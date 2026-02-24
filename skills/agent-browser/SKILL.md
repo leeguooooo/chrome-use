@@ -52,6 +52,7 @@ agent-browser open https://example.com && agent-browser wait --load networkidle 
 # Navigation
 agent-browser open <url>              # Navigate (aliases: goto, navigate)
 agent-browser close                   # Close browser
+agent-browser --version               # Show CLI version (fork builds include upstream/fork)
 
 # Snapshot
 agent-browser snapshot -i             # Interactive elements with refs (recommended)
@@ -219,25 +220,11 @@ agent-browser --allow-file-access open file:///path/to/page.html
 agent-browser screenshot output.png
 ```
 
-### Stealth Mode (Avoid Bot Detection)
+### Stealth Mode (Always On)
 
-Stealth mode is enabled by default. It patches automation detection vectors (navigator.webdriver, plugins, WebGL, etc.) so websites cannot easily identify the browser as automated.
+Stealth is always active -- no flags needed. All sessions automatically apply anti-detection patches (navigator.webdriver removal, UA override, plugin injection, WebGL masking, humanized interactions, etc.).
 
-```bash
-# Stealth is on by default -- just use normally
-agent-browser open https://example.com
-
-# Disable stealth if needed for debugging
-agent-browser --stealth false open https://example.com
-```
-
-Stealth capabilities vary by connection type:
-
-- Local launch: Chromium launch args + context init scripts
-- CDP / `--auto-connect`: context init scripts
-- Cloud providers: context init scripts (Kernel may also apply provider-managed stealth)
-
-For troubleshooting, run with `--debug` to print the active stealth connection type and capabilities.
+For best results against strong bot detection, use `--headed` and `--profile`.
 
 ### iOS Simulator (Mobile Safari)
 

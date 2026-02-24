@@ -1542,7 +1542,7 @@ export class BrowserManager {
       // Expand ~ to home directory since it won't be shell-expanded
       const profilePath = options.profile!.replace(/^~\//, os.homedir() + '/');
       context = await launcher.launchPersistentContext(profilePath, {
-        headless: options.headless ?? true,
+        headless: options.headless ?? false,
         executablePath: options.executablePath,
         args: baseArgs,
         viewport,
@@ -1558,7 +1558,7 @@ export class BrowserManager {
     } else {
       // Regular ephemeral browser
       this.browser = await launcher.launch({
-        headless: options.headless ?? true,
+        headless: options.headless ?? false,
         executablePath: options.executablePath,
         args: baseArgs,
       });

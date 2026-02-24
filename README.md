@@ -1,6 +1,12 @@
 # agent-browser
 
-Stealth browser automation CLI for AI agents with anti-bot evasions. Fast Rust CLI with Node.js fallback.
+Stealth-first browser automation CLI engineered for anti-bot evasion. Fast Rust CLI with Node.js fallback.
+
+Designed for production automation on detection-heavy sites:
+- Always-on stealth (no opt-in flag)
+- Browser and protocol-level anti-fingerprint patches
+- Humanized interaction behavior by default
+- Verified against CreepJS using the built-in check script
 
 ## Installation
 
@@ -95,6 +101,8 @@ Independent release checklist for forks:
 - Update `repository`, `bugs`, and `homepage` in `package.json` to your fork.
 - Configure npm Trusted Publishing (OIDC) for your package and repository workflow.
 - Keep release tags and changelog in your own namespace/versioning policy.
+- Use dual-version format: `<upstream>-fork.<fork>` (example: `0.14.0-fork.1`).
+- `agent-browser --version` should show all three: full version, upstream version, and fork version.
 
 ### Linux Dependencies
 
@@ -114,6 +122,7 @@ agent-browser click @e2                   # Click by ref from snapshot
 agent-browser fill @e3 "test@example.com" # Fill by ref
 agent-browser get text @e1                # Get text by ref
 agent-browser screenshot page.png
+agent-browser --version                   # Includes upstream/fork metadata on fork builds
 agent-browser close
 ```
 
@@ -757,51 +766,42 @@ The `--allow-file-access` flag adds Chromium flags (`--allow-file-access-from-fi
 
 ## Stealth Mode
 
-Stealth mode is **enabled by default**. It patches common detection vectors to make the browser appear like a regular user session, preventing websites from blocking automation.
+`agent-browser-stealth` is built around stealth as a primary design goal, not an add-on.
+Stealth is **always on** with no flag needed. Every browser session automatically applies anti-detection countermeasures:
 
-```bash
-# Stealth is on by default -- just use normally
-agent-browser open example.com
-
-# Disable stealth if needed
-agent-browser --stealth false open example.com
-
-# Or disable via environment variable
-export AGENT_BROWSER_STEALTH=false
-
-# Or disable in config file
-# agent-browser.json: {"stealth": false}
-```
-
-Stealth mode applies the following countermeasures:
 - Removes `navigator.webdriver` automation indicator
 - Disables Chromium's `AutomationControlled` blink feature
-- Adds realistic `navigator.plugins` (Chrome PDF Plugin, etc.)
+- Replaces "HeadlessChrome" in User-Agent and userAgentData (including CDP-level override)
+- Uses ANGLE rendering instead of SwiftShader to avoid GPU fingerprinting
+- Adds realistic `navigator.plugins` and `navigator.mimeTypes` (passes `instanceof` checks)
 - Patches `window.chrome.runtime` to match real Chrome
-- Masks WebGL vendor/renderer when SwiftShader is detected
+- Masks WebGL vendor/renderer
 - Fixes `navigator.permissions.query` for notifications
-- Reports realistic `navigator.hardwareConcurrency`
+- Reports realistic `navigator.hardwareConcurrency` and `performance.memory`
 - Provides default media devices for `enumerateDevices()`
+- Patches screen/window dimensions to avoid viewport-equals-screen fingerprint
+- Sets opaque background color (headless default is transparent)
 - Cleans up CDP-injected properties on the document
 
-Stealth capability matrix:
+### Stealth Verification
 
-<table>
-  <thead>
-    <tr><th>Connection type</th><th>Stealth capabilities</th></tr>
-  </thead>
-  <tbody>
-    <tr><td>Local launch</td><td>Chromium launch args (<code>--disable-blink-features=AutomationControlled</code>) + context init scripts</td></tr>
-    <tr><td>CDP / auto-connect</td><td>Context init scripts</td></tr>
-    <tr><td>Cloud providers</td><td>Context init scripts (Kernel may also apply provider-managed stealth)</td></tr>
-  </tbody>
-</table>
+On February 24, 2026, local validation against CreepJS using `scripts/check-creepjs-headless.js` reported:
 
-Use <code>--debug</code> to print the active stealth connection type and capabilities at launch time.
+| Metric | Result |
+| --- | --- |
+| like headless | 0% |
+| headless | 0% |
+| stealth | 0% |
+
+Reproduce:
+
+```bash
+node scripts/check-creepjs-headless.js --binary ./cli/target/release/agent-browser
+```
 
 ### Humanized Interactions
 
-In addition to stealth patches, agent-browser automatically humanizes interactions to avoid behavioral detection:
+All interactions are automatically humanized to avoid behavioral detection:
 
 - **Randomized typing** -- When using `type --delay`, each keystroke delay varies by +-40% so timing appears natural rather than mechanical
 - **Random wait ranges** -- `wait 2000-5000` pauses for a random duration between 2 and 5 seconds

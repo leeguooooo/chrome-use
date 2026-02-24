@@ -20,13 +20,31 @@ const packageJson = JSON.parse(
 );
 const version = packageJson.version;
 
-console.log(`Syncing version ${version} to all config files...`);
+function parseForkVersion(raw) {
+  const match = raw.match(/^([0-9]+\.[0-9]+\.[0-9]+)-fork\.([A-Za-z0-9.-]+)$/);
+  if (!match) return null;
+  return {
+    upstream: match[1],
+    fork: match[2],
+  };
+}
+
+const forkVersion = parseForkVersion(version);
+if (forkVersion) {
+  console.log(
+    `Syncing version ${version} (upstream=${forkVersion.upstream}, fork=${forkVersion.fork}) to all config files...`
+  );
+} else {
+  console.log(`Syncing version ${version} to all config files...`);
+}
 
 // Update Cargo.toml
 const cargoTomlPath = join(cliDir, "Cargo.toml");
 let cargoToml = readFileSync(cargoTomlPath, "utf-8");
 const cargoVersionRegex = /^version\s*=\s*"[^"]*"/m;
 const newCargoVersion = `version = "${version}"`;
+const cargoNameMatch = cargoToml.match(/^name\s*=\s*"([^"]+)"/m);
+const cargoPackageName = cargoNameMatch?.[1] ?? "agent-browser-stealth";
 
 let cargoTomlUpdated = false;
 if (cargoVersionRegex.test(cargoToml)) {
@@ -47,7 +65,7 @@ if (cargoVersionRegex.test(cargoToml)) {
 // Update Cargo.lock to match Cargo.toml
 if (cargoTomlUpdated) {
   try {
-    execSync("cargo update -p agent-browser --offline", {
+    execSync(`cargo update -p ${cargoPackageName} --offline`, {
       cwd: cliDir,
       stdio: "pipe",
     });
@@ -55,7 +73,7 @@ if (cargoTomlUpdated) {
   } catch {
     // --offline may fail if package not in cache, try without it
     try {
-      execSync("cargo update -p agent-browser", {
+      execSync(`cargo update -p ${cargoPackageName}`, {
         cwd: cliDir,
         stdio: "pipe",
       });

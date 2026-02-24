@@ -2126,7 +2126,7 @@ Options:
   --session-name <name>      Auto-save/restore session state (cookies, localStorage)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
   --debug                    Debug output
-  --version, -V              Show version
+  --version, -V              Show version (fork builds include upstream/fork info)
 
 Configuration:
   agent-browser looks for agent-browser.json in these locations (lowest to highest priority):
@@ -2290,6 +2290,35 @@ fn print_screenshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
     );
 }
 
+/// Parse fork version metadata from semver-like strings:
+///   <upstream>-fork.<fork>
+/// Example:
+///   0.14.0-fork.1 -> (0.14.0, 1)
+fn parse_fork_version(version: &str) -> Option<(&str, &str)> {
+    let (upstream, fork) = version.split_once("-fork.")?;
+    if upstream.is_empty() || fork.is_empty() {
+        return None;
+    }
+    if !upstream
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+    {
+        return None;
+    }
+    if !fork.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return None;
+    }
+    Some((upstream, fork))
+}
+
 pub fn print_version() {
-    println!("agent-browser {}", env!("CARGO_PKG_VERSION"));
+    let version = env!("CARGO_PKG_VERSION");
+    if let Some((upstream, fork)) = parse_fork_version(version) {
+        println!(
+            "agent-browser {} (upstream {}, fork {})",
+            version, upstream, fork
+        );
+    } else {
+        println!("agent-browser {}", version);
+    }
 }

@@ -95,6 +95,46 @@ describe('Stealth mode', () => {
     expect(userAgentSignals.workerUA).not.toContain('HeadlessChrome');
   });
 
+  it('neutralizes the css webdriver heuristic probe', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const signals = await browser.getPage().evaluate(() => ({
+      probe: CSS.supports('border-end-end-radius: initial'),
+      baseline: CSS.supports('display: block'),
+      webdriver: navigator.webdriver,
+      inNavigator: 'webdriver' in navigator,
+    }));
+
+    expect(signals.probe).toBe(false);
+    expect(signals.baseline).toBe(true);
+    expect(signals.webdriver).toBeUndefined();
+    expect(signals.inNavigator).toBe(false);
+  });
+
+  it('neutralizes creepjs prefers-color-scheme light probe', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const signals = await browser.getPage().evaluate(() => {
+      const node = document.createElement('div');
+      node.setAttribute('style', 'background-color: ActiveText');
+      document.body.appendChild(node);
+      const activeTextColor = getComputedStyle(node).backgroundColor;
+      node.remove();
+
+      return {
+        activeTextColor,
+        prefersLight: matchMedia('(prefers-color-scheme: light)').matches,
+        prefersDark: matchMedia('(prefers-color-scheme: dark)').matches,
+      };
+    });
+
+    expect(signals.activeTextColor).not.toBe('rgb(255, 0, 0)');
+    expect(signals.prefersLight).toBe(false);
+    expect(typeof signals.prefersDark).toBe('boolean');
+  });
+
   it('exposes realistic mimeTypes/pdf/share signals', async () => {
     browser = new BrowserManager();
     await browser.launch({ headless: true, stealth: true });

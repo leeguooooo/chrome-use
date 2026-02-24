@@ -60,6 +60,15 @@ pnpm build:native
 pnpm link --global
 ```
 
+## Fork versioning
+
+Fork releases use a dual-version format:
+
+- `<upstream>-fork.<fork>`
+- Example: `0.14.0-fork.1`
+
+`agent-browser --version` prints the full version and also shows upstream and fork parts for fork builds.
+
 ## Linux dependencies
 
 On Linux, install system dependencies:

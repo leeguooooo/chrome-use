@@ -190,6 +190,7 @@ function buildStealthScript(options: StealthScriptOptions): string {
   return [
     configScript,
     patchNavigatorWebdriver(),
+    patchCssSupportsWebdriverHeuristic(),
     patchChromeRuntime(),
     patchNavigatorLanguages(),
     patchNavigatorPluginsAndMimeTypes(),
@@ -201,11 +202,13 @@ function buildStealthScript(options: StealthScriptOptions): string {
     patchScreenAvailability(),
     patchNavigatorHardwareConcurrency(),
     patchNotificationPermission(),
+    patchActiveTextColorHeuristic(),
     patchNavigatorConnection(),
     patchWorkerConnection(),
     patchNavigatorShare(),
     patchNavigatorContacts(),
     patchContentIndex(),
+    patchPrefersColorSchemeHeuristic(),
     patchPdfViewerEnabled(),
     patchMediaDevices(),
     patchUserAgentData(),
@@ -218,6 +221,44 @@ function buildStealthScript(options: StealthScriptOptions): string {
 // ---------------------------------------------------------------------------
 // Individual patches
 // ---------------------------------------------------------------------------
+
+/**
+ * CreepJS uses CSS.supports('border-end-end-radius: initial') + webdriver
+ * undefined to infer automation. Keep this one probe neutral.
+ */
+function patchCssSupportsWebdriverHeuristic(): string {
+  return `(function(){
+  if (typeof CSS === 'undefined' || typeof CSS.supports !== 'function') return;
+  const nativeSupports = CSS.supports.bind(CSS);
+  const normalize = (value) => String(value).replace(/\\s+/g, ' ').trim().toLowerCase();
+  const target = 'border-end-end-radius: initial';
+  const patchedSupports = function(...args) {
+    if (args.length === 1 && normalize(args[0]) === target) {
+      return false;
+    }
+    if (args.length >= 2 && normalize(args[0] + ': ' + args[1]) === target) {
+      return false;
+    }
+    return nativeSupports(...args);
+  };
+  try {
+    Object.defineProperty(patchedSupports, 'name', { value: 'supports', configurable: true });
+    Object.defineProperty(patchedSupports, 'toString', {
+      value: () => nativeSupports.toString(),
+      configurable: true,
+    });
+  } catch {}
+  try {
+    Object.defineProperty(CSS, 'supports', {
+      value: patchedSupports,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    try { CSS.supports = patchedSupports; } catch {}
+  }
+})();`;
+}
 
 /**
  * Remove navigator.webdriver entirely.
@@ -643,6 +684,46 @@ function patchNotificationPermission(): string {
 }
 
 /**
+ * CreepJS probes `background-color: ActiveText` and flags Chromium when the
+ * computed value resolves to `rgb(255, 0, 0)`. Rewrite only that exact probe.
+ */
+function patchActiveTextColorHeuristic(): string {
+  return `(function(){
+  if (typeof Element === 'undefined' || !Element.prototype) return;
+  const nativeSetAttribute = Element.prototype.setAttribute;
+  if (typeof nativeSetAttribute !== 'function') return;
+  const normalize = (value) => String(value).replace(/\\s+/g, ' ').trim().toLowerCase();
+  const probeStyle = 'background-color: activetext';
+  const replacement = 'background-color: rgb(0, 0, 0)';
+  const patchedSetAttribute = function(name, value) {
+    if (String(name).toLowerCase() === 'style' && normalize(value) === probeStyle) {
+      return nativeSetAttribute.call(this, name, replacement);
+    }
+    return nativeSetAttribute.call(this, name, value);
+  };
+  try {
+    Object.defineProperty(patchedSetAttribute, 'name', {
+      value: 'setAttribute',
+      configurable: true,
+    });
+    Object.defineProperty(patchedSetAttribute, 'toString', {
+      value: () => nativeSetAttribute.toString(),
+      configurable: true,
+    });
+  } catch {}
+  try {
+    Object.defineProperty(Element.prototype, 'setAttribute', {
+      value: patchedSetAttribute,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    try { Element.prototype.setAttribute = patchedSetAttribute; } catch {}
+  }
+})();`;
+}
+
+/**
  * Add missing connection.downlinkMax in Chromium headless environments.
  */
 function patchNavigatorConnection(): string {
@@ -747,6 +828,51 @@ function patchWorkerConnection(): string {
       writable: true,
     });
   } catch {}
+})();`;
+}
+
+/**
+ * CreepJS marks light-scheme defaults as a weak headless signal. Keep
+ * `(prefers-color-scheme: light)` neutral without affecting other media queries.
+ */
+function patchPrefersColorSchemeHeuristic(): string {
+  return `(function(){
+  if (typeof window.matchMedia !== 'function') return;
+  const nativeMatchMedia = window.matchMedia.bind(window);
+  const normalize = (query) => String(query).replace(/\\s+/g, ' ').trim().toLowerCase();
+  const prefersLight = '(prefers-color-scheme: light)';
+  const patchMediaQueryList = (mql) => {
+    if (!mql || typeof mql !== 'object') return mql;
+    return new Proxy(mql, {
+      get(target, prop, receiver) {
+        if (prop === 'matches') return false;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  };
+  const patchedMatchMedia = function(query) {
+    const mql = nativeMatchMedia(query);
+    if (normalize(query) === prefersLight) {
+      return patchMediaQueryList(mql);
+    }
+    return mql;
+  };
+  try {
+    Object.defineProperty(patchedMatchMedia, 'name', { value: 'matchMedia', configurable: true });
+    Object.defineProperty(patchedMatchMedia, 'toString', {
+      value: () => nativeMatchMedia.toString(),
+      configurable: true,
+    });
+  } catch {}
+  try {
+    Object.defineProperty(window, 'matchMedia', {
+      value: patchedMatchMedia,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    try { window.matchMedia = patchedMatchMedia; } catch {}
+  }
 })();`;
 }
 
