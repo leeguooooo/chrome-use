@@ -51,7 +51,7 @@ agent-browser install  # Download Chromium
 ### From Source
 
 ```bash
-git clone https://github.com/vercel-labs/agent-browser
+git clone https://github.com/leeguooooo/agent-browser
 cd agent-browser
 pnpm install
 pnpm build
@@ -59,6 +59,42 @@ pnpm build:native   # Requires Rust (https://rustup.rs)
 pnpm link --global  # Makes agent-browser available globally
 agent-browser install
 ```
+
+### Fork Maintenance (Independent Release + Upstream Sync)
+
+If you maintain a fork and publish your own CLI, use this workflow:
+
+1. Keep an upstream-tracking branch (`upstream-main`) for clean sync history.
+2. Keep your release branch (`main`) for production-ready code only.
+3. Merge upstream into short-lived sync branches, then open PRs into `main`.
+
+One-time setup:
+
+```bash
+git remote add upstream https://github.com/vercel-labs/agent-browser.git
+git fetch upstream
+```
+
+Regular sync:
+
+```bash
+pnpm run sync:upstream:push
+```
+
+This command:
+- Fetches `upstream/main`
+- Fast-forwards local `upstream-main`
+- Creates `sync/YYYY-MM-DD` from local `main`
+- Merges `upstream-main` into the sync branch
+- Pushes the sync branch to `origin` (with `sync:upstream:push`)
+
+If merge conflicts occur, resolve them on the sync branch and open a PR as usual.
+
+Independent release checklist for forks:
+- Use your own npm package name and CLI binary name (avoid conflicts with upstream package ownership).
+- Update `repository`, `bugs`, and `homepage` in `package.json` to your fork.
+- Configure npm Trusted Publishing (OIDC) for your package and repository workflow.
+- Keep release tags and changelog in your own namespace/versioning policy.
 
 ### Linux Dependencies
 
@@ -971,7 +1007,7 @@ The `--help` output is comprehensive and most agents can figure it out from ther
 Add the skill to your AI coding assistant for richer context:
 
 ```bash
-npx skills add vercel-labs/agent-browser
+npx skills add leeguooooo/agent-browser
 ```
 
 This works with Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, Goose, OpenCode, and Windsurf. The skill is fetched from the repository, so it stays up to date automatically -- do not copy `SKILL.md` from `node_modules` as it will become stale.
@@ -981,7 +1017,7 @@ This works with Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, Goose, O
 Install as a Claude Code skill:
 
 ```bash
-npx skills add vercel-labs/agent-browser
+npx skills add leeguooooo/agent-browser
 ```
 
 This adds the skill to `.claude/skills/agent-browser/SKILL.md` in your project. The skill teaches Claude Code the full agent-browser workflow, including the snapshot-ref interaction pattern, session management, and timeout handling.

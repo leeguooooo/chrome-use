@@ -53,7 +53,7 @@ export function Header() {
         </div>
         <nav className="flex items-center gap-4">
           <a
-            href="https://github.com/vercel-labs/agent-browser"
+            href="https://github.com/leeguooooo/agent-browser"
             target="_blank"
             rel="noopener noreferrer"
             className="hidden sm:flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"

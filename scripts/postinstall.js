@@ -9,7 +9,7 @@
  * - Mac/Linux: Replaces symlink to point to native binary
  */
 
-import { existsSync, mkdirSync, chmodSync, createWriteStream, unlinkSync, writeFileSync, symlinkSync, lstatSync } from 'fs';
+import { existsSync, mkdirSync, chmodSync, createWriteStream, unlinkSync, writeFileSync, symlinkSync, lstatSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, arch } from 'os';
@@ -27,14 +27,27 @@ const binaryName = `agent-browser-${platformKey}${ext}`;
 const binaryPath = join(binDir, binaryName);
 
 // Package info
-const packageJson = JSON.parse(
-  (await import('fs')).readFileSync(join(projectRoot, 'package.json'), 'utf8')
-);
+const packageJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
 const version = packageJson.version;
 
 // GitHub release URL
-const GITHUB_REPO = 'vercel-labs/agent-browser';
+const GITHUB_REPO = getGitHubRepoFromPackage(packageJson);
 const DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${binaryName}`;
+
+function getGitHubRepoFromPackage(pkg) {
+  const repo = pkg?.repository;
+  const repoUrl = typeof repo === 'string' ? repo : repo?.url;
+
+  if (typeof repoUrl === 'string') {
+    const match = repoUrl.match(/github\.com[:/]([^/]+\/[^/.]+)(?:\.git)?$/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  // Fallback for legacy package metadata
+  return 'vercel-labs/agent-browser';
+}
 
 async function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
@@ -107,7 +120,7 @@ async function main() {
     console.log('');
     console.log('To build the native binary locally:');
     console.log('  1. Install Rust: https://rustup.rs');
-    console.log('  2. Run: npm run build:native');
+    console.log('  2. Run: pnpm run build:native');
   }
 
   // On global installs, fix npm's bin entry to use native binary directly

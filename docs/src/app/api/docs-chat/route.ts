@@ -14,7 +14,7 @@ const DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
 
 const SYSTEM_PROMPT = `You are a helpful documentation assistant for agent-browser, a headless browser automation CLI designed for AI agents.
 
-GitHub repository: https://github.com/vercel-labs/agent-browser
+GitHub repository: https://github.com/leeguooooo/agent-browser
 Documentation: https://agent-browser.dev
 npm package: agent-browser
 

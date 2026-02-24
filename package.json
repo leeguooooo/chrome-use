@@ -33,6 +33,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "node scripts/postinstall.js",
+    "sync:upstream": "bash scripts/sync-upstream.sh",
+    "sync:upstream:push": "bash scripts/sync-upstream.sh --push",
     "changeset": "changeset",
     "ci:version": "changeset version && pnpm run version:sync && pnpm install --no-frozen-lockfile",
     "ci:publish": "pnpm run version:sync && pnpm run build && changeset publish"
@@ -48,12 +50,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vercel-labs/agent-browser.git"
+    "url": "git+https://github.com/leeguooooo/agent-browser.git"
   },
   "bugs": {
-    "url": "https://github.com/vercel-labs/agent-browser/issues"
+    "url": "https://github.com/leeguooooo/agent-browser/issues"
   },
-  "homepage": "https://github.com/vercel-labs/agent-browser#readme",
+  "homepage": "https://github.com/leeguooooo/agent-browser#readme",
   "dependencies": {
     "node-simctl": "^7.4.0",
     "playwright-core": "^1.57.0",
