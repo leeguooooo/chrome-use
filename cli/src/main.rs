@@ -153,6 +153,47 @@ fn main() {
         return;
     }
 
+    if args.iter().any(|a| a == "--profile") {
+        let msg =
+            "Project policy: --profile is forbidden. Use your existing browser and --session-name for state persistence.";
+        if flags.json {
+            println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+        } else {
+            eprintln!("{} {}", color::error_indicator(), msg);
+        }
+        exit(1);
+    }
+    if env::var("AGENT_BROWSER_PROFILE").is_ok() {
+        let msg =
+            "Project policy: AGENT_BROWSER_PROFILE is forbidden. Remove it and use --session-name.";
+        if flags.json {
+            println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+        } else {
+            eprintln!("{} {}", color::error_indicator(), msg);
+        }
+        exit(1);
+    }
+
+    if args.iter().any(|a| a == "--channel") {
+        let msg = "Project policy: --channel is forbidden. Browser selection follows your existing browser session.";
+        if flags.json {
+            println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+        } else {
+            eprintln!("{} {}", color::error_indicator(), msg);
+        }
+        exit(1);
+    }
+    if env::var("AGENT_BROWSER_CHANNEL").is_ok() {
+        let msg =
+            "Project policy: AGENT_BROWSER_CHANNEL is forbidden. Remove it and use your existing browser session.";
+        if flags.json {
+            println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+        } else {
+            eprintln!("{} {}", color::error_indicator(), msg);
+        }
+        exit(1);
+    }
+
     if clean.is_empty() {
         print_help();
         return;
@@ -221,7 +262,6 @@ fn main() {
         flags.proxy_bypass.as_deref(),
         flags.ignore_https_errors,
         flags.allow_file_access,
-        flags.profile.as_deref(),
         flags.state.as_deref(),
         flags.provider.as_deref(),
         flags.device.as_deref(),
@@ -251,11 +291,6 @@ fn main() {
             },
             if flags.cli_extensions {
                 Some("--extension")
-            } else {
-                None
-            },
-            if flags.cli_profile {
-                Some("--profile")
             } else {
                 None
             },
@@ -513,14 +548,13 @@ fn main() {
         }
     }
 
-    // Default fork behavior: when no explicit connection mode is provided,
-    // try attaching to resident Chrome on CDP :9333 first. If unavailable,
-    // silently fall back to local launch behavior below.
+    // Project policy: when no explicit connection mode is provided,
+    // commands must attach to an existing browser on CDP :9333.
+    // If unavailable, fail fast instead of launching a managed browser.
     let can_try_default_cdp = flags.cdp.is_none()
         && !flags.auto_connect
         && flags.provider.is_none()
         && flags.executable_path.is_none()
-        && flags.profile.is_none()
         && flags.state.is_none()
         && flags.proxy.is_none()
         && flags.args.is_none()
@@ -545,11 +579,19 @@ fn main() {
             launched_via_default_cdp = resp.success;
         }
     }
+    if can_try_default_cdp && !launched_via_default_cdp {
+        let msg = "Project policy requires using your existing browser. Could not connect to CDP at localhost:9333. Start your browser with remote debugging on port 9333, or pass --cdp <port|url>.";
+        if flags.json {
+            println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+        } else {
+            eprintln!("{} {}", color::error_indicator(), msg);
+        }
+        exit(1);
+    }
 
     // Launch headed browser or configure browser options (without CDP or provider)
     if (flags.headed
         || flags.executable_path.is_some()
-        || flags.profile.is_some()
         || flags.state.is_some()
         || flags.proxy.is_some()
         || flags.args.is_some()
@@ -575,11 +617,6 @@ fn main() {
         // Add executable path if specified
         if let Some(ref exec_path) = flags.executable_path {
             cmd_obj.insert("executablePath".to_string(), json!(exec_path));
-        }
-
-        // Add profile path if specified
-        if let Some(ref profile_path) = flags.profile {
-            cmd_obj.insert("profile".to_string(), json!(profile_path));
         }
 
         // Add state path if specified
@@ -627,7 +664,7 @@ fn main() {
         match send_command(launch_cmd, &flags.session) {
             Ok(resp) => {
                 if !resp.success {
-                    // Launch command failed (e.g., invalid state file, profile error)
+                    // Launch command failed (e.g., invalid state file)
                     let error_msg = resp
                         .error
                         .unwrap_or_else(|| "Browser launch failed".to_string());

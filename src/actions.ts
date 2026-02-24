@@ -529,19 +529,87 @@ async function handleNavigate(
 ): Promise<Response<NavigateData>> {
   const page = browser.getPage();
 
+  // Set target URL for region auto-detection (locale/timezone)
+  await browser.setTargetUrl(command.url);
+
   // If headers are provided, set up scoped headers for this origin
   if (command.headers && Object.keys(command.headers).length > 0) {
     await browser.setScopedHeaders(command.url, command.headers);
   }
 
+  // Humanized navigation pacing: random short delay before navigating
+  const pace = 300 + Math.random() * 700;
+  await page.waitForTimeout(Math.round(pace));
+
   await page.goto(command.url, {
     waitUntil: command.waitUntil ?? 'load',
   });
 
+  // Detect captcha/verification pages and retry with backoff
+  const finalUrl = page.url();
+  const title = await page.title();
+  const captchaDetected = isCaptchaPage(finalUrl, title);
+
+  if (captchaDetected) {
+    const maxRetries = 2;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const backoff = 3000 + Math.random() * 4000;
+      await page.waitForTimeout(Math.round(backoff));
+      await page.goto(command.url, {
+        waitUntil: command.waitUntil ?? 'load',
+      });
+      const retryUrl = page.url();
+      const retryTitle = await page.title();
+      if (!isCaptchaPage(retryUrl, retryTitle)) {
+        return successResponse(command.id, {
+          url: retryUrl,
+          title: retryTitle,
+        });
+      }
+    }
+    // All retries exhausted -- return the page as-is with a warning
+    return successResponse(command.id, {
+      url: page.url(),
+      title: await page.title(),
+      warning:
+        'Captcha/verification page detected. Try --headed mode or use --session-name for state persistence.',
+    } as NavigateData);
+  }
+
   return successResponse(command.id, {
-    url: page.url(),
-    title: await page.title(),
+    url: finalUrl,
+    title,
   });
+}
+
+function isCaptchaPage(url: string, title: string): boolean {
+  const lowerUrl = url.toLowerCase();
+  const lowerTitle = title.toLowerCase();
+  const captchaPatterns = [
+    '/verify/captcha',
+    '/captcha',
+    '/challenge',
+    'scene=crawler',
+    'scene=anti_bot',
+    'recaptcha',
+    'hcaptcha',
+  ];
+  const titlePatterns = [
+    'verify',
+    'captcha',
+    'challenge',
+    'attention required',
+    'just a moment',
+    'checking your browser',
+    'access denied',
+    '驗證',
+    '验证',
+    '人机验证',
+  ];
+  return (
+    captchaPatterns.some((p) => lowerUrl.includes(p)) ||
+    titlePatterns.some((p) => lowerTitle.includes(p))
+  );
 }
 
 function bezierPoint(t: number, p0: number, p1: number, p2: number, p3: number): number {

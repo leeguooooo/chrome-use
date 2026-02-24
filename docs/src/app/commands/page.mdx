@@ -240,7 +240,6 @@ agent-browser reload                  # Reload page
 ```bash
 --session <name>         # Isolated browser session
 --session-name <name>    # Auto-save/restore session state (cookies, localStorage)
---profile <path>         # Persistent browser profile directory
 --state <path>           # Load storage state from JSON file
 --headers <json>         # HTTP headers scoped to URL's origin
 --executable-path <path> # Custom browser executable
@@ -251,7 +250,7 @@ agent-browser reload                  # Reload page
 --proxy-bypass <hosts>   # Hosts to bypass proxy
 --ignore-https-errors    # Ignore HTTPS certificate errors
 --allow-file-access      # Allow file:// URLs to access local files (Chromium only)
---stealth                # Stealth mode: local uses launch args+init scripts; CDP/provider uses init scripts
+--stealth                # Stealth mode (always on by default)
 -p, --provider <name>    # Browser provider (ios, browserbase, kernel, browseruse)
 --device <name>          # iOS device name (e.g., "iPhone 15 Pro")
 --json                   # JSON output (for scripts)

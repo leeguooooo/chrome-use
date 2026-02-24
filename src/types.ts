@@ -18,7 +18,6 @@ export interface LaunchCommand extends BaseCommand {
   cdpUrl?: string;
   autoConnect?: boolean; // Auto-discover and connect to running Chrome via DevToolsActivePort
   extensions?: string[];
-  profile?: string; // Path to persistent browser profile directory
   storageState?: string; // Path to storage state JSON file
   proxy?: {
     server: string;
@@ -1073,6 +1072,7 @@ export type Response<T = unknown> = SuccessResponse<T> | ErrorResponse;
 export interface NavigateData {
   url: string;
   title: string;
+  warning?: string;
 }
 
 export interface Annotation {

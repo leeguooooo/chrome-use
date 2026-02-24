@@ -466,7 +466,6 @@ export async function startDaemon(options?: {
                 headless: process.env.AGENT_BROWSER_HEADED !== '1',
                 executablePath: process.env.AGENT_BROWSER_EXECUTABLE_PATH,
                 extensions: extensions,
-                profile: process.env.AGENT_BROWSER_PROFILE,
                 storageState: process.env.AGENT_BROWSER_STATE,
                 args,
                 userAgent: process.env.AGENT_BROWSER_USER_AGENT,
@@ -480,7 +479,7 @@ export async function startDaemon(options?: {
 
               let launchedViaDefaultCdp = false;
               try {
-                // Keep default CDP attempt minimal. Launch-only options like profile/extensions
+                // Keep default CDP attempt minimal. Launch-only options like extensions
                 // are incompatible with CDP and can cause a false-negative fallback.
                 const cdpLaunchOptions = {
                   id: launchOptions.id,

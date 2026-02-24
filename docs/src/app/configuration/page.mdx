@@ -6,7 +6,7 @@ export const metadata = pageMetadata("configuration")
 
 Create an `agent-browser.json` file to set persistent defaults instead of repeating flags on every command.
 
-In this fork, default launch behavior already prefers a resident Chrome at `localhost:9333` (CDP) and falls back to local Playwright launch when unavailable.
+In this fork, default launch behavior requires a resident browser at `localhost:9333` (CDP). If unavailable, commands fail fast instead of launching a managed browser.
 
 ## Config File Locations
 
@@ -39,7 +39,6 @@ AGENT_BROWSER_CONFIG=./ci-config.json agent-browser open example.com
 {
   "headed": true,
   "proxy": "http://localhost:8080",
-  "profile": "./browser-data",
   "userAgent": "my-agent/1.0",
   "ignoreHttpsErrors": true
 }
@@ -62,7 +61,6 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
     <tr><td><code>sessionName</code></td><td><code>--session-name</code></td><td>string</td></tr>
     <tr><td><code>executablePath</code></td><td><code>--executable-path</code></td><td>string</td></tr>
     <tr><td><code>extensions</code></td><td><code>--extension</code></td><td>string[]</td></tr>
-    <tr><td><code>profile</code></td><td><code>--profile</code></td><td>string</td></tr>
     <tr><td><code>state</code></td><td><code>--state</code></td><td>string</td></tr>
     <tr><td><code>proxy</code></td><td><code>--proxy</code></td><td>string</td></tr>
     <tr><td><code>proxyBypass</code></td><td><code>--proxy-bypass</code></td><td>string</td></tr>
@@ -86,7 +84,7 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
 ```json
 {
   "headed": true,
-  "profile": "./browser-data"
+  "sessionName": "local-dev"
 }
 ```
 

@@ -179,7 +179,7 @@ agent-browser session list
 
 ### Connect to Existing Chrome
 
-By default in this fork, commands without `--cdp` try `localhost:9333` first and automatically fall back to a local browser launch if CDP is unavailable.
+By default in this fork, commands without `--cdp` require an existing browser at `localhost:9333`. If CDP is unavailable, the command fails fast (no automatic local browser launch).
 
 ```bash
 # Auto-discover running Chrome with remote debugging enabled
@@ -222,11 +222,29 @@ agent-browser --allow-file-access open file:///path/to/page.html
 agent-browser screenshot output.png
 ```
 
+### Project Policy
+
+- `--profile` / `AGENT_BROWSER_PROFILE` are forbidden
+- `--channel` / `AGENT_BROWSER_CHANNEL` are forbidden
+- Use existing browser sessions (default CDP `localhost:9333`) or pass `--cdp` explicitly
+
 ### Stealth Mode (Always On)
 
 Stealth is always active -- no flags needed. All sessions automatically apply anti-detection patches (navigator.webdriver removal, UA override, plugin injection, WebGL masking, humanized interactions, etc.).
 
-For best results against strong bot detection, use `--headed` and `--profile`.
+Chromium launches in managed mode use Chrome channel by default for a genuine browser binary fingerprint.
+
+For best results against strong bot detection, use `--headed` and `--session-name`.
+
+### Auto Region Detection
+
+The browser automatically detects the target site's region from the URL TLD and sets matching locale, timezone, and Accept-Language headers. For example, navigating to `shopee.tw` sets locale `zh-TW` and timezone `Asia/Taipei`. This reduces server-side risk scoring from region-signal mismatches.
+
+Override: `AGENT_BROWSER_LOCALE`, `AGENT_BROWSER_TIMEZONE` env vars.
+
+### Captcha Detection & Auto-Retry
+
+When a navigation lands on a captcha/verification page, the browser automatically retries up to 2 times with randomized backoff (3-7s). If detection persists, a warning is shown suggesting `--headed` mode or `--session-name` persistence.
 
 ### iOS Simulator (Mobile Safari)
 
@@ -314,7 +332,7 @@ agent-browser automatically humanizes interactions to avoid behavioral detection
 - **Random wait ranges**: `wait 2000-5000` pauses for a random duration in that range
 - **Bezier curve mouse**: Before every `click`, the mouse moves along a natural-looking curve
 
-These behaviors are always active. For sensitive sites, combine with `--headed` and `--profile` for best results.
+These behaviors are always active. For sensitive sites, combine with `--headed` and `--session-name` for best results.
 
 ## Session Management and Cleanup
 
@@ -419,8 +437,7 @@ Create `agent-browser.json` in the project root for persistent settings:
 ```json
 {
   "headed": true,
-  "proxy": "http://localhost:8080",
-  "profile": "./browser-data"
+  "proxy": "http://localhost:8080"
 }
 ```
 

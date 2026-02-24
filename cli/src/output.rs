@@ -22,6 +22,9 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
             if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
                 println!("{} {}", color::success_indicator(), color::bold(title));
                 println!("  {}", color::dim(url));
+                if let Some(warning) = data.get("warning").and_then(|v| v.as_str()) {
+                    println!("{} {}", color::warning_indicator(), warning);
+                }
                 return;
             }
             println!("{}", url);
@@ -2100,7 +2103,6 @@ Snapshot Options:
 
 Options:
   --session <name>           Isolated session (or AGENT_BROWSER_SESSION env)
-  --profile <path>           Persistent browser profile (or AGENT_BROWSER_PROFILE env)
   --state <path>             Load storage state from JSON file (or AGENT_BROWSER_STATE env)
   --headers <json>           HTTP headers scoped to URL's origin (for auth)
   --executable-path <path>   Custom browser executable (or AGENT_BROWSER_EXECUTABLE_PATH)
@@ -2122,12 +2124,17 @@ Options:
   --headed                   Show browser window (not headless)
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
   --auto-connect             Auto-discover and connect to running Chrome
-                             Default launch tries CDP at localhost:9333 first, then falls back to local browser launch
+                             Project default: require existing browser at localhost:9333 (no auto local fallback)
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --session-name <name>      Auto-save/restore session state (cookies, localStorage)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
   --debug                    Debug output
   --version, -V              Show version (fork builds include upstream/fork info)
+
+Policy:
+  --profile / AGENT_BROWSER_PROFILE are forbidden
+  --channel / AGENT_BROWSER_CHANNEL are forbidden
+  Use existing browser session (CDP localhost:9333) or pass --cdp explicitly
 
 Configuration:
   agent-browser looks for agent-browser.json in these locations (lowest to highest priority):
@@ -2146,7 +2153,7 @@ Configuration:
   Extensions from user and project configs are merged (not replaced).
 
   Example agent-browser.json:
-    {{"headed": true, "proxy": "http://localhost:8080", "profile": "./browser-data"}}
+    {{"headed": true, "proxy": "http://localhost:8080", "userAgent": "my-agent/1.0"}}
 
 Environment:
   AGENT_BROWSER_CONFIG           Path to config file (or use --config)
@@ -2166,6 +2173,8 @@ Environment:
   AGENT_BROWSER_AUTO_CONNECT     Auto-discover and connect to running Chrome
   AGENT_BROWSER_ALLOW_FILE_ACCESS Allow file:// URLs to access local files
   
+  AGENT_BROWSER_LOCALE           Override auto-detected locale (e.g., zh-TW, ja-JP)
+  AGENT_BROWSER_TIMEZONE         Override auto-detected timezone (e.g., Asia/Taipei)
   AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default Playwright timeout in ms (default: 25000)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
@@ -2195,7 +2204,6 @@ Examples:
   agent-browser --cdp 9222 snapshot      # Connect via CDP port
   agent-browser --auto-connect snapshot  # Auto-discover running Chrome
   agent-browser --color-scheme dark open example.com  # Dark mode
-  agent-browser --profile ~/.myapp open example.com    # Persistent profile
   agent-browser --session-name myapp open example.com  # Auto-save/restore state
 
 Command Chaining:

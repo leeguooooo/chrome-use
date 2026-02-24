@@ -383,33 +383,9 @@ Each session has its own:
 - Navigation history
 - Authentication state
 
-## Persistent Profiles
-
-By default, browser state (cookies, localStorage, login sessions) is ephemeral and lost when the browser closes. Use `--profile` to persist state across browser restarts:
-
-```bash
-# Use a persistent profile directory
-agent-browser --profile ~/.myapp-profile open myapp.com
-
-# Login once, then reuse the authenticated session
-agent-browser --profile ~/.myapp-profile open myapp.com/dashboard
-
-# Or via environment variable
-AGENT_BROWSER_PROFILE=~/.myapp-profile agent-browser open myapp.com
-```
-
-The profile directory stores:
-- Cookies and localStorage
-- IndexedDB data
-- Service workers
-- Browser cache
-- Login sessions
-
-**Tip**: Use different profile paths for different projects to keep their browser state isolated.
-
 ## Session Persistence
 
-Alternatively, use `--session-name` to automatically save and restore cookies and localStorage across browser restarts:
+Use `--session-name` to automatically save and restore cookies and localStorage across browser restarts:
 
 ```bash
 # Auto-save/load state for "twitter" session
@@ -492,7 +468,6 @@ This is useful for multimodal AI models that can reason about visual layout, unl
 |--------|-------------|
 | `--session <name>` | Use isolated session (or `AGENT_BROWSER_SESSION` env) |
 | `--session-name <name>` | Auto-save/restore session state (or `AGENT_BROWSER_SESSION_NAME` env) |
-| `--profile <path>` | Persistent browser profile directory (or `AGENT_BROWSER_PROFILE` env) |
 | `--state <path>` | Load storage state from JSON file (or `AGENT_BROWSER_STATE` env) |
 | `--headers <json>` | Set HTTP headers scoped to the URL's origin |
 | `--executable-path <path>` | Custom browser executable (or `AGENT_BROWSER_EXECUTABLE_PATH` env) |
@@ -503,7 +478,6 @@ This is useful for multimodal AI models that can reason about visual layout, unl
 | `--proxy-bypass <hosts>` | Hosts to bypass proxy (or `AGENT_BROWSER_PROXY_BYPASS` env) |
 | `--ignore-https-errors` | Ignore HTTPS certificate errors (useful for self-signed certs) |
 | `--allow-file-access` | Allow file:// URLs to access local files (Chromium only) |
-| `--stealth` | Stealth mode (default: on): local launch uses Chromium args + init scripts; CDP/provider uses init scripts |
 | `-p, --provider <name>` | Cloud browser provider (or `AGENT_BROWSER_PROVIDER` env) |
 | `--device <name>` | iOS device name, e.g. "iPhone 15 Pro" (or `AGENT_BROWSER_IOS_DEVICE` env) |
 | `--json` | JSON output (for agents) |
@@ -515,6 +489,11 @@ This is useful for multimodal AI models that can reason about visual layout, unl
 | `--color-scheme <scheme>` | Color scheme: `dark`, `light`, `no-preference` (or `AGENT_BROWSER_COLOR_SCHEME` env) |
 | `--config <path>` | Use a custom config file (or `AGENT_BROWSER_CONFIG` env) |
 | `--debug` | Debug output |
+
+Project policy:
+- `--profile` / `AGENT_BROWSER_PROFILE` are forbidden
+- `--channel` / `AGENT_BROWSER_CHANNEL` are forbidden
+- Default mode must connect to an existing browser at `localhost:9333` (no automatic local-launch fallback)
 
 ## Configuration
 
@@ -533,7 +512,6 @@ Create an `agent-browser.json` file to set persistent defaults instead of repeat
 {
   "headed": true,
   "proxy": "http://localhost:8080",
-  "profile": "./browser-data",
   "userAgent": "my-agent/1.0",
   "ignoreHttpsErrors": true
 }
@@ -769,6 +747,8 @@ The `--allow-file-access` flag adds Chromium flags (`--allow-file-access-from-fi
 `agent-browser-stealth` is built around stealth as a primary design goal, not an add-on.
 Stealth is **always on** with no flag needed. Every browser session automatically applies anti-detection countermeasures:
 
+- **Uses Chrome channel for Chromium launches** -- local Chromium sessions are launched through Playwright's `chrome` channel for a genuine Chrome fingerprint
+
 - Removes `navigator.webdriver` automation indicator
 - Disables Chromium's `AutomationControlled` blink feature
 - Replaces "HeadlessChrome" in User-Agent and userAgentData (including CDP-level override)
@@ -806,14 +786,27 @@ All interactions are automatically humanized to avoid behavioral detection:
 - **Randomized typing** -- When using `type --delay`, each keystroke delay varies by +-40% so timing appears natural rather than mechanical
 - **Random wait ranges** -- `wait 2000-5000` pauses for a random duration between 2 and 5 seconds
 - **Bezier curve mouse movement** -- Before every `click`, the mouse moves to the target element along a randomized cubic Bezier curve with natural-looking control points
+- **Navigation pacing** -- Each page navigation includes a short random delay (300-1000ms) to avoid burst patterns
 
 These behaviors are always active and require no additional flags.
+
+### Auto Region Detection
+
+When navigating to a site, the URL's TLD is used to automatically match locale, timezone, and Accept-Language headers to the target region. For example, opening `shopee.tw` automatically sets locale to `zh-TW` and timezone to `Asia/Taipei`, eliminating region-signal mismatches that server-side risk systems commonly flag.
+
+Supported TLDs include: `.tw`, `.cn`, `.hk`, `.jp`, `.kr`, `.th`, `.vn`, `.sg`, `.my`, `.id`, `.ph`, `.br`, `.mx`, `.de`, `.fr`, `.uk`, `.ru`, `.in`, `.au`, and more.
+
+Override with environment variables: `AGENT_BROWSER_LOCALE`, `AGENT_BROWSER_TIMEZONE`.
+
+### Captcha / Verification Detection
+
+If a navigation lands on a known captcha or verification page (detected by URL patterns like `/verify/captcha` or titles like "Checking your browser"), the browser automatically retries up to 2 times with randomized backoff (3-7 seconds). If all retries are exhausted, a warning suggests `--headed` mode or `--session-name` persistence.
 
 ## CDP Mode
 
 Connect to an existing browser via Chrome DevTools Protocol:
 
-By default in this fork, when you run commands without `--cdp`, agent-browser first tries `localhost:9333` (resident Chrome) and falls back to launching a local Playwright browser if CDP is unavailable.
+By default in this fork, when you run commands without `--cdp`, agent-browser requires an existing browser at `localhost:9333` (resident browser via CDP). If CDP is unavailable, the command fails fast instead of launching a new managed browser.
 
 ```bash
 # Start Chrome with: google-chrome --remote-debugging-port=9222

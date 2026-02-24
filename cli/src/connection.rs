@@ -215,7 +215,6 @@ pub fn ensure_daemon(
     proxy_bypass: Option<&str>,
     ignore_https_errors: bool,
     allow_file_access: bool,
-    profile: Option<&str>,
     state: Option<&str>,
     provider: Option<&str>,
     device: Option<&str>,
@@ -345,10 +344,6 @@ pub fn ensure_daemon(
             cmd.env("AGENT_BROWSER_ALLOW_FILE_ACCESS", "1");
         }
 
-        if let Some(prof) = profile {
-            cmd.env("AGENT_BROWSER_PROFILE", prof);
-        }
-
         if let Some(st) = state {
             cmd.env("AGENT_BROWSER_STATE", st);
         }
@@ -431,10 +426,6 @@ pub fn ensure_daemon(
 
         if allow_file_access {
             cmd.env("AGENT_BROWSER_ALLOW_FILE_ACCESS", "1");
-        }
-
-        if let Some(prof) = profile {
-            cmd.env("AGENT_BROWSER_PROFILE", prof);
         }
 
         if let Some(st) = state {

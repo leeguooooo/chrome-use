@@ -19,7 +19,6 @@ pub struct Config {
     pub session_name: Option<String>,
     pub executable_path: Option<String>,
     pub extensions: Option<Vec<String>>,
-    pub profile: Option<String>,
     pub state: Option<String>,
     pub proxy: Option<String>,
     pub proxy_bypass: Option<String>,
@@ -53,7 +52,6 @@ impl Config {
                 }
                 (a, b) => b.or(a),
             },
-            profile: other.profile.or(self.profile),
             state: other.state.or(self.state),
             proxy: other.proxy.or(self.proxy),
             proxy_bypass: other.proxy_bypass.or(self.proxy_bypass),
@@ -132,6 +130,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--device",
         "--session-name",
         "--color-scheme",
+        "--channel",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -188,7 +187,6 @@ pub struct Flags {
     pub executable_path: Option<String>,
     pub cdp: Option<String>,
     pub extensions: Vec<String>,
-    pub profile: Option<String>,
     pub state: Option<String>,
     pub proxy: Option<String>,
     pub proxy_bypass: Option<String>,
@@ -207,7 +205,6 @@ pub struct Flags {
     // (as opposed to being set only via environment variables)
     pub cli_executable_path: bool,
     pub cli_extensions: bool,
-    pub cli_profile: bool,
     pub cli_state: bool,
     pub cli_args: bool,
     pub cli_user_agent: bool,
@@ -257,7 +254,6 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .or(config.executable_path),
         cdp: config.cdp,
         extensions,
-        profile: env::var("AGENT_BROWSER_PROFILE").ok().or(config.profile),
         state: env::var("AGENT_BROWSER_STATE").ok().or(config.state),
         proxy: env::var("AGENT_BROWSER_PROXY").ok().or(config.proxy),
         proxy_bypass: env::var("AGENT_BROWSER_PROXY_BYPASS")
@@ -284,7 +280,6 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .or(config.color_scheme),
         cli_executable_path: false,
         cli_extensions: false,
-        cli_profile: false,
         cli_state: false,
         cli_args: false,
         cli_user_agent: false,
@@ -354,13 +349,6 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--cdp" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.cdp = Some(s.clone());
-                    i += 1;
-                }
-            }
-            "--profile" => {
-                if let Some(s) = args.get(i + 1) {
-                    flags.profile = Some(s.clone());
-                    flags.cli_profile = true;
                     i += 1;
                 }
             }
@@ -486,7 +474,6 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--executable-path",
         "--cdp",
         "--extension",
-        "--profile",
         "--state",
         "--proxy",
         "--proxy-bypass",
@@ -669,12 +656,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_profile_tracking() {
-        let flags = parse_flags(&args("--profile /path/to/profile snapshot"));
-        assert!(flags.cli_profile);
-    }
-
-    #[test]
     fn test_cli_annotate_tracking() {
         let flags = parse_flags(&args("--annotate screenshot"));
         assert!(flags.cli_annotate);
@@ -690,10 +671,9 @@ mod tests {
     #[test]
     fn test_cli_multiple_flags_tracking() {
         let flags = parse_flags(&args(
-            "--executable-path /chrome --profile /profile --proxy http://proxy snapshot",
+            "--executable-path /chrome --proxy http://proxy snapshot",
         ));
         assert!(flags.cli_executable_path);
-        assert!(flags.cli_profile);
         assert!(flags.cli_proxy);
         assert!(!flags.cli_extensions);
         assert!(!flags.cli_state);
@@ -712,7 +692,6 @@ mod tests {
             "sessionName": "my-app",
             "executablePath": "/usr/bin/chromium",
             "extensions": ["/ext1", "/ext2"],
-            "profile": "/tmp/profile",
             "state": "/tmp/state.json",
             "proxy": "http://proxy:8080",
             "proxyBypass": "localhost",
@@ -738,7 +717,6 @@ mod tests {
             config.extensions,
             Some(vec!["/ext1".to_string(), "/ext2".to_string()])
         );
-        assert_eq!(config.profile.as_deref(), Some("/tmp/profile"));
         assert_eq!(config.state.as_deref(), Some("/tmp/state.json"));
         assert_eq!(config.proxy.as_deref(), Some("http://proxy:8080"));
         assert_eq!(config.proxy_bypass.as_deref(), Some("localhost"));
@@ -784,7 +762,6 @@ mod tests {
         let user = Config {
             headed: Some(true),
             proxy: Some("http://user-proxy:8080".to_string()),
-            profile: Some("/user/profile".to_string()),
             ..Config::default()
         };
         let project = Config {
@@ -795,7 +772,6 @@ mod tests {
         let merged = user.merge(project);
         assert_eq!(merged.headed, Some(true)); // kept from user
         assert_eq!(merged.proxy.as_deref(), Some("http://project-proxy:9090")); // overridden by project
-        assert_eq!(merged.profile.as_deref(), Some("/user/profile")); // kept from user
         assert_eq!(merged.debug, Some(true)); // added by project
     }
 

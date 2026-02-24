@@ -6,7 +6,12 @@ export const metadata = pageMetadata("cdp-mode")
 
 Connect to an existing browser via Chrome DevTools Protocol:
 
-Default behavior in this fork: when `--cdp` is omitted, agent-browser first tries `localhost:9333` and falls back to local browser launch if CDP is unavailable.
+Default behavior in this fork: when `--cdp` is omitted, agent-browser requires an existing browser at `localhost:9333`. If CDP is unavailable, the command fails fast (no local-launch fallback).
+
+Project policy:
+
+- `--profile` / `AGENT_BROWSER_PROFILE` are forbidden
+- `--channel` / `AGENT_BROWSER_CHANNEL` are forbidden
 
 ```bash
 # Start Chrome with: google-chrome --remote-debugging-port=9222
@@ -112,7 +117,6 @@ This enables control of:
   </thead>
   <tbody>
     <tr><td><code>--session &lt;name&gt;</code></td><td>Use isolated session</td></tr>
-    <tr><td><code>--profile &lt;path&gt;</code></td><td>Persistent browser profile directory</td></tr>
     <tr><td><code>-p &lt;provider&gt;</code></td><td>Cloud browser provider (<code>browserbase</code>, <code>browseruse</code>, <code>kernel</code>)</td></tr>
     <tr><td><code>--headers &lt;json&gt;</code></td><td>HTTP headers scoped to origin</td></tr>
     <tr><td><code>--executable-path</code></td><td>Custom browser executable</td></tr>

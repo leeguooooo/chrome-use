@@ -249,13 +249,117 @@ export class BrowserManager {
     return undefined;
   }
 
+  // TLD -> {locale, timezone} mapping for automatic region consistency
+  private static readonly TLD_REGION_MAP: Record<string, { locale: string; timezone: string }> = {
+    tw: { locale: 'zh-TW', timezone: 'Asia/Taipei' },
+    cn: { locale: 'zh-CN', timezone: 'Asia/Shanghai' },
+    hk: { locale: 'zh-HK', timezone: 'Asia/Hong_Kong' },
+    jp: { locale: 'ja-JP', timezone: 'Asia/Tokyo' },
+    kr: { locale: 'ko-KR', timezone: 'Asia/Seoul' },
+    th: { locale: 'th-TH', timezone: 'Asia/Bangkok' },
+    vn: { locale: 'vi-VN', timezone: 'Asia/Ho_Chi_Minh' },
+    sg: { locale: 'en-SG', timezone: 'Asia/Singapore' },
+    my: { locale: 'ms-MY', timezone: 'Asia/Kuala_Lumpur' },
+    id: { locale: 'id-ID', timezone: 'Asia/Jakarta' },
+    ph: { locale: 'en-PH', timezone: 'Asia/Manila' },
+    br: { locale: 'pt-BR', timezone: 'America/Sao_Paulo' },
+    mx: { locale: 'es-MX', timezone: 'America/Mexico_City' },
+    ar: { locale: 'es-AR', timezone: 'America/Argentina/Buenos_Aires' },
+    de: { locale: 'de-DE', timezone: 'Europe/Berlin' },
+    fr: { locale: 'fr-FR', timezone: 'Europe/Paris' },
+    uk: { locale: 'en-GB', timezone: 'Europe/London' },
+    ru: { locale: 'ru-RU', timezone: 'Europe/Moscow' },
+    in: { locale: 'hi-IN', timezone: 'Asia/Kolkata' },
+    au: { locale: 'en-AU', timezone: 'Australia/Sydney' },
+  };
+
+  // Target URL set during navigation, used for region auto-detection
+  private targetUrl: string | undefined = undefined;
+
+  /**
+   * Set the target URL for region auto-detection.
+   * Called from navigate/open commands so locale/timezone can adapt.
+   * Applies CDP overrides to align locale/timezone with the target site's region.
+   */
+  async setTargetUrl(url: string): Promise<void> {
+    this.targetUrl = url;
+    const region = this.getRegionFromUrl(url);
+    if (!region) return;
+
+    // Skip if user has explicitly set locale/timezone via env
+    const envLocale = process.env.AGENT_BROWSER_LOCALE;
+    const envTimezone = process.env.AGENT_BROWSER_TIMEZONE || process.env.TZ;
+
+    try {
+      const page = this.getPage();
+      const cdp = await page.context().newCDPSession(page);
+
+      if (!envTimezone) {
+        await cdp
+          .send('Emulation.setTimezoneOverride', { timezoneId: region.timezone })
+          .catch(() => {});
+      }
+
+      if (!envLocale) {
+        await cdp.send('Emulation.setLocaleOverride', { locale: region.locale }).catch(() => {});
+        // Update Accept-Language header to match
+        const langHeader = this.buildAcceptLanguageHeader(region.locale);
+        const context = page.context();
+        const currentHeaders = this.contextHeaders ?? {};
+        await context.setExtraHTTPHeaders({ ...currentHeaders, 'Accept-Language': langHeader });
+      }
+
+      await cdp.detach().catch(() => {});
+    } catch {
+      // CDP not available (non-Chromium), skip dynamic override
+    }
+  }
+
+  private getRegionFromUrl(url?: string): { locale: string; timezone: string } | undefined {
+    if (!url) return undefined;
+    try {
+      const hostname = new URL(url).hostname;
+      const parts = hostname.split('.');
+      const tld = parts[parts.length - 1];
+      // Check compound TLDs like co.th, com.tw, co.id
+      const secondLevel = parts.length >= 2 ? parts[parts.length - 2] : '';
+      const compoundTld = `${secondLevel}.${tld}`;
+
+      // Try compound first (e.g., "co.th" -> "th", "com.tw" -> "tw")
+      const compoundMatch = BrowserManager.TLD_REGION_MAP[tld];
+      if (
+        compoundMatch &&
+        (secondLevel === 'co' ||
+          secondLevel === 'com' ||
+          secondLevel === 'or' ||
+          secondLevel === 'org')
+      ) {
+        return compoundMatch;
+      }
+      // Then direct TLD
+      if (BrowserManager.TLD_REGION_MAP[tld]) {
+        return BrowserManager.TLD_REGION_MAP[tld];
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private resolveStealthLocale(headers?: Record<string, string>): string {
     const headerLocale = this.getHeaderValue(headers, 'accept-language');
     const normalizedHeaderLocale = this.normalizeLocaleTag(headerLocale);
     if (normalizedHeaderLocale) return normalizedHeaderLocale;
 
+    // Explicit env var takes priority
+    const envLocale = this.normalizeLocaleTag(process.env.AGENT_BROWSER_LOCALE);
+    if (envLocale) return envLocale;
+
+    // Auto-detect from target URL TLD
+    const urlRegion = this.getRegionFromUrl(this.targetUrl);
+    if (urlRegion) return urlRegion.locale;
+
     const candidates = [
-      process.env.AGENT_BROWSER_LOCALE,
       process.env.LC_ALL,
       process.env.LC_MESSAGES,
       process.env.LANG,
@@ -269,16 +373,16 @@ export class BrowserManager {
   }
 
   private resolveStealthTimezoneId(): string | undefined {
-    const candidates = [
-      process.env.AGENT_BROWSER_TIMEZONE,
-      process.env.TZ,
-      Intl.DateTimeFormat().resolvedOptions().timeZone,
-    ];
-    for (const value of candidates) {
-      const timezone = value?.trim();
-      if (!timezone) continue;
-      if (timezone === 'UTC' || timezone.includes('/')) return timezone;
-    }
+    // Explicit env var takes priority
+    const envTz = process.env.AGENT_BROWSER_TIMEZONE?.trim() || process.env.TZ?.trim();
+    if (envTz && (envTz === 'UTC' || envTz.includes('/'))) return envTz;
+
+    // Auto-detect from target URL TLD
+    const urlRegion = this.getRegionFromUrl(this.targetUrl);
+    if (urlRegion) return urlRegion.timezone;
+
+    const systemTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (systemTz) return systemTz;
     return undefined;
   }
 
@@ -1409,21 +1513,10 @@ export class BrowserManager {
     // Determine CDP endpoint: prefer cdpUrl over cdpPort for flexibility
     const cdpEndpoint = options.cdpUrl ?? (options.cdpPort ? String(options.cdpPort) : undefined);
     const hasExtensions = !!options.extensions?.length;
-    const hasProfile = !!options.profile;
     const hasStorageState = !!options.storageState;
 
     if (hasExtensions && cdpEndpoint) {
       throw new Error('Extensions cannot be used with CDP connection');
-    }
-
-    if (hasProfile && cdpEndpoint) {
-      throw new Error('Profile cannot be used with CDP connection');
-    }
-
-    if (hasStorageState && hasProfile) {
-      throw new Error(
-        'Storage state cannot be used with profile (profile is already persistent storage)'
-      );
     }
 
     if (hasStorageState && hasExtensions) {
@@ -1510,6 +1603,10 @@ export class BrowserManager {
     const launcher =
       browserType === 'firefox' ? firefox : browserType === 'webkit' ? webkit : chromium;
 
+    // Chromium launches always use the Chrome channel unless a custom executable is provided.
+    const chromeChannel =
+      browserType === 'chromium' && !options.executablePath ? 'chrome' : undefined;
+
     const stealthPolicy = this.getStealthPolicy(browserType);
     const contextDefaults = this.buildStealthContextDefaults(stealthPolicy, options.headers);
     const extraHTTPHeaders = contextDefaults.extraHTTPHeaders;
@@ -1572,6 +1669,7 @@ export class BrowserManager {
         {
           headless: false,
           executablePath: options.executablePath,
+          ...(chromeChannel && { channel: chromeChannel }),
           args: allArgs,
           viewport,
           extraHTTPHeaders,
@@ -1584,29 +1682,12 @@ export class BrowserManager {
         }
       );
       this.isPersistentContext = true;
-    } else if (hasProfile) {
-      // Profile uses persistent context for durable cookies/storage
-      // Expand ~ to home directory since it won't be shell-expanded
-      const profilePath = options.profile!.replace(/^~\//, os.homedir() + '/');
-      context = await launcher.launchPersistentContext(profilePath, {
-        headless: options.headless ?? false,
-        executablePath: options.executablePath,
-        args: baseArgs,
-        viewport,
-        extraHTTPHeaders,
-        userAgent: contextUserAgent,
-        ...(this.contextLocale && { locale: this.contextLocale }),
-        ...(this.contextTimezoneId && { timezoneId: this.contextTimezoneId }),
-        ...(options.proxy && { proxy: options.proxy }),
-        ignoreHTTPSErrors: options.ignoreHTTPSErrors ?? false,
-        ...(this.colorScheme && { colorScheme: this.colorScheme }),
-      });
-      this.isPersistentContext = true;
     } else {
       // Regular ephemeral browser
       this.browser = await launcher.launch({
         headless: options.headless ?? false,
         executablePath: options.executablePath,
+        ...(chromeChannel && { channel: chromeChannel }),
         args: baseArgs,
       });
       this.cdpEndpoint = null;
