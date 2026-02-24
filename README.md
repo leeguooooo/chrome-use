@@ -167,6 +167,22 @@ agent-browser connect <port>          # Connect to browser via CDP
 agent-browser close                   # Close browser (aliases: quit, exit)
 ```
 
+### Typing Delay And Literal Text
+
+Use `--delay` as a real CLI option (outside the text argument):
+
+```bash
+agent-browser type @e2 "iphone" --delay 120
+agent-browser keyboard type "iphone" --delay 120
+```
+
+If your literal text must include `--delay`, stop option parsing with `--`:
+
+```bash
+agent-browser type @e2 -- "--delay 120"
+agent-browser keyboard type -- "--delay 120"
+```
+
 ### Get Info
 
 ```bash
@@ -746,12 +762,14 @@ The `--allow-file-access` flag adds Chromium flags (`--allow-file-access-from-fi
 
 `agent-browser-stealth` is built around stealth as a primary design goal, not an add-on.
 Stealth is **always on** with no flag needed. Every browser session automatically applies anti-detection countermeasures:
+Legacy protocol field `launch.stealth` is accepted for compatibility but ignored.
 
 - **Uses Chrome channel for Chromium launches** -- local Chromium sessions are launched through Playwright's `chrome` channel for a genuine Chrome fingerprint
 
 - Removes `navigator.webdriver` automation indicator
 - Disables Chromium's `AutomationControlled` blink feature
 - Replaces "HeadlessChrome" in User-Agent and userAgentData (including CDP-level override)
+- Preserves explicit custom User-Agent from `--user-agent` / `launch({ userAgent })`
 - Uses ANGLE rendering instead of SwiftShader to avoid GPU fingerprinting
 - Adds realistic `navigator.plugins` and `navigator.mimeTypes` (passes `instanceof` checks)
 - Patches `window.chrome.runtime` to match real Chrome
@@ -763,20 +781,49 @@ Stealth is **always on** with no flag needed. Every browser session automaticall
 - Sets opaque background color (headless default is transparent)
 - Cleans up CDP-injected properties on the document
 
-### Stealth Verification
+### Stealth Verification / Anti-detection test results
 
-On February 24, 2026, local validation against CreepJS using `scripts/check-creepjs-headless.js` reported:
+The following public anti-bot / fingerprinting sites were tested with `agent-browser-stealth` (headed mode). All passed with no captcha or block.
+
+**1. [bot.sannysoft.com](https://bot.sannysoft.com/)**
+
+| Test | Result |
+|------|--------|
+| User Agent (Old) | ✅ |
+| **WebDriver (New)** | ✅ missing (passed) |
+| WebDriver Advanced | ✅ |
+| Chrome (New) | ✅ |
+| Permissions / Plugins / Languages / WebGL / Broken Image | ✅ |
+| **navigator.webdriver** | **undefined** ✅ |
+
+**2. [CreepJS](https://abrahamjuliot.github.io/creepjs/)**
 
 | Metric | Result |
-| --- | --- |
-| like headless | 0% |
-| headless | 0% |
-| stealth | 0% |
+|--------|--------|
+| like headless | 0% ✅ |
+| headless | 0% ✅ |
+| stealth | 0% ✅ |
 
-Reproduce:
+**3. [arh.antoinevastel.com/bots/areyouheadless](https://arh.antoinevastel.com/bots/areyouheadless)**
+
+- **"You are not Chrome headless"** ✅
+
+**4. [infosimples.github.io/detect-headless](https://infosimples.github.io/detect-headless)**
+
+- Webdriver: **Missing webdriver** ✅  
+- Plugins / Mime / Chrome / Permission / Devtool Protocol / Broken Image: normal ✅  
+
+Reproduce (CreepJS):
 
 ```bash
 node scripts/check-creepjs-headless.js --binary ./cli/target/release/agent-browser
+```
+
+Manual check against all sites:
+
+```bash
+agent-browser-stealth --session test --headed open https://bot.sannysoft.com/
+# then: CreepJS, areyouheadless, detect-headless
 ```
 
 ### Humanized Interactions
