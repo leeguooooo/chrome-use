@@ -106,6 +106,8 @@ describe('Stealth mode', () => {
       hasCanShare: typeof navigator.canShare === 'function',
       hasConnectionDownlinkMax:
         !!navigator.connection && typeof navigator.connection.downlinkMax === 'number',
+      hasConnectionDownlinkMaxOnProto:
+        !!navigator.connection && 'downlinkMax' in Object.getPrototypeOf(navigator.connection),
     }));
 
     expect(signals.mimeTypesLength).toBeGreaterThan(0);
@@ -113,5 +115,59 @@ describe('Stealth mode', () => {
     expect(signals.hasShare).toBe(true);
     expect(signals.hasCanShare).toBe(true);
     expect(signals.hasConnectionDownlinkMax).toBe(true);
+    expect(signals.hasConnectionDownlinkMaxOnProto).toBe(true);
+  });
+
+  it('exposes contacts manager and content index APIs', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const signals = await browser.getPage().evaluate(() => ({
+      hasContacts: 'contacts' in navigator,
+      contactsManagerCtor: typeof (window as any).ContactsManager === 'function',
+      hasContentIndexCtor: typeof (window as any).ContentIndex === 'function',
+      hasServiceWorkerRegistration: typeof ServiceWorkerRegistration !== 'undefined',
+      hasContentIndexOnSWR:
+        typeof ServiceWorkerRegistration !== 'undefined' &&
+        ('contentIndex' in ServiceWorkerRegistration.prototype ||
+          'index' in ServiceWorkerRegistration.prototype),
+      notificationPermission: typeof Notification !== 'undefined' ? Notification.permission : null,
+      screenMatchesViewport:
+        screen.width === window.innerWidth && screen.height === window.innerHeight,
+    }));
+
+    expect(signals.hasContacts).toBe(true);
+    expect(signals.contactsManagerCtor).toBe(true);
+    expect(signals.hasContentIndexCtor).toBe(true);
+    if (signals.hasServiceWorkerRegistration) {
+      expect(signals.hasContentIndexOnSWR).toBe(true);
+    }
+    expect(signals.notificationPermission).toBe('default');
+    expect(signals.screenMatchesViewport).toBe(false);
+  });
+
+  it('exposes downlinkMax inside dedicated workers', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const workerSignals = await browser.getPage().evaluate(async () => {
+      return new Promise<{
+        hasConnection: boolean;
+        hasDownlinkMax: boolean;
+        hasDownlinkMaxOnProto: boolean;
+        downlinkMax: unknown;
+      }>((resolve) => {
+        const source =
+          "postMessage({hasConnection: !!navigator.connection, hasDownlinkMax: navigator.connection ? ('downlinkMax' in navigator.connection) : false, hasDownlinkMaxOnProto: navigator.connection ? ('downlinkMax' in Object.getPrototypeOf(navigator.connection)) : false, downlinkMax: navigator.connection && navigator.connection.downlinkMax});";
+        const blob = new Blob([source], { type: 'application/javascript' });
+        const worker = new Worker(URL.createObjectURL(blob));
+        worker.onmessage = (event) => resolve(event.data);
+      });
+    });
+
+    expect(workerSignals.hasConnection).toBe(true);
+    expect(workerSignals.hasDownlinkMax).toBe(true);
+    expect(workerSignals.hasDownlinkMaxOnProto).toBe(true);
+    expect(typeof workerSignals.downlinkMax).toBe('number');
   });
 });

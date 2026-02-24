@@ -6,7 +6,7 @@
  * Puppeteer / headless Chrome.
  */
 
-import type { BrowserContext } from 'playwright-core';
+import type { BrowserContext, Page } from 'playwright-core';
 
 export interface StealthScriptOptions {
   locale?: string;
@@ -27,6 +27,80 @@ export async function applyStealthScripts(
   options: StealthScriptOptions = {}
 ): Promise<void> {
   await context.addInitScript({ content: buildStealthScript(options) });
+
+  // Apply CDP-level User-Agent override so Workers also get the patched UA.
+  // This must be done per-page since CDP sessions are page-scoped.
+  for (const page of context.pages()) {
+    await applyCDPStealthToPage(page);
+  }
+  context.on('page', (page: Page) => applyCDPStealthToPage(page));
+}
+
+async function applyCDPStealthToPage(page: Page): Promise<void> {
+  try {
+    const cdp = await page.context().newCDPSession(page);
+    const ua = await cdp.send('Browser.getVersion').catch(() => null);
+    const rawUA = ua?.userAgent ?? '';
+    const patchedUA = rawUA.replace(/HeadlessChrome/g, 'Chrome');
+
+    const versionMatch = patchedUA.match(/Chrome\/(\d+)/);
+    const majorVersion = versionMatch?.[1] ?? '120';
+    const fullVersionMatch = patchedUA.match(/Chrome\/([\d.]+)/);
+    const fullVersion = fullVersionMatch?.[1] ?? `${majorVersion}.0.0.0`;
+
+    await cdp.send('Emulation.setUserAgentOverride', {
+      userAgent: patchedUA,
+      acceptLanguage: 'en-US,en;q=0.9',
+      platform: getPlatformString(),
+      userAgentMetadata: {
+        brands: [
+          { brand: 'Chromium', version: majorVersion },
+          { brand: 'Google Chrome', version: majorVersion },
+          { brand: 'Not-A.Brand', version: '99' },
+        ],
+        fullVersionList: [
+          { brand: 'Chromium', version: fullVersion },
+          { brand: 'Google Chrome', version: fullVersion },
+          { brand: 'Not-A.Brand', version: '99.0.0.0' },
+        ],
+        fullVersion: fullVersion,
+        platform: getPlatformHint(),
+        platformVersion: getPlatformVersionHint(),
+        architecture: 'x86',
+        model: '',
+        mobile: false,
+        bitness: '64',
+        wow64: false,
+      },
+    });
+    await cdp.detach();
+  } catch {
+    // CDP not available (non-Chromium) -- silently skip
+  }
+}
+
+function getPlatformString(): string {
+  if (typeof process !== 'undefined') {
+    if (process.platform === 'darwin') return 'macOS';
+    if (process.platform === 'win32') return 'Windows';
+  }
+  return 'Linux';
+}
+
+function getPlatformHint(): string {
+  if (typeof process !== 'undefined') {
+    if (process.platform === 'darwin') return 'macOS';
+    if (process.platform === 'win32') return 'Windows';
+  }
+  return 'Linux';
+}
+
+function getPlatformVersionHint(): string {
+  if (typeof process !== 'undefined') {
+    if (process.platform === 'darwin') return '13.0.0';
+    if (process.platform === 'win32') return '10.0.0';
+  }
+  return '6.1.0';
 }
 
 function normalizeLocale(locale?: string): string | undefined {
@@ -65,11 +139,15 @@ function buildStealthScript(options: StealthScriptOptions): string {
     patchWebGLVendor(),
     patchCdcProperties(),
     patchWindowDimensions(),
+    patchScreenDimensions(),
     patchScreenAvailability(),
     patchNavigatorHardwareConcurrency(),
+    patchNotificationPermission(),
     patchNavigatorConnection(),
+    patchWorkerConnection(),
     patchNavigatorShare(),
     patchNavigatorContacts(),
+    patchContentIndex(),
     patchPdfViewerEnabled(),
     patchMediaDevices(),
     patchUserAgentData(),
@@ -433,6 +511,37 @@ function patchScreenAvailability(): string {
 }
 
 /**
+ * Avoid screen == viewport fingerprints common in headless defaults.
+ */
+function patchScreenDimensions(): string {
+  return `(function(){
+  const patchNumber = (target, key, value) => {
+    try {
+      Object.defineProperty(target, key, {
+        get: () => value,
+        configurable: true,
+      });
+    } catch {}
+  };
+  const width = Number(screen.width);
+  const height = Number(screen.height);
+  const innerWidth = Number(window.innerWidth);
+  const innerHeight = Number(window.innerHeight);
+  if (
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    Number.isFinite(innerWidth) &&
+    Number.isFinite(innerHeight) &&
+    width === innerWidth &&
+    height === innerHeight
+  ) {
+    patchNumber(screen, 'width', Math.max(innerWidth + 86, 1366));
+    patchNumber(screen, 'height', Math.max(innerHeight + 48, 768));
+  }
+})();`;
+}
+
+/**
  * navigator.hardwareConcurrency: headless often reports 2 (CI);
  * real desktops typically have >= 4 cores.
  */
@@ -448,6 +557,23 @@ function patchNavigatorHardwareConcurrency(): string {
 }
 
 /**
+ * Keep notifications in "default" state instead of denied-by-default headless behavior.
+ */
+function patchNotificationPermission(): string {
+  return `(function(){
+  if (typeof Notification === 'undefined') return;
+  const current = Notification.permission;
+  if (current === 'granted') return;
+  try {
+    Object.defineProperty(Notification, 'permission', {
+      get: () => 'default',
+      configurable: true,
+    });
+  } catch {}
+})();`;
+}
+
+/**
  * Add missing connection.downlinkMax in Chromium headless environments.
  */
 function patchNavigatorConnection(): string {
@@ -455,10 +581,101 @@ function patchNavigatorConnection(): string {
   if (!navigator.connection) return;
   const conn = navigator.connection;
   if (typeof conn.downlinkMax === 'number') return;
+  const defineDownlinkMax = (target) => {
+    if (!target) return false;
+    try {
+      Object.defineProperty(target, 'downlinkMax', {
+        get: () => 10,
+        configurable: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
   try {
-    Object.defineProperty(conn, 'downlinkMax', {
-      get: () => 10,
+    const proto = Object.getPrototypeOf(conn);
+    if (defineDownlinkMax(proto)) {
+      try { delete conn.downlinkMax; } catch {}
+      return;
+    }
+  } catch {}
+  defineDownlinkMax(conn);
+})();`;
+}
+
+/**
+ * Ensure dedicated workers expose navigator.connection.downlinkMax too.
+ */
+function patchWorkerConnection(): string {
+  return `(function(){
+  if (typeof Worker !== 'function') return;
+  const NativeWorker = Worker;
+  const workerPrelude = \`
+(() => {
+  try {
+    if (!navigator || !navigator.connection) return;
+    const conn = navigator.connection;
+    if (typeof conn.downlinkMax === 'number') return;
+    const defineDownlinkMax = (target) => {
+      if (!target) return false;
+      try {
+        Object.defineProperty(target, 'downlinkMax', {
+          get: () => 10,
+          configurable: true,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      const proto = Object.getPrototypeOf(conn);
+      if (defineDownlinkMax(proto)) {
+        try { delete conn.downlinkMax; } catch {}
+        return;
+      }
+    } catch {}
+    defineDownlinkMax(conn);
+  } catch {}
+})();
+\`;
+  const buildPatchedScript = (url, options) => {
+    const scriptUrl = String(url);
+    const isModule = options && options.type === 'module';
+    const loader = isModule
+      ? \`import \${JSON.stringify(scriptUrl)};\`
+      : \`importScripts(\${JSON.stringify(scriptUrl)});\`;
+    return \`\${workerPrelude}\\n\${loader}\`;
+  };
+  const WrappedWorker = function(scriptURL, options) {
+    try {
+      const source = buildPatchedScript(scriptURL, options);
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const patchedUrl = URL.createObjectURL(blob);
+      return new NativeWorker(patchedUrl, options);
+    } catch {
+      return new NativeWorker(scriptURL, options);
+    }
+  };
+  WrappedWorker.prototype = NativeWorker.prototype;
+  try {
+    Object.setPrototypeOf(WrappedWorker, NativeWorker);
+  } catch {}
+  try {
+    Object.defineProperty(WrappedWorker, 'name', { value: 'Worker', configurable: true });
+  } catch {}
+  try {
+    Object.defineProperty(WrappedWorker, 'toString', {
+      value: () => NativeWorker.toString(),
       configurable: true,
+    });
+  } catch {}
+  try {
+    Object.defineProperty(window, 'Worker', {
+      value: WrappedWorker,
+      configurable: true,
+      writable: true,
     });
   } catch {}
 })();`;
@@ -493,16 +710,83 @@ function patchNavigatorShare(): string {
  */
 function patchNavigatorContacts(): string {
   return `(function(){
-  if (navigator.contacts) return;
+  const ContactsCtor = typeof ContactsManager === 'function'
+    ? ContactsManager
+    : function ContactsManager() {};
   try {
-    Object.defineProperty(navigator, 'contacts', {
-      value: {
-        select: async () => [],
-        getProperties: () => ['name', 'email', 'tel', 'address', 'icon'],
-      },
+    Object.defineProperty(window, 'ContactsManager', {
+      value: ContactsCtor,
       configurable: true,
     });
   } catch {}
+  const manager = Object.create(ContactsCtor.prototype || Object.prototype);
+  if (typeof manager.select !== 'function') {
+    manager.select = async () => [];
+  }
+  if (typeof manager.getProperties !== 'function') {
+    manager.getProperties = () => ['name', 'email', 'tel', 'address', 'icon'];
+  }
+  const defineContacts = (target) => {
+    if (!target) return false;
+    try {
+      Object.defineProperty(target, 'contacts', {
+        get: () => manager,
+        configurable: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (defineContacts(navigator)) return;
+  try {
+    defineContacts(Object.getPrototypeOf(navigator));
+  } catch {}
+})();`;
+}
+
+/**
+ * Expose ContentIndex APIs expected on modern Chromium.
+ */
+function patchContentIndex(): string {
+  return `(function(){
+  const ContentIndexCtor = typeof ContentIndex === 'function'
+    ? ContentIndex
+    : function ContentIndex() {};
+  try {
+    Object.defineProperty(window, 'ContentIndex', {
+      value: ContentIndexCtor,
+      configurable: true,
+    });
+  } catch {}
+  const index = Object.create(ContentIndexCtor.prototype || Object.prototype);
+  if (typeof index.add !== 'function') {
+    index.add = async () => undefined;
+  }
+  if (typeof index.delete !== 'function') {
+    index.delete = async () => undefined;
+  }
+  if (typeof index.getAll !== 'function') {
+    index.getAll = async () => [];
+  }
+  if (typeof ServiceWorkerRegistration === 'undefined') return;
+  const defineIndex = (key) => {
+    try {
+      Object.defineProperty(ServiceWorkerRegistration.prototype, key, {
+        get: () => index,
+        configurable: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!('contentIndex' in ServiceWorkerRegistration.prototype)) {
+    defineIndex('contentIndex');
+  }
+  if (!('index' in ServiceWorkerRegistration.prototype)) {
+    defineIndex('index');
+  }
 })();`;
 }
 
