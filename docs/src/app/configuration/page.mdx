@@ -70,7 +70,6 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
     <tr><td><code>device</code></td><td><code>--device</code></td><td>string</td></tr>
     <tr><td><code>ignoreHttpsErrors</code></td><td><code>--ignore-https-errors</code></td><td>boolean</td></tr>
     <tr><td><code>allowFileAccess</code></td><td><code>--allow-file-access</code></td><td>boolean</td></tr>
-    <tr><td><code>stealth</code></td><td><code>--stealth</code></td><td>boolean (default: true)</td></tr>
     <tr><td><code>cdp</code></td><td><code>--cdp</code></td><td>string</td></tr>
     <tr><td><code>autoConnect</code></td><td><code>--auto-connect</code></td><td>boolean</td></tr>
     <tr><td><code>colorScheme</code></td><td><code>--color-scheme</code></td><td>string (<code>dark</code>, <code>light</code>, <code>no-preference</code>)</td></tr>
@@ -132,7 +131,7 @@ agent-browser --headed open example.com       # same as --headed true
 agent-browser --headed true open example.com  # explicit
 ```
 
-This applies to all boolean flags: `--headed`, `--debug`, `--json`, `--ignore-https-errors`, `--allow-file-access`, `--stealth`, `--auto-connect`.
+This applies to all boolean flags: `--headed`, `--debug`, `--json`, `--ignore-https-errors`, `--allow-file-access`, `--auto-connect`.
 
 ## Extensions Merging
 
