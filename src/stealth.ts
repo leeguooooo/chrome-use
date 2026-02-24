@@ -8,6 +8,10 @@
 
 import type { BrowserContext } from 'playwright-core';
 
+export interface StealthScriptOptions {
+  locale?: string;
+}
+
 /**
  * Chromium args that reduce automation fingerprint.
  * Intended to be merged into the user-supplied args array at launch time.
@@ -18,22 +22,52 @@ export const STEALTH_CHROMIUM_ARGS: string[] = ['--disable-blink-features=Automa
  * Apply all stealth patches to a BrowserContext.
  * Must be called BEFORE any page is created / navigated.
  */
-export async function applyStealthScripts(context: BrowserContext): Promise<void> {
-  await context.addInitScript({ content: buildStealthScript() });
+export async function applyStealthScripts(
+  context: BrowserContext,
+  options: StealthScriptOptions = {}
+): Promise<void> {
+  await context.addInitScript({ content: buildStealthScript(options) });
 }
 
-function buildStealthScript(): string {
+function normalizeLocale(locale?: string): string | undefined {
+  if (!locale) return undefined;
+  const trimmed = locale.trim();
+  if (!trimmed) return undefined;
+  const cleaned = trimmed.split(',')[0]?.split(';')[0]?.replace(/_/g, '-');
+  if (!cleaned) return undefined;
+  try {
+    return new Intl.Locale(cleaned).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function deriveLanguages(locale?: string): string[] {
+  const normalized = normalizeLocale(locale) ?? 'en-US';
+  const base = normalized.split('-')[0];
+  if (!base || base === normalized) return [normalized];
+  return [normalized, base];
+}
+
+function buildStealthScript(options: StealthScriptOptions): string {
+  const locale = normalizeLocale(options.locale) ?? 'en-US';
+  const languages = deriveLanguages(locale);
+  const configScript = `const __abStealth = ${JSON.stringify({ locale, languages })};`;
+
   // Each patch is an IIFE so variable scoping is clean
   return [
+    configScript,
     patchNavigatorWebdriver(),
     patchChromeRuntime(),
+    patchNavigatorLanguages(),
     patchNavigatorPlugins(),
     patchNavigatorPermissions(),
     patchWebGLVendor(),
     patchCdcProperties(),
-    patchIframeContentWindow(),
+    patchWindowDimensions(),
     patchNavigatorHardwareConcurrency(),
     patchMediaDevices(),
+    patchUserAgentData(),
     patchUserAgent(),
     patchPerformanceMemory(),
   ].join('\n');
@@ -56,6 +90,9 @@ function patchNavigatorWebdriver(): string {
   removeWebdriver(navigator);
   removeWebdriver(Object.getPrototypeOf(navigator));
   removeWebdriver(Navigator.prototype);
+  if (typeof WorkerNavigator !== 'undefined') {
+    removeWebdriver(WorkerNavigator.prototype);
+  }
 })();`;
 }
 
@@ -67,11 +104,56 @@ function patchChromeRuntime(): string {
   return `(function(){
   if (!window.chrome) { window.chrome = {}; }
   if (!window.chrome.runtime) {
-    window.chrome.runtime = {
-      connect: function(){},
-      sendMessage: function(){},
+    const makeEvent = () => ({
+      addListener: () => {},
+      removeListener: () => {},
+      hasListener: () => false,
+      hasListeners: () => false,
+      dispatch: () => {},
+    });
+    const makePort = () => ({
+      name: '',
+      sender: undefined,
+      disconnect: () => {},
+      onDisconnect: makeEvent(),
+      onMessage: makeEvent(),
+      postMessage: () => {},
+    });
+    const runtime = {
+      id: undefined,
+      connect: () => makePort(),
+      sendMessage: () => undefined,
+      onConnect: makeEvent(),
+      onMessage: makeEvent(),
     };
+    Object.defineProperty(window.chrome, 'runtime', {
+      value: runtime,
+      configurable: true,
+    });
   }
+})();`;
+}
+
+/**
+ * Keep navigator.language + navigator.languages aligned with launch locale.
+ */
+function patchNavigatorLanguages(): string {
+  return `(function(){
+  const config = (typeof __abStealth === 'object' && __abStealth) ? __abStealth : null;
+  if (!config || !Array.isArray(config.languages) || config.languages.length === 0) return;
+  const locale = typeof config.locale === 'string' ? config.locale : config.languages[0];
+  try {
+    Object.defineProperty(navigator, 'language', {
+      get: () => locale,
+      configurable: true,
+    });
+  } catch {}
+  try {
+    Object.defineProperty(navigator, 'languages', {
+      get: () => config.languages.slice(),
+      configurable: true,
+    });
+  } catch {}
 })();`;
 }
 
@@ -115,14 +197,42 @@ function patchNavigatorPlugins(): string {
  */
 function patchNavigatorPermissions(): string {
   return `(function(){
-  if (!navigator.permissions) return;
+  if (!navigator.permissions || !navigator.permissions.query) return;
   const origQuery = navigator.permissions.query.bind(navigator.permissions);
-  navigator.permissions.query = (params) => {
-    if (params.name === 'notifications') {
-      return Promise.resolve({ state: Notification.permission, onchange: null });
+  const makePermissionStatus = (state) => {
+    if (typeof PermissionStatus !== 'undefined') {
+      const status = Object.create(PermissionStatus.prototype);
+      Object.defineProperty(status, 'state', {
+        value: state,
+        writable: false,
+        enumerable: true,
+      });
+      Object.defineProperty(status, 'onchange', {
+        value: null,
+        writable: true,
+        enumerable: true,
+      });
+      return status;
     }
-    return origQuery(params);
+    return { state, onchange: null };
   };
+  const patchedQuery = new Proxy(origQuery, {
+    apply(target, thisArg, argList) {
+      const params = argList && argList[0];
+      if (params && params.name === 'notifications') {
+        const state = (typeof Notification !== 'undefined' && Notification.permission) || 'default';
+        return Promise.resolve(makePermissionStatus(state));
+      }
+      return Reflect.apply(target, navigator.permissions, argList);
+    }
+  });
+  try {
+    Object.defineProperty(navigator.permissions, 'query', {
+      value: patchedQuery,
+      configurable: true,
+      writable: true,
+    });
+  } catch {}
 })();`;
 }
 
@@ -179,20 +289,56 @@ function patchCdcProperties(): string {
  * contentWindow on cross-origin iframes: Playwright sometimes returns null
  * where real browsers return a (restricted) Window object.
  */
-function patchIframeContentWindow(): string {
+function patchWindowDimensions(): string {
   return `(function(){
-  const orig = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
-  if (orig && orig.get) {
-    Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
-      get: function() {
-        const w = orig.get.call(this);
-        if (w === null) {
-          return window;
-        }
-        return w;
-      },
-      configurable: true,
-    });
+  const widthDelta = 12;
+  const heightDelta = 74;
+  const patchWidth =
+    !Number.isFinite(window.outerWidth) ||
+    window.outerWidth === 0 ||
+    Math.abs(window.outerWidth - window.innerWidth) <= 1;
+  const patchHeight =
+    !Number.isFinite(window.outerHeight) ||
+    window.outerHeight === 0 ||
+    Math.abs(window.outerHeight - window.innerHeight) <= 1;
+  if (patchWidth) {
+    try {
+      Object.defineProperty(window, 'outerWidth', {
+        get: () => Math.max(window.innerWidth + widthDelta, window.innerWidth),
+        configurable: true,
+      });
+    } catch {}
+  }
+  if (patchHeight) {
+    try {
+      Object.defineProperty(window, 'outerHeight', {
+        get: () => Math.max(window.innerHeight + heightDelta, window.innerHeight),
+        configurable: true,
+      });
+    } catch {}
+  }
+  const patchScreenPosition =
+    (!Number.isFinite(window.screenX) || !Number.isFinite(window.screenY)) ||
+    (window.screenX === 0 && window.screenY === 0 && (patchWidth || patchHeight));
+  if (patchScreenPosition) {
+    try {
+      Object.defineProperty(window, 'screenX', {
+        get: () => 16,
+        configurable: true,
+      });
+      Object.defineProperty(window, 'screenY', {
+        get: () => 72,
+        configurable: true,
+      });
+      Object.defineProperty(window, 'screenLeft', {
+        get: () => 16,
+        configurable: true,
+      });
+      Object.defineProperty(window, 'screenTop', {
+        get: () => 72,
+        configurable: true,
+      });
+    } catch {}
   }
 })();`;
 }
@@ -253,6 +399,63 @@ function patchUserAgent(): string {
       configurable: true,
     });
   }
+})();`;
+}
+
+/**
+ * Ensure userAgentData does not expose "HeadlessChrome" brand tokens.
+ */
+function patchUserAgentData(): string {
+  return `(function(){
+  const uaData = navigator.userAgentData;
+  if (!uaData) return;
+  const sanitizeBrand = (brand) => {
+    if (typeof brand !== 'string') return brand;
+    return brand.replace(/HeadlessChrome/gi, 'Google Chrome');
+  };
+  const patchBrandList = (value) => {
+    if (!Array.isArray(value)) return value;
+    return value.map((entry) => ({
+      ...entry,
+      brand: sanitizeBrand(entry.brand),
+    }));
+  };
+  const patched = Object.create(Object.getPrototypeOf(uaData));
+  Object.defineProperties(patched, {
+    brands: {
+      get: () => patchBrandList(uaData.brands),
+      enumerable: true,
+    },
+    mobile: {
+      get: () => uaData.mobile,
+      enumerable: true,
+    },
+    platform: {
+      get: () => uaData.platform,
+      enumerable: true,
+    },
+  });
+  patched.toJSON = () => ({
+    brands: patchBrandList(uaData.brands),
+    mobile: uaData.mobile,
+    platform: uaData.platform,
+  });
+  patched.getHighEntropyValues = async (hints) => {
+    const values = await uaData.getHighEntropyValues(hints);
+    if (values && typeof values === 'object') {
+      if ('brands' in values) values.brands = patchBrandList(values.brands);
+      if ('fullVersionList' in values) {
+        values.fullVersionList = patchBrandList(values.fullVersionList);
+      }
+    }
+    return values;
+  };
+  try {
+    Object.defineProperty(navigator, 'userAgentData', {
+      get: () => patched,
+      configurable: true,
+    });
+  } catch {}
 })();`;
 }
 

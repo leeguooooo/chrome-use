@@ -27,7 +27,11 @@ import {
   decryptData,
   ENCRYPTION_KEY_ENV,
 } from './state-utils.js';
-import { STEALTH_CHROMIUM_ARGS, applyStealthScripts } from './stealth.js';
+import {
+  STEALTH_CHROMIUM_ARGS,
+  applyStealthScripts,
+  type StealthScriptOptions,
+} from './stealth.js';
 
 /**
  * Returns the default Playwright timeout in milliseconds for standard operations.
@@ -114,6 +118,12 @@ export interface StealthStatus {
   providerManaged: boolean;
 }
 
+interface StealthContextDefaults {
+  locale?: string;
+  timezoneId?: string;
+  extraHTTPHeaders?: Record<string, string>;
+}
+
 /**
  * Manages the Playwright browser lifecycle with multiple tabs/windows
  */
@@ -143,6 +153,10 @@ export class BrowserManager {
   private colorScheme: 'light' | 'dark' | 'no-preference' | null = null;
   private stealthEnabled: boolean = false;
   private stealthConnectionKind: StealthConnectionKind = 'local';
+  private contextLocale: string | undefined = undefined;
+  private contextTimezoneId: string | undefined = undefined;
+  private contextHeaders: Record<string, string> | undefined = undefined;
+  private contextUserAgent: string | undefined = undefined;
 
   /**
    * Set the persistent color scheme preference.
@@ -212,13 +226,130 @@ export class BrowserManager {
     };
   }
 
+  private normalizeLocaleTag(locale?: string): string | undefined {
+    if (!locale) return undefined;
+    const cleaned = locale.trim().split(',')[0]?.split(';')[0]?.replace(/_/g, '-');
+    if (!cleaned) return undefined;
+    try {
+      return new Intl.Locale(cleaned).toString();
+    } catch {
+      return undefined;
+    }
+  }
+
+  private buildAcceptLanguageHeader(locale: string): string {
+    const baseLanguage = locale.split('-')[0];
+    if (!baseLanguage || baseLanguage === locale) {
+      return `${locale};q=0.9`;
+    }
+    return `${locale},${baseLanguage};q=0.9`;
+  }
+
+  private getHeaderValue(
+    headers: Record<string, string> | undefined,
+    name: string
+  ): string | undefined {
+    if (!headers) return undefined;
+    const target = name.toLowerCase();
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase() === target) return value;
+    }
+    return undefined;
+  }
+
+  private resolveStealthLocale(headers?: Record<string, string>): string {
+    const headerLocale = this.getHeaderValue(headers, 'accept-language');
+    const normalizedHeaderLocale = this.normalizeLocaleTag(headerLocale);
+    if (normalizedHeaderLocale) return normalizedHeaderLocale;
+
+    const candidates = [
+      process.env.AGENT_BROWSER_LOCALE,
+      process.env.LC_ALL,
+      process.env.LC_MESSAGES,
+      process.env.LANG,
+      Intl.DateTimeFormat().resolvedOptions().locale,
+    ];
+    for (const candidate of candidates) {
+      const normalized = this.normalizeLocaleTag(candidate);
+      if (normalized) return normalized;
+    }
+    return 'en-US';
+  }
+
+  private resolveStealthTimezoneId(): string | undefined {
+    const candidates = [
+      process.env.AGENT_BROWSER_TIMEZONE,
+      process.env.TZ,
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    ];
+    for (const value of candidates) {
+      const timezone = value?.trim();
+      if (!timezone) continue;
+      if (timezone === 'UTC' || timezone.includes('/')) return timezone;
+    }
+    return undefined;
+  }
+
+  private buildStealthContextDefaults(
+    policy: StealthPolicy,
+    headers?: Record<string, string>
+  ): StealthContextDefaults {
+    if (!policy.enabled) {
+      return { extraHTTPHeaders: headers };
+    }
+
+    const locale = this.resolveStealthLocale(headers);
+    const timezoneId = this.resolveStealthTimezoneId();
+    const hasAcceptLanguage = this.getHeaderValue(headers, 'accept-language') !== undefined;
+    const extraHTTPHeaders = hasAcceptLanguage
+      ? headers
+      : {
+          ...(headers ?? {}),
+          'Accept-Language': this.buildAcceptLanguageHeader(locale),
+        };
+
+    return {
+      locale,
+      timezoneId,
+      extraHTTPHeaders,
+    };
+  }
+
+  private extractChromiumVersion(versionText: string): string | undefined {
+    const match = versionText.match(/(\d+\.\d+\.\d+\.\d+)/);
+    return match?.[1];
+  }
+
+  private buildStealthChromiumUserAgent(chromeVersion: string): string {
+    const platform = os.platform();
+    let osToken = 'X11; Linux x86_64';
+    if (platform === 'darwin') {
+      osToken = 'Macintosh; Intel Mac OS X 10_15_7';
+    } else if (platform === 'win32') {
+      osToken = 'Windows NT 10.0; Win64; x64';
+    }
+    return (
+      `Mozilla/5.0 (${osToken}) AppleWebKit/537.36 ` +
+      `(KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
+    );
+  }
+
+  private getStealthUserAgentVersionHint(): string | undefined {
+    const deviceUA = devices['Desktop Chrome']?.userAgent;
+    if (!deviceUA) return undefined;
+    return this.extractChromiumVersion(deviceUA);
+  }
+
   /**
    * Apply context init-script stealth patches when policy allows.
    */
-  private async applyStealthIfEnabled(context: BrowserContext): Promise<void> {
+  private async applyStealthIfEnabled(
+    context: BrowserContext,
+    options: StealthScriptOptions = {}
+  ): Promise<void> {
     const policy = this.getStealthPolicy();
     if (!policy.applyInitScripts) return;
-    await applyStealthScripts(context);
+    await applyStealthScripts(context, options);
     this.logStealthPolicy('init-script applied');
   }
 
@@ -377,9 +508,13 @@ export class BrowserManager {
       context = this.contexts[this.contexts.length - 1];
     } else if (this.browser) {
       context = await this.browser.newContext({
+        ...(this.contextHeaders && { extraHTTPHeaders: this.contextHeaders }),
+        ...(this.contextUserAgent && { userAgent: this.contextUserAgent }),
+        ...(this.contextLocale && { locale: this.contextLocale }),
+        ...(this.contextTimezoneId && { timezoneId: this.contextTimezoneId }),
         ...(this.colorScheme && { colorScheme: this.colorScheme }),
       });
-      await this.applyStealthIfEnabled(context);
+      await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
       context.setDefaultTimeout(getDefaultTimeout());
       this.contexts.push(context);
       this.setupContextTracking(context);
@@ -988,7 +1123,7 @@ export class BrowserManager {
       }
 
       const context = contexts[0];
-      await this.applyStealthIfEnabled(context);
+      await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
       const pages = context.pages();
       const page = pages[0] ?? (await context.newPage());
 
@@ -1127,11 +1262,11 @@ export class BrowserManager {
       // Kernel browsers launch with a default context and page
       if (contexts.length === 0) {
         context = await browser.newContext();
-        await this.applyStealthIfEnabled(context);
+        await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
         page = await context.newPage();
       } else {
         context = contexts[0];
-        await this.applyStealthIfEnabled(context);
+        await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
         const pages = context.pages();
         page = pages[0] ?? (await context.newPage());
       }
@@ -1203,11 +1338,11 @@ export class BrowserManager {
 
       if (contexts.length === 0) {
         context = await browser.newContext();
-        await this.applyStealthIfEnabled(context);
+        await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
         page = await context.newPage();
       } else {
         context = contexts[0];
-        await this.applyStealthIfEnabled(context);
+        await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
         const pages = context.pages();
         page = pages[0] ?? (await context.newPage());
       }
@@ -1279,6 +1414,12 @@ export class BrowserManager {
       this.colorScheme = options.colorScheme;
     }
     this.stealthEnabled = options.stealth ?? false;
+    this.contextLocale = this.stealthEnabled
+      ? this.resolveStealthLocale(options.headers)
+      : undefined;
+    this.contextTimezoneId = this.stealthEnabled ? this.resolveStealthTimezoneId() : undefined;
+    this.contextHeaders = undefined;
+    this.contextUserAgent = options.userAgent;
     // -p flag takes precedence over AGENT_BROWSER_PROVIDER.
     const provider = options.provider ?? process.env.AGENT_BROWSER_PROVIDER;
 
@@ -1335,13 +1476,36 @@ export class BrowserManager {
       browserType === 'firefox' ? firefox : browserType === 'webkit' ? webkit : chromium;
 
     const stealthPolicy = this.getStealthPolicy(browserType);
+    const contextDefaults = this.buildStealthContextDefaults(stealthPolicy, options.headers);
+    const extraHTTPHeaders = contextDefaults.extraHTTPHeaders;
+    this.contextLocale = contextDefaults.locale;
+    this.contextTimezoneId = contextDefaults.timezoneId;
+    this.contextHeaders = contextDefaults.extraHTTPHeaders;
+
+    let contextUserAgent = options.userAgent;
+    if (!contextUserAgent && stealthPolicy.enabled && browserType === 'chromium') {
+      const versionHint = this.getStealthUserAgentVersionHint();
+      if (versionHint) {
+        contextUserAgent = this.buildStealthChromiumUserAgent(versionHint);
+      }
+    }
+    this.contextUserAgent = contextUserAgent;
 
     // Build base args array with file access flags and stealth args when policy allows.
     const fileAccessArgs = options.allowFileAccess
       ? ['--allow-file-access-from-files', '--allow-file-access']
       : [];
     const stealthArgs = stealthPolicy.applyChromiumArgs ? STEALTH_CHROMIUM_ARGS : [];
-    const implicitArgs = [...fileAccessArgs, ...stealthArgs];
+    const hasUserAgentArg = options.args?.some((arg) => arg.startsWith('--user-agent='));
+    const launchUserAgentArgs =
+      !hasUserAgentArg &&
+      !options.userAgent &&
+      stealthPolicy.enabled &&
+      browserType === 'chromium' &&
+      contextUserAgent
+        ? [`--user-agent=${contextUserAgent}`]
+        : [];
+    const implicitArgs = [...fileAccessArgs, ...stealthArgs, ...launchUserAgentArgs];
     const baseArgs = options.args
       ? [...implicitArgs, ...options.args]
       : implicitArgs.length > 0
@@ -1375,8 +1539,10 @@ export class BrowserManager {
           executablePath: options.executablePath,
           args: allArgs,
           viewport,
-          extraHTTPHeaders: options.headers,
-          userAgent: options.userAgent,
+          extraHTTPHeaders,
+          userAgent: contextUserAgent,
+          ...(this.contextLocale && { locale: this.contextLocale }),
+          ...(this.contextTimezoneId && { timezoneId: this.contextTimezoneId }),
           ...(options.proxy && { proxy: options.proxy }),
           ignoreHTTPSErrors: options.ignoreHTTPSErrors ?? false,
           ...(this.colorScheme && { colorScheme: this.colorScheme }),
@@ -1392,8 +1558,10 @@ export class BrowserManager {
         executablePath: options.executablePath,
         args: baseArgs,
         viewport,
-        extraHTTPHeaders: options.headers,
-        userAgent: options.userAgent,
+        extraHTTPHeaders,
+        userAgent: contextUserAgent,
+        ...(this.contextLocale && { locale: this.contextLocale }),
+        ...(this.contextTimezoneId && { timezoneId: this.contextTimezoneId }),
         ...(options.proxy && { proxy: options.proxy }),
         ignoreHTTPSErrors: options.ignoreHTTPSErrors ?? false,
         ...(this.colorScheme && { colorScheme: this.colorScheme }),
@@ -1407,6 +1575,14 @@ export class BrowserManager {
         args: baseArgs,
       });
       this.cdpEndpoint = null;
+
+      if (!options.userAgent && stealthPolicy.enabled && browserType === 'chromium') {
+        const runtimeVersion = this.extractChromiumVersion(this.browser.version());
+        if (runtimeVersion) {
+          contextUserAgent = this.buildStealthChromiumUserAgent(runtimeVersion);
+          this.contextUserAgent = contextUserAgent;
+        }
+      }
 
       // Check for auto-load state file (supports encrypted files)
       let storageState:
@@ -1477,16 +1653,18 @@ export class BrowserManager {
 
       context = await this.browser.newContext({
         viewport,
-        extraHTTPHeaders: options.headers,
-        userAgent: options.userAgent,
+        extraHTTPHeaders,
+        userAgent: contextUserAgent,
         storageState,
+        ...(this.contextLocale && { locale: this.contextLocale }),
+        ...(this.contextTimezoneId && { timezoneId: this.contextTimezoneId }),
         ...(options.proxy && { proxy: options.proxy }),
         ignoreHTTPSErrors: options.ignoreHTTPSErrors ?? false,
         ...(this.colorScheme && { colorScheme: this.colorScheme }),
       });
     }
 
-    await this.applyStealthIfEnabled(context);
+    await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
 
     context.setDefaultTimeout(getDefaultTimeout());
     this.contexts.push(context);
@@ -1564,7 +1742,7 @@ export class BrowserManager {
       this.cdpEndpoint = cdpEndpoint;
 
       for (const context of contexts) {
-        await this.applyStealthIfEnabled(context);
+        await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
         context.setDefaultTimeout(10000);
         this.contexts.push(context);
         this.setupContextTracking(context);
@@ -1820,9 +1998,13 @@ export class BrowserManager {
 
     const context = await this.browser.newContext({
       viewport: viewport === undefined ? { width: 1280, height: 720 } : viewport,
+      ...(this.contextHeaders && { extraHTTPHeaders: this.contextHeaders }),
+      ...(this.contextUserAgent && { userAgent: this.contextUserAgent }),
+      ...(this.contextLocale && { locale: this.contextLocale }),
+      ...(this.contextTimezoneId && { timezoneId: this.contextTimezoneId }),
       ...(this.colorScheme && { colorScheme: this.colorScheme }),
     });
-    await this.applyStealthIfEnabled(context);
+    await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
     context.setDefaultTimeout(getDefaultTimeout());
     this.contexts.push(context);
     this.setupContextTracking(context);
@@ -2564,6 +2746,10 @@ export class BrowserManager {
     this.colorScheme = null;
     this.stealthEnabled = false;
     this.stealthConnectionKind = 'local';
+    this.contextLocale = undefined;
+    this.contextTimezoneId = undefined;
+    this.contextHeaders = undefined;
+    this.contextUserAgent = undefined;
     this.refMap = {};
     this.lastSnapshot = '';
     this.frameCallback = null;
