@@ -141,13 +141,23 @@ This repo includes a dedicated OpenClaw skill at:
 
 - `skills/agent-browser-stealth/SKILL.md`
 
-GitHub Actions auto-syncs skills to ClawHub on every push via:
+Local git `pre-push` hook auto-syncs skills before every push:
 
-- `.github/workflows/clawhub-sync.yml`
+- `.husky/pre-push` -> `pnpm run clawhub:sync`
 
-Required repository secret:
+Manual sync command (same logic as hook):
 
-- `CLAWHUB_TOKEN`: API token used by `clawhub login --token ...`
+```bash
+pnpm run clawhub:sync
+```
+
+This uses your existing local ClawHub login session (no GitHub secret required).
+
+Temporarily skip auto-sync for one push:
+
+```bash
+SKIP_CLAWHUB_SYNC=1 git push
+```
 
 ## License
 

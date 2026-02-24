@@ -34,6 +34,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "node scripts/postinstall.js",
+    "clawhub:sync": "bash scripts/clawhub-sync.sh",
     "sync:upstream": "bash scripts/sync-upstream.sh",
     "sync:upstream:push": "bash scripts/sync-upstream.sh --push",
     "changeset": "changeset",
