@@ -160,7 +160,6 @@ jobs:
         with:
           node-version: '22'
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
@@ -239,7 +238,15 @@ jobs:
       - name: Publish to npm (trusted publishing)
         id: publish_npm
         if: steps.changesets.outputs.hasChangesets == 'false' && steps.publish_check.outputs.needs_publish == 'true'
-        run: pnpm ci:publish
+        env:
+          NODE_AUTH_TOKEN: ""
+          NPM_CONFIG_USERCONFIG: /home/runner/work/_temp/trusted-npmrc
+          NPM_CONFIG_PROVENANCE: "true"
+        run: |
+          npm install -g npm@^11
+          npm --version
+          printf "registry=https://registry.npmjs.org/\n" > "$NPM_CONFIG_USERCONFIG"
+          pnpm ci:publish
 
       - name: Set release outputs
         id: publish_metadata
