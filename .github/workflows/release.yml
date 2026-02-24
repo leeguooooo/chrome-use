@@ -142,8 +142,8 @@ jobs:
     needs: build-binaries
     runs-on: ubuntu-latest
     outputs:
-      published: ${{ steps.changesets.outputs.published }}
-      publishedPackages: ${{ steps.changesets.outputs.publishedPackages }}
+      published: ${{ steps.publish_metadata.outputs.published }}
+      publishedPackages: ${{ steps.publish_metadata.outputs.publishedPackages }}
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
@@ -215,11 +215,42 @@ jobs:
         uses: changesets/action@v1
         with:
           version: pnpm ci:version
-          publish: pnpm ci:publish
           title: 'chore: version packages'
           commit: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if publish is needed
+        id: publish_check
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: |
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          REMOTE_VERSION=$(npm view agent-browser-stealth version 2>/dev/null || echo "")
+          echo "local_version=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "remote_version=$REMOTE_VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$LOCAL_VERSION" != "$REMOTE_VERSION" ]; then
+            echo "needs_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_publish=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Local:  $LOCAL_VERSION"
+          echo "Remote: ${REMOTE_VERSION:-<none>}"
+
+      - name: Publish to npm (trusted publishing)
+        id: publish_npm
+        if: steps.changesets.outputs.hasChangesets == 'false' && steps.publish_check.outputs.needs_publish == 'true'
+        run: pnpm ci:publish
+
+      - name: Set release outputs
+        id: publish_metadata
+        run: |
+          if [ "${{ steps.publish_npm.outcome }}" = "success" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "publishedPackages=[{\"name\":\"agent-browser-stealth\",\"version\":\"${{ steps.publish_check.outputs.local_version }}\"}]" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "publishedPackages=[]" >> "$GITHUB_OUTPUT"
+          fi
 
   # Create GitHub release with binaries after npm publish
   github-release:
