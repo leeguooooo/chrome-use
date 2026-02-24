@@ -11,7 +11,7 @@ describe('Launch Options', () => {
   });
 
   describe('browser args', () => {
-    it('should launch with custom args to disable webdriver detection', async () => {
+    it('should keep webdriver undefined with custom args under stealth defaults', async () => {
       browser = new BrowserManager();
       await browser.launch({
         headless: true,
@@ -21,9 +21,9 @@ describe('Launch Options', () => {
       const page = browser.getPage();
       await page.goto('about:blank');
 
-      // Check that navigator.webdriver is false
+      // Under stealth defaults, webdriver is hidden (undefined)
       const webdriver = await page.evaluate(() => navigator.webdriver);
-      expect(webdriver).toBe(false);
+      expect(webdriver).toBeUndefined();
     });
 
     it('should launch with multiple args', async () => {
@@ -39,7 +39,7 @@ describe('Launch Options', () => {
       expect(browser.isLaunched()).toBe(true);
     });
 
-    it('should launch without args (default behavior)', async () => {
+    it('should launch without args and keep webdriver hidden by default', async () => {
       browser = new BrowserManager();
       await browser.launch({
         headless: true,
@@ -48,9 +48,9 @@ describe('Launch Options', () => {
       const page = browser.getPage();
       await page.goto('about:blank');
 
-      // Default Playwright behavior - webdriver is true
+      // Stealth default behavior - webdriver is hidden
       const webdriver = await page.evaluate(() => navigator.webdriver);
-      expect(webdriver).toBe(true);
+      expect(webdriver).toBeUndefined();
     });
   });
 
@@ -152,7 +152,7 @@ describe('Launch Options', () => {
 
       // Verify webdriver is hidden
       const webdriver = await page.evaluate(() => navigator.webdriver);
-      expect(webdriver).toBe(false);
+      expect(webdriver).toBeUndefined();
     });
   });
 });

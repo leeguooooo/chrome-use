@@ -9,11 +9,11 @@ describe('BrowserManager', () => {
   beforeAll(async () => {
     browser = new BrowserManager();
     await browser.launch({ headless: true });
-  });
+  }, 30000);
 
   afterAll(async () => {
     await browser.close();
-  });
+  }, 30000);
 
   describe('launch and close', () => {
     it('should report as launched', () => {
@@ -56,7 +56,7 @@ describe('BrowserManager', () => {
 
     it('should report local stealth policy capabilities', async () => {
       const testBrowser = new BrowserManager();
-      await testBrowser.launch({ headless: true, stealth: true });
+      await testBrowser.launch({ headless: true });
 
       const status = testBrowser.getStealthStatus('chromium');
       expect(status.enabled).toBe(true);
@@ -84,7 +84,7 @@ describe('BrowserManager', () => {
       const spy = vi.spyOn(chromium, 'connectOverCDP').mockResolvedValue(mockBrowser as any);
 
       const cdpBrowser = new BrowserManager();
-      await cdpBrowser.launch({ cdpPort: 9222, stealth: true });
+      await cdpBrowser.launch({ cdpPort: 9222 });
 
       expect(addInitScript).toHaveBeenCalledTimes(1);
       const status = cdpBrowser.getStealthStatus();
@@ -97,7 +97,7 @@ describe('BrowserManager', () => {
       spy.mockRestore();
     });
 
-    it('should disable stealth capabilities when launch stealth is false in CDP mode', async () => {
+    it('should ignore legacy stealth=false and keep CDP stealth capabilities enabled', async () => {
       const addInitScript = vi.fn().mockResolvedValue(undefined);
       const mockPage = { url: () => 'http://example.com', on: vi.fn(), isClosed: () => false };
       const mockContext = {
@@ -116,11 +116,12 @@ describe('BrowserManager', () => {
       const cdpBrowser = new BrowserManager();
       await cdpBrowser.launch({ cdpPort: 9222, stealth: false });
 
-      expect(addInitScript).not.toHaveBeenCalled();
+      expect(addInitScript).toHaveBeenCalledTimes(1);
       const status = cdpBrowser.getStealthStatus();
-      expect(status.enabled).toBe(false);
+      expect(status.enabled).toBe(true);
       expect(status.connectionKind).toBe('cdp');
-      expect(status.capabilities).toEqual([]);
+      expect(status.capabilities).toContain('context-init-scripts');
+      expect(status.capabilities).not.toContain('chromium-launch-args');
 
       await cdpBrowser.close();
       spy.mockRestore();

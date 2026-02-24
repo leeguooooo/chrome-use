@@ -445,7 +445,10 @@ export class BrowserManager {
   ): Promise<void> {
     const policy = this.getStealthPolicy();
     if (!policy.applyInitScripts) return;
-    await applyStealthScripts(context, options);
+    await applyStealthScripts(context, {
+      ...options,
+      userAgent: this.contextUserAgent,
+    });
     this.logStealthPolicy('init-script applied');
   }
 
@@ -1693,7 +1696,9 @@ export class BrowserManager {
       this.cdpEndpoint = null;
 
       if (stealthPolicy.enabled && browserType === 'chromium') {
-        await applyBrowserLevelStealth(this.browser);
+        await applyBrowserLevelStealth(this.browser, {
+          userAgent: contextUserAgent,
+        });
       }
 
       if (!options.userAgent && stealthPolicy.enabled && browserType === 'chromium') {

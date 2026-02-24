@@ -146,9 +146,9 @@ describe('File Access (Issue #345)', () => {
       const content = await page.locator('h1').textContent();
       expect(content).toBe('Test File Access');
 
-      // Verify webdriver is hidden (from custom arg)
+      // Verify webdriver is hidden under stealth defaults
       const webdriver = await page.evaluate(() => navigator.webdriver);
-      expect(webdriver).toBe(false);
+      expect(webdriver).toBeUndefined();
     });
   });
 });

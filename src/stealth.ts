@@ -10,6 +10,8 @@ import type { Browser, BrowserContext, Page } from 'playwright-core';
 
 export interface StealthScriptOptions {
   locale?: string;
+  userAgent?: string;
+  acceptLanguage?: string;
 }
 
 /**
@@ -35,25 +37,30 @@ export async function applyStealthScripts(
   // Apply CDP-level User-Agent override so Workers also get the patched UA.
   // This must be done per-page since CDP sessions are page-scoped.
   for (const page of context.pages()) {
-    await applyCDPStealthToPage(page);
+    await applyCDPStealthToPage(page, options);
   }
-  context.on('page', (page: Page) => applyCDPStealthToPage(page));
+  context.on('page', (page: Page) => applyCDPStealthToPage(page, options));
 }
 
 /**
  * Apply browser-level CDP overrides that affect all targets (including Workers).
  * Call this right after browser.launch() and before creating pages.
  */
-export async function applyBrowserLevelStealth(browser: Browser): Promise<void> {
+export async function applyBrowserLevelStealth(
+  browser: Browser,
+  options: StealthScriptOptions = {}
+): Promise<void> {
   try {
     const cdp = await (browser as any).newBrowserCDPSession();
     const version = await cdp.send('Browser.getVersion');
     const rawUA = version?.userAgent ?? '';
-    if (!rawUA.includes('HeadlessChrome')) {
+    const explicitUA = options.userAgent?.trim();
+    if (!explicitUA && !rawUA.includes('HeadlessChrome')) {
       await cdp.detach();
       return;
     }
-    const patchedUA = rawUA.replace(/HeadlessChrome/g, 'Chrome');
+    const patchedUA = explicitUA || rawUA.replace(/HeadlessChrome/g, 'Chrome');
+    const acceptLanguage = options.acceptLanguage ?? 'en-US,en;q=0.9';
     const metadata = buildUserAgentMetadata(patchedUA);
 
     // Override on all existing targets
@@ -66,7 +73,7 @@ export async function applyBrowserLevelStealth(browser: Browser): Promise<void> 
         });
         await cdp.send('Emulation.setUserAgentOverride', {
           userAgent: patchedUA,
-          acceptLanguage: 'en-US,en;q=0.9',
+          acceptLanguage,
           platform: getPlatformString(),
           userAgentMetadata: metadata,
         });
@@ -81,17 +88,22 @@ export async function applyBrowserLevelStealth(browser: Browser): Promise<void> 
   }
 }
 
-async function applyCDPStealthToPage(page: Page): Promise<void> {
+async function applyCDPStealthToPage(
+  page: Page,
+  options: StealthScriptOptions = {}
+): Promise<void> {
   try {
     const cdp = await page.context().newCDPSession(page);
     const ua = await cdp.send('Browser.getVersion').catch(() => null);
     const rawUA = ua?.userAgent ?? '';
-    const patchedUA = rawUA.replace(/HeadlessChrome/g, 'Chrome');
+    const explicitUA = options.userAgent?.trim();
+    const patchedUA = explicitUA || rawUA.replace(/HeadlessChrome/g, 'Chrome');
+    const acceptLanguage = options.acceptLanguage ?? 'en-US,en;q=0.9';
     const metadata = buildUserAgentMetadata(patchedUA);
 
     await cdp.send('Emulation.setUserAgentOverride', {
       userAgent: patchedUA,
-      acceptLanguage: 'en-US,en;q=0.9',
+      acceptLanguage,
       platform: getPlatformString(),
       userAgentMetadata: metadata,
     });
