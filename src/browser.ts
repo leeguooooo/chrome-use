@@ -152,7 +152,7 @@ export class BrowserManager {
   private lastSnapshot: string = '';
   private scopedHeaderRoutes: Map<string, (route: Route) => Promise<void>> = new Map();
   private colorScheme: 'light' | 'dark' | 'no-preference' | null = null;
-  private stealthEnabled: boolean = false;
+  private stealthEnabled: boolean = true;
   private stealthConnectionKind: StealthConnectionKind = 'local';
   private contextLocale: string | undefined = undefined;
   private contextTimezoneId: string | undefined = undefined;
@@ -172,17 +172,6 @@ export class BrowserManager {
    * Local Chromium gets args + init scripts; CDP/providers get init scripts only.
    */
   private getStealthPolicy(browserType: BrowserType = 'chromium'): StealthPolicy {
-    if (!this.stealthEnabled) {
-      return {
-        enabled: false,
-        connectionKind: this.stealthConnectionKind,
-        applyChromiumArgs: false,
-        applyInitScripts: false,
-        providerManaged: false,
-        capabilities: [],
-      };
-    }
-
     const applyChromiumArgs = this.stealthConnectionKind === 'local' && browserType === 'chromium';
     const applyInitScripts = true;
     const providerManaged = this.stealthConnectionKind === 'provider-kernel';
@@ -1414,11 +1403,9 @@ export class BrowserManager {
     if (options.colorScheme) {
       this.colorScheme = options.colorScheme;
     }
-    this.stealthEnabled = options.stealth ?? false;
-    this.contextLocale = this.stealthEnabled
-      ? this.resolveStealthLocale(options.headers)
-      : undefined;
-    this.contextTimezoneId = this.stealthEnabled ? this.resolveStealthTimezoneId() : undefined;
+    this.stealthEnabled = true;
+    this.contextLocale = this.resolveStealthLocale(options.headers);
+    this.contextTimezoneId = this.resolveStealthTimezoneId();
     this.contextHeaders = undefined;
     this.contextUserAgent = options.userAgent;
     // -p flag takes precedence over AGENT_BROWSER_PROVIDER.
@@ -2749,7 +2736,7 @@ export class BrowserManager {
     this.isPersistentContext = false;
     this.activePageIndex = 0;
     this.colorScheme = null;
-    this.stealthEnabled = false;
+    this.stealthEnabled = true;
     this.stealthConnectionKind = 'local';
     this.contextLocale = undefined;
     this.contextTimezoneId = undefined;

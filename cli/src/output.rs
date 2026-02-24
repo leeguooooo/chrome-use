@@ -2114,7 +2114,6 @@ Options:
                              e.g., --proxy-bypass "localhost,*.internal.com"
   --ignore-https-errors      Ignore HTTPS certificate errors
   --allow-file-access        Allow file:// URLs to access local files (Chromium only)
-  --stealth                  Stealth mode (default: on): local=launch args+init scripts, CDP/provider=init scripts
   -p, --provider <name>      Browser provider: ios, browserbase, kernel, browseruse
   --device <name>            iOS device name (e.g., "iPhone 15 Pro")
   --json                     JSON output
@@ -2126,7 +2125,7 @@ Options:
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --session-name <name>      Auto-save/restore session state (cookies, localStorage)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
-  --debug                    Debug output (includes stealth connection type + capabilities)
+  --debug                    Debug output
   --version, -V              Show version
 
 Configuration:

@@ -244,8 +244,18 @@ function patchNavigatorWebdriver(): string {
  */
 function patchChromeRuntime(): string {
   return `(function(){
-  if (!window.chrome) { window.chrome = {}; }
-  if (!window.chrome.runtime) {
+  const chromeObject = ('chrome' in window && window.chrome) ? window.chrome : {};
+  if (!('chrome' in window)) {
+    try {
+      Object.defineProperty(Window.prototype, 'chrome', {
+        get: () => chromeObject,
+        configurable: true,
+      });
+    } catch {
+      try { Object.defineProperty(window, 'chrome', { value: chromeObject, configurable: true }); } catch {}
+    }
+  }
+  if (!chromeObject.runtime) {
     const makeEvent = () => ({
       addListener: () => {},
       removeListener: () => {},
@@ -268,7 +278,7 @@ function patchChromeRuntime(): string {
       onConnect: makeEvent(),
       onMessage: makeEvent(),
     };
-    Object.defineProperty(window.chrome, 'runtime', {
+    Object.defineProperty(chromeObject, 'runtime', {
       value: runtime,
       configurable: true,
     });

@@ -220,7 +220,6 @@ pub fn ensure_daemon(
     provider: Option<&str>,
     device: Option<&str>,
     session_name: Option<&str>,
-    stealth: bool,
     debug: bool,
 ) -> Result<DaemonResult, String> {
     // Check if daemon is running AND responsive
@@ -366,7 +365,7 @@ pub fn ensure_daemon(
             cmd.env("AGENT_BROWSER_SESSION_NAME", sn);
         }
 
-        cmd.env("AGENT_BROWSER_STEALTH", if stealth { "1" } else { "0" });
+        cmd.env("AGENT_BROWSER_STEALTH", "1");
         if debug {
             cmd.env("AGENT_BROWSER_DEBUG", "1");
         }
@@ -454,7 +453,7 @@ pub fn ensure_daemon(
             cmd.env("AGENT_BROWSER_SESSION_NAME", sn);
         }
 
-        cmd.env("AGENT_BROWSER_STEALTH", if stealth { "1" } else { "0" });
+        cmd.env("AGENT_BROWSER_STEALTH", "1");
         if debug {
             cmd.env("AGENT_BROWSER_DEBUG", "1");
         }

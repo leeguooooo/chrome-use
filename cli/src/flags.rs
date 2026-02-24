@@ -34,7 +34,6 @@ pub struct Config {
     pub headers: Option<String>,
     pub annotate: Option<bool>,
     pub color_scheme: Option<String>,
-    pub stealth: Option<bool>,
 }
 
 impl Config {
@@ -69,7 +68,6 @@ impl Config {
             headers: other.headers.or(self.headers),
             annotate: other.annotate.or(self.annotate),
             color_scheme: other.color_scheme.or(self.color_scheme),
-            stealth: other.stealth.or(self.stealth),
         }
     }
 }
@@ -204,7 +202,6 @@ pub struct Flags {
     pub session_name: Option<String>,
     pub annotate: bool,
     pub color_scheme: Option<String>,
-    pub stealth: bool,
 
     // Track which launch-time options were explicitly passed via CLI
     // (as opposed to being set only via environment variables)
@@ -218,7 +215,6 @@ pub struct Flags {
     pub cli_proxy_bypass: bool,
     pub cli_allow_file_access: bool,
     pub cli_annotate: bool,
-    pub cli_stealth: bool,
 }
 
 pub fn parse_flags(args: &[String]) -> Flags {
@@ -283,10 +279,6 @@ pub fn parse_flags(args: &[String]) -> Flags {
         color_scheme: env::var("AGENT_BROWSER_COLOR_SCHEME")
             .ok()
             .or(config.color_scheme),
-        stealth: match env::var("AGENT_BROWSER_STEALTH") {
-            Ok(val) => !matches!(val.to_lowercase().as_str(), "0" | "false" | "no" | ""),
-            Err(_) => config.stealth.unwrap_or(true),
-        },
         cli_executable_path: false,
         cli_extensions: false,
         cli_profile: false,
@@ -297,7 +289,6 @@ pub fn parse_flags(args: &[String]) -> Flags {
         cli_proxy_bypass: false,
         cli_allow_file_access: false,
         cli_annotate: false,
-        cli_stealth: false,
     };
 
     let mut i = 0;
@@ -453,14 +444,6 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
-            "--stealth" => {
-                let (val, consumed) = parse_bool_arg(args, i);
-                flags.stealth = val;
-                flags.cli_stealth = true;
-                if consumed {
-                    i += 1;
-                }
-            }
             "--color-scheme" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.color_scheme = Some(s.clone());
@@ -492,7 +475,6 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--allow-file-access",
         "--auto-connect",
         "--annotate",
-        "--stealth",
     ];
     // Global flags that always take a value (need to skip the next arg too)
     const GLOBAL_FLAGS_WITH_VALUE: &[&str] = &[

@@ -1923,10 +1923,8 @@ mod tests {
             cli_proxy_bypass: false,
             cli_allow_file_access: false,
             cli_annotate: false,
-            cli_stealth: false,
             annotate: false,
             color_scheme: None,
-            stealth: false,
         }
     }
 

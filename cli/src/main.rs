@@ -52,14 +52,6 @@ fn parse_proxy(proxy_str: &str) -> serde_json::Value {
     })
 }
 
-fn print_stealth_debug(resp: &connection::Response) {
-    if let Some(data) = &resp.data {
-        if let Some(stealth) = data.get("stealth") {
-            eprintln!("[DEBUG] stealth: {}", stealth);
-        }
-    }
-}
-
 fn run_session(args: &[String], session: &str, json_mode: bool) {
     let subcommand = args.get(1).map(|s| s.as_str());
 
@@ -234,7 +226,6 @@ fn main() {
         flags.provider.as_deref(),
         flags.device.as_deref(),
         flags.session_name.as_deref(),
-        flags.stealth,
         flags.debug,
     ) {
         Ok(result) => result,
@@ -291,7 +282,6 @@ fn main() {
             },
             flags.ignore_https_errors.then_some("--ignore-https-errors"),
             flags.cli_allow_file_access.then_some("--allow-file-access"),
-            flags.cli_stealth.then_some("--stealth"),
         ]
         .into_iter()
         .flatten()
@@ -472,9 +462,7 @@ fn main() {
                     }
                     exit(1);
                 }
-                if flags.debug {
-                    print_stealth_debug(&resp);
-                }
+                
             }
             Err(e) => {
                 if flags.json {
@@ -512,9 +500,7 @@ fn main() {
                     }
                     exit(1);
                 }
-                if flags.debug {
-                    print_stealth_debug(&resp);
-                }
+                
             }
             Err(e) => {
                 if flags.json {
@@ -537,7 +523,6 @@ fn main() {
         || flags.user_agent.is_some()
         || flags.ignore_https_errors
         || flags.allow_file_access
-        || flags.cli_stealth
         || flags.debug
         || flags.color_scheme.is_some())
         && flags.cdp.is_none()
@@ -601,8 +586,6 @@ fn main() {
             launch_cmd["allowFileAccess"] = json!(true);
         }
 
-        launch_cmd["stealth"] = json!(flags.stealth);
-
         if let Some(ref cs) = flags.color_scheme {
             launch_cmd["colorScheme"] = json!(cs);
         }
@@ -621,9 +604,7 @@ fn main() {
                     }
                     exit(1);
                 }
-                if flags.debug {
-                    print_stealth_debug(&resp);
-                }
+                
             }
             Err(e) => {
                 if flags.json {
