@@ -405,7 +405,9 @@ export async function startDaemon(options?: {
             continue;
           }
 
-          // Auto-launch if not already launched and this isn't a launch/close/state_load command
+          // Auto-launch if not already launched and this isn't a launch/close/state_load command.
+          // Default behavior for this fork: first try attaching to a resident Chrome on CDP :9333,
+          // then fall back to launching a local Playwright browser if CDP is unavailable.
           if (
             !manager.isLaunched() &&
             parseResult.command.action !== 'launch' &&
@@ -452,13 +454,13 @@ export async function startDaemon(options?: {
               const allowFileAccess = process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS === '1';
               // Stealth is always enabled in agent-browser-stealth
               const colorSchemeEnv = process.env.AGENT_BROWSER_COLOR_SCHEME;
-              const colorScheme =
+              const colorScheme: 'dark' | 'light' | 'no-preference' | undefined =
                 colorSchemeEnv === 'dark' ||
                 colorSchemeEnv === 'light' ||
                 colorSchemeEnv === 'no-preference'
                   ? colorSchemeEnv
                   : undefined;
-              await manager.launch({
+              const launchOptions = {
                 id: 'auto',
                 action: 'launch' as const,
                 headless: process.env.AGENT_BROWSER_HEADED !== '1',
@@ -474,7 +476,39 @@ export async function startDaemon(options?: {
 
                 colorScheme,
                 autoStateFilePath: getSessionAutoStatePath(),
-              });
+              };
+
+              let launchedViaDefaultCdp = false;
+              try {
+                // Keep default CDP attempt minimal. Launch-only options like profile/extensions
+                // are incompatible with CDP and can cause a false-negative fallback.
+                const cdpLaunchOptions = {
+                  id: launchOptions.id,
+                  action: launchOptions.action,
+                  cdpPort: 9333,
+                  ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
+                  colorScheme: launchOptions.colorScheme,
+                  userAgent: launchOptions.userAgent,
+                };
+                await manager.launch({
+                  ...cdpLaunchOptions,
+                });
+                launchedViaDefaultCdp = true;
+                if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                  console.error('[DEBUG] Auto-launch connected via default CDP port 9333');
+                }
+              } catch (error) {
+                if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                  const message = error instanceof Error ? error.message : String(error);
+                  console.error(
+                    `[DEBUG] Default CDP port 9333 unavailable, falling back to local launch: ${message}`
+                  );
+                }
+              }
+
+              if (!launchedViaDefaultCdp) {
+                await manager.launch(launchOptions);
+              }
             }
           }
 

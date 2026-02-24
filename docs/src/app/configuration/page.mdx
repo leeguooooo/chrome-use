@@ -6,6 +6,8 @@ export const metadata = pageMetadata("configuration")
 
 Create an `agent-browser.json` file to set persistent defaults instead of repeating flags on every command.
 
+In this fork, default launch behavior already prefers a resident Chrome at `localhost:9333` (CDP) and falls back to local Playwright launch when unavailable.
+
 ## Config File Locations
 
 agent-browser checks two locations, merged in priority order:

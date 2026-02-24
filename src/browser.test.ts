@@ -69,7 +69,7 @@ describe('BrowserManager', () => {
 
     it('should apply init-script stealth policy for CDP connections', async () => {
       const addInitScript = vi.fn().mockResolvedValue(undefined);
-      const mockPage = { url: () => 'http://example.com', on: vi.fn() };
+      const mockPage = { url: () => 'http://example.com', on: vi.fn(), isClosed: () => false };
       const mockContext = {
         pages: () => [mockPage],
         on: vi.fn(),
@@ -99,7 +99,7 @@ describe('BrowserManager', () => {
 
     it('should disable stealth capabilities when launch stealth is false in CDP mode', async () => {
       const addInitScript = vi.fn().mockResolvedValue(undefined);
-      const mockPage = { url: () => 'http://example.com', on: vi.fn() };
+      const mockPage = { url: () => 'http://example.com', on: vi.fn(), isClosed: () => false };
       const mockContext = {
         pages: () => [mockPage],
         on: vi.fn(),
@@ -926,15 +926,16 @@ describe('BrowserManager', () => {
         contexts: () => [
           {
             pages: () => [
-              { url: () => 'http://example.com', on: vi.fn() },
-              { url: () => '', on: vi.fn() }, // This page should be filtered out
-              { url: () => 'http://anothersite.com', on: vi.fn() },
+              { url: () => 'http://example.com', on: vi.fn(), isClosed: () => false },
+              { url: () => '', on: vi.fn(), isClosed: () => false }, // This page should be filtered out
+              { url: () => 'http://anothersite.com', on: vi.fn(), isClosed: () => false },
             ],
             on: vi.fn(),
             setDefaultTimeout: vi.fn(),
+            addInitScript: vi.fn().mockResolvedValue(undefined),
           },
         ],
-        close: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
       };
       const spy = vi.spyOn(chromium, 'connectOverCDP').mockResolvedValue(mockBrowser as any);
 
@@ -948,6 +949,65 @@ describe('BrowserManager', () => {
       const urls = cdpBrowser.getPages().map((p) => p.url());
       expect(urls).not.toContain('');
       expect(urls).toContain('http://example.com');
+      spy.mockRestore();
+    });
+
+    it('should ignore omnibox popup pages during CDP connection', async () => {
+      const mockBrowser = {
+        contexts: () => [
+          {
+            pages: () => [
+              {
+                url: () => 'chrome://omnibox-popup.top-chrome/',
+                on: vi.fn(),
+                isClosed: () => false,
+              },
+              { url: () => 'http://example.com', on: vi.fn(), isClosed: () => false },
+            ],
+            on: vi.fn(),
+            setDefaultTimeout: vi.fn(),
+            addInitScript: vi.fn().mockResolvedValue(undefined),
+          },
+        ],
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      const spy = vi.spyOn(chromium, 'connectOverCDP').mockResolvedValue(mockBrowser as any);
+
+      const cdpBrowser = new BrowserManager();
+      await cdpBrowser.launch({ cdpPort: 9222 });
+
+      expect(cdpBrowser.getPages().length).toBe(1);
+      expect(cdpBrowser.getPages()[0]?.url()).toBe('http://example.com');
+      spy.mockRestore();
+    });
+
+    it('should create a fallback page when CDP has only internal pages', async () => {
+      const newPage = { url: () => 'about:blank', on: vi.fn(), isClosed: () => false };
+      const context = {
+        pages: () => [
+          {
+            url: () => 'chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html',
+            on: vi.fn(),
+            isClosed: () => false,
+          },
+        ],
+        newPage: vi.fn().mockResolvedValue(newPage),
+        on: vi.fn(),
+        setDefaultTimeout: vi.fn(),
+        addInitScript: vi.fn().mockResolvedValue(undefined),
+      };
+      const mockBrowser = {
+        contexts: () => [context],
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      const spy = vi.spyOn(chromium, 'connectOverCDP').mockResolvedValue(mockBrowser as any);
+
+      const cdpBrowser = new BrowserManager();
+      await cdpBrowser.launch({ cdpPort: 9222 });
+
+      expect(context.newPage).toHaveBeenCalledTimes(1);
+      expect(cdpBrowser.getPages().length).toBe(1);
+      expect(cdpBrowser.getPages()[0]?.url()).toBe('about:blank');
       spy.mockRestore();
     });
   });

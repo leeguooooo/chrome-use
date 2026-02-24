@@ -813,6 +813,8 @@ These behaviors are always active and require no additional flags.
 
 Connect to an existing browser via Chrome DevTools Protocol:
 
+By default in this fork, when you run commands without `--cdp`, agent-browser first tries `localhost:9333` (resident Chrome) and falls back to launching a local Playwright browser if CDP is unavailable.
+
 ```bash
 # Start Chrome with: google-chrome --remote-debugging-port=9222
 
@@ -854,7 +856,7 @@ AGENT_BROWSER_AUTO_CONNECT=1 agent-browser snapshot
 
 Auto-connect discovers Chrome by:
 1. Reading Chrome's `DevToolsActivePort` file from the default user data directory
-2. Falling back to probing common debugging ports (9222, 9229)
+2. Falling back to probing common debugging ports (9222, 9229, 9333)
 
 This is useful when:
 - Chrome 144+ has remote debugging enabled via `chrome://inspect/#remote-debugging` (which uses a dynamic port)

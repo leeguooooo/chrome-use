@@ -179,6 +179,8 @@ agent-browser session list
 
 ### Connect to Existing Chrome
 
+By default in this fork, commands without `--cdp` try `localhost:9333` first and automatically fall back to a local browser launch if CDP is unavailable.
+
 ```bash
 # Auto-discover running Chrome with remote debugging enabled
 agent-browser --auto-connect open https://example.com

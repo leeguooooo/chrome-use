@@ -2122,6 +2122,7 @@ Options:
   --headed                   Show browser window (not headless)
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
   --auto-connect             Auto-discover and connect to running Chrome
+                             Default launch tries CDP at localhost:9333 first, then falls back to local browser launch
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --session-name <name>      Auto-save/restore session state (cookies, localStorage)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)

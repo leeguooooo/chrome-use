@@ -513,6 +513,39 @@ fn main() {
         }
     }
 
+    // Default fork behavior: when no explicit connection mode is provided,
+    // try attaching to resident Chrome on CDP :9333 first. If unavailable,
+    // silently fall back to local launch behavior below.
+    let can_try_default_cdp = flags.cdp.is_none()
+        && !flags.auto_connect
+        && flags.provider.is_none()
+        && flags.executable_path.is_none()
+        && flags.profile.is_none()
+        && flags.state.is_none()
+        && flags.proxy.is_none()
+        && flags.args.is_none()
+        && flags.user_agent.is_none()
+        && !flags.ignore_https_errors
+        && !flags.allow_file_access
+        && flags.extensions.is_empty();
+
+    let mut launched_via_default_cdp = false;
+    if can_try_default_cdp {
+        let mut launch_cmd = json!({
+            "id": gen_id(),
+            "action": "launch",
+            "cdpPort": 9333
+        });
+
+        if let Some(ref cs) = flags.color_scheme {
+            launch_cmd["colorScheme"] = json!(cs);
+        }
+
+        if let Ok(resp) = send_command(launch_cmd, &flags.session) {
+            launched_via_default_cdp = resp.success;
+        }
+    }
+
     // Launch headed browser or configure browser options (without CDP or provider)
     if (flags.headed
         || flags.executable_path.is_some()
@@ -527,6 +560,7 @@ fn main() {
         || flags.color_scheme.is_some())
         && flags.cdp.is_none()
         && flags.provider.is_none()
+        && !launched_via_default_cdp
     {
         let mut launch_cmd = json!({
             "id": gen_id(),

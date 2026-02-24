@@ -125,6 +125,8 @@ interface StealthContextDefaults {
   extraHTTPHeaders?: Record<string, string>;
 }
 
+const IGNORED_CDP_PAGE_URL_PREFIXES = ['chrome://omnibox-popup.top-chrome/'];
+
 /**
  * Manages the Playwright browser lifecycle with multiple tabs/windows
  */
@@ -483,6 +485,33 @@ export class BrowserManager {
     return this.pages.length > 0;
   }
 
+  private getSafePageUrl(page: Page): string {
+    try {
+      return page.url();
+    } catch {
+      return '';
+    }
+  }
+
+  private isIgnoredCDPPageUrl(url: string): boolean {
+    if (!url) return false;
+    const normalizedUrl = url.toLowerCase();
+    return IGNORED_CDP_PAGE_URL_PREFIXES.some((prefix) => normalizedUrl.startsWith(prefix));
+  }
+
+  private isUsableCDPPage(page: Page): boolean {
+    if (page.isClosed()) return false;
+    const url = this.getSafePageUrl(page);
+    if (!url) return false;
+    return !this.isIgnoredCDPPageUrl(url);
+  }
+
+  private collectUsableCDPPages(contexts: BrowserContext[]): Page[] {
+    return contexts
+      .flatMap((context) => context.pages())
+      .filter((page) => this.isUsableCDPPage(page));
+  }
+
   /**
    * Ensure at least one page exists. If the browser is launched but all pages
    * were closed (stale session), creates a new page on the existing context.
@@ -527,6 +556,24 @@ export class BrowserManager {
     if (this.pages.length === 0) {
       throw new Error('Browser not launched. Call launch first.');
     }
+
+    const current = this.pages[this.activePageIndex];
+    if (current && this.isUsableCDPPage(current)) {
+      return current;
+    }
+
+    const usableIndex = this.pages.findIndex((page) => this.isUsableCDPPage(page));
+    if (usableIndex !== -1) {
+      this.activePageIndex = usableIndex;
+      return this.pages[this.activePageIndex];
+    }
+
+    const openIndex = this.pages.findIndex((page) => !page.isClosed());
+    if (openIndex !== -1) {
+      this.activePageIndex = openIndex;
+      return this.pages[this.activePageIndex];
+    }
+
     return this.pages[this.activePageIndex];
   }
 
@@ -1008,7 +1055,7 @@ export class BrowserManager {
     try {
       const contexts = this.browser.contexts();
       if (contexts.length === 0) return false;
-      return contexts.some((context) => context.pages().length > 0);
+      return contexts.some((context) => context.pages().some((page) => this.isUsableCDPPage(page)));
     } catch {
       return false;
     }
@@ -1722,11 +1769,32 @@ export class BrowserManager {
         throw new Error('No browser context found. Make sure the app has an open window.');
       }
 
-      // Filter out pages with empty URLs, which can cause Playwright to hang
-      const allPages = contexts.flatMap((context) => context.pages()).filter((page) => page.url());
+      let allPages = this.collectUsableCDPPages(contexts);
 
       if (allPages.length === 0) {
-        throw new Error('No page found. Make sure the app has loaded content.');
+        // Some Chrome instances (especially with custom UI pages) expose only internal/transient
+        // pages over CDP. Create a fresh page so commands always have a stable target.
+        let fallbackPage: Page | null = null;
+        for (const context of contexts) {
+          try {
+            const page = await context.newPage();
+            if (!fallbackPage) {
+              fallbackPage = page;
+            }
+            if (this.isUsableCDPPage(page)) {
+              fallbackPage = page;
+              break;
+            }
+          } catch {
+            // Try next context
+          }
+        }
+
+        if (!fallbackPage) {
+          throw new Error('No page found. Make sure the app has loaded content.');
+        }
+
+        allPages = [fallbackPage];
       }
 
       // All validation passed - commit state
@@ -1831,7 +1899,7 @@ export class BrowserManager {
    * Discovery strategy:
    * 1. Read DevToolsActivePort from Chrome's default user data directories
    * 2. If found, connect using the port and WebSocket path from that file
-   * 3. If not found, probe common debugging ports (9222, 9229)
+   * 3. If not found, probe common debugging ports (9222, 9229, 9333)
    * 4. If a port responds, connect via CDP
    */
   private async autoConnectViaCDP(): Promise<void> {
@@ -1866,7 +1934,7 @@ export class BrowserManager {
     }
 
     // Strategy 2: Probe common debugging ports
-    const commonPorts = [9222, 9229];
+    const commonPorts = [9222, 9229, 9333];
     for (const port of commonPorts) {
       const wsUrl = await this.probeDebugPort(port);
       if (wsUrl) {
@@ -1922,6 +1990,9 @@ export class BrowserManager {
       const index = this.pages.indexOf(page);
       if (index !== -1) {
         this.pages.splice(index, 1);
+        if (index < this.activePageIndex) {
+          this.activePageIndex--;
+        }
         if (this.activePageIndex >= this.pages.length) {
           this.activePageIndex = Math.max(0, this.pages.length - 1);
         }
@@ -1935,6 +2006,11 @@ export class BrowserManager {
    */
   private setupContextTracking(context: BrowserContext): void {
     context.on('page', (page) => {
+      const pageUrl = this.getSafePageUrl(page);
+      if (this.isIgnoredCDPPageUrl(pageUrl)) {
+        return;
+      }
+
       // Only add if not already tracked (avoids duplicates when newTab() creates pages)
       if (!this.pages.includes(page)) {
         this.pages.push(page);
