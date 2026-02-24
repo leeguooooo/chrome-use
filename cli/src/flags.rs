@@ -34,6 +34,7 @@ pub struct Config {
     pub headers: Option<String>,
     pub annotate: Option<bool>,
     pub color_scheme: Option<String>,
+    pub stealth: Option<bool>,
 }
 
 impl Config {
@@ -68,6 +69,7 @@ impl Config {
             headers: other.headers.or(self.headers),
             annotate: other.annotate.or(self.annotate),
             color_scheme: other.color_scheme.or(self.color_scheme),
+            stealth: other.stealth.or(self.stealth),
         }
     }
 }
@@ -156,8 +158,7 @@ pub fn load_config(args: &[String]) -> Result<Config, String> {
         });
 
     if let Some((source, maybe_path)) = explicit {
-        let path_str =
-            maybe_path.ok_or_else(|| format!("{} requires a file path", source))?;
+        let path_str = maybe_path.ok_or_else(|| format!("{} requires a file path", source))?;
         let path = PathBuf::from(&path_str);
         if !path.exists() {
             return Err(format!("config file not found: {}", path_str));
@@ -203,6 +204,7 @@ pub struct Flags {
     pub session_name: Option<String>,
     pub annotate: bool,
     pub color_scheme: Option<String>,
+    pub stealth: bool,
 
     // Track which launch-time options were explicitly passed via CLI
     // (as opposed to being set only via environment variables)
@@ -216,6 +218,7 @@ pub struct Flags {
     pub cli_proxy_bypass: bool,
     pub cli_allow_file_access: bool,
     pub cli_annotate: bool,
+    pub cli_stealth: bool,
 }
 
 pub fn parse_flags(args: &[String]) -> Flags {
@@ -241,50 +244,49 @@ pub fn parse_flags(args: &[String]) -> Flags {
     };
 
     let mut flags = Flags {
-        json: env_var_is_truthy("AGENT_BROWSER_JSON")
-            || config.json.unwrap_or(false),
-        full: env_var_is_truthy("AGENT_BROWSER_FULL")
-            || config.full.unwrap_or(false),
-        headed: env_var_is_truthy("AGENT_BROWSER_HEADED")
-            || config.headed.unwrap_or(false),
-        debug: env_var_is_truthy("AGENT_BROWSER_DEBUG")
-            || config.debug.unwrap_or(false),
-        session: env::var("AGENT_BROWSER_SESSION").ok()
+        json: env_var_is_truthy("AGENT_BROWSER_JSON") || config.json.unwrap_or(false),
+        full: env_var_is_truthy("AGENT_BROWSER_FULL") || config.full.unwrap_or(false),
+        headed: env_var_is_truthy("AGENT_BROWSER_HEADED") || config.headed.unwrap_or(false),
+        debug: env_var_is_truthy("AGENT_BROWSER_DEBUG") || config.debug.unwrap_or(false),
+        session: env::var("AGENT_BROWSER_SESSION")
+            .ok()
             .or(config.session)
             .unwrap_or_else(|| "default".to_string()),
         headers: config.headers,
-        executable_path: env::var("AGENT_BROWSER_EXECUTABLE_PATH").ok()
+        executable_path: env::var("AGENT_BROWSER_EXECUTABLE_PATH")
+            .ok()
             .or(config.executable_path),
         cdp: config.cdp,
         extensions,
-        profile: env::var("AGENT_BROWSER_PROFILE").ok()
-            .or(config.profile),
-        state: env::var("AGENT_BROWSER_STATE").ok()
-            .or(config.state),
-        proxy: env::var("AGENT_BROWSER_PROXY").ok()
-            .or(config.proxy),
-        proxy_bypass: env::var("AGENT_BROWSER_PROXY_BYPASS").ok()
+        profile: env::var("AGENT_BROWSER_PROFILE").ok().or(config.profile),
+        state: env::var("AGENT_BROWSER_STATE").ok().or(config.state),
+        proxy: env::var("AGENT_BROWSER_PROXY").ok().or(config.proxy),
+        proxy_bypass: env::var("AGENT_BROWSER_PROXY_BYPASS")
+            .ok()
             .or(config.proxy_bypass),
-        args: env::var("AGENT_BROWSER_ARGS").ok()
-            .or(config.args),
-        user_agent: env::var("AGENT_BROWSER_USER_AGENT").ok()
+        args: env::var("AGENT_BROWSER_ARGS").ok().or(config.args),
+        user_agent: env::var("AGENT_BROWSER_USER_AGENT")
+            .ok()
             .or(config.user_agent),
-        provider: env::var("AGENT_BROWSER_PROVIDER").ok()
-            .or(config.provider),
+        provider: env::var("AGENT_BROWSER_PROVIDER").ok().or(config.provider),
         ignore_https_errors: env_var_is_truthy("AGENT_BROWSER_IGNORE_HTTPS_ERRORS")
             || config.ignore_https_errors.unwrap_or(false),
         allow_file_access: env_var_is_truthy("AGENT_BROWSER_ALLOW_FILE_ACCESS")
             || config.allow_file_access.unwrap_or(false),
-        device: env::var("AGENT_BROWSER_IOS_DEVICE").ok()
-            .or(config.device),
+        device: env::var("AGENT_BROWSER_IOS_DEVICE").ok().or(config.device),
         auto_connect: env_var_is_truthy("AGENT_BROWSER_AUTO_CONNECT")
             || config.auto_connect.unwrap_or(false),
-        session_name: env::var("AGENT_BROWSER_SESSION_NAME").ok()
+        session_name: env::var("AGENT_BROWSER_SESSION_NAME")
+            .ok()
             .or(config.session_name),
-        annotate: env_var_is_truthy("AGENT_BROWSER_ANNOTATE")
-            || config.annotate.unwrap_or(false),
-        color_scheme: env::var("AGENT_BROWSER_COLOR_SCHEME").ok()
+        annotate: env_var_is_truthy("AGENT_BROWSER_ANNOTATE") || config.annotate.unwrap_or(false),
+        color_scheme: env::var("AGENT_BROWSER_COLOR_SCHEME")
+            .ok()
             .or(config.color_scheme),
+        stealth: match env::var("AGENT_BROWSER_STEALTH") {
+            Ok(val) => !matches!(val.to_lowercase().as_str(), "0" | "false" | "no" | ""),
+            Err(_) => config.stealth.unwrap_or(true),
+        },
         cli_executable_path: false,
         cli_extensions: false,
         cli_profile: false,
@@ -295,6 +297,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         cli_proxy_bypass: false,
         cli_allow_file_access: false,
         cli_annotate: false,
+        cli_stealth: false,
     };
 
     let mut i = 0;
@@ -303,22 +306,30 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--json" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.json = val;
-                if consumed { i += 1; }
+                if consumed {
+                    i += 1;
+                }
             }
             "--full" | "-f" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.full = val;
-                if consumed { i += 1; }
+                if consumed {
+                    i += 1;
+                }
             }
             "--headed" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.headed = val;
-                if consumed { i += 1; }
+                if consumed {
+                    i += 1;
+                }
             }
             "--debug" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.debug = val;
-                if consumed { i += 1; }
+                if consumed {
+                    i += 1;
+                }
             }
             "--session" => {
                 if let Some(s) = args.get(i + 1) {
@@ -403,13 +414,17 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--ignore-https-errors" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.ignore_https_errors = val;
-                if consumed { i += 1; }
+                if consumed {
+                    i += 1;
+                }
             }
             "--allow-file-access" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.allow_file_access = val;
                 flags.cli_allow_file_access = true;
-                if consumed { i += 1; }
+                if consumed {
+                    i += 1;
+                }
             }
             "--device" => {
                 if let Some(d) = args.get(i + 1) {
@@ -420,7 +435,9 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--auto-connect" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.auto_connect = val;
-                if consumed { i += 1; }
+                if consumed {
+                    i += 1;
+                }
             }
             "--session-name" => {
                 if let Some(s) = args.get(i + 1) {
@@ -432,7 +449,17 @@ pub fn parse_flags(args: &[String]) -> Flags {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.annotate = val;
                 flags.cli_annotate = true;
-                if consumed { i += 1; }
+                if consumed {
+                    i += 1;
+                }
+            }
+            "--stealth" => {
+                let (val, consumed) = parse_bool_arg(args, i);
+                flags.stealth = val;
+                flags.cli_stealth = true;
+                if consumed {
+                    i += 1;
+                }
             }
             "--color-scheme" => {
                 if let Some(s) = args.get(i + 1) {
@@ -465,6 +492,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--allow-file-access",
         "--auto-connect",
         "--annotate",
+        "--stealth",
     ];
     // Global flags that always take a value (need to skip the next arg too)
     const GLOBAL_FLAGS_WITH_VALUE: &[&str] = &[
@@ -721,7 +749,10 @@ mod tests {
         assert_eq!(config.session.as_deref(), Some("test-session"));
         assert_eq!(config.session_name.as_deref(), Some("my-app"));
         assert_eq!(config.executable_path.as_deref(), Some("/usr/bin/chromium"));
-        assert_eq!(config.extensions, Some(vec!["/ext1".to_string(), "/ext2".to_string()]));
+        assert_eq!(
+            config.extensions,
+            Some(vec!["/ext1".to_string(), "/ext2".to_string()])
+        );
         assert_eq!(config.profile.as_deref(), Some("/tmp/profile"));
         assert_eq!(config.state.as_deref(), Some("/tmp/state.json"));
         assert_eq!(config.proxy.as_deref(), Some("http://proxy:8080"));
@@ -1030,7 +1061,11 @@ mod tests {
         let merged = user.merge(project);
         assert_eq!(
             merged.extensions,
-            Some(vec!["/ext1".to_string(), "/ext2".to_string(), "/ext3".to_string()])
+            Some(vec![
+                "/ext1".to_string(),
+                "/ext2".to_string(),
+                "/ext3".to_string()
+            ])
         );
     }
 

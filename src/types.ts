@@ -32,6 +32,7 @@ export interface LaunchCommand extends BaseCommand {
   ignoreHTTPSErrors?: boolean;
   allowFileAccess?: boolean; // Enable file:// URL access and cross-origin file requests
   colorScheme?: 'light' | 'dark' | 'no-preference'; // Persistent color scheme override
+  stealth?: boolean; // Enable stealth mode to avoid automation detection
   // Auto-load state file for session persistence
   autoStateFilePath?: string;
 }
@@ -828,6 +829,7 @@ export interface WaitCommand extends BaseCommand {
   action: 'wait';
   selector?: string;
   timeout?: number;
+  timeoutMax?: number; // When set with timeout, waits a random duration in [timeout, timeoutMax]
   state?: 'attached' | 'detached' | 'visible' | 'hidden';
 }
 

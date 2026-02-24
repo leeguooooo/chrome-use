@@ -111,10 +111,12 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
             let mut nav_cmd = json!({ "id": id, "action": "navigate", "url": url });
             // If --headers flag is set, include headers (scoped to this origin)
             if let Some(ref headers_json) = flags.headers {
-                let headers = serde_json::from_str::<serde_json::Value>(headers_json)
-                    .map_err(|_| ParseError::InvalidValue {
-                        message: format!("Invalid JSON for --headers: {}", headers_json),
-                        usage: "open <url> --headers '{\"Key\": \"Value\"}'",
+                let headers =
+                    serde_json::from_str::<serde_json::Value>(headers_json).map_err(|_| {
+                        ParseError::InvalidValue {
+                            message: format!("Invalid JSON for --headers: {}", headers_json),
+                            usage: "open <url> --headers '{\"Key\": \"Value\"}'",
+                        }
                     })?;
                 nav_cmd["headers"] = headers;
             }
@@ -287,7 +289,9 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                             usage: "keyboard inserttext <text>",
                         });
                     }
-                    Ok(json!({ "id": id, "action": "keyboard", "subaction": "insertText", "text": text }))
+                    Ok(
+                        json!({ "id": id, "action": "keyboard", "subaction": "insertText", "text": text }),
+                    )
                 }
                 _ => Err(ParseError::UnknownSubcommand {
                     subcommand: sub.to_string(),
@@ -386,8 +390,16 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                 return Ok(cmd);
             }
 
-            // Default: selector or timeout
+            // Default: selector, timeout, or range (e.g. 2000-5000)
             if let Some(arg) = rest.first() {
+                // Check for range syntax: "2000-5000"
+                if let Some((min_str, max_str)) = arg.split_once('-') {
+                    if let (Ok(min), Ok(max)) = (min_str.parse::<u64>(), max_str.parse::<u64>()) {
+                        return Ok(
+                            json!({ "id": id, "action": "wait", "timeout": min, "timeoutMax": max }),
+                        );
+                    }
+                }
                 if let Ok(timeout) = arg.parse::<u64>() {
                     Ok(json!({ "id": id, "action": "wait", "timeout": timeout }))
                 } else {
@@ -396,7 +408,7 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
             } else {
                 Err(ParseError::MissingArguments {
                     context: "wait".to_string(),
-                    usage: "wait <selector|ms|--url|--load|--fn|--text>",
+                    usage: "wait <selector|ms|min-max|--url|--load|--fn|--text>",
                 })
             }
         }
@@ -929,9 +941,7 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                     })?;
                     Ok(json!({ "id": id, "action": "state_load", "path": path }))
                 }
-                Some("list") => {
-                    Ok(json!({ "id": id, "action": "state_list" }))
-                }
+                Some("list") => Ok(json!({ "id": id, "action": "state_list" })),
                 Some("clear") => {
                     let mut session_name: Option<&str> = None;
                     let mut all = false;
@@ -952,7 +962,9 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
 
                     if let Some(name) = session_name {
                         if !is_valid_session_name(name) {
-                            return Err(ParseError::InvalidSessionName { name: name.to_string() });
+                            return Err(ParseError::InvalidSessionName {
+                                name: name.to_string(),
+                            });
                         }
                     }
 
@@ -1006,13 +1018,19 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                     let new_name = new_name.trim_end_matches(".json");
 
                     if !is_valid_session_name(old_name) {
-                        return Err(ParseError::InvalidSessionName { name: old_name.to_string() });
+                        return Err(ParseError::InvalidSessionName {
+                            name: old_name.to_string(),
+                        });
                     }
                     if !is_valid_session_name(new_name) {
-                        return Err(ParseError::InvalidSessionName { name: new_name.to_string() });
+                        return Err(ParseError::InvalidSessionName {
+                            name: new_name.to_string(),
+                        });
                     }
 
-                    Ok(json!({ "id": id, "action": "state_rename", "oldName": old_name, "newName": new_name }))
+                    Ok(
+                        json!({ "id": id, "action": "state_rename", "oldName": old_name, "newName": new_name }),
+                    )
                 }
                 Some(sub) => Err(ParseError::UnknownSubcommand {
                     subcommand: sub.to_string(),
@@ -1121,7 +1139,10 @@ fn parse_diff(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
                                 }
                                 Err(_) => {
                                     return Err(ParseError::InvalidValue {
-                                        message: format!("Depth must be a non-negative integer, got: {}", d),
+                                        message: format!(
+                                            "Depth must be a non-negative integer, got: {}",
+                                            d
+                                        ),
                                         usage: "diff snapshot --depth <n>",
                                     });
                                 }
@@ -1187,7 +1208,10 @@ fn parse_diff(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
                                 }
                                 Ok(n) => {
                                     return Err(ParseError::InvalidValue {
-                                        message: format!("Threshold must be between 0 and 1, got {}", n),
+                                        message: format!(
+                                            "Threshold must be between 0 and 1, got {}",
+                                            n
+                                        ),
                                         usage: "diff screenshot --threshold <0-1>",
                                     });
                                 }
@@ -1304,7 +1328,10 @@ fn parse_diff(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
                                 }
                                 Err(_) => {
                                     return Err(ParseError::InvalidValue {
-                                        message: format!("Depth must be a non-negative integer, got: {}", d),
+                                        message: format!(
+                                            "Depth must be a non-negative integer, got: {}",
+                                            d
+                                        ),
                                         usage: "diff url <url1> <url2> --depth <n>",
                                     });
                                 }
@@ -1896,8 +1923,10 @@ mod tests {
             cli_proxy_bypass: false,
             cli_allow_file_access: false,
             cli_annotate: false,
+            cli_stealth: false,
             annotate: false,
             color_scheme: None,
+            stealth: false,
         }
     }
 
@@ -3029,8 +3058,11 @@ mod tests {
 
     #[test]
     fn test_diff_snapshot_baseline() {
-        let cmd =
-            parse_command(&args("diff snapshot --baseline before.txt"), &default_flags()).unwrap();
+        let cmd = parse_command(
+            &args("diff snapshot --baseline before.txt"),
+            &default_flags(),
+        )
+        .unwrap();
         assert_eq!(cmd["action"], "diff_snapshot");
         assert_eq!(cmd["baseline"], "before.txt");
     }
@@ -3050,9 +3082,11 @@ mod tests {
 
     #[test]
     fn test_diff_snapshot_short_flags() {
-        let cmd =
-            parse_command(&args("diff snapshot -b snap.txt -s .content -c -d 2"), &default_flags())
-                .unwrap();
+        let cmd = parse_command(
+            &args("diff snapshot -b snap.txt -s .content -c -d 2"),
+            &default_flags(),
+        )
+        .unwrap();
         assert_eq!(cmd["action"], "diff_snapshot");
         assert_eq!(cmd["baseline"], "snap.txt");
         assert_eq!(cmd["selector"], ".content");
@@ -3100,8 +3134,7 @@ mod tests {
     fn test_diff_screenshot_global_full_flag() {
         let mut flags = default_flags();
         flags.full = true;
-        let cmd =
-            parse_command(&args("diff screenshot --baseline b.png"), &flags).unwrap();
+        let cmd = parse_command(&args("diff screenshot --baseline b.png"), &flags).unwrap();
         assert_eq!(cmd["action"], "diff_screenshot");
         assert_eq!(cmd["fullPage"], true);
     }
@@ -3145,8 +3178,7 @@ mod tests {
     fn test_diff_url_global_full_flag() {
         let mut flags = default_flags();
         flags.full = true;
-        let cmd =
-            parse_command(&args("diff url https://a.com https://b.com"), &flags).unwrap();
+        let cmd = parse_command(&args("diff url https://a.com https://b.com"), &flags).unwrap();
         assert_eq!(cmd["fullPage"], true);
     }
 
