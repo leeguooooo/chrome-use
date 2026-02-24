@@ -719,10 +719,11 @@ Examples:
             r##"
 agent-browser type - Type text into an element
 
-Usage: agent-browser type <selector> <text>
+Usage: agent-browser type <selector> <text> [--delay <ms>]
 
 Types text into the specified element character by character.
 Unlike fill, this does not clear existing content first.
+Use --delay to add per-character delay (milliseconds).
 
 Global Options:
   --json               Output as JSON
@@ -730,7 +731,9 @@ Global Options:
 
 Examples:
   agent-browser type "#search" "hello"
+  agent-browser type "#search" "iphone" --delay 120
   agent-browser type @e2 "additional text"
+  agent-browser type @e2 -- "--delay 120 (literal text)"
 
 See Also:
   For typing into contenteditable editors (Lexical, ProseMirror, etc.)
@@ -961,7 +964,7 @@ the current focus — essential for contenteditable editors like
 Lexical, ProseMirror, CodeMirror, and Monaco.
 
 Subcommands:
-  type <text>          Type text character-by-character with real
+  type <text> [--delay <ms>]  Type text character-by-character with real
                        key events (keydown, keypress, keyup per char)
   inserttext <text>    Insert text without key events (like paste)
 
@@ -974,6 +977,7 @@ Global Options:
 
 Examples:
   agent-browser keyboard type "Hello, World!"
+  agent-browser keyboard type "human pacing" --delay 90
   agent-browser keyboard type "# My Heading"
   agent-browser keyboard inserttext "pasted content"
 
@@ -2016,10 +2020,10 @@ Core Commands:
   open <url>                 Navigate to URL
   click <sel>                Click element (or @ref)
   dblclick <sel>             Double-click element
-  type <sel> <text>          Type into element
+  type <sel> <text> [--delay <ms>]  Type into element
   fill <sel> <text>          Clear and fill
   press <key>                Press key (Enter, Tab, Control+a)
-  keyboard type <text>       Type text with real keystrokes (no selector)
+  keyboard type <text> [--delay <ms>]  Type text with real keystrokes (no selector)
   keyboard inserttext <text> Insert text without key events
   hover <sel>                Hover element
   focus <sel>                Focus element

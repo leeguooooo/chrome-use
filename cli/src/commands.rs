@@ -71,6 +71,62 @@ pub fn gen_id() -> String {
     )
 }
 
+/// Parse free-form text arguments with optional `--delay <ms>`.
+///
+/// `--` can be used to stop flag parsing if text must include `--delay` literally.
+fn parse_text_with_optional_delay(
+    args: &[&str],
+    context: &str,
+    usage: &'static str,
+) -> Result<(String, Option<u64>), ParseError> {
+    let mut text_parts: Vec<&str> = Vec::new();
+    let mut delay_ms: Option<u64> = None;
+    let mut parse_flags = true;
+    let mut i = 0;
+
+    while i < args.len() {
+        let arg = args[i];
+
+        if parse_flags && arg == "--" {
+            parse_flags = false;
+            i += 1;
+            continue;
+        }
+
+        if parse_flags && arg == "--delay" {
+            let raw = args
+                .get(i + 1)
+                .ok_or_else(|| ParseError::MissingArguments {
+                    context: format!("{} --delay", context),
+                    usage,
+                })?;
+            let parsed = raw.parse::<u64>().map_err(|_| ParseError::InvalidValue {
+                message: format!(
+                    "Invalid --delay value: {} (must be a non-negative integer in milliseconds)",
+                    raw
+                ),
+                usage,
+            })?;
+            delay_ms = Some(parsed);
+            i += 2;
+            continue;
+        }
+
+        text_parts.push(arg);
+        i += 1;
+    }
+
+    let text = text_parts.join(" ");
+    if text.is_empty() {
+        return Err(ParseError::MissingArguments {
+            context: context.to_string(),
+            usage,
+        });
+    }
+
+    Ok((text, delay_ms))
+}
+
 pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError> {
     if args.is_empty() {
         return Err(ParseError::MissingArguments {
@@ -165,9 +221,18 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
         "type" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "type".to_string(),
-                usage: "type <selector> <text>",
+                usage: "type <selector> <text> [--delay <ms>]",
             })?;
-            Ok(json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" ") }))
+            let (text, delay) = parse_text_with_optional_delay(
+                &rest[1..],
+                "type",
+                "type <selector> <text> [--delay <ms>]",
+            )?;
+            let mut cmd = json!({ "id": id, "action": "type", "selector": sel, "text": text });
+            if let Some(ms) = delay {
+                cmd["delay"] = json!(ms);
+            }
+            Ok(cmd)
         }
         "hover" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
@@ -272,14 +337,16 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
             })?;
             match *sub {
                 "type" => {
-                    let text: String = rest[1..].join(" ");
-                    if text.is_empty() {
-                        return Err(ParseError::MissingArguments {
-                            context: "keyboard type".to_string(),
-                            usage: "keyboard type <text>",
-                        });
+                    let (text, delay) = parse_text_with_optional_delay(
+                        &rest[1..],
+                        "keyboard type",
+                        "keyboard type <text> [--delay <ms>]",
+                    )?;
+                    let mut cmd = json!({ "id": id, "action": "keyboard", "subaction": "type", "text": text });
+                    if let Some(ms) = delay {
+                        cmd["delay"] = json!(ms);
                     }
-                    Ok(json!({ "id": id, "action": "keyboard", "subaction": "type", "text": text }))
+                    Ok(cmd)
                 }
                 "inserttext" | "insertText" => {
                     let text: String = rest[1..].join(" ");
@@ -2301,6 +2368,29 @@ mod tests {
     }
 
     #[test]
+    fn test_type_command_with_delay() {
+        let cmd =
+            parse_command(&args("type #input some text --delay 120"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "type");
+        assert_eq!(cmd["selector"], "#input");
+        assert_eq!(cmd["text"], "some text");
+        assert_eq!(cmd["delay"], 120);
+    }
+
+    #[test]
+    fn test_type_command_with_literal_delay_text() {
+        let cmd = parse_command(
+            &args("type #input -- --delay 120 should be typed"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "type");
+        assert_eq!(cmd["selector"], "#input");
+        assert_eq!(cmd["text"], "--delay 120 should be typed");
+        assert!(cmd.get("delay").is_none());
+    }
+
+    #[test]
     fn test_select() {
         let cmd = parse_command(&args("select #menu option1"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "select");
@@ -2477,6 +2567,19 @@ mod tests {
         let cmd = parse_command(&args("wait #element"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "wait");
         assert_eq!(cmd["selector"], "#element");
+    }
+
+    #[test]
+    fn test_keyboard_type_with_delay() {
+        let cmd = parse_command(
+            &args("keyboard type natural typing --delay 90"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "keyboard");
+        assert_eq!(cmd["subaction"], "type");
+        assert_eq!(cmd["text"], "natural typing");
+        assert_eq!(cmd["delay"], 90);
     }
 
     #[test]
