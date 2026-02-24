@@ -6,7 +6,7 @@
  * Puppeteer / headless Chrome.
  */
 
-import type { BrowserContext, Page } from 'playwright-core';
+import type { Browser, BrowserContext, Page } from 'playwright-core';
 
 export interface StealthScriptOptions {
   locale?: string;
@@ -16,7 +16,11 @@ export interface StealthScriptOptions {
  * Chromium args that reduce automation fingerprint.
  * Intended to be merged into the user-supplied args array at launch time.
  */
-export const STEALTH_CHROMIUM_ARGS: string[] = ['--disable-blink-features=AutomationControlled'];
+export const STEALTH_CHROMIUM_ARGS: string[] = [
+  '--disable-blink-features=AutomationControlled',
+  '--use-gl=angle',
+  '--use-angle=default',
+];
 
 /**
  * Apply all stealth patches to a BrowserContext.
@@ -36,47 +40,101 @@ export async function applyStealthScripts(
   context.on('page', (page: Page) => applyCDPStealthToPage(page));
 }
 
+/**
+ * Apply browser-level CDP overrides that affect all targets (including Workers).
+ * Call this right after browser.launch() and before creating pages.
+ */
+export async function applyBrowserLevelStealth(browser: Browser): Promise<void> {
+  try {
+    const cdp = await (browser as any).newBrowserCDPSession();
+    const version = await cdp.send('Browser.getVersion');
+    const rawUA = version?.userAgent ?? '';
+    if (!rawUA.includes('HeadlessChrome')) {
+      await cdp.detach();
+      return;
+    }
+    const patchedUA = rawUA.replace(/HeadlessChrome/g, 'Chrome');
+    const metadata = buildUserAgentMetadata(patchedUA);
+
+    // Override on all existing targets
+    const { targetInfos } = await cdp.send('Target.getTargets');
+    for (const target of targetInfos) {
+      try {
+        const { sessionId } = await cdp.send('Target.attachToTarget', {
+          targetId: target.targetId,
+          flatten: true,
+        });
+        await cdp.send('Emulation.setUserAgentOverride', {
+          userAgent: patchedUA,
+          acceptLanguage: 'en-US,en;q=0.9',
+          platform: getPlatformString(),
+          userAgentMetadata: metadata,
+        });
+        await cdp.send('Target.detachFromTarget', { sessionId }).catch(() => {});
+      } catch {
+        // Some targets don't support Emulation domain
+      }
+    }
+    await cdp.detach();
+  } catch {
+    // newBrowserCDPSession not available -- silently skip
+  }
+}
+
 async function applyCDPStealthToPage(page: Page): Promise<void> {
   try {
     const cdp = await page.context().newCDPSession(page);
     const ua = await cdp.send('Browser.getVersion').catch(() => null);
     const rawUA = ua?.userAgent ?? '';
     const patchedUA = rawUA.replace(/HeadlessChrome/g, 'Chrome');
-
-    const versionMatch = patchedUA.match(/Chrome\/(\d+)/);
-    const majorVersion = versionMatch?.[1] ?? '120';
-    const fullVersionMatch = patchedUA.match(/Chrome\/([\d.]+)/);
-    const fullVersion = fullVersionMatch?.[1] ?? `${majorVersion}.0.0.0`;
+    const metadata = buildUserAgentMetadata(patchedUA);
 
     await cdp.send('Emulation.setUserAgentOverride', {
       userAgent: patchedUA,
       acceptLanguage: 'en-US,en;q=0.9',
       platform: getPlatformString(),
-      userAgentMetadata: {
-        brands: [
-          { brand: 'Chromium', version: majorVersion },
-          { brand: 'Google Chrome', version: majorVersion },
-          { brand: 'Not-A.Brand', version: '99' },
-        ],
-        fullVersionList: [
-          { brand: 'Chromium', version: fullVersion },
-          { brand: 'Google Chrome', version: fullVersion },
-          { brand: 'Not-A.Brand', version: '99.0.0.0' },
-        ],
-        fullVersion: fullVersion,
-        platform: getPlatformHint(),
-        platformVersion: getPlatformVersionHint(),
-        architecture: 'x86',
-        model: '',
-        mobile: false,
-        bitness: '64',
-        wow64: false,
-      },
+      userAgentMetadata: metadata,
     });
-    await cdp.detach();
+
+    // Set default background color to opaque white (headless default is transparent)
+    await cdp
+      .send('Emulation.setDefaultBackgroundColorOverride', {
+        color: { r: 255, g: 255, b: 255, a: 1 },
+      })
+      .catch(() => {});
+
+    // Keep CDP session alive so the override persists for Workers
   } catch {
     // CDP not available (non-Chromium) -- silently skip
   }
+}
+
+function buildUserAgentMetadata(patchedUA: string): any {
+  const versionMatch = patchedUA.match(/Chrome\/(\d+)/);
+  const majorVersion = versionMatch?.[1] ?? '120';
+  const fullVersionMatch = patchedUA.match(/Chrome\/([\d.]+)/);
+  const fullVersion = fullVersionMatch?.[1] ?? `${majorVersion}.0.0.0`;
+
+  return {
+    brands: [
+      { brand: 'Chromium', version: majorVersion },
+      { brand: 'Google Chrome', version: majorVersion },
+      { brand: 'Not-A.Brand', version: '99' },
+    ],
+    fullVersionList: [
+      { brand: 'Chromium', version: fullVersion },
+      { brand: 'Google Chrome', version: fullVersion },
+      { brand: 'Not-A.Brand', version: '99.0.0.0' },
+    ],
+    fullVersion: fullVersion,
+    platform: getPlatformHint(),
+    platformVersion: getPlatformVersionHint(),
+    architecture: 'x86',
+    model: '',
+    mobile: false,
+    bitness: '64',
+    wow64: false,
+  };
 }
 
 function getPlatformString(): string {
@@ -153,6 +211,7 @@ function buildStealthScript(options: StealthScriptOptions): string {
     patchUserAgentData(),
     patchUserAgent(),
     patchPerformanceMemory(),
+    patchDefaultBackgroundColor(),
   ].join('\n');
 }
 
@@ -921,6 +980,23 @@ function patchPerformanceMemory(): string {
       }),
       configurable: true,
     });
+  }
+})();`;
+}
+
+/**
+ * Headless Chrome has a transparent default background (rgba(0,0,0,0)).
+ * Real browsers have an opaque white background. Set it early to avoid
+ * the "hasKnownBgColor" detection.
+ */
+function patchDefaultBackgroundColor(): string {
+  return `(function(){
+  if (document.documentElement) {
+    const style = getComputedStyle(document.documentElement);
+    const bg = style.backgroundColor;
+    if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
+      document.documentElement.style.backgroundColor = 'rgb(255, 255, 255)';
+    }
   }
 })();`;
 }

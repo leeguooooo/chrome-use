@@ -30,6 +30,7 @@ import {
 import {
   STEALTH_CHROMIUM_ARGS,
   applyStealthScripts,
+  applyBrowserLevelStealth,
   type StealthScriptOptions,
 } from './stealth.js';
 
@@ -1575,6 +1576,10 @@ export class BrowserManager {
         args: baseArgs,
       });
       this.cdpEndpoint = null;
+
+      if (stealthPolicy.enabled && browserType === 'chromium') {
+        await applyBrowserLevelStealth(this.browser);
+      }
 
       if (!options.userAgent && stealthPolicy.enabled && browserType === 'chromium') {
         const runtimeVersion = this.extractChromiumVersion(this.browser.version());
