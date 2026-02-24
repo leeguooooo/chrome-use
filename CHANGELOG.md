@@ -1,5 +1,15 @@
 # agent-browser
 
+## 0.14.0-fork.3
+
+### Patch Changes
+
+- Fix CLI typing delay parsing so `--delay` is treated as an option instead of typed text.
+  - Add `--delay <ms>` parsing for `type` and `keyboard type`
+  - Support `--` to type literal `--delay` text
+  - Add regression tests for parsing and delay behavior
+  - Update CLI help, README, skills, and docs command references
+
 ## 0.14.0
 
 ### Minor Changes
