@@ -135,6 +135,20 @@ This fork enforces a few operational policies:
 - Recommended release format: `<upstream>-fork.<fork>` (example: `0.14.0-fork.3`)
 - Use npm Trusted Publishing (OIDC)
 
+## OpenClaw Skill Sync
+
+This repo includes a dedicated OpenClaw skill at:
+
+- `skills/agent-browser-stealth/SKILL.md`
+
+GitHub Actions auto-syncs skills to ClawHub on every push via:
+
+- `.github/workflows/clawhub-sync.yml`
+
+Required repository secret:
+
+- `CLAWHUB_TOKEN`: API token used by `clawhub login --token ...`
+
 ## License
 
 Apache-2.0

@@ -1,0 +1,46 @@
+name: ClawHub Sync
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-skills:
+    name: Sync skills to ClawHub
+    runs-on: ubuntu-latest
+    env:
+      CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Validate CLAWHUB_TOKEN
+        run: |
+          if [ -z "${CLAWHUB_TOKEN}" ]; then
+            echo "CLAWHUB_TOKEN is not set. Add it in repository secrets."
+            exit 1
+          fi
+
+      - name: Login to ClawHub
+        run: pnpm dlx clawhub@latest login --token "${CLAWHUB_TOKEN}" --no-browser
+
+      - name: Sync all local skills
+        run: |
+          pnpm dlx clawhub@latest sync --all --root ./skills
