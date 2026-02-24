@@ -39,15 +39,11 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
                     return;
                 }
                 Some("diff_url") => {
-                    if let Some(snap_data) =
-                        obj.get("snapshot").and_then(|v| v.as_object())
-                    {
+                    if let Some(snap_data) = obj.get("snapshot").and_then(|v| v.as_object()) {
                         println!("{}", color::bold("Snapshot diff:"));
                         print_snapshot_diff(snap_data);
                     }
-                    if let Some(ss_data) =
-                        obj.get("screenshot").and_then(|v| v.as_object())
-                    {
+                    if let Some(ss_data) = obj.get("screenshot").and_then(|v| v.as_object()) {
                         println!("\n{}", color::bold("Screenshot diff:"));
                         print_screenshot_diff(ss_data);
                     }
@@ -310,11 +306,7 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
                     }
                     _ => {
                         if let Some(path) = data.get("path").and_then(|v| v.as_str()) {
-                            println!(
-                                "{} Recording started: {}",
-                                color::success_indicator(),
-                                path
-                            );
+                            println!("{} Recording started: {}", color::success_indicator(), path);
                         } else {
                             println!("{} Recording started", color::success_indicator());
                         }
@@ -497,7 +489,10 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
                     let filename = file.get("filename").and_then(|v| v.as_str()).unwrap_or("");
                     let size = file.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
                     let modified = file.get("modified").and_then(|v| v.as_str()).unwrap_or("");
-                    let encrypted = file.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let encrypted = file
+                        .get("encrypted")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     let size_str = if size > 1024 {
                         format!("{:.1}KB", size as f64 / 1024.0)
                     } else {
@@ -505,7 +500,11 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
                     };
                     let date_str = modified.split('T').next().unwrap_or(modified);
                     let enc_str = if encrypted { " [encrypted]" } else { "" };
-                    println!("  {} {}", filename, color::dim(&format!("({}, {}){}", size_str, date_str, enc_str)));
+                    println!(
+                        "  {} {}",
+                        filename,
+                        color::dim(&format!("({}, {}){}", size_str, date_str, enc_str))
+                    );
                 }
             }
             return;
@@ -515,13 +514,22 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
         if let Some(true) = data.get("renamed").and_then(|v| v.as_bool()) {
             let old_name = data.get("oldName").and_then(|v| v.as_str()).unwrap_or("");
             let new_name = data.get("newName").and_then(|v| v.as_str()).unwrap_or("");
-            println!("{} Renamed {} -> {}", color::success_indicator(), old_name, new_name);
+            println!(
+                "{} Renamed {} -> {}",
+                color::success_indicator(),
+                old_name,
+                new_name
+            );
             return;
         }
 
         // State clear
         if let Some(cleared) = data.get("cleared").and_then(|v| v.as_i64()) {
-            println!("{} Cleared {} state file(s)", color::success_indicator(), cleared);
+            println!(
+                "{} Cleared {} state file(s)",
+                color::success_indicator(),
+                cleared
+            );
             return;
         }
 
@@ -529,7 +537,10 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
         if let Some(summary) = data.get("summary") {
             let cookies = summary.get("cookies").and_then(|v| v.as_i64()).unwrap_or(0);
             let origins = summary.get("origins").and_then(|v| v.as_i64()).unwrap_or(0);
-            let encrypted = data.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
+            let encrypted = data
+                .get("encrypted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let enc_str = if encrypted { " (encrypted)" } else { "" };
             println!("State file summary{}:", enc_str);
             println!("  Cookies: {}", cookies);
@@ -539,7 +550,11 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
 
         // State clean
         if let Some(cleaned) = data.get("cleaned").and_then(|v| v.as_i64()) {
-            println!("{} Cleaned {} old state file(s)", color::success_indicator(), cleaned);
+            println!(
+                "{} Cleaned {} old state file(s)",
+                color::success_indicator(),
+                cleaned
+            );
             return;
         }
 
@@ -1017,13 +1032,14 @@ Examples:
             r##"
 agent-browser wait - Wait for condition
 
-Usage: agent-browser wait <selector|ms|option>
+Usage: agent-browser wait <selector|ms|min-max|option>
 
 Waits for an element to appear, a timeout, or other conditions.
 
 Modes:
   <selector>           Wait for element to appear
   <ms>                 Wait for specified milliseconds
+  <min>-<max>          Wait for random time between min and max ms
   --url <pattern>      Wait for URL to match pattern
   --load <state>       Wait for load state (load, domcontentloaded, networkidle)
   --fn <expression>    Wait for JavaScript expression to be truthy
@@ -1040,6 +1056,7 @@ Global Options:
 Examples:
   agent-browser wait "#loading-spinner"
   agent-browser wait 2000
+  agent-browser wait 2000-5000            # Random wait between 2-5 seconds
   agent-browser wait --url "**/dashboard"
   agent-browser wait --load networkidle
   agent-browser wait --fn "window.appReady === true"
@@ -2011,7 +2028,7 @@ Core Commands:
   download <sel> <path>      Download file by clicking element
   scroll <dir> [px]          Scroll (up/down/left/right)
   scrollintoview <sel>       Scroll element into view
-  wait <sel|ms>              Wait for element or time
+  wait <sel|ms|min-max>      Wait for element, time, or random range
   screenshot [path]          Take screenshot
   pdf <path>                 Save as PDF
   snapshot                   Accessibility tree with refs (for AI)
@@ -2097,6 +2114,7 @@ Options:
                              e.g., --proxy-bypass "localhost,*.internal.com"
   --ignore-https-errors      Ignore HTTPS certificate errors
   --allow-file-access        Allow file:// URLs to access local files (Chromium only)
+  --stealth                  Stealth mode (default: on): local=launch args+init scripts, CDP/provider=init scripts
   -p, --provider <name>      Browser provider: ios, browserbase, kernel, browseruse
   --device <name>            iOS device name (e.g., "iPhone 15 Pro")
   --json                     JSON output
@@ -2108,7 +2126,7 @@ Options:
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --session-name <name>      Auto-save/restore session state (cookies, localStorage)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
-  --debug                    Debug output
+  --debug                    Debug output (includes stealth connection type + capabilities)
   --version, -V              Show version
 
 Configuration:
@@ -2147,6 +2165,7 @@ Environment:
   AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse)
   AGENT_BROWSER_AUTO_CONNECT     Auto-discover and connect to running Chrome
   AGENT_BROWSER_ALLOW_FILE_ACCESS Allow file:// URLs to access local files
+  AGENT_BROWSER_STEALTH          Stealth mode (default: on, set to 0/false to disable)
   AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default Playwright timeout in ms (default: 25000)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
@@ -2232,10 +2251,7 @@ fn print_screenshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
         .get("mismatchPercentage")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let is_match = data
-        .get("match")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let is_match = data.get("match").and_then(|v| v.as_bool()).unwrap_or(false);
     let dim_mismatch = data
         .get("dimensionMismatch")
         .and_then(|v| v.as_bool())
@@ -2246,7 +2262,10 @@ fn print_screenshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
             color::error_indicator()
         );
     } else if is_match {
-        println!("{} Images match (0% difference)", color::success_indicator());
+        println!(
+            "{} Images match (0% difference)",
+            color::success_indicator()
+        );
     } else {
         println!(
             "{} {:.2}% pixels differ",
@@ -2257,7 +2276,10 @@ fn print_screenshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
     if let Some(diff_path) = data.get("diffPath").and_then(|v| v.as_str()) {
         println!("  Diff image: {}", color::green(diff_path));
     }
-    let total = data.get("totalPixels").and_then(|v| v.as_i64()).unwrap_or(0);
+    let total = data
+        .get("totalPixels")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let different = data
         .get("differentPixels")
         .and_then(|v| v.as_i64())

@@ -517,7 +517,10 @@ async function handleLaunch(
   browser: BrowserManager
 ): Promise<Response> {
   await browser.launch(command);
-  return successResponse(command.id, { launched: true });
+  return successResponse(command.id, {
+    launched: true,
+    stealth: browser.getStealthStatus(command.browser ?? 'chromium'),
+  });
 }
 
 async function handleNavigate(
@@ -539,6 +542,30 @@ async function handleNavigate(
     url: page.url(),
     title: await page.title(),
   });
+}
+
+function bezierPoint(t: number, p0: number, p1: number, p2: number, p3: number): number {
+  const u = 1 - t;
+  return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+}
+
+async function humanMouseMove(page: Page, toX: number, toY: number): Promise<void> {
+  const viewport = page.viewportSize();
+  const fromX = viewport ? Math.random() * viewport.width * 0.3 : 100;
+  const fromY = viewport ? Math.random() * viewport.height * 0.3 : 100;
+
+  const cp1x = fromX + (toX - fromX) * (0.2 + Math.random() * 0.3);
+  const cp1y = fromY + (Math.random() - 0.5) * 200;
+  const cp2x = fromX + (toX - fromX) * (0.5 + Math.random() * 0.3);
+  const cp2y = toY + (Math.random() - 0.5) * 200;
+
+  const steps = 15 + Math.floor(Math.random() * 15);
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = bezierPoint(t, fromX, cp1x, cp2x, toX);
+    const y = bezierPoint(t, fromY, cp1y, cp2y, toY);
+    await page.mouse.move(x, y);
+  }
 }
 
 async function handleClick(command: ClickCommand, browser: BrowserManager): Promise<Response> {
@@ -572,6 +599,14 @@ async function handleClick(command: ClickCommand, browser: BrowserManager): Prom
       });
     }
 
+    // Human-like: move mouse along a Bezier curve before clicking
+    const box = await locator.boundingBox();
+    if (box) {
+      const targetX = box.x + box.width * (0.3 + Math.random() * 0.4);
+      const targetY = box.y + box.height * (0.3 + Math.random() * 0.4);
+      await humanMouseMove(browser.getPage(), targetX, targetY);
+    }
+
     await locator.click({
       button: command.button,
       clickCount: command.clickCount,
@@ -592,9 +627,18 @@ async function handleType(command: TypeCommand, browser: BrowserManager): Promis
       await locator.fill('');
     }
 
-    await locator.pressSequentially(command.text, {
-      delay: command.delay,
-    });
+    if (command.delay) {
+      // Humanized: type char-by-char with randomized delay (+-40%)
+      await locator.focus();
+      const page = browser.getPage();
+      for (const char of command.text) {
+        const jitter = command.delay * (0.6 + Math.random() * 0.8);
+        await page.keyboard.type(char, { delay: 0 });
+        await page.waitForTimeout(jitter);
+      }
+    } else {
+      await locator.pressSequentially(command.text, {});
+    }
   } catch (error) {
     throw toAIFriendlyError(error, command.selector);
   }
@@ -870,7 +914,11 @@ async function handleWait(command: WaitCommand, browser: BrowserManager): Promis
       timeout: command.timeout,
     });
   } else if (command.timeout) {
-    await page.waitForTimeout(command.timeout);
+    // Random range: wait between [timeout, timeoutMax]
+    const min = command.timeout;
+    const max = command.timeoutMax ?? min;
+    const delay = max > min ? min + Math.random() * (max - min) : min;
+    await page.waitForTimeout(Math.round(delay));
   } else {
     // Default: wait for load state
     await page.waitForLoadState('load');
@@ -1897,9 +1945,19 @@ async function handleKeyboard(
   const sub = command.subaction ?? 'press';
 
   switch (sub) {
-    case 'type':
-      await page.keyboard.type(command.text ?? '', { delay: command.delay });
+    case 'type': {
+      const text = command.text ?? '';
+      if (command.delay) {
+        for (const char of text) {
+          const jitter = command.delay * (0.6 + Math.random() * 0.8);
+          await page.keyboard.type(char, { delay: 0 });
+          await page.waitForTimeout(jitter);
+        }
+      } else {
+        await page.keyboard.type(text);
+      }
       return successResponse(command.id, { typed: true, text: command.text });
+    }
     case 'press':
       await page.keyboard.press(command.keys ?? '');
       return successResponse(command.id, { pressed: command.keys });

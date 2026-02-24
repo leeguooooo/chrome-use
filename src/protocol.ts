@@ -49,6 +49,8 @@ const launchSchema = baseCommandSchema.extend({
   provider: z.string().optional(),
   ignoreHTTPSErrors: z.boolean().optional(),
   allowFileAccess: z.boolean().optional(),
+  // Stealth toggle is part of launch semantics for local/CDP/provider modes.
+  stealth: z.boolean().optional(),
   colorScheme: z.enum(['light', 'dark', 'no-preference']).optional(),
   profile: z.string().optional(),
   storageState: z.string().optional(),
@@ -809,6 +811,7 @@ const waitSchema = baseCommandSchema.extend({
   action: z.literal('wait'),
   selector: z.string().min(1).optional(),
   timeout: z.number().positive().optional(),
+  timeoutMax: z.number().positive().optional(),
   state: z.enum(['attached', 'detached', 'visible', 'hidden']).optional(),
 });
 

@@ -5,6 +5,19 @@ import { parseCommand } from './protocol.js';
 const cmd = (obj: object) => JSON.stringify(obj);
 
 describe('parseCommand', () => {
+  describe('launch', () => {
+    it('should parse launch command with stealth flag', () => {
+      const result = parseCommand(
+        cmd({ id: '1', action: 'launch', headless: false, stealth: true })
+      );
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.command.action).toBe('launch');
+        expect(result.command.stealth).toBe(true);
+      }
+    });
+  });
+
   describe('navigation', () => {
     it('should parse navigate command', () => {
       const result = parseCommand(cmd({ id: '1', action: 'navigate', url: 'https://example.com' }));

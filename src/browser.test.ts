@@ -53,6 +53,78 @@ describe('BrowserManager', () => {
       expect(newBrowser.getBrowser()).toBeNull();
       await newBrowser.close();
     });
+
+    it('should report local stealth policy capabilities', async () => {
+      const testBrowser = new BrowserManager();
+      await testBrowser.launch({ headless: true, stealth: true });
+
+      const status = testBrowser.getStealthStatus('chromium');
+      expect(status.enabled).toBe(true);
+      expect(status.connectionKind).toBe('local');
+      expect(status.capabilities).toContain('chromium-launch-args');
+      expect(status.capabilities).toContain('context-init-scripts');
+
+      await testBrowser.close();
+    });
+
+    it('should apply init-script stealth policy for CDP connections', async () => {
+      const addInitScript = vi.fn().mockResolvedValue(undefined);
+      const mockPage = { url: () => 'http://example.com', on: vi.fn() };
+      const mockContext = {
+        pages: () => [mockPage],
+        on: vi.fn(),
+        setDefaultTimeout: vi.fn(),
+        addInitScript,
+      };
+      const mockBrowser = {
+        contexts: () => [mockContext],
+        close: vi.fn().mockResolvedValue(undefined),
+        isConnected: vi.fn(() => true),
+      };
+      const spy = vi.spyOn(chromium, 'connectOverCDP').mockResolvedValue(mockBrowser as any);
+
+      const cdpBrowser = new BrowserManager();
+      await cdpBrowser.launch({ cdpPort: 9222, stealth: true });
+
+      expect(addInitScript).toHaveBeenCalledTimes(1);
+      const status = cdpBrowser.getStealthStatus();
+      expect(status.enabled).toBe(true);
+      expect(status.connectionKind).toBe('cdp');
+      expect(status.capabilities).toContain('context-init-scripts');
+      expect(status.capabilities).not.toContain('chromium-launch-args');
+
+      await cdpBrowser.close();
+      spy.mockRestore();
+    });
+
+    it('should disable stealth capabilities when launch stealth is false in CDP mode', async () => {
+      const addInitScript = vi.fn().mockResolvedValue(undefined);
+      const mockPage = { url: () => 'http://example.com', on: vi.fn() };
+      const mockContext = {
+        pages: () => [mockPage],
+        on: vi.fn(),
+        setDefaultTimeout: vi.fn(),
+        addInitScript,
+      };
+      const mockBrowser = {
+        contexts: () => [mockContext],
+        close: vi.fn().mockResolvedValue(undefined),
+        isConnected: vi.fn(() => true),
+      };
+      const spy = vi.spyOn(chromium, 'connectOverCDP').mockResolvedValue(mockBrowser as any);
+
+      const cdpBrowser = new BrowserManager();
+      await cdpBrowser.launch({ cdpPort: 9222, stealth: false });
+
+      expect(addInitScript).not.toHaveBeenCalled();
+      const status = cdpBrowser.getStealthStatus();
+      expect(status.enabled).toBe(false);
+      expect(status.connectionKind).toBe('cdp');
+      expect(status.capabilities).toEqual([]);
+
+      await cdpBrowser.close();
+      spy.mockRestore();
+    });
   });
 
   describe('stale session recovery (all pages closed)', () => {

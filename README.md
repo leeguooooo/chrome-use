@@ -177,6 +177,7 @@ agent-browser find nth 2 "a" text
 ```bash
 agent-browser wait <selector>         # Wait for element to be visible
 agent-browser wait <ms>               # Wait for time (milliseconds)
+agent-browser wait 2000-5000          # Random wait between 2-5 seconds
 agent-browser wait --text "Welcome"   # Wait for text to appear
 agent-browser wait --url "**/dash"    # Wait for URL pattern
 agent-browser wait --load networkidle # Wait for load state
@@ -457,6 +458,7 @@ This is useful for multimodal AI models that can reason about visual layout, unl
 | `--proxy-bypass <hosts>` | Hosts to bypass proxy (or `AGENT_BROWSER_PROXY_BYPASS` env) |
 | `--ignore-https-errors` | Ignore HTTPS certificate errors (useful for self-signed certs) |
 | `--allow-file-access` | Allow file:// URLs to access local files (Chromium only) |
+| `--stealth` | Stealth mode (default: on): local launch uses Chromium args + init scripts; CDP/provider uses init scripts |
 | `-p, --provider <name>` | Cloud browser provider (or `AGENT_BROWSER_PROVIDER` env) |
 | `--device <name>` | iOS device name, e.g. "iPhone 15 Pro" (or `AGENT_BROWSER_IOS_DEVICE` env) |
 | `--json` | JSON output (for agents) |
@@ -716,6 +718,60 @@ The `--allow-file-access` flag adds Chromium flags (`--allow-file-access-from-fi
 - Load local resources (images, scripts, stylesheets)
 
 **Note:** This flag only works with Chromium. For security, it's disabled by default.
+
+## Stealth Mode
+
+Stealth mode is **enabled by default**. It patches common detection vectors to make the browser appear like a regular user session, preventing websites from blocking automation.
+
+```bash
+# Stealth is on by default -- just use normally
+agent-browser open example.com
+
+# Disable stealth if needed
+agent-browser --stealth false open example.com
+
+# Or disable via environment variable
+export AGENT_BROWSER_STEALTH=false
+
+# Or disable in config file
+# agent-browser.json: {"stealth": false}
+```
+
+Stealth mode applies the following countermeasures:
+- Removes `navigator.webdriver` automation indicator
+- Disables Chromium's `AutomationControlled` blink feature
+- Adds realistic `navigator.plugins` (Chrome PDF Plugin, etc.)
+- Patches `window.chrome.runtime` to match real Chrome
+- Masks WebGL vendor/renderer when SwiftShader is detected
+- Fixes `navigator.permissions.query` for notifications
+- Reports realistic `navigator.hardwareConcurrency`
+- Provides default media devices for `enumerateDevices()`
+- Cleans up CDP-injected properties on the document
+
+Stealth capability matrix:
+
+<table>
+  <thead>
+    <tr><th>Connection type</th><th>Stealth capabilities</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Local launch</td><td>Chromium launch args (<code>--disable-blink-features=AutomationControlled</code>) + context init scripts</td></tr>
+    <tr><td>CDP / auto-connect</td><td>Context init scripts</td></tr>
+    <tr><td>Cloud providers</td><td>Context init scripts (Kernel may also apply provider-managed stealth)</td></tr>
+  </tbody>
+</table>
+
+Use <code>--debug</code> to print the active stealth connection type and capabilities at launch time.
+
+### Humanized Interactions
+
+In addition to stealth patches, agent-browser automatically humanizes interactions to avoid behavioral detection:
+
+- **Randomized typing** -- When using `type --delay`, each keystroke delay varies by +-40% so timing appears natural rather than mechanical
+- **Random wait ranges** -- `wait 2000-5000` pauses for a random duration between 2 and 5 seconds
+- **Bezier curve mouse movement** -- Before every `click`, the mouse moves to the target element along a randomized cubic Bezier curve with natural-looking control points
+
+These behaviors are always active and require no additional flags.
 
 ## CDP Mode
 

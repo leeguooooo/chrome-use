@@ -27,6 +27,7 @@ import {
   decryptData,
   ENCRYPTION_KEY_ENV,
 } from './state-utils.js';
+import { STEALTH_CHROMIUM_ARGS, applyStealthScripts } from './stealth.js';
 
 /**
  * Returns the default Playwright timeout in milliseconds for standard operations.
@@ -89,6 +90,30 @@ interface PageError {
   timestamp: number;
 }
 
+type BrowserType = NonNullable<LaunchCommand['browser']>;
+type StealthConnectionKind =
+  | 'local'
+  | 'cdp'
+  | 'provider-browserbase'
+  | 'provider-browseruse'
+  | 'provider-kernel';
+
+interface StealthPolicy {
+  enabled: boolean;
+  connectionKind: StealthConnectionKind;
+  applyChromiumArgs: boolean;
+  applyInitScripts: boolean;
+  providerManaged: boolean;
+  capabilities: string[];
+}
+
+export interface StealthStatus {
+  enabled: boolean;
+  connectionKind: StealthConnectionKind;
+  capabilities: string[];
+  providerManaged: boolean;
+}
+
 /**
  * Manages the Playwright browser lifecycle with multiple tabs/windows
  */
@@ -116,6 +141,8 @@ export class BrowserManager {
   private lastSnapshot: string = '';
   private scopedHeaderRoutes: Map<string, (route: Route) => Promise<void>> = new Map();
   private colorScheme: 'light' | 'dark' | 'no-preference' | null = null;
+  private stealthEnabled: boolean = false;
+  private stealthConnectionKind: StealthConnectionKind = 'local';
 
   /**
    * Set the persistent color scheme preference.
@@ -123,6 +150,76 @@ export class BrowserManager {
    */
   setColorScheme(scheme: 'light' | 'dark' | 'no-preference' | null): void {
     this.colorScheme = scheme;
+  }
+
+  /**
+   * Centralized stealth policy so launch mode semantics stay consistent.
+   * Local Chromium gets args + init scripts; CDP/providers get init scripts only.
+   */
+  private getStealthPolicy(browserType: BrowserType = 'chromium'): StealthPolicy {
+    if (!this.stealthEnabled) {
+      return {
+        enabled: false,
+        connectionKind: this.stealthConnectionKind,
+        applyChromiumArgs: false,
+        applyInitScripts: false,
+        providerManaged: false,
+        capabilities: [],
+      };
+    }
+
+    const applyChromiumArgs = this.stealthConnectionKind === 'local' && browserType === 'chromium';
+    const applyInitScripts = true;
+    const providerManaged = this.stealthConnectionKind === 'provider-kernel';
+    const capabilities: string[] = [];
+
+    if (applyChromiumArgs) {
+      capabilities.push('chromium-launch-args');
+    }
+    if (applyInitScripts) {
+      capabilities.push('context-init-scripts');
+    }
+    if (providerManaged) {
+      capabilities.push('provider-managed-stealth');
+    }
+
+    return {
+      enabled: true,
+      connectionKind: this.stealthConnectionKind,
+      applyChromiumArgs,
+      applyInitScripts,
+      providerManaged,
+      capabilities,
+    };
+  }
+
+  private logStealthPolicy(phase: string, browserType: BrowserType = 'chromium'): void {
+    if (process.env.AGENT_BROWSER_DEBUG !== '1') return;
+    const policy = this.getStealthPolicy(browserType);
+    const capabilities = policy.capabilities.length > 0 ? policy.capabilities.join(', ') : 'none';
+    console.error(
+      `[DEBUG] Stealth ${phase}: enabled=${policy.enabled} connection=${policy.connectionKind} capabilities=${capabilities}`
+    );
+  }
+
+  getStealthStatus(browserType: BrowserType = 'chromium'): StealthStatus {
+    const policy = this.getStealthPolicy(browserType);
+    return {
+      enabled: policy.enabled,
+      connectionKind: policy.connectionKind,
+      capabilities: policy.capabilities,
+      providerManaged: policy.providerManaged,
+    };
+  }
+
+  /**
+   * Apply context init-script stealth patches when policy allows.
+   */
+  private async applyStealthIfEnabled(context: BrowserContext): Promise<void> {
+    const policy = this.getStealthPolicy();
+    if (!policy.applyInitScripts) return;
+    await applyStealthScripts(context);
+    this.logStealthPolicy('init-script applied');
   }
 
   // CDP session for screencast and input injection
@@ -282,6 +379,7 @@ export class BrowserManager {
       context = await this.browser.newContext({
         ...(this.colorScheme && { colorScheme: this.colorScheme }),
       });
+      await this.applyStealthIfEnabled(context);
       context.setDefaultTimeout(getDefaultTimeout());
       this.contexts.push(context);
       this.setupContextTracking(context);
@@ -852,6 +950,7 @@ export class BrowserManager {
    * Requires BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID environment variables.
    */
   private async connectToBrowserbase(): Promise<void> {
+    this.stealthConnectionKind = 'provider-browserbase';
     const browserbaseApiKey = process.env.BROWSERBASE_API_KEY;
     const browserbaseProjectId = process.env.BROWSERBASE_PROJECT_ID;
 
@@ -889,6 +988,7 @@ export class BrowserManager {
       }
 
       const context = contexts[0];
+      await this.applyStealthIfEnabled(context);
       const pages = context.pages();
       const page = pages[0] ?? (await context.newPage());
 
@@ -959,6 +1059,7 @@ export class BrowserManager {
    * Requires KERNEL_API_KEY environment variable.
    */
   private async connectToKernel(): Promise<void> {
+    this.stealthConnectionKind = 'provider-kernel';
     const kernelApiKey = process.env.KERNEL_API_KEY;
     if (!kernelApiKey) {
       throw new Error('KERNEL_API_KEY is required when using kernel as a provider');
@@ -1026,9 +1127,11 @@ export class BrowserManager {
       // Kernel browsers launch with a default context and page
       if (contexts.length === 0) {
         context = await browser.newContext();
+        await this.applyStealthIfEnabled(context);
         page = await context.newPage();
       } else {
         context = contexts[0];
+        await this.applyStealthIfEnabled(context);
         const pages = context.pages();
         page = pages[0] ?? (await context.newPage());
       }
@@ -1055,6 +1158,7 @@ export class BrowserManager {
    * Requires BROWSER_USE_API_KEY environment variable.
    */
   private async connectToBrowserUse(): Promise<void> {
+    this.stealthConnectionKind = 'provider-browseruse';
     const browserUseApiKey = process.env.BROWSER_USE_API_KEY;
     if (!browserUseApiKey) {
       throw new Error('BROWSER_USE_API_KEY is required when using browseruse as a provider');
@@ -1099,9 +1203,11 @@ export class BrowserManager {
 
       if (contexts.length === 0) {
         context = await browser.newContext();
+        await this.applyStealthIfEnabled(context);
         page = await context.newPage();
       } else {
         context = contexts[0];
+        await this.applyStealthIfEnabled(context);
         const pages = context.pages();
         page = pages[0] ?? (await context.newPage());
       }
@@ -1172,6 +1278,22 @@ export class BrowserManager {
     if (options.colorScheme) {
       this.colorScheme = options.colorScheme;
     }
+    this.stealthEnabled = options.stealth ?? false;
+    // -p flag takes precedence over AGENT_BROWSER_PROVIDER.
+    const provider = options.provider ?? process.env.AGENT_BROWSER_PROVIDER;
+
+    if (cdpEndpoint || options.autoConnect) {
+      this.stealthConnectionKind = 'cdp';
+    } else if (provider === 'browserbase') {
+      this.stealthConnectionKind = 'provider-browserbase';
+    } else if (provider === 'browseruse') {
+      this.stealthConnectionKind = 'provider-browseruse';
+    } else if (provider === 'kernel') {
+      this.stealthConnectionKind = 'provider-kernel';
+    } else {
+      this.stealthConnectionKind = 'local';
+    }
+    this.logStealthPolicy('launch policy', options.browser ?? 'chromium');
 
     if (cdpEndpoint) {
       await this.connectViaCDP(cdpEndpoint);
@@ -1184,8 +1306,6 @@ export class BrowserManager {
     }
 
     // Cloud browser providers require explicit opt-in via -p flag or AGENT_BROWSER_PROVIDER env var
-    // -p flag takes precedence over env var
-    const provider = options.provider ?? process.env.AGENT_BROWSER_PROVIDER;
     if (provider === 'browserbase') {
       await this.connectToBrowserbase();
       return;
@@ -1214,16 +1334,18 @@ export class BrowserManager {
     const launcher =
       browserType === 'firefox' ? firefox : browserType === 'webkit' ? webkit : chromium;
 
-    // Build base args array with file access flags if enabled
-    // --allow-file-access-from-files: allows file:// URLs to read other file:// URLs via XHR/fetch
-    // --allow-file-access: allows the browser to access local files in general
+    const stealthPolicy = this.getStealthPolicy(browserType);
+
+    // Build base args array with file access flags and stealth args when policy allows.
     const fileAccessArgs = options.allowFileAccess
       ? ['--allow-file-access-from-files', '--allow-file-access']
       : [];
+    const stealthArgs = stealthPolicy.applyChromiumArgs ? STEALTH_CHROMIUM_ARGS : [];
+    const implicitArgs = [...fileAccessArgs, ...stealthArgs];
     const baseArgs = options.args
-      ? [...fileAccessArgs, ...options.args]
-      : fileAccessArgs.length > 0
-        ? fileAccessArgs
+      ? [...implicitArgs, ...options.args]
+      : implicitArgs.length > 0
+        ? implicitArgs
         : undefined;
 
     // Auto-detect args that control window size and disable viewport emulation
@@ -1364,6 +1486,8 @@ export class BrowserManager {
       });
     }
 
+    await this.applyStealthIfEnabled(context);
+
     context.setDefaultTimeout(getDefaultTimeout());
     this.contexts.push(context);
     this.setupContextTracking(context);
@@ -1385,6 +1509,7 @@ export class BrowserManager {
     cdpEndpoint: string | undefined,
     options?: { timeout?: number }
   ): Promise<void> {
+    this.stealthConnectionKind = 'cdp';
     if (!cdpEndpoint) {
       throw new Error('CDP endpoint is required for CDP connection');
     }
@@ -1439,6 +1564,7 @@ export class BrowserManager {
       this.cdpEndpoint = cdpEndpoint;
 
       for (const context of contexts) {
+        await this.applyStealthIfEnabled(context);
         context.setDefaultTimeout(10000);
         this.contexts.push(context);
         this.setupContextTracking(context);
@@ -1696,6 +1822,7 @@ export class BrowserManager {
       viewport: viewport === undefined ? { width: 1280, height: 720 } : viewport,
       ...(this.colorScheme && { colorScheme: this.colorScheme }),
     });
+    await this.applyStealthIfEnabled(context);
     context.setDefaultTimeout(getDefaultTimeout());
     this.contexts.push(context);
     this.setupContextTracking(context);
@@ -2435,6 +2562,8 @@ export class BrowserManager {
     this.isPersistentContext = false;
     this.activePageIndex = 0;
     this.colorScheme = null;
+    this.stealthEnabled = false;
+    this.stealthConnectionKind = 'local';
     this.refMap = {};
     this.lastSnapshot = '';
     this.frameCallback = null;

@@ -95,6 +95,7 @@ agent-browser find nth 2 ".card" hover
 ```bash
 agent-browser wait <selector>         # Wait for element
 agent-browser wait <ms>               # Wait for time
+agent-browser wait 2000-5000          # Random wait between 2-5 seconds
 agent-browser wait --text "Welcome"   # Wait for text
 agent-browser wait --url "**/dash"    # Wait for URL pattern
 agent-browser wait --load networkidle # Wait for load state
@@ -243,6 +244,7 @@ agent-browser reload                  # Reload page
 --proxy-bypass <hosts>   # Hosts to bypass proxy
 --ignore-https-errors    # Ignore HTTPS certificate errors
 --allow-file-access      # Allow file:// URLs to access local files (Chromium only)
+--stealth                # Stealth mode: local uses launch args+init scripts; CDP/provider uses init scripts
 -p, --provider <name>    # Browser provider (ios, browserbase, kernel, browseruse)
 --device <name>          # iOS device name (e.g., "iPhone 15 Pro")
 --json                   # JSON output (for scripts)
@@ -251,7 +253,7 @@ agent-browser reload                  # Reload page
 --headed                 # Show browser window (not headless)
 --cdp <port|url>         # Connect via Chrome DevTools Protocol (port or WebSocket URL)
 --auto-connect           # Auto-discover and connect to running Chrome
---debug                  # Debug output
+--debug                  # Debug output (includes stealth connection type + capabilities)
 ```
 
 ## Command chaining

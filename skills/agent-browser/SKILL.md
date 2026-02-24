@@ -78,6 +78,7 @@ agent-browser wait @e1                # Wait for element
 agent-browser wait --load networkidle # Wait for network idle
 agent-browser wait --url "**/page"    # Wait for URL pattern
 agent-browser wait 2000               # Wait milliseconds
+agent-browser wait 2000-5000          # Random wait between 2-5 seconds
 
 # Capture
 agent-browser screenshot              # Screenshot to temp dir
@@ -216,6 +217,26 @@ agent-browser --allow-file-access open file:///path/to/page.html
 agent-browser screenshot output.png
 ```
 
+### Stealth Mode (Avoid Bot Detection)
+
+Stealth mode is enabled by default. It patches automation detection vectors (navigator.webdriver, plugins, WebGL, etc.) so websites cannot easily identify the browser as automated.
+
+```bash
+# Stealth is on by default -- just use normally
+agent-browser open https://example.com
+
+# Disable stealth if needed for debugging
+agent-browser --stealth false open https://example.com
+```
+
+Stealth capabilities vary by connection type:
+
+- Local launch: Chromium launch args + context init scripts
+- CDP / `--auto-connect`: context init scripts
+- Cloud providers: context init scripts (Kernel may also apply provider-managed stealth)
+
+For troubleshooting, run with `--debug` to print the active stealth connection type and capabilities.
+
 ### iOS Simulator (Mobile Safari)
 
 ```bash
@@ -287,9 +308,22 @@ agent-browser wait --fn "document.readyState === 'complete'"
 
 # Wait a fixed duration (milliseconds) as a last resort
 agent-browser wait 5000
+
+# Random wait between 2-5 seconds (useful for anti-detection)
+agent-browser wait 2000-5000
 ```
 
 When dealing with consistently slow websites, use `wait --load networkidle` after `open` to ensure the page is fully loaded before taking a snapshot. If a specific element is slow to render, wait for it directly with `wait <selector>` or `wait @ref`.
+
+### Humanized Interactions
+
+agent-browser automatically humanizes interactions to avoid behavioral detection:
+
+- **Randomized typing**: `type --delay` varies each keystroke delay by +-40%
+- **Random wait ranges**: `wait 2000-5000` pauses for a random duration in that range
+- **Bezier curve mouse**: Before every `click`, the mouse moves along a natural-looking curve
+
+These behaviors are always active. For sensitive sites, combine with `--headed` and `--profile` for best results.
 
 ## Session Management and Cleanup
 

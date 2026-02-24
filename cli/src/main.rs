@@ -52,6 +52,14 @@ fn parse_proxy(proxy_str: &str) -> serde_json::Value {
     })
 }
 
+fn print_stealth_debug(resp: &connection::Response) {
+    if let Some(data) = &resp.data {
+        if let Some(stealth) = data.get("stealth") {
+            eprintln!("[DEBUG] stealth: {}", stealth);
+        }
+    }
+}
+
 fn run_session(args: &[String], session: &str, json_mode: bool) {
     let subcommand = args.get(1).map(|s| s.as_str());
 
@@ -226,6 +234,8 @@ fn main() {
         flags.provider.as_deref(),
         flags.device.as_deref(),
         flags.session_name.as_deref(),
+        flags.stealth,
+        flags.debug,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -281,6 +291,7 @@ fn main() {
             },
             flags.ignore_https_errors.then_some("--ignore-https-errors"),
             flags.cli_allow_file_access.then_some("--allow-file-access"),
+            flags.cli_stealth.then_some("--stealth"),
         ]
         .into_iter()
         .flatten()
@@ -448,22 +459,31 @@ fn main() {
             launch_cmd["colorScheme"] = json!(cs);
         }
 
-        let err = match send_command(launch_cmd, &flags.session) {
-            Ok(resp) if resp.success => None,
-            Ok(resp) => Some(
-                resp.error
-                    .unwrap_or_else(|| "CDP connection failed".to_string()),
-            ),
-            Err(e) => Some(e.to_string()),
-        };
-
-        if let Some(msg) = err {
-            if flags.json {
-                println!(r#"{{"success":false,"error":"{}"}}"#, msg);
-            } else {
-                eprintln!("{} {}", color::error_indicator(), msg);
+        match send_command(launch_cmd, &flags.session) {
+            Ok(resp) => {
+                if !resp.success {
+                    let msg = resp
+                        .error
+                        .unwrap_or_else(|| "CDP connection failed".to_string());
+                    if flags.json {
+                        println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+                    } else {
+                        eprintln!("{} {}", color::error_indicator(), msg);
+                    }
+                    exit(1);
+                }
+                if flags.debug {
+                    print_stealth_debug(&resp);
+                }
             }
-            exit(1);
+            Err(e) => {
+                if flags.json {
+                    println!(r#"{{"success":false,"error":"{}"}}"#, e);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), e);
+                }
+                exit(1);
+            }
         }
     }
 
@@ -479,22 +499,31 @@ fn main() {
             launch_cmd["colorScheme"] = json!(cs);
         }
 
-        let err = match send_command(launch_cmd, &flags.session) {
-            Ok(resp) if resp.success => None,
-            Ok(resp) => Some(
-                resp.error
-                    .unwrap_or_else(|| "Provider connection failed".to_string()),
-            ),
-            Err(e) => Some(e.to_string()),
-        };
-
-        if let Some(msg) = err {
-            if flags.json {
-                println!(r#"{{"success":false,"error":"{}"}}"#, msg);
-            } else {
-                eprintln!("{} {}", color::error_indicator(), msg);
+        match send_command(launch_cmd, &flags.session) {
+            Ok(resp) => {
+                if !resp.success {
+                    let msg = resp
+                        .error
+                        .unwrap_or_else(|| "Provider connection failed".to_string());
+                    if flags.json {
+                        println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+                    } else {
+                        eprintln!("{} {}", color::error_indicator(), msg);
+                    }
+                    exit(1);
+                }
+                if flags.debug {
+                    print_stealth_debug(&resp);
+                }
             }
-            exit(1);
+            Err(e) => {
+                if flags.json {
+                    println!(r#"{{"success":false,"error":"{}"}}"#, e);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), e);
+                }
+                exit(1);
+            }
         }
     }
 
@@ -506,7 +535,10 @@ fn main() {
         || flags.proxy.is_some()
         || flags.args.is_some()
         || flags.user_agent.is_some()
+        || flags.ignore_https_errors
         || flags.allow_file_access
+        || flags.cli_stealth
+        || flags.debug
         || flags.color_scheme.is_some())
         && flags.cdp.is_none()
         && flags.provider.is_none()
@@ -569,22 +601,29 @@ fn main() {
             launch_cmd["allowFileAccess"] = json!(true);
         }
 
+        launch_cmd["stealth"] = json!(flags.stealth);
+
         if let Some(ref cs) = flags.color_scheme {
             launch_cmd["colorScheme"] = json!(cs);
         }
 
         match send_command(launch_cmd, &flags.session) {
-            Ok(resp) if !resp.success => {
-                // Launch command failed (e.g., invalid state file, profile error)
-                let error_msg = resp
-                    .error
-                    .unwrap_or_else(|| "Browser launch failed".to_string());
-                if flags.json {
-                    println!(r#"{{"success":false,"error":"{}"}}"#, error_msg);
-                } else {
-                    eprintln!("{} {}", color::error_indicator(), error_msg);
+            Ok(resp) => {
+                if !resp.success {
+                    // Launch command failed (e.g., invalid state file, profile error)
+                    let error_msg = resp
+                        .error
+                        .unwrap_or_else(|| "Browser launch failed".to_string());
+                    if flags.json {
+                        println!(r#"{{"success":false,"error":"{}"}}"#, error_msg);
+                    } else {
+                        eprintln!("{} {}", color::error_indicator(), error_msg);
+                    }
+                    exit(1);
                 }
-                exit(1);
+                if flags.debug {
+                    print_stealth_debug(&resp);
+                }
             }
             Err(e) => {
                 if flags.json {
@@ -597,9 +636,6 @@ fn main() {
                     );
                 }
                 exit(1);
-            }
-            Ok(_) => {
-                // Launch succeeded
             }
         }
     }

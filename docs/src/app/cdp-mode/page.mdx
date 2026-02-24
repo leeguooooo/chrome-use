@@ -75,6 +75,23 @@ Or set it globally via config or environment variable:
 AGENT_BROWSER_COLOR_SCHEME=dark agent-browser --cdp 9222 open https://example.com
 ```
 
+## Stealth behavior
+
+`--stealth` is enabled by default across connection modes, but capabilities depend on how you connect:
+
+<table>
+  <thead>
+    <tr><th>Connection type</th><th>Stealth capabilities</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Local launch</td><td>Chromium launch args + context init scripts</td></tr>
+    <tr><td>CDP / auto-connect</td><td>Context init scripts</td></tr>
+    <tr><td>Cloud providers</td><td>Context init scripts (Kernel may also apply provider-managed stealth)</td></tr>
+  </tbody>
+</table>
+
+Use `--debug` to print the active connection type and applied stealth capabilities.
+
 ## Use cases
 
 This enables control of:
