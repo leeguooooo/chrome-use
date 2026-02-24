@@ -2164,7 +2164,7 @@ Environment:
   AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse)
   AGENT_BROWSER_AUTO_CONNECT     Auto-discover and connect to running Chrome
   AGENT_BROWSER_ALLOW_FILE_ACCESS Allow file:// URLs to access local files
-  AGENT_BROWSER_STEALTH          Stealth mode (default: on, set to 0/false to disable)
+  
   AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default Playwright timeout in ms (default: 25000)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
