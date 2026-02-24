@@ -1,7 +1,7 @@
 {
-  "name": "agent-browser",
+  "name": "agent-browser-stealth",
   "version": "0.14.0",
-  "description": "Headless browser automation CLI for AI agents",
+  "description": "Stealth browser automation CLI for AI agents with anti-bot evasions",
   "type": "module",
   "main": "dist/daemon.js",
   "files": [
@@ -11,6 +11,7 @@
     "skills"
   ],
   "bin": {
+    "agent-browser-stealth": "./bin/agent-browser.js",
     "agent-browser": "./bin/agent-browser.js"
   },
   "scripts": {
@@ -43,6 +44,9 @@
     "browser",
     "automation",
     "headless",
+    "stealth",
+    "anti-bot",
+    "anti-detection",
     "playwright",
     "cli",
     "agent"

@@ -1,6 +1,6 @@
 # agent-browser
 
-Headless browser automation CLI for AI agents. Fast Rust CLI with Node.js fallback.
+Stealth browser automation CLI for AI agents with anti-bot evasions. Fast Rust CLI with Node.js fallback.
 
 ## Installation
 
@@ -9,7 +9,7 @@ Headless browser automation CLI for AI agents. Fast Rust CLI with Node.js fallba
 Installs the native Rust binary for maximum performance:
 
 ```bash
-npm install -g agent-browser
+npm install -g agent-browser-stealth
 agent-browser install  # Download Chromium
 ```
 
@@ -20,8 +20,8 @@ This is the fastest option -- commands run through the native Rust CLI directly 
 Run directly with `npx` if you want to try it without installing globally:
 
 ```bash
-npx agent-browser install   # Download Chromium (first time only)
-npx agent-browser open example.com
+npx agent-browser-stealth install   # Download Chromium (first time only)
+npx agent-browser-stealth open example.com
 ```
 
 > **Note:** `npx` routes through Node.js before reaching the Rust CLI, so it is noticeably slower than a global install. For regular use, install globally.
@@ -31,14 +31,14 @@ npx agent-browser open example.com
 For projects that want to pin the version in `package.json`:
 
 ```bash
-npm install agent-browser
-npx agent-browser install
+npm install agent-browser-stealth
+npx agent-browser-stealth install
 ```
 
 Then use via `npx` or `package.json` scripts:
 
 ```bash
-npx agent-browser open example.com
+npx agent-browser-stealth open example.com
 ```
 
 ### Homebrew (macOS)
@@ -722,7 +722,7 @@ AGENT_BROWSER_EXECUTABLE_PATH=/path/to/chromium agent-browser open example.com
 
 ```typescript
 import chromium from '@sparticuz/chromium';
-import { BrowserManager } from 'agent-browser';
+import { BrowserManager } from 'agent-browser-stealth';
 
 export async function handler() {
   const browser = new BrowserManager();
@@ -931,7 +931,7 @@ Connect to `ws://localhost:9223` to receive frames and send input:
 For advanced use, control streaming directly via the protocol:
 
 ```typescript
-import { BrowserManager } from 'agent-browser';
+import { BrowserManager } from 'agent-browser-stealth';
 
 const browser = new BrowserManager();
 await browser.launch({ headless: true });

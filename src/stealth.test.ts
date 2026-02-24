@@ -94,4 +94,24 @@ describe('Stealth mode', () => {
     expect(userAgentSignals.pageUA).not.toContain('HeadlessChrome');
     expect(userAgentSignals.workerUA).not.toContain('HeadlessChrome');
   });
+
+  it('exposes realistic mimeTypes/pdf/share signals', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const signals = await browser.getPage().evaluate(() => ({
+      mimeTypesLength: navigator.mimeTypes ? navigator.mimeTypes.length : 0,
+      pdfViewerEnabled: navigator.pdfViewerEnabled,
+      hasShare: typeof navigator.share === 'function',
+      hasCanShare: typeof navigator.canShare === 'function',
+      hasConnectionDownlinkMax:
+        !!navigator.connection && typeof navigator.connection.downlinkMax === 'number',
+    }));
+
+    expect(signals.mimeTypesLength).toBeGreaterThan(0);
+    expect(signals.pdfViewerEnabled).toBe(true);
+    expect(signals.hasShare).toBe(true);
+    expect(signals.hasCanShare).toBe(true);
+    expect(signals.hasConnectionDownlinkMax).toBe(true);
+  });
 });

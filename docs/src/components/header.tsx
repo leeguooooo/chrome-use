@@ -69,7 +69,7 @@ export function Header() {
             <span>14k</span>
           </a>
           <a
-            href="https://www.npmjs.com/package/agent-browser"
+            href="https://www.npmjs.com/package/agent-browser-stealth"
             target="_blank"
             rel="noopener noreferrer"
             className="hidden sm:block text-sm text-muted-foreground hover:text-foreground transition-colors"

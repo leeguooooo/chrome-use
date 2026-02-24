@@ -29,6 +29,8 @@ const binaryPath = join(binDir, binaryName);
 // Package info
 const packageJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
 const version = packageJson.version;
+const packageName = packageJson.name;
+const binCommands = getBinCommands(packageJson);
 
 // GitHub release URL
 const GITHUB_REPO = getGitHubRepoFromPackage(packageJson);
@@ -47,6 +49,17 @@ function getGitHubRepoFromPackage(pkg) {
 
   // Fallback for legacy package metadata
   return 'vercel-labs/agent-browser';
+}
+
+function getBinCommands(pkg) {
+  const bin = pkg?.bin;
+  if (typeof bin === 'string') {
+    return [pkg.name.replace(/^@[^/]+\//, '')];
+  }
+  if (bin && typeof bin === 'object') {
+    return Object.keys(bin);
+  }
+  return ['agent-browser'];
 }
 
 async function downloadFile(url, dest) {
@@ -170,27 +183,34 @@ async function fixUnixSymlink() {
     return; // npm not available
   }
 
-  const symlinkPath = join(npmBinDir, 'agent-browser');
+  let optimized = false;
+  for (const commandName of binCommands) {
+    const symlinkPath = join(npmBinDir, commandName);
 
-  // Check if symlink exists (indicates global install)
-  try {
-    const stat = lstatSync(symlinkPath);
-    if (!stat.isSymbolicLink()) {
-      return; // Not a symlink, don't touch it
+    // Check if symlink exists (indicates global install)
+    try {
+      const stat = lstatSync(symlinkPath);
+      if (!stat.isSymbolicLink()) {
+        continue; // Not a symlink, don't touch it
+      }
+    } catch {
+      continue; // Symlink doesn't exist, not a global install
     }
-  } catch {
-    return; // Symlink doesn't exist, not a global install
+
+    // Replace symlink to point directly to native binary
+    try {
+      unlinkSync(symlinkPath);
+      symlinkSync(binaryPath, symlinkPath);
+      optimized = true;
+    } catch (err) {
+      // Permission error or other issue - not critical, JS wrapper still works
+      console.log(`⚠ Could not optimize symlink (${commandName}): ${err.message}`);
+      console.log('  CLI will work via Node.js wrapper (slightly slower startup)');
+    }
   }
 
-  // Replace symlink to point directly to native binary
-  try {
-    unlinkSync(symlinkPath);
-    symlinkSync(binaryPath, symlinkPath);
+  if (optimized) {
     console.log('✓ Optimized: symlink points to native binary (zero overhead)');
-  } catch (err) {
-    // Permission error or other issue - not critical, JS wrapper still works
-    console.log(`⚠ Could not optimize symlink: ${err.message}`);
-    console.log('  CLI will work via Node.js wrapper (slightly slower startup)');
   }
 }
 
@@ -208,25 +228,28 @@ async function fixWindowsShims() {
     return; // Not a global install or npm not available
   }
 
-  // The shims are in the npm prefix directory (not prefix/bin on Windows)
-  const cmdShim = join(npmBinDir, 'agent-browser.cmd');
-  const ps1Shim = join(npmBinDir, 'agent-browser.ps1');
-
-  // Only fix if shims exist (indicates global install)
-  if (!existsSync(cmdShim)) {
-    return;
-  }
-
   // Path to native binary relative to npm prefix
-  const relativeBinaryPath = 'node_modules\\agent-browser\\bin\\agent-browser-win32-x64.exe';
+  const packagePath = packageName.replace(/\//g, '\\');
+  const relativeBinaryPath = `node_modules\\${packagePath}\\bin\\${binaryName}`;
+  let optimized = false;
 
-  try {
-    // Overwrite .cmd shim
-    const cmdContent = `@ECHO off\r\n"%~dp0${relativeBinaryPath}" %*\r\n`;
-    writeFileSync(cmdShim, cmdContent);
+  for (const commandName of binCommands) {
+    // The shims are in the npm prefix directory (not prefix/bin on Windows)
+    const cmdShim = join(npmBinDir, `${commandName}.cmd`);
+    const ps1Shim = join(npmBinDir, `${commandName}.ps1`);
 
-    // Overwrite .ps1 shim
-    const ps1Content = `#!/usr/bin/env pwsh
+    // Only fix if shims exist (indicates global install)
+    if (!existsSync(cmdShim)) {
+      continue;
+    }
+
+    try {
+      // Overwrite .cmd shim
+      const cmdContent = `@ECHO off\r\n"%~dp0${relativeBinaryPath}" %*\r\n`;
+      writeFileSync(cmdShim, cmdContent);
+
+      // Overwrite .ps1 shim
+      const ps1Content = `#!/usr/bin/env pwsh
 $basedir = Split-Path $MyInvocation.MyCommand.Definition -Parent
 $exe = ""
 if ($PSVersionTable.PSVersion -lt "6.0" -or $IsWindows) {
@@ -235,13 +258,17 @@ if ($PSVersionTable.PSVersion -lt "6.0" -or $IsWindows) {
 & "$basedir/${relativeBinaryPath.replace(/\\/g, '/')}" $args
 exit $LASTEXITCODE
 `;
-    writeFileSync(ps1Shim, ps1Content);
+      writeFileSync(ps1Shim, ps1Content);
+      optimized = true;
+    } catch (err) {
+      // Permission error or other issue - not critical, JS wrapper still works
+      console.log(`⚠ Could not optimize shims (${commandName}): ${err.message}`);
+      console.log('  CLI will work via Node.js wrapper (slightly slower startup)');
+    }
+  }
 
+  if (optimized) {
     console.log('✓ Optimized: shims point to native binary (zero overhead)');
-  } catch (err) {
-    // Permission error or other issue - not critical, JS wrapper still works
-    console.log(`⚠ Could not optimize shims: ${err.message}`);
-    console.log('  CLI will work via Node.js wrapper (slightly slower startup)');
   }
 }
 

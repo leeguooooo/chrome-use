@@ -2176,11 +2176,11 @@ Environment:
   AGENT_BROWSER_IOS_UDID         Default iOS device UDID
 
 Install (recommended, fastest - native Rust CLI):
-  npm install -g agent-browser
+  npm install -g agent-browser-stealth
   agent-browser install                  # Download Chromium (first time)
 
 Try without installing (slower, routes through Node.js):
-  npx agent-browser open example.com
+  npx agent-browser-stealth open example.com
 
 Examples:
   agent-browser open example.com

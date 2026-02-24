@@ -60,12 +60,17 @@ function buildStealthScript(options: StealthScriptOptions): string {
     patchNavigatorWebdriver(),
     patchChromeRuntime(),
     patchNavigatorLanguages(),
-    patchNavigatorPlugins(),
+    patchNavigatorPluginsAndMimeTypes(),
     patchNavigatorPermissions(),
     patchWebGLVendor(),
     patchCdcProperties(),
     patchWindowDimensions(),
+    patchScreenAvailability(),
     patchNavigatorHardwareConcurrency(),
+    patchNavigatorConnection(),
+    patchNavigatorShare(),
+    patchNavigatorContacts(),
+    patchPdfViewerEnabled(),
     patchMediaDevices(),
     patchUserAgentData(),
     patchUserAgent(),
@@ -158,34 +163,86 @@ function patchNavigatorLanguages(): string {
 }
 
 /**
- * Inject a realistic navigator.plugins array.
+ * Inject realistic navigator.plugins and navigator.mimeTypes arrays.
  * Headless Chrome reports an empty PluginArray; real Chrome always has a few.
  */
-function patchNavigatorPlugins(): string {
+function patchNavigatorPluginsAndMimeTypes(): string {
   return `(function(){
-  const makePlugin = (name, description, filename, mimeType) => {
-    const mime = { type: mimeType, suffixes: '', description, enabledPlugin: null };
-    const plugin = { name, description, filename, length: 1, 0: mime };
-    mime.enabledPlugin = plugin;
+  const makeMimeType = (type, suffixes, description) => {
+    const mime = Object.create(MimeType.prototype);
+    Object.defineProperties(mime, {
+      type: { value: type, enumerable: true },
+      suffixes: { value: suffixes, enumerable: true },
+      description: { value: description, enumerable: true },
+      enabledPlugin: { value: null, writable: true, enumerable: true },
+    });
+    return mime;
+  };
+
+  const makePlugin = (name, description, filename, mimes) => {
+    const plugin = Object.create(Plugin.prototype);
+    Object.defineProperties(plugin, {
+      name: { value: name, enumerable: true },
+      description: { value: description, enumerable: true },
+      filename: { value: filename, enumerable: true },
+      length: { value: mimes.length, enumerable: true },
+    });
+    mimes.forEach((mime, i) => {
+      Object.defineProperty(plugin, i, {
+        value: mime,
+        enumerable: true,
+      });
+      Object.defineProperty(plugin, mime.type, {
+        value: mime,
+        enumerable: false,
+      });
+      try { mime.enabledPlugin = plugin; } catch {}
+    });
     return plugin;
   };
+
+  const pdfMime = makeMimeType('application/pdf', 'pdf', 'Portable Document Format');
+  const chromePdfMime = makeMimeType(
+    'application/x-google-chrome-pdf',
+    'pdf',
+    'Portable Document Format'
+  );
+  const naclMime = makeMimeType('application/x-nacl', '', 'Native Client Executable');
+  const pnaclMime = makeMimeType('application/x-pnacl', '', 'Portable Native Client Executable');
+
   const plugins = [
-    makePlugin('Chrome PDF Plugin', 'Portable Document Format', 'internal-pdf-viewer', 'application/x-google-chrome-pdf'),
-    makePlugin('Chrome PDF Viewer', '', 'mhjfbmdgcfjbbpaeojofohoefgiehjai', 'application/pdf'),
-    makePlugin('Native Client', '', 'internal-nacl-plugin', 'application/x-nacl'),
+    makePlugin('Chrome PDF Plugin', 'Portable Document Format', 'internal-pdf-viewer', [chromePdfMime]),
+    makePlugin('Chrome PDF Viewer', '', 'mhjfbmdgcfjbbpaeojofohoefgiehjai', [pdfMime]),
+    makePlugin('Native Client', '', 'internal-nacl-plugin', [naclMime, pnaclMime]),
   ];
   const pluginArray = Object.create(PluginArray.prototype);
   plugins.forEach((p, i) => {
-    Object.setPrototypeOf(p, Plugin.prototype);
     pluginArray[i] = p;
+    pluginArray[p.name] = p;
   });
   Object.defineProperty(pluginArray, 'length', { get: () => plugins.length });
   pluginArray.item = (i) => plugins[i] || null;
   pluginArray.namedItem = (name) => plugins.find(p => p.name === name) || null;
   pluginArray.refresh = () => {};
   pluginArray[Symbol.iterator] = function*() { for (const p of plugins) yield p; };
+
+  const mimeTypes = [chromePdfMime, pdfMime, naclMime, pnaclMime];
+  const mimeTypeArray = Object.create(MimeTypeArray.prototype);
+  mimeTypes.forEach((m, i) => {
+    mimeTypeArray[i] = m;
+    mimeTypeArray[m.type] = m;
+  });
+  Object.defineProperty(mimeTypeArray, 'length', { get: () => mimeTypes.length });
+  mimeTypeArray.item = (i) => mimeTypes[i] || null;
+  mimeTypeArray.namedItem = (name) => mimeTypes.find(m => m.type === name) || null;
+  mimeTypeArray[Symbol.iterator] = function*() { for (const m of mimeTypes) yield m; };
+
   Object.defineProperty(navigator, 'plugins', {
     get: () => pluginArray,
+    configurable: true,
+  });
+  Object.defineProperty(navigator, 'mimeTypes', {
+    get: () => mimeTypeArray,
     configurable: true,
   });
 })();`;
@@ -344,6 +401,38 @@ function patchWindowDimensions(): string {
 }
 
 /**
+ * Make Screen avail* values look like a desktop with taskbar/menu bar reserved space.
+ */
+function patchScreenAvailability(): string {
+  return `(function(){
+  const patchNumber = (target, key, value) => {
+    try {
+      Object.defineProperty(target, key, {
+        get: () => value,
+        configurable: true,
+      });
+    } catch {}
+  };
+  const availWidth = Number(screen.availWidth);
+  const availHeight = Number(screen.availHeight);
+  const width = Number(screen.width);
+  const height = Number(screen.height);
+  if (Number.isFinite(width) && Number.isFinite(availWidth) && availWidth >= width) {
+    patchNumber(screen, 'availWidth', Math.max(width - 8, 0));
+  }
+  if (Number.isFinite(height) && Number.isFinite(availHeight) && availHeight >= height) {
+    patchNumber(screen, 'availHeight', Math.max(height - 40, 0));
+  }
+  if (Number.isFinite(screen.availLeft) && screen.availLeft === 0) {
+    patchNumber(screen, 'availLeft', 0);
+  }
+  if (Number.isFinite(screen.availTop) && screen.availTop === 0) {
+    patchNumber(screen, 'availTop', 24);
+  }
+})();`;
+}
+
+/**
  * navigator.hardwareConcurrency: headless often reports 2 (CI);
  * real desktops typically have >= 4 cores.
  */
@@ -355,6 +444,80 @@ function patchNavigatorHardwareConcurrency(): string {
       configurable: true,
     });
   }
+})();`;
+}
+
+/**
+ * Add missing connection.downlinkMax in Chromium headless environments.
+ */
+function patchNavigatorConnection(): string {
+  return `(function(){
+  if (!navigator.connection) return;
+  const conn = navigator.connection;
+  if (typeof conn.downlinkMax === 'number') return;
+  try {
+    Object.defineProperty(conn, 'downlinkMax', {
+      get: () => 10,
+      configurable: true,
+    });
+  } catch {}
+})();`;
+}
+
+/**
+ * Add share/canShare APIs expected on modern Chromium desktop.
+ */
+function patchNavigatorShare(): string {
+  return `(function(){
+  if (typeof navigator.share !== 'function') {
+    try {
+      Object.defineProperty(navigator, 'share', {
+        value: async () => undefined,
+        configurable: true,
+      });
+    } catch {}
+  }
+  if (typeof navigator.canShare !== 'function') {
+    try {
+      Object.defineProperty(navigator, 'canShare', {
+        value: () => true,
+        configurable: true,
+      });
+    } catch {}
+  }
+})();`;
+}
+
+/**
+ * Add Contacts Manager stub to avoid "missing contacts manager" signals.
+ */
+function patchNavigatorContacts(): string {
+  return `(function(){
+  if (navigator.contacts) return;
+  try {
+    Object.defineProperty(navigator, 'contacts', {
+      value: {
+        select: async () => [],
+        getProperties: () => ['name', 'email', 'tel', 'address', 'icon'],
+      },
+      configurable: true,
+    });
+  } catch {}
+})();`;
+}
+
+/**
+ * Chromium exposes navigator.pdfViewerEnabled=true in normal browsing mode.
+ */
+function patchPdfViewerEnabled(): string {
+  return `(function(){
+  if (navigator.pdfViewerEnabled === true) return;
+  try {
+    Object.defineProperty(navigator, 'pdfViewerEnabled', {
+      get: () => true,
+      configurable: true,
+    });
+  } catch {}
 })();`;
 }
 

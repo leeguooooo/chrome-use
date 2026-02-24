@@ -16,7 +16,7 @@ const SYSTEM_PROMPT = `You are a helpful documentation assistant for agent-brows
 
 GitHub repository: https://github.com/leeguooooo/agent-browser
 Documentation: https://agent-browser.dev
-npm package: agent-browser
+npm package: agent-browser-stealth
 
 You have access to the full agent-browser documentation via the bash and readFile tools. The docs are available as markdown files in the /workspace/ directory.
 
