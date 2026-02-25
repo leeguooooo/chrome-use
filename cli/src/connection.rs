@@ -220,6 +220,7 @@ pub fn ensure_daemon(
     device: Option<&str>,
     session_name: Option<&str>,
     debug: bool,
+    download_path: Option<&str>,
 ) -> Result<DaemonResult, String> {
     // Check if daemon is running AND responsive
     if is_daemon_running(session) && daemon_ready(session) {
@@ -364,6 +365,9 @@ pub fn ensure_daemon(
         if debug {
             cmd.env("AGENT_BROWSER_DEBUG", "1");
         }
+        if let Some(dp) = download_path {
+            cmd.env("AGENT_BROWSER_DOWNLOAD_PATH", dp);
+        }
 
         // Create new process group and session to fully detach
         unsafe {
@@ -447,6 +451,9 @@ pub fn ensure_daemon(
         cmd.env("AGENT_BROWSER_STEALTH", "1");
         if debug {
             cmd.env("AGENT_BROWSER_DEBUG", "1");
+        }
+        if let Some(dp) = download_path {
+            cmd.env("AGENT_BROWSER_DOWNLOAD_PATH", dp);
         }
 
         // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS

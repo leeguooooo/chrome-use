@@ -267,6 +267,7 @@ fn main() {
         flags.device.as_deref(),
         flags.session_name.as_deref(),
         flags.debug,
+        flags.download_path.as_deref(),
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -317,6 +318,7 @@ fn main() {
             },
             flags.ignore_https_errors.then_some("--ignore-https-errors"),
             flags.cli_allow_file_access.then_some("--allow-file-access"),
+            flags.cli_download_path.then_some("--download-path"),
         ]
         .into_iter()
         .flatten()
@@ -396,6 +398,10 @@ fn main() {
 
         if let Some(ref cs) = flags.color_scheme {
             launch_cmd["colorScheme"] = json!(cs);
+        }
+
+        if let Some(ref dp) = flags.download_path {
+            launch_cmd["downloadPath"] = json!(dp);
         }
 
         let err = match send_command(launch_cmd, &flags.session) {
@@ -484,29 +490,26 @@ fn main() {
             launch_cmd["colorScheme"] = json!(cs);
         }
 
-        match send_command(launch_cmd, &flags.session) {
-            Ok(resp) => {
-                if !resp.success {
-                    let msg = resp
-                        .error
-                        .unwrap_or_else(|| "CDP connection failed".to_string());
-                    if flags.json {
-                        println!(r#"{{"success":false,"error":"{}"}}"#, msg);
-                    } else {
-                        eprintln!("{} {}", color::error_indicator(), msg);
-                    }
-                    exit(1);
-                }
-                
+        if let Some(ref dp) = flags.download_path {
+            launch_cmd["downloadPath"] = json!(dp);
+        }
+
+        let err = match send_command(launch_cmd, &flags.session) {
+            Ok(resp) if resp.success => None,
+            Ok(resp) => Some(
+                resp.error
+                    .unwrap_or_else(|| "CDP connection failed".to_string()),
+            ),
+            Err(e) => Some(e.to_string()),
+        };
+
+        if let Some(msg) = err {
+            if flags.json {
+                println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+            } else {
+                eprintln!("{} {}", color::error_indicator(), msg);
             }
-            Err(e) => {
-                if flags.json {
-                    println!(r#"{{"success":false,"error":"{}"}}"#, e);
-                } else {
-                    eprintln!("{} {}", color::error_indicator(), e);
-                }
-                exit(1);
-            }
+            exit(1);
         }
     }
 
@@ -599,7 +602,8 @@ fn main() {
         || flags.ignore_https_errors
         || flags.allow_file_access
         || flags.debug
-        || flags.color_scheme.is_some())
+        || flags.color_scheme.is_some()
+        || flags.download_path.is_some())
         && flags.cdp.is_none()
         && flags.provider.is_none()
         && !launched_via_default_cdp
@@ -659,6 +663,10 @@ fn main() {
 
         if let Some(ref cs) = flags.color_scheme {
             launch_cmd["colorScheme"] = json!(cs);
+        }
+
+        if let Some(ref dp) = flags.download_path {
+            launch_cmd["downloadPath"] = json!(dp);
         }
 
         match send_command(launch_cmd, &flags.session) {

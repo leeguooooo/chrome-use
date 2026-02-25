@@ -33,6 +33,7 @@
     "format:check": "prettier --check 'src/**/*.ts'",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e:dogfood": "vitest run test/e2e/dogfood.eval.ts",
     "postinstall": "node scripts/postinstall.js",
     "clawhub:sync": "bash scripts/clawhub-sync.sh",
     "sync:upstream": "bash scripts/sync-upstream.sh",
@@ -69,6 +70,7 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.52",
     "@changesets/cli": "^2.29.8",
     "@types/node": "^20.10.0",
     "@types/ws": "^8.18.1",

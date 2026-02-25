@@ -70,6 +70,7 @@ agent-browser press Enter             # Press key
 agent-browser keyboard type "text" --delay 90  # Type at current focus (no selector)
 agent-browser keyboard inserttext "text"  # Insert without key events
 agent-browser scroll down 500         # Scroll page
+agent-browser scroll down 500 --selector "div.content"  # Scroll within a specific container
 
 # Get information
 agent-browser get text @e1            # Get element text
@@ -82,6 +83,11 @@ agent-browser wait --load networkidle # Wait for network idle
 agent-browser wait --url "**/page"    # Wait for URL pattern
 agent-browser wait 2000               # Wait milliseconds
 agent-browser wait 2000-5000          # Random wait between 2-5 seconds
+
+# Downloads
+agent-browser download @e1 ./file.pdf          # Click element to trigger download
+agent-browser wait --download ./output.zip     # Wait for any download to complete
+agent-browser --download-path ./downloads open <url>  # Set default download directory
 
 # Capture
 agent-browser screenshot              # Screenshot to temp dir
