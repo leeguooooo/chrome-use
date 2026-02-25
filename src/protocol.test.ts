@@ -44,8 +44,35 @@ describe('parseCommand', () => {
       }
     });
 
+    it('should parse navigate with riskMode', () => {
+      const result = parseCommand(
+        cmd({
+          id: '1',
+          action: 'navigate',
+          url: 'https://example.com',
+          riskMode: 'block',
+        })
+      );
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.command.riskMode).toBe('block');
+      }
+    });
+
     it('should reject navigate without url', () => {
       const result = parseCommand(cmd({ id: '1', action: 'navigate' }));
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject navigate with invalid riskMode', () => {
+      const result = parseCommand(
+        cmd({
+          id: '1',
+          action: 'navigate',
+          url: 'https://example.com',
+          riskMode: 'invalid',
+        })
+      );
       expect(result.success).toBe(false);
     });
 

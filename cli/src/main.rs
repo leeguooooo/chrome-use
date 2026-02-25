@@ -153,6 +153,21 @@ fn main() {
         return;
     }
 
+    if let Some(ref risk_mode) = flags.risk_mode {
+        if !matches!(risk_mode.as_str(), "off" | "warn" | "block") {
+            let msg = format!(
+                "Invalid --risk-mode value: {} (expected off, warn, or block)",
+                risk_mode
+            );
+            if flags.json {
+                println!(r#"{{"success":false,"error":"{}"}}"#, msg);
+            } else {
+                eprintln!("{} {}", color::error_indicator(), msg);
+            }
+            exit(1);
+        }
+    }
+
     if args.iter().any(|a| a == "--profile") {
         let msg =
             "Project policy: --profile is forbidden. Use your existing browser and --session-name for state persistence.";

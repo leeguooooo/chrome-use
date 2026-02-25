@@ -6,6 +6,15 @@ export interface BaseCommand {
   action: string;
 }
 
+export type RiskMode = 'off' | 'warn' | 'block';
+
+export interface RiskSignal {
+  code: string;
+  source: 'url' | 'title';
+  evidence: string;
+  confidence: number;
+}
+
 // Action-specific command types
 export interface LaunchCommand extends BaseCommand {
   action: 'launch';
@@ -41,6 +50,8 @@ export interface NavigateCommand extends BaseCommand {
   url: string;
   waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
   headers?: Record<string, string>;
+  // off: skip detection/retry, warn: retry then return warning+riskSignals, block: fail fast
+  riskMode?: RiskMode;
 }
 
 export interface ClickCommand extends BaseCommand {
@@ -1074,6 +1085,8 @@ export interface NavigateData {
   url: string;
   title: string;
   warning?: string;
+  // Structured evidence emitted when verification/captcha patterns are detected.
+  riskSignals?: RiskSignal[];
 }
 
 export interface Annotation {

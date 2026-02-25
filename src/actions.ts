@@ -127,7 +127,6 @@ import type {
   DiffScreenshotCommand,
   DiffUrlCommand,
   Annotation,
-  NavigateData,
   ScreenshotData,
   EvaluateData,
   DiffSnapshotData,
@@ -145,6 +144,8 @@ import type {
   RecordingRestartData,
   InputEventData,
   StylesData,
+  RiskMode,
+  RiskSignal,
 } from './types.js';
 import { successResponse, errorResponse } from './protocol.js';
 import { diffSnapshots, diffScreenshots } from './diff.js';
@@ -526,7 +527,7 @@ async function handleLaunch(
 async function handleNavigate(
   command: NavigateCommand,
   browser: BrowserManager
-): Promise<Response<NavigateData>> {
+): Promise<Response> {
   const page = browser.getPage();
 
   // Set target URL for region auto-detection (locale/timezone)
@@ -545,71 +546,125 @@ async function handleNavigate(
     waitUntil: command.waitUntil ?? 'load',
   });
 
-  // Detect captcha/verification pages and retry with backoff
-  const finalUrl = page.url();
-  const title = await page.title();
-  const captchaDetected = isCaptchaPage(finalUrl, title);
-
-  if (captchaDetected) {
-    const maxRetries = 2;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const backoff = 3000 + Math.random() * 4000;
-      await page.waitForTimeout(Math.round(backoff));
-      await page.goto(command.url, {
-        waitUntil: command.waitUntil ?? 'load',
-      });
-      const retryUrl = page.url();
-      const retryTitle = await page.title();
-      if (!isCaptchaPage(retryUrl, retryTitle)) {
-        return successResponse(command.id, {
-          url: retryUrl,
-          title: retryTitle,
-        });
-      }
-    }
-    // All retries exhausted -- return the page as-is with a warning
+  const riskMode: RiskMode = command.riskMode ?? 'warn';
+  if (riskMode === 'off') {
     return successResponse(command.id, {
       url: page.url(),
       title: await page.title(),
-      warning:
-        'Captcha/verification page detected. Try --headed mode or use --session-name for state persistence.',
-    } as NavigateData);
+    });
   }
 
+  // Detect risk interstitials (captcha/verification) and handle by risk mode.
+  const finalUrl = page.url();
+  const title = await page.title();
+  let encounteredSignals = detectRiskSignals(finalUrl, title);
+  if (encounteredSignals.length === 0) {
+    return successResponse(command.id, {
+      url: finalUrl,
+      title,
+    });
+  }
+
+  if (riskMode === 'block') {
+    const first = encounteredSignals[0];
+    return errorResponse(
+      command.id,
+      `Navigation blocked by risk-mode=block: ${first.code} (${first.source}="${first.evidence}")`
+    );
+  }
+
+  const maxRetries = 2;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const backoff = 3000 + Math.random() * 4000;
+    await page.waitForTimeout(Math.round(backoff));
+    await page.goto(command.url, {
+      waitUntil: command.waitUntil ?? 'load',
+    });
+    const retryUrl = page.url();
+    const retryTitle = await page.title();
+    const retrySignals = detectRiskSignals(retryUrl, retryTitle);
+    if (retrySignals.length === 0) {
+      return successResponse(command.id, {
+        url: retryUrl,
+        title: retryTitle,
+        warning:
+          'Risk interstitial detected and recovered after retry. Review riskSignals for evidence.',
+        riskSignals: encounteredSignals,
+      });
+    }
+    encounteredSignals = mergeRiskSignals(encounteredSignals, retrySignals);
+  }
+
+  // All retries exhausted -- return the page as-is with a warning and evidence.
   return successResponse(command.id, {
-    url: finalUrl,
-    title,
+    url: page.url(),
+    title: await page.title(),
+    warning:
+      'Captcha/verification page detected. Try --headed mode or use --session-name for state persistence.',
+    riskSignals: encounteredSignals,
   });
 }
 
-function isCaptchaPage(url: string, title: string): boolean {
+function mergeRiskSignals(current: RiskSignal[], next: RiskSignal[]): RiskSignal[] {
+  const merged = new Map<string, RiskSignal>();
+  for (const signal of [...current, ...next]) {
+    const key = `${signal.code}|${signal.source}|${signal.evidence}`;
+    if (!merged.has(key) || (merged.get(key)?.confidence ?? 0) < signal.confidence) {
+      merged.set(key, signal);
+    }
+  }
+  return [...merged.values()];
+}
+
+/**
+ * Detect verification/captcha interstitials and return structured risk evidence.
+ */
+export function detectRiskSignals(url: string, title: string): RiskSignal[] {
   const lowerUrl = url.toLowerCase();
   const lowerTitle = title.toLowerCase();
-  const captchaPatterns = [
-    '/verify/captcha',
-    '/captcha',
-    '/challenge',
-    'scene=crawler',
-    'scene=anti_bot',
-    'recaptcha',
-    'hcaptcha',
+  const urlPatterns: Array<{ pattern: string; code: string; confidence: number }> = [
+    { pattern: '/verify/captcha', code: 'captcha_interstitial', confidence: 0.98 },
+    { pattern: '/captcha', code: 'captcha_interstitial', confidence: 0.95 },
+    { pattern: '/challenge', code: 'verification_interstitial', confidence: 0.93 },
+    { pattern: 'scene=crawler', code: 'bot_challenge', confidence: 0.99 },
+    { pattern: 'scene=anti_bot', code: 'bot_challenge', confidence: 0.99 },
+    { pattern: 'recaptcha', code: 'captcha_interstitial', confidence: 0.97 },
+    { pattern: 'hcaptcha', code: 'captcha_interstitial', confidence: 0.97 },
   ];
-  const titlePatterns = [
-    'verify',
-    'captcha',
-    'challenge',
-    'attention required',
-    'just a moment',
-    'checking your browser',
-    'access denied',
-    '驗證',
-    '验证',
-    '人机验证',
+  const titlePatterns: Array<{ pattern: string; code: string; confidence: number }> = [
+    { pattern: 'verify', code: 'verification_interstitial', confidence: 0.78 },
+    { pattern: 'captcha', code: 'captcha_interstitial', confidence: 0.9 },
+    { pattern: 'challenge', code: 'verification_interstitial', confidence: 0.8 },
+    { pattern: 'attention required', code: 'verification_interstitial', confidence: 0.96 },
+    { pattern: 'just a moment', code: 'verification_interstitial', confidence: 0.95 },
+    { pattern: 'checking your browser', code: 'verification_interstitial', confidence: 0.97 },
+    { pattern: 'access denied', code: 'access_gate', confidence: 0.86 },
+    { pattern: '驗證', code: 'verification_interstitial', confidence: 0.88 },
+    { pattern: '验证', code: 'verification_interstitial', confidence: 0.88 },
+    { pattern: '人机验证', code: 'captcha_interstitial', confidence: 0.95 },
   ];
-  return (
-    captchaPatterns.some((p) => lowerUrl.includes(p)) ||
-    titlePatterns.some((p) => lowerTitle.includes(p))
-  );
+  const signals: RiskSignal[] = [];
+  for (const item of urlPatterns) {
+    if (lowerUrl.includes(item.pattern)) {
+      signals.push({
+        code: item.code,
+        source: 'url',
+        evidence: item.pattern,
+        confidence: item.confidence,
+      });
+    }
+  }
+  for (const item of titlePatterns) {
+    if (lowerTitle.includes(item.pattern)) {
+      signals.push({
+        code: item.code,
+        source: 'title',
+        evidence: item.pattern,
+        confidence: item.confidence,
+      });
+    }
+  }
+  return mergeRiskSignals([], signals);
 }
 
 function bezierPoint(t: number, p0: number, p1: number, p2: number, p3: number): number {

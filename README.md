@@ -1,163 +1,199 @@
 # agent-browser-stealth
 
-Stealth-focused fork of `agent-browser` for anti-bot evasion in production automation.
+Stealth-first fork of `agent-browser` for production browser automation under anti-bot pressure.
 
-This fork keeps core browser automation capabilities in sync with upstream `agent-browser`, and focuses its own changes on stealth and anti-detection behavior.
+This README focuses on stealth architecture and principles. For full command coverage inherited from upstream, use:
 
-## Positioning
+- upstream docs: <https://github.com/vercel-labs/agent-browser>
+- local help: `agent-browser --help`
 
-- Core commands and workflows: aligned with upstream `agent-browser`
-- Fork value: stronger anti-bot defaults and operational policies
-- Default mindset: no extra stealth toggle, stealth is always on
+## What This Fork Optimizes
 
-## Installation
+- Stealth is always on (legacy `launch.stealth` is accepted but ignored).
+- Fingerprint surfaces are patched at multiple layers (launch args, CDP overrides, init scripts).
+- Behavioral signals are humanized (typing cadence, cursor path, pacing, retry backoff).
+- Region signals are auto-aligned (locale/timezone/Accept-Language) to reduce mismatch risk.
+- Verification/captcha handling is policy-driven (`--risk-mode off|warn|block`).
 
-### Global (recommended)
+## Quick Start
+
+### Install
 
 ```bash
 npm install -g agent-browser-stealth
 agent-browser install
 ```
 
-### Quick try with npx
-
-```bash
-npx agent-browser-stealth install
-npx agent-browser-stealth open example.com
-```
-
-### From source
-
-```bash
-git clone https://github.com/leeguooooo/agent-browser
-cd agent-browser
-pnpm install
-pnpm build
-pnpm build:native
-pnpm link --global
-agent-browser install
-```
-
-## Quick Start
+### Minimal Usage
 
 ```bash
 agent-browser open https://example.com
 agent-browser snapshot -i
 agent-browser click @e2
-agent-browser fill @e3 "test@example.com"
-agent-browser screenshot page.png
 ```
 
-## Anti-Bot Measures
+## Stealth Architecture
 
-Stealth is always enabled. Legacy `launch.stealth` is accepted only for compatibility and ignored.
-
-### 1) Fingerprint hardening
-
-- Hides automation indicators such as `navigator.webdriver`
-- Adds Chromium launch args to reduce automation fingerprints
-- Rewrites headless UA markers (`HeadlessChrome`)
-- Patches high-signal surfaces such as:
-  - `navigator.plugins` / `navigator.mimeTypes`
-  - `window.chrome.runtime`
-  - WebGL vendor/renderer exposure
-  - permissions/language/media/device related probes
-- Applies both context init scripts and CDP-level UA overrides
-- Preserves explicit custom UA from `--user-agent` or `launch({ userAgent })`
-
-### 2) Behavioral humanization
-
-- Randomized typing cadence when `--delay` is used
-- Random wait ranges (`wait 2000-5000`)
-- Bezier-curve mouse movement before click actions
-- Randomized navigation pacing
-
-### 3) Region signal alignment
-
-- Auto-aligns locale/timezone/Accept-Language by target TLD
-- Reduces locale-timezone mismatch risk on region-sensitive sites
-
-### 4) Verification-aware retry
-
-- Detects common captcha/verification interstitial patterns
-- Retries navigation with randomized backoff when triggered
-
-## Typing `--delay` Correctly
-
-Use `--delay` as an option:
-
-```bash
-agent-browser type @e2 "iphone" --delay 120
-agent-browser keyboard type "iphone" --delay 120
+```mermaid
+flowchart TD
+  A["Command Input"] --> B["Stealth Policy Resolver"]
+  B --> C["Connection Mode Detection"]
+  C --> D["Launch Layer: Chromium Args"]
+  C --> E["CDP Layer: UA + Metadata Override"]
+  C --> F["Context Layer: Init Script Patches"]
+  D --> G["Behavior Layer: Humanized Interaction"]
+  E --> G
+  F --> G
+  G --> H["Risk Layer: Verification Detection and Handling"]
+  H --> I["Response with warnings and riskSignals"]
 ```
 
-If literal text includes `--delay`, stop option parsing with `--`:
+### Policy by Connection Mode
+
+| Mode | Stealth Capabilities | Notes |
+|---|---|---|
+| Local Chromium launch | Chromium launch args + CDP UA override + context init scripts | Most complete stack |
+| Existing browser via CDP | CDP UA override + context init scripts | No local Chromium arg injection |
+| Cloud provider (browserbase/browseruse) | Context init scripts | Remote browser runtime controls launch layer |
+| Kernel provider | Context init scripts + provider-managed stealth | Provider-side stealth may also apply |
+
+## Principle 1: Always-On Stealth with Explicit Boundaries
+
+- Stealth defaults to enabled and does not depend on a runtime toggle.
+- Project policy forbids:
+  - `--profile` / `AGENT_BROWSER_PROFILE`
+  - `--channel` / `AGENT_BROWSER_CHANNEL`
+- Default CLI policy expects an existing browser on CDP `localhost:9333` unless explicit connection options are provided.
+
+## Principle 2: Multi-Layer Fingerprint Hardening
+
+### 2.1 Launch Layer (Local Chromium)
+
+Injected Chromium args:
+
+- `--disable-blink-features=AutomationControlled`
+- `--use-gl=angle`
+- `--use-angle=default`
+
+If no custom UA is set, the runtime UA is normalized to remove `HeadlessChrome` tokens.
+
+### 2.2 CDP Layer (Browser/Page Targets)
+
+- Uses `Emulation.setUserAgentOverride` to align:
+  - `userAgent`
+  - `acceptLanguage`
+  - `userAgentMetadata` brands and versions
+- Applies overrides for existing/new targets, including worker-relevant contexts.
+- Forces opaque white background (`Emulation.setDefaultBackgroundColorOverride`) to avoid headless transparency fingerprints.
+
+### 2.3 Context Init-Script Layer (Patch Inventory)
+
+The init script patch set is injected before page scripts and currently includes:
+
+1. `navigator.webdriver` removal (including prototype-level cleanup).
+2. CSS webdriver heuristic neutralization (`CSS.supports('border-end-end-radius: initial')` probe).
+3. `window.chrome.runtime` bootstrap for missing runtime surfaces.
+4. Locale/language normalization (`navigator.language`, `navigator.languages`).
+5. Realistic `navigator.plugins` and `navigator.mimeTypes`.
+6. `navigator.permissions.query` normalization for notifications.
+7. WebGL vendor/renderer masking when SwiftShader indicators are present.
+8. `cdc_` property cleanup on document/documentElement.
+9. Window/screen dimension normalization (`outerWidth/outerHeight/screenX/screenY`).
+10. Screen availability patching (`availWidth/availHeight`).
+11. Hardware concurrency stabilization.
+12. Notification permission consistency.
+13. Active text color heuristic patching.
+14. `navigator.connection` normalization.
+15. Worker network signal normalization (`downlinkMax`).
+16. `prefers-color-scheme` light-mode heuristic neutralization.
+17. `navigator.share` exposure.
+18. `navigator.contacts` exposure.
+19. `contentIndex` exposure.
+20. `navigator.pdfViewerEnabled` normalization.
+21. Media devices surface normalization.
+22. `navigator.userAgent` cleanup (strip `HeadlessChrome`).
+23. `navigator.userAgentData` brand cleanup.
+24. `performance.memory` stabilization.
+25. Default background color patching at script level.
+
+## Principle 3: Behavioral Humanization
+
+- Navigation pacing jitter before `goto` (short randomized delay).
+- Typing jitter for `type --delay` and `keyboard type --delay`:
+  - per-character randomized delay around the requested base delay (about ±40%).
+- Click path humanization:
+  - cursor moves on a Bezier-like curve before click.
+- Wait supports random ranges (`wait min-max`) for non-uniform timing.
+
+## Principle 4: Region Signal Alignment
+
+Before navigation, the runtime derives region hints from target URL TLD and aligns:
+
+- locale
+- timezone
+- `Accept-Language`
+
+Examples of built-in mappings include `tw`, `jp`, `kr`, `sg`, `de`, `fr`, `uk`, `in`, `au`.
+
+Manual overrides are supported:
+
+- `AGENT_BROWSER_LOCALE`
+- `AGENT_BROWSER_TIMEZONE` (or `TZ`)
+
+## Principle 5: Verification-Aware Risk Control
+
+When a navigation lands on verification/captcha pages, structured risk signals are generated from URL/title evidence.
+
+`riskSignals` include:
+
+- `code`
+- `source` (`url` or `title`)
+- `evidence`
+- `confidence`
+
+### Risk Mode
+
+- `warn` (default): retry with randomized backoff and return warnings + `riskSignals`.
+- `block`: fail fast once verification/captcha interstitial is detected.
+- `off`: skip detection/retry path.
 
 ```bash
-agent-browser type @e2 -- "--delay 120"
-agent-browser keyboard type -- "--delay 120"
+agent-browser --risk-mode warn open https://example.com
+agent-browser --risk-mode block open https://example.com
+AGENT_BROWSER_RISK_MODE=off agent-browser open https://example.com
 ```
 
-## Validation Snapshot
+```mermaid
+flowchart TD
+  A["Navigate"] --> B["Collect URL and Title Signals"]
+  B --> C{"risk-mode"}
+  C -->|off| D["Return Success"]
+  C -->|block| E["Return Error with First Signal"]
+  C -->|warn| F["Retry up to 2 times"]
+  F --> G{"Signals Cleared"}
+  G -->|yes| H["Return Success + recovery warning + riskSignals"]
+  G -->|no| I["Return Success + warning + riskSignals"]
+```
 
-Manual checks were run against common public detection pages in headed mode, including:
+## Operational Recommendations
 
-- [bot.sannysoft.com](https://bot.sannysoft.com/)
-- [CreepJS](https://abrahamjuliot.github.io/creepjs/)
-- [areyouheadless](https://arh.antoinevastel.com/bots/areyouheadless)
-- [detect-headless](https://infosimples.github.io/detect-headless)
+- Prefer `--headed` for high-friction targets.
+- Reuse session state with `--session-name` for continuity.
+- Keep locale/timezone consistent with target market.
+- Use `--risk-mode block` in strict pipelines that require explicit operator intervention on verification pages.
 
-Reproduce CreepJS check:
+## Validation Scripts
+
+Run public detector checks after stealth changes:
 
 ```bash
+node scripts/check-sannysoft-webdriver.js --binary ./cli/target/release/agent-browser
 node scripts/check-creepjs-headless.js --binary ./cli/target/release/agent-browser
 ```
 
-## Command Coverage And Docs
+## Upstream Compatibility
 
-Core command set is intentionally kept compatible with upstream `agent-browser`.
-
-- Full command reference: [upstream agent-browser docs](https://github.com/vercel-labs/agent-browser)
-- Local help: `agent-browser --help`
-
-## Fork Policies
-
-This fork enforces a few operational policies:
-
-- `--profile` / `AGENT_BROWSER_PROFILE` are forbidden
-- `--channel` / `AGENT_BROWSER_CHANNEL` are forbidden
-- Default mode expects an existing browser via CDP on `localhost:9333`
-
-## Maintainer Notes (Fork Release)
-
-- Keep `upstream-main` for clean upstream sync
-- Merge upstream into short-lived sync branches, then PR into `main`
-- Recommended release format: `<upstream>-fork.<fork>` (example: `0.14.0-fork.3`)
-- Use npm Trusted Publishing (OIDC)
-
-## OpenClaw Skill Sync
-
-This repo includes a dedicated OpenClaw skill at:
-
-- `skills/agent-browser-stealth/SKILL.md`
-
-Local git `pre-push` hook auto-syncs skills before every push:
-
-- `.husky/pre-push` -> `pnpm run clawhub:sync`
-
-Manual sync command (same logic as hook):
-
-```bash
-pnpm run clawhub:sync
-```
-
-This uses your existing local ClawHub login session (no GitHub secret required).
-
-Temporarily skip auto-sync for one push:
-
-```bash
-SKIP_CLAWHUB_SYNC=1 git push
-```
+This fork intentionally keeps command workflows close to upstream while concentrating custom behavior in stealth, policy, and anti-detection handling.
 
 ## License
 

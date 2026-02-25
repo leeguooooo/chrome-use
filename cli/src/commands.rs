@@ -182,6 +182,19 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                     nav_cmd["iosDevice"] = json!(device);
                 }
             }
+            if let Some(ref risk_mode) = flags.risk_mode {
+                if matches!(risk_mode.as_str(), "off" | "warn" | "block") {
+                    nav_cmd["riskMode"] = json!(risk_mode);
+                } else {
+                    return Err(ParseError::InvalidValue {
+                        message: format!(
+                            "Invalid --risk-mode value: {} (expected off, warn, or block)",
+                            risk_mode
+                        ),
+                        usage: "open <url>",
+                    });
+                }
+            }
             Ok(nav_cmd)
         }
         "back" => Ok(json!({ "id": id, "action": "back" })),
@@ -2028,6 +2041,7 @@ mod tests {
             annotate: false,
             color_scheme: None,
             download_path: None,
+            risk_mode: None,
         }
     }
 
@@ -2291,6 +2305,14 @@ mod tests {
         assert_eq!(cmd["action"], "navigate");
         assert_eq!(cmd["url"], "https://api.example.com");
         assert_eq!(cmd["headers"]["Authorization"], "Bearer token");
+    }
+
+    #[test]
+    fn test_navigate_with_risk_mode() {
+        let mut flags = default_flags();
+        flags.risk_mode = Some("block".to_string());
+        let cmd = parse_command(&args("open https://example.com"), &flags).unwrap();
+        assert_eq!(cmd["riskMode"], "block");
     }
 
     #[test]

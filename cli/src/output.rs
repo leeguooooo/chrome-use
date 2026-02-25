@@ -25,6 +25,33 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
                 if let Some(warning) = data.get("warning").and_then(|v| v.as_str()) {
                     println!("{} {}", color::warning_indicator(), warning);
                 }
+                if let Some(risk_signals) = data.get("riskSignals").and_then(|v| v.as_array()) {
+                    for signal in risk_signals {
+                        let code = signal
+                            .get("code")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown_risk");
+                        let source = signal.get("source").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let evidence = signal
+                            .get("evidence")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("-");
+                        let confidence = signal.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        println!(
+                            "{} risk-signal code={} source={} evidence={} confidence={:.2}",
+                            color::warning_indicator(),
+                            code,
+                            source,
+                            evidence,
+                            confidence
+                        );
+                    }
+                }
+                if let Some(warnings) = data.get("warnings").and_then(|v| v.as_array()) {
+                    for warning in warnings.iter().filter_map(|v| v.as_str()) {
+                        println!("{} {}", color::warning_indicator(), warning);
+                    }
+                }
                 return;
             }
             println!("{}", url);
@@ -590,10 +617,12 @@ Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
   --headers <json>     Set HTTP headers (scoped to this origin)
+  --risk-mode <mode>   Risk handling for verify/captcha pages: off, warn, block
   --headed             Show browser window
 
 Examples:
   agent-browser open example.com
+  agent-browser --risk-mode block open example.com
   agent-browser open https://github.com
   agent-browser open localhost:3000
   agent-browser open api.example.com --headers '{"Authorization": "Bearer token"}'
@@ -2135,6 +2164,7 @@ Options:
                              Project default: require existing browser at localhost:9333 (no auto local fallback)
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
+  --risk-mode <mode>         Verify/captcha handling: off, warn, block (or AGENT_BROWSER_RISK_MODE)
   --session-name <name>      Auto-save/restore session state (cookies, localStorage)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
   --debug                    Debug output
@@ -2186,6 +2216,7 @@ Environment:
   AGENT_BROWSER_TIMEZONE         Override auto-detected timezone (e.g., Asia/Taipei)
   AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
   AGENT_BROWSER_DOWNLOAD_PATH    Default download directory for browser downloads
+  AGENT_BROWSER_RISK_MODE        Verify/captcha handling mode (off, warn, block)
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default Playwright timeout in ms (default: 25000)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (default: 30)
@@ -2214,6 +2245,7 @@ Examples:
   agent-browser --cdp 9222 snapshot      # Connect via CDP port
   agent-browser --auto-connect snapshot  # Auto-discover running Chrome
   agent-browser --color-scheme dark open example.com  # Dark mode
+  agent-browser --risk-mode block open example.com  # Block on verification/captcha pages
   agent-browser --session-name myapp open example.com  # Auto-save/restore state
 
 Command Chaining:

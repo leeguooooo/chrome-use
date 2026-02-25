@@ -59,6 +59,7 @@ const navigateSchema = baseCommandSchema.extend({
   url: z.string().min(1),
   waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle']).optional(),
   headers: z.record(z.string()).optional(),
+  riskMode: z.enum(['off', 'warn', 'block']).optional(),
 });
 
 const clickSchema = baseCommandSchema.extend({

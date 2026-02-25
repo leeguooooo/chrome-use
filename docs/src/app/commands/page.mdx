@@ -1,6 +1,6 @@
-import { pageMetadata } from "@/lib/page-metadata"
+import { pageMetadata } from '@/lib/page-metadata';
 
-export const metadata = pageMetadata("commands")
+export const metadata = pageMetadata('commands');
 
 # Commands
 
@@ -8,6 +8,7 @@ export const metadata = pageMetadata("commands")
 
 ```bash
 agent-browser open <url>              # Navigate (aliases: goto, navigate)
+agent-browser --risk-mode block open <url>  # Block when verification/captcha interstitial is detected
 agent-browser click <sel>             # Click element (--new-tab to open in new tab)
 agent-browser dblclick <sel>          # Double-click
 agent-browser fill <sel> <text>       # Clear and fill
@@ -108,6 +109,16 @@ agent-browser wait --url "**/dash"    # Wait for URL pattern
 agent-browser wait --load networkidle # Wait for load state
 agent-browser wait --fn "condition"   # Wait for JS condition
 agent-browser wait --download [path]  # Wait for download
+```
+
+## Risk Mode
+
+Control how `open`/`navigate` handles verification or captcha interstitials:
+
+```bash
+agent-browser --risk-mode warn open https://example.com   # default: retry and warn with riskSignals
+agent-browser --risk-mode block open https://example.com  # fail fast on detection
+agent-browser --risk-mode off open https://example.com    # disable detection/retry
 ```
 
 ## Downloads

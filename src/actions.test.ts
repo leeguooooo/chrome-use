@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toAIFriendlyError } from './actions.js';
+import { detectRiskSignals, toAIFriendlyError } from './actions.js';
 
 describe('toAIFriendlyError', () => {
   describe('element blocked by overlay', () => {
@@ -35,5 +35,24 @@ describe('toAIFriendlyError', () => {
 
       expect(result.message).toContain('cookie banners');
     });
+  });
+});
+
+describe('detectRiskSignals', () => {
+  it('should detect verification patterns from URL and title', () => {
+    const signals = detectRiskSignals(
+      'https://example.com/verify/captcha?scene=anti_bot',
+      'Just a moment...'
+    );
+    expect(signals.length).toBeGreaterThan(0);
+    expect(signals.some((s) => s.source === 'url' && s.code === 'captcha_interstitial')).toBe(true);
+    expect(
+      signals.some((s) => s.source === 'title' && s.code === 'verification_interstitial')
+    ).toBe(true);
+  });
+
+  it('should return empty array for normal pages', () => {
+    const signals = detectRiskSignals('https://example.com/dashboard', 'Dashboard');
+    expect(signals).toEqual([]);
   });
 });

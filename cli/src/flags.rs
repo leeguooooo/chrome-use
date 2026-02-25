@@ -34,6 +34,7 @@ pub struct Config {
     pub annotate: Option<bool>,
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
+    pub risk_mode: Option<String>,
 }
 
 impl Config {
@@ -68,6 +69,7 @@ impl Config {
             annotate: other.annotate.or(self.annotate),
             color_scheme: other.color_scheme.or(self.color_scheme),
             download_path: other.download_path.or(self.download_path),
+            risk_mode: other.risk_mode.or(self.risk_mode),
         }
     }
 }
@@ -134,6 +136,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--color-scheme",
         "--channel",
         "--download-path",
+        "--risk-mode",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -204,6 +207,9 @@ pub struct Flags {
     pub annotate: bool,
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
+    /// How verification/captcha detections are handled on navigation:
+    /// `off` (disable), `warn` (retry and warn), `block` (fail fast).
+    pub risk_mode: Option<String>,
 
     // Track which launch-time options were explicitly passed via CLI
     // (as opposed to being set only via environment variables)
@@ -285,6 +291,10 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .or(config.color_scheme),
         download_path: env::var("AGENT_BROWSER_DOWNLOAD_PATH").ok()
             .or(config.download_path),
+        risk_mode: env::var("AGENT_BROWSER_RISK_MODE")
+            .ok()
+            .or(config.risk_mode)
+            .map(|s| s.to_ascii_lowercase()),
         cli_executable_path: false,
         cli_extensions: false,
         cli_state: false,
@@ -456,6 +466,12 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
+            "--risk-mode" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.risk_mode = Some(s.to_ascii_lowercase());
+                    i += 1;
+                }
+            }
             "--config" => {
                 // Already handled by load_config(); skip the value
                 i += 1;
@@ -500,6 +516,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--session-name",
         "--color-scheme",
         "--download-path",
+        "--risk-mode",
         "--config",
     ];
 
@@ -698,6 +715,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_risk_mode_flag() {
+        let flags = parse_flags(&args("--risk-mode block open example.com"));
+        assert_eq!(flags.risk_mode.as_deref(), Some("block"));
+    }
+
+    #[test]
+    fn test_clean_args_removes_risk_mode() {
+        let cleaned = clean_args(&args("--risk-mode warn open example.com"));
+        assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    #[test]
     fn test_cli_multiple_flags_tracking() {
         let flags = parse_flags(&args(
             "--executable-path /chrome --proxy http://proxy snapshot",
@@ -732,7 +761,8 @@ mod tests {
             "allowFileAccess": true,
             "cdp": "9222",
             "autoConnect": true,
-            "headers": "{\"Auth\":\"token\"}"
+            "headers": "{\"Auth\":\"token\"}",
+            "riskMode": "block"
         }"#;
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.headed, Some(true));
@@ -758,6 +788,7 @@ mod tests {
         assert_eq!(config.cdp.as_deref(), Some("9222"));
         assert_eq!(config.auto_connect, Some(true));
         assert_eq!(config.headers.as_deref(), Some("{\"Auth\":\"token\"}"));
+        assert_eq!(config.risk_mode.as_deref(), Some("block"));
     }
 
     #[test]
