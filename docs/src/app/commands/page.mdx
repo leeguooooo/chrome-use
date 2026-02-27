@@ -172,6 +172,14 @@ agent-browser storage local clear     # Clear all
 agent-browser storage session         # Same for sessionStorage
 ```
 
+For `cookies set`, use one of these patterns:
+
+- `--url <url>`
+- `--domain <domain> --path <path>`
+- omit all three to scope from the current page URL
+
+When `--url` is omitted, `--domain` and `--path` must be provided together.
+
 ## Network
 
 ```bash

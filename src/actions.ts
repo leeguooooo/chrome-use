@@ -1378,9 +1378,20 @@ async function handleCookiesSet(
 ): Promise<Response> {
   const page = browser.getPage();
   const context = page.context();
-  // Auto-fill URL for cookies that don't have domain/path/url set
+  // Playwright requires either `url` or a complete `domain` + `path` pair.
+  // If none are provided, we default to the current page URL.
   const pageUrl = page.url();
   const cookies = command.cookies.map((cookie) => {
+    const hasUrl = Boolean(cookie.url);
+    const hasDomain = Boolean(cookie.domain);
+    const hasPath = Boolean(cookie.path);
+
+    if (!hasUrl && hasDomain !== hasPath) {
+      throw new Error(
+        `Invalid cookie "${cookie.name}": provide either url, or both domain and path`
+      );
+    }
+
     if (!cookie.url && !cookie.domain && !cookie.path) {
       return { ...cookie, url: pageUrl };
     }

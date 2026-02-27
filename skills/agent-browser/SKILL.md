@@ -137,6 +137,20 @@ agent-browser state load auth.json
 agent-browser open https://app.example.com/dashboard
 ```
 
+### Cookie Injection for Auth Callbacks
+
+```bash
+# Before navigation: set by URL
+agent-browser cookies set session_id "abc123" --url https://app.example.com/api/auth/sso/callback
+
+# Explicit domain/path pair (must be provided together)
+agent-browser cookies set auth_token "xyz789" --domain .example.com --path /api
+
+# Or navigate first and rely on current URL
+agent-browser open https://app.example.com/api/auth/sso/callback
+agent-browser cookies set callback_token "token123"
+```
+
 ### Session Persistence
 
 ```bash

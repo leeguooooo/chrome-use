@@ -181,6 +181,8 @@ flowchart TD
 - Reuse session state with `--session-name` for continuity.
 - Keep locale/timezone consistent with target market.
 - Use `--risk-mode block` in strict pipelines that require explicit operator intervention on verification pages.
+- For `cookies set`, use either `--url <url>`, or `--domain <domain> --path <path>` together.
+- If `--url`, `--domain`, and `--path` are all omitted, the cookie is scoped from the current page URL.
 
 ## Validation Scripts
 

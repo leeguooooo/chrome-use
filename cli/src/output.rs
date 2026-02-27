@@ -1486,8 +1486,8 @@ Operations:
 
 Cookie Set Options:
   --url <url>                        URL for the cookie (allows setting before page load)
-  --domain <domain>                  Cookie domain (e.g., ".example.com")
-  --path <path>                      Cookie path (e.g., "/api")
+  --domain <domain>                  Cookie domain (use with --path, e.g., ".example.com")
+  --path <path>                      Cookie path (use with --domain, e.g., "/api")
   --httpOnly                         Set HttpOnly flag (prevents JavaScript access)
   --secure                           Set Secure flag (HTTPS only)
   --sameSite <Strict|Lax|None>       SameSite policy
@@ -1495,6 +1495,7 @@ Cookie Set Options:
 
 Note: If --url, --domain, and --path are all omitted, the cookie will be set
 for the current page URL.
+When --url is omitted, --domain and --path must be provided together.
 
 Global Options:
   --json               Output as JSON

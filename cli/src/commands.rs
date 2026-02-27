@@ -828,6 +828,17 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                         }
                     }
 
+                    // Playwright requires either `url` or a complete `domain`+`path` pair.
+                    let has_url = cookie.get("url").is_some();
+                    let has_domain = cookie.get("domain").is_some();
+                    let has_path = cookie.get("path").is_some();
+                    if !has_url && (has_domain != has_path) {
+                        return Err(ParseError::MissingArguments {
+                            context: "cookies set".to_string(),
+                            usage: "When not using --url, you must provide both --domain <domain> and --path <path>",
+                        });
+                    }
+
                     Ok(json!({ "id": id, "action": "cookies_set", "cookies": [cookie] }))
                 }
                 "clear" => Ok(json!({ "id": id, "action": "cookies_clear" })),
@@ -2097,9 +2108,27 @@ mod tests {
     }
 
     #[test]
-    fn test_cookies_set_with_domain() {
-        let cmd = parse_command(
+    fn test_cookies_set_with_domain_requires_path() {
+        let result = parse_command(
             &args("cookies set mycookie myvalue --domain example.com"),
+            &default_flags(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cookies_set_with_path_requires_domain() {
+        let result = parse_command(
+            &args("cookies set mycookie myvalue --path /api"),
+            &default_flags(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cookies_set_with_domain_and_path() {
+        let cmd = parse_command(
+            &args("cookies set mycookie myvalue --domain example.com --path /api"),
             &default_flags(),
         )
         .unwrap();
@@ -2107,18 +2136,6 @@ mod tests {
         assert_eq!(cmd["cookies"][0]["name"], "mycookie");
         assert_eq!(cmd["cookies"][0]["value"], "myvalue");
         assert_eq!(cmd["cookies"][0]["domain"], "example.com");
-    }
-
-    #[test]
-    fn test_cookies_set_with_path() {
-        let cmd = parse_command(
-            &args("cookies set mycookie myvalue --path /api"),
-            &default_flags(),
-        )
-        .unwrap();
-        assert_eq!(cmd["action"], "cookies_set");
-        assert_eq!(cmd["cookies"][0]["name"], "mycookie");
-        assert_eq!(cmd["cookies"][0]["value"], "myvalue");
         assert_eq!(cmd["cookies"][0]["path"], "/api");
     }
 
