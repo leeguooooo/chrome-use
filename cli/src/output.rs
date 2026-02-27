@@ -1,9 +1,83 @@
+use std::sync::OnceLock;
+
 use crate::color;
 use crate::connection::Response;
 
-pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
-    if json_mode {
-        println!("{}", serde_json::to_string(resp).unwrap_or_default());
+static BOUNDARY_NONCE: OnceLock<String> = OnceLock::new();
+
+/// Per-process nonce for content boundary markers. Uses a CSPRNG (getrandom) so
+/// that untrusted page content cannot predict or spoof the boundary delimiter.
+/// Process ID or timestamps would be insufficient since pages can read those.
+fn get_boundary_nonce() -> &'static str {
+    BOUNDARY_NONCE.get_or_init(|| {
+        let mut buf = [0u8; 16];
+        getrandom::getrandom(&mut buf).expect("failed to generate random nonce");
+        buf.iter().map(|b| format!("{:02x}", b)).collect()
+    })
+}
+
+#[derive(Default)]
+pub struct OutputOptions {
+    pub json: bool,
+    pub content_boundaries: bool,
+    pub max_output: Option<usize>,
+}
+
+fn truncate_if_needed(content: &str, max: Option<usize>) -> String {
+    let Some(limit) = max else {
+        return content.to_string();
+    };
+    // Fast path: byte length is a lower bound on char count, so if the
+    // byte length is within the limit the char count must be too.
+    if content.len() <= limit {
+        return content.to_string();
+    }
+    // Find the byte offset of the limit-th character.
+    match content.char_indices().nth(limit).map(|(i, _)| i) {
+        Some(byte_offset) => {
+            let total_chars = content.chars().count();
+            format!(
+                "{}\n[truncated: showing {} of {} chars. Use --max-output to adjust]",
+                &content[..byte_offset], limit, total_chars
+            )
+        }
+        // Content has fewer than `limit` chars despite more bytes
+        None => content.to_string(),
+    }
+}
+
+fn print_with_boundaries(content: &str, origin: Option<&str>, opts: &OutputOptions) {
+    let content = truncate_if_needed(content, opts.max_output);
+    if opts.content_boundaries {
+        let origin_str = origin.unwrap_or("unknown");
+        let nonce = get_boundary_nonce();
+        println!("--- AGENT_BROWSER_PAGE_CONTENT nonce={} origin={} ---", nonce, origin_str);
+        println!("{}", content);
+        println!("--- END_AGENT_BROWSER_PAGE_CONTENT nonce={} ---", nonce);
+    } else {
+        println!("{}", content);
+    }
+}
+
+pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
+    if opts.json {
+        if opts.content_boundaries {
+            let mut json_val = serde_json::to_value(resp).unwrap_or_default();
+            if let Some(obj) = json_val.as_object_mut() {
+                let nonce = get_boundary_nonce();
+                let origin = obj.get("data")
+                    .and_then(|d| d.get("origin"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                obj.insert("_boundary".to_string(), serde_json::json!({
+                    "nonce": nonce,
+                    "origin": origin,
+                }));
+            }
+            println!("{}", serde_json::to_string(&json_val).unwrap_or_default());
+        } else {
+            println!("{}", serde_json::to_string(resp).unwrap_or_default());
+        }
         return;
     }
 
@@ -82,9 +156,10 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
                 _ => {}
             }
         }
+        let origin = data.get("origin").and_then(|v| v.as_str());
         // Snapshot
         if let Some(snapshot) = data.get("snapshot").and_then(|v| v.as_str()) {
-            println!("{}", snapshot);
+            print_with_boundaries(snapshot, origin, opts);
             return;
         }
         // Title
@@ -94,12 +169,12 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
         }
         // Text
         if let Some(text) = data.get("text").and_then(|v| v.as_str()) {
-            println!("{}", text);
+            print_with_boundaries(text, origin, opts);
             return;
         }
         // HTML
         if let Some(html) = data.get("html").and_then(|v| v.as_str()) {
-            println!("{}", html);
+            print_with_boundaries(html, origin, opts);
             return;
         }
         // Value
@@ -127,10 +202,8 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
         }
         // Eval result
         if let Some(result) = data.get("result") {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(result).unwrap_or_default()
-            );
+            let formatted = serde_json::to_string_pretty(result).unwrap_or_default();
+            print_with_boundaries(&formatted, origin, opts);
             return;
         }
         // iOS Devices
@@ -217,10 +290,23 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
         }
         // Console logs
         if let Some(logs) = data.get("messages").and_then(|v| v.as_array()) {
-            for log in logs {
-                let level = log.get("type").and_then(|v| v.as_str()).unwrap_or("log");
-                let text = log.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                println!("{} {}", color::console_level_prefix(level), text);
+            if opts.content_boundaries {
+                let mut console_output = String::new();
+                for log in logs {
+                    let level = log.get("type").and_then(|v| v.as_str()).unwrap_or("log");
+                    let text = log.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    console_output.push_str(&format!("{} {}\n", color::console_level_prefix(level), text));
+                }
+                if console_output.ends_with('\n') {
+                    console_output.pop();
+                }
+                print_with_boundaries(&console_output, origin, opts);
+            } else {
+                for log in logs {
+                    let level = log.get("type").and_then(|v| v.as_str()).unwrap_or("log");
+                    let text = log.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    println!("{} {}", color::console_level_prefix(level), text);
+                }
             }
             return;
         }
@@ -593,6 +679,87 @@ pub fn print_response(resp: &Response, json_mode: bool, action: Option<&str>) {
             println!("{}", note);
             return;
         }
+        // Auth list
+        if let Some(profiles) = data.get("profiles").and_then(|v| v.as_array()) {
+            if profiles.is_empty() {
+                println!("{}", color::dim("No auth profiles saved"));
+            } else {
+                println!("{}", color::bold("Auth profiles:"));
+                for p in profiles {
+                    let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let url = p.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    let user = p.get("username").and_then(|v| v.as_str()).unwrap_or("");
+                    println!("  {} {} {}", color::green(name), color::dim(user), color::dim(url));
+                }
+            }
+            return;
+        }
+
+        // Auth show
+        if let Some(profile) = data.get("profile").and_then(|v| v.as_object()) {
+            let name = profile.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let url = profile.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let user = profile.get("username").and_then(|v| v.as_str()).unwrap_or("");
+            let created = profile.get("createdAt").and_then(|v| v.as_str()).unwrap_or("");
+            let last_login = profile.get("lastLoginAt").and_then(|v| v.as_str());
+            println!("Name: {}", name);
+            println!("URL: {}", url);
+            println!("Username: {}", user);
+            println!("Created: {}", created);
+            if let Some(ll) = last_login {
+                println!("Last login: {}", ll);
+            }
+            return;
+        }
+
+        // Auth save/update/login/delete
+        if data.get("saved").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            println!("{} Auth profile '{}' saved", color::success_indicator(), name);
+            return;
+        }
+        if data.get("updated").and_then(|v| v.as_bool()).unwrap_or(false)
+            && !data.get("saved").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            println!("{} Auth profile '{}' updated", color::success_indicator(), name);
+            return;
+        }
+        if data.get("loggedIn").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
+                println!("{} Logged in as '{}' - {}", color::success_indicator(), name, title);
+            } else {
+                println!("{} Logged in as '{}'", color::success_indicator(), name);
+            }
+            return;
+        }
+        if data.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if let Some(name) = data.get("name").and_then(|v| v.as_str()) {
+                println!("{} Auth profile '{}' deleted", color::success_indicator(), name);
+                return;
+            }
+        }
+
+        // Confirmation required (for orchestrator use)
+        if data.get("confirmation_required").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let category = data.get("category").and_then(|v| v.as_str()).unwrap_or("");
+            let description = data.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let cid = data.get("confirmation_id").and_then(|v| v.as_str()).unwrap_or("");
+            println!("Confirmation required:");
+            println!("  {}: {}", category, description);
+            println!("  Run: agent-browser confirm {}", cid);
+            println!("  Or:  agent-browser deny {}", cid);
+            return;
+        }
+        if data.get("confirmed").and_then(|v| v.as_bool()).unwrap_or(false) {
+            println!("{} Action confirmed", color::success_indicator());
+            return;
+        }
+        if data.get("denied").and_then(|v| v.as_bool()).unwrap_or(false) {
+            println!("{} Action denied", color::success_indicator());
+            return;
+        }
+
         // Default success
         println!("{} Done", color::success_indicator());
     }
@@ -1600,6 +1767,64 @@ Examples:
 "##
         }
 
+        // === Auth ===
+        "auth" => {
+            r##"
+agent-browser auth - Manage authentication profiles
+
+Usage: agent-browser auth <subcommand> [args]
+
+Subcommands:
+  save <name>              Save credentials for a login profile
+  login <name>             Login using saved credentials
+  list                     List saved profiles (names and URLs only)
+  show <name>              Show profile metadata (no passwords)
+  delete <name>            Delete a saved profile
+
+Save Options:
+  --url <url>              Login page URL (required)
+  --username <user>        Username (required)
+  --password <pass>        Password (required unless --password-stdin)
+  --password-stdin          Read password from stdin (recommended)
+  --username-selector <s>  Custom CSS selector for username field
+  --password-selector <s>  Custom CSS selector for password field
+  --submit-selector <s>    Custom CSS selector for submit button
+
+Global Options:
+  --json                   Output as JSON
+  --session <name>         Use specific session
+
+Examples:
+  echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin
+  agent-browser auth save github --url https://github.com/login --username user --password pass
+  agent-browser auth login github
+  agent-browser auth list
+  agent-browser auth show github
+  agent-browser auth delete github
+"##
+        }
+
+        // === Confirm/Deny ===
+        "confirm" | "deny" => {
+            r##"
+agent-browser confirm/deny - Approve or deny pending actions
+
+Usage:
+  agent-browser confirm <confirmation-id>
+  agent-browser deny <confirmation-id>
+
+When --confirm-actions is set, certain action categories return a
+confirmation_required response with a confirmation ID. Use confirm/deny
+to approve or reject the action.
+
+Pending confirmations auto-deny after 60 seconds.
+
+Examples:
+  agent-browser confirm c_8f3a1234
+  agent-browser deny c_8f3a1234
+"##
+        }
+
         // === Dialog ===
         "dialog" => {
             r##"
@@ -2125,6 +2350,17 @@ Debug:
   errors [--clear]           View page errors
   highlight <sel>            Highlight element
 
+Auth Vault:
+  auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
+  auth login <name>          Login using saved credentials
+  auth list                  List saved auth profiles
+  auth show <name>           Show auth profile metadata
+  auth delete <name>         Delete auth profile
+
+Confirmation:
+  confirm <id>               Approve a pending action
+  deny <id>                  Deny a pending action
+
 Sessions:
   session                    Show current session name
   session list               List active sessions
@@ -2167,6 +2403,12 @@ Options:
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
   --risk-mode <mode>         Verify/captcha handling: off, warn, block (or AGENT_BROWSER_RISK_MODE)
   --session-name <name>      Auto-save/restore session state (cookies, localStorage)
+  --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
+  --max-output <chars>       Truncate page output to N chars (or AGENT_BROWSER_MAX_OUTPUT)
+  --allowed-domains <list>   Restrict navigation domains (or AGENT_BROWSER_ALLOWED_DOMAINS)
+  --action-policy <path>     Action policy JSON file (or AGENT_BROWSER_ACTION_POLICY)
+  --confirm-actions <list>   Categories requiring confirmation (or AGENT_BROWSER_CONFIRM_ACTIONS)
+  --confirm-interactive      Interactive confirmation prompts; auto-denies if stdin is not a TTY (or AGENT_BROWSER_CONFIRM_INTERACTIVE)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
   --debug                    Debug output
   --version, -V              Show version (fork builds include upstream/fork info)
@@ -2225,6 +2467,12 @@ Environment:
   AGENT_BROWSER_STREAM_PORT      Enable WebSocket streaming on port (e.g., 9223)
   AGENT_BROWSER_IOS_DEVICE       Default iOS device name
   AGENT_BROWSER_IOS_UDID         Default iOS device UDID
+  AGENT_BROWSER_CONTENT_BOUNDARIES Wrap page output in boundary markers
+  AGENT_BROWSER_MAX_OUTPUT       Max characters for page output
+  AGENT_BROWSER_ALLOWED_DOMAINS  Comma-separated allowed domain patterns
+  AGENT_BROWSER_ACTION_POLICY    Path to action policy JSON file
+  AGENT_BROWSER_CONFIRM_ACTIONS  Action categories requiring confirmation
+  AGENT_BROWSER_CONFIRM_INTERACTIVE Enable interactive confirmation prompts
 
 Install (recommended, fastest - native Rust CLI):
   npm install -g agent-browser-stealth

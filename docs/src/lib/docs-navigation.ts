@@ -35,6 +35,7 @@ export const navigation: NavSection[] = [
       { name: "Streaming", href: "/streaming" },
       { name: "Profiler", href: "/profiler" },
       { name: "iOS Simulator", href: "/ios" },
+      { name: "Security", href: "/security" },
     ],
   },
   {

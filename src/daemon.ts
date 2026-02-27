@@ -5,7 +5,7 @@ import * as os from 'os';
 import { BrowserManager } from './browser.js';
 import { IOSManager } from './ios-manager.js';
 import { parseCommand, serializeResponse, errorResponse } from './protocol.js';
-import { executeCommand } from './actions.js';
+import { executeCommand, initActionPolicy } from './actions.js';
 import { executeIOSCommand } from './ios-actions.js';
 import { StreamServer } from './stream-server.js';
 import {
@@ -333,6 +333,9 @@ export async function startDaemon(options?: {
   // Clean up expired state files on startup
   runCleanupExpiredStates();
 
+  // Initialize action policy enforcement
+  initActionPolicy();
+
   // Determine provider from options or environment
   const provider = options?.provider ?? process.env.AGENT_BROWSER_PROVIDER;
   const isIOS = provider === 'ios';
@@ -630,9 +633,13 @@ export async function startDaemon(options?: {
       processQueue().catch((err) => {
         // Socket write failures during queue processing are non-fatal;
         // the client has likely disconnected.
-        console.warn('[warn] processQueue error:', err?.message ?? err);
+        // Only log err.message to avoid leaking sensitive fields (e.g. passwords) from command objects.
+        console.warn('[warn] processQueue error:', err?.message ?? String(err));
         if (process.env.AGENT_BROWSER_DEBUG === '1') {
-          console.error('[DEBUG] processQueue error (full):', err);
+          console.error(
+            '[DEBUG] processQueue error stack:',
+            err?.stack ?? err?.message ?? String(err)
+          );
         }
       });
     });

@@ -12,6 +12,7 @@ export const PAGE_TITLES: Record<string, string> = {
   streaming: "Streaming",
   profiler: "Profiler",
   ios: "iOS Simulator",
+  security: "Security",
   changelog: "Changelog",
 };
 
