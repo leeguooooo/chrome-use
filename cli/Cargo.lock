@@ -4,10 +4,11 @@ version = 4
 
 [[package]]
 name = "agent-browser-stealth"
-version = "0.15.1-fork.6"
+version = "0.15.1-fork.7"
 dependencies = [
  "base64",
  "dirs",
+ "getrandom",
  "libc",
  "serde",
  "serde_json",

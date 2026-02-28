@@ -1,6 +1,6 @@
 [package]
 name = "agent-browser-stealth"
-version = "0.15.1-fork.6"
+version = "0.15.1-fork.7"
 edition = "2021"
 description = "Stealth browser automation CLI for AI agents with anti-bot evasions"
 license = "Apache-2.0"
@@ -18,6 +18,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
 base64 = "0.22"
+getrandom = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

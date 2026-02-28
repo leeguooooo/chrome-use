@@ -2514,6 +2514,15 @@ iOS Simulator (requires Xcode and Appium):
     );
 }
 
+pub fn print_response(resp: &Response, json: bool, action: Option<&str>) {
+    let opts = OutputOptions {
+        json,
+        content_boundaries: false,
+        max_output: None,
+    };
+    print_response_with_opts(resp, action, &opts);
+}
+
 fn print_snapshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
     let changed = data
         .get("changed")

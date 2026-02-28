@@ -5,7 +5,7 @@ import * as os from 'os';
 import { BrowserManager } from './browser.js';
 import { IOSManager } from './ios-manager.js';
 import { parseCommand, serializeResponse, errorResponse } from './protocol.js';
-import { executeCommand, initActionPolicy } from './actions.js';
+import { executeCommand } from './actions.js';
 import { executeIOSCommand } from './ios-actions.js';
 import { StreamServer } from './stream-server.js';
 import {
@@ -332,9 +332,6 @@ export async function startDaemon(options?: {
 
   // Clean up expired state files on startup
   runCleanupExpiredStates();
-
-  // Initialize action policy enforcement
-  initActionPolicy();
 
   // Determine provider from options or environment
   const provider = options?.provider ?? process.env.AGENT_BROWSER_PROVIDER;
