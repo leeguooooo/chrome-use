@@ -1,6 +1,12 @@
 # agent-browser
 
-## 0.14.0-fork.3
+## 0.15.1
+
+### Patch Changes
+
+- 7bd8ce9: Added support for chrome:// and chrome-extension:// URLs in navigation and recording commands. These special browser URLs are now preserved as-is instead of having https:// incorrectly prepended.
+
+## 0.15.0
 
 ### Patch Changes
 
