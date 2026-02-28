@@ -856,9 +856,13 @@ function patchPrefersColorSchemeHeuristic(): string {
   const patchMediaQueryList = (mql) => {
     if (!mql || typeof mql !== 'object') return mql;
     return new Proxy(mql, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === 'matches') return false;
-        return Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop, target);
+        if (typeof value === 'function') {
+          return value.bind(target);
+        }
+        return value;
       },
     });
   };

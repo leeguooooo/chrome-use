@@ -127,12 +127,24 @@ describe('Stealth mode', () => {
         activeTextColor,
         prefersLight: matchMedia('(prefers-color-scheme: light)').matches,
         prefersDark: matchMedia('(prefers-color-scheme: dark)').matches,
+        lightListenerCalls: (() => {
+          try {
+            const mql = matchMedia('(prefers-color-scheme: light)');
+            const handler = () => {};
+            mql.addEventListener('change', handler);
+            mql.removeEventListener('change', handler);
+            return 'ok';
+          } catch (error) {
+            return String(error);
+          }
+        })(),
       };
     });
 
     expect(signals.activeTextColor).not.toBe('rgb(255, 0, 0)');
     expect(signals.prefersLight).toBe(false);
     expect(typeof signals.prefersDark).toBe('boolean');
+    expect(signals.lightListenerCalls).toBe('ok');
   });
 
   it('exposes realistic mimeTypes/pdf/share signals', async () => {
