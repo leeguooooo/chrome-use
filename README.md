@@ -15,6 +15,24 @@ This README focuses on stealth architecture and principles. For full command cov
 - Region signals are auto-aligned (locale/timezone/Accept-Language) to reduce mismatch risk.
 - Verification/captcha handling is policy-driven (`--risk-mode off|warn|block`).
 
+## FAQ: `agent-browser` vs `agent-browser-stealth`
+
+People often ask this: "What's the anti-detection approach compared to `agent-browser-stealth` on npm?"
+
+- `agent-browser-stealth` on npm is the package name for this fork.
+- The CLI keeps upstream-compatible command names (`agent-browser` is still the main executable, with `agent-browser-stealth` as an alias).
+- The practical difference vs upstream `agent-browser` is not one single "stealth switch"; it is a defense-in-depth stack designed for anti-bot pressure.
+
+The core idea is layered hardening across the full automation lifecycle:
+
+1. Connection-aware policy: choose the best available stealth capability by mode (local launch/CDP/cloud provider).
+2. Fingerprint hardening: patch launch args, CDP metadata, and init-script surfaces before page code runs.
+3. Behavioral humanization: non-uniform typing/mouse/wait patterns instead of perfectly mechanical actions.
+4. Region coherence: auto-align locale/timezone/language signals to target geography.
+5. Risk-aware control loop: detect verification/captcha signals and handle them with explicit `risk-mode` policy.
+
+Goal: reduce detection probability and improve stability in production automation. Non-goal: "guaranteed bypass" on every target.
+
 ## Quick Start
 
 ### Install
@@ -50,12 +68,12 @@ flowchart TD
 
 ### Policy by Connection Mode
 
-| Mode | Stealth Capabilities | Notes |
-|---|---|---|
-| Local Chromium launch | Chromium launch args + CDP UA override + context init scripts | Most complete stack |
-| Existing browser via CDP | CDP UA override + context init scripts | No local Chromium arg injection |
-| Cloud provider (browserbase/browseruse) | Context init scripts | Remote browser runtime controls launch layer |
-| Kernel provider | Context init scripts + provider-managed stealth | Provider-side stealth may also apply |
+| Mode                                    | Stealth Capabilities                                          | Notes                                        |
+| --------------------------------------- | ------------------------------------------------------------- | -------------------------------------------- |
+| Local Chromium launch                   | Chromium launch args + CDP UA override + context init scripts | Most complete stack                          |
+| Existing browser via CDP                | CDP UA override + context init scripts                        | No local Chromium arg injection              |
+| Cloud provider (browserbase/browseruse) | Context init scripts                                          | Remote browser runtime controls launch layer |
+| Kernel provider                         | Context init scripts + provider-managed stealth               | Provider-side stealth may also apply         |
 
 ## Principle 1: Always-On Stealth with Explicit Boundaries
 
@@ -63,7 +81,7 @@ flowchart TD
 - Project policy forbids:
   - `--profile` / `AGENT_BROWSER_PROFILE`
   - `--channel` / `AGENT_BROWSER_CHANNEL`
-- Default CLI policy expects an existing browser on CDP `localhost:9333` unless explicit connection options are provided.
+- Default CLI policy auto-attaches an existing browser: try CDP `localhost:9333` first, then auto-discovery unless explicit connection options are provided.
 
 ## Principle 2: Multi-Layer Fingerprint Hardening
 

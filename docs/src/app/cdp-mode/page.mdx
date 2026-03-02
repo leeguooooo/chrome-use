@@ -1,12 +1,12 @@
-import { pageMetadata } from "@/lib/page-metadata"
+import { pageMetadata } from '@/lib/page-metadata';
 
-export const metadata = pageMetadata("cdp-mode")
+export const metadata = pageMetadata('cdp-mode');
 
 # CDP Mode
 
 Connect to an existing browser via Chrome DevTools Protocol:
 
-Default behavior in this fork: when `--cdp` is omitted, agent-browser requires an existing browser at `localhost:9333`. If CDP is unavailable, the command fails fast (no local-launch fallback).
+Default behavior in this fork: when `--cdp` is omitted, agent-browser auto-attaches to an existing browser by trying `localhost:9333` first, then auto-discovery. If both fail, the command exits (no managed local-launch fallback).
 
 Project policy:
 
@@ -88,12 +88,24 @@ AGENT_BROWSER_COLOR_SCHEME=dark agent-browser --cdp 9222 open https://example.co
 
 <table>
   <thead>
-    <tr><th>Connection type</th><th>Stealth capabilities</th></tr>
+    <tr>
+      <th>Connection type</th>
+      <th>Stealth capabilities</th>
+    </tr>
   </thead>
   <tbody>
-    <tr><td>Local launch</td><td>Chromium launch args + context init scripts</td></tr>
-    <tr><td>CDP / auto-connect</td><td>Context init scripts</td></tr>
-    <tr><td>Cloud providers</td><td>Context init scripts (Kernel may also apply provider-managed stealth)</td></tr>
+    <tr>
+      <td>Local launch</td>
+      <td>Chromium launch args + context init scripts</td>
+    </tr>
+    <tr>
+      <td>CDP / auto-connect</td>
+      <td>Context init scripts</td>
+    </tr>
+    <tr>
+      <td>Cloud providers</td>
+      <td>Context init scripts (Kernel may also apply provider-managed stealth)</td>
+    </tr>
   </tbody>
 </table>
 
@@ -113,26 +125,119 @@ This enables control of:
 
 <table>
   <thead>
-    <tr><th>Option</th><th>Description</th></tr>
+    <tr>
+      <th>Option</th>
+      <th>Description</th>
+    </tr>
   </thead>
   <tbody>
-    <tr><td><code>--session &lt;name&gt;</code></td><td>Use isolated session</td></tr>
-    <tr><td><code>-p &lt;provider&gt;</code></td><td>Cloud browser provider (<code>browserbase</code>, <code>browseruse</code>, <code>kernel</code>)</td></tr>
-    <tr><td><code>--headers &lt;json&gt;</code></td><td>HTTP headers scoped to origin</td></tr>
-    <tr><td><code>--executable-path</code></td><td>Custom browser executable</td></tr>
-    <tr><td><code>--args &lt;args&gt;</code></td><td>Browser launch args (comma-separated)</td></tr>
-    <tr><td><code>--user-agent &lt;ua&gt;</code></td><td>Custom User-Agent string</td></tr>
-    <tr><td><code>--proxy &lt;url&gt;</code></td><td>Proxy server URL</td></tr>
-    <tr><td><code>--proxy-bypass &lt;hosts&gt;</code></td><td>Hosts to bypass proxy</td></tr>
-    <tr><td><code>--json</code></td><td>JSON output for scripts</td></tr>
-    <tr><td><code>--full, -f</code></td><td>Full page screenshot</td></tr>
-    <tr><td><code>--name, -n</code></td><td>Locator name filter</td></tr>
-    <tr><td><code>--exact</code></td><td>Exact text match</td></tr>
-    <tr><td><code>--headed</code></td><td>Show browser window</td></tr>
-    <tr><td><code>{"--cdp <port|url>"}</code></td><td>CDP connection (port or WebSocket URL)</td></tr>
-    <tr><td><code>--auto-connect</code></td><td>Auto-discover and connect to running Chrome</td></tr>
-    <tr><td><code>--color-scheme &lt;scheme&gt;</code></td><td>Persistent color scheme (<code>dark</code>, <code>light</code>, <code>no-preference</code>)</td></tr>
-    <tr><td><code>--debug</code></td><td>Debug output</td></tr>
+    <tr>
+      <td>
+        <code>--session &lt;name&gt;</code>
+      </td>
+      <td>Use isolated session</td>
+    </tr>
+    <tr>
+      <td>
+        <code>-p &lt;provider&gt;</code>
+      </td>
+      <td>
+        Cloud browser provider (<code>browserbase</code>, <code>browseruse</code>,{' '}
+        <code>kernel</code>)
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <code>--headers &lt;json&gt;</code>
+      </td>
+      <td>HTTP headers scoped to origin</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--executable-path</code>
+      </td>
+      <td>Custom browser executable</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--args &lt;args&gt;</code>
+      </td>
+      <td>Browser launch args (comma-separated)</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--user-agent &lt;ua&gt;</code>
+      </td>
+      <td>Custom User-Agent string</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--proxy &lt;url&gt;</code>
+      </td>
+      <td>Proxy server URL</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--proxy-bypass &lt;hosts&gt;</code>
+      </td>
+      <td>Hosts to bypass proxy</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--json</code>
+      </td>
+      <td>JSON output for scripts</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--full, -f</code>
+      </td>
+      <td>Full page screenshot</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--name, -n</code>
+      </td>
+      <td>Locator name filter</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--exact</code>
+      </td>
+      <td>Exact text match</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--headed</code>
+      </td>
+      <td>Show browser window</td>
+    </tr>
+    <tr>
+      <td>
+        <code>{'--cdp <port|url>'}</code>
+      </td>
+      <td>CDP connection (port or WebSocket URL)</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--auto-connect</code>
+      </td>
+      <td>Auto-discover and connect to running Chrome</td>
+    </tr>
+    <tr>
+      <td>
+        <code>--color-scheme &lt;scheme&gt;</code>
+      </td>
+      <td>
+        Persistent color scheme (<code>dark</code>, <code>light</code>, <code>no-preference</code>)
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <code>--debug</code>
+      </td>
+      <td>Debug output</td>
+    </tr>
   </tbody>
 </table>
 

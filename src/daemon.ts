@@ -406,8 +406,7 @@ export async function startDaemon(options?: {
           }
 
           // Auto-launch if not already launched and this isn't a launch/close/state_load command.
-          // Default behavior for this fork: first try attaching to a resident Chrome on CDP :9333,
-          // then fall back to launching a local Playwright browser if CDP is unavailable.
+          // Default behavior for this fork: attach to an existing browser only.
           if (
             !manager.isLaunched() &&
             parseResult.command.action !== 'launch' &&
@@ -477,10 +476,10 @@ export async function startDaemon(options?: {
                 autoStateFilePath: getSessionAutoStatePath(),
               };
 
-              let launchedViaDefaultCdp = false;
+              let attachedToExistingBrowser = false;
               try {
                 // Keep default CDP attempt minimal. Launch-only options like extensions
-                // are incompatible with CDP and can cause a false-negative fallback.
+                // are incompatible with CDP and can cause false-negative attach failures.
                 const cdpLaunchOptions = {
                   id: launchOptions.id,
                   action: launchOptions.action,
@@ -492,7 +491,7 @@ export async function startDaemon(options?: {
                 await manager.launch({
                   ...cdpLaunchOptions,
                 });
-                launchedViaDefaultCdp = true;
+                attachedToExistingBrowser = true;
                 if (process.env.AGENT_BROWSER_DEBUG === '1') {
                   console.error('[DEBUG] Auto-launch connected via default CDP port 9333');
                 }
@@ -500,13 +499,37 @@ export async function startDaemon(options?: {
                 if (process.env.AGENT_BROWSER_DEBUG === '1') {
                   const message = error instanceof Error ? error.message : String(error);
                   console.error(
-                    `[DEBUG] Default CDP port 9333 unavailable, falling back to local launch: ${message}`
+                    `[DEBUG] Default CDP port 9333 unavailable, trying auto-connect discovery: ${message}`
                   );
                 }
               }
 
-              if (!launchedViaDefaultCdp) {
-                await manager.launch(launchOptions);
+              if (!attachedToExistingBrowser) {
+                try {
+                  await manager.launch({
+                    id: launchOptions.id,
+                    action: launchOptions.action,
+                    autoConnect: true,
+                    ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
+                    colorScheme: launchOptions.colorScheme,
+                    userAgent: launchOptions.userAgent,
+                  });
+                  attachedToExistingBrowser = true;
+                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                    console.error('[DEBUG] Auto-launch connected via auto-connect discovery');
+                  }
+                } catch (error) {
+                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                    const message = error instanceof Error ? error.message : String(error);
+                    console.error(`[DEBUG] Auto-connect discovery failed: ${message}`);
+                  }
+                }
+              }
+
+              if (!attachedToExistingBrowser) {
+                throw new Error(
+                  'Project policy requires using your existing browser. Could not connect to CDP at localhost:9333 and auto-discovery also failed.'
+                );
               }
             }
           }

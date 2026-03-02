@@ -1,5 +1,13 @@
 # agent-browser
 
+## 0.15.1-fork.11
+
+### Patch Changes
+
+- Auto-attach existing browser more reliably by trying CDP localhost:9333 first, then falling back to auto-discovery before failing.
+
+  Align daemon behavior and user-facing docs/skill guidance with the same attachment policy.
+
 ## 0.15.1
 
 ### Patch Changes

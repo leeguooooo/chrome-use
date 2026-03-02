@@ -671,6 +671,16 @@ export class BrowserManager {
     return !this.isIgnoredCDPPageUrl(url);
   }
 
+  private isMeaningfulCDPPage(page: Page): boolean {
+    if (page.isClosed()) return false;
+    const url = this.getSafePageUrl(page).trim().toLowerCase();
+    if (!url) return false;
+    if (url === 'about:blank' || url.startsWith('about:blank#')) return false;
+    if (url === 'chrome://newtab/' || url.startsWith('chrome://newtab')) return false;
+    if (url === 'chrome://new-tab-page/' || url.startsWith('chrome://new-tab-page')) return false;
+    return !this.isIgnoredCDPPageUrl(url);
+  }
+
   private collectUsableCDPPages(contexts: BrowserContext[]): Page[] {
     return contexts
       .flatMap((context) => context.pages())
@@ -1594,7 +1604,13 @@ export class BrowserManager {
     }
 
     if (this.isLaunched()) {
+      // Explicit --auto-connect should switch away from managed/local/provider sessions
+      // so commands always target a discovered user browser.
+      const shouldSwitchToAutoConnect =
+        !!options.autoConnect &&
+        (this.cdpEndpoint === null || this.stealthConnectionKind !== 'cdp');
       const needsRelaunch =
+        shouldSwitchToAutoConnect ||
         (!cdpEndpoint && !options.autoConnect && this.cdpEndpoint !== null) ||
         (!!cdpEndpoint && this.needsCdpReconnect(cdpEndpoint)) ||
         (!!options.autoConnect && !this.isCdpConnectionAlive());
@@ -1923,7 +1939,11 @@ export class BrowserManager {
    */
   private async connectViaCDP(
     cdpEndpoint: string | undefined,
-    options?: { timeout?: number }
+    options?: {
+      timeout?: number;
+      allowCreatePageFallback?: boolean;
+      requireMeaningfulPage?: boolean;
+    }
   ): Promise<void> {
     this.stealthConnectionKind = 'cdp';
     if (!cdpEndpoint) {
@@ -1969,8 +1989,12 @@ export class BrowserManager {
       }
 
       let allPages = this.collectUsableCDPPages(contexts);
+      const allowCreatePageFallback = options?.allowCreatePageFallback ?? true;
 
       if (allPages.length === 0) {
+        if (!allowCreatePageFallback) {
+          throw new Error('No existing user tabs found on this CDP endpoint.');
+        }
         // Some Chrome instances (especially with custom UI pages) expose only internal/transient
         // pages over CDP. Create a fresh page so commands always have a stable target.
         let fallbackPage: Page | null = null;
@@ -1994,6 +2018,14 @@ export class BrowserManager {
         }
 
         allPages = [fallbackPage];
+      }
+
+      if (options?.requireMeaningfulPage) {
+        const meaningfulPages = allPages.filter((page) => this.isMeaningfulCDPPage(page));
+        if (meaningfulPages.length === 0) {
+          throw new Error('No existing user tabs found on this CDP endpoint.');
+        }
+        allPages = meaningfulPages;
       }
 
       // All validation passed - commit state
@@ -2105,6 +2137,35 @@ export class BrowserManager {
    * 4. If a port responds, connect via CDP
    */
   private async autoConnectViaCDP(): Promise<void> {
+    let sawEndpointWithoutUserTabs = false;
+
+    // Strategy 0: Prefer project-default resident CDP port first.
+    // This keeps user + agent on the same browser session when 9333 is available.
+    {
+      const wsUrl = await this.probeDebugPort(9333);
+      if (wsUrl) {
+        try {
+          await this.connectViaCDP(wsUrl, {
+            allowCreatePageFallback: false,
+            requireMeaningfulPage: true,
+          });
+          return;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes('No existing user tabs found on this CDP endpoint')) {
+            sawEndpointWithoutUserTabs = true;
+            if (process.env.AGENT_BROWSER_DEBUG === '1') {
+              console.error(
+                `[DEBUG] Skipping preferred CDP endpoint without user tabs (${wsUrl}): ${message}`
+              );
+            }
+          } else if (process.env.AGENT_BROWSER_DEBUG === '1') {
+            console.error(`[DEBUG] Failed preferred CDP candidate (${wsUrl}): ${message}`);
+          }
+        }
+      }
+    }
+
     // Strategy 1: Check DevToolsActivePort files
     const userDataDirs = this.getChromeUserDataDirs();
     for (const dir of userDataDirs) {
@@ -2113,8 +2174,25 @@ export class BrowserManager {
         // Try HTTP discovery first (works with --remote-debugging-port mode)
         const wsUrl = await this.probeDebugPort(activePort.port);
         if (wsUrl) {
-          await this.connectViaCDP(wsUrl);
-          return;
+          try {
+            await this.connectViaCDP(wsUrl, {
+              allowCreatePageFallback: false,
+              requireMeaningfulPage: true,
+            });
+            return;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.includes('No existing user tabs found on this CDP endpoint')) {
+              sawEndpointWithoutUserTabs = true;
+              if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                console.error(
+                  `[DEBUG] Skipping CDP endpoint without user tabs (${wsUrl}): ${message}`
+                );
+              }
+            } else if (process.env.AGENT_BROWSER_DEBUG === '1') {
+              console.error(`[DEBUG] Failed CDP candidate (${wsUrl}): ${message}`);
+            }
+          }
         }
         // HTTP probe failed -- Chrome M144+ chrome://inspect remote debugging uses a
         // WebSocket-only server with no HTTP endpoints. Connect using the WebSocket
@@ -2127,22 +2205,60 @@ export class BrowserManager {
                 `attempting direct WebSocket connection to ${directWsUrl}`
             );
           }
-          await this.connectViaCDP(directWsUrl, { timeout: 60_000 });
+          await this.connectViaCDP(directWsUrl, {
+            timeout: 60_000,
+            allowCreatePageFallback: false,
+            requireMeaningfulPage: true,
+          });
           return;
-        } catch {
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes('No existing user tabs found on this CDP endpoint')) {
+            sawEndpointWithoutUserTabs = true;
+            if (process.env.AGENT_BROWSER_DEBUG === '1') {
+              console.error(
+                `[DEBUG] Skipping CDP endpoint without user tabs (${directWsUrl}): ${message}`
+              );
+            }
+          } else if (process.env.AGENT_BROWSER_DEBUG === '1') {
+            console.error(`[DEBUG] Failed CDP candidate (${directWsUrl}): ${message}`);
+          }
           // Direct WebSocket also failed, try next directory
         }
       }
     }
 
     // Strategy 2: Probe common debugging ports
-    const commonPorts = [9222, 9229, 9333];
+    const commonPorts = [9222, 9229];
     for (const port of commonPorts) {
       const wsUrl = await this.probeDebugPort(port);
       if (wsUrl) {
-        await this.connectViaCDP(wsUrl);
-        return;
+        try {
+          await this.connectViaCDP(wsUrl, {
+            allowCreatePageFallback: false,
+            requireMeaningfulPage: true,
+          });
+          return;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes('No existing user tabs found on this CDP endpoint')) {
+            sawEndpointWithoutUserTabs = true;
+            if (process.env.AGENT_BROWSER_DEBUG === '1') {
+              console.error(
+                `[DEBUG] Skipping CDP endpoint without user tabs (${wsUrl}): ${message}`
+              );
+            }
+          } else if (process.env.AGENT_BROWSER_DEBUG === '1') {
+            console.error(`[DEBUG] Failed CDP candidate (${wsUrl}): ${message}`);
+          }
+        }
       }
+    }
+
+    if (sawEndpointWithoutUserTabs) {
+      throw new Error(
+        'Found CDP endpoints, but none exposed existing user tabs. Ensure you are attaching to the same Chrome instance/profile you are using manually.'
+      );
     }
 
     // Nothing found

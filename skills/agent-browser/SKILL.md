@@ -216,7 +216,11 @@ agent-browser session list
 
 ### Connect to Existing Chrome
 
-By default in this fork, commands without `--cdp` require an existing browser at `localhost:9333`. If CDP is unavailable, the command fails fast (no automatic local browser launch).
+By default in this fork, commands without `--cdp` auto-attach to your existing browser with this order:
+
+1. Try CDP at `localhost:9333`
+2. If unavailable, fall back to `--auto-connect`-style discovery
+3. If both fail, exit with guidance (no automatic managed local browser launch on this path)
 
 ```bash
 # Auto-discover running Chrome with remote debugging enabled
@@ -225,6 +229,9 @@ agent-browser --auto-connect snapshot
 
 # Or with explicit CDP port
 agent-browser --cdp 9222 snapshot
+
+# Debug auto-attach behavior
+agent-browser --debug snapshot
 ```
 
 ### Color Scheme (Dark Mode)
@@ -263,7 +270,7 @@ agent-browser screenshot output.png
 
 - `--profile` / `AGENT_BROWSER_PROFILE` are forbidden
 - `--channel` / `AGENT_BROWSER_CHANNEL` are forbidden
-- Use existing browser sessions (default CDP `localhost:9333`) or pass `--cdp` explicitly
+- Use existing browser sessions (default attach path: CDP `localhost:9333` then auto-discovery) or pass `--cdp` explicitly
 
 ### Stealth Mode (Always On)
 
@@ -357,8 +364,9 @@ export AGENT_BROWSER_ACTION_POLICY=./policy.json
 ```
 
 Example `policy.json`:
+
 ```json
-{"default": "deny", "allow": ["navigate", "snapshot", "click", "scroll", "wait", "get"]}
+{ "default": "deny", "allow": ["navigate", "snapshot", "click", "scroll", "wait", "get"] }
 ```
 
 Auth vault operations (`auth login`, etc.) bypass action policy but domain allowlist still applies.

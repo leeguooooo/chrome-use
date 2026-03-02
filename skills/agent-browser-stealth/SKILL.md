@@ -23,7 +23,7 @@ agent-browser install
 agent-browser --version
 ```
 
-If default CDP mode is used in your environment, ensure a browser is available at `localhost:9333`, or pass `--cdp` / `--auto-connect` explicitly.
+If default CDP mode is used in your environment, the CLI first tries `localhost:9333` and then auto-discovery. You can still pass `--cdp` / `--auto-connect` explicitly when needed.
 
 ## Standard execution workflow
 

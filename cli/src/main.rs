@@ -399,6 +399,8 @@ fn main() {
         exit(1);
     }
 
+    let mut attached_to_existing_browser = false;
+
     // Auto-connect to existing browser
     if flags.auto_connect {
         let mut launch_cmd = json!({
@@ -436,6 +438,8 @@ fn main() {
             }
             exit(1);
         }
+
+        attached_to_existing_browser = true;
     }
 
     // Connect via CDP if --cdp flag is set
@@ -526,6 +530,8 @@ fn main() {
             }
             exit(1);
         }
+
+        attached_to_existing_browser = true;
     }
 
     // Launch with cloud provider if -p flag is set
@@ -567,8 +573,8 @@ fn main() {
     }
 
     // Project policy: when no explicit connection mode is provided,
-    // commands must attach to an existing browser on CDP :9333.
-    // If unavailable, fail fast instead of launching a managed browser.
+    // commands should attach to an existing browser.
+    // Try CDP :9333 first, then fall back to auto-connect discovery.
     let can_try_default_cdp = flags.cdp.is_none()
         && !flags.auto_connect
         && flags.provider.is_none()
@@ -581,7 +587,6 @@ fn main() {
         && !flags.allow_file_access
         && flags.extensions.is_empty();
 
-    let mut launched_via_default_cdp = false;
     if can_try_default_cdp {
         let mut launch_cmd = json!({
             "id": gen_id(),
@@ -594,11 +599,27 @@ fn main() {
         }
 
         if let Ok(resp) = send_command(launch_cmd, &flags.session) {
-            launched_via_default_cdp = resp.success;
+            attached_to_existing_browser = resp.success;
+        }
+
+        if !attached_to_existing_browser {
+            let mut auto_connect_cmd = json!({
+                "id": gen_id(),
+                "action": "launch",
+                "autoConnect": true
+            });
+
+            if let Some(ref cs) = flags.color_scheme {
+                auto_connect_cmd["colorScheme"] = json!(cs);
+            }
+
+            if let Ok(resp) = send_command(auto_connect_cmd, &flags.session) {
+                attached_to_existing_browser = resp.success;
+            }
         }
     }
-    if can_try_default_cdp && !launched_via_default_cdp {
-        let msg = "Project policy requires using your existing browser. Could not connect to CDP at localhost:9333. Start your browser with remote debugging on port 9333, or pass --cdp <port|url>.";
+    if can_try_default_cdp && !attached_to_existing_browser {
+        let msg = "Project policy requires using your existing browser. Could not connect to CDP at localhost:9333 and auto-discovery also failed. Start Chrome with remote debugging (for example, --remote-debugging-port=9333), or pass --cdp <port|url>.";
         if flags.json {
             println!(r#"{{"success":false,"error":"{}"}}"#, msg);
         } else {
@@ -621,7 +642,7 @@ fn main() {
         || flags.download_path.is_some())
         && flags.cdp.is_none()
         && flags.provider.is_none()
-        && !launched_via_default_cdp
+        && !attached_to_existing_browser
     {
         let mut launch_cmd = json!({
             "id": gen_id(),

@@ -2398,7 +2398,7 @@ Options:
   --headed                   Show browser window (not headless)
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
   --auto-connect             Auto-discover and connect to running Chrome
-                             Project default: require existing browser at localhost:9333 (no auto local fallback)
+                             Project default: try localhost:9333 first, then auto-discovery (no managed local-launch fallback)
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
   --risk-mode <mode>         Verify/captcha handling: off, warn, block (or AGENT_BROWSER_RISK_MODE)
@@ -2416,7 +2416,7 @@ Options:
 Policy:
   --profile / AGENT_BROWSER_PROFILE are forbidden
   --channel / AGENT_BROWSER_CHANNEL are forbidden
-  Use existing browser session (CDP localhost:9333) or pass --cdp explicitly
+  Auto-attach existing browser (prefer CDP localhost:9333, then auto-discovery), or pass --cdp explicitly
 
 Configuration:
   agent-browser looks for agent-browser.json in these locations (lowest to highest priority):

@@ -54,6 +54,56 @@ describe('BrowserManager', () => {
       await newBrowser.close();
     });
 
+    it('should switch from local session when auto-connect is explicitly requested', async () => {
+      const testBrowser = new BrowserManager();
+      await testBrowser.launch({ id: 'test', action: 'launch', headless: true });
+
+      const closeSpy = vi.spyOn(testBrowser, 'close');
+      const autoConnectSpy = vi
+        .spyOn(testBrowser as any, 'autoConnectViaCDP')
+        .mockResolvedValue(undefined);
+
+      await testBrowser.launch({ id: 'test', action: 'launch', autoConnect: true });
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(autoConnectSpy).toHaveBeenCalledTimes(1);
+
+      autoConnectSpy.mockRestore();
+      closeSpy.mockRestore();
+      await testBrowser.close();
+    });
+
+    it('should not relaunch when already connected via healthy CDP and auto-connect is requested', async () => {
+      const addInitScript = vi.fn().mockResolvedValue(undefined);
+      const mockPage = { url: () => 'http://example.com', on: vi.fn(), isClosed: () => false };
+      const mockContext = {
+        pages: () => [mockPage],
+        on: vi.fn(),
+        setDefaultTimeout: vi.fn(),
+        addInitScript,
+      };
+      const mockBrowser = {
+        contexts: () => [mockContext],
+        close: vi.fn().mockResolvedValue(undefined),
+        isConnected: vi.fn(() => true),
+      };
+      const connectSpy = vi.spyOn(chromium, 'connectOverCDP').mockResolvedValue(mockBrowser as any);
+
+      const cdpBrowser = new BrowserManager();
+      await cdpBrowser.launch({ id: 'test', action: 'launch', cdpPort: 9222 });
+      expect(connectSpy).toHaveBeenCalledTimes(1);
+
+      const closeSpy = vi.spyOn(cdpBrowser, 'close');
+      await cdpBrowser.launch({ id: 'test', action: 'launch', autoConnect: true });
+
+      expect(closeSpy).not.toHaveBeenCalled();
+      expect(connectSpy).toHaveBeenCalledTimes(1);
+
+      closeSpy.mockRestore();
+      await cdpBrowser.close();
+      connectSpy.mockRestore();
+    });
+
     it('should report local stealth policy capabilities', async () => {
       const testBrowser = new BrowserManager();
       await testBrowser.launch({ headless: true });
@@ -95,6 +145,90 @@ describe('BrowserManager', () => {
 
       await cdpBrowser.close();
       spy.mockRestore();
+    });
+
+    it('should reject CDP endpoints with only blank pages when meaningful tabs are required', async () => {
+      const mockPage = { url: () => 'about:blank', on: vi.fn(), isClosed: () => false };
+      const mockContext = {
+        pages: () => [mockPage],
+        on: vi.fn(),
+        setDefaultTimeout: vi.fn(),
+        addInitScript: vi.fn().mockResolvedValue(undefined),
+      };
+      const mockBrowser = {
+        contexts: () => [mockContext],
+        close: vi.fn().mockResolvedValue(undefined),
+        isConnected: vi.fn(() => true),
+      };
+      const connectSpy = vi.spyOn(chromium, 'connectOverCDP').mockResolvedValue(mockBrowser as any);
+
+      const cdpBrowser = new BrowserManager();
+      await expect(
+        (cdpBrowser as any).connectViaCDP('9222', {
+          allowCreatePageFallback: false,
+          requireMeaningfulPage: true,
+        })
+      ).rejects.toThrow('No existing user tabs found on this CDP endpoint.');
+
+      expect(mockBrowser.close).toHaveBeenCalledTimes(1);
+      connectSpy.mockRestore();
+    });
+
+    it('should skip auto-connect candidates without user tabs and continue discovery', async () => {
+      const cdpBrowser = new BrowserManager();
+      const dirsSpy = vi
+        .spyOn(cdpBrowser as any, 'getChromeUserDataDirs')
+        .mockReturnValue(['/tmp/chrome-a', '/tmp/chrome-b']);
+      const activePortSpy = vi.spyOn(cdpBrowser as any, 'readDevToolsActivePort');
+      activePortSpy
+        .mockReturnValueOnce({ port: 9222, wsPath: '/devtools/browser/a' })
+        .mockReturnValueOnce({ port: 9333, wsPath: '/devtools/browser/b' });
+      const probeSpy = vi.spyOn(cdpBrowser as any, 'probeDebugPort');
+      probeSpy
+        .mockResolvedValueOnce('ws://127.0.0.1:9222/devtools/browser/a')
+        .mockResolvedValueOnce('ws://127.0.0.1:9333/devtools/browser/b');
+      const connectViaCDPSpy = vi.spyOn(cdpBrowser as any, 'connectViaCDP');
+      connectViaCDPSpy
+        .mockRejectedValueOnce(new Error('No existing user tabs found on this CDP endpoint.'))
+        .mockResolvedValueOnce(undefined);
+
+      await (cdpBrowser as any).autoConnectViaCDP();
+
+      expect(connectViaCDPSpy).toHaveBeenCalledTimes(2);
+      expect(connectViaCDPSpy.mock.calls[0][1]).toMatchObject({
+        allowCreatePageFallback: false,
+        requireMeaningfulPage: true,
+      });
+      expect(connectViaCDPSpy.mock.calls[1][1]).toMatchObject({
+        allowCreatePageFallback: false,
+        requireMeaningfulPage: true,
+      });
+
+      dirsSpy.mockRestore();
+      activePortSpy.mockRestore();
+      probeSpy.mockRestore();
+      connectViaCDPSpy.mockRestore();
+    });
+
+    it('should prefer port 9333 before DevToolsActivePort discovery in auto-connect', async () => {
+      const cdpBrowser = new BrowserManager();
+      const probeSpy = vi.spyOn(cdpBrowser as any, 'probeDebugPort');
+      probeSpy.mockResolvedValueOnce('ws://127.0.0.1:9333/devtools/browser/preferred');
+      const connectViaCDPSpy = vi
+        .spyOn(cdpBrowser as any, 'connectViaCDP')
+        .mockResolvedValue(undefined);
+      const dirsSpy = vi.spyOn(cdpBrowser as any, 'getChromeUserDataDirs');
+
+      await (cdpBrowser as any).autoConnectViaCDP();
+
+      expect(probeSpy).toHaveBeenCalledWith(9333);
+      expect(connectViaCDPSpy).toHaveBeenCalledTimes(1);
+      expect(connectViaCDPSpy.mock.calls[0][0]).toContain('9333');
+      expect(dirsSpy).not.toHaveBeenCalled();
+
+      probeSpy.mockRestore();
+      connectViaCDPSpy.mockRestore();
+      dirsSpy.mockRestore();
     });
 
     it('should ignore legacy stealth=false and keep CDP stealth capabilities enabled', async () => {
