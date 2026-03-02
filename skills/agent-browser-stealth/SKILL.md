@@ -18,7 +18,7 @@ Use this skill when the task needs web automation and anti-bot stability.
 ## Install and baseline
 
 ```bash
-npm install -g agent-browser-stealth
+pnpm add -g agent-browser-stealth
 agent-browser install
 agent-browser --version
 ```

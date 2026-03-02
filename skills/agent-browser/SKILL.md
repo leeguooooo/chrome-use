@@ -6,7 +6,7 @@ allowed-tools: Bash(npx agent-browser-stealth:*), Bash(npx agent-browser:*), Bas
 
 # Browser Automation with agent-browser
 
-Install package: `npm install -g agent-browser-stealth` (CLI command remains `agent-browser` for compatibility).
+Install package: `pnpm add -g agent-browser-stealth` (CLI command remains `agent-browser` for compatibility). If global install is unavailable in your environment, use `pnpm dlx agent-browser-stealth <command>` for one-off runs.
 
 ## Core Workflow
 
