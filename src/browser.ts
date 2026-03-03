@@ -38,6 +38,7 @@ import {
   STEALTH_CHROMIUM_ARGS,
   applyStealthScripts,
   applyBrowserLevelStealth,
+  wrapCDPSessionSourceUrlSanitizer,
   type StealthScriptOptions,
 } from './stealth.js';
 
@@ -319,7 +320,7 @@ export class BrowserManager {
 
     try {
       const page = this.getPage();
-      const cdp = await page.context().newCDPSession(page);
+      const cdp = wrapCDPSessionSourceUrlSanitizer(await page.context().newCDPSession(page));
 
       if (!envTimezone) {
         await cdp
@@ -3089,7 +3090,7 @@ export class BrowserManager {
     const context = page.context();
 
     // Create a new CDP session attached to the page
-    this.cdpSession = await context.newCDPSession(page);
+    this.cdpSession = wrapCDPSessionSourceUrlSanitizer(await context.newCDPSession(page));
     return this.cdpSession;
   }
 

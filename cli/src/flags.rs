@@ -301,7 +301,8 @@ pub fn parse_flags(args: &[String]) -> Flags {
         color_scheme: env::var("AGENT_BROWSER_COLOR_SCHEME")
             .ok()
             .or(config.color_scheme),
-        download_path: env::var("AGENT_BROWSER_DOWNLOAD_PATH").ok()
+        download_path: env::var("AGENT_BROWSER_DOWNLOAD_PATH")
+            .ok()
             .or(config.download_path),
         tab_group: env::var("AGENT_BROWSER_TAB_GROUP")
             .ok()

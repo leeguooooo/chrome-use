@@ -76,6 +76,20 @@ describe('Stealth mode', () => {
     }
   });
 
+  it('keeps navigator.vendor aligned with Chrome', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const vendorSignals = await browser.getPage().evaluate(() => ({
+      userAgent: navigator.userAgent,
+      vendor: navigator.vendor,
+    }));
+
+    if (vendorSignals.userAgent.includes('Chrome/')) {
+      expect(vendorSignals.vendor).toBe('Google Inc.');
+    }
+  });
+
   it('keeps worker and page userAgent free of HeadlessChrome tokens', async () => {
     browser = new BrowserManager();
     await browser.launch({ headless: true, stealth: true });
@@ -168,6 +182,124 @@ describe('Stealth mode', () => {
     expect(signals.hasCanShare).toBe(true);
     expect(signals.hasConnectionDownlinkMax).toBe(true);
     expect(signals.hasConnectionDownlinkMaxOnProto).toBe(true);
+  });
+
+  it('exposes legacy chrome.app/csi/loadTimes APIs', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const signals = await browser.getPage().evaluate(() => {
+      const chromeObj = (window as any).chrome;
+      const csi = chromeObj && typeof chromeObj.csi === 'function' ? chromeObj.csi() : null;
+      const loadTimes =
+        chromeObj && typeof chromeObj.loadTimes === 'function' ? chromeObj.loadTimes() : null;
+      return {
+        hasChrome: !!chromeObj,
+        hasApp: !!(chromeObj && chromeObj.app),
+        appInstalled: chromeObj?.app?.isInstalled,
+        appRunningState: chromeObj?.app?.runningState?.(),
+        hasCsi: typeof chromeObj?.csi === 'function',
+        hasLoadTimes: typeof chromeObj?.loadTimes === 'function',
+        csiHasOnloadT: csi && typeof csi.onloadT === 'number',
+        csiHasPageT: csi && typeof csi.pageT === 'number',
+        loadTimesHasRequestTime: loadTimes && typeof loadTimes.requestTime === 'number',
+        loadTimesHasConnectionInfo: loadTimes && typeof loadTimes.connectionInfo === 'string',
+      };
+    });
+
+    expect(signals.hasChrome).toBe(true);
+    expect(signals.hasApp).toBe(true);
+    expect(signals.appInstalled).toBe(false);
+    expect(signals.appRunningState).toBe('cannot_run');
+    expect(signals.hasCsi).toBe(true);
+    expect(signals.hasLoadTimes).toBe(true);
+    expect(signals.csiHasOnloadT).toBe(true);
+    expect(signals.csiHasPageT).toBe(true);
+    expect(signals.loadTimesHasRequestTime).toBe(true);
+    expect(signals.loadTimesHasConnectionInfo).toBe(true);
+  });
+
+  it('spoofs high-signal media codec probes', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const codecs = await browser.getPage().evaluate(() => {
+      const video = document.createElement('video');
+      const audio = document.createElement('audio');
+      return {
+        mp4Avc: video.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+        xM4a: audio.canPlayType('audio/x-m4a;'),
+        aac: audio.canPlayType('audio/aac'),
+      };
+    });
+
+    expect(codecs.mp4Avc).toBe('probably');
+    expect(codecs.xM4a).toBe('maybe');
+    expect(codecs.aac).toBe('probably');
+  });
+
+  it('patches srcdoc iframe.contentWindow probes', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const iframeSignals = await browser.getPage().evaluate(() => {
+      const iframe = document.createElement('iframe');
+      iframe.srcdoc = '<!doctype html><html><body>ok</body></html>';
+      const win = iframe.contentWindow;
+      return {
+        hasContentWindow: !!win,
+        selfEqualsWindow: win ? win.self === win : false,
+        selfEqualsTop: win ? win.self === window.top : null,
+        frameElementMatches: win ? win.frameElement === iframe : false,
+        zeroSlotType: typeof (win as any)?.[0],
+      };
+    });
+
+    expect(iframeSignals.hasContentWindow).toBe(true);
+    expect(iframeSignals.selfEqualsWindow).toBe(true);
+    expect(iframeSignals.selfEqualsTop).toBe(false);
+    expect(iframeSignals.frameElementMatches).toBe(true);
+    expect(iframeSignals.zeroSlotType).toBe('undefined');
+  });
+
+  it('sanitizes Playwright sourceURL markers in error stacks', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const stacks = await browser.getPage().evaluate(() => {
+      const explicitEvalStack = eval(
+        `(() => { try { throw new Error('explicit'); } catch (error) { return String(error.stack || ''); } })()\n//# sourceURL=__playwright_evaluation_script__`
+      );
+      let directStack = '';
+      try {
+        throw new Error('direct');
+      } catch (error) {
+        directStack = String((error as Error).stack || '');
+      }
+      return { explicitEvalStack, directStack };
+    });
+
+    expect(stacks.explicitEvalStack).not.toContain('__playwright_evaluation_script__');
+    expect(stacks.explicitEvalStack).not.toContain('__puppeteer_evaluation_script__');
+    expect(stacks.explicitEvalStack).not.toContain('sourceURL=');
+    expect(stacks.directStack).not.toContain('__playwright_evaluation_script__');
+    expect(stacks.directStack).not.toContain('__puppeteer_evaluation_script__');
+  });
+
+  it('sanitizes sourceURL markers in direct CDP Runtime.evaluate payloads', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const cdp = await browser.getCDPSession();
+    const response = await cdp.send('Runtime.evaluate', {
+      expression:
+        "(() => { throw new Error('cdp'); })()\\n//# sourceURL=__playwright_evaluation_script__",
+      returnByValue: true,
+    });
+    const raw = JSON.stringify(response);
+    expect(raw).not.toContain('__playwright_evaluation_script__');
+    expect(raw).not.toContain('__puppeteer_evaluation_script__');
+    expect(raw).not.toContain('sourceURL=');
   });
 
   it('exposes contacts manager and content index APIs', async () => {

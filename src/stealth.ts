@@ -12,6 +12,7 @@ export interface StealthScriptOptions {
   locale?: string;
   userAgent?: string;
   acceptLanguage?: string;
+  allowWebGLContextFallback?: boolean;
 }
 
 /**
@@ -23,6 +24,90 @@ export const STEALTH_CHROMIUM_ARGS: string[] = [
   '--use-gl=angle',
   '--use-angle=default',
 ];
+
+const CDP_SOURCE_URL_SANITIZED = Symbol('ab.cdpSourceUrlSanitized');
+
+interface CDPSessionLike {
+  send(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  [CDP_SOURCE_URL_SANITIZED]?: boolean;
+}
+
+function stripSourceUrlLabels(input: string): string {
+  let output = input;
+  output = output.replace(/\n?\s*\/\/[@#]\s*sourceURL=[^\n\r]*/gi, '');
+  output = output.replace(/\n?\s*\/\*[@#]\s*sourceURL=[\s\S]*?\*\//gi, '');
+  return output;
+}
+
+function sanitizeCdpPayload(
+  method: string,
+  params?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (!params || typeof params !== 'object') return params;
+  const sanitizeField = (
+    payload: Record<string, unknown>,
+    field: 'expression' | 'functionDeclaration' | 'source'
+  ): Record<string, unknown> => {
+    const value = payload[field];
+    if (typeof value !== 'string') return payload;
+    const cleaned = stripSourceUrlLabels(value);
+    if (cleaned === value) return payload;
+    return { ...payload, [field]: cleaned };
+  };
+
+  switch (method) {
+    case 'Runtime.evaluate':
+    case 'Runtime.compileScript':
+      return sanitizeField(params, 'expression');
+    case 'Runtime.callFunctionOn':
+      return sanitizeField(params, 'functionDeclaration');
+    case 'Page.addScriptToEvaluateOnNewDocument':
+      return sanitizeField(params, 'source');
+    default:
+      return params;
+  }
+}
+
+/**
+ * Patch CDPSession.send so Runtime/Page script payloads no longer carry
+ * sourceURL labels that reveal automation internals.
+ */
+export function wrapCDPSessionSourceUrlSanitizer<T extends CDPSessionLike>(session: T): T {
+  if (!session || typeof session.send !== 'function') return session;
+  if (session[CDP_SOURCE_URL_SANITIZED]) return session;
+
+  const nativeSend = session.send.bind(session);
+  const wrappedSend = (method: string, params?: Record<string, unknown>) => {
+    return nativeSend(method, sanitizeCdpPayload(method, params));
+  };
+
+  try {
+    Object.defineProperty(session, 'send', {
+      value: wrappedSend,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    try {
+      (session as any).send = wrappedSend;
+    } catch {
+      return session;
+    }
+  }
+
+  try {
+    Object.defineProperty(session, CDP_SOURCE_URL_SANITIZED, {
+      value: true,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  } catch {
+    (session as any)[CDP_SOURCE_URL_SANITIZED] = true;
+  }
+
+  return session;
+}
 
 /**
  * Apply all stealth patches to a BrowserContext.
@@ -51,7 +136,7 @@ export async function applyBrowserLevelStealth(
   options: StealthScriptOptions = {}
 ): Promise<void> {
   try {
-    const cdp = await (browser as any).newBrowserCDPSession();
+    const cdp = wrapCDPSessionSourceUrlSanitizer(await (browser as any).newBrowserCDPSession());
     const version = await cdp.send('Browser.getVersion');
     const rawUA = version?.userAgent ?? '';
     const explicitUA = options.userAgent?.trim();
@@ -93,7 +178,7 @@ async function applyCDPStealthToPage(
   options: StealthScriptOptions = {}
 ): Promise<void> {
   try {
-    const cdp = await page.context().newCDPSession(page);
+    const cdp = wrapCDPSessionSourceUrlSanitizer(await page.context().newCDPSession(page));
     const ua = await cdp.send('Browser.getVersion').catch(() => null);
     const rawUA = ua?.userAgent ?? '';
     const explicitUA = options.userAgent?.trim();
@@ -196,7 +281,11 @@ function deriveLanguages(locale?: string): string[] {
 function buildStealthScript(options: StealthScriptOptions): string {
   const locale = normalizeLocale(options.locale) ?? 'en-US';
   const languages = deriveLanguages(locale);
-  const configScript = `const __abStealth = ${JSON.stringify({ locale, languages })};`;
+  const configScript = `const __abStealth = ${JSON.stringify({
+    locale,
+    languages,
+    allowWebGLContextFallback: options.allowWebGLContextFallback === true,
+  })};`;
 
   // Each patch is an IIFE so variable scoping is clean
   return [
@@ -204,11 +293,15 @@ function buildStealthScript(options: StealthScriptOptions): string {
     patchNavigatorWebdriver(),
     patchCssSupportsWebdriverHeuristic(),
     patchChromeRuntime(),
+    patchChromeLegacyApis(),
+    patchIframeContentWindow(),
     patchNavigatorLanguages(),
+    patchNavigatorVendor(),
     patchNavigatorPluginsAndMimeTypes(),
     patchNavigatorPermissions(),
     patchWebGLVendor(),
     patchCdcProperties(),
+    patchSourceUrlStackTraces(),
     patchWindowDimensions(),
     patchScreenDimensions(),
     patchScreenAvailability(),
@@ -222,6 +315,7 @@ function buildStealthScript(options: StealthScriptOptions): string {
     patchContentIndex(),
     patchPrefersColorSchemeHeuristic(),
     patchPdfViewerEnabled(),
+    patchMediaCodecs(),
     patchMediaDevices(),
     patchUserAgentData(),
     patchUserAgent(),
@@ -340,6 +434,223 @@ function patchChromeRuntime(): string {
 }
 
 /**
+ * Add deprecated-but-still-probed Chrome APIs: chrome.app, chrome.csi, chrome.loadTimes.
+ */
+function patchChromeLegacyApis(): string {
+  return `(function(){
+  const chromeObject = ('chrome' in window && window.chrome) ? window.chrome : null;
+  if (!chromeObject) return;
+  const nativeNow = Date.now;
+  const nativeToString = Function.prototype.toString;
+  const timing = window.performance && window.performance.timing ? window.performance.timing : null;
+  const getNavigationEntry = () => {
+    try {
+      return performance.getEntriesByType('navigation')[0] || { nextHopProtocol: 'h2', type: 'other' };
+    } catch {
+      return { nextHopProtocol: 'h2', type: 'other' };
+    }
+  };
+  const defineValue = (target, key, value) => {
+    try {
+      Object.defineProperty(target, key, {
+        value,
+        configurable: true,
+        writable: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const patchFunctionShape = (fn, name) => {
+    try {
+      Object.defineProperty(fn, 'name', { value: name, configurable: true });
+      Object.defineProperty(fn, 'toString', {
+        value: () => nativeToString.call(nativeNow).replace('now', name),
+        configurable: true,
+      });
+    } catch {}
+  };
+
+  if (!('app' in chromeObject)) {
+    const invokeError = (name) => new TypeError('Error in invocation of app.' + name + '()');
+    const app = {
+      isInstalled: false,
+      InstallState: {
+        DISABLED: 'disabled',
+        INSTALLED: 'installed',
+        NOT_INSTALLED: 'not_installed',
+      },
+      RunningState: {
+        CANNOT_RUN: 'cannot_run',
+        READY_TO_RUN: 'ready_to_run',
+        RUNNING: 'running',
+      },
+      getDetails: function getDetails() {
+        if (arguments.length) throw invokeError('getDetails');
+        return null;
+      },
+      getIsInstalled: function getIsInstalled() {
+        if (arguments.length) throw invokeError('getIsInstalled');
+        return false;
+      },
+      runningState: function runningState() {
+        if (arguments.length) throw invokeError('runningState');
+        return 'cannot_run';
+      },
+    };
+    defineValue(chromeObject, 'app', app);
+  }
+
+  if (!('csi' in chromeObject) && timing) {
+    const csi = function csi() {
+      return {
+        onloadT: timing.domContentLoadedEventEnd,
+        startE: timing.navigationStart,
+        pageT: Date.now() - timing.navigationStart,
+        tran: 15,
+      };
+    };
+    patchFunctionShape(csi, 'csi');
+    defineValue(chromeObject, 'csi', csi);
+  }
+
+  if (!('loadTimes' in chromeObject) && timing) {
+    const toFixed = (num, fixed) => {
+      const matcher = new RegExp('^-?\\\\d+(?:.\\\\d{0,' + (fixed || -1) + '})?');
+      const match = String(num).match(matcher);
+      return match ? match[0] : String(num);
+    };
+    const loadTimes = function loadTimes() {
+      const navigationEntry = getNavigationEntry();
+      const nextHopProtocol = navigationEntry.nextHopProtocol || 'h2';
+      let firstPaint = timing.loadEventEnd / 1000;
+      try {
+        const paintEntries = performance.getEntriesByType('paint');
+        if (paintEntries && paintEntries[0] && typeof paintEntries[0].startTime === 'number') {
+          firstPaint = (paintEntries[0].startTime + performance.timeOrigin) / 1000;
+        }
+      } catch {}
+      return {
+        connectionInfo: nextHopProtocol,
+        npnNegotiatedProtocol: ['h2', 'hq'].includes(nextHopProtocol) ? nextHopProtocol : 'unknown',
+        navigationType: navigationEntry.type || 'other',
+        wasAlternateProtocolAvailable: false,
+        wasFetchedViaSpdy: ['h2', 'hq'].includes(nextHopProtocol),
+        wasNpnNegotiated: ['h2', 'hq'].includes(nextHopProtocol),
+        firstPaintAfterLoadTime: 0,
+        requestTime: timing.navigationStart / 1000,
+        startLoadTime: timing.navigationStart / 1000,
+        commitLoadTime: timing.responseStart / 1000,
+        finishDocumentLoadTime: timing.domContentLoadedEventEnd / 1000,
+        finishLoadTime: timing.loadEventEnd / 1000,
+        firstPaintTime: toFixed(firstPaint, 3),
+      };
+    };
+    patchFunctionShape(loadTimes, 'loadTimes');
+    defineValue(chromeObject, 'loadTimes', loadTimes);
+  }
+})();`;
+}
+
+/**
+ * Fix srcdoc iframe.contentWindow signals used by classic HEADCHR_IFRAME checks.
+ * We only intercept iframe creation and srcdoc assignment to keep impact minimal.
+ */
+function patchIframeContentWindow(): string {
+  return `(function(){
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
+  const nativeCreateElement = document.createElement.bind(document);
+  const nativeSrcdocDescriptor =
+    typeof HTMLIFrameElement !== 'undefined'
+      ? Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'srcdoc')
+      : null;
+  const srcdocGetter = nativeSrcdocDescriptor && nativeSrcdocDescriptor.get;
+  const srcdocSetter = nativeSrcdocDescriptor && nativeSrcdocDescriptor.set;
+  const iframeProxyMap = new WeakMap();
+  const patchedIframes = new WeakSet();
+
+  const ensureContentWindowProxy = (iframe) => {
+    if (!iframe || iframeProxyMap.has(iframe)) return;
+    try {
+      if (iframe.contentWindow) return;
+    } catch {}
+    const proxy = new Proxy(window, {
+      get(target, key) {
+        if (key === 'self') return proxy;
+        if (key === 'frameElement') return iframe;
+        if (key === '0') return undefined;
+        return Reflect.get(target, key, target);
+      },
+    });
+    iframeProxyMap.set(iframe, proxy);
+    try {
+      Object.defineProperty(iframe, 'contentWindow', {
+        get: () => proxy,
+        set: () => undefined,
+        enumerable: true,
+        configurable: false,
+      });
+    } catch {}
+  };
+
+  const patchIframeSrcdoc = (iframe) => {
+    if (!iframe || patchedIframes.has(iframe)) return;
+    patchedIframes.add(iframe);
+    try {
+      Object.defineProperty(iframe, 'srcdoc', {
+        configurable: true,
+        get() {
+          if (typeof srcdocGetter === 'function') {
+            return srcdocGetter.call(this);
+          }
+          return '';
+        },
+        set(value) {
+          ensureContentWindowProxy(this);
+          if (typeof srcdocSetter === 'function') {
+            srcdocSetter.call(this, value);
+          } else {
+            this.setAttribute('srcdoc', String(value ?? ''));
+          }
+        },
+      });
+    } catch {}
+  };
+
+  const patchedCreateElement = function(...args) {
+    const element = nativeCreateElement(...args);
+    try {
+      const name = args && args.length > 0 ? String(args[0]).toLowerCase() : '';
+      if (name === 'iframe') {
+        patchIframeSrcdoc(element);
+      }
+    } catch {}
+    return element;
+  };
+  try {
+    Object.defineProperty(patchedCreateElement, 'name', {
+      value: 'createElement',
+      configurable: true,
+    });
+    Object.defineProperty(patchedCreateElement, 'toString', {
+      value: () => nativeCreateElement.toString(),
+      configurable: true,
+    });
+  } catch {}
+  try {
+    Object.defineProperty(document, 'createElement', {
+      value: patchedCreateElement,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    try { document.createElement = patchedCreateElement; } catch {}
+  }
+})();`;
+}
+
+/**
  * Keep navigator.language + navigator.languages aligned with launch locale.
  */
 function patchNavigatorLanguages(): string {
@@ -359,6 +670,38 @@ function patchNavigatorLanguages(): string {
       configurable: true,
     });
   } catch {}
+})();`;
+}
+
+/**
+ * Keep navigator.vendor aligned with regular Chrome.
+ */
+function patchNavigatorVendor(): string {
+  return `(function(){
+  const ua = String(navigator.userAgent || '');
+  if (!/Chrome\\//.test(ua) || /Firefox\\//.test(ua)) return;
+  const target = 'Google Inc.';
+  const proto = Object.getPrototypeOf(navigator);
+  try {
+    if (navigator.vendor === target) return;
+  } catch {}
+  const defineVendor = (targetObj) => {
+    if (!targetObj) return false;
+    try {
+      Object.defineProperty(targetObj, 'vendor', {
+        get: () => target,
+        configurable: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (defineVendor(proto)) {
+    try { delete (navigator).vendor; } catch {}
+    return;
+  }
+  defineVendor(navigator);
 })();`;
 }
 
@@ -500,8 +843,104 @@ function patchNavigatorPermissions(): string {
 function patchWebGLVendor(): string {
   return `(function(){
   const getCtx = HTMLCanvasElement.prototype.getContext;
+  const WEBGL_VENDOR = 'Intel Inc.';
+  const WEBGL_RENDERER = 'Intel Iris OpenGL Engine';
+  const DEBUG_RENDERER_INFO = {
+    UNMASKED_VENDOR_WEBGL: 0x9245,
+    UNMASKED_RENDERER_WEBGL: 0x9246,
+  };
+
+  const createFallbackWebGLContext = (canvas, requestedType) => {
+    const isWebGL2 = requestedType === 'webgl2';
+    const ctx = {
+      __abFallbackWebGLContext: true,
+      canvas,
+      drawingBufferWidth: canvas.width || 300,
+      drawingBufferHeight: canvas.height || 150,
+      VENDOR: 0x1F00,
+      RENDERER: 0x1F01,
+      VERSION: 0x1F02,
+      SHADING_LANGUAGE_VERSION: 0x8B8C,
+      getExtension(name) {
+        if (name === 'WEBGL_debug_renderer_info') return DEBUG_RENDERER_INFO;
+        return null;
+      },
+      getSupportedExtensions() {
+        return ['WEBGL_debug_renderer_info'];
+      },
+      getContextAttributes() {
+        return {
+          alpha: true,
+          antialias: true,
+          depth: true,
+          desynchronized: false,
+          failIfMajorPerformanceCaveat: false,
+          powerPreference: 'default',
+          premultipliedAlpha: true,
+          preserveDrawingBuffer: false,
+          stencil: false,
+        };
+      },
+      getParameter(param) {
+        if (param === DEBUG_RENDERER_INFO.UNMASKED_VENDOR_WEBGL || param === this.VENDOR) {
+          return WEBGL_VENDOR;
+        }
+        if (param === DEBUG_RENDERER_INFO.UNMASKED_RENDERER_WEBGL || param === this.RENDERER) {
+          return WEBGL_RENDERER;
+        }
+        if (param === this.VERSION) {
+          return isWebGL2
+            ? 'WebGL 2.0 (OpenGL ES 3.0 Chromium)'
+            : 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';
+        }
+        if (param === this.SHADING_LANGUAGE_VERSION) {
+          return isWebGL2
+            ? 'WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)'
+            : 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
+        }
+        return 0;
+      },
+      getError() { return 0; },
+      clear() {},
+      clearColor() {},
+      createBuffer() { return {}; },
+      bindBuffer() {},
+      bufferData() {},
+      createProgram() { return {}; },
+      createShader() { return {}; },
+      shaderSource() {},
+      compileShader() {},
+      attachShader() {},
+      linkProgram() {},
+      useProgram() {},
+      viewport() {},
+      drawArrays() {},
+      readPixels() {},
+      finish() {},
+      flush() {},
+    };
+    try {
+      const proto =
+        requestedType === 'webgl2' && typeof WebGL2RenderingContext !== 'undefined'
+          ? WebGL2RenderingContext.prototype
+          : typeof WebGLRenderingContext !== 'undefined'
+            ? WebGLRenderingContext.prototype
+            : null;
+      if (proto) Object.setPrototypeOf(ctx, proto);
+    } catch {}
+    return ctx;
+  };
+
   HTMLCanvasElement.prototype.getContext = function(type, attrs) {
     const ctx = getCtx.call(this, type, attrs);
+    if (
+      (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') &&
+      !ctx &&
+      __abStealth &&
+      __abStealth.allowWebGLContextFallback === true
+    ) {
+      return createFallbackWebGLContext(this, type);
+    }
     if (ctx && (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl')) {
       const origGetParameter = ctx.getParameter.bind(ctx);
       ctx.getParameter = function(param) {
@@ -509,13 +948,15 @@ function patchWebGLVendor(): string {
         if (ext) {
           if (param === ext.UNMASKED_VENDOR_WEBGL) {
             const real = origGetParameter(param);
-            return (real && real.includes('SwiftShader')) ? 'Intel Inc.' : real;
+            return (real && real.includes('SwiftShader')) ? WEBGL_VENDOR : real;
           }
           if (param === ext.UNMASKED_RENDERER_WEBGL) {
             const real = origGetParameter(param);
-            return (real && real.includes('SwiftShader')) ? 'Intel Iris OpenGL Engine' : real;
+            return (real && real.includes('SwiftShader')) ? WEBGL_RENDERER : real;
           }
         }
+        if (param === ctx.VENDOR) return WEBGL_VENDOR;
+        if (param === ctx.RENDERER) return WEBGL_RENDERER;
         return origGetParameter(param);
       };
     }
@@ -539,6 +980,60 @@ function patchCdcProperties(): string {
   };
   clean(document);
   if (document.documentElement) clean(document.documentElement);
+})();`;
+}
+
+/**
+ * Remove Playwright/Puppeteer sourceURL tokens from error stacks.
+ * This mirrors the intent of the sourceurl evasion: reduce obvious
+ * automation-only script labels in stack traces.
+ */
+function patchSourceUrlStackTraces(): string {
+  return `(function(){
+  if (typeof Error === 'undefined') return;
+  const sanitizeStack = (value) => {
+    if (typeof value !== 'string') return value;
+    let stack = value;
+    stack = stack.replace(/\\/\\/# sourceURL=.*$/gm, '');
+    stack = stack.replace(/__playwright_evaluation_script__/g, '<anonymous>');
+    stack = stack.replace(/__puppeteer_evaluation_script__/g, '<anonymous>');
+    stack = stack.replace(/__pw_evaluation_script__/g, '<anonymous>');
+    return stack;
+  };
+
+  const nativePrepare = Error.prepareStackTrace;
+  Error.prepareStackTrace = function(error, structuredStackTrace) {
+    let stackString;
+    if (typeof nativePrepare === 'function') {
+      stackString = nativePrepare.call(this, error, structuredStackTrace);
+    } else {
+      const name = error && error.name ? String(error.name) : 'Error';
+      const message = error && error.message ? String(error.message) : '';
+      const header = message ? name + ': ' + message : name;
+      const frames = Array.isArray(structuredStackTrace)
+        ? structuredStackTrace.map((frame) => '    at ' + String(frame))
+        : [];
+      stackString = [header].concat(frames).join('\\n');
+    }
+    return sanitizeStack(String(stackString));
+  };
+
+  if (typeof Error.captureStackTrace === 'function') {
+    const nativeCapture = Error.captureStackTrace;
+    Error.captureStackTrace = function(targetObject, constructorOpt) {
+      nativeCapture.call(this, targetObject, constructorOpt);
+      try {
+        const stack = targetObject && targetObject.stack;
+        if (typeof stack === 'string') {
+          Object.defineProperty(targetObject, 'stack', {
+            value: sanitizeStack(stack),
+            configurable: true,
+            writable: true,
+          });
+        }
+      } catch {}
+    };
+  }
 })();`;
 }
 
@@ -1013,6 +1508,68 @@ function patchPdfViewerEnabled(): string {
       configurable: true,
     });
   } catch {}
+})();`;
+}
+
+/**
+ * Chromium headless can under-report support for common media codecs.
+ * Patch canPlayType for a narrow set of high-signal probes.
+ */
+function patchMediaCodecs(): string {
+  return `(function(){
+  if (typeof HTMLMediaElement === 'undefined' || !HTMLMediaElement.prototype) return;
+  const nativeCanPlayType = HTMLMediaElement.prototype.canPlayType;
+  if (typeof nativeCanPlayType !== 'function') return;
+  const parseInput = (value) => {
+    const input = String(value || '').trim();
+    const [mimePart, codecPart] = input.split(';');
+    const mime = String(mimePart || '').trim().toLowerCase();
+    const codecs = [];
+    if (codecPart && codecPart.includes('codecs=')) {
+      const normalized = codecPart
+        .replace(/^[^=]*=/, '')
+        .replace(/^\\s*["']?/, '')
+        .replace(/["']?\\s*$/, '');
+      normalized
+        .split(',')
+        .map((codec) => codec.trim().toLowerCase())
+        .filter(Boolean)
+        .forEach((codec) => codecs.push(codec));
+    }
+    return { mime, codecs };
+  };
+  const patchedCanPlayType = function(type) {
+    const { mime, codecs } = parseInput(type);
+    if (mime === 'video/mp4' && codecs.includes('avc1.42e01e')) {
+      return 'probably';
+    }
+    if (mime === 'audio/x-m4a' && codecs.length === 0) {
+      return 'maybe';
+    }
+    if (mime === 'audio/aac' && codecs.length === 0) {
+      return 'probably';
+    }
+    return nativeCanPlayType.call(this, type);
+  };
+  try {
+    Object.defineProperty(patchedCanPlayType, 'name', {
+      value: 'canPlayType',
+      configurable: true,
+    });
+    Object.defineProperty(patchedCanPlayType, 'toString', {
+      value: () => nativeCanPlayType.toString(),
+      configurable: true,
+    });
+  } catch {}
+  try {
+    Object.defineProperty(HTMLMediaElement.prototype, 'canPlayType', {
+      value: patchedCanPlayType,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    try { HTMLMediaElement.prototype.canPlayType = patchedCanPlayType; } catch {}
+  }
 })();`;
 }
 

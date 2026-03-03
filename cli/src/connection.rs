@@ -118,6 +118,12 @@ fn get_pid_path(session: &str) -> PathBuf {
 
 /// Clean up stale socket and PID files for a session
 fn cleanup_stale_files(session: &str) {
+    // Never delete files for a live daemon. A missing PID file can happen in
+    // race scenarios, but the socket is authoritative for liveness.
+    if daemon_ready(session) {
+        return;
+    }
+
     let pid_path = get_pid_path(session);
     let _ = fs::remove_file(&pid_path);
 
@@ -148,42 +154,6 @@ fn get_port_for_session(session: &str) -> u16 {
     // Correct logic: first take absolute modulo, then cast to u16
     // Using unsigned_abs() to safely handle i32::MIN
     49152 + ((hash.unsigned_abs() as u32 % 16383) as u16)
-}
-
-#[cfg(unix)]
-fn is_daemon_running(session: &str) -> bool {
-    let pid_path = get_pid_path(session);
-    if !pid_path.exists() {
-        return false;
-    }
-    if let Ok(pid_str) = fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            unsafe {
-                if libc::kill(pid, 0) == 0 {
-                    return true;
-                }
-                // EPERM means the process exists but we lack permission to
-                // signal it (e.g. inside a macOS sandbox). Only ESRCH means
-                // the process is genuinely gone.
-                return std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH);
-            }
-        }
-    }
-    false
-}
-
-#[cfg(windows)]
-fn is_daemon_running(session: &str) -> bool {
-    let pid_path = get_pid_path(session);
-    if !pid_path.exists() {
-        return false;
-    }
-    let port = get_port_for_session(session);
-    TcpStream::connect_timeout(
-        &format!("127.0.0.1:{}", port).parse().unwrap(),
-        Duration::from_millis(100),
-    )
-    .is_ok()
 }
 
 fn daemon_ready(session: &str) -> bool {
@@ -230,8 +200,9 @@ pub fn ensure_daemon(
     tab_group: Option<&str>,
     tab_group_plugin_id: Option<&str>,
 ) -> Result<DaemonResult, String> {
-    // Check if daemon is running AND responsive
-    if is_daemon_running(session) && daemon_ready(session) {
+    // Socket readiness is the source of truth for a usable daemon.
+    // PID files can be missing/stale under concurrent start/stop races.
+    if daemon_ready(session) {
         // Double-check it's actually responsive by waiting and checking again
         // This handles the race condition where daemon is shutting down
         // (daemon has a 100ms shutdown delay, so we wait longer)

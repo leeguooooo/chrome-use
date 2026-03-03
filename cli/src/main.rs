@@ -587,7 +587,6 @@ fn main() {
                     }
                     exit(1);
                 }
-                
             }
             Err(e) => {
                 if flags.json {
@@ -679,8 +678,7 @@ fn main() {
         || flags.allow_file_access
         || flags.debug
         || flags.color_scheme.is_some()
-        || flags.download_path.is_some()
-        )
+        || flags.download_path.is_some())
         && flags.cdp.is_none()
         && flags.provider.is_none()
         && !attached_to_existing_browser
@@ -766,7 +764,6 @@ fn main() {
                     }
                     exit(1);
                 }
-                
             }
             Err(e) => {
                 if flags.json {
