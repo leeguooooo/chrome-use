@@ -2040,7 +2040,8 @@ Operations:
   clean --older-than <days>          Delete expired state files
 
 Automatic State Persistence:
-  Use --session-name to auto-save/restore state across restarts:
+  Use --session-name to auto-save/restore state across restarts.
+  If omitted, it defaults to --session (or "default"):
   agent-browser --session-name myapp open https://example.com
   Or set AGENT_BROWSER_SESSION_NAME environment variable.
 
@@ -2409,9 +2410,10 @@ Options:
                              Project default: try localhost:9333 first, then auto-discovery (no managed local-launch fallback)
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
-  --tab-group <name>         Override default tab group title for agent tabs in Chromium local launch (or AGENT_BROWSER_TAB_GROUP)
+  --tab-group <name>         Base title for agent tab groups (CDP plugin mode; silent no-op if plugin unavailable)
+  --tab-group-plugin-id <id> Expected Chrome extension ID for tab-group handshake (or AGENT_BROWSER_TAB_GROUP_PLUGIN_ID)
   --risk-mode <mode>         Verify/captcha handling: off, warn, block (or AGENT_BROWSER_RISK_MODE)
-  --session-name <name>      Auto-save/restore session state (cookies, localStorage)
+  --session-name <name>      Auto-save/restore session state (defaults to --session)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
   --max-output <chars>       Truncate page output to N chars (or AGENT_BROWSER_MAX_OUTPUT)
   --allowed-domains <list>   Restrict navigation domains (or AGENT_BROWSER_ALLOWED_DOMAINS)
@@ -2449,7 +2451,7 @@ Configuration:
 Environment:
   AGENT_BROWSER_CONFIG           Path to config file (or use --config)
   AGENT_BROWSER_SESSION          Session name (default: "default")
-  AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name
+  AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name (default: AGENT_BROWSER_SESSION)
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path
@@ -2468,7 +2470,8 @@ Environment:
   AGENT_BROWSER_TIMEZONE         Override auto-detected timezone (e.g., Asia/Taipei)
   AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
   AGENT_BROWSER_DOWNLOAD_PATH    Default download directory for browser downloads
-  AGENT_BROWSER_TAB_GROUP        Override default tab group title (Chromium local launch only)
+  AGENT_BROWSER_TAB_GROUP        Base title for tab groups (default: "Agent Browser Stealth"; session suffix auto-appended)
+  AGENT_BROWSER_TAB_GROUP_PLUGIN_ID Expected Chrome extension ID for tab-group handshake (default: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
   AGENT_BROWSER_RISK_MODE        Verify/captcha handling mode (off, warn, block)
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default Playwright timeout in ms (default: 25000)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Agent Browser CDP Tab Grouper",
+  "version": "0.1.0",
+  "description": "Groups tabs by Agent Browser session when requested from CDP-driven pages.",
+  "permissions": ["tabs", "tabGroups"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "match_about_blank": true
+    }
+  ]
+}

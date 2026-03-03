@@ -89,7 +89,7 @@ agent-browser wait 2000-5000          # Random wait between 2-5 seconds
 agent-browser download @e1 ./file.pdf          # Click element to trigger download
 agent-browser wait --download ./output.zip     # Wait for any download to complete
 agent-browser --download-path ./downloads open <url>  # Set default download directory
-agent-browser --tab-group "My Agent Group" open <url>  # Override default tab group title (Chromium local launch)
+agent-browser --tab-group "My Agent Group" open <url>  # Override default tab-group base title
 
 # Capture
 agent-browser screenshot              # Screenshot to temp dir
@@ -172,6 +172,7 @@ agent-browser cookies set callback_token "token123"
 
 ```bash
 # Auto-save/restore cookies and localStorage across browser restarts
+# If --session-name is omitted, it defaults to --session (or "default")
 agent-browser --session-name myapp open https://app.example.com/login
 # ... login flow ...
 agent-browser close  # State auto-saved to ~/.agent-browser/sessions/
@@ -251,7 +252,7 @@ agent-browser set media dark
 ### Tab Grouping
 
 ```bash
-# Local Chromium launch auto-groups under "Agent Browser Stealth"
+# CDP mode groups tabs when tab-group extension is installed
 agent-browser open https://example.com
 
 # Override the default group title
@@ -259,13 +260,19 @@ agent-browser --tab-group "My Agent Group" open https://example.com
 
 # Or via environment variable
 AGENT_BROWSER_TAB_GROUP="My Agent Group" agent-browser open https://example.com
+
+# Override expected extension ID if needed
+AGENT_BROWSER_TAB_GROUP_PLUGIN_ID="<extension-id>" agent-browser open https://example.com
 ```
 
 Notes:
 
-- Works only for local Chromium launches.
-- In CDP/auto-connect and cloud provider modes, `--tab-group` is ignored with a warning.
-- New agent tabs are auto-added to the group after each tab loads content.
+- Works in CDP mode via extension handshake.
+- Extension installed and reachable: tabs are grouped by session.
+- Extension missing/unavailable: silent no-op (no warning/error unless debug mode).
+- Default titles:
+  - `default` session: `Agent Browser Stealth`
+  - non-default session: `Agent Browser Stealth • <session>`
 
 ### Visual Browser (Debugging)
 
@@ -298,7 +305,7 @@ Stealth is always active -- no flags needed. All sessions automatically apply an
 
 Chromium launches in managed mode use Chrome channel by default for a genuine browser binary fingerprint.
 
-For best results against strong bot detection, use `--headed` and `--session-name`.
+For best results against strong bot detection, use `--headed` and keep one stable `--session-name`.
 
 ### Auto Region Detection
 
@@ -310,7 +317,7 @@ Override: `AGENT_BROWSER_LOCALE`, `AGENT_BROWSER_TIMEZONE` env vars.
 
 When a navigation lands on a captcha/verification page, behavior is controlled by `--risk-mode` (or `AGENT_BROWSER_RISK_MODE`):
 
-- `warn` (default): retry up to 2 times with randomized backoff (3-7s), then return warning plus structured `riskSignals`
+- `warn` (default): wait for auto-clear first, then retry up to 2 times with randomized backoff (3-7s), then return warning plus structured `riskSignals`
 - `block`: fail fast once a risk interstitial is detected
 - `off`: disable this detection/retry path
 
@@ -459,7 +466,7 @@ agent-browser automatically humanizes interactions to avoid behavioral detection
 - **Random wait ranges**: `wait 2000-5000` pauses for a random duration in that range
 - **Bezier curve mouse**: Before every `click`, the mouse moves along a natural-looking curve
 
-These behaviors are always active. For sensitive sites, combine with `--headed` and `--session-name` for best results.
+These behaviors are always active. For sensitive sites, combine with `--headed` and a stable `--session-name` for best results.
 
 ## Session Management and Cleanup
 

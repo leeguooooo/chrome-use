@@ -2055,8 +2055,10 @@ mod tests {
             color_scheme: None,
             download_path: None,
             tab_group: None,
+            tab_group_plugin_id: None,
             risk_mode: None,
             cli_tab_group: false,
+            cli_tab_group_plugin_id: false,
         }
     }
 

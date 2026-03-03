@@ -1,4 +1,4 @@
-use crate::color;
+use crate::{color, validation};
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 const CONFIG_DIR: &str = ".agent-browser";
 const CONFIG_FILENAME: &str = "config.json";
 const PROJECT_CONFIG_FILENAME: &str = "agent-browser.json";
+const DEFAULT_TAB_GROUP: &str = "Agent Browser Stealth";
+const DEFAULT_TAB_GROUP_PLUGIN_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -35,6 +37,7 @@ pub struct Config {
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
     pub tab_group: Option<String>,
+    pub tab_group_plugin_id: Option<String>,
     pub risk_mode: Option<String>,
 }
 
@@ -71,6 +74,7 @@ impl Config {
             color_scheme: other.color_scheme.or(self.color_scheme),
             download_path: other.download_path.or(self.download_path),
             tab_group: other.tab_group.or(self.tab_group),
+            tab_group_plugin_id: other.tab_group_plugin_id.or(self.tab_group_plugin_id),
             risk_mode: other.risk_mode.or(self.risk_mode),
         }
     }
@@ -139,6 +143,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--channel",
         "--download-path",
         "--tab-group",
+        "--tab-group-plugin-id",
         "--risk-mode",
     ];
     let mut i = 0;
@@ -206,11 +211,12 @@ pub struct Flags {
     pub allow_file_access: bool,
     pub device: Option<String>,
     pub auto_connect: bool,
-    pub session_name: Option<String>,
+    pub session_name: Option<String>, // Defaults to --session when unset
     pub annotate: bool,
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
     pub tab_group: Option<String>,
+    pub tab_group_plugin_id: Option<String>,
     /// How verification/captcha detections are handled on navigation:
     /// `off` (disable), `warn` (retry and warn), `block` (fail fast).
     pub risk_mode: Option<String>,
@@ -228,6 +234,7 @@ pub struct Flags {
     pub cli_annotate: bool,
     pub cli_download_path: bool,
     pub cli_tab_group: bool,
+    pub cli_tab_group_plugin_id: bool,
 }
 
 pub fn parse_flags(args: &[String]) -> Flags {
@@ -296,7 +303,14 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .or(config.color_scheme),
         download_path: env::var("AGENT_BROWSER_DOWNLOAD_PATH").ok()
             .or(config.download_path),
-        tab_group: env::var("AGENT_BROWSER_TAB_GROUP").ok().or(config.tab_group),
+        tab_group: env::var("AGENT_BROWSER_TAB_GROUP")
+            .ok()
+            .or(config.tab_group)
+            .or_else(|| Some(DEFAULT_TAB_GROUP.to_string())),
+        tab_group_plugin_id: env::var("AGENT_BROWSER_TAB_GROUP_PLUGIN_ID")
+            .ok()
+            .or(config.tab_group_plugin_id)
+            .or_else(|| Some(DEFAULT_TAB_GROUP_PLUGIN_ID.to_string())),
         risk_mode: env::var("AGENT_BROWSER_RISK_MODE")
             .ok()
             .or(config.risk_mode)
@@ -312,6 +326,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         cli_annotate: false,
         cli_download_path: false,
         cli_tab_group: false,
+        cli_tab_group_plugin_id: false,
     };
 
     let mut i = 0;
@@ -480,6 +495,13 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
+            "--tab-group-plugin-id" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.tab_group_plugin_id = Some(s.clone());
+                    flags.cli_tab_group_plugin_id = true;
+                    i += 1;
+                }
+            }
             "--risk-mode" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.risk_mode = Some(s.to_ascii_lowercase());
@@ -494,6 +516,18 @@ pub fn parse_flags(args: &[String]) -> Flags {
         }
         i += 1;
     }
+
+    // Keep auth/state continuity stable by default: if no explicit --session-name
+    // is provided, derive it from --session (or fall back to "default" when invalid).
+    if flags.session_name.is_none() {
+        let derived = if validation::is_valid_session_name(&flags.session) {
+            flags.session.clone()
+        } else {
+            "default".to_string()
+        };
+        flags.session_name = Some(derived);
+    }
+
     flags
 }
 
@@ -531,6 +565,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--color-scheme",
         "--download-path",
         "--tab-group",
+        "--tab-group-plugin-id",
         "--risk-mode",
         "--config",
     ];
@@ -566,6 +601,36 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard<'a> {
+        _lock: MutexGuard<'a, ()>,
+        vars: Vec<(String, Option<String>)>,
+    }
+
+    impl<'a> EnvGuard<'a> {
+        fn new(var_names: &[&str]) -> Self {
+            let lock = ENV_MUTEX.lock().unwrap();
+            let vars = var_names
+                .iter()
+                .map(|&name| (name.to_string(), env::var(name).ok()))
+                .collect();
+            Self { _lock: lock, vars }
+        }
+    }
+
+    impl Drop for EnvGuard<'_> {
+        fn drop(&mut self) {
+            for (name, value) in &self.vars {
+                match value {
+                    Some(v) => env::set_var(name, v),
+                    None => env::remove_var(name),
+                }
+            }
+        }
+    }
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
@@ -679,6 +744,19 @@ mod tests {
         ));
         assert_eq!(flags.session, "test");
         assert_eq!(flags.executable_path, Some("/custom/chrome".to_string()));
+        assert_eq!(flags.session_name.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn test_session_name_defaults_to_session_when_not_provided() {
+        let flags = parse_flags(&args("--session my-session snapshot"));
+        assert_eq!(flags.session_name.as_deref(), Some("my-session"));
+    }
+
+    #[test]
+    fn test_invalid_session_falls_back_to_default_session_name() {
+        let flags = parse_flags(&args("--session bad/session snapshot"));
+        assert_eq!(flags.session_name.as_deref(), Some("default"));
     }
 
     #[test]
@@ -730,6 +808,23 @@ mod tests {
     }
 
     #[test]
+    fn test_default_tab_group_is_enabled() {
+        let flags = parse_flags(&args("snapshot"));
+        assert_eq!(flags.tab_group.as_deref(), Some(DEFAULT_TAB_GROUP));
+        assert!(!flags.cli_tab_group);
+    }
+
+    #[test]
+    fn test_default_tab_group_plugin_id_is_enabled() {
+        let flags = parse_flags(&args("snapshot"));
+        assert_eq!(
+            flags.tab_group_plugin_id.as_deref(),
+            Some(DEFAULT_TAB_GROUP_PLUGIN_ID)
+        );
+        assert!(!flags.cli_tab_group_plugin_id);
+    }
+
+    #[test]
     fn test_parse_tab_group_flag() {
         let input = vec![
             "--tab-group".to_string(),
@@ -745,6 +840,69 @@ mod tests {
     fn test_clean_args_removes_tab_group() {
         let cleaned = clean_args(&args("--tab-group AgentGroup open example.com"));
         assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    #[test]
+    fn test_parse_tab_group_plugin_id_flag() {
+        let input = vec![
+            "--tab-group-plugin-id".to_string(),
+            "cli-plugin-id".to_string(),
+            "snapshot".to_string(),
+        ];
+        let flags = parse_flags(&input);
+        assert_eq!(flags.tab_group_plugin_id.as_deref(), Some("cli-plugin-id"));
+        assert!(flags.cli_tab_group_plugin_id);
+    }
+
+    #[test]
+    fn test_clean_args_removes_tab_group_plugin_id() {
+        let cleaned = clean_args(&args(
+            "--tab-group-plugin-id cli-plugin-id open example.com",
+        ));
+        assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    #[test]
+    fn test_tab_group_plugin_id_precedence_config_env_cli() {
+        use std::io::Write;
+
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_TAB_GROUP_PLUGIN_ID"]);
+
+        let dir = std::env::temp_dir().join("ab-test-plugin-id-precedence");
+        let _ = fs::create_dir_all(&dir);
+        let config_path = dir.join("config.json");
+        let mut f = fs::File::create(&config_path).unwrap();
+        writeln!(f, r#"{{"tabGroupPluginId":"config-plugin-id"}}"#).unwrap();
+
+        env::set_var("AGENT_BROWSER_TAB_GROUP_PLUGIN_ID", "env-plugin-id");
+
+        let env_args = vec![
+            "--config".to_string(),
+            config_path.to_string_lossy().to_string(),
+            "snapshot".to_string(),
+        ];
+        let flags_from_env = parse_flags(&env_args);
+        assert_eq!(
+            flags_from_env.tab_group_plugin_id.as_deref(),
+            Some("env-plugin-id")
+        );
+
+        let cli_args = vec![
+            "--config".to_string(),
+            config_path.to_string_lossy().to_string(),
+            "--tab-group-plugin-id".to_string(),
+            "cli-plugin-id".to_string(),
+            "snapshot".to_string(),
+        ];
+        let flags_from_cli = parse_flags(&cli_args);
+        assert_eq!(
+            flags_from_cli.tab_group_plugin_id.as_deref(),
+            Some("cli-plugin-id")
+        );
+        assert!(flags_from_cli.cli_tab_group_plugin_id);
+
+        let _ = fs::remove_file(&config_path);
+        let _ = fs::remove_dir(&dir);
     }
 
     #[test]
@@ -796,6 +954,7 @@ mod tests {
             "autoConnect": true,
             "headers": "{\"Auth\":\"token\"}",
             "tabGroup": "Agent Browser Stealth",
+            "tabGroupPluginId": "tab-group-plugin-id",
             "riskMode": "block"
         }"#;
         let config: Config = serde_json::from_str(json).unwrap();
@@ -823,6 +982,10 @@ mod tests {
         assert_eq!(config.auto_connect, Some(true));
         assert_eq!(config.headers.as_deref(), Some("{\"Auth\":\"token\"}"));
         assert_eq!(config.tab_group.as_deref(), Some("Agent Browser Stealth"));
+        assert_eq!(
+            config.tab_group_plugin_id.as_deref(),
+            Some("tab-group-plugin-id")
+        );
         assert_eq!(config.risk_mode.as_deref(), Some("block"));
     }
 

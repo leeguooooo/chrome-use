@@ -228,6 +228,7 @@ pub fn ensure_daemon(
     debug: bool,
     download_path: Option<&str>,
     tab_group: Option<&str>,
+    tab_group_plugin_id: Option<&str>,
 ) -> Result<DaemonResult, String> {
     // Check if daemon is running AND responsive
     if is_daemon_running(session) && daemon_ready(session) {
@@ -378,6 +379,9 @@ pub fn ensure_daemon(
         if let Some(tg) = tab_group {
             cmd.env("AGENT_BROWSER_TAB_GROUP", tg);
         }
+        if let Some(plugin_id) = tab_group_plugin_id {
+            cmd.env("AGENT_BROWSER_TAB_GROUP_PLUGIN_ID", plugin_id);
+        }
 
         // Create new process group and session to fully detach
         unsafe {
@@ -467,6 +471,9 @@ pub fn ensure_daemon(
         }
         if let Some(tg) = tab_group {
             cmd.env("AGENT_BROWSER_TAB_GROUP", tg);
+        }
+        if let Some(plugin_id) = tab_group_plugin_id {
+            cmd.env("AGENT_BROWSER_TAB_GROUP_PLUGIN_ID", plugin_id);
         }
 
         // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS

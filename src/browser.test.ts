@@ -262,6 +262,80 @@ describe('BrowserManager', () => {
     });
   });
 
+  describe('tab-group plugin handshake', () => {
+    it('should mark plugin capability as available after successful handshake', async () => {
+      const manager = new BrowserManager() as any;
+      manager.tabGroupIntent = {
+        session: 'default',
+        groupTitle: 'Agent Browser Stealth',
+        pluginId: 'plugin-123',
+      };
+      manager.stealthConnectionKind = 'cdp';
+
+      const page = {
+        isClosed: () => false,
+        url: () => 'https://example.com',
+      };
+
+      const requestSpy = vi
+        .spyOn(manager, 'requestTabGroupPlugin')
+        .mockResolvedValue({ ok: true, extensionId: 'plugin-123' });
+
+      await manager.tryApplyTabGrouping(page, 'test');
+
+      expect(manager.getTabGroupCapability('default')).toBe('available');
+      expect(requestSpy).toHaveBeenCalledTimes(1);
+      requestSpy.mockRestore();
+    });
+
+    it('should silently mark capability unavailable on timeout response', async () => {
+      const manager = new BrowserManager() as any;
+      manager.tabGroupIntent = {
+        session: 'default',
+        groupTitle: 'Agent Browser Stealth',
+        pluginId: 'plugin-123',
+      };
+      manager.stealthConnectionKind = 'cdp';
+
+      const page = {
+        isClosed: () => false,
+        url: () => 'https://example.com',
+      };
+
+      const requestSpy = vi.spyOn(manager, 'requestTabGroupPlugin').mockResolvedValue(null);
+
+      await manager.tryApplyTabGrouping(page, 'test-timeout');
+
+      expect(manager.getTabGroupCapability('default')).toBe('unavailable');
+      expect(requestSpy).toHaveBeenCalledTimes(1);
+      requestSpy.mockRestore();
+    });
+
+    it('should stop retrying handshake once capability is unavailable', async () => {
+      const manager = new BrowserManager() as any;
+      manager.tabGroupIntent = {
+        session: 'default',
+        groupTitle: 'Agent Browser Stealth',
+        pluginId: 'plugin-123',
+      };
+      manager.stealthConnectionKind = 'cdp';
+
+      const page = {
+        isClosed: () => false,
+        url: () => 'https://example.com',
+      };
+
+      const requestSpy = vi.spyOn(manager, 'requestTabGroupPlugin').mockResolvedValue(null);
+
+      await manager.tryApplyTabGrouping(page, 'first-attempt');
+      await manager.tryApplyTabGrouping(page, 'second-attempt');
+
+      expect(manager.getTabGroupCapability('default')).toBe('unavailable');
+      expect(requestSpy).toHaveBeenCalledTimes(1);
+      requestSpy.mockRestore();
+    });
+  });
+
   describe('stale session recovery (all pages closed)', () => {
     it('should recover when all pages are closed externally', async () => {
       const testBrowser = new BrowserManager();

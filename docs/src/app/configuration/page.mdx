@@ -281,7 +281,16 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
       <td>
         <code>--tab-group</code>
       </td>
-      <td>string (override default tab group title; Chromium local launch only)</td>
+      <td>string (base title for session tab grouping via CDP plugin handshake)</td>
+    </tr>
+    <tr>
+      <td>
+        <code>tabGroupPluginId</code>
+      </td>
+      <td>
+        <code>--tab-group-plugin-id</code>
+      </td>
+      <td>string (expected extension ID for tab-group plugin handshake)</td>
     </tr>
     <tr>
       <td>
@@ -307,6 +316,9 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
 </table>
 
 `riskMode` defaults to `warn` when unset.
+
+For tab grouping in CDP mode, grouping is best-effort through the extension handshake:
+extension available => grouped by session; extension missing/unavailable => silent no-op.
 
 ## Common Configurations
 
@@ -419,8 +431,21 @@ These environment variables configure additional daemon and runtime behavior:
       <td>
         <code>AGENT_BROWSER_TAB_GROUP</code>
       </td>
-      <td>Override default auto-group title for agent tabs (Chromium local launch only).</td>
-      <td>(disabled)</td>
+      <td>
+        Base title for tab grouping. Session suffix is appended automatically in CDP mode.
+      </td>
+      <td>
+        <code>Agent Browser Stealth</code>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <code>AGENT_BROWSER_TAB_GROUP_PLUGIN_ID</code>
+      </td>
+      <td>Expected extension ID for CDP tab-group plugin handshake.</td>
+      <td>
+        <code>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code>
+      </td>
     </tr>
     <tr>
       <td>
@@ -447,8 +472,8 @@ These environment variables configure additional daemon and runtime behavior:
       <td>
         <code>AGENT_BROWSER_SESSION_NAME</code>
       </td>
-      <td>Auto-save/load state persistence name.</td>
-      <td>(none)</td>
+      <td>Auto-save/load state persistence name (defaults to <code>AGENT_BROWSER_SESSION</code> when unset).</td>
+      <td>(same as <code>AGENT_BROWSER_SESSION</code>)</td>
     </tr>
     <tr>
       <td>

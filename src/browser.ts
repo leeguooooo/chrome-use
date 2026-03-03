@@ -16,15 +16,7 @@ import {
 } from 'playwright-core';
 import path from 'node:path';
 import os from 'node:os';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, statSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import type { LaunchCommand, TraceEvent } from './types.js';
 import { type RefMap, type EnhancedSnapshot, getEnhancedSnapshot, parseRef } from './snapshot.js';
@@ -136,6 +128,18 @@ interface StealthContextDefaults {
 
 const IGNORED_CDP_PAGE_URL_PREFIXES = ['chrome://omnibox-popup.top-chrome/'];
 const DEFAULT_TAB_GROUP_NAME = 'Agent Browser Stealth';
+const DEFAULT_TAB_GROUP_PLUGIN_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const TAB_GROUP_REQUEST_MESSAGE_TYPE = 'AB_TAB_GROUP_REQUEST';
+const TAB_GROUP_RESPONSE_MESSAGE_TYPE = 'AB_TAB_GROUP_RESPONSE';
+const TAB_GROUP_REQUEST_TIMEOUT_MS = 400;
+
+type TabGroupPluginAvailability = 'unknown' | 'available' | 'unavailable';
+
+interface TabGroupIntent {
+  session: string;
+  groupTitle: string;
+  pluginId: string;
+}
 
 /**
  * Manages the Playwright browser lifecycle with multiple tabs/windows
@@ -172,7 +176,9 @@ export class BrowserManager {
   private contextUserAgent: string | undefined = undefined;
   private downloadPath: string | null = null;
   private allowedDomains: string[] = [];
-  private tabGroupExtensionDir: string | null = null;
+  private tabGroupIntent: TabGroupIntent | null = null;
+  private tabGroupCapabilityBySession: Map<string, TabGroupPluginAvailability> = new Map();
+  private tabGroupInFlight: WeakSet<Page> = new WeakSet();
 
   /**
    * Set the persistent color scheme preference.
@@ -496,115 +502,202 @@ export class BrowserManager {
     return trimmed.slice(0, 80);
   }
 
-  /**
-   * Build a temporary MV3 extension that auto-groups managed tabs under a fixed title.
-   * This is only used for local Chromium launches.
-   */
-  private createTabGroupExtension(groupTitle: string): string {
-    this.cleanupTabGroupExtension();
+  private normalizeTabGroupPluginId(pluginId?: string): string | undefined {
+    if (!pluginId) return undefined;
+    const trimmed = pluginId.trim();
+    if (!trimmed) return undefined;
+    return trimmed.slice(0, 128);
+  }
 
-    const extensionDir = mkdtempSync(path.join(os.tmpdir(), 'agent-browser-tab-group-'));
-    const manifest = {
-      manifest_version: 3,
-      name: 'Agent Browser Tab Grouper',
-      version: '1.0.0',
-      permissions: ['tabs', 'tabGroups'],
-      host_permissions: ['<all_urls>'],
-      background: {
-        service_worker: 'service-worker.js',
+  private getAgentSessionName(): string {
+    const session = process.env.AGENT_BROWSER_SESSION?.trim();
+    return session && session.length > 0 ? session : 'default';
+  }
+
+  private buildSessionTabGroupTitle(baseTitle: string, session: string): string {
+    const normalizedBase = this.normalizeTabGroupName(baseTitle) ?? DEFAULT_TAB_GROUP_NAME;
+    if (session === 'default') {
+      return normalizedBase;
+    }
+    const withSuffix = `${normalizedBase} • ${session}`;
+    return this.normalizeTabGroupName(withSuffix) ?? normalizedBase;
+  }
+
+  private configureTabGroupIntent(options: LaunchCommand): void {
+    const baseTitle = this.normalizeTabGroupName(options.tabGroup) ?? DEFAULT_TAB_GROUP_NAME;
+    const session = this.getAgentSessionName();
+    const groupTitle = this.buildSessionTabGroupTitle(baseTitle, session);
+    const pluginId =
+      this.normalizeTabGroupPluginId(options.tabGroupPluginId) ??
+      this.normalizeTabGroupPluginId(process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID) ??
+      DEFAULT_TAB_GROUP_PLUGIN_ID;
+
+    this.tabGroupIntent = { session, groupTitle, pluginId };
+    if (!this.tabGroupCapabilityBySession.has(session)) {
+      this.tabGroupCapabilityBySession.set(session, 'unknown');
+    }
+  }
+
+  private getTabGroupCapability(session: string): TabGroupPluginAvailability {
+    return this.tabGroupCapabilityBySession.get(session) ?? 'unknown';
+  }
+
+  private setTabGroupCapability(session: string, capability: TabGroupPluginAvailability): void {
+    this.tabGroupCapabilityBySession.set(session, capability);
+  }
+
+  private canInjectTabGroupScript(page: Page): boolean {
+    const url = this.getSafePageUrl(page).toLowerCase();
+    if (!url) return false;
+    return (
+      !url.startsWith('chrome://') &&
+      !url.startsWith('chrome-extension://') &&
+      !url.startsWith('devtools://') &&
+      !url.startsWith('edge://')
+    );
+  }
+
+  private logTabGroupDebug(message: string): void {
+    if (process.env.AGENT_BROWSER_DEBUG === '1') {
+      console.error(`[DEBUG] ${message}`);
+    }
+  }
+
+  private async requestTabGroupPlugin(
+    page: Page,
+    intent: TabGroupIntent
+  ): Promise<{ ok: boolean; extensionId?: string; error?: string } | null> {
+    const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const result = await page.evaluate(
+      ({ requestType, responseType, nonce, session, groupTitle, pluginId, timeoutMs }) => {
+        return new Promise<{
+          ok: boolean;
+          extensionId?: string;
+          error?: string;
+        } | null>((resolve) => {
+          let settled = false;
+          let timer: number | undefined;
+
+          const finish = (value: { ok: boolean; extensionId?: string; error?: string } | null) => {
+            if (settled) return;
+            settled = true;
+            window.removeEventListener('message', onMessage);
+            if (typeof timer === 'number') {
+              window.clearTimeout(timer);
+            }
+            resolve(value);
+          };
+
+          const onMessage = (event: MessageEvent) => {
+            if (event.source !== window) return;
+            const data = event.data as Record<string, unknown> | null;
+            if (!data || data.type !== responseType) return;
+            if (data.nonce !== nonce) return;
+            finish({
+              ok: data.ok === true,
+              extensionId:
+                typeof data.extensionId === 'string' && data.extensionId.length > 0
+                  ? data.extensionId
+                  : undefined,
+              error: typeof data.error === 'string' ? data.error : undefined,
+            });
+          };
+
+          window.addEventListener('message', onMessage);
+          timer = window.setTimeout(() => finish(null), timeoutMs);
+
+          try {
+            window.postMessage(
+              {
+                type: requestType,
+                nonce,
+                session,
+                groupTitle,
+                pluginId,
+              },
+              '*'
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            finish({ ok: false, error: message });
+          }
+        });
       },
-      content_scripts: [
-        {
-          matches: ['<all_urls>'],
-          js: ['content-script.js'],
-          run_at: 'document_start',
-          match_about_blank: true,
-        },
-      ],
-    };
-
-    const serviceWorker = `const GROUP_TITLE = ${JSON.stringify(groupTitle)};
-const MESSAGE_TYPE = 'agent-browser-manage-tab';
-
-async function findGroupId(windowId) {
-  const tabs = await chrome.tabs.query({ windowId });
-  const checkedGroupIds = new Set();
-  for (const tab of tabs) {
-    if (typeof tab.groupId !== 'number' || tab.groupId < 0 || checkedGroupIds.has(tab.groupId)) {
-      continue;
-    }
-    checkedGroupIds.add(tab.groupId);
-    try {
-      const group = await chrome.tabGroups.get(tab.groupId);
-      if (group.title === GROUP_TITLE) {
-        return tab.groupId;
+      {
+        requestType: TAB_GROUP_REQUEST_MESSAGE_TYPE,
+        responseType: TAB_GROUP_RESPONSE_MESSAGE_TYPE,
+        nonce,
+        session: intent.session,
+        groupTitle: intent.groupTitle,
+        pluginId: intent.pluginId,
+        timeoutMs: TAB_GROUP_REQUEST_TIMEOUT_MS,
       }
-    } catch {
-      // Ignore stale group IDs and continue searching.
+    );
+
+    return result;
+  }
+
+  private scheduleTabGrouping(page: Page, source: string): void {
+    void this.tryApplyTabGrouping(page, source);
+  }
+
+  private async tryApplyTabGrouping(page: Page, source: string): Promise<void> {
+    const intent = this.tabGroupIntent;
+    if (!intent) return;
+    if (this.stealthConnectionKind !== 'cdp') return;
+    if (this.tabGroupInFlight.has(page)) return;
+
+    const capability = this.getTabGroupCapability(intent.session);
+    if (capability === 'unavailable') return;
+
+    if (page.isClosed() || !this.canInjectTabGroupScript(page)) {
+      return;
+    }
+
+    this.tabGroupInFlight.add(page);
+
+    try {
+      const response = await this.requestTabGroupPlugin(page, intent);
+      if (!response) {
+        this.setTabGroupCapability(intent.session, 'unavailable');
+        this.logTabGroupDebug(
+          `Tab-group plugin unavailable (timeout, source=${source}, session=${intent.session})`
+        );
+        return;
+      }
+
+      if (!response.ok) {
+        this.setTabGroupCapability(intent.session, 'unavailable');
+        this.logTabGroupDebug(
+          `Tab-group plugin returned error (source=${source}, session=${intent.session}): ${response.error ?? 'unknown'}`
+        );
+        return;
+      }
+
+      if (response.extensionId !== intent.pluginId) {
+        this.setTabGroupCapability(intent.session, 'unavailable');
+        this.logTabGroupDebug(
+          `Tab-group plugin id mismatch (source=${source}, expected=${intent.pluginId}, actual=${response.extensionId ?? 'missing'})`
+        );
+        return;
+      }
+
+      this.setTabGroupCapability(intent.session, 'available');
+    } catch (error) {
+      this.setTabGroupCapability(intent.session, 'unavailable');
+      const message = error instanceof Error ? error.message : String(error);
+      this.logTabGroupDebug(
+        `Tab-group plugin unavailable (source=${source}, session=${intent.session}): ${message}`
+      );
+    } finally {
+      this.tabGroupInFlight.delete(page);
     }
   }
-  return null;
-}
 
-async function styleGroup(groupId) {
-  await chrome.tabGroups.update(groupId, {
-    title: GROUP_TITLE,
-    color: 'blue',
-    collapsed: false,
-  });
-}
-
-async function ensureTabGrouped(tabId, windowId) {
-  let groupId = await findGroupId(windowId);
-  if (groupId === null) {
-    groupId = await chrome.tabs.group({
-      tabIds: [tabId],
-      createProperties: { windowId },
-    });
-    await styleGroup(groupId);
-    return;
-  }
-  await chrome.tabs.group({
-    groupId,
-    tabIds: [tabId],
-  });
-  await styleGroup(groupId);
-}
-
-chrome.runtime.onMessage.addListener((message, sender) => {
-  if (!message || message.type !== MESSAGE_TYPE) {
-    return;
-  }
-  const tabId = sender.tab?.id;
-  const windowId = sender.tab?.windowId;
-  if (typeof tabId !== 'number' || typeof windowId !== 'number') {
-    return;
-  }
-  ensureTabGrouped(tabId, windowId).catch(() => {});
-});
-`;
-
-    const contentScript = `(() => {
-  try {
-    chrome.runtime.sendMessage({ type: 'agent-browser-manage-tab' });
-  } catch {
-    // Ignore pages where extension messaging is unavailable.
-  }
-})();
-`;
-
-    writeFileSync(path.join(extensionDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
-    writeFileSync(path.join(extensionDir, 'service-worker.js'), serviceWorker);
-    writeFileSync(path.join(extensionDir, 'content-script.js'), contentScript);
-
-    this.tabGroupExtensionDir = extensionDir;
-    return extensionDir;
-  }
-
-  private cleanupTabGroupExtension(): void {
-    if (!this.tabGroupExtensionDir) return;
-    rmSync(this.tabGroupExtensionDir, { recursive: true, force: true });
-    this.tabGroupExtensionDir = null;
+  triggerTabGroupingForActivePage(source: string = 'active-page'): void {
+    if (!this.tabGroupIntent || this.pages.length === 0) return;
+    const page = this.getPage();
+    this.scheduleTabGrouping(page, source);
   }
 
   // CDP profiling state
@@ -1719,9 +1812,6 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     const cdpEndpoint = options.cdpUrl ?? (options.cdpPort ? String(options.cdpPort) : undefined);
     const configuredExtensions = options.extensions ? [...options.extensions] : [];
     const hasStorageState = !!options.storageState;
-    const explicitTabGroup = this.normalizeTabGroupName(options.tabGroup);
-    const requestedTabGroup = explicitTabGroup ?? DEFAULT_TAB_GROUP_NAME;
-    const tabGroupWasExplicit = explicitTabGroup !== undefined;
 
     if (configuredExtensions.length > 0 && cdpEndpoint) {
       throw new Error('Extensions cannot be used with CDP connection');
@@ -1762,6 +1852,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     this.contextTimezoneId = this.resolveStealthTimezoneId();
     this.contextHeaders = undefined;
     this.contextUserAgent = options.userAgent;
+    this.configureTabGroupIntent(options);
     // -p flag takes precedence over AGENT_BROWSER_PROVIDER.
     const provider = options.provider ?? process.env.AGENT_BROWSER_PROVIDER;
 
@@ -1777,42 +1868,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       this.stealthConnectionKind = 'local';
     }
     this.logStealthPolicy('launch policy', options.browser ?? 'chromium');
-
-    let effectiveExtensions = configuredExtensions;
-    if (requestedTabGroup) {
-      const requestedBrowserType = options.browser ?? 'chromium';
-      if (this.stealthConnectionKind !== 'local') {
-        if (tabGroupWasExplicit) {
-          const warning = `--tab-group "${requestedTabGroup}" is ignored in CDP/provider mode (requires local Chromium launch)`;
-          this.launchWarnings.push(warning);
-          console.error(`[WARN] ${warning}`);
-        }
-      } else if (requestedBrowserType !== 'chromium') {
-        if (tabGroupWasExplicit) {
-          const warning = `--tab-group is only supported in Chromium (requested: ${requestedBrowserType})`;
-          this.launchWarnings.push(warning);
-          console.error(`[WARN] ${warning}`);
-        }
-      } else if (options.headless === true) {
-        if (tabGroupWasExplicit) {
-          const warning = '--tab-group is ignored in headless mode';
-          this.launchWarnings.push(warning);
-          console.error(`[WARN] ${warning}`);
-        }
-      } else if (hasStorageState) {
-        if (tabGroupWasExplicit) {
-          const warning =
-            '--tab-group is ignored when storage state is loaded via --state (extensions require persistent context)';
-          this.launchWarnings.push(warning);
-          console.error(`[WARN] ${warning}`);
-        }
-      } else {
-        const tabGroupExtensionPath = this.createTabGroupExtension(requestedTabGroup);
-        effectiveExtensions = [...effectiveExtensions, tabGroupExtensionPath];
-      }
-    }
-
-    const hasExtensions = effectiveExtensions.length > 0;
+    const hasExtensions = configuredExtensions.length > 0;
 
     if (options.downloadPath) {
       this.downloadPath = options.downloadPath;
@@ -1953,7 +2009,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     let context: BrowserContext;
     if (hasExtensions) {
       // Extensions require persistent context in a temp directory
-      const extPaths = effectiveExtensions.join(',');
+      const extPaths = configuredExtensions.join(',');
       const session = process.env.AGENT_BROWSER_SESSION || 'default';
       // Combine extension args with custom args and file access args
       const extArgs = [`--disable-extensions-except=${extPaths}`, `--load-extension=${extPaths}`];
@@ -2511,6 +2567,8 @@ chrome.runtime.onMessage.addListener((message, sender) => {
         // Invalidate CDP session since the active page changed
         this.invalidateCDPSession().catch(() => {});
       }
+
+      this.scheduleTabGrouping(page, 'context-page');
     });
   }
 
@@ -2533,6 +2591,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       this.setupPageTracking(page);
     }
     this.activePageIndex = this.pages.length - 1;
+    this.scheduleTabGrouping(page, 'new-tab');
 
     return { index: this.activePageIndex, total: this.pages.length };
   }
@@ -3285,8 +3344,6 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       }
     }
 
-    this.cleanupTabGroupExtension();
-
     this.pages = [];
     this.contexts = [];
     this.cdpEndpoint = null;
@@ -3305,6 +3362,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     this.contextTimezoneId = undefined;
     this.contextHeaders = undefined;
     this.contextUserAgent = undefined;
+    this.tabGroupIntent = null;
+    this.tabGroupCapabilityBySession.clear();
+    this.tabGroupInFlight = new WeakSet();
     this.refMap = {};
     this.lastSnapshot = '';
     this.frameCallback = null;

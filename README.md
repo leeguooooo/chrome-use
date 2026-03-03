@@ -50,20 +50,26 @@ agent-browser snapshot -i
 agent-browser click @e2
 ```
 
-### Default: Auto Group Agent Tabs (Local Chromium)
+### Default: Auto Group Agent Tabs (CDP + Plugin)
 
 ```bash
 agent-browser open https://example.com
-# Local Chromium launch auto-groups tabs under "Agent Browser Stealth"
+# In CDP mode, tabs are grouped when the tab-group extension is installed
 
 # Override group title
 agent-browser --tab-group "My Agent Group" open https://example.com
 ```
 
-- Groups agent-opened tabs under a shared Chrome tab group title.
-- Supported only for local Chromium launches.
-- In CDP (`--cdp` / `--auto-connect`) and cloud provider modes, it is ignored with a warning.
-- Env override: `AGENT_BROWSER_TAB_GROUP`.
+- CDP (`--cdp` / `--auto-connect`) keeps working unchanged.
+- If the extension is installed and handshake succeeds, agent tabs are grouped by session:
+  - session=`default`: `Agent Browser Stealth`
+  - other sessions: `Agent Browser Stealth • <session>`
+- If the extension is missing/unavailable, commands continue normally with silent no-op (no warning/error unless `AGENT_BROWSER_DEBUG=1`).
+- Env overrides:
+  - `AGENT_BROWSER_TAB_GROUP` for base title
+  - `AGENT_BROWSER_TAB_GROUP_PLUGIN_ID` for expected extension ID
+
+Install once in Chrome: load unpacked extension from `extensions/tab-group-cdp/`.
 
 ## Stealth Architecture
 
@@ -175,7 +181,7 @@ Manual overrides are supported:
 
 ## Principle 5: Verification-Aware Risk Control
 
-When a navigation lands on verification/captcha pages, structured risk signals are generated from URL/title evidence.
+When a navigation lands on verification/captcha pages, structured risk signals are generated from URL/title/page-text evidence.
 
 `riskSignals` include:
 
@@ -186,7 +192,7 @@ When a navigation lands on verification/captcha pages, structured risk signals a
 
 ### Risk Mode
 
-- `warn` (default): retry with randomized backoff and return warnings + `riskSignals`.
+- `warn` (default): wait for auto-clear, then retry with randomized backoff and return warnings + `riskSignals`.
 - `block`: fail fast once verification/captcha interstitial is detected.
 - `off`: skip detection/retry path.
 
@@ -198,11 +204,11 @@ AGENT_BROWSER_RISK_MODE=off agent-browser open https://example.com
 
 ```mermaid
 flowchart TD
-  A["Navigate"] --> B["Collect URL and Title Signals"]
+  A["Navigate"] --> B["Collect URL/Title/Text Signals"]
   B --> C{"risk-mode"}
   C -->|off| D["Return Success"]
   C -->|block| E["Return Error with First Signal"]
-  C -->|warn| F["Retry up to 2 times"]
+  C -->|warn| F["Wait for auto-clear, then retry up to 2 times"]
   F --> G{"Signals Cleared"}
   G -->|yes| H["Return Success + recovery warning + riskSignals"]
   G -->|no| I["Return Success + warning + riskSignals"]
@@ -211,7 +217,7 @@ flowchart TD
 ## Operational Recommendations
 
 - Prefer `--headed` for high-friction targets.
-- Reuse session state with `--session-name` for continuity.
+- Reuse session state with one stable `--session-name` for continuity (when omitted, it defaults to `--session`).
 - Keep locale/timezone consistent with target market.
 - Use `--risk-mode block` in strict pipelines that require explicit operator intervention on verification pages.
 - For `cookies set`, use either `--url <url>`, or `--domain <domain> --path <path>` together.

@@ -545,6 +545,11 @@ async function handleNavigate(
   await page.goto(command.url, {
     waitUntil: command.waitUntil ?? 'load',
   });
+  try {
+    browser.triggerTabGroupingForActivePage('navigate');
+  } catch {
+    // Tab-grouping is best-effort and must never fail navigation.
+  }
 
   const riskMode: RiskMode = command.riskMode ?? 'warn';
   if (riskMode === 'off') {
@@ -557,7 +562,7 @@ async function handleNavigate(
   // Detect risk interstitials (captcha/verification) and handle by risk mode.
   const finalUrl = page.url();
   const title = await page.title();
-  let encounteredSignals = detectRiskSignals(finalUrl, title);
+  let encounteredSignals = await detectPageRiskSignals(page, finalUrl, title);
   if (encounteredSignals.length === 0) {
     return successResponse(command.id, {
       url: finalUrl,
@@ -573,16 +578,43 @@ async function handleNavigate(
     );
   }
 
+  // Many verification interstitials (e.g. Cloudflare) auto-resolve after a short wait.
+  // Poll before forcing a retry to avoid resetting the challenge loop ourselves.
+  const initialRecovery = await waitForRiskRecovery(page, 12_000);
+  if (initialRecovery.recovered) {
+    return successResponse(command.id, {
+      url: initialRecovery.url,
+      title: initialRecovery.title,
+      warning:
+        'Risk interstitial detected and cleared after wait. Reuse the same browser session for stability.',
+      riskSignals: encounteredSignals,
+    });
+  }
+  encounteredSignals = mergeRiskSignals(encounteredSignals, initialRecovery.signals);
+
   const maxRetries = 2;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const backoff = 3000 + Math.random() * 4000;
     await page.waitForTimeout(Math.round(backoff));
+
+    const passiveRecovery = await waitForRiskRecovery(page, 8_000);
+    if (passiveRecovery.recovered) {
+      return successResponse(command.id, {
+        url: passiveRecovery.url,
+        title: passiveRecovery.title,
+        warning:
+          'Risk interstitial detected and recovered after wait. Review riskSignals for evidence.',
+        riskSignals: encounteredSignals,
+      });
+    }
+    encounteredSignals = mergeRiskSignals(encounteredSignals, passiveRecovery.signals);
+
     await page.goto(command.url, {
       waitUntil: command.waitUntil ?? 'load',
     });
     const retryUrl = page.url();
     const retryTitle = await page.title();
-    const retrySignals = detectRiskSignals(retryUrl, retryTitle);
+    const retrySignals = await detectPageRiskSignals(page, retryUrl, retryTitle);
     if (retrySignals.length === 0) {
       return successResponse(command.id, {
         url: retryUrl,
@@ -600,7 +632,7 @@ async function handleNavigate(
     url: page.url(),
     title: await page.title(),
     warning:
-      'Captcha/verification page detected. Try --headed mode or use --session-name for state persistence.',
+      'Captcha/verification page detected. Keep one stable --session-name and retry in the same browser window.',
     riskSignals: encounteredSignals,
   });
 }
@@ -616,12 +648,57 @@ function mergeRiskSignals(current: RiskSignal[], next: RiskSignal[]): RiskSignal
   return [...merged.values()];
 }
 
+async function detectPageRiskSignals(
+  page: Page,
+  currentUrl?: string,
+  currentTitle?: string
+): Promise<RiskSignal[]> {
+  const url = currentUrl ?? page.url();
+  const title = currentTitle ?? (await page.title());
+  let pageText = '';
+  try {
+    pageText = await page.evaluate(() => {
+      const text = (globalThis as any).document?.body?.innerText ?? '';
+      return String(text).slice(0, 2000);
+    });
+  } catch {
+    // Ignore cross-origin/script-restricted pages; URL/title signals still apply.
+  }
+  return detectRiskSignals(url, title, pageText);
+}
+
+async function waitForRiskRecovery(
+  page: Page,
+  timeoutMs: number
+): Promise<{ recovered: boolean; url: string; title: string; signals: RiskSignal[] }> {
+  const deadline = Date.now() + timeoutMs;
+  let url = page.url();
+  let title = await page.title();
+  let signals = await detectPageRiskSignals(page, url, title);
+
+  while (signals.length > 0 && Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    await page.waitForTimeout(Math.min(1000, Math.max(250, remaining)));
+    url = page.url();
+    title = await page.title();
+    signals = await detectPageRiskSignals(page, url, title);
+  }
+
+  return {
+    recovered: signals.length === 0,
+    url,
+    title,
+    signals,
+  };
+}
+
 /**
  * Detect verification/captcha interstitials and return structured risk evidence.
  */
-export function detectRiskSignals(url: string, title: string): RiskSignal[] {
+export function detectRiskSignals(url: string, title: string, pageText: string = ''): RiskSignal[] {
   const lowerUrl = url.toLowerCase();
   const lowerTitle = title.toLowerCase();
+  const lowerText = pageText.toLowerCase();
   const urlPatterns: Array<{ pattern: string; code: string; confidence: number }> = [
     { pattern: '/verify/captcha', code: 'captcha_interstitial', confidence: 0.98 },
     { pattern: '/captcha', code: 'captcha_interstitial', confidence: 0.95 },
@@ -637,11 +714,29 @@ export function detectRiskSignals(url: string, title: string): RiskSignal[] {
     { pattern: 'challenge', code: 'verification_interstitial', confidence: 0.8 },
     { pattern: 'attention required', code: 'verification_interstitial', confidence: 0.96 },
     { pattern: 'just a moment', code: 'verification_interstitial', confidence: 0.95 },
+    {
+      pattern: 'performing security verification',
+      code: 'verification_interstitial',
+      confidence: 0.98,
+    },
     { pattern: 'checking your browser', code: 'verification_interstitial', confidence: 0.97 },
     { pattern: 'access denied', code: 'access_gate', confidence: 0.86 },
     { pattern: '驗證', code: 'verification_interstitial', confidence: 0.88 },
     { pattern: '验证', code: 'verification_interstitial', confidence: 0.88 },
     { pattern: '人机验证', code: 'captcha_interstitial', confidence: 0.95 },
+  ];
+  const textPatterns: Array<{ pattern: string; code: string; confidence: number }> = [
+    {
+      pattern: 'performing security verification',
+      code: 'verification_interstitial',
+      confidence: 0.99,
+    },
+    {
+      pattern: 'this website uses a security service to protect against malicious bots',
+      code: 'bot_challenge',
+      confidence: 0.99,
+    },
+    { pattern: 'verifying...', code: 'verification_interstitial', confidence: 0.84 },
   ];
   const signals: RiskSignal[] = [];
   for (const item of urlPatterns) {
@@ -656,6 +751,16 @@ export function detectRiskSignals(url: string, title: string): RiskSignal[] {
   }
   for (const item of titlePatterns) {
     if (lowerTitle.includes(item.pattern)) {
+      signals.push({
+        code: item.code,
+        source: 'title',
+        evidence: item.pattern,
+        confidence: item.confidence,
+      });
+    }
+  }
+  for (const item of textPatterns) {
+    if (lowerText.includes(item.pattern)) {
       signals.push({
         code: item.code,
         source: 'title',
@@ -1152,6 +1257,11 @@ async function handleTabNew(
   if (command.url) {
     const page = browser.getPage();
     await page.goto(command.url, { waitUntil: 'domcontentloaded' });
+    try {
+      browser.triggerTabGroupingForActivePage('tab-new-navigate');
+    } catch {
+      // Tab-grouping is best-effort and must never fail tab creation.
+    }
   }
 
   return successResponse(command.id, result);
