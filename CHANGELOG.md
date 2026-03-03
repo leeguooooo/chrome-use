@@ -1,11 +1,16 @@
 # agent-browser
 
+## 0.15.2-fork.0
+
+### Patch Changes
+
+- Merge upstream `v0.15.2` updates, including fixes for cookies clear/tab close output, daemon EPERM liveness checks, unnamed element reference matching, and docs/skills refresh.
+
 ## 0.15.1-fork.11
 
 ### Patch Changes
 
 - Auto-attach existing browser more reliably by trying CDP localhost:9333 first, then falling back to auto-discovery before failing.
-
   Align daemon behavior and user-facing docs/skill guidance with the same attachment policy.
 
 ## 0.15.1
