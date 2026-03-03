@@ -139,6 +139,7 @@ interface TabGroupIntent {
   session: string;
   groupTitle: string;
   pluginId: string;
+  allowedDomains: string[];
 }
 
 /**
@@ -532,7 +533,12 @@ export class BrowserManager {
       this.normalizeTabGroupPluginId(process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID) ??
       DEFAULT_TAB_GROUP_PLUGIN_ID;
 
-    this.tabGroupIntent = { session, groupTitle, pluginId };
+    this.tabGroupIntent = {
+      session,
+      groupTitle,
+      pluginId,
+      allowedDomains: [...this.allowedDomains],
+    };
     if (!this.tabGroupCapabilityBySession.has(session)) {
       this.tabGroupCapabilityBySession.set(session, 'unknown');
     }
@@ -566,19 +572,56 @@ export class BrowserManager {
   private async requestTabGroupPlugin(
     page: Page,
     intent: TabGroupIntent
-  ): Promise<{ ok: boolean; extensionId?: string; error?: string } | null> {
+  ): Promise<{
+    ok: boolean;
+    extensionId?: string;
+    error?: string;
+    riskHints?: string[];
+    policy?: {
+      enforced: boolean;
+      blocked: boolean;
+      reason?: string;
+    };
+  } | null> {
     const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const result = await page.evaluate(
-      ({ requestType, responseType, nonce, session, groupTitle, pluginId, timeoutMs }) => {
+      ({
+        requestType,
+        responseType,
+        nonce,
+        session,
+        groupTitle,
+        pluginId,
+        allowedDomains,
+        timeoutMs,
+      }) => {
         return new Promise<{
           ok: boolean;
           extensionId?: string;
           error?: string;
+          riskHints?: string[];
+          policy?: {
+            enforced: boolean;
+            blocked: boolean;
+            reason?: string;
+          };
         } | null>((resolve) => {
           let settled = false;
           let timer: number | undefined;
 
-          const finish = (value: { ok: boolean; extensionId?: string; error?: string } | null) => {
+          const finish = (
+            value: {
+              ok: boolean;
+              extensionId?: string;
+              error?: string;
+              riskHints?: string[];
+              policy?: {
+                enforced: boolean;
+                blocked: boolean;
+                reason?: string;
+              };
+            } | null
+          ) => {
             if (settled) return;
             settled = true;
             window.removeEventListener('message', onMessage);
@@ -600,6 +643,20 @@ export class BrowserManager {
                   ? data.extensionId
                   : undefined,
               error: typeof data.error === 'string' ? data.error : undefined,
+              riskHints: Array.isArray(data.riskHints)
+                ? data.riskHints.filter((item): item is string => typeof item === 'string')
+                : undefined,
+              policy:
+                data.policy && typeof data.policy === 'object'
+                  ? {
+                      enforced: (data.policy as Record<string, unknown>).enforced === true,
+                      blocked: (data.policy as Record<string, unknown>).blocked === true,
+                      reason:
+                        typeof (data.policy as Record<string, unknown>).reason === 'string'
+                          ? ((data.policy as Record<string, unknown>).reason as string)
+                          : undefined,
+                    }
+                  : undefined,
             });
           };
 
@@ -614,6 +671,7 @@ export class BrowserManager {
                 session,
                 groupTitle,
                 pluginId,
+                allowedDomains,
               },
               '*'
             );
@@ -630,6 +688,7 @@ export class BrowserManager {
         session: intent.session,
         groupTitle: intent.groupTitle,
         pluginId: intent.pluginId,
+        allowedDomains: intent.allowedDomains,
         timeoutMs: TAB_GROUP_REQUEST_TIMEOUT_MS,
       }
     );
@@ -683,6 +742,16 @@ export class BrowserManager {
       }
 
       this.setTabGroupCapability(intent.session, 'available');
+      if (response.policy?.blocked) {
+        this.logTabGroupDebug(
+          `Tab-group policy blocked navigation (source=${source}, session=${intent.session}): ${response.policy.reason ?? 'domain-not-allowed'}`
+        );
+      }
+      if (response.riskHints && response.riskHints.length > 0) {
+        this.logTabGroupDebug(
+          `Tab-group plugin risk hints (source=${source}, session=${intent.session}): ${response.riskHints.join(' | ')}`
+        );
+      }
     } catch (error) {
       this.setTabGroupCapability(intent.session, 'unavailable');
       const message = error instanceof Error ? error.message : String(error);
@@ -1852,7 +1921,6 @@ export class BrowserManager {
     this.contextTimezoneId = this.resolveStealthTimezoneId();
     this.contextHeaders = undefined;
     this.contextUserAgent = options.userAgent;
-    this.configureTabGroupIntent(options);
     // -p flag takes precedence over AGENT_BROWSER_PROVIDER.
     const provider = options.provider ?? process.env.AGENT_BROWSER_PROVIDER;
 
@@ -1882,6 +1950,7 @@ export class BrowserManager {
         this.allowedDomains = parseDomainList(envDomains);
       }
     }
+    this.configureTabGroupIntent(options);
 
     if (this.downloadPath && (cdpEndpoint || options.autoConnect)) {
       const warning =

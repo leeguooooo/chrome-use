@@ -320,6 +320,9 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
 For tab grouping in CDP mode, grouping is best-effort through the extension handshake:
 extension available => grouped by session; extension missing/unavailable => silent no-op.
 
+With the `agent-browser-stealth` extension installed, the side panel also exposes
+session window isolation controls, empty-group cleanup, and per-session allowlist policy editing.
+
 ## Common Configurations
 
 ### Local Development
@@ -431,9 +434,7 @@ These environment variables configure additional daemon and runtime behavior:
       <td>
         <code>AGENT_BROWSER_TAB_GROUP</code>
       </td>
-      <td>
-        Base title for tab grouping. Session suffix is appended automatically in CDP mode.
-      </td>
+      <td>Base title for tab grouping. Session suffix is appended automatically in CDP mode.</td>
       <td>
         <code>Agent Browser Stealth</code>
       </td>
@@ -472,8 +473,13 @@ These environment variables configure additional daemon and runtime behavior:
       <td>
         <code>AGENT_BROWSER_SESSION_NAME</code>
       </td>
-      <td>Auto-save/load state persistence name (defaults to <code>AGENT_BROWSER_SESSION</code> when unset).</td>
-      <td>(same as <code>AGENT_BROWSER_SESSION</code>)</td>
+      <td>
+        Auto-save/load state persistence name (defaults to <code>AGENT_BROWSER_SESSION</code> when
+        unset).
+      </td>
+      <td>
+        (same as <code>AGENT_BROWSER_SESSION</code>)
+      </td>
     </tr>
     <tr>
       <td>

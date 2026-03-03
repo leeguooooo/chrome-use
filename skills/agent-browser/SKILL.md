@@ -268,11 +268,17 @@ AGENT_BROWSER_TAB_GROUP_PLUGIN_ID="<extension-id>" agent-browser open https://ex
 Notes:
 
 - Works in CDP mode via extension handshake.
+- Extension package name in Chrome: `agent-browser-stealth`.
 - Extension installed and reachable: tabs are grouped by session.
 - Extension missing/unavailable: silent no-op (no warning/error unless debug mode).
 - Default titles:
   - `default` session: `Agent Browser Stealth`
   - non-default session: `Agent Browser Stealth • <session>`
+- Additional extension-side capabilities:
+  - Session window isolation + deterministic group colors.
+  - Side panel controls: Focus / Keep Only This / Clean Empty Groups.
+  - Session allowlist policy editing and fallback blocking (`about:blank`).
+  - Download auto-routing to `agent-browser-stealth/<session>/...`.
 
 ### Visual Browser (Debugging)
 

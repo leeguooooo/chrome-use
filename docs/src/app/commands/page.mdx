@@ -147,6 +147,11 @@ CDP mode uses a browser extension handshake to group tabs.
 - Default titles:
   - `default` session: `Agent Browser Stealth`
   - non-default: `Agent Browser Stealth • <session>`
+- Extension side panel (`agent-browser-stealth`) also provides:
+  - Session window isolation and deterministic group colors.
+  - `Keep Only This`, `Focus`, `Clean Empty Groups` quick actions.
+  - Session allowlist editing (domain fallback to `about:blank` when violated).
+  - Download routing to `agent-browser-stealth/<session>/...`.
 - Use `--tab-group` / `AGENT_BROWSER_TAB_GROUP` for base title.
 - Use `AGENT_BROWSER_TAB_GROUP_PLUGIN_ID` (or `--tab-group-plugin-id`) to override expected extension ID.
 

@@ -12,18 +12,14 @@
       return;
     }
 
-    let request;
-    try {
-      request = {
-        type: REQUEST_TYPE,
-        nonce: data.nonce,
-        session: data.session,
-        groupTitle: data.groupTitle,
-        pluginId: data.pluginId,
-      };
-    } catch {
-      return;
-    }
+    const request = {
+      type: REQUEST_TYPE,
+      nonce: data.nonce,
+      session: data.session,
+      groupTitle: data.groupTitle,
+      pluginId: data.pluginId,
+      allowedDomains: Array.isArray(data.allowedDomains) ? data.allowedDomains : undefined,
+    };
 
     try {
       chrome.runtime.sendMessage(request, (response) => {
@@ -53,6 +49,19 @@
                 ? payload.extensionId
                 : chrome.runtime.id,
             groupId: typeof payload.groupId === 'number' ? payload.groupId : undefined,
+            windowId: typeof payload.windowId === 'number' ? payload.windowId : undefined,
+            color: typeof payload.color === 'string' ? payload.color : undefined,
+            collapsed: payload.collapsed === true,
+            policy:
+              payload.policy && typeof payload.policy === 'object'
+                ? {
+                    enforced: payload.policy.enforced === true,
+                    blocked: payload.policy.blocked === true,
+                    reason:
+                      typeof payload.policy.reason === 'string' ? payload.policy.reason : undefined,
+                  }
+                : undefined,
+            riskHints: Array.isArray(payload.riskHints) ? payload.riskHints : undefined,
             error: typeof payload.error === 'string' ? payload.error : undefined,
           },
           '*'

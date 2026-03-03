@@ -1,12 +1,18 @@
 {
   "manifest_version": 3,
-  "name": "Agent Browser CDP Tab Grouper",
-  "version": "0.1.0",
-  "description": "Groups tabs by Agent Browser session when requested from CDP-driven pages.",
-  "permissions": ["tabs", "tabGroups"],
+  "name": "agent-browser-stealth",
+  "version": "0.2.0",
+  "description": "Session-aware tab grouping and coordination for CDP-driven agent-browser workflows.",
+  "permissions": ["tabs", "tabGroups", "downloads", "storage", "sidePanel"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "agent-browser-stealth"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "content_scripts": [
     {
