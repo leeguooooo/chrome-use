@@ -848,6 +848,10 @@ const closeSchema = baseCommandSchema.extend({
   action: z.literal('close'),
 });
 
+const doctorSchema = baseCommandSchema.extend({
+  action: z.literal('doctor'),
+});
+
 // Tab/Window schemas
 const tabNewSchema = baseCommandSchema.extend({
   action: z.literal('tab_new'),
@@ -955,6 +959,7 @@ const commandSchema = z.discriminatedUnion('action', [
   hoverSchema,
   contentSchema,
   closeSchema,
+  doctorSchema,
   tabNewSchema,
   tabListSchema,
   tabSwitchSchema,

@@ -412,11 +412,13 @@ export async function startDaemon(options?: {
 
           // Auto-launch if not already launched and this isn't a launch/close/state_load command.
           // Default behavior for this fork: attach to an existing browser only.
+          const isDoctor = parseResult.command.action === 'doctor';
           if (
             !manager.isLaunched() &&
             parseResult.command.action !== 'launch' &&
             parseResult.command.action !== 'close' &&
-            parseResult.command.action !== 'state_load'
+            parseResult.command.action !== 'state_load' &&
+            parseResult.command.action !== 'doctor'
           ) {
             if (isIOS && manager instanceof IOSManager) {
               // Auto-launch iOS Safari
@@ -544,6 +546,53 @@ export async function startDaemon(options?: {
                 throw new Error(
                   'Project policy requires using your existing browser. Could not connect to CDP at localhost:9333 and auto-discovery also failed.'
                 );
+              }
+            }
+          }
+
+          // For doctor, attempt the same default attach flow but do not fail hard if attach is unavailable.
+          // This keeps diagnostics actionable even when CDP is down.
+          if (!manager.isLaunched() && isDoctor && manager instanceof BrowserManager) {
+            try {
+              await manager.launch({
+                id: 'doctor-cdp',
+                action: 'launch',
+                cdpPort: 9333,
+                ignoreHTTPSErrors: process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1',
+                userAgent: process.env.AGENT_BROWSER_USER_AGENT,
+                colorScheme:
+                  process.env.AGENT_BROWSER_COLOR_SCHEME === 'dark' ||
+                  process.env.AGENT_BROWSER_COLOR_SCHEME === 'light' ||
+                  process.env.AGENT_BROWSER_COLOR_SCHEME === 'no-preference'
+                    ? (process.env.AGENT_BROWSER_COLOR_SCHEME as 'dark' | 'light' | 'no-preference')
+                    : undefined,
+                tabGroup: process.env.AGENT_BROWSER_TAB_GROUP?.trim() || undefined,
+                tabGroupPluginId:
+                  process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim() || undefined,
+              });
+            } catch {
+              try {
+                await manager.launch({
+                  id: 'doctor-auto-connect',
+                  action: 'launch',
+                  autoConnect: true,
+                  ignoreHTTPSErrors: process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1',
+                  userAgent: process.env.AGENT_BROWSER_USER_AGENT,
+                  colorScheme:
+                    process.env.AGENT_BROWSER_COLOR_SCHEME === 'dark' ||
+                    process.env.AGENT_BROWSER_COLOR_SCHEME === 'light' ||
+                    process.env.AGENT_BROWSER_COLOR_SCHEME === 'no-preference'
+                      ? (process.env.AGENT_BROWSER_COLOR_SCHEME as
+                          | 'dark'
+                          | 'light'
+                          | 'no-preference')
+                      : undefined,
+                  tabGroup: process.env.AGENT_BROWSER_TAB_GROUP?.trim() || undefined,
+                  tabGroupPluginId:
+                    process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim() || undefined,
+                });
+              } catch {
+                // Keep running: doctor should report failures instead of exiting early.
               }
             }
           }

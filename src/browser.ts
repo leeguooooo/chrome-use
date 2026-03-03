@@ -18,7 +18,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { existsSync, mkdirSync, rmSync, readFileSync, statSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
-import type { LaunchCommand, TraceEvent } from './types.js';
+import type {
+  DoctorCheck,
+  DoctorCheckStatus,
+  DoctorData,
+  LaunchCommand,
+  TraceEvent,
+} from './types.js';
 import { type RefMap, type EnhancedSnapshot, getEnhancedSnapshot, parseRef } from './snapshot.js';
 import { safeHeaderMerge } from './state-utils.js';
 import { isDomainAllowed, installDomainFilter, parseDomainList } from './domain-filter.js';
@@ -175,6 +181,7 @@ export class BrowserManager {
   private contextTimezoneId: string | undefined = undefined;
   private contextHeaders: Record<string, string> | undefined = undefined;
   private contextUserAgent: string | undefined = undefined;
+  private allowWebGLContextFallback: boolean = false;
   private downloadPath: string | null = null;
   private allowedDomains: string[] = [];
   private tabGroupIntent: TabGroupIntent | null = null;
@@ -468,8 +475,47 @@ export class BrowserManager {
     await applyStealthScripts(context, {
       ...options,
       userAgent: this.contextUserAgent,
+      allowWebGLContextFallback: this.allowWebGLContextFallback,
     });
     this.logStealthPolicy('init-script applied');
+  }
+
+  private async probeNativeWebGL(page: Page): Promise<{ loose: boolean; strict: boolean } | null> {
+    try {
+      return await page.evaluate(() => {
+        const doc = (globalThis as any).document;
+        if (!doc || typeof doc.createElement !== 'function') return null;
+        const canvas = doc.createElement('canvas');
+        const strict =
+          canvas.getContext('webgl', { failIfMajorPerformanceCaveat: true }) ||
+          canvas.getContext('experimental-webgl', { failIfMajorPerformanceCaveat: true }) ||
+          canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: true });
+        const loose =
+          canvas.getContext('webgl') ||
+          canvas.getContext('experimental-webgl') ||
+          canvas.getContext('webgl2');
+        return { strict: !!strict, loose: !!loose };
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private async configureWebGLFallbackFromPage(page: Page, source: string): Promise<void> {
+    const probe = await this.probeNativeWebGL(page);
+    this.allowWebGLContextFallback = !!probe && probe.strict === false;
+
+    if (process.env.AGENT_BROWSER_DEBUG === '1') {
+      console.error(
+        `[DEBUG] WebGL probe (${source}): strict=${String(probe?.strict)} loose=${String(probe?.loose)} fallback=${this.allowWebGLContextFallback}`
+      );
+    }
+
+    if (probe && probe.strict === false) {
+      this.launchWarnings.push(
+        `Strict WebGL context is unavailable on ${source} (often caused by GPU-disabled CDP browsers, e.g. --use-gl=disabled); enabling compatibility fallback context for fingerprint probes.`
+      );
+    }
   }
 
   // CDP session for screencast and input injection
@@ -606,6 +652,7 @@ export class BrowserManager {
             reason?: string;
           };
         } | null>((resolve) => {
+          const win = globalThis as any;
           let settled = false;
           let timer: number | undefined;
 
@@ -624,15 +671,15 @@ export class BrowserManager {
           ) => {
             if (settled) return;
             settled = true;
-            window.removeEventListener('message', onMessage);
+            win.removeEventListener('message', onMessage);
             if (typeof timer === 'number') {
-              window.clearTimeout(timer);
+              win.clearTimeout(timer);
             }
             resolve(value);
           };
 
-          const onMessage = (event: MessageEvent) => {
-            if (event.source !== window) return;
+          const onMessage = (event: any) => {
+            if (event.source !== win) return;
             const data = event.data as Record<string, unknown> | null;
             if (!data || data.type !== responseType) return;
             if (data.nonce !== nonce) return;
@@ -660,11 +707,11 @@ export class BrowserManager {
             });
           };
 
-          window.addEventListener('message', onMessage);
-          timer = window.setTimeout(() => finish(null), timeoutMs);
+          win.addEventListener('message', onMessage);
+          timer = win.setTimeout(() => finish(null), timeoutMs);
 
           try {
-            window.postMessage(
+            win.postMessage(
               {
                 type: requestType,
                 nonce,
@@ -1921,6 +1968,7 @@ export class BrowserManager {
     this.contextTimezoneId = this.resolveStealthTimezoneId();
     this.contextHeaders = undefined;
     this.contextUserAgent = options.userAgent;
+    this.allowWebGLContextFallback = false;
     // -p flag takes precedence over AGENT_BROWSER_PROVIDER.
     const provider = options.provider ?? process.env.AGENT_BROWSER_PROVIDER;
 
@@ -2207,6 +2255,16 @@ export class BrowserManager {
       });
     }
 
+    let probePage = context.pages()[0];
+    const createdProbePage = !probePage;
+    if (!probePage) {
+      probePage = await context.newPage();
+    }
+    await this.configureWebGLFallbackFromPage(probePage, 'local');
+    if (createdProbePage) {
+      await probePage.close().catch(() => {});
+    }
+
     await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
 
     context.setDefaultTimeout(getDefaultTimeout());
@@ -2322,6 +2380,8 @@ export class BrowserManager {
       // All validation passed - commit state
       this.browser = browser;
       this.cdpEndpoint = cdpEndpoint;
+
+      await this.configureWebGLFallbackFromPage(allPages[0], 'cdp');
 
       for (const context of contexts) {
         await this.applyStealthIfEnabled(context, { locale: this.contextLocale });
@@ -2570,6 +2630,233 @@ export class BrowserManager {
     }
 
     throw new Error(`No running Chrome instance with remote debugging found.\n${hint}`);
+  }
+
+  private addDoctorCheck(
+    checks: DoctorCheck[],
+    name: string,
+    status: DoctorCheckStatus,
+    message: string,
+    details?: Record<string, unknown>
+  ): void {
+    checks.push({ name, status, message, ...(details ? { details } : {}) });
+  }
+
+  private buildDoctorTabGroupIntent(): TabGroupIntent {
+    const session = this.getAgentSessionName();
+    const pluginId =
+      this.tabGroupIntent?.pluginId ??
+      this.normalizeTabGroupPluginId(process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID) ??
+      DEFAULT_TAB_GROUP_PLUGIN_ID;
+    const groupTitle =
+      this.tabGroupIntent?.groupTitle ??
+      this.buildSessionTabGroupTitle(DEFAULT_TAB_GROUP_NAME, session);
+
+    return {
+      session,
+      groupTitle,
+      pluginId,
+      allowedDomains:
+        (this.tabGroupIntent?.allowedDomains?.length ?? 0) > 0
+          ? [...(this.tabGroupIntent?.allowedDomains ?? [])]
+          : [...this.allowedDomains],
+    };
+  }
+
+  /**
+   * Run connection diagnostics for CDP discovery and tab-group plugin handshake.
+   * This is intentionally side-effect-light: it does not navigate or force launch.
+   */
+  async runDoctor(): Promise<DoctorData> {
+    const checks: DoctorCheck[] = [];
+    const preferredPort = 9333;
+    const discovered: DoctorData['cdp']['discovered'] = [];
+    const devToolsActivePort: DoctorData['cdp']['devToolsActivePort'] = [];
+    const seenPorts = new Set<number>();
+
+    const pushDiscovery = (
+      port: number,
+      source: 'preferred-port' | 'common-port' | 'devtools-active-port',
+      wsUrl: string | null,
+      status: DoctorCheckStatus,
+      note?: string
+    ) => {
+      discovered.push({
+        port,
+        source,
+        status,
+        ...(wsUrl ? { wsUrl } : {}),
+        ...(note ? { note } : {}),
+      });
+      seenPorts.add(port);
+    };
+
+    const preferredWsUrl = await this.probeDebugPort(preferredPort);
+    pushDiscovery(
+      preferredPort,
+      'preferred-port',
+      preferredWsUrl,
+      preferredWsUrl ? 'pass' : 'fail'
+    );
+    this.addDoctorCheck(
+      checks,
+      'cdp:preferred-9333',
+      preferredWsUrl ? 'pass' : 'fail',
+      preferredWsUrl
+        ? `CDP :${preferredPort} reachable`
+        : `CDP :${preferredPort} is not reachable via http://127.0.0.1:${preferredPort}/json/version`
+    );
+
+    for (const port of [9222, 9229]) {
+      const wsUrl = await this.probeDebugPort(port);
+      pushDiscovery(port, 'common-port', wsUrl, wsUrl ? 'pass' : 'fail');
+    }
+
+    for (const userDataDir of this.getChromeUserDataDirs()) {
+      const activePort = this.readDevToolsActivePort(userDataDir);
+      if (!activePort) {
+        devToolsActivePort.push({
+          userDataDir,
+          status: 'skip',
+        });
+        continue;
+      }
+
+      devToolsActivePort.push({
+        userDataDir,
+        status: 'pass',
+        port: activePort.port,
+        wsPath: activePort.wsPath,
+      });
+
+      if (!seenPorts.has(activePort.port)) {
+        const wsUrl = await this.probeDebugPort(activePort.port);
+        pushDiscovery(
+          activePort.port,
+          'devtools-active-port',
+          wsUrl,
+          wsUrl ? 'pass' : 'warn',
+          wsUrl
+            ? 'resolved from DevToolsActivePort'
+            : 'DevToolsActivePort exists, but /json/version is unavailable (likely WS-only debug server)'
+        );
+      }
+    }
+
+    const reachableEndpoints = discovered.filter((entry) => entry.status === 'pass');
+    this.addDoctorCheck(
+      checks,
+      'cdp:any-reachable-endpoint',
+      reachableEndpoints.length > 0 ? 'pass' : 'fail',
+      reachableEndpoints.length > 0
+        ? `Found ${reachableEndpoints.length} reachable CDP endpoint(s)`
+        : 'No reachable CDP endpoints found on preferred/common/local profile ports',
+      {
+        endpoints: discovered.map((entry) => ({
+          port: entry.port,
+          source: entry.source,
+          status: entry.status,
+        })),
+      }
+    );
+
+    const pluginIntent = this.buildDoctorTabGroupIntent();
+    const pluginResult: DoctorData['plugin'] = {
+      configuredPluginId: pluginIntent.pluginId,
+      status: 'skip',
+      mode: 'not-launched',
+      message: 'Browser is not launched; plugin handshake skipped',
+    };
+
+    if (!this.isLaunched()) {
+      this.addDoctorCheck(
+        checks,
+        'plugin:tab-group-handshake',
+        pluginResult.status,
+        pluginResult.message,
+        { configuredPluginId: pluginIntent.pluginId }
+      );
+    } else if (this.stealthConnectionKind !== 'cdp') {
+      pluginResult.mode = 'non-cdp';
+      pluginResult.status = 'skip';
+      pluginResult.message = `Current connection mode is ${this.stealthConnectionKind}; plugin handshake only applies to CDP`;
+      this.addDoctorCheck(
+        checks,
+        'plugin:tab-group-handshake',
+        pluginResult.status,
+        pluginResult.message,
+        { configuredPluginId: pluginIntent.pluginId }
+      );
+    } else {
+      pluginResult.mode = 'cdp';
+      try {
+        const page = this.getPage();
+        if (page.isClosed()) {
+          pluginResult.status = 'fail';
+          pluginResult.message = 'Active page is closed; cannot run plugin handshake';
+        } else if (!this.canInjectTabGroupScript(page)) {
+          pluginResult.status = 'warn';
+          pluginResult.message =
+            'Active page is an internal browser page; open a normal http(s) page to test plugin handshake';
+        } else {
+          const response = await this.requestTabGroupPlugin(page, pluginIntent);
+          if (!response) {
+            pluginResult.status = 'fail';
+            pluginResult.message = 'Plugin handshake timed out';
+            this.setTabGroupCapability(pluginIntent.session, 'unavailable');
+          } else if (!response.ok) {
+            pluginResult.status = 'fail';
+            pluginResult.message = response.error
+              ? `Plugin handshake failed: ${response.error}`
+              : 'Plugin handshake failed';
+            this.setTabGroupCapability(pluginIntent.session, 'unavailable');
+          } else if (response.extensionId !== pluginIntent.pluginId) {
+            pluginResult.status = 'fail';
+            pluginResult.message = `Plugin id mismatch: expected ${pluginIntent.pluginId}, got ${response.extensionId ?? 'missing'}`;
+            pluginResult.extensionId = response.extensionId;
+            this.setTabGroupCapability(pluginIntent.session, 'unavailable');
+          } else {
+            pluginResult.status = 'pass';
+            pluginResult.message = 'Plugin handshake succeeded';
+            pluginResult.extensionId = response.extensionId;
+            this.setTabGroupCapability(pluginIntent.session, 'available');
+          }
+        }
+      } catch (error) {
+        pluginResult.status = 'fail';
+        pluginResult.message =
+          error instanceof Error ? error.message : `Plugin handshake failed: ${String(error)}`;
+      }
+
+      this.addDoctorCheck(
+        checks,
+        'plugin:tab-group-handshake',
+        pluginResult.status,
+        pluginResult.message,
+        {
+          configuredPluginId: pluginIntent.pluginId,
+          ...(pluginResult.extensionId ? { extensionId: pluginResult.extensionId } : {}),
+        }
+      );
+    }
+
+    const ok = checks.every((check) => check.status !== 'fail');
+    return {
+      ok,
+      checks,
+      context: {
+        launched: this.isLaunched(),
+        connectionKind: this.stealthConnectionKind,
+        cdpEndpoint: this.cdpEndpoint,
+        session: this.getAgentSessionName(),
+      },
+      cdp: {
+        preferredPort,
+        discovered,
+        devToolsActivePort,
+      },
+      plugin: pluginResult,
+    };
   }
 
   /**

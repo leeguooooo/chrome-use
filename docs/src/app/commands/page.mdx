@@ -33,6 +33,7 @@ agent-browser pdf <path>              # Save page as PDF
 agent-browser snapshot                # Accessibility tree with refs
 agent-browser eval <js>               # Run JavaScript
 agent-browser connect <port|url>      # Connect to browser via CDP
+agent-browser doctor                  # Diagnose CDP + tab-group plugin health
 agent-browser --version               # Show CLI version
 agent-browser close                   # Close browser (aliases: quit, exit)
 ```
@@ -252,6 +253,7 @@ agent-browser console --clear         # Clear console log
 agent-browser errors                  # View page errors
 agent-browser errors --clear          # Clear error log
 agent-browser highlight <sel>         # Highlight element
+agent-browser doctor                  # Diagnose CDP + plugin handshake status
 ```
 
 ## State management

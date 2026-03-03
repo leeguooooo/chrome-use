@@ -242,6 +242,21 @@ node scripts/check-sannysoft-webdriver.js --binary ./cli/target/release/agent-br
 node scripts/check-creepjs-headless.js --binary ./cli/target/release/agent-browser
 ```
 
+## Doctor Diagnostics
+
+Use `doctor` to quickly diagnose local CDP and tab-group plugin readiness:
+
+```bash
+agent-browser doctor
+agent-browser --json doctor
+```
+
+`doctor` checks:
+
+- CDP probe status (preferred `:9333` plus common ports)
+- DevToolsActivePort discovery from local Chrome profiles
+- Tab-group extension handshake (when currently attached in CDP mode)
+
 ## Upstream Compatibility
 
 This fork intentionally keeps command workflows close to upstream while concentrating custom behavior in stealth, policy, and anti-detection handling.

@@ -52,6 +52,7 @@ agent-browser open https://example.com && agent-browser wait --load networkidle 
 # Navigation
 agent-browser open <url>              # Navigate (aliases: goto, navigate)
 agent-browser --risk-mode block open <url>  # Block if verification/captcha interstitial is detected
+agent-browser doctor                  # Diagnose CDP + tab-group plugin health
 agent-browser close                   # Close browser
 agent-browser --version               # Show CLI version (fork builds include upstream/fork)
 
@@ -234,6 +235,9 @@ agent-browser --cdp 9222 snapshot
 
 # Debug auto-attach behavior
 agent-browser --debug snapshot
+
+# Diagnose CDP + plugin handshake status
+agent-browser doctor
 ```
 
 ### Color Scheme (Dark Mode)

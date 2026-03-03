@@ -877,6 +877,10 @@ export interface CloseCommand extends BaseCommand {
   action: 'close';
 }
 
+export interface DoctorCommand extends BaseCommand {
+  action: 'doctor';
+}
+
 // Tab/Window commands
 export interface TabNewCommand extends BaseCommand {
   action: 'tab_new';
@@ -931,6 +935,7 @@ export type Command =
   | HoverCommand
   | ContentCommand
   | CloseCommand
+  | DoctorCommand
   | TabNewCommand
   | TabListCommand
   | TabSwitchCommand
@@ -1295,6 +1300,49 @@ export interface DiffScreenshotData {
 export interface DiffUrlData {
   snapshot: DiffSnapshotData;
   screenshot?: DiffScreenshotData;
+}
+
+export type DoctorCheckStatus = 'pass' | 'warn' | 'fail' | 'skip';
+
+export interface DoctorCheck {
+  name: string;
+  status: DoctorCheckStatus;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface DoctorData {
+  ok: boolean;
+  checks: DoctorCheck[];
+  context: {
+    launched: boolean;
+    connectionKind: string;
+    cdpEndpoint?: string | null;
+    session: string;
+  };
+  cdp: {
+    preferredPort: number;
+    discovered: Array<{
+      port: number;
+      status: DoctorCheckStatus;
+      wsUrl?: string | null;
+      source: 'preferred-port' | 'common-port' | 'devtools-active-port';
+      note?: string;
+    }>;
+    devToolsActivePort: Array<{
+      userDataDir: string;
+      status: DoctorCheckStatus;
+      port?: number;
+      wsPath?: string;
+    }>;
+  };
+  plugin: {
+    configuredPluginId: string;
+    status: DoctorCheckStatus;
+    mode: 'cdp' | 'non-cdp' | 'not-launched';
+    message: string;
+    extensionId?: string;
+  };
 }
 
 // Browser state

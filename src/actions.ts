@@ -133,6 +133,7 @@ import type {
   DiffScreenshotData,
   DiffUrlData,
   ContentData,
+  DoctorCommand,
   TabListData,
   TabNewData,
   TabSwitchData,
@@ -289,6 +290,8 @@ export async function executeCommand(command: Command, browser: BrowserManager):
         return await handleContent(command, browser);
       case 'close':
         return await handleClose(command, browser);
+      case 'doctor':
+        return await handleDoctor(command, browser);
       case 'tab_new':
         return await handleTabNew(command, browser);
       case 'tab_list':
@@ -522,6 +525,11 @@ async function handleLaunch(
     launched: true,
     stealth: browser.getStealthStatus(command.browser ?? 'chromium'),
   });
+}
+
+async function handleDoctor(command: DoctorCommand, browser: BrowserManager): Promise<Response> {
+  const report = await browser.runDoctor();
+  return successResponse(command.id, report);
 }
 
 async function handleNavigate(

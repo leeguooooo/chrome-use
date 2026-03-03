@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-stealth",
-  "version": "0.15.2-fork.0",
+  "version": "0.15.2-fork.1",
   "description": "Stealth browser automation CLI for AI agents with anti-bot evasions",
   "type": "module",
   "main": "dist/daemon.js",
@@ -34,6 +34,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e:dogfood": "vitest run test/e2e/dogfood.eval.ts",
+    "check:daemon-pid-recovery": "node scripts/check-daemon-pid-recovery.js",
     "postinstall": "node scripts/postinstall.js",
     "verify:native-version": "node scripts/verify-native-version.js",
     "clawhub:sync": "bash scripts/clawhub-sync.sh",

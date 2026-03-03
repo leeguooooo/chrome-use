@@ -1464,6 +1464,14 @@ describe('parseCommand', () => {
   });
 
   describe('invalid commands', () => {
+    it('should parse doctor command', () => {
+      const result = parseCommand(cmd({ id: '1', action: 'doctor' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.command.action).toBe('doctor');
+      }
+    });
+
     it('should reject unknown action', () => {
       const result = parseCommand(cmd({ id: '1', action: 'unknown' }));
       expect(result.success).toBe(false);

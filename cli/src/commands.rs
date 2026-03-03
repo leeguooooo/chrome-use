@@ -655,6 +655,17 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
         // === Close ===
         "close" | "quit" | "exit" => Ok(json!({ "id": id, "action": "close" })),
 
+        // === Doctor ===
+        "doctor" => {
+            if !rest.is_empty() {
+                return Err(ParseError::InvalidValue {
+                    message: format!("doctor does not accept arguments: {}", rest.join(" ")),
+                    usage: "doctor",
+                });
+            }
+            Ok(json!({ "id": id, "action": "doctor" }))
+        }
+
         // === Connect (CDP) ===
         "connect" => {
             let endpoint = rest.first().ok_or_else(|| ParseError::MissingArguments {
@@ -2376,16 +2387,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cmd["action"], "navigate");
-        assert_eq!(
-            cmd["url"],
-            "chrome-extension://abcdefghijklmnop/popup.html"
-        );
+        assert_eq!(cmd["url"], "chrome-extension://abcdefghijklmnop/popup.html");
     }
 
     #[test]
     fn test_navigate_chrome_url() {
-        let cmd =
-            parse_command(&args("open chrome://extensions"), &default_flags()).unwrap();
+        let cmd = parse_command(&args("open chrome://extensions"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "navigate");
         assert_eq!(cmd["url"], "chrome://extensions");
     }
@@ -2961,6 +2968,21 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err, ParseError::InvalidValue { .. }));
         assert!(err.format().contains("Invalid base64"));
+    }
+
+    #[test]
+    fn test_doctor() {
+        let cmd = parse_command(&args("doctor"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "doctor");
+    }
+
+    #[test]
+    fn test_doctor_rejects_arguments() {
+        let result = parse_command(&args("doctor extra"), &default_flags());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ParseError::InvalidValue { .. }));
+        assert!(err.format().contains("doctor does not accept arguments"));
     }
 
     #[test]
@@ -3717,11 +3739,7 @@ mod tests {
 
     #[test]
     fn test_scroll_with_selector_short_flag() {
-        let cmd = parse_command(
-            &args("scroll left 100 -s .sidebar"),
-            &default_flags(),
-        )
-        .unwrap();
+        let cmd = parse_command(&args("scroll left 100 -s .sidebar"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "scroll");
         assert_eq!(cmd["direction"], "left");
         assert_eq!(cmd["amount"], 100);
@@ -3730,11 +3748,8 @@ mod tests {
 
     #[test]
     fn test_scroll_selector_before_positional() {
-        let cmd = parse_command(
-            &args("scroll --selector .panel down 400"),
-            &default_flags(),
-        )
-        .unwrap();
+        let cmd =
+            parse_command(&args("scroll --selector .panel down 400"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "scroll");
         assert_eq!(cmd["direction"], "down");
         assert_eq!(cmd["amount"], 400);
@@ -3743,11 +3758,7 @@ mod tests {
 
     #[test]
     fn test_scroll_selector_only() {
-        let cmd = parse_command(
-            &args("scroll --selector .content"),
-            &default_flags(),
-        )
-        .unwrap();
+        let cmd = parse_command(&args("scroll --selector .content"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "scroll");
         assert_eq!(cmd["direction"], "down");
         assert_eq!(cmd["amount"], 300);

@@ -38,7 +38,9 @@ fn truncate_if_needed(content: &str, max: Option<usize>) -> String {
             let total_chars = content.chars().count();
             format!(
                 "{}\n[truncated: showing {} of {} chars. Use --max-output to adjust]",
-                &content[..byte_offset], limit, total_chars
+                &content[..byte_offset],
+                limit,
+                total_chars
             )
         }
         // Content has fewer than `limit` chars despite more bytes
@@ -51,7 +53,10 @@ fn print_with_boundaries(content: &str, origin: Option<&str>, opts: &OutputOptio
     if opts.content_boundaries {
         let origin_str = origin.unwrap_or("unknown");
         let nonce = get_boundary_nonce();
-        println!("--- AGENT_BROWSER_PAGE_CONTENT nonce={} origin={} ---", nonce, origin_str);
+        println!(
+            "--- AGENT_BROWSER_PAGE_CONTENT nonce={} origin={} ---",
+            nonce, origin_str
+        );
         println!("{}", content);
         println!("--- END_AGENT_BROWSER_PAGE_CONTENT nonce={} ---", nonce);
     } else {
@@ -65,14 +70,18 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             let mut json_val = serde_json::to_value(resp).unwrap_or_default();
             if let Some(obj) = json_val.as_object_mut() {
                 let nonce = get_boundary_nonce();
-                let origin = obj.get("data")
+                let origin = obj
+                    .get("data")
                     .and_then(|d| d.get("origin"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                obj.insert("_boundary".to_string(), serde_json::json!({
-                    "nonce": nonce,
-                    "origin": origin,
-                }));
+                obj.insert(
+                    "_boundary".to_string(),
+                    serde_json::json!({
+                        "nonce": nonce,
+                        "origin": origin,
+                    }),
+                );
             }
             println!("{}", serde_json::to_string(&json_val).unwrap_or_default());
         } else {
@@ -105,12 +114,18 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                             .get("code")
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown_risk");
-                        let source = signal.get("source").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let source = signal
+                            .get("source")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
                         let evidence = signal
                             .get("evidence")
                             .and_then(|v| v.as_str())
                             .unwrap_or("-");
-                        let confidence = signal.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let confidence = signal
+                            .get("confidence")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
                         println!(
                             "{} risk-signal code={} source={} evidence={} confidence={:.2}",
                             color::warning_indicator(),
@@ -134,6 +149,10 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         // Diff responses -- route by action to avoid fragile shape probing
         if let Some(obj) = data.as_object() {
             match action {
+                Some("doctor") => {
+                    print_doctor_report(obj);
+                    return;
+                }
                 Some("diff_snapshot") => {
                     print_snapshot_diff(obj);
                     return;
@@ -295,7 +314,11 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 for log in logs {
                     let level = log.get("type").and_then(|v| v.as_str()).unwrap_or("log");
                     let text = log.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                    console_output.push_str(&format!("{} {}\n", color::console_level_prefix(level), text));
+                    console_output.push_str(&format!(
+                        "{} {}\n",
+                        color::console_level_prefix(level),
+                        text
+                    ));
                 }
                 if console_output.ends_with('\n') {
                     console_output.pop();
@@ -697,7 +720,12 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                     let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
                     let url = p.get("url").and_then(|v| v.as_str()).unwrap_or("");
                     let user = p.get("username").and_then(|v| v.as_str()).unwrap_or("");
-                    println!("  {} {} {}", color::green(name), color::dim(user), color::dim(url));
+                    println!(
+                        "  {} {} {}",
+                        color::green(name),
+                        color::dim(user),
+                        color::dim(url)
+                    );
                 }
             }
             return;
@@ -707,8 +735,14 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         if let Some(profile) = data.get("profile").and_then(|v| v.as_object()) {
             let name = profile.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let url = profile.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let user = profile.get("username").and_then(|v| v.as_str()).unwrap_or("");
-            let created = profile.get("createdAt").and_then(|v| v.as_str()).unwrap_or("");
+            let user = profile
+                .get("username")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let created = profile
+                .get("createdAt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let last_login = profile.get("lastLoginAt").and_then(|v| v.as_str());
             println!("Name: {}", name);
             println!("URL: {}", url);
@@ -723,47 +757,94 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         // Auth save/update/login/delete
         if data.get("saved").and_then(|v| v.as_bool()).unwrap_or(false) {
             let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            println!("{} Auth profile '{}' saved", color::success_indicator(), name);
+            println!(
+                "{} Auth profile '{}' saved",
+                color::success_indicator(),
+                name
+            );
             return;
         }
-        if data.get("updated").and_then(|v| v.as_bool()).unwrap_or(false)
-            && !data.get("saved").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("updated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            && !data.get("saved").and_then(|v| v.as_bool()).unwrap_or(false)
+        {
             let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            println!("{} Auth profile '{}' updated", color::success_indicator(), name);
+            println!(
+                "{} Auth profile '{}' updated",
+                color::success_indicator(),
+                name
+            );
             return;
         }
-        if data.get("loggedIn").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("loggedIn")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
-                println!("{} Logged in as '{}' - {}", color::success_indicator(), name, title);
+                println!(
+                    "{} Logged in as '{}' - {}",
+                    color::success_indicator(),
+                    name,
+                    title
+                );
             } else {
                 println!("{} Logged in as '{}'", color::success_indicator(), name);
             }
             return;
         }
-        if data.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("deleted")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             if let Some(name) = data.get("name").and_then(|v| v.as_str()) {
-                println!("{} Auth profile '{}' deleted", color::success_indicator(), name);
+                println!(
+                    "{} Auth profile '{}' deleted",
+                    color::success_indicator(),
+                    name
+                );
                 return;
             }
         }
 
         // Confirmation required (for orchestrator use)
-        if data.get("confirmation_required").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("confirmation_required")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             let category = data.get("category").and_then(|v| v.as_str()).unwrap_or("");
-            let description = data.get("description").and_then(|v| v.as_str()).unwrap_or("");
-            let cid = data.get("confirmation_id").and_then(|v| v.as_str()).unwrap_or("");
+            let description = data
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let cid = data
+                .get("confirmation_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             println!("Confirmation required:");
             println!("  {}: {}", category, description);
             println!("  Run: agent-browser confirm {}", cid);
             println!("  Or:  agent-browser deny {}", cid);
             return;
         }
-        if data.get("confirmed").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("confirmed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             println!("{} Action confirmed", color::success_indicator());
             return;
         }
-        if data.get("denied").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("denied")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             println!("{} Action denied", color::success_indicator());
             return;
         }
@@ -2149,6 +2230,31 @@ Examples:
   agent-browser click @e1
 "##
         }
+        "doctor" => {
+            r##"
+agent-browser doctor - Diagnose CDP and tab-group plugin health
+
+Usage: agent-browser doctor
+
+Runs a non-destructive health check focused on:
+  - CDP endpoint reachability (preferred :9333 + common ports)
+  - DevToolsActivePort discovery from local Chrome profiles
+  - Tab-group plugin handshake status (when connected via CDP)
+
+Notes:
+  - doctor does not accept positional arguments
+  - If browser is not already connected, doctor will still report CDP probe results
+  - Plugin handshake requires a live CDP page and the extension to be installed
+
+Global Options:
+  --json               Output as JSON
+  --session <name>     Use specific session
+
+Examples:
+  agent-browser doctor
+  agent-browser --json doctor
+"##
+        }
 
         // === iOS Commands ===
         "tap" => {
@@ -2377,6 +2483,7 @@ Sessions:
 Setup:
   install                    Install browser binaries
   install --with-deps        Also install system dependencies (Linux)
+  doctor                     Diagnose CDP + plugin health
 
 Snapshot Options:
   -i, --interactive          Only interactive elements
@@ -2536,6 +2643,85 @@ pub fn print_response(resp: &Response, json: bool, action: Option<&str>) {
     print_response_with_opts(resp, action, &opts);
 }
 
+fn status_badge(status: &str) -> String {
+    match status {
+        "pass" => color::green("PASS"),
+        "warn" => color::yellow("WARN"),
+        "fail" => color::red("FAIL"),
+        "skip" => color::dim("SKIP"),
+        _ => status.to_string(),
+    }
+}
+
+fn print_doctor_report(data: &serde_json::Map<String, serde_json::Value>) {
+    let ok = data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let summary = if ok {
+        format!("{} doctor checks passed", color::success_indicator())
+    } else {
+        format!("{} doctor found issues", color::error_indicator())
+    };
+    println!("{}", summary);
+
+    if let Some(context) = data.get("context").and_then(|v| v.as_object()) {
+        let launched = context
+            .get("launched")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let connection = context
+            .get("connectionKind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let session = context
+            .get("session")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default");
+        let cdp_endpoint = context
+            .get("cdpEndpoint")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        println!(
+            "  context: launched={} connection={} session={} cdp={}",
+            launched, connection, session, cdp_endpoint
+        );
+    }
+
+    if let Some(checks) = data.get("checks").and_then(|v| v.as_array()) {
+        for check in checks {
+            let Some(obj) = check.as_object() else {
+                continue;
+            };
+            let name = obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let status = obj
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let message = obj.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            println!("  [{}] {} - {}", status_badge(status), name, message);
+        }
+    }
+
+    if let Some(plugin) = data.get("plugin").and_then(|v| v.as_object()) {
+        let plugin_status = plugin
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let plugin_message = plugin.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        let plugin_id = plugin
+            .get("configuredPluginId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        println!(
+            "  plugin: [{}] id={} {}",
+            status_badge(plugin_status),
+            plugin_id,
+            plugin_message
+        );
+    }
+}
+
 fn print_snapshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
     let changed = data
         .get("changed")
@@ -2627,7 +2813,10 @@ fn parse_fork_version(version: &str) -> Option<(&str, &str)> {
     {
         return None;
     }
-    if !fork.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+    if !fork
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
         return None;
     }
     Some((upstream, fork))
