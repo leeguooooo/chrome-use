@@ -161,7 +161,19 @@ function showPlaywrightReminder() {
  * Fix npm's bin entry on global installs to use the native binary directly.
  * This provides zero-overhead CLI execution for global installs.
  */
+function isPnpmGlobalInstall() {
+  const ua = process.env.npm_config_user_agent || '';
+  return ua.includes('pnpm/');
+}
+
 async function fixGlobalInstallBin() {
+  // pnpm already manages global shims in its own bin dir.
+  // Rewriting links via `npm prefix -g` can create stale links in unrelated paths
+  // (e.g. /opt/homebrew/bin), which then shadow pnpm's up-to-date shims.
+  if (isPnpmGlobalInstall()) {
+    return;
+  }
+
   if (platform() === 'win32') {
     await fixWindowsShims();
   } else {
