@@ -17,6 +17,7 @@ function createTag(text) {
 
 function renderSummary(state) {
   summaryEl.innerHTML = '';
+  const options = state.options || {};
   const title = document.createElement('div');
   title.innerHTML = `<strong>Overview</strong> · extensionId: <code>${state.extensionId}</code>`;
 
@@ -24,9 +25,68 @@ function renderSummary(state) {
   tags.className = 'tags';
   tags.appendChild(createTag(`sessions: ${state.totals.sessions}`));
   tags.appendChild(createTag(`tabs: ${state.totals.tabs}`));
+  tags.appendChild(
+    createTag(`isolation: ${options.strictWindowIsolation === false ? 'off' : 'on'}`)
+  );
+  tags.appendChild(
+    createTag(`activation-guard: ${options.suppressCrossWindowActivation === false ? 'off' : 'on'}`)
+  );
+  tags.appendChild(
+    createTag(`auto-clean: ${options.autoCleanEmptyGroups === false ? 'off' : 'on'}`)
+  );
+
+  const optionActions = document.createElement('div');
+  optionActions.className = 'row-actions';
+
+  const isolationBtn = document.createElement('button');
+  isolationBtn.type = 'button';
+  isolationBtn.textContent =
+    options.strictWindowIsolation === false ? 'Enable Isolation' : 'Disable Isolation';
+  isolationBtn.addEventListener('click', async () => {
+    await send({
+      type: 'AB_PANEL_SET_OPTIONS',
+      options: { ...options, strictWindowIsolation: options.strictWindowIsolation === false },
+    });
+    await refresh();
+  });
+
+  const guardBtn = document.createElement('button');
+  guardBtn.type = 'button';
+  guardBtn.textContent =
+    options.suppressCrossWindowActivation === false ? 'Enable Guard' : 'Disable Guard';
+  guardBtn.addEventListener('click', async () => {
+    await send({
+      type: 'AB_PANEL_SET_OPTIONS',
+      options: {
+        ...options,
+        suppressCrossWindowActivation: options.suppressCrossWindowActivation === false,
+      },
+    });
+    await refresh();
+  });
+
+  const autoCleanBtn = document.createElement('button');
+  autoCleanBtn.type = 'button';
+  autoCleanBtn.textContent =
+    options.autoCleanEmptyGroups === false ? 'Enable Auto-Clean' : 'Disable Auto-Clean';
+  autoCleanBtn.addEventListener('click', async () => {
+    await send({
+      type: 'AB_PANEL_SET_OPTIONS',
+      options: {
+        ...options,
+        autoCleanEmptyGroups: options.autoCleanEmptyGroups === false,
+      },
+    });
+    await refresh();
+  });
+
+  optionActions.appendChild(isolationBtn);
+  optionActions.appendChild(guardBtn);
+  optionActions.appendChild(autoCleanBtn);
 
   summaryEl.appendChild(title);
   summaryEl.appendChild(tags);
+  summaryEl.appendChild(optionActions);
 }
 
 function renderSessions(state) {

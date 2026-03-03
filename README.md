@@ -74,11 +74,12 @@ Install once in Chrome: load unpacked extension from `extensions/tab-group-cdp/`
 ### Extension Capabilities (`agent-browser-stealth`)
 
 - Session window isolation: tabs are kept in their session window when possible.
+- Configurable isolation controls: side panel can toggle `strictWindowIsolation` and cross-window activation guard.
 - Session-aware grouping: deterministic group color, default session expanded, non-default sessions collapsed.
 - Download archive routing: downloads from managed tabs are routed to `agent-browser-stealth/<session>/...`.
 - Domain allowlist fallback: when allowlist is configured for a session, extension can force-block out-of-policy tabs to `about:blank`.
 - Risk hints (debug only): suspicious host/TLD hints are returned via handshake and printed only when `AGENT_BROWSER_DEBUG=1`.
-- Side panel console: view session/tab/group mapping, focus a session, keep only one session, clean empty groups, and edit session allowlist.
+- Side panel console: view session/tab/group mapping, focus a session, keep only one session, clean empty groups, edit session allowlist, and toggle auto-clean.
 
 ## Stealth Architecture
 

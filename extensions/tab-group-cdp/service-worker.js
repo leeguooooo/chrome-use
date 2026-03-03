@@ -4,13 +4,22 @@ const PANEL_CLOSE_OTHER_TABS = 'AB_PANEL_CLOSE_OTHER_SESSION_TABS';
 const PANEL_FOCUS_SESSION = 'AB_PANEL_FOCUS_SESSION';
 const PANEL_CLEAN_EMPTY_GROUPS = 'AB_PANEL_CLEAN_EMPTY_GROUPS';
 const PANEL_SET_POLICY = 'AB_PANEL_SET_POLICY';
+const PANEL_SET_OPTIONS = 'AB_PANEL_SET_OPTIONS';
 
 const DEFAULT_GROUP_TITLE = 'Agent Browser Stealth';
 const DOWNLOAD_ARCHIVE_ROOT = 'agent-browser-stealth';
 const STORAGE_POLICY_KEY = 'abSessionPoliciesV1';
+const STORAGE_OPTIONS_KEY = 'abExtensionOptionsV1';
+const CLEANUP_ALARM_NAME = 'ab-clean-empty-groups';
 const GROUP_COLORS = ['blue', 'green', 'pink', 'orange', 'purple', 'cyan', 'red', 'yellow'];
 const RISKY_TLDS = new Set(['zip', 'mov', 'click', 'top', 'gq', 'tk', 'country']);
 const RISKY_HOST_KEYWORDS = ['secure-login', 'account-verify', 'wallet-verify', 'airdrop-claim'];
+
+const DEFAULT_EXTENSION_OPTIONS = {
+  strictWindowIsolation: true,
+  suppressCrossWindowActivation: true,
+  autoCleanEmptyGroups: true,
+};
 
 const sessionGroupCache = new Map();
 const sessionWindowMap = new Map();
@@ -18,8 +27,9 @@ const tabSessionMap = new Map();
 const tabMetaById = new Map();
 const downloadEvents = [];
 const sessionPolicies = new Map();
+let extensionOptions = { ...DEFAULT_EXTENSION_OPTIONS };
 
-let policyLoadPromise = loadPolicies();
+let bootstrapPromise = bootstrapState();
 
 function normalizeSession(session) {
   if (typeof session !== 'string') return 'default';
@@ -141,6 +151,46 @@ async function loadPolicies() {
   }
 }
 
+function normalizeOptions(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return { ...DEFAULT_EXTENSION_OPTIONS };
+  }
+  return {
+    strictWindowIsolation: raw.strictWindowIsolation !== false,
+    suppressCrossWindowActivation: raw.suppressCrossWindowActivation !== false,
+    autoCleanEmptyGroups: raw.autoCleanEmptyGroups !== false,
+  };
+}
+
+async function loadOptions() {
+  try {
+    const result = await chrome.storage.local.get([STORAGE_OPTIONS_KEY]);
+    extensionOptions = normalizeOptions(result?.[STORAGE_OPTIONS_KEY]);
+  } catch {
+    extensionOptions = { ...DEFAULT_EXTENSION_OPTIONS };
+  }
+}
+
+async function persistOptions() {
+  await chrome.storage.local.set({ [STORAGE_OPTIONS_KEY]: extensionOptions });
+}
+
+async function setExtensionOptions(nextOptions) {
+  extensionOptions = {
+    ...extensionOptions,
+    ...normalizeOptions(nextOptions),
+  };
+  await persistOptions();
+  await syncCleanupAlarm();
+  return extensionOptions;
+}
+
+async function bootstrapState() {
+  await loadPolicies();
+  await loadOptions();
+  await syncCleanupAlarm();
+}
+
 async function persistPolicies() {
   const serialized = {};
   for (const [session, domains] of sessionPolicies.entries()) {
@@ -200,6 +250,11 @@ function removeWindowCaches(windowId) {
 }
 
 async function ensureSessionWindow(tabId, currentWindowId, session) {
+  if (!extensionOptions.strictWindowIsolation) {
+    sessionWindowMap.set(session, currentWindowId);
+    return currentWindowId;
+  }
+
   let targetWindowId = sessionWindowMap.get(session);
 
   if (typeof targetWindowId === 'number') {
@@ -420,6 +475,75 @@ async function cleanEmptyGroups() {
   return { removedGroups, removedWindows };
 }
 
+async function syncCleanupAlarm() {
+  try {
+    await chrome.alarms.clear(CLEANUP_ALARM_NAME);
+    if (extensionOptions.autoCleanEmptyGroups) {
+      await chrome.alarms.create(CLEANUP_ALARM_NAME, { periodInMinutes: 1 });
+    }
+  } catch {
+    // Ignore alarms API failures.
+  }
+}
+
+async function enforceSessionWindowAffinity(tabId) {
+  if (!extensionOptions.suppressCrossWindowActivation) return { moved: false };
+
+  const session = getManagedSessionForTab(tabId);
+  if (!session) return { moved: false };
+  if (!extensionOptions.strictWindowIsolation) return { moved: false };
+
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return { moved: false };
+  }
+
+  const mappedWindowId = sessionWindowMap.get(session);
+  if (typeof mappedWindowId !== 'number' || mappedWindowId === tab.windowId) {
+    if (typeof tab.windowId === 'number') {
+      sessionWindowMap.set(session, tab.windowId);
+    }
+    return { moved: false };
+  }
+
+  try {
+    await chrome.tabs.move(tabId, { windowId: mappedWindowId, index: -1 });
+    await chrome.tabs.update(tabId, { active: false }).catch(() => {});
+    return { moved: true, toWindowId: mappedWindowId };
+  } catch {
+    return { moved: false };
+  }
+}
+
+async function updateRiskBadge(tabId) {
+  let text = '';
+  let title = 'agent-browser-stealth';
+
+  const session = getManagedSessionForTab(tabId);
+  if (session) {
+    let tab;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {
+      tab = undefined;
+    }
+
+    if (tab) {
+      const hints = collectRiskHints(tab.url, getSessionPolicy(session));
+      if (hints.length > 0) {
+        text = '!';
+        title = `Risk hints (${hints.length}): ${hints.join(', ')}`;
+      }
+    }
+  }
+
+  await chrome.action.setBadgeText({ text }).catch(() => {});
+  await chrome.action.setBadgeBackgroundColor({ color: '#dc2626' }).catch(() => {});
+  await chrome.action.setTitle({ title }).catch(() => {});
+}
+
 async function buildPanelState() {
   const allTabs = await chrome.tabs.query({});
   for (const tab of allTabs) {
@@ -492,6 +616,7 @@ async function buildPanelState() {
 
   return {
     extensionId: chrome.runtime.id,
+    options: { ...extensionOptions },
     totals: {
       sessions: sessions.length,
       tabs: sessions.reduce((sum, session) => sum + session.tabs.length, 0),
@@ -502,7 +627,7 @@ async function buildPanelState() {
 }
 
 async function handleTabGroupRequest(message, sender) {
-  await policyLoadPromise;
+  await bootstrapPromise;
 
   const tabId = sender.tab?.id;
   const windowId = sender.tab?.windowId;
@@ -555,6 +680,11 @@ async function handleTabGroupRequest(message, sender) {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  bootstrapPromise = bootstrapState();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  bootstrapPromise = bootstrapState();
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -580,7 +710,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (type === PANEL_GET_STATE) {
-    buildPanelState()
+    bootstrapPromise
+      .then(() => buildPanelState())
       .then((state) => sendResponse({ ok: true, state }))
       .catch((error) => {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -620,8 +751,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (type === PANEL_SET_POLICY) {
-    setSessionPolicy(message.session, message.allowedDomains)
+    bootstrapPromise
+      .then(() => setSessionPolicy(message.session, message.allowedDomains))
       .then(() => sendResponse({ ok: true }))
+      .catch((error) => {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        sendResponse({ ok: false, error: errorMessage });
+      });
+    return true;
+  }
+
+  if (type === PANEL_SET_OPTIONS) {
+    bootstrapPromise
+      .then(() => setExtensionOptions(message.options))
+      .then((options) => sendResponse({ ok: true, options }))
       .catch((error) => {
         const errorMessage = error instanceof Error ? error.message : String(error);
         sendResponse({ ok: false, error: errorMessage });
@@ -633,7 +776,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   updateTabMeta(tab);
   const session = getManagedSessionForTab(tabId);
-  if (!session) return;
+  if (!session) {
+    if (changeInfo.status === 'complete' && tab.active === true) {
+      updateRiskBadge(tabId).catch(() => {});
+    }
+    return;
+  }
 
   if (typeof tab.windowId === 'number') {
     sessionWindowMap.set(session, tab.windowId);
@@ -641,7 +789,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
   if (changeInfo.status === 'complete') {
     applySessionDomainFallback(tabId, session).catch(() => {});
+    if (tab.active === true) {
+      updateRiskBadge(tabId).catch(() => {});
+    }
   }
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  enforceSessionWindowAffinity(activeInfo.tabId).catch(() => {});
+  updateRiskBadge(activeInfo.tabId).catch(() => {});
 });
 
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
@@ -659,6 +815,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   if (remaining.length === 0) {
     sessionWindowMap.delete(session);
   }
+  cleanEmptyGroups().catch(() => {});
 });
 
 chrome.tabs.onDetached.addListener((tabId) => {
@@ -675,6 +832,12 @@ chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
 
 chrome.windows.onRemoved.addListener((windowId) => {
   removeWindowCaches(windowId);
+  cleanEmptyGroups().catch(() => {});
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name !== CLEANUP_ALARM_NAME) return;
+  cleanEmptyGroups().catch(() => {});
 });
 
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
