@@ -2409,6 +2409,7 @@ Options:
                              Project default: try localhost:9333 first, then auto-discovery (no managed local-launch fallback)
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
+  --tab-group <name>         Override default tab group title for agent tabs in Chromium local launch (or AGENT_BROWSER_TAB_GROUP)
   --risk-mode <mode>         Verify/captcha handling: off, warn, block (or AGENT_BROWSER_RISK_MODE)
   --session-name <name>      Auto-save/restore session state (cookies, localStorage)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
@@ -2467,6 +2468,7 @@ Environment:
   AGENT_BROWSER_TIMEZONE         Override auto-detected timezone (e.g., Asia/Taipei)
   AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
   AGENT_BROWSER_DOWNLOAD_PATH    Default download directory for browser downloads
+  AGENT_BROWSER_TAB_GROUP        Override default tab group title (Chromium local launch only)
   AGENT_BROWSER_RISK_MODE        Verify/captcha handling mode (off, warn, block)
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default Playwright timeout in ms (default: 25000)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name

@@ -130,6 +130,22 @@ agent-browser wait --download [path]  # Wait for any download to complete
 
 Use `--download-path <dir>` (or `AGENT_BROWSER_DOWNLOAD_PATH` env) to set a default download directory. Without it, downloads go to a temporary directory that is deleted when the browser closes.
 
+## Tab grouping
+
+```bash
+agent-browser open https://example.com
+# Local Chromium launch auto-groups tabs under "Agent Browser Stealth"
+
+# Override the default group title
+agent-browser --tab-group "My Agent Group" open https://example.com
+```
+
+Local Chromium launches auto-create/reuse the `Agent Browser Stealth` tab group and move newly opened agent tabs into that group.
+
+- Supported only for local Chromium launches.
+- In CDP (`--cdp` / `--auto-connect`) and cloud provider modes, the flag is ignored with a warning.
+- Use `--tab-group` or `AGENT_BROWSER_TAB_GROUP` to override the default group title.
+
 ## Mouse
 
 ```bash
@@ -280,6 +296,7 @@ agent-browser reload                  # Reload page
 --headed                 # Show browser window (not headless)
 --cdp <port|url>         # Connect via Chrome DevTools Protocol (port or WebSocket URL)
 --auto-connect           # Auto-discover and connect to running Chrome
+--tab-group <name>       # Override default agent tab group title (Chromium local launch only)
 --debug                  # Debug output (includes stealth connection type + capabilities)
 ```
 

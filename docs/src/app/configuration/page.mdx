@@ -276,6 +276,15 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
     </tr>
     <tr>
       <td>
+        <code>tabGroup</code>
+      </td>
+      <td>
+        <code>--tab-group</code>
+      </td>
+      <td>string (override default tab group title; Chromium local launch only)</td>
+    </tr>
+    <tr>
+      <td>
         <code>riskMode</code>
       </td>
       <td>
@@ -405,6 +414,13 @@ These environment variables configure additional daemon and runtime behavior:
       </td>
       <td>Default directory for browser downloads.</td>
       <td>(temp directory)</td>
+    </tr>
+    <tr>
+      <td>
+        <code>AGENT_BROWSER_TAB_GROUP</code>
+      </td>
+      <td>Override default auto-group title for agent tabs (Chromium local launch only).</td>
+      <td>(disabled)</td>
     </tr>
     <tr>
       <td>

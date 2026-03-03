@@ -287,6 +287,7 @@ fn main() {
         flags.session_name.as_deref(),
         flags.debug,
         flags.download_path.as_deref(),
+        flags.tab_group.as_deref(),
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -338,6 +339,7 @@ fn main() {
             flags.ignore_https_errors.then_some("--ignore-https-errors"),
             flags.cli_allow_file_access.then_some("--allow-file-access"),
             flags.cli_download_path.then_some("--download-path"),
+            flags.cli_tab_group.then_some("--tab-group"),
         ]
         .into_iter()
         .flatten()
@@ -423,6 +425,9 @@ fn main() {
 
         if let Some(ref dp) = flags.download_path {
             launch_cmd["downloadPath"] = json!(dp);
+        }
+        if let Some(ref tg) = flags.tab_group {
+            launch_cmd["tabGroup"] = json!(tg);
         }
 
         let err = match send_command(launch_cmd, &flags.session) {
@@ -516,6 +521,9 @@ fn main() {
         if let Some(ref dp) = flags.download_path {
             launch_cmd["downloadPath"] = json!(dp);
         }
+        if let Some(ref tg) = flags.tab_group {
+            launch_cmd["tabGroup"] = json!(tg);
+        }
 
         let err = match send_command(launch_cmd, &flags.session) {
             Ok(resp) if resp.success => None,
@@ -548,6 +556,9 @@ fn main() {
 
         if let Some(ref cs) = flags.color_scheme {
             launch_cmd["colorScheme"] = json!(cs);
+        }
+        if let Some(ref tg) = flags.tab_group {
+            launch_cmd["tabGroup"] = json!(tg);
         }
 
         match send_command(launch_cmd, &flags.session) {
@@ -589,7 +600,8 @@ fn main() {
         && flags.user_agent.is_none()
         && !flags.ignore_https_errors
         && !flags.allow_file_access
-        && flags.extensions.is_empty();
+        && flags.extensions.is_empty()
+        && flags.tab_group.is_none();
 
     if can_try_default_cdp {
         let mut launch_cmd = json!({
@@ -643,7 +655,8 @@ fn main() {
         || flags.allow_file_access
         || flags.debug
         || flags.color_scheme.is_some()
-        || flags.download_path.is_some())
+        || flags.download_path.is_some()
+        || flags.tab_group.is_some())
         && flags.cdp.is_none()
         && flags.provider.is_none()
         && !attached_to_existing_browser
@@ -707,6 +720,9 @@ fn main() {
 
         if let Some(ref dp) = flags.download_path {
             launch_cmd["downloadPath"] = json!(dp);
+        }
+        if let Some(ref tg) = flags.tab_group {
+            launch_cmd["tabGroup"] = json!(tg);
         }
 
         match send_command(launch_cmd, &flags.session) {

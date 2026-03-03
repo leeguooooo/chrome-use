@@ -16,6 +16,17 @@ describe('parseCommand', () => {
         expect((result.command as any).stealth).toBeUndefined();
       }
     });
+
+    it('should parse launch command with tabGroup', () => {
+      const result = parseCommand(
+        cmd({ id: '1', action: 'launch', headless: false, tabGroup: 'Agent Browser Stealth' })
+      );
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.command.action).toBe('launch');
+        expect(result.command.tabGroup).toBe('Agent Browser Stealth');
+      }
+    });
   });
 
   describe('navigation', () => {

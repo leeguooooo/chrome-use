@@ -89,6 +89,7 @@ agent-browser wait 2000-5000          # Random wait between 2-5 seconds
 agent-browser download @e1 ./file.pdf          # Click element to trigger download
 agent-browser wait --download ./output.zip     # Wait for any download to complete
 agent-browser --download-path ./downloads open <url>  # Set default download directory
+agent-browser --tab-group "My Agent Group" open <url>  # Override default tab group title (Chromium local launch)
 
 # Capture
 agent-browser screenshot              # Screenshot to temp dir
@@ -246,6 +247,25 @@ AGENT_BROWSER_COLOR_SCHEME=dark agent-browser open https://example.com
 # Or set during session (persists for subsequent commands)
 agent-browser set media dark
 ```
+
+### Tab Grouping
+
+```bash
+# Local Chromium launch auto-groups under "Agent Browser Stealth"
+agent-browser open https://example.com
+
+# Override the default group title
+agent-browser --tab-group "My Agent Group" open https://example.com
+
+# Or via environment variable
+AGENT_BROWSER_TAB_GROUP="My Agent Group" agent-browser open https://example.com
+```
+
+Notes:
+
+- Works only for local Chromium launches.
+- In CDP/auto-connect and cloud provider modes, `--tab-group` is ignored with a warning.
+- New agent tabs are auto-added to the group after each tab loads content.
 
 ### Visual Browser (Debugging)
 

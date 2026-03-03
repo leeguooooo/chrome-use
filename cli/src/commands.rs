@@ -2054,7 +2054,9 @@ mod tests {
             annotate: false,
             color_scheme: None,
             download_path: None,
+            tab_group: None,
             risk_mode: None,
+            cli_tab_group: false,
         }
     }
 

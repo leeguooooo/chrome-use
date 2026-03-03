@@ -51,6 +51,7 @@ const launchSchema = baseCommandSchema.extend({
   allowFileAccess: z.boolean().optional(),
   colorScheme: z.enum(['light', 'dark', 'no-preference']).optional(),
   downloadPath: z.string().optional(),
+  tabGroup: z.string().min(1).optional(),
   storageState: z.string().optional(),
   allowedDomains: z.array(z.string()).optional(),
   actionPolicy: z.string().optional(),

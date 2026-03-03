@@ -464,6 +464,7 @@ export async function startDaemon(options?: {
                 colorSchemeEnv === 'no-preference'
                   ? colorSchemeEnv
                   : undefined;
+              const tabGroup = process.env.AGENT_BROWSER_TAB_GROUP?.trim();
               const launchOptions = {
                 id: 'auto',
                 action: 'launch' as const,
@@ -478,38 +479,54 @@ export async function startDaemon(options?: {
                 allowFileAccess: allowFileAccess,
 
                 colorScheme,
+                tabGroup: tabGroup && tabGroup.length > 0 ? tabGroup : undefined,
                 autoStateFilePath: getSessionAutoStatePath(),
               };
 
               let attachedToExistingBrowser = false;
-              try {
-                // Keep default CDP attempt minimal. Launch-only options like extensions
-                // are incompatible with CDP and can cause false-negative attach failures.
-                const cdpLaunchOptions = {
-                  id: launchOptions.id,
-                  action: launchOptions.action,
-                  cdpPort: 9333,
-                  ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
-                  colorScheme: launchOptions.colorScheme,
-                  userAgent: launchOptions.userAgent,
-                };
-                await manager.launch({
-                  ...cdpLaunchOptions,
-                });
-                attachedToExistingBrowser = true;
-                if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                  console.error('[DEBUG] Auto-launch connected via default CDP port 9333');
+              if (launchOptions.tabGroup) {
+                try {
+                  await manager.launch(launchOptions);
+                  attachedToExistingBrowser = true;
+                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                    console.error('[DEBUG] Auto-launch started local Chromium with --tab-group');
+                  }
+                } catch (error) {
+                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                    const message = error instanceof Error ? error.message : String(error);
+                    console.error(`[DEBUG] Local launch with --tab-group failed: ${message}`);
+                  }
                 }
-              } catch (error) {
-                if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                  const message = error instanceof Error ? error.message : String(error);
-                  console.error(
-                    `[DEBUG] Default CDP port 9333 unavailable, trying auto-connect discovery: ${message}`
-                  );
+              } else {
+                try {
+                  // Keep default CDP attempt minimal. Launch-only options like extensions
+                  // are incompatible with CDP and can cause false-negative attach failures.
+                  const cdpLaunchOptions = {
+                    id: launchOptions.id,
+                    action: launchOptions.action,
+                    cdpPort: 9333,
+                    ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
+                    colorScheme: launchOptions.colorScheme,
+                    userAgent: launchOptions.userAgent,
+                  };
+                  await manager.launch({
+                    ...cdpLaunchOptions,
+                  });
+                  attachedToExistingBrowser = true;
+                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                    console.error('[DEBUG] Auto-launch connected via default CDP port 9333');
+                  }
+                } catch (error) {
+                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                    const message = error instanceof Error ? error.message : String(error);
+                    console.error(
+                      `[DEBUG] Default CDP port 9333 unavailable, trying auto-connect discovery: ${message}`
+                    );
+                  }
                 }
               }
 
-              if (!attachedToExistingBrowser) {
+              if (!attachedToExistingBrowser && !launchOptions.tabGroup) {
                 try {
                   await manager.launch({
                     id: launchOptions.id,
@@ -532,6 +549,11 @@ export async function startDaemon(options?: {
               }
 
               if (!attachedToExistingBrowser) {
+                if (launchOptions.tabGroup) {
+                  throw new Error(
+                    'Failed to launch local Chromium with tab grouping. Check Chromium availability and extension policy settings.'
+                  );
+                }
                 throw new Error(
                   'Project policy requires using your existing browser. Could not connect to CDP at localhost:9333 and auto-discovery also failed.'
                 );

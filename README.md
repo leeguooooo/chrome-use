@@ -50,6 +50,21 @@ agent-browser snapshot -i
 agent-browser click @e2
 ```
 
+### Default: Auto Group Agent Tabs (Local Chromium)
+
+```bash
+agent-browser open https://example.com
+# Local Chromium launch auto-groups tabs under "Agent Browser Stealth"
+
+# Override group title
+agent-browser --tab-group "My Agent Group" open https://example.com
+```
+
+- Groups agent-opened tabs under a shared Chrome tab group title.
+- Supported only for local Chromium launches.
+- In CDP (`--cdp` / `--auto-connect`) and cloud provider modes, it is ignored with a warning.
+- Env override: `AGENT_BROWSER_TAB_GROUP`.
+
 ## Stealth Architecture
 
 ```mermaid

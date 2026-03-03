@@ -34,6 +34,7 @@ pub struct Config {
     pub annotate: Option<bool>,
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
+    pub tab_group: Option<String>,
     pub risk_mode: Option<String>,
 }
 
@@ -69,6 +70,7 @@ impl Config {
             annotate: other.annotate.or(self.annotate),
             color_scheme: other.color_scheme.or(self.color_scheme),
             download_path: other.download_path.or(self.download_path),
+            tab_group: other.tab_group.or(self.tab_group),
             risk_mode: other.risk_mode.or(self.risk_mode),
         }
     }
@@ -136,6 +138,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--color-scheme",
         "--channel",
         "--download-path",
+        "--tab-group",
         "--risk-mode",
     ];
     let mut i = 0;
@@ -207,6 +210,7 @@ pub struct Flags {
     pub annotate: bool,
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
+    pub tab_group: Option<String>,
     /// How verification/captcha detections are handled on navigation:
     /// `off` (disable), `warn` (retry and warn), `block` (fail fast).
     pub risk_mode: Option<String>,
@@ -223,6 +227,7 @@ pub struct Flags {
     pub cli_allow_file_access: bool,
     pub cli_annotate: bool,
     pub cli_download_path: bool,
+    pub cli_tab_group: bool,
 }
 
 pub fn parse_flags(args: &[String]) -> Flags {
@@ -291,6 +296,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .or(config.color_scheme),
         download_path: env::var("AGENT_BROWSER_DOWNLOAD_PATH").ok()
             .or(config.download_path),
+        tab_group: env::var("AGENT_BROWSER_TAB_GROUP").ok().or(config.tab_group),
         risk_mode: env::var("AGENT_BROWSER_RISK_MODE")
             .ok()
             .or(config.risk_mode)
@@ -305,6 +311,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         cli_allow_file_access: false,
         cli_annotate: false,
         cli_download_path: false,
+        cli_tab_group: false,
     };
 
     let mut i = 0;
@@ -466,6 +473,13 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
+            "--tab-group" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.tab_group = Some(s.clone());
+                    flags.cli_tab_group = true;
+                    i += 1;
+                }
+            }
             "--risk-mode" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.risk_mode = Some(s.to_ascii_lowercase());
@@ -516,6 +530,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--session-name",
         "--color-scheme",
         "--download-path",
+        "--tab-group",
         "--risk-mode",
         "--config",
     ];
@@ -715,6 +730,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_tab_group_flag() {
+        let input = vec![
+            "--tab-group".to_string(),
+            "Agent Browser Stealth".to_string(),
+            "snapshot".to_string(),
+        ];
+        let flags = parse_flags(&input);
+        assert_eq!(flags.tab_group.as_deref(), Some("Agent Browser Stealth"));
+        assert!(flags.cli_tab_group);
+    }
+
+    #[test]
+    fn test_clean_args_removes_tab_group() {
+        let cleaned = clean_args(&args("--tab-group AgentGroup open example.com"));
+        assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    #[test]
     fn test_parse_risk_mode_flag() {
         let flags = parse_flags(&args("--risk-mode block open example.com"));
         assert_eq!(flags.risk_mode.as_deref(), Some("block"));
@@ -762,6 +795,7 @@ mod tests {
             "cdp": "9222",
             "autoConnect": true,
             "headers": "{\"Auth\":\"token\"}",
+            "tabGroup": "Agent Browser Stealth",
             "riskMode": "block"
         }"#;
         let config: Config = serde_json::from_str(json).unwrap();
@@ -788,6 +822,7 @@ mod tests {
         assert_eq!(config.cdp.as_deref(), Some("9222"));
         assert_eq!(config.auto_connect, Some(true));
         assert_eq!(config.headers.as_deref(), Some("{\"Auth\":\"token\"}"));
+        assert_eq!(config.tab_group.as_deref(), Some("Agent Browser Stealth"));
         assert_eq!(config.risk_mode.as_deref(), Some("block"));
     }
 

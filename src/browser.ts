@@ -16,7 +16,15 @@ import {
 } from 'playwright-core';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync, mkdirSync, rmSync, readFileSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import type { LaunchCommand, TraceEvent } from './types.js';
 import { type RefMap, type EnhancedSnapshot, getEnhancedSnapshot, parseRef } from './snapshot.js';
@@ -127,6 +135,7 @@ interface StealthContextDefaults {
 }
 
 const IGNORED_CDP_PAGE_URL_PREFIXES = ['chrome://omnibox-popup.top-chrome/'];
+const DEFAULT_TAB_GROUP_NAME = 'Agent Browser Stealth';
 
 /**
  * Manages the Playwright browser lifecycle with multiple tabs/windows
@@ -163,6 +172,7 @@ export class BrowserManager {
   private contextUserAgent: string | undefined = undefined;
   private downloadPath: string | null = null;
   private allowedDomains: string[] = [];
+  private tabGroupExtensionDir: string | null = null;
 
   /**
    * Set the persistent color scheme preference.
@@ -476,6 +486,125 @@ export class BrowserManager {
     const warnings = this.launchWarnings;
     this.launchWarnings = [];
     return warnings;
+  }
+
+  private normalizeTabGroupName(name?: string): string | undefined {
+    if (!name) return undefined;
+    const trimmed = name.trim();
+    if (!trimmed) return undefined;
+    // Keep the title short for stable UI rendering in Chrome's tab strip.
+    return trimmed.slice(0, 80);
+  }
+
+  /**
+   * Build a temporary MV3 extension that auto-groups managed tabs under a fixed title.
+   * This is only used for local Chromium launches.
+   */
+  private createTabGroupExtension(groupTitle: string): string {
+    this.cleanupTabGroupExtension();
+
+    const extensionDir = mkdtempSync(path.join(os.tmpdir(), 'agent-browser-tab-group-'));
+    const manifest = {
+      manifest_version: 3,
+      name: 'Agent Browser Tab Grouper',
+      version: '1.0.0',
+      permissions: ['tabs', 'tabGroups'],
+      host_permissions: ['<all_urls>'],
+      background: {
+        service_worker: 'service-worker.js',
+      },
+      content_scripts: [
+        {
+          matches: ['<all_urls>'],
+          js: ['content-script.js'],
+          run_at: 'document_start',
+          match_about_blank: true,
+        },
+      ],
+    };
+
+    const serviceWorker = `const GROUP_TITLE = ${JSON.stringify(groupTitle)};
+const MESSAGE_TYPE = 'agent-browser-manage-tab';
+
+async function findGroupId(windowId) {
+  const tabs = await chrome.tabs.query({ windowId });
+  const checkedGroupIds = new Set();
+  for (const tab of tabs) {
+    if (typeof tab.groupId !== 'number' || tab.groupId < 0 || checkedGroupIds.has(tab.groupId)) {
+      continue;
+    }
+    checkedGroupIds.add(tab.groupId);
+    try {
+      const group = await chrome.tabGroups.get(tab.groupId);
+      if (group.title === GROUP_TITLE) {
+        return tab.groupId;
+      }
+    } catch {
+      // Ignore stale group IDs and continue searching.
+    }
+  }
+  return null;
+}
+
+async function styleGroup(groupId) {
+  await chrome.tabGroups.update(groupId, {
+    title: GROUP_TITLE,
+    color: 'blue',
+    collapsed: false,
+  });
+}
+
+async function ensureTabGrouped(tabId, windowId) {
+  let groupId = await findGroupId(windowId);
+  if (groupId === null) {
+    groupId = await chrome.tabs.group({
+      tabIds: [tabId],
+      createProperties: { windowId },
+    });
+    await styleGroup(groupId);
+    return;
+  }
+  await chrome.tabs.group({
+    groupId,
+    tabIds: [tabId],
+  });
+  await styleGroup(groupId);
+}
+
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (!message || message.type !== MESSAGE_TYPE) {
+    return;
+  }
+  const tabId = sender.tab?.id;
+  const windowId = sender.tab?.windowId;
+  if (typeof tabId !== 'number' || typeof windowId !== 'number') {
+    return;
+  }
+  ensureTabGrouped(tabId, windowId).catch(() => {});
+});
+`;
+
+    const contentScript = `(() => {
+  try {
+    chrome.runtime.sendMessage({ type: 'agent-browser-manage-tab' });
+  } catch {
+    // Ignore pages where extension messaging is unavailable.
+  }
+})();
+`;
+
+    writeFileSync(path.join(extensionDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    writeFileSync(path.join(extensionDir, 'service-worker.js'), serviceWorker);
+    writeFileSync(path.join(extensionDir, 'content-script.js'), contentScript);
+
+    this.tabGroupExtensionDir = extensionDir;
+    return extensionDir;
+  }
+
+  private cleanupTabGroupExtension(): void {
+    if (!this.tabGroupExtensionDir) return;
+    rmSync(this.tabGroupExtensionDir, { recursive: true, force: true });
+    this.tabGroupExtensionDir = null;
   }
 
   // CDP profiling state
@@ -1588,14 +1717,17 @@ export class BrowserManager {
   async launch(options: LaunchCommand): Promise<void> {
     // Determine CDP endpoint: prefer cdpUrl over cdpPort for flexibility
     const cdpEndpoint = options.cdpUrl ?? (options.cdpPort ? String(options.cdpPort) : undefined);
-    const hasExtensions = !!options.extensions?.length;
+    const configuredExtensions = options.extensions ? [...options.extensions] : [];
     const hasStorageState = !!options.storageState;
+    const explicitTabGroup = this.normalizeTabGroupName(options.tabGroup);
+    const requestedTabGroup = explicitTabGroup ?? DEFAULT_TAB_GROUP_NAME;
+    const tabGroupWasExplicit = explicitTabGroup !== undefined;
 
-    if (hasExtensions && cdpEndpoint) {
+    if (configuredExtensions.length > 0 && cdpEndpoint) {
       throw new Error('Extensions cannot be used with CDP connection');
     }
 
-    if (hasStorageState && hasExtensions) {
+    if (hasStorageState && configuredExtensions.length > 0) {
       throw new Error(
         'Storage state cannot be used with extensions (extensions require persistent context)'
       );
@@ -1645,6 +1777,42 @@ export class BrowserManager {
       this.stealthConnectionKind = 'local';
     }
     this.logStealthPolicy('launch policy', options.browser ?? 'chromium');
+
+    let effectiveExtensions = configuredExtensions;
+    if (requestedTabGroup) {
+      const requestedBrowserType = options.browser ?? 'chromium';
+      if (this.stealthConnectionKind !== 'local') {
+        if (tabGroupWasExplicit) {
+          const warning = `--tab-group "${requestedTabGroup}" is ignored in CDP/provider mode (requires local Chromium launch)`;
+          this.launchWarnings.push(warning);
+          console.error(`[WARN] ${warning}`);
+        }
+      } else if (requestedBrowserType !== 'chromium') {
+        if (tabGroupWasExplicit) {
+          const warning = `--tab-group is only supported in Chromium (requested: ${requestedBrowserType})`;
+          this.launchWarnings.push(warning);
+          console.error(`[WARN] ${warning}`);
+        }
+      } else if (options.headless === true) {
+        if (tabGroupWasExplicit) {
+          const warning = '--tab-group is ignored in headless mode';
+          this.launchWarnings.push(warning);
+          console.error(`[WARN] ${warning}`);
+        }
+      } else if (hasStorageState) {
+        if (tabGroupWasExplicit) {
+          const warning =
+            '--tab-group is ignored when storage state is loaded via --state (extensions require persistent context)';
+          this.launchWarnings.push(warning);
+          console.error(`[WARN] ${warning}`);
+        }
+      } else {
+        const tabGroupExtensionPath = this.createTabGroupExtension(requestedTabGroup);
+        effectiveExtensions = [...effectiveExtensions, tabGroupExtensionPath];
+      }
+    }
+
+    const hasExtensions = effectiveExtensions.length > 0;
 
     if (options.downloadPath) {
       this.downloadPath = options.downloadPath;
@@ -1785,7 +1953,7 @@ export class BrowserManager {
     let context: BrowserContext;
     if (hasExtensions) {
       // Extensions require persistent context in a temp directory
-      const extPaths = options.extensions!.join(',');
+      const extPaths = effectiveExtensions.join(',');
       const session = process.env.AGENT_BROWSER_SESSION || 'default';
       // Combine extension args with custom args and file access args
       const extArgs = [`--disable-extensions-except=${extPaths}`, `--load-extension=${extPaths}`];
@@ -3116,6 +3284,8 @@ export class BrowserManager {
         this.browser = null;
       }
     }
+
+    this.cleanupTabGroupExtension();
 
     this.pages = [];
     this.contexts = [];

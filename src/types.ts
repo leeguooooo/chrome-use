@@ -41,6 +41,7 @@ export interface LaunchCommand extends BaseCommand {
   allowFileAccess?: boolean; // Enable file:// URL access and cross-origin file requests
   colorScheme?: 'light' | 'dark' | 'no-preference'; // Persistent color scheme override
   downloadPath?: string; // Directory for browser downloads (Playwright's downloadsPath)
+  tabGroup?: string; // Chromium local-launch only: auto-group agent tabs under this title
   allowedDomains?: string[];
   actionPolicy?: string;
   confirmActions?: string[];
