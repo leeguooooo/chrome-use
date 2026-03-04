@@ -286,7 +286,10 @@ Notes:
   - non-default session: `Agent Browser Stealth • <session>`
 - Additional extension-side capabilities:
   - Session window isolation + deterministic group colors.
-  - Side panel controls: Focus / Keep Only This / Clean Empty Groups + isolation/auto-clean toggles.
+  - Side panel browser controls: `open` / `back` / `forward` / `reload` + selector-based `click` / `fill` / `press`.
+  - Side panel developer signals: page console events, fetch/xhr network events, command history, and on-demand DOM snapshots.
+  - Side panel automation: action recording, workflow run, slash shortcut binding, and scheduled execution (daily/weekly/monthly/yearly).
+  - Side panel operations: Focus / Keep Only This / Clean Empty Groups + isolation/auto-clean toggles.
   - Session allowlist policy editing and fallback blocking (`about:blank`).
   - Download auto-routing to `agent-browser-stealth/<session>/...`.
 

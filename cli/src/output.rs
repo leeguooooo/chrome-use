@@ -2249,6 +2249,7 @@ Notes:
   - doctor does not accept positional arguments
   - If browser is not already connected, doctor will still report CDP probe results
   - Plugin handshake requires CDP mode, a normal http(s) page, and the extension installed
+  - Extension side panel includes browser controls, developer signal panels, workflow shortcuts, and scheduled automation
 
 Global Options:
   --json               Output as JSON
@@ -2524,6 +2525,7 @@ Options:
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
   --tab-group <name>         Base title for agent tab groups (CDP plugin mode; silent no-op if plugin unavailable)
   --tab-group-plugin-id <id> Expected Chrome extension ID for tab-group handshake (or AGENT_BROWSER_TAB_GROUP_PLUGIN_ID)
+                             Extension side panel supports browser controls + console/network/DOM + workflow scheduling
   --risk-mode <mode>         Verify/captcha handling: off, warn, block (or AGENT_BROWSER_RISK_MODE)
   --wait-until <mode>        Navigation wait strategy for open/navigate: load, domcontentloaded, networkidle
   --session-name <name>      Auto-save/restore session state (defaults to --session)

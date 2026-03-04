@@ -81,7 +81,10 @@ Install once in Chrome: load unpacked extension from `extensions/tab-group-cdp/`
 - Download archive routing: downloads from managed tabs are routed to `agent-browser-stealth/<session>/...`.
 - Domain allowlist fallback: when allowlist is configured for a session, extension can force-block out-of-policy tabs to `about:blank`.
 - Risk hints (debug only): suspicious host/TLD hints are returned via handshake and printed only when `AGENT_BROWSER_DEBUG=1`.
-- Side panel console: view session/tab/group mapping, focus a session, keep only one session, clean empty groups, edit session allowlist, and toggle auto-clean.
+- Side panel browser controls: open/back/forward/reload, click/fill/press by CSS selector, run shortcut commands, and switch/close tabs.
+- Side panel developer signals: capture page console errors/warnings, fetch/xhr network events, command history, and live DOM snapshots.
+- Workflow automation: record actions into workflows, run workflows, map workflows to slash shortcuts, and schedule runs (daily/weekly/monthly/yearly).
+- Side panel operations console: view session/tab/group mapping, focus a session, keep only one session, clean empty groups, edit session allowlist, and toggle auto-clean.
 
 ## Stealth Architecture
 
