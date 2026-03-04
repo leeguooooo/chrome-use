@@ -4,10 +4,10 @@ node_modules/
 # Build output
 dist/
 
-# Native binaries (keep the launcher scripts)
+# Native binaries and build byproducts (keep JS launcher)
 bin/agent-browser-*
-!bin/agent-browser
-!bin/agent-browser.cmd
+bin/agent-browser
+bin/*.d
 
 # Rust build artifacts
 cli/target/
