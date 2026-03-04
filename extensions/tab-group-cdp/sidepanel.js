@@ -16,86 +16,89 @@ function createTag(text) {
 }
 
 function renderSummary(state) {
-  summaryEl.innerHTML = '';
+  summaryEl.innerHTML = '<h3>Overview</h3>';
   const options = state.options || {};
-  const title = document.createElement('div');
-  title.innerHTML = `<strong>Overview</strong> · extensionId: <code>${state.extensionId}</code>`;
+
+  const idInfo = document.createElement('div');
+  idInfo.style.marginBottom = '12px';
+  idInfo.style.fontSize = '11px';
+  idInfo.style.color = 'var(--text-muted)';
+  idInfo.innerHTML = `Extension ID: <code>${state.extensionId}</code>`;
+  summaryEl.appendChild(idInfo);
 
   const tags = document.createElement('div');
   tags.className = 'tags';
-  tags.appendChild(createTag(`sessions: ${state.totals.sessions}`));
-  tags.appendChild(createTag(`tabs: ${state.totals.tabs}`));
+  tags.appendChild(createTag(`Sessions: ${state.totals.sessions}`));
+  tags.appendChild(createTag(`Tabs: ${state.totals.tabs}`));
   tags.appendChild(
-    createTag(`isolation: ${options.strictWindowIsolation === false ? 'off' : 'on'}`)
+    createTag(`Isolation: ${options.strictWindowIsolation === false ? 'Off' : 'On'}`)
   );
   tags.appendChild(
-    createTag(`activation-guard: ${options.suppressCrossWindowActivation === false ? 'off' : 'on'}`)
+    createTag(`Guard: ${options.suppressCrossWindowActivation === false ? 'Off' : 'On'}`)
   );
   tags.appendChild(
-    createTag(`auto-clean: ${options.autoCleanEmptyGroups === false ? 'off' : 'on'}`)
+    createTag(`Auto-Clean: ${options.autoCleanEmptyGroups === false ? 'Off' : 'On'}`)
   );
 
   const optionActions = document.createElement('div');
   optionActions.className = 'row-actions';
 
-  const isolationBtn = document.createElement('button');
-  isolationBtn.type = 'button';
-  isolationBtn.textContent =
-    options.strictWindowIsolation === false ? 'Enable Isolation' : 'Disable Isolation';
-  isolationBtn.addEventListener('click', async () => {
-    await send({
-      type: 'AB_PANEL_SET_OPTIONS',
-      options: { ...options, strictWindowIsolation: options.strictWindowIsolation === false },
-    });
-    await refresh();
-  });
+  const createOptionBtn = (text, active, onClick) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = text;
+    if (active) btn.style.borderColor = 'var(--accent)';
+    btn.addEventListener('click', onClick);
+    return btn;
+  };
 
-  const guardBtn = document.createElement('button');
-  guardBtn.type = 'button';
-  guardBtn.textContent =
-    options.suppressCrossWindowActivation === false ? 'Enable Guard' : 'Disable Guard';
-  guardBtn.addEventListener('click', async () => {
-    await send({
-      type: 'AB_PANEL_SET_OPTIONS',
-      options: {
-        ...options,
-        suppressCrossWindowActivation: options.suppressCrossWindowActivation === false,
-      },
-    });
-    await refresh();
-  });
+  optionActions.appendChild(
+    createOptionBtn('Strict Isolation', options.strictWindowIsolation !== false, async () => {
+      await send({
+        type: 'AB_PANEL_SET_OPTIONS',
+        options: { ...options, strictWindowIsolation: options.strictWindowIsolation === false },
+      });
+      await refresh();
+    })
+  );
 
-  const autoCleanBtn = document.createElement('button');
-  autoCleanBtn.type = 'button';
-  autoCleanBtn.textContent =
-    options.autoCleanEmptyGroups === false ? 'Enable Auto-Clean' : 'Disable Auto-Clean';
-  autoCleanBtn.addEventListener('click', async () => {
-    await send({
-      type: 'AB_PANEL_SET_OPTIONS',
-      options: {
-        ...options,
-        autoCleanEmptyGroups: options.autoCleanEmptyGroups === false,
-      },
-    });
-    await refresh();
-  });
+  optionActions.appendChild(
+    createOptionBtn('Activation Guard', options.suppressCrossWindowActivation !== false, async () => {
+      await send({
+        type: 'AB_PANEL_SET_OPTIONS',
+        options: {
+          ...options,
+          suppressCrossWindowActivation: options.suppressCrossWindowActivation === false,
+        },
+      });
+      await refresh();
+    })
+  );
 
-  optionActions.appendChild(isolationBtn);
-  optionActions.appendChild(guardBtn);
-  optionActions.appendChild(autoCleanBtn);
+  optionActions.appendChild(
+    createOptionBtn('Auto-Clean', options.autoCleanEmptyGroups !== false, async () => {
+      await send({
+        type: 'AB_PANEL_SET_OPTIONS',
+        options: {
+          ...options,
+          autoCleanEmptyGroups: options.autoCleanEmptyGroups === false,
+        },
+      });
+      await refresh();
+    })
+  );
 
-  summaryEl.appendChild(title);
   summaryEl.appendChild(tags);
   summaryEl.appendChild(optionActions);
 }
 
 function renderSessions(state) {
-  sessionsEl.innerHTML = '';
+  sessionsEl.innerHTML = '<h3>Active Sessions</h3>';
 
   if (!state.sessions || state.sessions.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'card empty';
-    empty.textContent = 'No managed sessions yet.';
+    empty.textContent = 'No active sessions monitored.';
     sessionsEl.appendChild(empty);
     return;
   }
@@ -107,31 +110,71 @@ function renderSessions(state) {
     const titleRow = document.createElement('div');
     titleRow.className = 'session-title';
 
-    const titleLeft = document.createElement('strong');
+    const titleLeft = document.createElement('h4');
     titleLeft.textContent = session.session;
 
-    const actions = document.createElement('div');
-    actions.className = 'row-actions';
-
     const focusBtn = document.createElement('button');
-    focusBtn.type = 'button';
     focusBtn.textContent = 'Focus';
     focusBtn.addEventListener('click', async () => {
       await send({ type: 'AB_PANEL_FOCUS_SESSION', session: session.session });
       await refresh();
     });
 
+    titleRow.appendChild(titleLeft);
+    titleRow.appendChild(focusBtn);
+
+    const tags = document.createElement('div');
+    tags.className = 'tags';
+    tags.appendChild(createTag(`Window: ${session.windowId ?? 'N/A'}`));
+    tags.appendChild(createTag(`Tabs: ${session.tabs.length}`));
+
+    if (session.group) {
+      tags.appendChild(createTag(`G: ${session.group.title || 'Untitled'}`));
+    }
+
+    if (session.allowedDomains && session.allowedDomains.length > 0) {
+      tags.appendChild(createTag(`Allowlist: ${session.allowedDomains.length} domains`));
+    }
+
+    const list = document.createElement('div');
+    list.className = 'list';
+    for (const tab of session.tabs.slice(0, 10)) {
+      const item = document.createElement('div');
+      item.className = 'item';
+
+      const t = document.createElement('div');
+      t.className = 'item-title';
+      if (tab.active) {
+        const dot = document.createElement('span');
+        dot.textContent = '●';
+        dot.style.color = 'var(--success)';
+        dot.style.marginRight = '6px';
+        dot.style.fontSize = '10px';
+        t.appendChild(dot);
+      }
+      t.appendChild(document.createTextNode(tab.title || '(Untitled)'));
+
+      const u = document.createElement('div');
+      u.className = 'item-url';
+      u.textContent = tab.url || 'about:blank';
+
+      item.appendChild(t);
+      item.appendChild(u);
+      list.appendChild(item);
+    }
+
+    const footerActions = document.createElement('div');
+    footerActions.className = 'row-actions';
+
     const keepBtn = document.createElement('button');
-    keepBtn.type = 'button';
-    keepBtn.textContent = 'Keep Only This';
+    keepBtn.textContent = 'Isolate Session';
     keepBtn.addEventListener('click', async () => {
       await send({ type: 'AB_PANEL_CLOSE_OTHER_SESSION_TABS', session: session.session });
       await refresh();
     });
 
     const policyBtn = document.createElement('button');
-    policyBtn.type = 'button';
-    policyBtn.textContent = 'Set Allowlist';
+    policyBtn.textContent = 'Config Policy';
     policyBtn.addEventListener('click', async () => {
       const current = (session.allowedDomains || []).join(',');
       const input = window.prompt('Allowed domains (comma-separated)', current);
@@ -144,62 +187,19 @@ function renderSessions(state) {
       await refresh();
     });
 
-    actions.appendChild(focusBtn);
-    actions.appendChild(keepBtn);
-    actions.appendChild(policyBtn);
-
-    titleRow.appendChild(titleLeft);
-    titleRow.appendChild(actions);
-
-    const tags = document.createElement('div');
-    tags.className = 'tags';
-    tags.appendChild(createTag(`window: ${session.windowId ?? 'n/a'}`));
-    tags.appendChild(createTag(`tabs: ${session.tabs.length}`));
-
-    if (session.group) {
-      tags.appendChild(createTag(`group: ${session.group.title || session.group.id}`));
-      tags.appendChild(createTag(`color: ${session.group.color}`));
-      tags.appendChild(createTag(`collapsed: ${session.group.collapsed}`));
-    }
-
-    if (session.allowedDomains && session.allowedDomains.length > 0) {
-      tags.appendChild(createTag(`allowlist: ${session.allowedDomains.join(', ')}`));
-    }
-
-    if (session.riskHints && session.riskHints.length > 0) {
-      for (const hint of session.riskHints) {
-        tags.appendChild(createTag(`risk: ${hint}`));
-      }
-    }
-
-    const list = document.createElement('div');
-    list.className = 'list';
-    for (const tab of session.tabs.slice(0, 10)) {
-      const item = document.createElement('div');
-      item.className = 'item';
-
-      const t = document.createElement('div');
-      t.className = 'item-title';
-      t.textContent = `${tab.active ? '● ' : ''}${tab.title || '(untitled)'}`;
-
-      const u = document.createElement('div');
-      u.className = 'item-url';
-      u.textContent = tab.url || 'about:blank';
-
-      item.appendChild(t);
-      item.appendChild(u);
-      list.appendChild(item);
-    }
+    footerActions.appendChild(keepBtn);
+    footerActions.appendChild(policyBtn);
 
     card.appendChild(titleRow);
     card.appendChild(tags);
     card.appendChild(list);
+    card.appendChild(footerActions);
     sessionsEl.appendChild(card);
   }
 }
 
 function renderDownloads(state) {
-  downloadsEl.innerHTML = '<strong>Recent Downloads</strong>';
+  downloadsEl.innerHTML = '<h3>Recent Downloads</h3>';
 
   const list = document.createElement('div');
   list.className = 'list';

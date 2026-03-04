@@ -5,7 +5,7 @@ Stealth-first fork of `agent-browser` for production browser automation under an
 This README focuses on stealth architecture and principles. For full command coverage inherited from upstream, use:
 
 - upstream docs: <https://github.com/vercel-labs/agent-browser>
-- local help: `agent-browser --help`
+- local help: `agent-browser --help` (short alias: `abs --help`)
 
 ## What This Fork Optimizes
 
@@ -20,7 +20,7 @@ This README focuses on stealth architecture and principles. For full command cov
 People often ask this: "What's the anti-detection approach compared to `agent-browser-stealth` on npm?"
 
 - `agent-browser-stealth` on npm is the package name for this fork.
-- The CLI keeps upstream-compatible command names (`agent-browser` is still the main executable, with `agent-browser-stealth` as an alias).
+- The CLI keeps upstream-compatible command names (`agent-browser` is still the main executable, with `agent-browser-stealth` and `abs` as aliases).
 - The practical difference vs upstream `agent-browser` is not one single "stealth switch"; it is a defense-in-depth stack designed for anti-bot pressure.
 
 The core idea is layered hardening across the full automation lifecycle:
@@ -40,6 +40,8 @@ Goal: reduce detection probability and improve stability in production automatio
 ```bash
 npm install -g agent-browser-stealth
 agent-browser install
+# same CLI, short alias
+abs install
 ```
 
 ### Minimal Usage

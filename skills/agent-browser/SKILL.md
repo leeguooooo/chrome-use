@@ -1,12 +1,12 @@
 ---
 name: agent-browser
 description: Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to "open a website", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction.
-allowed-tools: Bash(npx agent-browser-stealth:*), Bash(npx agent-browser:*), Bash(agent-browser:*)
+allowed-tools: Bash(npx agent-browser-stealth:*), Bash(npx agent-browser:*), Bash(agent-browser:*), Bash(abs:*)
 ---
 
 # Browser Automation with agent-browser
 
-Install package: `pnpm add -g agent-browser-stealth` (CLI command remains `agent-browser` for compatibility). If global install is unavailable in your environment, use `pnpm dlx agent-browser-stealth <command>` for one-off runs.
+Install package: `pnpm add -g agent-browser-stealth` (CLI commands: `agent-browser`, `agent-browser-stealth`, and short alias `abs`). If global install is unavailable in your environment, use `pnpm dlx agent-browser-stealth <command>` for one-off runs.
 
 ## Core Workflow
 

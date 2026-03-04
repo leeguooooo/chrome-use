@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-stealth",
-  "version": "0.16.1-fork.0",
+  "version": "0.16.1-fork.1",
   "description": "Stealth browser automation CLI for AI agents with anti-bot evasions",
   "type": "module",
   "main": "dist/daemon.js",
@@ -12,7 +12,8 @@
   ],
   "bin": {
     "agent-browser-stealth": "./bin/agent-browser.js",
-    "agent-browser": "./bin/agent-browser.js"
+    "agent-browser": "./bin/agent-browser.js",
+    "abs": "./bin/agent-browser.js"
   },
   "scripts": {
     "prepare": "husky",

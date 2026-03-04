@@ -2393,6 +2393,7 @@ pub fn print_help() {
 agent-browser - fast browser automation CLI for AI agents
 
 Usage: agent-browser <command> [args] [options]
+Aliases: agent-browser, agent-browser-stealth, abs
 
 Core Commands:
   open <url>                 Navigate to URL
