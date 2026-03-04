@@ -302,6 +302,29 @@ describe('Stealth mode', () => {
     expect(raw).not.toContain('sourceURL=');
   });
 
+  it('doctor reports CDP sourceURL probe as pass in launched chromium sessions', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const report = await browser.runDoctor();
+    const check = report.checks.find((entry) => entry.name === 'cdp:sourceurl-sanitized');
+
+    expect(check).toBeDefined();
+    expect(check?.status).toBe('pass');
+  });
+
+  it('doctor marks plugin handshake context as skip outside CDP mode', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const report = await browser.runDoctor();
+    const check = report.checks.find((entry) => entry.name === 'plugin:handshake-context');
+
+    expect(check).toBeDefined();
+    expect(check?.status).toBe('skip');
+    expect(check?.message).toContain('only applies to CDP');
+  });
+
   it('exposes contacts manager and content index APIs', async () => {
     browser = new BrowserManager();
     await browser.launch({ headless: true, stealth: true });
@@ -353,5 +376,37 @@ describe('Stealth mode', () => {
     expect(workerSignals.hasDownlinkMax).toBe(true);
     expect(workerSignals.hasDownlinkMaxOnProto).toBe(true);
     expect(typeof workerSignals.downlinkMax).toBe('number');
+  });
+
+  it('skips worker wrapping for cross-origin blob URLs', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const signals = await browser.getPage().evaluate(() => {
+      const nativeCreateObjectURL = URL.createObjectURL;
+      const nativeRevokeObjectURL = URL.revokeObjectURL;
+      let createCalls = 0;
+      let revokeCalls = 0;
+
+      (URL as any).createObjectURL = (...args: unknown[]) => {
+        createCalls += 1;
+        return nativeCreateObjectURL.apply(URL, args as [Blob | MediaSource]);
+      };
+      (URL as any).revokeObjectURL = (...args: unknown[]) => {
+        revokeCalls += 1;
+        return nativeRevokeObjectURL.apply(URL, args as [string]);
+      };
+
+      try {
+        new Worker('blob:https://challenges.cloudflare.com/11111111-1111-1111-1111-111111111111');
+      } catch {}
+
+      (URL as any).createObjectURL = nativeCreateObjectURL;
+      (URL as any).revokeObjectURL = nativeRevokeObjectURL;
+      return { createCalls, revokeCalls };
+    });
+
+    expect(signals.createCalls).toBe(0);
+    expect(signals.revokeCalls).toBe(0);
   });
 });

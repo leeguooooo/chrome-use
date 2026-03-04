@@ -2643,6 +2643,54 @@ export class BrowserManager {
     checks.push({ name, status, message, ...(details ? { details } : {}) });
   }
 
+  /**
+   * Probe whether CDP Runtime.evaluate responses still leak automation-only
+   * sourceURL labels such as `__playwright_evaluation_script__`.
+   */
+  private async runDoctorSourceUrlProbe(checks: DoctorCheck[], launched: boolean): Promise<void> {
+    if (!launched) {
+      this.addDoctorCheck(
+        checks,
+        'cdp:sourceurl-sanitized',
+        'skip',
+        'Browser is not launched; sourceURL probe skipped'
+      );
+      return;
+    }
+
+    try {
+      const cdp = await this.getCDPSession();
+      const response = await cdp.send('Runtime.evaluate', {
+        expression:
+          "(() => { throw new Error('doctor-sourceurl'); })()\\n//# sourceURL=__playwright_evaluation_script__",
+        returnByValue: true,
+      });
+      const raw = JSON.stringify(response);
+      const leakedMarkers = [
+        '__playwright_evaluation_script__',
+        '__puppeteer_evaluation_script__',
+        'sourceURL=',
+      ].filter((marker) => raw.includes(marker));
+      const leaked = leakedMarkers.length > 0;
+      this.addDoctorCheck(
+        checks,
+        'cdp:sourceurl-sanitized',
+        leaked ? 'fail' : 'pass',
+        leaked
+          ? 'CDP Runtime.evaluate response still exposes automation sourceURL markers'
+          : 'CDP Runtime.evaluate response is sourceURL-sanitized',
+        leaked ? { leakedMarkers } : undefined
+      );
+    } catch (error) {
+      this.addDoctorCheck(
+        checks,
+        'cdp:sourceurl-sanitized',
+        'warn',
+        `Unable to run Runtime.evaluate sourceURL probe: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
   private buildDoctorTabGroupIntent(): TabGroupIntent {
     const session = this.getAgentSessionName();
     const pluginId =
@@ -2665,11 +2713,13 @@ export class BrowserManager {
   }
 
   /**
-   * Run connection diagnostics for CDP discovery and tab-group plugin handshake.
+   * Run connection diagnostics for CDP discovery, sourceURL sanitization, and
+   * tab-group plugin readiness/handshake.
    * This is intentionally side-effect-light: it does not navigate or force launch.
    */
   async runDoctor(): Promise<DoctorData> {
     const checks: DoctorCheck[] = [];
+    const launched = this.isLaunched();
     const preferredPort = 9333;
     const discovered: DoctorData['cdp']['discovered'] = [];
     const devToolsActivePort: DoctorData['cdp']['devToolsActivePort'] = [];
@@ -2761,6 +2811,8 @@ export class BrowserManager {
       }
     );
 
+    await this.runDoctorSourceUrlProbe(checks, launched);
+
     const pluginIntent = this.buildDoctorTabGroupIntent();
     const pluginResult: DoctorData['plugin'] = {
       configuredPluginId: pluginIntent.pluginId,
@@ -2769,7 +2821,13 @@ export class BrowserManager {
       message: 'Browser is not launched; plugin handshake skipped',
     };
 
-    if (!this.isLaunched()) {
+    if (!launched) {
+      this.addDoctorCheck(
+        checks,
+        'plugin:handshake-context',
+        'skip',
+        'Browser is not launched; plugin context check skipped'
+      );
       this.addDoctorCheck(
         checks,
         'plugin:tab-group-handshake',
@@ -2778,6 +2836,12 @@ export class BrowserManager {
         { configuredPluginId: pluginIntent.pluginId }
       );
     } else if (this.stealthConnectionKind !== 'cdp') {
+      this.addDoctorCheck(
+        checks,
+        'plugin:handshake-context',
+        'skip',
+        `Current connection mode is ${this.stealthConnectionKind}; plugin context check only applies to CDP`
+      );
       pluginResult.mode = 'non-cdp';
       pluginResult.status = 'skip';
       pluginResult.message = `Current connection mode is ${this.stealthConnectionKind}; plugin handshake only applies to CDP`;
@@ -2793,13 +2857,33 @@ export class BrowserManager {
       try {
         const page = this.getPage();
         if (page.isClosed()) {
+          this.addDoctorCheck(
+            checks,
+            'plugin:handshake-context',
+            'fail',
+            'Active page is closed; cannot test plugin handshake context'
+          );
           pluginResult.status = 'fail';
           pluginResult.message = 'Active page is closed; cannot run plugin handshake';
         } else if (!this.canInjectTabGroupScript(page)) {
+          this.addDoctorCheck(
+            checks,
+            'plugin:handshake-context',
+            'warn',
+            'Active page is an internal browser page; open a normal http(s) page before testing plugin handshake',
+            { url: this.getSafePageUrl(page) }
+          );
           pluginResult.status = 'warn';
           pluginResult.message =
             'Active page is an internal browser page; open a normal http(s) page to test plugin handshake';
         } else {
+          this.addDoctorCheck(
+            checks,
+            'plugin:handshake-context',
+            'pass',
+            'Active page is a normal page; plugin handshake can be tested',
+            { url: this.getSafePageUrl(page) }
+          );
           const response = await this.requestTabGroupPlugin(page, pluginIntent);
           if (!response) {
             pluginResult.status = 'fail';

@@ -36,6 +36,8 @@
     "test:watch": "vitest",
     "test:e2e:dogfood": "vitest run test/e2e/dogfood.eval.ts",
     "check:daemon-pid-recovery": "node scripts/check-daemon-pid-recovery.js",
+    "check:stealth-regression": "node scripts/check-stealth-regression.js",
+    "check:turnstile-testkey": "pnpm exec tsx scripts/check-turnstile-testkey.ts",
     "postinstall": "node scripts/postinstall.js",
     "verify:native-version": "node scripts/verify-native-version.js",
     "clawhub:sync": "bash scripts/clawhub-sync.sh",

@@ -33,7 +33,7 @@ agent-browser pdf <path>              # Save page as PDF
 agent-browser snapshot                # Accessibility tree with refs
 agent-browser eval <js>               # Run JavaScript
 agent-browser connect <port|url>      # Connect to browser via CDP
-agent-browser doctor                  # Diagnose CDP + tab-group plugin health
+agent-browser doctor                  # Diagnose CDP + sourceURL + tab-group plugin health
 agent-browser --version               # Show CLI version
 agent-browser close                   # Close browser (aliases: quit, exit)
 ```
@@ -253,7 +253,8 @@ agent-browser console --clear         # Clear console log
 agent-browser errors                  # View page errors
 agent-browser errors --clear          # Clear error log
 agent-browser highlight <sel>         # Highlight element
-agent-browser doctor                  # Diagnose CDP + plugin handshake status
+agent-browser doctor                  # Diagnose CDP + sourceURL + plugin handshake status
+pnpm run check:turnstile-testkey      # Deterministic Turnstile smoke check (official test key)
 ```
 
 ## State management
@@ -310,6 +311,7 @@ agent-browser reload                  # Reload page
 --auto-connect           # Auto-discover and connect to running Chrome
 --tab-group <name>       # Base title for agent tab groups (CDP plugin mode)
 --tab-group-plugin-id <id> # Expected extension ID for tab-group handshake
+--wait-until <mode>      # Navigation wait strategy for open/navigate (load, domcontentloaded, networkidle)
 --debug                  # Debug output (includes stealth connection type + capabilities)
 ```
 

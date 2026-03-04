@@ -229,6 +229,7 @@ flowchart TD
 - Prefer `--headed` for high-friction targets.
 - Reuse session state with one stable `--session-name` for continuity (when omitted, it defaults to `--session`).
 - Keep locale/timezone consistent with target market.
+- For challenge-heavy pages, prefer `--wait-until domcontentloaded` on `open`/`navigate` to avoid `load` stalls.
 - Use `--risk-mode block` in strict pipelines that require explicit operator intervention on verification pages.
 - For `cookies set`, use either `--url <url>`, or `--domain <domain> --path <path>` together.
 - If `--url`, `--domain`, and `--path` are all omitted, the cookie is scoped from the current page URL.
@@ -240,11 +241,13 @@ Run public detector checks after stealth changes:
 ```bash
 node scripts/check-sannysoft-webdriver.js --binary ./cli/target/release/agent-browser
 node scripts/check-creepjs-headless.js --binary ./cli/target/release/agent-browser
+node scripts/check-stealth-regression.js --binary ./cli/target/release/agent-browser
+pnpm run check:turnstile-testkey
 ```
 
 ## Doctor Diagnostics
 
-Use `doctor` to quickly diagnose local CDP and tab-group plugin readiness:
+Use `doctor` to quickly diagnose local CDP, sourceURL sanitization, and tab-group plugin readiness:
 
 ```bash
 agent-browser doctor
@@ -255,6 +258,8 @@ agent-browser --json doctor
 
 - CDP probe status (preferred `:9333` plus common ports)
 - DevToolsActivePort discovery from local Chrome profiles
+- CDP Runtime.evaluate sourceURL sanitization probe
+- Plugin handshake page context check (internal page vs normal `http(s)` page)
 - Tab-group extension handshake (when currently attached in CDP mode)
 
 ## Upstream Compatibility

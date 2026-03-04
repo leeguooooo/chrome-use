@@ -1262,7 +1262,8 @@ function patchNavigatorConnection(): string {
 }
 
 /**
- * Ensure dedicated workers expose navigator.connection.downlinkMax too.
+ * Ensure same-origin dedicated workers expose navigator.connection.downlinkMax too.
+ * Skip cross-origin worker URLs to avoid breaking anti-bot challenge workers.
  */
 function patchWorkerConnection(): string {
   return `(function(){
@@ -1305,12 +1306,36 @@ function patchWorkerConnection(): string {
       : \`importScripts(\${JSON.stringify(scriptUrl)});\`;
     return \`\${workerPrelude}\\n\${loader}\`;
   };
+  const resolveWorkerUrl = (value) => {
+    try {
+      return new URL(String(value), location.href);
+    } catch {
+      return null;
+    }
+  };
+  const shouldPatchWorker = (value) => {
+    const resolved = resolveWorkerUrl(value);
+    if (!resolved) return false;
+    if (resolved.protocol === 'blob:') return resolved.origin === location.origin;
+    if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+      return resolved.origin === location.origin;
+    }
+    if (resolved.protocol === 'file:') return location.protocol === 'file:';
+    return false;
+  };
   const WrappedWorker = function(scriptURL, options) {
+    if (!shouldPatchWorker(scriptURL)) {
+      return new NativeWorker(scriptURL, options);
+    }
     try {
       const source = buildPatchedScript(scriptURL, options);
       const blob = new Blob([source], { type: 'application/javascript' });
       const patchedUrl = URL.createObjectURL(blob);
-      return new NativeWorker(patchedUrl, options);
+      const worker = new NativeWorker(patchedUrl, options);
+      try {
+        setTimeout(() => URL.revokeObjectURL(patchedUrl), 0);
+      } catch {}
+      return worker;
     } catch {
       return new NativeWorker(scriptURL, options);
     }

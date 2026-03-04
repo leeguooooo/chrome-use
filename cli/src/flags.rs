@@ -39,6 +39,7 @@ pub struct Config {
     pub tab_group: Option<String>,
     pub tab_group_plugin_id: Option<String>,
     pub risk_mode: Option<String>,
+    pub wait_until: Option<String>,
 }
 
 impl Config {
@@ -76,6 +77,7 @@ impl Config {
             tab_group: other.tab_group.or(self.tab_group),
             tab_group_plugin_id: other.tab_group_plugin_id.or(self.tab_group_plugin_id),
             risk_mode: other.risk_mode.or(self.risk_mode),
+            wait_until: other.wait_until.or(self.wait_until),
         }
     }
 }
@@ -145,6 +147,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--tab-group",
         "--tab-group-plugin-id",
         "--risk-mode",
+        "--wait-until",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -220,6 +223,9 @@ pub struct Flags {
     /// How verification/captcha detections are handled on navigation:
     /// `off` (disable), `warn` (retry and warn), `block` (fail fast).
     pub risk_mode: Option<String>,
+    /// Navigation wait strategy passed to navigate/open commands:
+    /// `load`, `domcontentloaded`, or `networkidle`.
+    pub wait_until: Option<String>,
 
     // Track which launch-time options were explicitly passed via CLI
     // (as opposed to being set only via environment variables)
@@ -316,6 +322,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .ok()
             .or(config.risk_mode)
             .map(|s| s.to_ascii_lowercase()),
+        wait_until: config.wait_until.map(|s| s.to_ascii_lowercase()),
         cli_executable_path: false,
         cli_extensions: false,
         cli_state: false,
@@ -509,6 +516,12 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
+            "--wait-until" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.wait_until = Some(s.to_ascii_lowercase());
+                    i += 1;
+                }
+            }
             "--config" => {
                 // Already handled by load_config(); skip the value
                 i += 1;
@@ -568,6 +581,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--tab-group",
         "--tab-group-plugin-id",
         "--risk-mode",
+        "--wait-until",
         "--config",
     ];
 
@@ -915,6 +929,18 @@ mod tests {
     #[test]
     fn test_clean_args_removes_risk_mode() {
         let cleaned = clean_args(&args("--risk-mode warn open example.com"));
+        assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    #[test]
+    fn test_parse_wait_until_flag() {
+        let flags = parse_flags(&args("--wait-until domcontentloaded open example.com"));
+        assert_eq!(flags.wait_until.as_deref(), Some("domcontentloaded"));
+    }
+
+    #[test]
+    fn test_clean_args_removes_wait_until() {
+        let cleaned = clean_args(&args("--wait-until networkidle open example.com"));
         assert_eq!(cleaned, vec!["open", "example.com"]);
     }
 

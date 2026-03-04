@@ -197,6 +197,22 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                     });
                 }
             }
+            if let Some(ref wait_until) = flags.wait_until {
+                if matches!(
+                    wait_until.as_str(),
+                    "load" | "domcontentloaded" | "networkidle"
+                ) {
+                    nav_cmd["waitUntil"] = json!(wait_until);
+                } else {
+                    return Err(ParseError::InvalidValue {
+                        message: format!(
+                            "Invalid --wait-until value: {} (expected load, domcontentloaded, or networkidle)",
+                            wait_until
+                        ),
+                        usage: "open <url>",
+                    });
+                }
+            }
             Ok(nav_cmd)
         }
         "back" => Ok(json!({ "id": id, "action": "back" })),
@@ -2068,6 +2084,7 @@ mod tests {
             tab_group: None,
             tab_group_plugin_id: None,
             risk_mode: None,
+            wait_until: None,
             cli_tab_group: false,
             cli_tab_group_plugin_id: false,
         }
@@ -2347,6 +2364,14 @@ mod tests {
         flags.risk_mode = Some("block".to_string());
         let cmd = parse_command(&args("open https://example.com"), &flags).unwrap();
         assert_eq!(cmd["riskMode"], "block");
+    }
+
+    #[test]
+    fn test_navigate_with_wait_until() {
+        let mut flags = default_flags();
+        flags.wait_until = Some("domcontentloaded".to_string());
+        let cmd = parse_command(&args("open https://example.com"), &flags).unwrap();
+        assert_eq!(cmd["waitUntil"], "domcontentloaded");
     }
 
     #[test]

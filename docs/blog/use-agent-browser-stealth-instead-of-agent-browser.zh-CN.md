@@ -1,105 +1,97 @@
-# 使用 agent-browser-stealth 代替 agent-browser
+# agent-browser 与 agent-browser-stealth：能力差异与选型
 
-很多人已经把 AI Agent 接入了浏览器自动化，但上线后会遇到同一个问题：
-
-同样流程在不同网站表现不一致；流程写完了，关键站点还是过不去。
-
-问题通常不在“会不会自动化”，而在“能不能在真实网站里稳定自动化”。
-
-这就是为什么要从 `agent-browser` 升级到 `agent-browser-stealth`。
+本文给出 `agent-browser` 与 `agent-browser-stealth` 的技术差异、适用场景和升级验证步骤。
 
 项目地址：[leeguooooo/agent-browser](https://github.com/leeguooooo/agent-browser)
 
 ---
 
-## 为什么要替换
+## 1. 定位差异
 
-### 1) 让 AI 真正可以使用浏览器
-
-很多网站已经有反爬和自动化检测策略。  
-在这些场景里，传统自动化链路会出现高频验证、中断、重试失败，最终让 AI 任务卡在关键步骤。
-
-`agent-browser-stealth` 的目标很明确：让 AI 在真实网站环境中保持更高可用性。
-
-### 2) 应对“限制 AI 浏览器”的站点策略
-
-部分站点会对自动化浏览器做额外限制，包括：
-
-- 触发挑战页
-- 关键页面二次验证
-- 会话中途降权或限流
-
-`agent-browser-stealth` 提供更完整的防识别能力，降低这类限制对任务成功率的影响。
-
-### 3) 让 Agent 和用户共享同一个浏览器
-
-很多自动化失败发生在“登录前后状态切换”环节。  
-`agent-browser-stealth` 支持 Agent 复用用户正在使用的浏览器会话，直接继承已登录状态，减少重复登录和验证码干扰。
-
-对业务流程的价值是直接的：
-
-- 缩短执行路径
-- 降低登录步骤失败率
-- 提升整体成功率与执行速度
+- `agent-browser`：标准浏览器自动化能力
+- `agent-browser-stealth`：在标准自动化能力基础上，增加反检测与高风控场景稳定性能力
 
 ---
 
-## 典型站点效果（示例）
-
-以亚马逊这类高风控电商站点为例，很多 AI 浏览器流程过去常见的问题是：
-
-- 能打开首页，但关键操作前触发验证
-- 搜索、跳转、加购这类连续动作中途被打断
-- 会话偶发失效，任务难以完整执行
-
-切换到 `agent-browser-stealth` 后，可显著提升这类流程的可执行性，常见可完成动作包括：
-
-- 商品搜索与详情浏览
-- 购物车相关操作
-- 已登录状态下的页面导航与信息读取
-
-除了电商站点，下面两类场景也常见明显改善：
-
-- 社媒/内容平台：多步骤跳转流程更稳定
-- SaaS 后台系统：登录后连续操作中断率降低
-
-说明：不同账号状态、网络环境、站点实时策略会影响最终效果。
-
----
-
-## 适合哪些场景
-
-- AI 客服或运营 Agent 需要在多站点执行后台操作
-- 自动化流程经常卡在登录、验证、跳转环节
-- 需要“人机协同”：用户和 Agent 共用一个会话处理复杂任务
-- 对稳定性要求高的生产任务（不是 Demo）
-
----
-
-## 迁移成本高吗
-
-迁移成本通常很低，命令习惯可以保持一致。  
-多数场景可以先做“无侵入替换”，再按业务流程逐步优化。
-
----
-
-## 一张表看差异
+## 2. 核心能力对比
 
 | 维度 | agent-browser | agent-browser-stealth |
 | --- | --- | --- |
-| 目标 | 标准自动化能力 | 面向真实风控环境的稳定自动化 |
-| 站点兼容性 | 普通站点可用 | 高风控站点可用性更高 |
-| AI 执行稳定性 | 受验证页影响明显 | 对验证/限制策略更稳 |
-| 登录链路 | 常需重复处理登录步骤 | 支持复用用户浏览器状态，减少登录干扰 |
-| 生产可用性 | 适合基础自动化 | 更适合生产级 AI 浏览器任务 |
+| 自动化基础能力 | 支持 | 支持 |
+| 指纹一致性治理 | 基础 | 多层（launch/CDP/init-script） |
+| 高风控站点稳定性 | 一般 | 更高 |
+| 会话连续性（附着现有浏览器） | 支持 | 支持，默认附着策略更明确 |
+| Cloudflare/Turnstile 回归工具 | 无专用脚本 | `check:turnstile-testkey` |
 
 ---
 
-## 结论
+## 3. Cloudflare/Turnstile 相关能力（v0.15.2-fork.2+）
 
-如果目标是“让 AI 在真实网站里稳定完成任务”，`agent-browser-stealth` 是更合适的选择。  
-如果目标只是“脚本在理想环境跑通”，`agent-browser` 已经足够。
+### 3.1 挑战链路保护
 
-在生产环境里，真正的差异通常体现在四个字：**可用与稳定**。
+- 同源 worker 注入保留
+- 跨域 challenge worker 不做注入改写
+- 降低 challenge worker 执行异常概率
 
-项目地址：[leeguooooo/agent-browser](https://github.com/leeguooooo/agent-browser)
+### 3.2 导航等待策略
+
+`open/navigate` 支持：
+
+- `--wait-until load`
+- `--wait-until domcontentloaded`
+- `--wait-until networkidle`
+
+挑战页建议优先 `domcontentloaded`，减少 `load` 阶段超时误判。
+
+### 3.3 确定性回归
+
+提供官方 test key 回归脚本：
+
+```bash
+pnpm run check:turnstile-testkey
+```
+
+通过特征：输出 `XXXX.DUMMY.TOKEN.XXXX`。
+
+---
+
+## 4. 适用场景
+
+优先使用 `agent-browser-stealth` 的场景：
+
+1. 目标站点存在挑战页/验证码/限流
+2. 自动化链路对稳定性要求高
+3. 需要长期回归验证与版本门禁
+
+使用 `agent-browser` 的场景：
+
+1. 低风控站点
+2. 以基础自动化能力验证为主
+
+---
+
+## 5. 升级验证步骤
+
+```bash
+# 1) 检查版本
+agent-browser -V
+
+# 2) 关闭旧 daemon，避免版本漂移
+agent-browser --session default close
+
+# 3) 运行确定性回归
+pnpm run check:turnstile-testkey
+
+# 4) 可选：真实站点回归
+agent-browser --wait-until domcontentloaded open https://www.anyviewer.com/cloudflare.html
+```
+
+如果启用域名白名单（`AGENT_BROWSER_ALLOWED_DOMAINS`），需包含 `challenges.cloudflare.com`。
+
+---
+
+## 6. 结论
+
+`agent-browser-stealth` 适用于高风控与稳定性敏感场景；`agent-browser` 适用于标准自动化场景。  
+选型建议按目标站点风控强度与回归要求决定。
+
