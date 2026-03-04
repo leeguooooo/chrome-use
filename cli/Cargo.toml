@@ -51,3 +51,6 @@ strip = true
 inherits = "release"
 lto = "thin"
 codegen-units = 16
+
+[patch.crates-io]
+zune-jpeg = { path = "vendor/zune-jpeg" }
