@@ -3,6 +3,9 @@
   "name": "agent-browser-stealth",
   "version": "0.2.0",
   "description": "Session-aware tab grouping and coordination for CDP-driven agent-browser workflows.",
+  "icons": {
+    "128": "icons/icon.svg"
+  },
   "permissions": ["tabs", "tabGroups", "downloads", "storage", "sidePanel", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -20,6 +23,12 @@
       "js": ["content-script.js"],
       "run_at": "document_start",
       "match_about_blank": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-bridge.js"],
+      "matches": ["<all_urls>"]
     }
   ]
 }

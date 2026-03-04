@@ -6,11 +6,36 @@ const PANEL_CLEAN_EMPTY_GROUPS = 'AB_PANEL_CLEAN_EMPTY_GROUPS';
 const PANEL_SET_POLICY = 'AB_PANEL_SET_POLICY';
 const PANEL_SET_OPTIONS = 'AB_PANEL_SET_OPTIONS';
 
+const PANEL_RUN_ACTION = 'AB_PANEL_RUN_ACTION';
+const PANEL_CLEAR_ACTIVITY = 'AB_PANEL_CLEAR_ACTIVITY';
+const PANEL_START_RECORDING = 'AB_PANEL_START_RECORDING';
+const PANEL_STOP_RECORDING = 'AB_PANEL_STOP_RECORDING';
+const PANEL_SAVE_RECORDING = 'AB_PANEL_SAVE_RECORDING';
+const PANEL_RUN_WORKFLOW = 'AB_PANEL_RUN_WORKFLOW';
+const PANEL_DELETE_WORKFLOW = 'AB_PANEL_DELETE_WORKFLOW';
+const PANEL_SET_SHORTCUT = 'AB_PANEL_SET_SHORTCUT';
+const PANEL_DELETE_SHORTCUT = 'AB_PANEL_DELETE_SHORTCUT';
+const PANEL_RUN_SHORTCUT = 'AB_PANEL_RUN_SHORTCUT';
+const PANEL_CREATE_SCHEDULE = 'AB_PANEL_CREATE_SCHEDULE';
+const PANEL_DELETE_SCHEDULE = 'AB_PANEL_DELETE_SCHEDULE';
+const PANEL_TOGGLE_SCHEDULE = 'AB_PANEL_TOGGLE_SCHEDULE';
+
+const CONTENT_EVENT_TYPE = 'AB_CONTENT_EVENT';
+const CONTENT_EXECUTE_ACTION = 'AB_CONTENT_EXECUTE_ACTION';
+const CONTENT_GET_DOM_STATE = 'AB_CONTENT_GET_DOM_STATE';
+const CONTENT_PING = 'AB_CONTENT_PING';
+
 const DEFAULT_GROUP_TITLE = 'Agent Browser Stealth';
 const DOWNLOAD_ARCHIVE_ROOT = 'agent-browser-stealth';
 const STORAGE_POLICY_KEY = 'abSessionPoliciesV1';
 const STORAGE_OPTIONS_KEY = 'abExtensionOptionsV1';
+const STORAGE_WORKFLOWS_KEY = 'abWorkflowsV1';
+const STORAGE_SHORTCUTS_KEY = 'abShortcutsV1';
+const STORAGE_SCHEDULES_KEY = 'abSchedulesV1';
+
 const CLEANUP_ALARM_NAME = 'ab-clean-empty-groups';
+const WORKFLOW_ALARM_PREFIX = 'ab-workflow-schedule:';
+
 const GROUP_COLORS = ['blue', 'green', 'pink', 'orange', 'purple', 'cyan', 'red', 'yellow'];
 const RISKY_TLDS = new Set(['zip', 'mov', 'click', 'top', 'gq', 'tk', 'country']);
 const RISKY_HOST_KEYWORDS = ['secure-login', 'account-verify', 'wallet-verify', 'airdrop-claim'];
@@ -19,17 +44,49 @@ const DEFAULT_EXTENSION_OPTIONS = {
   strictWindowIsolation: true,
   suppressCrossWindowActivation: true,
   autoCleanEmptyGroups: true,
+  pageBridgeEnabled: false,
 };
 
+const MAX_ACTIVITY_EVENTS = 500;
+const COMMAND_HISTORY_LIMIT = 120;
+
 const sessionGroupCache = new Map();
+const sessionGroupTitleMap = new Map();
 const sessionWindowMap = new Map();
 const tabSessionMap = new Map();
 const tabMetaById = new Map();
 const downloadEvents = [];
 const sessionPolicies = new Map();
-let extensionOptions = { ...DEFAULT_EXTENSION_OPTIONS };
+const workflows = new Map();
+const shortcuts = new Map();
+const schedules = new Map();
 
+const activityEvents = [];
+const commandHistory = [];
+let latestDomState = null;
+
+let extensionOptions = { ...DEFAULT_EXTENSION_OPTIONS };
+// Transient workflow recorder state. Persisted only when saved as a workflow.
+let recordingState = null;
 let bootstrapPromise = bootstrapState();
+let eventCounter = 0;
+
+function now() {
+  return Date.now();
+}
+
+function uid(prefix) {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `${prefix}-${Date.now().toString(36)}-${rand}`;
+}
+
+function clampInt(value, min, max, fallback) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed < min) return min;
+  if (parsed > max) return max;
+  return parsed;
+}
 
 function normalizeSession(session) {
   if (typeof session !== 'string') return 'default';
@@ -49,6 +106,26 @@ function normalizeAllowedDomains(domains) {
     .map((item) => (typeof item === 'string' ? item.trim().toLowerCase() : ''))
     .filter((item) => item.length > 0)
     .slice(0, 256);
+}
+
+function normalizeUrl(rawUrl) {
+  if (typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+
+  if (/^(https?|file|about|data|blob|chrome-extension):/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `https://${trimmed}`;
+}
+
+function normalizeShortcutName(name) {
+  if (typeof name !== 'string') return null;
+  const trimmed = name.trim().toLowerCase();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(/[^a-z0-9:_-]/g, '-').replace(/-+/g, '-').slice(0, 48);
+  return normalized || null;
 }
 
 function parseHostname(rawUrl) {
@@ -136,6 +213,50 @@ function shouldCollapseGroup(session) {
   return session !== 'default';
 }
 
+function defaultGroupTitleForSession(session) {
+  const normalized = normalizeSession(session);
+  if (normalized === 'default') {
+    return DEFAULT_GROUP_TITLE;
+  }
+  return normalizeGroupTitle(`${DEFAULT_GROUP_TITLE} • ${normalized}`);
+}
+
+function getGroupTitleForSession(session) {
+  const normalized = normalizeSession(session);
+  return sessionGroupTitleMap.get(normalized) || defaultGroupTitleForSession(normalized);
+}
+
+function createActivityEvent(kind, payload, meta = {}) {
+  return {
+    id: ++eventCounter,
+    kind,
+    payload,
+    tabId: typeof meta.tabId === 'number' ? meta.tabId : null,
+    session: typeof meta.session === 'string' ? meta.session : null,
+    url: typeof meta.url === 'string' ? meta.url : '',
+    title: typeof meta.title === 'string' ? meta.title : '',
+    source: typeof meta.source === 'string' ? meta.source : 'extension',
+    timestamp: now(),
+  };
+}
+
+function pushActivityEvent(kind, payload, meta = {}) {
+  activityEvents.push(createActivityEvent(kind, payload, meta));
+  if (activityEvents.length > MAX_ACTIVITY_EVENTS) {
+    activityEvents.splice(0, activityEvents.length - MAX_ACTIVITY_EVENTS);
+  }
+}
+
+function pushCommandHistory(entry) {
+  commandHistory.push({
+    ...entry,
+    timestamp: now(),
+  });
+  if (commandHistory.length > COMMAND_HISTORY_LIMIT) {
+    commandHistory.splice(0, commandHistory.length - COMMAND_HISTORY_LIMIT);
+  }
+}
+
 async function loadPolicies() {
   try {
     const result = await chrome.storage.local.get([STORAGE_POLICY_KEY]);
@@ -159,6 +280,7 @@ function normalizeOptions(raw) {
     strictWindowIsolation: raw.strictWindowIsolation !== false,
     suppressCrossWindowActivation: raw.suppressCrossWindowActivation !== false,
     autoCleanEmptyGroups: raw.autoCleanEmptyGroups !== false,
+    pageBridgeEnabled: raw.pageBridgeEnabled === true,
   };
 }
 
@@ -176,19 +298,281 @@ async function persistOptions() {
 }
 
 async function setExtensionOptions(nextOptions) {
-  extensionOptions = {
+  const merged = {
     ...extensionOptions,
-    ...normalizeOptions(nextOptions),
+    ...(nextOptions && typeof nextOptions === 'object' ? nextOptions : {}),
   };
+  extensionOptions = normalizeOptions(merged);
   await persistOptions();
   await syncCleanupAlarm();
   return extensionOptions;
 }
 
+function normalizeWorkflowStep(rawStep) {
+  if (!rawStep || typeof rawStep !== 'object') return null;
+  if (typeof rawStep.action !== 'string' || rawStep.action.trim().length === 0) return null;
+
+  const action = rawStep.action.trim();
+  return {
+    id: typeof rawStep.id === 'string' ? rawStep.id : uid('step'),
+    action,
+    args: rawStep.args && typeof rawStep.args === 'object' ? rawStep.args : {},
+    timeoutMs: clampInt(rawStep.timeoutMs, 0, 120_000, 0),
+    retries: clampInt(rawStep.retries, 0, 5, 0),
+  };
+}
+
+function normalizeWorkflow(rawWorkflow) {
+  if (!rawWorkflow || typeof rawWorkflow !== 'object') return null;
+  if (typeof rawWorkflow.id !== 'string' || rawWorkflow.id.length === 0) return null;
+
+  const steps = Array.isArray(rawWorkflow.steps)
+    ? rawWorkflow.steps.map((step) => normalizeWorkflowStep(step)).filter(Boolean)
+    : [];
+
+  return {
+    id: rawWorkflow.id,
+    name:
+      typeof rawWorkflow.name === 'string' && rawWorkflow.name.trim().length > 0
+        ? rawWorkflow.name.trim().slice(0, 120)
+        : rawWorkflow.id,
+    steps,
+    createdAt: clampInt(rawWorkflow.createdAt, 0, Number.MAX_SAFE_INTEGER, now()),
+    updatedAt: clampInt(rawWorkflow.updatedAt, 0, Number.MAX_SAFE_INTEGER, now()),
+  };
+}
+
+function normalizeCadence(rawCadence) {
+  if (!rawCadence || typeof rawCadence !== 'object') {
+    return {
+      kind: 'daily',
+      hour: 9,
+      minute: 0,
+    };
+  }
+
+  const kind =
+    rawCadence.kind === 'weekly' ||
+    rawCadence.kind === 'monthly' ||
+    rawCadence.kind === 'yearly' ||
+    rawCadence.kind === 'daily'
+      ? rawCadence.kind
+      : 'daily';
+
+  const cadence = {
+    kind,
+    hour: clampInt(rawCadence.hour, 0, 23, 9),
+    minute: clampInt(rawCadence.minute, 0, 59, 0),
+  };
+
+  if (kind === 'weekly') {
+    const weekdays = Array.isArray(rawCadence.weekdays)
+      ? rawCadence.weekdays.map((day) => clampInt(day, 0, 6, 1))
+      : [clampInt(rawCadence.weekday, 0, 6, 1)];
+    cadence.weekdays = [...new Set(weekdays)].slice(0, 7);
+  }
+
+  if (kind === 'monthly') {
+    cadence.dayOfMonth = clampInt(rawCadence.dayOfMonth, 1, 31, 1);
+  }
+
+  if (kind === 'yearly') {
+    cadence.month = clampInt(rawCadence.month, 1, 12, 1);
+    cadence.dayOfMonth = clampInt(rawCadence.dayOfMonth, 1, 31, 1);
+  }
+
+  return cadence;
+}
+
+function daysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+function computeNextRun(cadence, fromTs = now()) {
+  const from = new Date(fromTs + 1000);
+  const hour = clampInt(cadence.hour, 0, 23, 9);
+  const minute = clampInt(cadence.minute, 0, 59, 0);
+
+  if (cadence.kind === 'weekly') {
+    const weekdays = Array.isArray(cadence.weekdays) && cadence.weekdays.length > 0
+      ? cadence.weekdays.map((day) => clampInt(day, 0, 6, 1))
+      : [1];
+
+    for (let offset = 0; offset < 14; offset += 1) {
+      const candidate = new Date(from);
+      candidate.setDate(from.getDate() + offset);
+      candidate.setHours(hour, minute, 0, 0);
+      if (candidate <= from) continue;
+      if (weekdays.includes(candidate.getDay())) {
+        return candidate.getTime();
+      }
+    }
+  }
+
+  if (cadence.kind === 'monthly') {
+    const dayOfMonth = clampInt(cadence.dayOfMonth, 1, 31, 1);
+    const candidate = new Date(from);
+
+    for (let i = 0; i < 24; i += 1) {
+      const monthDate = new Date(candidate.getFullYear(), candidate.getMonth() + i, 1);
+      const maxDay = daysInMonth(monthDate.getFullYear(), monthDate.getMonth());
+      monthDate.setDate(Math.min(dayOfMonth, maxDay));
+      monthDate.setHours(hour, minute, 0, 0);
+      if (monthDate > from) {
+        return monthDate.getTime();
+      }
+    }
+  }
+
+  if (cadence.kind === 'yearly') {
+    const month = clampInt(cadence.month, 1, 12, 1) - 1;
+    const dayOfMonth = clampInt(cadence.dayOfMonth, 1, 31, 1);
+
+    for (let yearOffset = 0; yearOffset < 5; yearOffset += 1) {
+      const year = from.getFullYear() + yearOffset;
+      const maxDay = daysInMonth(year, month);
+      const candidate = new Date(year, month, Math.min(dayOfMonth, maxDay), hour, minute, 0, 0);
+      if (candidate > from) {
+        return candidate.getTime();
+      }
+    }
+  }
+
+  const dailyCandidate = new Date(from);
+  dailyCandidate.setHours(hour, minute, 0, 0);
+  if (dailyCandidate <= from) {
+    dailyCandidate.setDate(dailyCandidate.getDate() + 1);
+  }
+  return dailyCandidate.getTime();
+}
+
+function normalizeSchedule(rawSchedule) {
+  if (!rawSchedule || typeof rawSchedule !== 'object') return null;
+  if (typeof rawSchedule.id !== 'string' || rawSchedule.id.length === 0) return null;
+  if (typeof rawSchedule.workflowId !== 'string' || rawSchedule.workflowId.length === 0) return null;
+
+  const cadence = normalizeCadence(rawSchedule.cadence);
+
+  const nextRunAt =
+    typeof rawSchedule.nextRunAt === 'number' && Number.isFinite(rawSchedule.nextRunAt)
+      ? rawSchedule.nextRunAt
+      : computeNextRun(cadence);
+
+  return {
+    id: rawSchedule.id,
+    name:
+      typeof rawSchedule.name === 'string' && rawSchedule.name.trim().length > 0
+        ? rawSchedule.name.trim().slice(0, 120)
+        : rawSchedule.id,
+    workflowId: rawSchedule.workflowId,
+    cadence,
+    enabled: rawSchedule.enabled !== false,
+    createdAt: clampInt(rawSchedule.createdAt, 0, Number.MAX_SAFE_INTEGER, now()),
+    updatedAt: clampInt(rawSchedule.updatedAt, 0, Number.MAX_SAFE_INTEGER, now()),
+    lastRunAt:
+      typeof rawSchedule.lastRunAt === 'number' && Number.isFinite(rawSchedule.lastRunAt)
+        ? rawSchedule.lastRunAt
+        : null,
+    nextRunAt,
+  };
+}
+
+async function persistWorkflows() {
+  const payload = [...workflows.values()];
+  await chrome.storage.local.set({ [STORAGE_WORKFLOWS_KEY]: payload });
+}
+
+async function persistShortcuts() {
+  const payload = Object.fromEntries(shortcuts.entries());
+  await chrome.storage.local.set({ [STORAGE_SHORTCUTS_KEY]: payload });
+}
+
+async function persistSchedules() {
+  const payload = [...schedules.values()];
+  await chrome.storage.local.set({ [STORAGE_SCHEDULES_KEY]: payload });
+}
+
+async function loadAutomationState() {
+  try {
+    const result = await chrome.storage.local.get([
+      STORAGE_WORKFLOWS_KEY,
+      STORAGE_SHORTCUTS_KEY,
+      STORAGE_SCHEDULES_KEY,
+    ]);
+
+    const workflowEntries = Array.isArray(result?.[STORAGE_WORKFLOWS_KEY])
+      ? result[STORAGE_WORKFLOWS_KEY]
+      : [];
+
+    workflows.clear();
+    for (const entry of workflowEntries) {
+      const workflow = normalizeWorkflow(entry);
+      if (!workflow) continue;
+      workflows.set(workflow.id, workflow);
+    }
+
+    const shortcutEntries =
+      result?.[STORAGE_SHORTCUTS_KEY] && typeof result[STORAGE_SHORTCUTS_KEY] === 'object'
+        ? result[STORAGE_SHORTCUTS_KEY]
+        : {};
+
+    shortcuts.clear();
+    for (const [name, workflowId] of Object.entries(shortcutEntries)) {
+      const shortcutName = normalizeShortcutName(name);
+      if (!shortcutName) continue;
+      if (typeof workflowId !== 'string') continue;
+      if (!workflows.has(workflowId)) continue;
+      shortcuts.set(shortcutName, workflowId);
+    }
+
+    const scheduleEntries = Array.isArray(result?.[STORAGE_SCHEDULES_KEY])
+      ? result[STORAGE_SCHEDULES_KEY]
+      : [];
+
+    schedules.clear();
+    for (const entry of scheduleEntries) {
+      const schedule = normalizeSchedule(entry);
+      if (!schedule) continue;
+      if (!workflows.has(schedule.workflowId)) continue;
+      schedules.set(schedule.id, schedule);
+    }
+  } catch {
+    workflows.clear();
+    shortcuts.clear();
+    schedules.clear();
+  }
+}
+
+async function scheduleWorkflowAlarm(schedule) {
+  const alarmName = `${WORKFLOW_ALARM_PREFIX}${schedule.id}`;
+  await chrome.alarms.clear(alarmName);
+
+  if (!schedule.enabled) {
+    return;
+  }
+
+  if (typeof schedule.nextRunAt !== 'number' || !Number.isFinite(schedule.nextRunAt)) {
+    schedule.nextRunAt = computeNextRun(schedule.cadence);
+    schedule.updatedAt = now();
+  }
+
+  await chrome.alarms.create(alarmName, {
+    when: Math.max(schedule.nextRunAt, now() + 5_000),
+  });
+}
+
+async function syncAllWorkflowAlarms() {
+  for (const schedule of schedules.values()) {
+    await scheduleWorkflowAlarm(schedule);
+  }
+}
+
 async function bootstrapState() {
   await loadPolicies();
   await loadOptions();
+  await loadAutomationState();
   await syncCleanupAlarm();
+  await syncAllWorkflowAlarms();
 }
 
 async function persistPolicies() {
@@ -220,7 +604,7 @@ function updateTabMeta(tab) {
     title: typeof tab.title === 'string' ? tab.title : '',
     groupId: typeof tab.groupId === 'number' ? tab.groupId : -1,
     active: tab.active === true,
-    lastSeenAt: Date.now(),
+    lastSeenAt: now(),
   });
 }
 
@@ -232,7 +616,7 @@ function pruneDownloadEvents() {
 }
 
 function recordDownloadEvent(event) {
-  downloadEvents.push({ ...event, timestamp: Date.now() });
+  downloadEvents.push({ ...event, timestamp: now() });
   pruneDownloadEvents();
 }
 
@@ -342,6 +726,7 @@ async function ensureSessionGroup(tabId, windowId, session, groupTitle) {
 
   sessionGroupCache.set(key, groupId);
   sessionWindowMap.set(session, targetWindowId);
+  sessionGroupTitleMap.set(session, groupTitle);
 
   return {
     groupId,
@@ -384,6 +769,34 @@ async function applySessionDomainFallback(tabId, session) {
 function getManagedSessionForTab(tabId) {
   if (typeof tabId !== 'number') return undefined;
   return tabSessionMap.get(tabId);
+}
+
+async function ensureManagedTab(tabId, sessionHint) {
+  if (typeof tabId !== 'number') return null;
+
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return null;
+  }
+
+  if (typeof tab.windowId !== 'number') {
+    return null;
+  }
+
+  const session = normalizeSession(sessionHint || getManagedSessionForTab(tabId) || 'default');
+  const groupTitle = getGroupTitleForSession(session);
+  tabSessionMap.set(tabId, session);
+  updateTabMeta(tab);
+
+  try {
+    const grouping = await ensureSessionGroup(tabId, tab.windowId, session, groupTitle);
+    return { session, groupTitle, grouping };
+  } catch {
+    // Best-effort grouping: keep session mapping even if group APIs fail.
+    return { session, groupTitle, grouping: null };
+  }
 }
 
 function collectSessionTabIds(session) {
@@ -544,6 +957,68 @@ async function updateRiskBadge(tabId) {
   await chrome.action.setTitle({ title }).catch(() => {});
 }
 
+function buildWorkflowSummary() {
+  return [...workflows.values()].map((workflow) => ({
+    id: workflow.id,
+    name: workflow.name,
+    stepCount: workflow.steps.length,
+    steps: workflow.steps,
+    createdAt: workflow.createdAt,
+    updatedAt: workflow.updatedAt,
+  }));
+}
+
+function buildShortcutSummary() {
+  return [...shortcuts.entries()].map(([name, workflowId]) => ({
+    name,
+    workflowId,
+    workflowName: workflows.get(workflowId)?.name || workflowId,
+  }));
+}
+
+function buildScheduleSummary() {
+  return [...schedules.values()].map((schedule) => ({
+    ...schedule,
+    workflowName: workflows.get(schedule.workflowId)?.name || schedule.workflowId,
+  }));
+}
+
+function buildActivitySummary() {
+  const recent = activityEvents.slice(-200).reverse();
+  return {
+    events: recent,
+    console: recent.filter((event) => event.kind === 'console').slice(0, 80),
+    network: recent.filter((event) => event.kind === 'network').slice(0, 120),
+    commandHistory: commandHistory.slice(-80).reverse(),
+  };
+}
+
+async function getControlState() {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const activeTab = tabs.find((tab) => tab.active === true) || tabs[0] || null;
+
+  return {
+    activeTab:
+      activeTab && typeof activeTab.id === 'number'
+        ? {
+            id: activeTab.id,
+            title: activeTab.title || '',
+            url: activeTab.url || '',
+            windowId: activeTab.windowId,
+          }
+        : null,
+    tabs: tabs.map((tab) => ({
+      id: tab.id,
+      index: tab.index,
+      title: tab.title || '(Untitled)',
+      url: tab.url || '',
+      active: tab.active === true,
+      windowId: tab.windowId,
+      session: getManagedSessionForTab(tab.id),
+    })),
+  };
+}
+
 async function buildPanelState() {
   const allTabs = await chrome.tabs.query({});
   for (const tab of allTabs) {
@@ -614,6 +1089,8 @@ async function buildPanelState() {
 
   sessions.sort((a, b) => a.session.localeCompare(b.session));
 
+  const control = await getControlState();
+
   return {
     extensionId: chrome.runtime.id,
     options: { ...extensionOptions },
@@ -623,7 +1100,733 @@ async function buildPanelState() {
     },
     sessions,
     downloads: downloadEvents.slice(-25).reverse(),
+    latestDomState,
+    control,
+    activity: buildActivitySummary(),
+    automation: {
+      recording: recordingState
+        ? {
+            id: recordingState.id,
+            name: recordingState.name,
+            startedAt: recordingState.startedAt,
+            stoppedAt: recordingState.stoppedAt,
+            stepCount: recordingState.steps.length,
+            steps: recordingState.steps,
+          }
+        : null,
+      workflows: buildWorkflowSummary(),
+      shortcuts: buildShortcutSummary(),
+      schedules: buildScheduleSummary(),
+    },
   };
+}
+
+async function waitForTabSettled(tabId, timeoutMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    const deadline = now() + timeoutMs;
+
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      reject(new Error('tab-load-timeout'));
+    }, timeoutMs);
+
+    const onUpdated = (updatedTabId, changeInfo) => {
+      if (updatedTabId !== tabId) return;
+      if (changeInfo.status === 'complete') {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(true);
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+
+    chrome.tabs
+      .get(tabId)
+      .then((tab) => {
+        if (tab.status === 'complete') {
+          clearTimeout(timer);
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+          resolve(true);
+          return;
+        }
+
+        if (now() > deadline) {
+          clearTimeout(timer);
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+          reject(new Error('tab-load-timeout'));
+        }
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        reject(new Error('tab-not-found'));
+      });
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getOrCreateActionTab(tabId) {
+  if (typeof tabId === 'number') {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      return tab;
+    } catch {
+      // fall through
+    }
+  }
+
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (activeTab && typeof activeTab.id === 'number') {
+    return activeTab;
+  }
+
+  return chrome.tabs.create({ url: 'about:blank', active: true });
+}
+
+async function sendContentCommand(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function shouldRecordAction(action) {
+  return ![
+    'tabs:list',
+    'dom-state',
+    'snapshot',
+    'shortcut:run',
+    'workflow:run',
+  ].includes(action);
+}
+
+function recordWorkflowStep(action, args) {
+  if (!recordingState) return;
+  if (!shouldRecordAction(action)) return;
+
+  recordingState.steps.push({
+    id: uid('step'),
+    action,
+    args: args && typeof args === 'object' ? { ...args } : {},
+    retries: 0,
+    timeoutMs: 0,
+  });
+}
+
+async function runShortcutByName(name, options = {}) {
+  const shortcutName = normalizeShortcutName(name);
+  if (!shortcutName) {
+    return { ok: false, error: 'shortcut-name-required' };
+  }
+
+  const workflowId = shortcuts.get(shortcutName);
+  if (!workflowId) {
+    return { ok: false, error: `shortcut-not-found:${shortcutName}` };
+  }
+
+  const runResult = await runWorkflowById(workflowId, {
+    source: options.source || 'shortcut',
+    tabId: options.tabId,
+  });
+
+  return {
+    ...runResult,
+    shortcut: shortcutName,
+    workflowId,
+  };
+}
+
+async function runActionInternal(request, options = {}) {
+  const action = typeof request.action === 'string' ? request.action.trim() : '';
+  const args = request.args && typeof request.args === 'object' ? request.args : {};
+  const source = options.source || 'panel';
+
+  if (!action) {
+    return { ok: false, error: 'action-required' };
+  }
+
+  if (action.startsWith('/')) {
+    return runShortcutByName(action.slice(1), {
+      source,
+      tabId: request.tabId,
+    });
+  }
+
+  let tab = null;
+  let tabId = typeof request.tabId === 'number' ? request.tabId : undefined;
+  let sourceSession = undefined;
+
+  if (!['tabs:list'].includes(action)) {
+    tab = await getOrCreateActionTab(tabId);
+    tabId = tab.id;
+    const managed = await ensureManagedTab(tabId, getManagedSessionForTab(tabId));
+    sourceSession = managed?.session;
+  }
+
+  let result;
+
+  switch (action) {
+    case 'open': {
+      const url = normalizeUrl(args.url || request.url);
+      if (!url) {
+        result = { ok: false, error: 'url-required' };
+        break;
+      }
+      const updatedTab = await chrome.tabs.update(tabId, { url, active: true });
+      await waitForTabSettled(updatedTab.id, clampInt(args.timeoutMs, 1000, 60_000, 12_000)).catch(
+        () => {}
+      );
+      result = {
+        ok: true,
+        action,
+        tabId: updatedTab.id,
+        url,
+      };
+      break;
+    }
+
+    case 'back': {
+      if (typeof chrome.tabs.goBack === 'function') {
+        await chrome.tabs.goBack(tabId);
+      } else {
+        await sendContentCommand(tabId, {
+          type: CONTENT_EXECUTE_ACTION,
+          command: 'eval',
+          args: { expression: '(() => { history.back(); return true; })()' },
+        });
+      }
+      result = { ok: true, action, tabId };
+      break;
+    }
+
+    case 'forward': {
+      if (typeof chrome.tabs.goForward === 'function') {
+        await chrome.tabs.goForward(tabId);
+      } else {
+        await sendContentCommand(tabId, {
+          type: CONTENT_EXECUTE_ACTION,
+          command: 'eval',
+          args: { expression: '(() => { history.forward(); return true; })()' },
+        });
+      }
+      result = { ok: true, action, tabId };
+      break;
+    }
+
+    case 'reload': {
+      await chrome.tabs.reload(tabId);
+      await waitForTabSettled(tabId, clampInt(args.timeoutMs, 1000, 60_000, 10_000)).catch(() => {});
+      result = { ok: true, action, tabId };
+      break;
+    }
+
+    case 'wait': {
+      const ms = clampInt(args.ms, 0, 120_000, 1000);
+      await delay(ms);
+      result = { ok: true, action, waitedMs: ms, tabId };
+      break;
+    }
+
+    case 'click':
+    case 'fill':
+    case 'press':
+    case 'eval':
+    case 'snapshot': {
+      // DOM-level commands are delegated to the page content-script.
+      const commandArgs =
+        action === 'eval'
+          ? { expression: args.expression }
+          : {
+              selector: args.selector,
+              value: args.value,
+              key: args.key,
+              interactiveOnly: args.interactiveOnly === true,
+              maxNodes: args.maxNodes,
+            };
+
+      const command = action === 'eval' ? 'eval' : action;
+      const response = await sendContentCommand(tabId, {
+        type: CONTENT_EXECUTE_ACTION,
+        command,
+        args: commandArgs,
+      });
+
+      result = {
+        ...(response && typeof response === 'object' ? response : { ok: false, error: 'invalid-response' }),
+        action,
+        tabId,
+      };
+      break;
+    }
+
+    case 'dom-state': {
+      const response = await sendContentCommand(tabId, {
+        type: CONTENT_GET_DOM_STATE,
+        options: {
+          selector: args.selector,
+          interactiveOnly: args.interactiveOnly === true,
+          maxNodes: args.maxNodes,
+        },
+      });
+
+      result = {
+        ...(response && typeof response === 'object' ? response : { ok: false, error: 'invalid-response' }),
+        action,
+        tabId,
+      };
+      break;
+    }
+
+    case 'tabs:list': {
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      result = {
+        ok: true,
+        action,
+        tabs: tabs.map((entry) => ({
+          id: entry.id,
+          index: entry.index,
+          title: entry.title,
+          url: entry.url,
+          active: entry.active === true,
+          session: getManagedSessionForTab(entry.id),
+        })),
+      };
+      break;
+    }
+
+    case 'tabs:new': {
+      const url = normalizeUrl(args.url) || 'about:blank';
+      const created = await chrome.tabs.create({ url, active: true });
+      const managed = await ensureManagedTab(created.id, sourceSession || 'default');
+      result = {
+        ok: true,
+        action,
+        tabId: created.id,
+        url,
+        session: managed?.session || null,
+        groupId: managed?.grouping?.groupId ?? null,
+      };
+      break;
+    }
+
+    case 'tabs:switch': {
+      if (typeof args.tabId === 'number') {
+        const switched = await chrome.tabs.update(args.tabId, { active: true });
+        if (typeof switched.windowId === 'number') {
+          await chrome.windows.update(switched.windowId, { focused: true }).catch(() => {});
+        }
+        const managed = await ensureManagedTab(switched.id, sourceSession || 'default');
+        result = {
+          ok: true,
+          action,
+          tabId: switched.id,
+          session: managed?.session || null,
+        };
+        break;
+      }
+
+      const index = clampInt(args.index, 0, 500, 0);
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      const target = tabs.find((item) => item.index === index);
+      if (!target || typeof target.id !== 'number') {
+        result = { ok: false, error: `tab-index-not-found:${index}` };
+        break;
+      }
+
+      const switched = await chrome.tabs.update(target.id, { active: true });
+      const managed = await ensureManagedTab(switched.id, sourceSession || 'default');
+      result = {
+        ok: true,
+        action,
+        tabId: switched.id,
+        session: managed?.session || null,
+      };
+      break;
+    }
+
+    case 'tabs:close': {
+      await chrome.tabs.remove(tabId);
+      result = { ok: true, action, tabId };
+      break;
+    }
+
+    case 'shortcut:run': {
+      result = await runShortcutByName(args.name, {
+        source,
+        tabId,
+      });
+      break;
+    }
+
+    default:
+      result = { ok: false, error: `unknown-action:${action}` };
+  }
+
+  pushCommandHistory({
+    action,
+    args,
+    ok: result?.ok === true,
+    source,
+    error: result?.ok === true ? null : result?.error || 'unknown',
+  });
+
+  if (options.record !== false && result?.ok === true) {
+    recordWorkflowStep(action, args);
+  }
+
+  if (
+    (action === 'dom-state' || action === 'snapshot') &&
+    result?.ok === true &&
+    result?.state &&
+    typeof result.state === 'object'
+  ) {
+    latestDomState = result.state;
+  }
+
+  pushActivityEvent('command', {
+    action,
+    ok: result?.ok === true,
+    error: result?.ok === true ? null : result?.error || 'unknown',
+  }, {
+    source,
+    tabId,
+    session: typeof tabId === 'number' ? getManagedSessionForTab(tabId) : null,
+    url: tab?.url || '',
+    title: tab?.title || '',
+  });
+
+  return result;
+}
+
+async function runWorkflowById(workflowId, options = {}) {
+  const workflow = workflows.get(workflowId);
+  if (!workflow) {
+    return { ok: false, error: `workflow-not-found:${workflowId}` };
+  }
+
+  let currentTabId = typeof options.tabId === 'number' ? options.tabId : undefined;
+  const results = [];
+
+  for (const step of workflow.steps) {
+    // Retry each step with bounded backoff for transient page timing issues.
+    let stepResult = null;
+    const retries = clampInt(step.retries, 0, 5, 0);
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      stepResult = await runActionInternal(
+        {
+          action: step.action,
+          args: step.args,
+          tabId: currentTabId,
+        },
+        {
+          source: options.source || 'workflow',
+          record: false,
+        }
+      );
+
+      if (stepResult?.ok === true) {
+        break;
+      }
+
+      if (attempt < retries) {
+        await delay(300 * (attempt + 1));
+      }
+    }
+
+    results.push({
+      action: step.action,
+      ok: stepResult?.ok === true,
+      error: stepResult?.ok === true ? null : stepResult?.error || 'unknown',
+    });
+
+    if (stepResult?.ok !== true) {
+      pushActivityEvent('workflow', {
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        ok: false,
+        failedAction: step.action,
+        error: stepResult?.error || 'unknown',
+      }, {
+        source: options.source || 'workflow',
+      });
+
+      return {
+        ok: false,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        error: `workflow-step-failed:${step.action}`,
+        results,
+      };
+    }
+
+    if (typeof stepResult.tabId === 'number') {
+      currentTabId = stepResult.tabId;
+    }
+
+    if (step.timeoutMs > 0) {
+      await delay(step.timeoutMs);
+    }
+  }
+
+  pushActivityEvent('workflow', {
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    ok: true,
+    steps: workflow.steps.length,
+  }, {
+    source: options.source || 'workflow',
+  });
+
+  return {
+    ok: true,
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    results,
+  };
+}
+
+async function startRecording(name) {
+  const normalizedName =
+    typeof name === 'string' && name.trim().length > 0 ? name.trim().slice(0, 120) : 'Recorded Workflow';
+
+  recordingState = {
+    id: uid('recording'),
+    name: normalizedName,
+    startedAt: now(),
+    stoppedAt: null,
+    steps: [],
+  };
+
+  pushActivityEvent('recording', {
+    event: 'start',
+    name: normalizedName,
+  }, {
+    source: 'panel',
+  });
+
+  return { ok: true, recording: recordingState };
+}
+
+async function stopRecording() {
+  if (!recordingState) {
+    return { ok: false, error: 'recording-not-active' };
+  }
+
+  recordingState.stoppedAt = now();
+
+  pushActivityEvent('recording', {
+    event: 'stop',
+    steps: recordingState.steps.length,
+    name: recordingState.name,
+  }, {
+    source: 'panel',
+  });
+
+  return { ok: true, recording: recordingState };
+}
+
+async function saveRecordingAsWorkflow(name) {
+  if (!recordingState) {
+    return { ok: false, error: 'recording-not-active' };
+  }
+
+  if (recordingState.steps.length === 0) {
+    return { ok: false, error: 'recording-has-no-steps' };
+  }
+
+  const workflowName =
+    typeof name === 'string' && name.trim().length > 0
+      ? name.trim().slice(0, 120)
+      : recordingState.name || 'Recorded Workflow';
+
+  const workflow = {
+    id: uid('workflow'),
+    name: workflowName,
+    steps: recordingState.steps.map((step) => normalizeWorkflowStep(step)).filter(Boolean),
+    createdAt: now(),
+    updatedAt: now(),
+  };
+
+  workflows.set(workflow.id, workflow);
+  await persistWorkflows();
+
+  pushActivityEvent('recording', {
+    event: 'saved',
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    steps: workflow.steps.length,
+  }, {
+    source: 'panel',
+  });
+
+  recordingState = null;
+  return { ok: true, workflow };
+}
+
+async function deleteWorkflow(workflowId) {
+  if (!workflows.has(workflowId)) {
+    return { ok: false, error: `workflow-not-found:${workflowId}` };
+  }
+
+  workflows.delete(workflowId);
+
+  for (const [name, mappedWorkflowId] of [...shortcuts.entries()]) {
+    if (mappedWorkflowId === workflowId) {
+      shortcuts.delete(name);
+    }
+  }
+
+  for (const [scheduleId, schedule] of [...schedules.entries()]) {
+    if (schedule.workflowId === workflowId) {
+      schedules.delete(scheduleId);
+      await chrome.alarms.clear(`${WORKFLOW_ALARM_PREFIX}${scheduleId}`);
+    }
+  }
+
+  await persistWorkflows();
+  await persistShortcuts();
+  await persistSchedules();
+
+  return { ok: true };
+}
+
+async function setShortcut(name, workflowId) {
+  const shortcutName = normalizeShortcutName(name);
+  if (!shortcutName) {
+    return { ok: false, error: 'invalid-shortcut-name' };
+  }
+
+  if (!workflows.has(workflowId)) {
+    return { ok: false, error: `workflow-not-found:${workflowId}` };
+  }
+
+  shortcuts.set(shortcutName, workflowId);
+  await persistShortcuts();
+
+  return {
+    ok: true,
+    shortcut: {
+      name: shortcutName,
+      workflowId,
+      workflowName: workflows.get(workflowId)?.name || workflowId,
+    },
+  };
+}
+
+async function deleteShortcut(name) {
+  const shortcutName = normalizeShortcutName(name);
+  if (!shortcutName) {
+    return { ok: false, error: 'invalid-shortcut-name' };
+  }
+
+  shortcuts.delete(shortcutName);
+  await persistShortcuts();
+  return { ok: true };
+}
+
+async function createSchedule(input) {
+  if (!input || typeof input !== 'object') {
+    return { ok: false, error: 'schedule-input-required' };
+  }
+
+  if (typeof input.workflowId !== 'string' || !workflows.has(input.workflowId)) {
+    return { ok: false, error: 'invalid-workflow-id' };
+  }
+
+  const cadence = normalizeCadence(input.cadence);
+  const schedule = {
+    id: uid('schedule'),
+    name:
+      typeof input.name === 'string' && input.name.trim().length > 0
+        ? input.name.trim().slice(0, 120)
+        : `Schedule ${workflows.get(input.workflowId)?.name || input.workflowId}`,
+    workflowId: input.workflowId,
+    cadence,
+    enabled: input.enabled !== false,
+    createdAt: now(),
+    updatedAt: now(),
+    lastRunAt: null,
+    nextRunAt: computeNextRun(cadence),
+  };
+
+  schedules.set(schedule.id, schedule);
+  await persistSchedules();
+  await scheduleWorkflowAlarm(schedule);
+
+  return { ok: true, schedule };
+}
+
+async function deleteSchedule(scheduleId) {
+  if (!schedules.has(scheduleId)) {
+    return { ok: false, error: `schedule-not-found:${scheduleId}` };
+  }
+
+  schedules.delete(scheduleId);
+  await chrome.alarms.clear(`${WORKFLOW_ALARM_PREFIX}${scheduleId}`);
+  await persistSchedules();
+  return { ok: true };
+}
+
+async function toggleSchedule(scheduleId, enabled) {
+  const schedule = schedules.get(scheduleId);
+  if (!schedule) {
+    return { ok: false, error: `schedule-not-found:${scheduleId}` };
+  }
+
+  schedule.enabled = enabled !== false;
+  schedule.updatedAt = now();
+  if (schedule.enabled && (!schedule.nextRunAt || schedule.nextRunAt <= now())) {
+    schedule.nextRunAt = computeNextRun(schedule.cadence);
+  }
+
+  schedules.set(schedule.id, schedule);
+  await persistSchedules();
+  await scheduleWorkflowAlarm(schedule);
+
+  return { ok: true, schedule };
+}
+
+async function runSchedule(scheduleId) {
+  const schedule = schedules.get(scheduleId);
+  if (!schedule) {
+    return;
+  }
+
+  if (!schedule.enabled) {
+    await scheduleWorkflowAlarm(schedule);
+    return;
+  }
+
+  const runResult = await runWorkflowById(schedule.workflowId, {
+    source: `schedule:${schedule.id}`,
+  });
+
+  schedule.lastRunAt = now();
+  schedule.updatedAt = now();
+  schedule.nextRunAt = computeNextRun(schedule.cadence, schedule.lastRunAt);
+  schedules.set(schedule.id, schedule);
+
+  await persistSchedules();
+  await scheduleWorkflowAlarm(schedule);
+
+  pushActivityEvent('schedule', {
+    scheduleId: schedule.id,
+    scheduleName: schedule.name,
+    workflowId: schedule.workflowId,
+    ok: runResult.ok === true,
+    error: runResult.ok === true ? null : runResult.error || 'unknown',
+  }, {
+    source: 'alarm',
+  });
 }
 
 async function handleTabGroupRequest(message, sender) {
@@ -709,6 +1912,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (type === CONTENT_EVENT_TYPE) {
+    const tabId = sender.tab?.id;
+    const session = typeof tabId === 'number' ? getManagedSessionForTab(tabId) : null;
+    const kind = typeof message.kind === 'string' ? message.kind : 'unknown';
+
+    pushActivityEvent(kind, message.payload || {}, {
+      source: 'content-script',
+      tabId,
+      session,
+      url: sender.tab?.url || message.url || '',
+      title: sender.tab?.title || message.title || '',
+    });
+
+    sendResponse({ ok: true });
+    return;
+  }
+
   if (type === PANEL_GET_STATE) {
     bootstrapPromise
       .then(() => buildPanelState())
@@ -716,6 +1936,142 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((error) => {
         const errorMessage = error instanceof Error ? error.message : String(error);
         sendResponse({ ok: false, error: errorMessage });
+      });
+    return true;
+  }
+
+  if (type === PANEL_RUN_ACTION) {
+    bootstrapPromise
+      .then(() =>
+        runActionInternal(
+          {
+            action: message.action,
+            args: message.args || {},
+            tabId: message.tabId,
+          },
+          {
+            source: 'panel',
+            record: true,
+          }
+        )
+      )
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return true;
+  }
+
+  if (type === PANEL_CLEAR_ACTIVITY) {
+    activityEvents.length = 0;
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (type === PANEL_START_RECORDING) {
+    startRecording(message.name)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_STOP_RECORDING) {
+    stopRecording()
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_SAVE_RECORDING) {
+    saveRecordingAsWorkflow(message.name)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_RUN_WORKFLOW) {
+    runWorkflowById(message.workflowId, {
+      source: 'panel-workflow',
+      tabId: message.tabId,
+    })
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_DELETE_WORKFLOW) {
+    deleteWorkflow(message.workflowId)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_SET_SHORTCUT) {
+    setShortcut(message.name, message.workflowId)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_DELETE_SHORTCUT) {
+    deleteShortcut(message.name)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_RUN_SHORTCUT) {
+    runShortcutByName(message.name, {
+      source: 'panel-shortcut',
+      tabId: message.tabId,
+    })
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_CREATE_SCHEDULE) {
+    createSchedule(message.schedule)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_DELETE_SCHEDULE) {
+    deleteSchedule(message.scheduleId)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  if (type === PANEL_TOGGLE_SCHEDULE) {
+    toggleSchedule(message.scheduleId, message.enabled)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
       });
     return true;
   }
@@ -771,6 +2127,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     return true;
   }
+
+  if (type === CONTENT_PING) {
+    sendResponse({ ok: true, extensionId: chrome.runtime.id });
+  }
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -814,6 +2174,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   const remaining = collectSessionTabIds(session);
   if (remaining.length === 0) {
     sessionWindowMap.delete(session);
+    sessionGroupTitleMap.delete(session);
   }
   cleanEmptyGroups().catch(() => {});
 });
@@ -836,8 +2197,17 @@ chrome.windows.onRemoved.addListener((windowId) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm?.name !== CLEANUP_ALARM_NAME) return;
-  cleanEmptyGroups().catch(() => {});
+  if (!alarm || typeof alarm.name !== 'string') return;
+
+  if (alarm.name === CLEANUP_ALARM_NAME) {
+    cleanEmptyGroups().catch(() => {});
+    return;
+  }
+
+  if (alarm.name.startsWith(WORKFLOW_ALARM_PREFIX)) {
+    const scheduleId = alarm.name.slice(WORKFLOW_ALARM_PREFIX.length);
+    runSchedule(scheduleId).catch(() => {});
+  }
 });
 
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
