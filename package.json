@@ -42,12 +42,15 @@
     "postinstall": "node scripts/postinstall.js",
     "verify:native-version": "node scripts/verify-native-version.js",
     "verify:bundled-binaries": "node scripts/verify-bundled-binaries.js",
+    "verify:packed-host-binary": "node scripts/verify-packed-host-binary.js",
+    "verify:registry-host-binary": "node scripts/verify-registry-host-binary.js",
+    "prepublishOnly": "pnpm run verify:bundled-binaries && pnpm run verify:native-version && pnpm run verify:packed-host-binary",
     "clawhub:sync": "bash scripts/clawhub-sync.sh",
     "sync:upstream": "bash scripts/sync-upstream.sh",
     "sync:upstream:push": "bash scripts/sync-upstream.sh --push",
     "changeset": "changeset",
     "ci:version": "changeset version && pnpm run version:sync && pnpm install --no-frozen-lockfile",
-    "ci:publish": "pnpm run version:sync && pnpm run build && pnpm run build:native && pnpm run verify:bundled-binaries && pnpm run verify:native-version && changeset publish"
+    "ci:publish": "pnpm run version:sync && pnpm run build && pnpm run build:native && pnpm run verify:bundled-binaries && pnpm run verify:native-version && pnpm run verify:packed-host-binary && changeset publish"
   },
   "keywords": [
     "browser",

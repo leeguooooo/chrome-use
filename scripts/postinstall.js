@@ -2,19 +2,29 @@
 
 /**
  * Postinstall script for agent-browser
- * 
+ *
  * Downloads the platform-specific native binary if not present.
  * On global installs, patches npm's bin entry to use the native binary directly:
  * - Windows: Overwrites .cmd/.ps1 shims
  * - Mac/Linux: Replaces symlink to point to native binary
  */
 
-import { existsSync, mkdirSync, chmodSync, createWriteStream, unlinkSync, writeFileSync, symlinkSync, lstatSync, readFileSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  chmodSync,
+  createWriteStream,
+  unlinkSync,
+  writeFileSync,
+  symlinkSync,
+  lstatSync,
+  readFileSync,
+} from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, arch } from 'os';
 import { get } from 'https';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
@@ -65,7 +75,7 @@ function getBinCommands(pkg) {
 async function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = createWriteStream(dest);
-    
+
     const request = (url) => {
       get(url, (response) => {
         // Handle redirects
@@ -73,12 +83,12 @@ async function downloadFile(url, dest) {
           request(response.headers.location);
           return;
         }
-        
+
         if (response.statusCode !== 200) {
           reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
           return;
         }
-        
+
         response.pipe(file);
         file.on('finish', () => {
           file.close();
@@ -89,7 +99,7 @@ async function downloadFile(url, dest) {
         reject(err);
       });
     };
-    
+
     request(url);
   });
 }
@@ -101,13 +111,21 @@ async function main() {
     if (platform() !== 'win32') {
       chmodSync(binaryPath, 0o755);
     }
-    console.log(`✓ Native binary ready: ${binaryName}`);
-    
-    // On global installs, fix npm's bin entry to use native binary directly
-    await fixGlobalInstallBin();
-    
-    showPlaywrightReminder();
-    return;
+    const installedVersion = readBinaryVersion(binaryPath);
+    if (installedVersion.includes(version)) {
+      console.log(`✓ Native binary ready: ${binaryName}`);
+
+      // On global installs, fix npm's bin entry to use native binary directly
+      await fixGlobalInstallBin();
+
+      showPlaywrightReminder();
+      return;
+    }
+
+    console.log(
+      `⚠ Binary version mismatch detected: expected ${version}, got "${installedVersion || 'unknown'}"`
+    );
+    console.log(`  Re-downloading ${binaryName} from release assets...`);
   }
 
   // Ensure bin directory exists
@@ -120,12 +138,19 @@ async function main() {
 
   try {
     await downloadFile(DOWNLOAD_URL, binaryPath);
-    
+
     // Make executable on Unix
     if (platform() !== 'win32') {
       chmodSync(binaryPath, 0o755);
     }
-    
+
+    const downloadedVersion = readBinaryVersion(binaryPath);
+    if (!downloadedVersion.includes(version)) {
+      throw new Error(
+        `downloaded binary version mismatch: expected ${version}, got "${downloadedVersion || 'unknown'}"`
+      );
+    }
+
     console.log(`✓ Downloaded native binary: ${binaryName}`);
   } catch (err) {
     console.log(`⚠ Could not download native binary: ${err.message}`);
@@ -141,6 +166,17 @@ async function main() {
   await fixGlobalInstallBin();
 
   showPlaywrightReminder();
+}
+
+function readBinaryVersion(path) {
+  try {
+    return execFileSync(path, ['--version'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch {
+    return '';
+  }
 }
 
 function showPlaywrightReminder() {
