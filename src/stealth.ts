@@ -1268,6 +1268,19 @@ function patchNavigatorConnection(): string {
 function patchWorkerConnection(): string {
   return `(function(){
   if (typeof Worker !== 'function') return;
+  const isCloudflareChallengeRuntime = (() => {
+    try {
+      const host = String(location.hostname || '').toLowerCase();
+      const path = String(location.pathname || '');
+      if (host === 'challenges.cloudflare.com') return true;
+      return /\\/cdn-cgi\\/challenge-platform\\//.test(path);
+    } catch {
+      return false;
+    }
+  })();
+  // Cloudflare challenge workers are sensitive to constructor wrapping.
+  // Keep native Worker behavior in this runtime to avoid importScripts(blob) failures.
+  if (isCloudflareChallengeRuntime) return;
   const NativeWorker = Worker;
   const workerPrelude = \`
 (() => {
