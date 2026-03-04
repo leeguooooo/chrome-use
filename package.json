@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-stealth",
-  "version": "0.15.2-fork.2",
+  "version": "0.16.1-fork.0",
   "description": "Stealth browser automation CLI for AI agents with anti-bot evasions",
   "type": "module",
   "main": "dist/daemon.js",

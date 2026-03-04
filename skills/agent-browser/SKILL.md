@@ -607,6 +607,21 @@ Priority (lowest to highest): `~/.agent-browser/config.json` < `./agent-browser.
 | [references/profiling.md](references/profiling.md)                   | Chrome DevTools profiling for performance analysis        |
 | [references/proxy-support.md](references/proxy-support.md)           | Proxy configuration, geo-testing, rotating proxies        |
 
+## Experimental: Native Mode
+
+agent-browser has an experimental native Rust daemon that communicates with Chrome directly via CDP, bypassing Node.js and Playwright entirely. It is opt-in and not recommended for production use yet.
+
+```bash
+# Enable via flag
+agent-browser --native open example.com
+
+# Enable via environment variable (avoids passing --native every time)
+export AGENT_BROWSER_NATIVE=1
+agent-browser open example.com
+```
+
+The native daemon supports Chromium and Safari (via WebDriver). Firefox and WebKit are not yet supported. All core commands (navigate, snapshot, click, fill, screenshot, cookies, storage, tabs, eval, etc.) work identically in native mode. Use `agent-browser close` before switching between native and default mode within the same session.
+
 ## Ready-to-Use Templates
 
 | Template                                                                 | Description                         |

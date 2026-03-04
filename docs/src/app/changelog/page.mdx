@@ -4,6 +4,62 @@ export const metadata = pageMetadata("changelog")
 
 # Changelog
 
+## v0.16.0
+
+<p className="text-[#888] text-sm">March 2026</p>
+
+### New Features
+
+- **Native Rust daemon (experimental).** A pure Rust daemon that communicates with Chrome directly via the Chrome DevTools Protocol (CDP), eliminating Node.js and Playwright dependencies entirely. Enable with `--native`, `AGENT_BROWSER_NATIVE=1`, or `"native": true` in your config file. Supports 150+ commands with full parity to the default Node.js daemon.
+
+```bash
+# Via flag
+agent-browser --native open example.com
+
+# Via environment variable
+export AGENT_BROWSER_NATIVE=1
+agent-browser open example.com
+```
+
+Or add to `agent-browser.json`:
+
+```json
+{"native": true}
+```
+
+### Architecture
+
+<table>
+  <thead>
+    <tr><th></th><th>Default (Node.js)</th><th>Native (<code>--native</code>)</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Runtime</strong></td><td>Node.js + Playwright</td><td>Pure Rust binary</td></tr>
+    <tr><td><strong>Protocol</strong></td><td>Playwright protocol</td><td>Direct CDP / WebDriver</td></tr>
+    <tr><td><strong>Install size</strong></td><td>Larger (Node.js + npm deps)</td><td>Smaller (single binary)</td></tr>
+    <tr><td><strong>Browser support</strong></td><td>Chromium, Firefox, WebKit</td><td>Chromium, Safari (via WebDriver)</td></tr>
+    <tr><td><strong>Stability</strong></td><td>Stable</td><td>Experimental</td></tr>
+  </tbody>
+</table>
+
+### What's Supported
+
+All core commands work in native mode: navigation, interaction (click, fill, type, press, hover, scroll, drag), observation (snapshot, screenshot, eval), state management (cookies, storage, state save/load), tabs, emulation (viewport, device, timezone, locale, geolocation), streaming, diffing, recording, and profiling.
+
+The native daemon also includes a WebDriver backend for Safari and iOS support.
+
+### Known Limitations
+
+- Firefox and WebKit are not yet supported (Chromium and Safari only)
+- Playwright trace format is not available (uses Chrome's built-in tracing)
+- HAR export is not available
+- Network route interception uses CDP Fetch domain instead of Playwright's route API
+- The native and Node.js daemons share the same session socket. Use `agent-browser close` before switching between modes.
+
+See the [Native Mode](/native-mode) page for full details.
+
+---
+
 ## v0.15.0
 
 <p className="text-[#888] text-sm">February 2026</p>

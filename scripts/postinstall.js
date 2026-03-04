@@ -232,17 +232,24 @@ async function fixUnixSymlink() {
  * We overwrite them to invoke the native .exe directly.
  */
 async function fixWindowsShims() {
-  // Check if this is a global install by looking for npm's global prefix
   let npmBinDir;
   try {
     npmBinDir = execSync('npm prefix -g', { encoding: 'utf8' }).trim();
   } catch {
-    return; // Not a global install or npm not available
+    return;
   }
 
   // Path to native binary relative to npm prefix
   const packagePath = packageName.replace(/\//g, '\\');
   const relativeBinaryPath = `node_modules\\${packagePath}\\bin\\${binaryName}`;
+  const absoluteBinaryPath = join(npmBinDir, relativeBinaryPath);
+
+  // npm may create shims after lifecycle scripts, and binary may be absent
+  // when running with JS fallback; skip rewriting in those cases.
+  if (!existsSync(absoluteBinaryPath)) {
+    return;
+  }
+
   let optimized = false;
 
   for (const commandName of binCommands) {
