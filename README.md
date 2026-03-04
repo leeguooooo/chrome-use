@@ -232,7 +232,7 @@ flowchart TD
 ## Operational Recommendations
 
 - Prefer `--headed` for high-friction targets.
-- Reuse session state with one stable `--session-name` for continuity (when omitted, it defaults to `--session`).
+- Reuse session state with one stable `--session-name` for continuity (when omitted, it defaults to `default`).
 - Keep locale/timezone consistent with target market.
 - For challenge-heavy pages, prefer `--wait-until domcontentloaded` on `open`/`navigate` to avoid `load` stalls.
 - Use `--risk-mode block` in strict pipelines that require explicit operator intervention on verification pages.

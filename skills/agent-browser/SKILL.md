@@ -173,7 +173,7 @@ agent-browser cookies set callback_token "token123"
 
 ```bash
 # Auto-save/restore cookies and localStorage across browser restarts
-# If --session-name is omitted, it defaults to --session (or "default")
+# If --session-name is omitted, it defaults to "default"
 agent-browser --session-name myapp open https://app.example.com/login
 # ... login flow ...
 agent-browser close  # State auto-saved to ~/.agent-browser/sessions/
@@ -205,16 +205,14 @@ agent-browser snapshot -i --json
 agent-browser get text @e1 --json
 ```
 
-### Parallel Sessions
+### Parallel Workflows
 
 ```bash
-agent-browser --session site1 open https://site-a.com
-agent-browser --session site2 open https://site-b.com
+agent-browser --session-name site1 open https://site-a.com
+agent-browser --session-name site2 open https://site-b.com
 
-agent-browser --session site1 snapshot -i
-agent-browser --session site2 snapshot -i
-
-agent-browser session list
+agent-browser --session-name site1 snapshot -i
+agent-browser --session-name site2 snapshot -i
 ```
 
 ### Connect to Existing Chrome
@@ -489,22 +487,12 @@ These behaviors are always active. For sensitive sites, combine with `--headed` 
 
 ## Session Management and Cleanup
 
-When running multiple agents or automations concurrently, always use named sessions to avoid conflicts:
-
-```bash
-# Each agent gets its own isolated session
-agent-browser --session agent1 open site-a.com
-agent-browser --session agent2 open site-b.com
-
-# Check active sessions
-agent-browser session list
-```
+`--session` is ignored in this fork. The runtime always uses one default session. Use `--session-name` to isolate persistence when needed.
 
 Always close your browser session when done to avoid leaked processes:
 
 ```bash
-agent-browser close                    # Close default session
-agent-browser --session agent1 close   # Close specific session
+agent-browser close
 ```
 
 If a previous session was not closed properly, the daemon may still be running. Use `agent-browser close` to clean it up before starting new work.

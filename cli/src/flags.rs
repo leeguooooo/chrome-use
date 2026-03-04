@@ -1,4 +1,4 @@
-use crate::{color, validation};
+use crate::color;
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -214,7 +214,7 @@ pub struct Flags {
     pub allow_file_access: bool,
     pub device: Option<String>,
     pub auto_connect: bool,
-    pub session_name: Option<String>, // Defaults to --session when unset
+    pub session_name: Option<String>, // Defaults to "default" when unset
     pub annotate: bool,
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
@@ -273,10 +273,8 @@ pub fn parse_flags(args: &[String]) -> Flags {
             Err(_) => config.headed.unwrap_or(true),
         },
         debug: env_var_is_truthy("AGENT_BROWSER_DEBUG") || config.debug.unwrap_or(false),
-        session: env::var("AGENT_BROWSER_SESSION")
-            .ok()
-            .or(config.session)
-            .unwrap_or_else(|| "default".to_string()),
+        // --session is disabled: user-facing CLI always uses one default session.
+        session: "default".to_string(),
         headers: config.headers,
         executable_path: env::var("AGENT_BROWSER_EXECUTABLE_PATH")
             .ok()
@@ -365,12 +363,6 @@ pub fn parse_flags(args: &[String]) -> Flags {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.debug = val;
                 if consumed {
-                    i += 1;
-                }
-            }
-            "--session" => {
-                if let Some(s) = args.get(i + 1) {
-                    flags.session = s.clone();
                     i += 1;
                 }
             }
@@ -532,14 +524,9 @@ pub fn parse_flags(args: &[String]) -> Flags {
     }
 
     // Keep auth/state continuity stable by default: if no explicit --session-name
-    // is provided, derive it from --session (or fall back to "default" when invalid).
+    // is provided, derive it from the default session id.
     if flags.session_name.is_none() {
-        let derived = if validation::is_valid_session_name(&flags.session) {
-            flags.session.clone()
-        } else {
-            "default".to_string()
-        };
-        flags.session_name = Some(derived);
+        flags.session_name = Some("default".to_string());
     }
 
     flags
@@ -753,24 +740,33 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_flags_with_session_and_executable_path() {
+    fn test_parse_flags_ignores_session_flag_and_keeps_default_session() {
         let flags = parse_flags(&args(
             "--session test --executable-path /custom/chrome open example.com",
         ));
-        assert_eq!(flags.session, "test");
+        assert_eq!(flags.session, "default");
         assert_eq!(flags.executable_path, Some("/custom/chrome".to_string()));
-        assert_eq!(flags.session_name.as_deref(), Some("test"));
+        assert_eq!(flags.session_name.as_deref(), Some("default"));
     }
 
     #[test]
-    fn test_session_name_defaults_to_session_when_not_provided() {
+    fn test_session_name_defaults_to_default_when_not_provided() {
         let flags = parse_flags(&args("--session my-session snapshot"));
-        assert_eq!(flags.session_name.as_deref(), Some("my-session"));
+        assert_eq!(flags.session_name.as_deref(), Some("default"));
     }
 
     #[test]
-    fn test_invalid_session_falls_back_to_default_session_name() {
+    fn test_invalid_session_still_uses_default_session_name() {
         let flags = parse_flags(&args("--session bad/session snapshot"));
+        assert_eq!(flags.session_name.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn test_env_session_is_ignored_and_default_session_is_used() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SESSION"]);
+        env::set_var("AGENT_BROWSER_SESSION", "legacy-session");
+        let flags = parse_flags(&args("snapshot"));
+        assert_eq!(flags.session, "default");
         assert_eq!(flags.session_name.as_deref(), Some("default"));
     }
 

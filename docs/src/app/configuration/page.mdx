@@ -121,15 +121,6 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
     </tr>
     <tr>
       <td>
-        <code>session</code>
-      </td>
-      <td>
-        <code>--session</code>
-      </td>
-      <td>string</td>
-    </tr>
-    <tr>
-      <td>
         <code>sessionName</code>
       </td>
       <td>
@@ -474,11 +465,10 @@ These environment variables configure additional daemon and runtime behavior:
         <code>AGENT_BROWSER_SESSION_NAME</code>
       </td>
       <td>
-        Auto-save/load state persistence name (defaults to <code>AGENT_BROWSER_SESSION</code> when
-        unset).
+        Auto-save/load state persistence name (defaults to <code>default</code> when unset).
       </td>
       <td>
-        (same as <code>AGENT_BROWSER_SESSION</code>)
+        <code>default</code>
       </td>
     </tr>
     <tr>

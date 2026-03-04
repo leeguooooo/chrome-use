@@ -871,7 +871,6 @@ Aliases: goto, navigate
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
   --headers <json>     Set HTTP headers (scoped to this origin)
   --risk-mode <mode>   Risk handling for verify/captcha pages: off, warn, block
   --wait-until <mode>  Navigation wait strategy: load, domcontentloaded, networkidle
@@ -898,7 +897,6 @@ the browser's back button.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser back
@@ -915,7 +913,6 @@ the browser's forward button.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser forward
@@ -932,7 +929,6 @@ the browser's reload button.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser reload
@@ -955,7 +951,6 @@ Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser click "#submit-button"
@@ -976,7 +971,6 @@ or triggering double-click handlers.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser dblclick "#editable-text"
@@ -994,7 +988,6 @@ This replaces any existing content in the field.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser fill "#email" "user@example.com"
@@ -1014,7 +1007,6 @@ Use --delay to add per-character delay (milliseconds).
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser type "#search" "hello"
@@ -1039,7 +1031,6 @@ triggering hover states or dropdown menus.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser hover "#dropdown-trigger"
@@ -1056,7 +1047,6 @@ Sets keyboard focus to the specified element.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser focus "#input-field"
@@ -1073,7 +1063,6 @@ Checks a checkbox element. If already checked, no action is taken.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser check "#terms-checkbox"
@@ -1090,7 +1079,6 @@ Unchecks a checkbox element. If already unchecked, no action is taken.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser uncheck "#newsletter-opt-in"
@@ -1107,7 +1095,6 @@ Selects one or more options in a <select> dropdown by value.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser select "#country" "US"
@@ -1125,7 +1112,6 @@ Drags an element from source to target location.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser drag "#draggable" "#drop-zone"
@@ -1142,7 +1128,6 @@ Uploads one or more files to a file input element.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser upload "#file-input" ./document.pdf
@@ -1163,7 +1148,6 @@ Arguments:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser download "#download-btn" ./file.pdf
@@ -1194,7 +1178,6 @@ Modifiers (combine with +):
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser press Enter
@@ -1215,7 +1198,6 @@ Useful for holding modifier keys.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser keydown Shift
@@ -1232,7 +1214,6 @@ Releases a key that was pressed with keydown.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser keyup Shift
@@ -1260,7 +1241,6 @@ directly — it already operates on the current focus.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser keyboard type "Hello, World!"
@@ -1295,7 +1275,6 @@ Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser scroll
@@ -1317,7 +1296,6 @@ Aliases: scrollinto
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser scrollintoview "#footer"
@@ -1349,7 +1327,6 @@ Download Options (with --download):
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser wait "#loading-spinner"
@@ -1383,7 +1360,6 @@ Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser screenshot
@@ -1404,7 +1380,6 @@ Saves the current page as a PDF file.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser pdf ./page.pdf
@@ -1432,7 +1407,6 @@ Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser snapshot
@@ -1458,7 +1432,6 @@ Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser eval "document.title"
@@ -1487,11 +1460,9 @@ Aliases: quit, exit
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser close
-  agent-browser close --session mysession
 "##
         }
 
@@ -1517,7 +1488,6 @@ Subcommands:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser get text @e1
@@ -1549,7 +1519,6 @@ Subcommands:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser is visible "#modal"
@@ -1588,7 +1557,6 @@ Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser find role button click --name Submit
@@ -1618,7 +1586,6 @@ Subcommands:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser mouse move 100 200
@@ -1651,7 +1618,6 @@ Settings:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser set viewport 1920 1080
@@ -1685,7 +1651,6 @@ Subcommands:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser network route "**/api/*" --abort
@@ -1717,7 +1682,6 @@ Operations:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser storage local
@@ -1757,7 +1721,6 @@ When --url is omitted, --domain and --path must be provided together.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   # Simple cookie for current page
@@ -1800,7 +1763,6 @@ Operations:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser tab
@@ -1827,7 +1789,6 @@ Operations:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser window new
@@ -1849,7 +1810,6 @@ Arguments:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser frame "#embed-iframe"
@@ -1883,7 +1843,6 @@ Save Options:
 
 Global Options:
   --json                   Output as JSON
-  --session <name>         Use specific session
 
 Examples:
   echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin
@@ -1931,7 +1890,6 @@ Operations:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser dialog accept
@@ -1955,7 +1913,6 @@ Operations:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser trace start
@@ -1986,7 +1943,6 @@ Start Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   # Basic profiling
@@ -2025,7 +1981,6 @@ Operations:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   # Record from current page (preserves login state)
@@ -2057,7 +2012,6 @@ Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser console
@@ -2077,7 +2031,6 @@ Options:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser errors
@@ -2096,7 +2049,6 @@ Visually highlights an element on the page for debugging.
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser highlight "#target-element"
@@ -2124,7 +2076,7 @@ Operations:
 
 Automatic State Persistence:
   Use --session-name to auto-save/restore state across restarts.
-  If omitted, it defaults to --session (or "default"):
+  If omitted, it defaults to "default":
   agent-browser --session-name myapp open https://example.com
   Or set AGENT_BROWSER_SESSION_NAME environment variable.
 
@@ -2134,7 +2086,6 @@ State Encryption:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser state save ./auth-state.json
@@ -2154,24 +2105,18 @@ agent-browser session - Manage sessions
 
 Usage: agent-browser session [operation]
 
-Manage isolated browser sessions. Each session has its own browser
-instance with separate cookies, storage, and state.
+Show the current fixed session and active daemon state.
 
 Operations:
   (none)               Show current session name
   list                 List all active sessions
 
-Environment:
-  AGENT_BROWSER_SESSION    Default session name
-
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser session
   agent-browser session list
-  agent-browser --session test open example.com
 "##
         }
 
@@ -2214,7 +2159,6 @@ Supported URL formats:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   # Connect to local Chrome with remote debugging
@@ -2253,7 +2197,6 @@ Notes:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser doctor
@@ -2273,7 +2216,6 @@ for touch-based interfaces like iOS Safari.
 
 Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser tap "#submit-button"
@@ -2296,7 +2238,6 @@ Arguments:
 
 Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser -p ios swipe up
@@ -2315,7 +2256,6 @@ Subcommands:
 
 Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser device list
@@ -2370,7 +2310,6 @@ URL Diff:
 
 Global Options:
   --json               Output as JSON
-  --session <name>     Use specific session
 
 Examples:
   agent-browser diff snapshot
@@ -2498,7 +2437,7 @@ Snapshot Options:
   -s, --selector <sel>       Scope to CSS selector
 
 Options:
-  --session <name>           Isolated session (or AGENT_BROWSER_SESSION env)
+  --session <name>           Ignored (single default session only)
   --state <path>             Load storage state from JSON file (or AGENT_BROWSER_STATE env)
   --headers <json>           HTTP headers scoped to URL's origin (for auth)
   --executable-path <path>   Custom browser executable (or AGENT_BROWSER_EXECUTABLE_PATH)
@@ -2528,7 +2467,7 @@ Options:
                              Extension side panel supports browser controls + console/network/DOM + workflow scheduling
   --risk-mode <mode>         Verify/captcha handling: off, warn, block (or AGENT_BROWSER_RISK_MODE)
   --wait-until <mode>        Navigation wait strategy for open/navigate: load, domcontentloaded, networkidle
-  --session-name <name>      Auto-save/restore session state (defaults to --session)
+  --session-name <name>      Auto-save/restore session state (defaults to "default")
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
   --max-output <chars>       Truncate page output to N chars (or AGENT_BROWSER_MAX_OUTPUT)
   --allowed-domains <list>   Restrict navigation domains (or AGENT_BROWSER_ALLOWED_DOMAINS)
@@ -2566,8 +2505,7 @@ Configuration:
 
 Environment:
   AGENT_BROWSER_CONFIG           Path to config file (or use --config)
-  AGENT_BROWSER_SESSION          Session name (default: "default")
-  AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name (default: AGENT_BROWSER_SESSION)
+    AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name (default: "default")
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path

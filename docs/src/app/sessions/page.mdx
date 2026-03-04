@@ -1,38 +1,27 @@
-import { pageMetadata } from "@/lib/page-metadata"
+import { pageMetadata } from '@/lib/page-metadata';
 
-export const metadata = pageMetadata("sessions")
+export const metadata = pageMetadata('sessions');
 
 # Sessions
 
-Run multiple isolated browser instances:
+Use one default runtime session and optional named persistence:
 
 ```bash
-# Different sessions
-agent-browser --session agent1 open site-a.com
-agent-browser --session agent2 open site-b.com
-
-# Or via environment variable
-AGENT_BROWSER_SESSION=agent1 agent-browser click "#btn"
-
-# List active sessions
-agent-browser session list
-# Output:
-# Active sessions:
-# -> default
-#    agent1
-
-# Show current session
+# Show current runtime session
 agent-browser session
+# Output: default
+
+# Show active daemon sessions
+agent-browser session list
 ```
 
 ## Session isolation
 
-Each session has its own:
+The runtime session is fixed to `default`. Use `--session-name` to isolate persisted state files per workflow.
 
-- Browser instance
-- Cookies and storage
-- Navigation history
+- Cookies and storage snapshots
 - Authentication state
+- Saved state lifecycle
 
 ## Session persistence
 
@@ -50,7 +39,7 @@ export AGENT_BROWSER_SESSION_NAME=twitter
 agent-browser open twitter.com
 ```
 
-If `--session-name` is omitted, it defaults to `--session` (or `default`).
+If `--session-name` is omitted, it defaults to `default`.
 
 State files are stored in `~/.agent-browser/sessions/` and automatically loaded on daemon start.
 
@@ -164,12 +153,29 @@ agent-browser set headers '{"X-Custom-Header": "value"}'
 
 <table>
   <thead>
-    <tr><th>Variable</th><th>Description</th></tr>
+    <tr>
+      <th>Variable</th>
+      <th>Description</th>
+    </tr>
   </thead>
   <tbody>
-    <tr><td><code>AGENT_BROWSER_SESSION</code></td><td>Browser session ID (default: "default")</td></tr>
-    <tr><td><code>AGENT_BROWSER_SESSION_NAME</code></td><td>Auto-save/load state persistence name</td></tr>
-    <tr><td><code>AGENT_BROWSER_ENCRYPTION_KEY</code></td><td>64-char hex key for AES-256-GCM encryption</td></tr>
-    <tr><td><code>AGENT_BROWSER_STATE_EXPIRE_DAYS</code></td><td>Auto-delete states older than N days (default: 30)</td></tr>
+    <tr>
+      <td>
+        <code>AGENT_BROWSER_SESSION_NAME</code>
+      </td>
+      <td>Auto-save/load state persistence name</td>
+    </tr>
+    <tr>
+      <td>
+        <code>AGENT_BROWSER_ENCRYPTION_KEY</code>
+      </td>
+      <td>64-char hex key for AES-256-GCM encryption</td>
+    </tr>
+    <tr>
+      <td>
+        <code>AGENT_BROWSER_STATE_EXPIRE_DAYS</code>
+      </td>
+      <td>Auto-delete states older than N days (default: 30)</td>
+    </tr>
   </tbody>
 </table>
