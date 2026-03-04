@@ -8,6 +8,7 @@ use super::types::BrowserVersionInfo;
 pub struct ChromeProcess {
     child: Child,
     pub ws_url: String,
+    temp_user_data_dir: Option<PathBuf>,
 }
 
 impl ChromeProcess {
@@ -20,6 +21,23 @@ impl ChromeProcess {
 impl Drop for ChromeProcess {
     fn drop(&mut self) {
         self.kill();
+        if let Some(ref dir) = self.temp_user_data_dir {
+            for attempt in 0..3 {
+                match std::fs::remove_dir_all(dir) {
+                    Ok(()) => break,
+                    Err(_) if attempt < 2 => {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: failed to clean up temp profile {}: {}",
+                            dir.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -59,14 +77,12 @@ impl Default for LaunchOptions {
     }
 }
 
-pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
-    let chrome_path = match &options.executable_path {
-        Some(p) => PathBuf::from(p),
-        None => {
-            find_chrome().ok_or("Chrome not found. Install Chrome or use --executable-path.")?
-        }
-    };
+struct ChromeArgs {
+    args: Vec<String>,
+    temp_user_data_dir: Option<PathBuf>,
+}
 
+fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
@@ -97,10 +113,18 @@ pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
         args.push(format!("--proxy-bypass-list={}", bypass));
     }
 
-    if let Some(ref profile) = options.profile {
+    let temp_user_data_dir = if let Some(ref profile) = options.profile {
         let expanded = expand_tilde(profile);
         args.push(format!("--user-data-dir={}", expanded));
-    }
+        None
+    } else {
+        let dir = std::env::temp_dir()
+            .join(format!("agent-browser-chrome-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create temp profile dir: {}", e))?;
+        args.push(format!("--user-data-dir={}", dir.display()));
+        Some(dir)
+    };
 
     if options.allow_file_access {
         args.push("--allow-file-access-from-files".to_string());
@@ -115,7 +139,6 @@ pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
         }
     }
 
-    // Check if user args set window size (skip viewport override)
     let has_window_size = options
         .args
         .iter()
@@ -131,23 +154,66 @@ pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
         args.push("--no-sandbox".to_string());
     }
 
+    Ok(ChromeArgs {
+        args,
+        temp_user_data_dir,
+    })
+}
+
+pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
+    let chrome_path = match &options.executable_path {
+        Some(p) => PathBuf::from(p),
+        None => {
+            find_chrome().ok_or("Chrome not found. Install Chrome or use --executable-path.")?
+        }
+    };
+
+    let ChromeArgs {
+        args,
+        temp_user_data_dir,
+    } = build_chrome_args(options)?;
+
+    let cleanup_temp_dir = |dir: &Option<PathBuf>| {
+        if let Some(ref d) = dir {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    };
+
     let mut child = Command::new(&chrome_path)
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to launch Chrome at {:?}: {}", chrome_path, e))?;
+        .map_err(|e| {
+            cleanup_temp_dir(&temp_user_data_dir);
+            format!("Failed to launch Chrome at {:?}: {}", chrome_path, e)
+        })?;
 
     let stderr = child
         .stderr
         .take()
-        .ok_or("Failed to capture Chrome stderr")?;
+        .ok_or_else(|| {
+            let _ = child.kill();
+            cleanup_temp_dir(&temp_user_data_dir);
+            "Failed to capture Chrome stderr".to_string()
+        })?;
     let reader = BufReader::new(stderr);
 
-    let ws_url = wait_for_ws_url(reader)?;
+    let ws_url = match wait_for_ws_url(reader) {
+        Ok(url) => url,
+        Err(e) => {
+            let _ = child.kill();
+            cleanup_temp_dir(&temp_user_data_dir);
+            return Err(e);
+        }
+    };
 
-    Ok(ChromeProcess { child, ws_url })
+    Ok(ChromeProcess {
+        child,
+        ws_url,
+        temp_user_data_dir,
+    })
 }
 
 fn wait_for_ws_url(reader: BufReader<std::process::ChildStderr>) -> Result<String, String> {
@@ -559,6 +625,7 @@ fn expand_tilde(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::EnvGuard;
 
     #[test]
     fn test_find_chrome_returns_some_on_host() {
@@ -626,10 +693,138 @@ mod tests {
 
     #[test]
     fn test_find_playwright_chromium_nonexistent() {
-        // With no Playwright cache, should return None
-        std::env::set_var("PLAYWRIGHT_BROWSERS_PATH", "/nonexistent/path");
+        let _guard = EnvGuard::new(&["PLAYWRIGHT_BROWSERS_PATH"]);
+        _guard.set("PLAYWRIGHT_BROWSERS_PATH", "/nonexistent/path");
         let result = find_playwright_chromium();
-        std::env::remove_var("PLAYWRIGHT_BROWSERS_PATH");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_build_args_headless_includes_headless_flag() {
+        let opts = LaunchOptions {
+            headless: true,
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(result.args.iter().any(|a| a == "--headless=new"));
+        assert!(result
+            .args
+            .iter()
+            .any(|a| a == "--window-size=1280,720"));
+        // Temp dir created when no profile
+        assert!(result.temp_user_data_dir.is_some());
+        let dir = result.temp_user_data_dir.unwrap();
+        assert!(dir.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_build_args_headed_no_headless_flag() {
+        let opts = LaunchOptions {
+            headless: false,
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(!result.args.iter().any(|a| a.contains("--headless")));
+        assert!(!result.args.iter().any(|a| a.starts_with("--window-size=")));
+        // Temp dir created when no profile
+        assert!(result.temp_user_data_dir.is_some());
+        let dir = result.temp_user_data_dir.unwrap();
+        assert!(dir.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_build_args_temp_user_data_dir_created() {
+        let opts = LaunchOptions::default();
+        let result = build_chrome_args(&opts).unwrap();
+        let dir = result.temp_user_data_dir.as_ref().unwrap();
+        assert!(dir.exists());
+        assert!(result
+            .args
+            .iter()
+            .any(|a| a.starts_with("--user-data-dir=")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_build_args_profile_no_temp_dir() {
+        let opts = LaunchOptions {
+            profile: Some("/tmp/my-profile".to_string()),
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(result.temp_user_data_dir.is_none());
+        assert!(result
+            .args
+            .iter()
+            .any(|a| a == "--user-data-dir=/tmp/my-profile"));
+    }
+
+    #[test]
+    fn test_build_args_custom_window_size_not_overridden() {
+        let opts = LaunchOptions {
+            headless: true,
+            args: vec!["--window-size=1920,1080".to_string()],
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(!result
+            .args
+            .iter()
+            .any(|a| a == "--window-size=1280,720"));
+        assert!(result
+            .args
+            .iter()
+            .any(|a| a == "--window-size=1920,1080"));
+        if let Some(ref dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn test_build_args_start_maximized_suppresses_default_window_size() {
+        let opts = LaunchOptions {
+            headless: true,
+            args: vec!["--start-maximized".to_string()],
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(!result.args.iter().any(|a| a == "--window-size=1280,720"));
+        assert!(result.args.iter().any(|a| a == "--start-maximized"));
+        if let Some(ref dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn test_chrome_process_drop_cleans_temp_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "agent-browser-chrome-drop-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(dir.exists());
+
+        {
+            // Simulate a ChromeProcess with a temp dir but a dummy child.
+            // We can't actually spawn Chrome here, but we can verify the Drop
+            // logic by creating a small helper process.
+            let child = Command::new("echo")
+                .arg("test")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let _process = ChromeProcess {
+                child,
+                ws_url: String::new(),
+                temp_user_data_dir: Some(dir.clone()),
+            };
+            // _process dropped here
+        }
+
+        assert!(!dir.exists(), "Temp dir should be cleaned up on drop");
     }
 }

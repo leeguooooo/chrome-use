@@ -2456,7 +2456,7 @@ Options:
   --json                     JSON output
   --full, -f                 Full page screenshot
   --annotate                 Annotated screenshot with numbered labels and legend
-  --headed                   Show browser window (not headless)
+  --headed                   Show browser window (not headless) (or AGENT_BROWSER_HEADED env)
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
   --auto-connect             Auto-discover and connect to running Chrome
                              Project default: try localhost:9333 first, then auto-discovery (no managed local-launch fallback)

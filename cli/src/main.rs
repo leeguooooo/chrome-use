@@ -4,6 +4,8 @@ mod connection;
 mod flags;
 mod install;
 mod output;
+#[cfg(test)]
+mod test_utils;
 mod validation;
 
 use serde_json::json;

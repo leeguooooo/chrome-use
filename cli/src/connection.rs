@@ -569,45 +569,14 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
-
-    // Mutex to prevent parallel tests from interfering with env vars
-    static ENV_MUTEX: Mutex<()> = Mutex::new(());
-
-    /// RAII guard that locks env mutex and restores env vars on drop
-    struct EnvGuard<'a> {
-        _lock: MutexGuard<'a, ()>,
-        vars: Vec<(String, Option<String>)>,
-    }
-
-    impl<'a> EnvGuard<'a> {
-        fn new(var_names: &[&str]) -> Self {
-            let lock = ENV_MUTEX.lock().unwrap();
-            let vars = var_names
-                .iter()
-                .map(|&name| (name.to_string(), env::var(name).ok()))
-                .collect();
-            Self { _lock: lock, vars }
-        }
-    }
-
-    impl Drop for EnvGuard<'_> {
-        fn drop(&mut self) {
-            for (name, value) in &self.vars {
-                match value {
-                    Some(v) => env::set_var(name, v),
-                    None => env::remove_var(name),
-                }
-            }
-        }
-    }
+    use crate::test_utils::EnvGuard;
 
     #[test]
     fn test_get_socket_dir_explicit_override() {
         let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
 
-        env::set_var("AGENT_BROWSER_SOCKET_DIR", "/custom/socket/path");
-        env::remove_var("XDG_RUNTIME_DIR");
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", "/custom/socket/path");
+        _guard.remove("XDG_RUNTIME_DIR");
 
         assert_eq!(get_socket_dir(), PathBuf::from("/custom/socket/path"));
     }
@@ -616,8 +585,8 @@ mod tests {
     fn test_get_socket_dir_ignores_empty_socket_dir() {
         let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
 
-        env::set_var("AGENT_BROWSER_SOCKET_DIR", "");
-        env::remove_var("XDG_RUNTIME_DIR");
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", "");
+        _guard.remove("XDG_RUNTIME_DIR");
 
         assert!(get_socket_dir()
             .to_string_lossy()
@@ -628,8 +597,8 @@ mod tests {
     fn test_get_socket_dir_xdg_runtime() {
         let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
 
-        env::remove_var("AGENT_BROWSER_SOCKET_DIR");
-        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        _guard.remove("AGENT_BROWSER_SOCKET_DIR");
+        _guard.set("XDG_RUNTIME_DIR", "/run/user/1000");
 
         assert_eq!(
             get_socket_dir(),
@@ -641,8 +610,8 @@ mod tests {
     fn test_get_socket_dir_ignores_empty_xdg_runtime() {
         let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
 
-        env::set_var("AGENT_BROWSER_SOCKET_DIR", "");
-        env::set_var("XDG_RUNTIME_DIR", "");
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", "");
+        _guard.set("XDG_RUNTIME_DIR", "");
 
         assert!(get_socket_dir()
             .to_string_lossy()
@@ -653,8 +622,8 @@ mod tests {
     fn test_get_socket_dir_home_fallback() {
         let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
 
-        env::remove_var("AGENT_BROWSER_SOCKET_DIR");
-        env::remove_var("XDG_RUNTIME_DIR");
+        _guard.remove("AGENT_BROWSER_SOCKET_DIR");
+        _guard.remove("XDG_RUNTIME_DIR");
 
         let result = get_socket_dir();
         assert!(result.to_string_lossy().ends_with(".agent-browser"));

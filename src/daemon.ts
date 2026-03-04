@@ -432,7 +432,7 @@ export async function startDaemon(options?: {
             } else if (manager instanceof BrowserManager) {
               // Auto-launch desktop browser
               const extensions = process.env.AGENT_BROWSER_EXTENSIONS
-                ? process.env.AGENT_BROWSER_EXTENSIONS.split(',')
+                ? process.env.AGENT_BROWSER_EXTENSIONS.split(/[,\n]/)
                     .map((p) => p.trim())
                     .filter(Boolean)
                 : undefined;
@@ -471,7 +471,9 @@ export async function startDaemon(options?: {
               const launchOptions = {
                 id: 'auto',
                 action: 'launch' as const,
-                headless: process.env.AGENT_BROWSER_HEADED !== '1',
+                headless:
+                  process.env.AGENT_BROWSER_HEADED !== '1' &&
+                  process.env.AGENT_BROWSER_HEADED !== 'true',
                 executablePath: process.env.AGENT_BROWSER_EXECUTABLE_PATH,
                 extensions: extensions,
                 storageState: process.env.AGENT_BROWSER_STATE,
