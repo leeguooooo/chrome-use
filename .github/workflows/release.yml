@@ -201,6 +201,10 @@ jobs:
           fi
           echo "All 5 platform binaries present and valid"
 
+      - name: Verify bundled binary versions
+        run: |
+          pnpm run verify:bundled-binaries
+
       - name: Create Release Pull Request or Publish to npm
         id: changesets
         uses: changesets/action@v1

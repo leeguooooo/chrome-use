@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-stealth",
-  "version": "0.16.1-fork.1",
+  "version": "0.16.1-fork.2",
   "description": "Stealth browser automation CLI for AI agents with anti-bot evasions",
   "type": "module",
   "main": "dist/daemon.js",
@@ -27,7 +27,7 @@
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "npm run version:sync && (npm run build:linux & npm run build:windows & wait) && npm run build:macos",
     "build:docker": "docker build -t agent-browser-builder -f docker/Dockerfile.build .",
-    "release": "npm run version:sync && npm run build && npm run build:all-platforms && npm publish",
+    "release": "npm run version:sync && npm run build && npm run build:all-platforms && npm run verify:bundled-binaries && npm run verify:native-version && npm publish",
     "start": "node dist/daemon.js",
     "dev": "tsx src/daemon.ts",
     "typecheck": "tsc --noEmit",
@@ -41,12 +41,13 @@
     "check:turnstile-testkey": "pnpm exec tsx scripts/check-turnstile-testkey.ts",
     "postinstall": "node scripts/postinstall.js",
     "verify:native-version": "node scripts/verify-native-version.js",
+    "verify:bundled-binaries": "node scripts/verify-bundled-binaries.js",
     "clawhub:sync": "bash scripts/clawhub-sync.sh",
     "sync:upstream": "bash scripts/sync-upstream.sh",
     "sync:upstream:push": "bash scripts/sync-upstream.sh --push",
     "changeset": "changeset",
     "ci:version": "changeset version && pnpm run version:sync && pnpm install --no-frozen-lockfile",
-    "ci:publish": "pnpm run version:sync && pnpm run build && pnpm run build:native && pnpm run verify:native-version && changeset publish"
+    "ci:publish": "pnpm run version:sync && pnpm run build && pnpm run build:native && pnpm run verify:bundled-binaries && pnpm run verify:native-version && changeset publish"
   },
   "keywords": [
     "browser",
