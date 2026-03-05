@@ -126,6 +126,34 @@ describe('Stealth mode', () => {
     expect(signals.inNavigator).toBe(false);
   });
 
+  it('hides disable-devtool auto bootstrap selector while keeping normal selectors intact', async () => {
+    browser = new BrowserManager();
+    await browser.launch({ headless: true, stealth: true });
+
+    const signals = await browser.getPage().evaluate(() => {
+      const marker = document.createElement('meta');
+      marker.setAttribute('data-ab-marker', 'ok');
+      document.head.appendChild(marker);
+
+      const dd = document.createElement('script');
+      dd.setAttribute('disable-devtool-auto', '');
+      document.head.appendChild(dd);
+
+      const hiddenOne = document.querySelector('[disable-devtool-auto]') === null;
+      const hiddenCount = document.querySelectorAll('[disable-devtool-auto]').length;
+      const normalSelectorWorks = !!document.querySelector('[data-ab-marker="ok"]');
+
+      dd.remove();
+      marker.remove();
+
+      return { hiddenOne, hiddenCount, normalSelectorWorks };
+    });
+
+    expect(signals.hiddenOne).toBe(true);
+    expect(signals.hiddenCount).toBe(0);
+    expect(signals.normalSelectorWorks).toBe(true);
+  });
+
   it('neutralizes creepjs prefers-color-scheme light probe', async () => {
     browser = new BrowserManager();
     await browser.launch({ headless: true, stealth: true });

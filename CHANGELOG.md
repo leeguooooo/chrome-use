@@ -1,5 +1,15 @@
 # agent-browser
 
+## 0.16.1-fork.5
+
+### Patch Changes
+
+- Harden runtime stealth against anti-debug self-destruct flows on high-risk sites:
+  - neutralize `disable-devtool` auto bootstrap probes by hiding the `[disable-devtool-auto]` selector entry point
+  - preserve normal selector behavior for non-target queries to minimize side effects
+  - add regression tests covering the selector patch boundary
+- Expand security design docs with the anti-debug execution-plane model and clarify why page self-close/redirect is a separate surface from fingerprint scoring.
+
 ## 0.15.2-fork.0
 
 ### Patch Changes

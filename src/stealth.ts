@@ -292,6 +292,7 @@ function buildStealthScript(options: StealthScriptOptions): string {
     configScript,
     patchNavigatorWebdriver(),
     patchCssSupportsWebdriverHeuristic(),
+    patchDisableDevtoolAutoBootstrap(),
     patchChromeRuntime(),
     patchChromeLegacyApis(),
     patchIframeContentWindow(),
@@ -362,6 +363,65 @@ function patchCssSupportsWebdriverHeuristic(): string {
     });
   } catch {
     try { CSS.supports = patchedSupports; } catch {}
+  }
+})();`;
+}
+
+/**
+ * Some high-risk sites ship disable-devtool with auto bootstrap via
+ * document.querySelector('[disable-devtool-auto]').
+ *
+ * Hiding only this selector prevents the default self-close/redirect behavior
+ * without affecting normal selector queries.
+ */
+function patchDisableDevtoolAutoBootstrap(): string {
+  return `(function(){
+  if (typeof Document === 'undefined') return;
+  const AUTO_SELECTOR = '[disable-devtool-auto]';
+  const NEVER_MATCH_SELECTOR = 'script[__ab_disable_devtool_never_match__="1"]';
+  const normalize = (value) => {
+    if (typeof value !== 'string') return '';
+    return value.replace(/\\s+/g, '').toLowerCase();
+  };
+  const shouldHideSelector = (selector) => normalize(selector) === AUTO_SELECTOR;
+
+  const patchQueryMethod = (proto, method) => {
+    if (!proto) return;
+    const native = proto[method];
+    if (typeof native !== 'function') return;
+
+    const wrapped = function(selector, ...args) {
+      if (shouldHideSelector(selector)) {
+        return native.call(this, NEVER_MATCH_SELECTOR, ...args);
+      }
+      return native.call(this, selector, ...args);
+    };
+
+    try {
+      Object.defineProperty(wrapped, 'name', {
+        value: native.name,
+        configurable: true,
+      });
+      Object.defineProperty(wrapped, 'toString', {
+        value: () => native.toString(),
+        configurable: true,
+      });
+    } catch {}
+
+    try {
+      Object.defineProperty(proto, method, {
+        value: wrapped,
+        configurable: true,
+        writable: true,
+      });
+    } catch {}
+  };
+
+  patchQueryMethod(Document.prototype, 'querySelector');
+  patchQueryMethod(Document.prototype, 'querySelectorAll');
+  if (typeof Element !== 'undefined') {
+    patchQueryMethod(Element.prototype, 'querySelector');
+    patchQueryMethod(Element.prototype, 'querySelectorAll');
   }
 })();`;
 }
