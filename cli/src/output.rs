@@ -2076,9 +2076,11 @@ Operations:
 
 Automatic State Persistence:
   Use --session-name to auto-save/restore state across restarts.
-  If omitted, it defaults to "default":
+  If omitted in default runtime mode, it defaults to "default":
   agent-browser --session-name myapp open https://example.com
   Or set AGENT_BROWSER_SESSION_NAME environment variable.
+  Note: with --parallel <name>, persistence is disabled by default unless
+  --session-name is explicitly passed on the same command.
 
 State Encryption:
   Set AGENT_BROWSER_ENCRYPTION_KEY (64-char hex) for AES-256-GCM encryption.
@@ -2105,7 +2107,7 @@ agent-browser session - Manage sessions
 
 Usage: agent-browser session [operation]
 
-Show the current fixed session and active daemon state.
+Show the current runtime session and active daemon state.
 
 Operations:
   (none)               Show current session name
@@ -2437,7 +2439,7 @@ Snapshot Options:
   -s, --selector <sel>       Scope to CSS selector
 
 Options:
-  --session <name>           Ignored (single default session only)
+  --session <name>           Ignored (runtime uses default session unless --parallel is set)
   --state <path>             Load storage state from JSON file (or AGENT_BROWSER_STATE env)
   --headers <json>           HTTP headers scoped to URL's origin (for auth)
   --executable-path <path>   Custom browser executable (or AGENT_BROWSER_EXECUTABLE_PATH)
@@ -2467,7 +2469,10 @@ Options:
                              Extension side panel supports browser controls + console/network/DOM + workflow scheduling
   --risk-mode <mode>         Verify/captcha handling: off, warn, block (or AGENT_BROWSER_RISK_MODE)
   --wait-until <mode>        Navigation wait strategy for open/navigate: load, domcontentloaded, networkidle
-  --session-name <name>      Auto-save/restore session state (defaults to "default")
+  --parallel <name>          Isolated runtime channel for parallel AI runs (maps to parallel-<name>)
+                             Default behavior in this mode is stateless (no auto session persistence unless --session-name is explicitly passed)
+  --resident                 Keep daemon running; disable 10-minute idle auto-shutdown
+  --session-name <name>      Auto-save/restore session state (defaults to "default" in non-parallel mode)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
   --max-output <chars>       Truncate page output to N chars (or AGENT_BROWSER_MAX_OUTPUT)
   --allowed-domains <list>   Restrict navigation domains (or AGENT_BROWSER_ALLOWED_DOMAINS)
@@ -2482,6 +2487,7 @@ Options:
 Policy:
   --profile / AGENT_BROWSER_PROFILE are forbidden
   --channel / AGENT_BROWSER_CHANNEL are forbidden
+  Daemon auto-shuts down after 10 minutes of inactivity unless --resident is set
   Auto-attach existing browser (prefer CDP localhost:9333, then auto-discovery), or pass --cdp explicitly
 
 Configuration:
@@ -2497,6 +2503,7 @@ Configuration:
   Boolean flags accept an optional true/false value to override config:
     --headed           (same as --headed true)
     --headed false     (disables "headed": true from config)
+    --resident false   (disable resident mode for this invocation)
 
   Extensions from user and project configs are merged (not replaced).
 
@@ -2505,7 +2512,8 @@ Configuration:
 
 Environment:
   AGENT_BROWSER_CONFIG           Path to config file (or use --config)
-    AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name (default: "default")
+  AGENT_BROWSER_PARALLEL         Isolated runtime channel for parallel AI runs (maps to parallel-<name>)
+                                 Best for stateless/no-login tasks where throughput matters
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path
@@ -2528,7 +2536,7 @@ Environment:
   AGENT_BROWSER_TAB_GROUP_PLUGIN_ID Expected Chrome extension ID for tab-group handshake (default: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
   AGENT_BROWSER_RISK_MODE        Verify/captcha handling mode (off, warn, block)
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default Playwright timeout in ms (default: 25000)
-  AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
+  AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name (default: "default" when --parallel is not set)
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (default: 30)
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM session encryption
   AGENT_BROWSER_STREAM_PORT      Enable WebSocket streaming on port (e.g., 9223)
@@ -2564,6 +2572,8 @@ Examples:
   agent-browser --color-scheme dark open example.com  # Dark mode
   agent-browser --risk-mode block open example.com  # Block on verification/captcha pages
   agent-browser --session-name myapp open example.com  # Auto-save/restore state
+  agent-browser --parallel worker-a open example.com  # Isolated runtime for parallel AI task
+  agent-browser --resident open example.com  # Keep daemon resident until explicit close
 
 Command Chaining:
   Chain commands with && in a single shell call (browser persists via daemon):

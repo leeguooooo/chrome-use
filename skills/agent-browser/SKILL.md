@@ -208,12 +208,14 @@ agent-browser get text @e1 --json
 ### Parallel Workflows
 
 ```bash
-agent-browser --session-name site1 open https://site-a.com
-agent-browser --session-name site2 open https://site-b.com
+agent-browser --parallel site1 open https://site-a.com
+agent-browser --parallel site2 open https://site-b.com
 
-agent-browser --session-name site1 snapshot -i
-agent-browser --session-name site2 snapshot -i
+agent-browser --parallel site1 snapshot -i
+agent-browser --parallel site2 snapshot -i
 ```
+
+Use `--parallel <name>` for stateless throughput tasks (navigation, extraction, checks). For login/auth continuity, use `--session-name` instead.
 
 ### Connect to Existing Chrome
 
@@ -242,6 +244,18 @@ agent-browser --wait-until domcontentloaded open https://example.com
 
 # Deterministic Turnstile smoke check (official test key)
 pnpm run check:turnstile-testkey
+```
+
+### Daemon Lifecycle
+
+Daemons auto-shutdown after 10 minutes of inactivity.
+
+Use `--resident` for long-running workflows that should not auto-close:
+
+```bash
+agent-browser --resident open https://example.com
+# keep running until explicit close
+agent-browser close
 ```
 
 ### Color Scheme (Dark Mode)
@@ -489,7 +503,7 @@ These behaviors are always active. For sensitive sites, combine with `--headed` 
 
 ## Session Management and Cleanup
 
-`--session` is ignored in this fork. The runtime always uses one default session. Use `--session-name` to isolate persistence when needed.
+`--session` is ignored in this fork. Runtime defaults to `default`; use `--parallel <name>` for isolated concurrent channels, and `--session-name` for persistence isolation.
 
 Always close your browser session when done to avoid leaked processes:
 

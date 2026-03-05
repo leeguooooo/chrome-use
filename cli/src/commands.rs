@@ -2060,6 +2060,7 @@ mod tests {
             full: false,
             headed: false,
             debug: false,
+            resident: false,
             headers: None,
             executable_path: None,
             extensions: Vec::new(),
@@ -2075,6 +2076,7 @@ mod tests {
             device: None,
             auto_connect: false,
             session_name: None,
+            parallel: None,
             cli_executable_path: false,
             cli_extensions: false,
             cli_state: false,
@@ -2094,6 +2096,8 @@ mod tests {
             wait_until: None,
             cli_tab_group: false,
             cli_tab_group_plugin_id: false,
+            cli_session_name: false,
+            cli_resident: false,
         }
     }
 

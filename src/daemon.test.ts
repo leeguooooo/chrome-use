@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as net from 'net';
 import { EventEmitter } from 'events';
-import { getSocketDir, safeWrite } from './daemon.js';
+import { createSerializedExecutor, getSocketDir, safeWrite } from './daemon.js';
 
 /**
  * HTTP request detection pattern used in daemon.ts to prevent cross-origin attacks.
@@ -157,5 +157,47 @@ describe('safeWrite', () => {
     expect(socket.listenerCount('drain')).toBe(0);
     expect(socket.listenerCount('error')).toBe(0);
     expect(socket.listenerCount('close')).toBe(0);
+  });
+});
+
+describe('createSerializedExecutor', () => {
+  it('should execute tasks one-by-one even when started concurrently', async () => {
+    const runSerialized = createSerializedExecutor();
+    const order: string[] = [];
+
+    const slow = runSerialized(async () => {
+      order.push('slow-start');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      order.push('slow-end');
+      return 'slow';
+    });
+
+    const fast = runSerialized(async () => {
+      order.push('fast-start');
+      order.push('fast-end');
+      return 'fast';
+    });
+
+    await expect(Promise.all([slow, fast])).resolves.toEqual(['slow', 'fast']);
+    expect(order).toEqual(['slow-start', 'slow-end', 'fast-start', 'fast-end']);
+  });
+
+  it('should continue running queued tasks after a task fails', async () => {
+    const runSerialized = createSerializedExecutor();
+    const order: string[] = [];
+
+    const first = runSerialized(async () => {
+      order.push('first');
+      throw new Error('boom');
+    });
+
+    const second = runSerialized(async () => {
+      order.push('second');
+      return 'ok';
+    });
+
+    await expect(first).rejects.toThrow('boom');
+    await expect(second).resolves.toBe('ok');
+    expect(order).toEqual(['first', 'second']);
   });
 });

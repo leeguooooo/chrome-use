@@ -3,14 +3,20 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::signal;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::time::{Duration, Instant};
 
 use super::actions::{execute_command, DaemonState};
 use super::state;
 
+const IDLE_SHUTDOWN_SECS: u64 = 600;
+
 pub async fn run_daemon(session: &str) {
+    let resident_mode = env::args().any(|arg| arg == "--resident");
     let socket_dir = get_daemon_socket_dir();
     if !socket_dir.exists() {
         let _ = fs::create_dir_all(&socket_dir);
@@ -33,7 +39,7 @@ pub async fn run_daemon(session: &str) {
         }
     }
 
-    let result = run_socket_server(&socket_path, session).await;
+    let result = run_socket_server(&socket_path, session, resident_mode).await;
 
     let _ = fs::remove_file(&socket_path);
     let _ = fs::remove_file(&pid_path);
@@ -47,7 +53,11 @@ pub async fn run_daemon(session: &str) {
 }
 
 #[cfg(unix)]
-async fn run_socket_server(socket_path: &PathBuf, _session: &str) -> Result<(), String> {
+async fn run_socket_server(
+    socket_path: &PathBuf,
+    _session: &str,
+    resident_mode: bool,
+) -> Result<(), String> {
     use tokio::net::UnixListener;
 
     let listener =
@@ -55,6 +65,9 @@ async fn run_socket_server(socket_path: &PathBuf, _session: &str) -> Result<(), 
 
     let state: std::sync::Arc<tokio::sync::Mutex<DaemonState>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(DaemonState::new()));
+    let active_commands = std::sync::Arc::new(AtomicUsize::new(0));
+    let (activity_tx, mut activity_rx) = unbounded_channel::<()>();
+    let mut idle_deadline = Instant::now() + Duration::from_secs(IDLE_SHUTDOWN_SECS);
 
     loop {
         tokio::select! {
@@ -62,14 +75,29 @@ async fn run_socket_server(socket_path: &PathBuf, _session: &str) -> Result<(), 
                 match accept_result {
                     Ok((stream, _)) => {
                         let state = state.clone();
+                        let activity_tx = activity_tx.clone();
+                        let active_commands = active_commands.clone();
                         tokio::spawn(async move {
-                            handle_connection(stream, state).await;
+                            handle_connection(stream, state, activity_tx, active_commands).await;
                         });
                     }
                     Err(e) => {
                         eprintln!("Accept error: {}", e);
                     }
                 }
+            }
+            Some(_) = activity_rx.recv() => {
+                idle_deadline = Instant::now() + Duration::from_secs(IDLE_SHUTDOWN_SECS);
+            }
+            _ = tokio::time::sleep_until(idle_deadline), if !resident_mode => {
+                if active_commands.load(Ordering::SeqCst) == 0 {
+                    let mut s = state.lock().await;
+                    if let Some(ref mut mgr) = s.browser {
+                        let _ = mgr.close().await;
+                    }
+                    break;
+                }
+                idle_deadline = Instant::now() + Duration::from_secs(IDLE_SHUTDOWN_SECS);
             }
             _ = shutdown_signal() => {
                 let mut s = state.lock().await;
@@ -85,7 +113,11 @@ async fn run_socket_server(socket_path: &PathBuf, _session: &str) -> Result<(), 
 }
 
 #[cfg(windows)]
-async fn run_socket_server(socket_path: &PathBuf, session: &str) -> Result<(), String> {
+async fn run_socket_server(
+    socket_path: &PathBuf,
+    session: &str,
+    resident_mode: bool,
+) -> Result<(), String> {
     use tokio::net::TcpListener;
 
     let port = get_port_for_session(session);
@@ -99,6 +131,9 @@ async fn run_socket_server(socket_path: &PathBuf, session: &str) -> Result<(), S
 
     let state: std::sync::Arc<tokio::sync::Mutex<DaemonState>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(DaemonState::new()));
+    let active_commands = std::sync::Arc::new(AtomicUsize::new(0));
+    let (activity_tx, mut activity_rx) = unbounded_channel::<()>();
+    let mut idle_deadline = Instant::now() + Duration::from_secs(IDLE_SHUTDOWN_SECS);
 
     loop {
         tokio::select! {
@@ -106,14 +141,30 @@ async fn run_socket_server(socket_path: &PathBuf, session: &str) -> Result<(), S
                 match accept_result {
                     Ok((stream, _)) => {
                         let state = state.clone();
+                        let activity_tx = activity_tx.clone();
+                        let active_commands = active_commands.clone();
                         tokio::spawn(async move {
-                            handle_connection(stream, state).await;
+                            handle_connection(stream, state, activity_tx, active_commands).await;
                         });
                     }
                     Err(e) => {
                         eprintln!("Accept error: {}", e);
                     }
                 }
+            }
+            Some(_) = activity_rx.recv() => {
+                idle_deadline = Instant::now() + Duration::from_secs(IDLE_SHUTDOWN_SECS);
+            }
+            _ = tokio::time::sleep_until(idle_deadline), if !resident_mode => {
+                if active_commands.load(Ordering::SeqCst) == 0 {
+                    let mut s = state.lock().await;
+                    if let Some(ref mut mgr) = s.browser {
+                        let _ = mgr.close().await;
+                    }
+                    let _ = fs::remove_file(&port_path);
+                    break;
+                }
+                idle_deadline = Instant::now() + Duration::from_secs(IDLE_SHUTDOWN_SECS);
             }
             _ = shutdown_signal() => {
                 let mut s = state.lock().await;
@@ -129,7 +180,12 @@ async fn run_socket_server(socket_path: &PathBuf, session: &str) -> Result<(), S
     Ok(())
 }
 
-async fn handle_connection<S>(stream: S, state: std::sync::Arc<tokio::sync::Mutex<DaemonState>>)
+async fn handle_connection<S>(
+    stream: S,
+    state: std::sync::Arc<tokio::sync::Mutex<DaemonState>>,
+    activity_tx: UnboundedSender<()>,
+    active_commands: std::sync::Arc<AtomicUsize>,
+)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -166,6 +222,8 @@ where
                 };
 
                 let is_close = cmd.get("action").and_then(|v| v.as_str()) == Some("close");
+                let _ = activity_tx.send(());
+                active_commands.fetch_add(1, Ordering::SeqCst);
 
                 let response = {
                     let mut s = state.lock().await;
@@ -175,8 +233,11 @@ where
                 let mut resp = serde_json::to_string(&response).unwrap_or_default();
                 resp.push('\n');
                 if writer.write_all(resp.as_bytes()).await.is_err() {
+                    active_commands.fetch_sub(1, Ordering::SeqCst);
                     break;
                 }
+                active_commands.fetch_sub(1, Ordering::SeqCst);
+                let _ = activity_tx.send(());
 
                 if is_close {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;

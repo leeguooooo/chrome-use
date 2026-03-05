@@ -72,7 +72,7 @@ AGENT_BROWSER_CONFIG=./ci-config.json agent-browser open example.com
 
 ## All Options
 
-Every CLI flag can be set in the config file using its camelCase equivalent:
+Most CLI flags can be set in the config file using their camelCase equivalents (`--resident` is CLI-only):
 
 <table>
   <thead>
@@ -127,6 +127,15 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
         <code>--session-name</code>
       </td>
       <td>string</td>
+    </tr>
+    <tr>
+      <td>
+        <code>parallel</code>
+      </td>
+      <td>
+        <code>--parallel</code>
+      </td>
+      <td>string (isolated runtime channel name)</td>
     </tr>
     <tr>
       <td>
@@ -353,6 +362,25 @@ session window isolation controls, activation guard toggles, empty-group cleanup
 }
 ```
 
+### Parallel Stateless Worker
+
+```json
+{
+  "parallel": "worker-a"
+}
+```
+
+Use this for stateless throughput tasks. For authenticated flows, prefer a stable `sessionName`.
+
+## CLI-only daemon lifecycle flag
+
+`--resident` is a CLI-only flag (not a config/env key). It keeps the daemon alive and disables the default 10-minute idle auto-shutdown.
+
+```bash
+agent-browser --resident open example.com
+agent-browser close
+```
+
 ## Overriding Boolean Options
 
 Boolean flags accept an optional `true`/`false` value to override config settings:
@@ -368,7 +396,7 @@ agent-browser --headed open example.com       # same as --headed true
 agent-browser --headed true open example.com  # explicit
 ```
 
-This applies to all boolean flags: `--headed`, `--debug`, `--json`, `--ignore-https-errors`, `--allow-file-access`, `--auto-connect`.
+This applies to all boolean flags: `--headed`, `--debug`, `--json`, `--ignore-https-errors`, `--allow-file-access`, `--auto-connect`, `--resident`.
 
 ## Extensions Merging
 
@@ -470,6 +498,15 @@ These environment variables configure additional daemon and runtime behavior:
       <td>
         <code>default</code>
       </td>
+    </tr>
+    <tr>
+      <td>
+        <code>AGENT_BROWSER_PARALLEL</code>
+      </td>
+      <td>
+        Isolated runtime channel name for parallel AI runs (maps to <code>parallel-&lt;name&gt;</code>).
+      </td>
+      <td>(none)</td>
     </tr>
     <tr>
       <td>

@@ -62,6 +62,23 @@ export function safeWrite(socket: net.Socket, payload: string): Promise<void> {
   });
 }
 
+/**
+ * Create an async executor that runs tasks strictly one-by-one.
+ * Used to serialize daemon commands across all client connections.
+ */
+export function createSerializedExecutor(): <T>(task: () => Promise<T>) => Promise<T> {
+  let tail: Promise<void> = Promise.resolve();
+
+  return async function runSerialized<T>(task: () => Promise<T>): Promise<T> {
+    const run = tail.then(task, task);
+    tail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  };
+}
+
 // Platform detection
 const isWindows = process.platform === 'win32';
 
@@ -73,6 +90,8 @@ let streamServer: StreamServer | null = null;
 
 // Default stream port (can be overridden with AGENT_BROWSER_STREAM_PORT)
 const DEFAULT_STREAM_PORT = 9223;
+// Default idle auto-shutdown timeout: 10 minutes
+const DEFAULT_IDLE_SHUTDOWN_MS = 10 * 60 * 1000;
 
 /**
  * Save state to file with optional encryption.
@@ -325,6 +344,7 @@ export function getStreamPortFile(session?: string): string {
 export async function startDaemon(options?: {
   streamPort?: number;
   provider?: string;
+  resident?: boolean;
 }): Promise<void> {
   // Ensure socket directory exists with restricted permissions (owner-only access)
   const socketDir = getSocketDir();
@@ -345,6 +365,10 @@ export async function startDaemon(options?: {
   // Create appropriate manager
   const manager: Manager = isIOS ? new IOSManager() : new BrowserManager();
   let shuttingDown = false;
+  const runSerialized = createSerializedExecutor();
+  const residentMode = options?.resident ?? process.argv.includes('--resident');
+  let idleTimer: NodeJS.Timeout | null = null;
+  let pendingCommands = 0;
 
   // Start stream server if port is specified (or use default if env var is set)
   // Note: Stream server only works with BrowserManager (desktop), not iOS
@@ -363,6 +387,21 @@ export async function startDaemon(options?: {
     fs.writeFileSync(streamPortFile, streamPort.toString());
   }
 
+  const cancelIdleTimer = (): void => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+
+  const scheduleIdleShutdown = (): void => {
+    if (residentMode || shuttingDown || pendingCommands > 0) return;
+    cancelIdleTimer();
+    idleTimer = setTimeout(() => {
+      void shutdown('idle timeout');
+    }, DEFAULT_IDLE_SHUTDOWN_MS);
+  };
+
   const server = net.createServer((socket) => {
     let buffer = '';
     let httpChecked = false;
@@ -379,311 +418,326 @@ export async function startDaemon(options?: {
 
       while (commandQueue.length > 0) {
         const line = commandQueue.shift()!;
+        pendingCommands += 1;
+        cancelIdleTimer();
 
         try {
-          const parseResult = parseCommand(line);
-
-          if (!parseResult.success) {
-            const resp = errorResponse(parseResult.id ?? 'unknown', parseResult.error);
-            await safeWrite(socket, serializeResponse(resp) + '\n');
-            continue;
-          }
-
-          // Handle device_list specially - it works without a session and always uses IOSManager
-          if (parseResult.command.action === 'device_list') {
-            const iosManager = new IOSManager();
+          await runSerialized(async () => {
             try {
-              const devices = await iosManager.listAllDevices();
-              const response = {
-                id: parseResult.command.id,
-                success: true as const,
-                data: { devices },
-              };
+              const parseResult = parseCommand(line);
+
+              if (!parseResult.success) {
+                const resp = errorResponse(parseResult.id ?? 'unknown', parseResult.error);
+                await safeWrite(socket, serializeResponse(resp) + '\n');
+                return;
+              }
+
+              // Handle device_list specially - it works without a session and always uses IOSManager
+              if (parseResult.command.action === 'device_list') {
+                const iosManager = new IOSManager();
+                try {
+                  const devices = await iosManager.listAllDevices();
+                  const response = {
+                    id: parseResult.command.id,
+                    success: true as const,
+                    data: { devices },
+                  };
+                  await safeWrite(socket, serializeResponse(response) + '\n');
+                } catch (err) {
+                  const message = err instanceof Error ? err.message : String(err);
+                  await safeWrite(
+                    socket,
+                    serializeResponse(errorResponse(parseResult.command.id, message)) + '\n'
+                  );
+                }
+                return;
+              }
+
+              // Auto-launch if not already launched and this isn't a launch/close/state_load command.
+              // Default behavior for this fork: attach to an existing browser only.
+              const isDoctor = parseResult.command.action === 'doctor';
+              if (
+                !manager.isLaunched() &&
+                parseResult.command.action !== 'launch' &&
+                parseResult.command.action !== 'close' &&
+                parseResult.command.action !== 'state_load' &&
+                parseResult.command.action !== 'doctor'
+              ) {
+                if (isIOS && manager instanceof IOSManager) {
+                  // Auto-launch iOS Safari
+                  // Check for device in command first (for reused daemons), then fall back to env vars
+                  const cmd = parseResult.command as { iosDevice?: string };
+                  const iosDevice = cmd.iosDevice || process.env.AGENT_BROWSER_IOS_DEVICE;
+                  await manager.launch({
+                    device: iosDevice,
+                    udid: process.env.AGENT_BROWSER_IOS_UDID,
+                  });
+                } else if (manager instanceof BrowserManager) {
+                  // Auto-launch desktop browser
+                  const extensions = process.env.AGENT_BROWSER_EXTENSIONS
+                    ? process.env.AGENT_BROWSER_EXTENSIONS.split(/[,\n]/)
+                        .map((p) => p.trim())
+                        .filter(Boolean)
+                    : undefined;
+
+                  // Parse args from env (comma or newline separated)
+                  const argsEnv = process.env.AGENT_BROWSER_ARGS;
+                  const args = argsEnv
+                    ? argsEnv
+                        .split(/[,\n]/)
+                        .map((a) => a.trim())
+                        .filter((a) => a.length > 0)
+                    : undefined;
+
+                  // Parse proxy from env
+                  const proxyServer = process.env.AGENT_BROWSER_PROXY;
+                  const proxyBypass = process.env.AGENT_BROWSER_PROXY_BYPASS;
+                  const proxy = proxyServer
+                    ? {
+                        server: proxyServer,
+                        ...(proxyBypass && { bypass: proxyBypass }),
+                      }
+                    : undefined;
+
+                  const ignoreHTTPSErrors = process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1';
+                  const allowFileAccess = process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS === '1';
+                  // Stealth is always enabled in agent-browser-stealth
+                  const colorSchemeEnv = process.env.AGENT_BROWSER_COLOR_SCHEME;
+                  const colorScheme: 'dark' | 'light' | 'no-preference' | undefined =
+                    colorSchemeEnv === 'dark' ||
+                    colorSchemeEnv === 'light' ||
+                    colorSchemeEnv === 'no-preference'
+                      ? colorSchemeEnv
+                      : undefined;
+                  const tabGroup = process.env.AGENT_BROWSER_TAB_GROUP?.trim();
+                  const tabGroupPluginId = process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim();
+                  const launchOptions = {
+                    id: 'auto',
+                    action: 'launch' as const,
+                    headless:
+                      process.env.AGENT_BROWSER_HEADED !== '1' &&
+                      process.env.AGENT_BROWSER_HEADED !== 'true',
+                    executablePath: process.env.AGENT_BROWSER_EXECUTABLE_PATH,
+                    extensions: extensions,
+                    storageState: process.env.AGENT_BROWSER_STATE,
+                    args,
+                    userAgent: process.env.AGENT_BROWSER_USER_AGENT,
+                    proxy,
+                    ignoreHTTPSErrors: ignoreHTTPSErrors,
+                    allowFileAccess: allowFileAccess,
+
+                    colorScheme,
+                    tabGroup: tabGroup && tabGroup.length > 0 ? tabGroup : undefined,
+                    tabGroupPluginId:
+                      tabGroupPluginId && tabGroupPluginId.length > 0
+                        ? tabGroupPluginId
+                        : undefined,
+                    autoStateFilePath: getSessionAutoStatePath(),
+                  };
+
+                  let attachedToExistingBrowser = false;
+                  try {
+                    // Keep default CDP attempt minimal. Launch-only options like extensions
+                    // are incompatible with CDP and can cause false-negative attach failures.
+                    const cdpLaunchOptions = {
+                      id: launchOptions.id,
+                      action: launchOptions.action,
+                      cdpPort: 9333,
+                      ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
+                      colorScheme: launchOptions.colorScheme,
+                      userAgent: launchOptions.userAgent,
+                      tabGroup: launchOptions.tabGroup,
+                      tabGroupPluginId: launchOptions.tabGroupPluginId,
+                    };
+                    await manager.launch({
+                      ...cdpLaunchOptions,
+                    });
+                    attachedToExistingBrowser = true;
+                    if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                      console.error('[DEBUG] Auto-launch connected via default CDP port 9333');
+                    }
+                  } catch (error) {
+                    if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                      const message = error instanceof Error ? error.message : String(error);
+                      console.error(
+                        `[DEBUG] Default CDP port 9333 unavailable, trying auto-connect discovery: ${message}`
+                      );
+                    }
+                  }
+
+                  if (!attachedToExistingBrowser) {
+                    try {
+                      await manager.launch({
+                        id: launchOptions.id,
+                        action: launchOptions.action,
+                        autoConnect: true,
+                        ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
+                        colorScheme: launchOptions.colorScheme,
+                        userAgent: launchOptions.userAgent,
+                        tabGroup: launchOptions.tabGroup,
+                        tabGroupPluginId: launchOptions.tabGroupPluginId,
+                      });
+                      attachedToExistingBrowser = true;
+                      if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                        console.error('[DEBUG] Auto-launch connected via auto-connect discovery');
+                      }
+                    } catch (error) {
+                      if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                        const message = error instanceof Error ? error.message : String(error);
+                        console.error(`[DEBUG] Auto-connect discovery failed: ${message}`);
+                      }
+                    }
+                  }
+
+                  if (!attachedToExistingBrowser) {
+                    throw new Error(
+                      'Project policy requires using your existing browser. Could not connect to CDP at localhost:9333 and auto-discovery also failed.'
+                    );
+                  }
+                }
+              }
+
+              // For doctor, attempt the same default attach flow but do not fail hard if attach is unavailable.
+              // This keeps diagnostics actionable even when CDP is down.
+              if (!manager.isLaunched() && isDoctor && manager instanceof BrowserManager) {
+                try {
+                  await manager.launch({
+                    id: 'doctor-cdp',
+                    action: 'launch',
+                    cdpPort: 9333,
+                    ignoreHTTPSErrors: process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1',
+                    userAgent: process.env.AGENT_BROWSER_USER_AGENT,
+                    colorScheme:
+                      process.env.AGENT_BROWSER_COLOR_SCHEME === 'dark' ||
+                      process.env.AGENT_BROWSER_COLOR_SCHEME === 'light' ||
+                      process.env.AGENT_BROWSER_COLOR_SCHEME === 'no-preference'
+                        ? (process.env.AGENT_BROWSER_COLOR_SCHEME as
+                            | 'dark'
+                            | 'light'
+                            | 'no-preference')
+                        : undefined,
+                    tabGroup: process.env.AGENT_BROWSER_TAB_GROUP?.trim() || undefined,
+                    tabGroupPluginId:
+                      process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim() || undefined,
+                  });
+                } catch {
+                  try {
+                    await manager.launch({
+                      id: 'doctor-auto-connect',
+                      action: 'launch',
+                      autoConnect: true,
+                      ignoreHTTPSErrors: process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1',
+                      userAgent: process.env.AGENT_BROWSER_USER_AGENT,
+                      colorScheme:
+                        process.env.AGENT_BROWSER_COLOR_SCHEME === 'dark' ||
+                        process.env.AGENT_BROWSER_COLOR_SCHEME === 'light' ||
+                        process.env.AGENT_BROWSER_COLOR_SCHEME === 'no-preference'
+                          ? (process.env.AGENT_BROWSER_COLOR_SCHEME as
+                              | 'dark'
+                              | 'light'
+                              | 'no-preference')
+                          : undefined,
+                      tabGroup: process.env.AGENT_BROWSER_TAB_GROUP?.trim() || undefined,
+                      tabGroupPluginId:
+                        process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim() || undefined,
+                    });
+                  } catch {
+                    // Keep running: doctor should report failures instead of exiting early.
+                  }
+                }
+              }
+
+              // Recover from stale state: browser is launched but all pages were closed
+              if (
+                manager instanceof BrowserManager &&
+                manager.isLaunched() &&
+                !manager.hasPages() &&
+                parseResult.command.action !== 'launch' &&
+                parseResult.command.action !== 'close'
+              ) {
+                await manager.ensurePage();
+              }
+
+              // Handle explicit launch with auto-load state
+              if (
+                parseResult.command.action === 'launch' &&
+                manager instanceof BrowserManager &&
+                !parseResult.command.autoStateFilePath
+              ) {
+                const autoStatePath = getSessionAutoStatePath();
+                if (autoStatePath) {
+                  parseResult.command.autoStateFilePath = autoStatePath;
+                }
+              }
+
+              // Handle close command specially - shuts down daemon
+              if (parseResult.command.action === 'close') {
+                // Auto-save state before closing
+                if (manager instanceof BrowserManager && manager.isLaunched()) {
+                  const savePath = getSessionSaveStatePath();
+                  if (savePath) {
+                    try {
+                      const { encrypted } = await saveStateToFile(manager, savePath);
+                      fs.chmodSync(savePath, 0o600);
+                      if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                        console.error(
+                          `Auto-saved session state: ${savePath}${encrypted ? ' (encrypted)' : ''}`
+                        );
+                      }
+                    } catch (err) {
+                      if (process.env.AGENT_BROWSER_DEBUG === '1') {
+                        console.error(`Failed to auto-save session state:`, err);
+                      }
+                    }
+                  }
+                }
+
+                const response =
+                  isIOS && manager instanceof IOSManager
+                    ? await executeIOSCommand(parseResult.command, manager)
+                    : await executeCommand(parseResult.command, manager as BrowserManager);
+                await safeWrite(socket, serializeResponse(response) + '\n');
+
+                if (!shuttingDown) {
+                  shuttingDown = true;
+                  setTimeout(() => {
+                    server.close();
+                    cleanupSocket();
+                    process.exit(0);
+                  }, 100);
+                }
+
+                commandQueue.length = 0;
+                processing = false;
+                return;
+              }
+
+              // Execute command with appropriate handler
+              const response =
+                isIOS && manager instanceof IOSManager
+                  ? await executeIOSCommand(parseResult.command, manager)
+                  : await executeCommand(parseResult.command, manager as BrowserManager);
+
+              // Add any launch warnings to the response
+              if (manager instanceof BrowserManager) {
+                const warnings = manager.getAndClearWarnings();
+                if (warnings.length > 0 && response.success && response.data) {
+                  (response.data as Record<string, unknown>).warnings = warnings;
+                }
+              }
+
               await safeWrite(socket, serializeResponse(response) + '\n');
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
               await safeWrite(
                 socket,
-                serializeResponse(errorResponse(parseResult.command.id, message)) + '\n'
-              );
+                serializeResponse(errorResponse('error', message)) + '\n'
+              ).catch(() => {}); // Socket may already be destroyed
             }
-            continue;
-          }
-
-          // Auto-launch if not already launched and this isn't a launch/close/state_load command.
-          // Default behavior for this fork: attach to an existing browser only.
-          const isDoctor = parseResult.command.action === 'doctor';
-          if (
-            !manager.isLaunched() &&
-            parseResult.command.action !== 'launch' &&
-            parseResult.command.action !== 'close' &&
-            parseResult.command.action !== 'state_load' &&
-            parseResult.command.action !== 'doctor'
-          ) {
-            if (isIOS && manager instanceof IOSManager) {
-              // Auto-launch iOS Safari
-              // Check for device in command first (for reused daemons), then fall back to env vars
-              const cmd = parseResult.command as { iosDevice?: string };
-              const iosDevice = cmd.iosDevice || process.env.AGENT_BROWSER_IOS_DEVICE;
-              await manager.launch({
-                device: iosDevice,
-                udid: process.env.AGENT_BROWSER_IOS_UDID,
-              });
-            } else if (manager instanceof BrowserManager) {
-              // Auto-launch desktop browser
-              const extensions = process.env.AGENT_BROWSER_EXTENSIONS
-                ? process.env.AGENT_BROWSER_EXTENSIONS.split(/[,\n]/)
-                    .map((p) => p.trim())
-                    .filter(Boolean)
-                : undefined;
-
-              // Parse args from env (comma or newline separated)
-              const argsEnv = process.env.AGENT_BROWSER_ARGS;
-              const args = argsEnv
-                ? argsEnv
-                    .split(/[,\n]/)
-                    .map((a) => a.trim())
-                    .filter((a) => a.length > 0)
-                : undefined;
-
-              // Parse proxy from env
-              const proxyServer = process.env.AGENT_BROWSER_PROXY;
-              const proxyBypass = process.env.AGENT_BROWSER_PROXY_BYPASS;
-              const proxy = proxyServer
-                ? {
-                    server: proxyServer,
-                    ...(proxyBypass && { bypass: proxyBypass }),
-                  }
-                : undefined;
-
-              const ignoreHTTPSErrors = process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1';
-              const allowFileAccess = process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS === '1';
-              // Stealth is always enabled in agent-browser-stealth
-              const colorSchemeEnv = process.env.AGENT_BROWSER_COLOR_SCHEME;
-              const colorScheme: 'dark' | 'light' | 'no-preference' | undefined =
-                colorSchemeEnv === 'dark' ||
-                colorSchemeEnv === 'light' ||
-                colorSchemeEnv === 'no-preference'
-                  ? colorSchemeEnv
-                  : undefined;
-              const tabGroup = process.env.AGENT_BROWSER_TAB_GROUP?.trim();
-              const tabGroupPluginId = process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim();
-              const launchOptions = {
-                id: 'auto',
-                action: 'launch' as const,
-                headless:
-                  process.env.AGENT_BROWSER_HEADED !== '1' &&
-                  process.env.AGENT_BROWSER_HEADED !== 'true',
-                executablePath: process.env.AGENT_BROWSER_EXECUTABLE_PATH,
-                extensions: extensions,
-                storageState: process.env.AGENT_BROWSER_STATE,
-                args,
-                userAgent: process.env.AGENT_BROWSER_USER_AGENT,
-                proxy,
-                ignoreHTTPSErrors: ignoreHTTPSErrors,
-                allowFileAccess: allowFileAccess,
-
-                colorScheme,
-                tabGroup: tabGroup && tabGroup.length > 0 ? tabGroup : undefined,
-                tabGroupPluginId:
-                  tabGroupPluginId && tabGroupPluginId.length > 0 ? tabGroupPluginId : undefined,
-                autoStateFilePath: getSessionAutoStatePath(),
-              };
-
-              let attachedToExistingBrowser = false;
-              try {
-                // Keep default CDP attempt minimal. Launch-only options like extensions
-                // are incompatible with CDP and can cause false-negative attach failures.
-                const cdpLaunchOptions = {
-                  id: launchOptions.id,
-                  action: launchOptions.action,
-                  cdpPort: 9333,
-                  ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
-                  colorScheme: launchOptions.colorScheme,
-                  userAgent: launchOptions.userAgent,
-                  tabGroup: launchOptions.tabGroup,
-                  tabGroupPluginId: launchOptions.tabGroupPluginId,
-                };
-                await manager.launch({
-                  ...cdpLaunchOptions,
-                });
-                attachedToExistingBrowser = true;
-                if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                  console.error('[DEBUG] Auto-launch connected via default CDP port 9333');
-                }
-              } catch (error) {
-                if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                  const message = error instanceof Error ? error.message : String(error);
-                  console.error(
-                    `[DEBUG] Default CDP port 9333 unavailable, trying auto-connect discovery: ${message}`
-                  );
-                }
-              }
-
-              if (!attachedToExistingBrowser) {
-                try {
-                  await manager.launch({
-                    id: launchOptions.id,
-                    action: launchOptions.action,
-                    autoConnect: true,
-                    ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
-                    colorScheme: launchOptions.colorScheme,
-                    userAgent: launchOptions.userAgent,
-                    tabGroup: launchOptions.tabGroup,
-                    tabGroupPluginId: launchOptions.tabGroupPluginId,
-                  });
-                  attachedToExistingBrowser = true;
-                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                    console.error('[DEBUG] Auto-launch connected via auto-connect discovery');
-                  }
-                } catch (error) {
-                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                    const message = error instanceof Error ? error.message : String(error);
-                    console.error(`[DEBUG] Auto-connect discovery failed: ${message}`);
-                  }
-                }
-              }
-
-              if (!attachedToExistingBrowser) {
-                throw new Error(
-                  'Project policy requires using your existing browser. Could not connect to CDP at localhost:9333 and auto-discovery also failed.'
-                );
-              }
-            }
-          }
-
-          // For doctor, attempt the same default attach flow but do not fail hard if attach is unavailable.
-          // This keeps diagnostics actionable even when CDP is down.
-          if (!manager.isLaunched() && isDoctor && manager instanceof BrowserManager) {
-            try {
-              await manager.launch({
-                id: 'doctor-cdp',
-                action: 'launch',
-                cdpPort: 9333,
-                ignoreHTTPSErrors: process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1',
-                userAgent: process.env.AGENT_BROWSER_USER_AGENT,
-                colorScheme:
-                  process.env.AGENT_BROWSER_COLOR_SCHEME === 'dark' ||
-                  process.env.AGENT_BROWSER_COLOR_SCHEME === 'light' ||
-                  process.env.AGENT_BROWSER_COLOR_SCHEME === 'no-preference'
-                    ? (process.env.AGENT_BROWSER_COLOR_SCHEME as 'dark' | 'light' | 'no-preference')
-                    : undefined,
-                tabGroup: process.env.AGENT_BROWSER_TAB_GROUP?.trim() || undefined,
-                tabGroupPluginId:
-                  process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim() || undefined,
-              });
-            } catch {
-              try {
-                await manager.launch({
-                  id: 'doctor-auto-connect',
-                  action: 'launch',
-                  autoConnect: true,
-                  ignoreHTTPSErrors: process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1',
-                  userAgent: process.env.AGENT_BROWSER_USER_AGENT,
-                  colorScheme:
-                    process.env.AGENT_BROWSER_COLOR_SCHEME === 'dark' ||
-                    process.env.AGENT_BROWSER_COLOR_SCHEME === 'light' ||
-                    process.env.AGENT_BROWSER_COLOR_SCHEME === 'no-preference'
-                      ? (process.env.AGENT_BROWSER_COLOR_SCHEME as
-                          | 'dark'
-                          | 'light'
-                          | 'no-preference')
-                      : undefined,
-                  tabGroup: process.env.AGENT_BROWSER_TAB_GROUP?.trim() || undefined,
-                  tabGroupPluginId:
-                    process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim() || undefined,
-                });
-              } catch {
-                // Keep running: doctor should report failures instead of exiting early.
-              }
-            }
-          }
-
-          // Recover from stale state: browser is launched but all pages were closed
-          if (
-            manager instanceof BrowserManager &&
-            manager.isLaunched() &&
-            !manager.hasPages() &&
-            parseResult.command.action !== 'launch' &&
-            parseResult.command.action !== 'close'
-          ) {
-            await manager.ensurePage();
-          }
-
-          // Handle explicit launch with auto-load state
-          if (
-            parseResult.command.action === 'launch' &&
-            manager instanceof BrowserManager &&
-            !parseResult.command.autoStateFilePath
-          ) {
-            const autoStatePath = getSessionAutoStatePath();
-            if (autoStatePath) {
-              parseResult.command.autoStateFilePath = autoStatePath;
-            }
-          }
-
-          // Handle close command specially - shuts down daemon
-          if (parseResult.command.action === 'close') {
-            // Auto-save state before closing
-            if (manager instanceof BrowserManager && manager.isLaunched()) {
-              const savePath = getSessionSaveStatePath();
-              if (savePath) {
-                try {
-                  const { encrypted } = await saveStateToFile(manager, savePath);
-                  fs.chmodSync(savePath, 0o600);
-                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                    console.error(
-                      `Auto-saved session state: ${savePath}${encrypted ? ' (encrypted)' : ''}`
-                    );
-                  }
-                } catch (err) {
-                  if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                    console.error(`Failed to auto-save session state:`, err);
-                  }
-                }
-              }
-            }
-
-            const response =
-              isIOS && manager instanceof IOSManager
-                ? await executeIOSCommand(parseResult.command, manager)
-                : await executeCommand(parseResult.command, manager as BrowserManager);
-            await safeWrite(socket, serializeResponse(response) + '\n');
-
-            if (!shuttingDown) {
-              shuttingDown = true;
-              setTimeout(() => {
-                server.close();
-                cleanupSocket();
-                process.exit(0);
-              }, 100);
-            }
-
-            commandQueue.length = 0;
-            processing = false;
-            return;
-          }
-
-          // Execute command with appropriate handler
-          const response =
-            isIOS && manager instanceof IOSManager
-              ? await executeIOSCommand(parseResult.command, manager)
-              : await executeCommand(parseResult.command, manager as BrowserManager);
-
-          // Add any launch warnings to the response
-          if (manager instanceof BrowserManager) {
-            const warnings = manager.getAndClearWarnings();
-            if (warnings.length > 0 && response.success && response.data) {
-              (response.data as Record<string, unknown>).warnings = warnings;
-            }
-          }
-
-          await safeWrite(socket, serializeResponse(response) + '\n');
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          await safeWrite(socket, serializeResponse(errorResponse('error', message)) + '\n').catch(
-            () => {}
-          ); // Socket may already be destroyed
+          });
+        } finally {
+          pendingCommands = Math.max(0, pendingCommands - 1);
+          scheduleIdleShutdown();
         }
       }
 
@@ -757,14 +811,16 @@ export async function startDaemon(options?: {
 
   server.on('error', (err) => {
     console.error('Server error:', err);
+    cancelIdleTimer();
     cleanupSocket();
     process.exit(1);
   });
 
   // Handle shutdown signals
-  const shutdown = async () => {
+  const shutdown = async (_reason?: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    cancelIdleTimer();
 
     // Stop stream server if running
     if (streamServer) {
@@ -792,20 +848,25 @@ export async function startDaemon(options?: {
   // Handle unexpected errors - always cleanup
   process.on('uncaughtException', (err) => {
     console.error('Uncaught exception:', err);
+    cancelIdleTimer();
     cleanupSocket();
     process.exit(1);
   });
 
   process.on('unhandledRejection', (reason) => {
     console.error('Unhandled rejection:', reason);
+    cancelIdleTimer();
     cleanupSocket();
     process.exit(1);
   });
 
   // Cleanup on normal exit
   process.on('exit', () => {
+    cancelIdleTimer();
     cleanupSocket();
   });
+
+  scheduleIdleShutdown();
 
   // Keep process alive
   process.stdin.resume();
@@ -813,7 +874,9 @@ export async function startDaemon(options?: {
 
 // Run daemon if this is the entry point
 if (process.argv[1]?.endsWith('daemon.js') || process.env.AGENT_BROWSER_DAEMON === '1') {
-  startDaemon().catch((err) => {
+  startDaemon({
+    resident: process.argv.includes('--resident'),
+  }).catch((err) => {
     console.error('Daemon error:', err);
     cleanupSocket();
     process.exit(1);

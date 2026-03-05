@@ -183,6 +183,8 @@ pub struct DaemonResult {
 pub fn ensure_daemon(
     session: &str,
     headed: bool,
+    // Keep daemon resident and disable idle auto-shutdown.
+    resident: bool,
     executable_path: Option<&str>,
     extensions: &[String],
     args: Option<&str>,
@@ -289,6 +291,11 @@ pub fn ensure_daemon(
 
         let mut cmd = Command::new("node");
         cmd.arg(daemon_path)
+            .arg(if resident {
+                "--resident"
+            } else {
+                "--idle-auto-shutdown"
+            })
             .env("AGENT_BROWSER_DAEMON", "1")
             .env("AGENT_BROWSER_SESSION", session);
 
@@ -384,6 +391,11 @@ pub fn ensure_daemon(
         // and automatically quotes arguments containing spaces.
         let mut cmd = Command::new("node");
         cmd.arg(daemon_path)
+            .arg(if resident {
+                "--resident"
+            } else {
+                "--idle-auto-shutdown"
+            })
             .env("AGENT_BROWSER_DAEMON", "1")
             .env("AGENT_BROWSER_SESSION", session);
 

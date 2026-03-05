@@ -280,6 +280,18 @@ agent-browser state clean --older-than <days>  # Delete old states
 ```bash
 agent-browser session                 # Show current session name
 agent-browser session list            # List active sessions
+agent-browser --parallel worker-a open https://example.com  # Isolated runtime for parallel AI tasks
+```
+
+## Daemon lifetime
+
+By default, daemon processes auto-shutdown after 10 minutes of inactivity.
+
+Use `--resident` when you need a long-running daemon:
+
+```bash
+agent-browser --resident open https://example.com
+agent-browser close
 ```
 
 ## Navigation
@@ -293,7 +305,7 @@ agent-browser reload                  # Reload page
 ## Global options
 
 ```bash
---session-name <name>    # Auto-save/restore session state (defaults to "default" when omitted)
+--session-name <name>    # Auto-save/restore session state (defaults to "default" in non-parallel mode)
 --state <path>           # Load storage state from JSON file
 --headers <json>         # HTTP headers scoped to URL's origin
 --executable-path <path> # Custom browser executable
@@ -315,6 +327,8 @@ agent-browser reload                  # Reload page
 --auto-connect           # Auto-discover and connect to running Chrome
 --tab-group <name>       # Base title for agent tab groups (CDP plugin mode)
 --tab-group-plugin-id <id> # Expected extension ID for tab-group handshake
+--parallel <name>        # Isolated runtime channel for parallel AI runs (maps to parallel-<name>)
+--resident               # Keep daemon running; disable 10-minute idle auto-shutdown
 --wait-until <mode>      # Navigation wait strategy for open/navigate (load, domcontentloaded, networkidle)
 --debug                  # Debug output (includes stealth connection type + capabilities)
 ```

@@ -174,6 +174,24 @@ fn main() {
         }
     }
 
+    if let Some(ref parallel) = flags.parallel {
+        if !validation::is_valid_session_name(parallel) {
+            let msg = format!(
+                "Invalid --parallel value '{}'. Only alphanumeric characters, hyphens, and underscores are allowed.",
+                parallel
+            );
+            if flags.json {
+                println!(
+                    r#"{{"success":false,"error":"{}","type":"invalid_parallel_name"}}"#,
+                    msg.replace('"', "\\\"")
+                );
+            } else {
+                eprintln!("{} {}", color::error_indicator(), msg);
+            }
+            exit(1);
+        }
+    }
+
     if args.iter().any(|a| a == "--profile") {
         let msg =
             "Project policy: --profile is forbidden. Use your existing browser and --session-name for state persistence.";
@@ -275,6 +293,7 @@ fn main() {
     let daemon_result = match ensure_daemon(
         &flags.session,
         flags.headed,
+        flags.resident,
         flags.executable_path.as_deref(),
         &flags.extensions,
         flags.args.as_deref(),
@@ -346,6 +365,7 @@ fn main() {
             flags
                 .cli_tab_group_plugin_id
                 .then_some("--tab-group-plugin-id"),
+            flags.cli_resident.then_some("--resident"),
         ]
         .into_iter()
         .flatten()

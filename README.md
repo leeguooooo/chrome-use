@@ -52,6 +52,33 @@ agent-browser snapshot -i
 agent-browser click @e2
 ```
 
+### Parallel AI Runs (Isolated Runtime Channel)
+
+Use `--parallel <name>` to run multiple AI flows concurrently without fighting over the same runtime channel.
+
+```bash
+agent-browser --parallel worker-a open https://example.com
+agent-browser --parallel worker-b open https://example.org
+```
+
+`--parallel` is designed for stateless throughput tasks (navigation, extraction, checks). For authenticated flows, keep using one stable `--session-name`.
+
+| Option | Purpose | Typical Usage |
+| --- | --- | --- |
+| `--parallel <name>` | Isolate runtime channel for concurrent AI tasks | Stateless/no-login parallel jobs |
+| `--session-name <name>` | Persist cookies/localStorage across restarts | Login/auth continuity |
+
+### Daemon Lifecycle
+
+- Daemons auto-shutdown after 10 minutes of inactivity by default.
+- Use `--resident` to keep a daemon alive until an explicit `close`.
+
+```bash
+agent-browser --resident open https://example.com
+# ... long-lived background workflow ...
+agent-browser close
+```
+
 ### Default: Auto Group Agent Tabs (CDP + Plugin)
 
 ```bash
@@ -233,6 +260,8 @@ flowchart TD
 
 - Prefer `--headed` for high-friction targets.
 - Reuse session state with one stable `--session-name` for continuity (when omitted, it defaults to `default`).
+- Use `--parallel <name>` only for stateless parallel workloads where higher throughput matters.
+- Use `--resident` only for deliberate long-running workflows, and close when done.
 - Keep locale/timezone consistent with target market.
 - For challenge-heavy pages, prefer `--wait-until domcontentloaded` on `open`/`navigate` to avoid `load` stalls.
 - Use `--risk-mode block` in strict pipelines that require explicit operator intervention on verification pages.

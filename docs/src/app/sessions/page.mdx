@@ -4,12 +4,16 @@ export const metadata = pageMetadata('sessions');
 
 # Sessions
 
-Use one default runtime session and optional named persistence:
+Use the default runtime session or an isolated parallel runtime channel, plus optional named persistence:
 
 ```bash
 # Show current runtime session
 agent-browser session
 # Output: default
+
+# Isolated runtime channel for parallel AI flow
+agent-browser --parallel worker-a session
+# Output: parallel-worker-a
 
 # Show active daemon sessions
 agent-browser session list
@@ -17,11 +21,31 @@ agent-browser session list
 
 ## Session isolation
 
-The runtime session is fixed to `default`. Use `--session-name` to isolate persisted state files per workflow.
+Runtime session defaults to `default`. Use `--parallel <name>` when you need isolated concurrent runtime channels, and `--session-name` to isolate persisted state files per workflow.
 
 - Cookies and storage snapshots
 - Authentication state
 - Saved state lifecycle
+
+Daemons auto-shutdown after 10 minutes of inactivity by default. Use `--resident` to keep a daemon alive until explicit `close`.
+
+## Parallel runtime channels
+
+Use `--parallel <name>` to isolate runtime channels for concurrent AI execution:
+
+```bash
+agent-browser --parallel worker-a open https://example.com
+agent-browser --parallel worker-b open https://example.org
+```
+
+`--parallel` is intended for stateless throughput tasks (navigation/extraction/checks). For authenticated flows, use a stable `--session-name`.
+
+For long-running workers, add `--resident` to disable idle auto-shutdown:
+
+```bash
+agent-browser --parallel worker-a --resident open https://example.com
+agent-browser --parallel worker-a close
+```
 
 ## Session persistence
 
@@ -40,6 +64,8 @@ agent-browser open twitter.com
 ```
 
 If `--session-name` is omitted, it defaults to `default`.
+
+When `--parallel` is enabled, auto persistence is disabled by default unless `--session-name` is explicitly passed on that command.
 
 State files are stored in `~/.agent-browser/sessions/` and automatically loaded on daemon start.
 
@@ -164,6 +190,12 @@ agent-browser set headers '{"X-Custom-Header": "value"}'
         <code>AGENT_BROWSER_SESSION_NAME</code>
       </td>
       <td>Auto-save/load state persistence name</td>
+    </tr>
+    <tr>
+      <td>
+        <code>AGENT_BROWSER_PARALLEL</code>
+      </td>
+      <td>Isolated runtime channel name for parallel AI runs (maps to <code>parallel-&lt;name&gt;</code>)</td>
     </tr>
     <tr>
       <td>

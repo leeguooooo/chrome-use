@@ -1,4 +1,5 @@
 use crate::color;
+use crate::validation::is_valid_session_name;
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -40,6 +41,7 @@ pub struct Config {
     pub tab_group_plugin_id: Option<String>,
     pub risk_mode: Option<String>,
     pub wait_until: Option<String>,
+    pub parallel: Option<String>,
 }
 
 impl Config {
@@ -78,6 +80,7 @@ impl Config {
             tab_group_plugin_id: other.tab_group_plugin_id.or(self.tab_group_plugin_id),
             risk_mode: other.risk_mode.or(self.risk_mode),
             wait_until: other.wait_until.or(self.wait_until),
+            parallel: other.parallel.or(self.parallel),
         }
     }
 }
@@ -148,6 +151,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--tab-group-plugin-id",
         "--risk-mode",
         "--wait-until",
+        "--parallel",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -199,6 +203,10 @@ pub struct Flags {
     pub full: bool,
     pub headed: bool,
     pub debug: bool,
+    /// Keep daemon resident and disable idle auto-shutdown.
+    pub resident: bool,
+    /// Runtime daemon session channel.
+    /// Defaults to `default`; when `--parallel <name>` is provided it becomes `parallel-<name>`.
     pub session: String,
     pub headers: Option<String>,
     pub executable_path: Option<String>,
@@ -214,7 +222,9 @@ pub struct Flags {
     pub allow_file_access: bool,
     pub device: Option<String>,
     pub auto_connect: bool,
-    pub session_name: Option<String>, // Defaults to "default" when unset
+    // Defaults to "default" when unset in default runtime mode.
+    // In --parallel mode, defaults to None unless explicitly provided on CLI.
+    pub session_name: Option<String>,
     pub annotate: bool,
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
@@ -226,6 +236,8 @@ pub struct Flags {
     /// Navigation wait strategy passed to navigate/open commands:
     /// `load`, `domcontentloaded`, or `networkidle`.
     pub wait_until: Option<String>,
+    /// Parallel execution channel name. When set, commands run in an isolated runtime session.
+    pub parallel: Option<String>,
 
     // Track which launch-time options were explicitly passed via CLI
     // (as opposed to being set only via environment variables)
@@ -241,6 +253,8 @@ pub struct Flags {
     pub cli_download_path: bool,
     pub cli_tab_group: bool,
     pub cli_tab_group_plugin_id: bool,
+    pub cli_session_name: bool,
+    pub cli_resident: bool,
 }
 
 pub fn parse_flags(args: &[String]) -> Flags {
@@ -273,7 +287,9 @@ pub fn parse_flags(args: &[String]) -> Flags {
             Err(_) => config.headed.unwrap_or(true),
         },
         debug: env_var_is_truthy("AGENT_BROWSER_DEBUG") || config.debug.unwrap_or(false),
-        // --session is disabled: user-facing CLI always uses one default session.
+        resident: false,
+        // --session is disabled for users.
+        // Runtime session defaults to `default`, and can be isolated with `--parallel`.
         session: "default".to_string(),
         headers: config.headers,
         executable_path: env::var("AGENT_BROWSER_EXECUTABLE_PATH")
@@ -321,6 +337,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .or(config.risk_mode)
             .map(|s| s.to_ascii_lowercase()),
         wait_until: config.wait_until.map(|s| s.to_ascii_lowercase()),
+        parallel: env::var("AGENT_BROWSER_PARALLEL").ok().or(config.parallel),
         cli_executable_path: false,
         cli_extensions: false,
         cli_state: false,
@@ -333,6 +350,8 @@ pub fn parse_flags(args: &[String]) -> Flags {
         cli_download_path: false,
         cli_tab_group: false,
         cli_tab_group_plugin_id: false,
+        cli_session_name: false,
+        cli_resident: false,
     };
 
     let mut i = 0;
@@ -362,6 +381,14 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--debug" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.debug = val;
+                if consumed {
+                    i += 1;
+                }
+            }
+            "--resident" => {
+                let (val, consumed) = parse_bool_arg(args, i);
+                flags.resident = val;
+                flags.cli_resident = true;
                 if consumed {
                     i += 1;
                 }
@@ -464,6 +491,13 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--session-name" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.session_name = Some(s.clone());
+                    flags.cli_session_name = true;
+                    i += 1;
+                }
+            }
+            "--parallel" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.parallel = Some(s.clone());
                     i += 1;
                 }
             }
@@ -523,9 +557,24 @@ pub fn parse_flags(args: &[String]) -> Flags {
         i += 1;
     }
 
-    // Keep auth/state continuity stable by default: if no explicit --session-name
-    // is provided, derive it from the default session id.
-    if flags.session_name.is_none() {
+    if let Some(parallel_name) = &flags.parallel {
+        // Validate early so session id derivation cannot introduce unsafe paths.
+        if !is_valid_session_name(parallel_name) {
+            // Keep default session and let main.rs surface a user-facing validation error.
+        } else {
+            flags.session = format!("parallel-{}", parallel_name);
+        }
+    }
+
+    // Parallel mode is for isolated/stateless runs.
+    // Unless --session-name is explicitly provided on this invocation, disable
+    // auto save/restore persistence to avoid cross-flow auth leakage.
+    if flags.parallel.is_some() && !flags.cli_session_name {
+        flags.session_name = None;
+    }
+
+    // Keep auth/state continuity stable by default for the default runtime session.
+    if flags.session_name.is_none() && flags.parallel.is_none() {
         flags.session_name = Some("default".to_string());
     }
 
@@ -542,6 +591,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--full",
         "--headed",
         "--debug",
+        "--resident",
         "--ignore-https-errors",
         "--allow-file-access",
         "--auto-connect",
@@ -569,6 +619,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--tab-group-plugin-id",
         "--risk-mode",
         "--wait-until",
+        "--parallel",
         "--config",
     ];
 
@@ -771,6 +822,34 @@ mod tests {
     }
 
     #[test]
+    fn test_parallel_sets_isolated_runtime_session() {
+        let flags = parse_flags(&args("--parallel worker_a snapshot"));
+        assert_eq!(flags.parallel.as_deref(), Some("worker_a"));
+        assert_eq!(flags.session, "parallel-worker_a");
+        assert_eq!(flags.session_name, None);
+    }
+
+    #[test]
+    fn test_parallel_keeps_explicit_session_name() {
+        let flags = parse_flags(&args(
+            "--parallel worker_b --session-name keep-state snapshot",
+        ));
+        assert_eq!(flags.session, "parallel-worker_b");
+        assert_eq!(flags.session_name.as_deref(), Some("keep-state"));
+        assert!(flags.cli_session_name);
+    }
+
+    #[test]
+    fn test_parallel_from_env_sets_runtime_session() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_PARALLEL", "AGENT_BROWSER_SESSION_NAME"]);
+        env::set_var("AGENT_BROWSER_PARALLEL", "envworker");
+        env::set_var("AGENT_BROWSER_SESSION_NAME", "persisted");
+        let flags = parse_flags(&args("snapshot"));
+        assert_eq!(flags.session, "parallel-envworker");
+        assert_eq!(flags.session_name, None);
+    }
+
+    #[test]
     fn test_cli_executable_path_tracking() {
         // When --executable-path is passed via CLI, cli_executable_path should be true
         let flags = parse_flags(&args("--executable-path /path/to/chrome snapshot"));
@@ -803,6 +882,20 @@ mod tests {
     fn test_cli_annotate_not_set_without_flag() {
         let flags = parse_flags(&args("screenshot"));
         assert!(!flags.cli_annotate);
+    }
+
+    #[test]
+    fn test_parse_resident_flag() {
+        let flags = parse_flags(&args("--resident open example.com"));
+        assert!(flags.resident);
+        assert!(flags.cli_resident);
+    }
+
+    #[test]
+    fn test_parse_resident_false() {
+        let flags = parse_flags(&args("--resident false open example.com"));
+        assert!(!flags.resident);
+        assert!(flags.cli_resident);
     }
 
     #[test]
@@ -941,6 +1034,18 @@ mod tests {
     }
 
     #[test]
+    fn test_clean_args_removes_parallel() {
+        let cleaned = clean_args(&args("--parallel worker_x open example.com"));
+        assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    #[test]
+    fn test_clean_args_removes_resident_flag() {
+        let cleaned = clean_args(&args("--resident open example.com"));
+        assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    #[test]
     fn test_cli_multiple_flags_tracking() {
         let flags = parse_flags(&args(
             "--executable-path /chrome --proxy http://proxy snapshot",
@@ -978,7 +1083,8 @@ mod tests {
             "headers": "{\"Auth\":\"token\"}",
             "tabGroup": "Agent Browser Stealth",
             "tabGroupPluginId": "tab-group-plugin-id",
-            "riskMode": "block"
+            "riskMode": "block",
+            "parallel": "worker-c"
         }"#;
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.headed, Some(true));
@@ -1010,6 +1116,7 @@ mod tests {
             Some("tab-group-plugin-id")
         );
         assert_eq!(config.risk_mode.as_deref(), Some("block"));
+        assert_eq!(config.parallel.as_deref(), Some("worker-c"));
     }
 
     #[test]
