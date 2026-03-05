@@ -20,13 +20,13 @@ services:
         
         # Build both targets in parallel
         (echo "→ Linux x64" && cargo zigbuild --release --target x86_64-unknown-linux-gnu && cp /build/target/x86_64-unknown-linux-gnu/release/agent-browser /output/agent-browser-linux-x64 && chmod +x /output/agent-browser-linux-x64 && echo "✓ Linux x64 done") &
-        PID1=$!
+        PID1=$$!
         
         (echo "→ Linux ARM64" && cargo zigbuild --release --target aarch64-unknown-linux-gnu && cp /build/target/aarch64-unknown-linux-gnu/release/agent-browser /output/agent-browser-linux-arm64 && chmod +x /output/agent-browser-linux-arm64 && echo "✓ Linux ARM64 done") &
-        PID2=$!
+        PID2=$$!
         
         # Wait for both to complete
-        wait $PID1 $PID2
+        wait $$PID1 $$PID2
         
         echo ""
         echo "✓ Linux platforms built successfully!"
@@ -67,8 +67,8 @@ services:
       - OUTPUT_NAME=${OUTPUT_NAME:-agent-browser-linux-x64}
     command: |
       -c '
-        cargo zigbuild --release --target $TARGET
-        cp /build/target/$TARGET/release/agent-browser* /output/$OUTPUT_NAME
-        chmod +x /output/$OUTPUT_NAME 2>/dev/null || true
-        echo "✓ Built $OUTPUT_NAME"
+        cargo zigbuild --release --target $$TARGET
+        cp /build/target/$$TARGET/release/agent-browser* /output/$$OUTPUT_NAME
+        chmod +x /output/$$OUTPUT_NAME 2>/dev/null || true
+        echo "✓ Built $$OUTPUT_NAME"
       '
