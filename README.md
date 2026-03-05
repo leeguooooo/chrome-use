@@ -63,6 +63,10 @@ agent-browser --parallel worker-b open https://example.org
 
 `--parallel` is designed for stateless throughput tasks (navigation, extraction, checks). For authenticated flows, keep using one stable `--session-name`.
 
+Default session isolation policy:
+- Running a default-session command reaps all non-default daemon sessions (`parallel-*` and legacy named channels).
+- This avoids stale daemon reuse and keeps stealth behavior consistent on the primary channel.
+
 | Option | Purpose | Typical Usage |
 | --- | --- | --- |
 | `--parallel <name>` | Isolate runtime channel for concurrent AI tasks | Stateless/no-login parallel jobs |
@@ -261,6 +265,7 @@ flowchart TD
 - Prefer `--headed` for high-friction targets.
 - Reuse session state with one stable `--session-name` for continuity (when omitted, it defaults to `default`).
 - Use `--parallel <name>` only for stateless parallel workloads where higher throughput matters.
+- Default-session commands will reap all non-default daemon sessions, so keep parallel workers short-lived.
 - Use `--resident` only for deliberate long-running workflows, and close when done.
 - Keep locale/timezone consistent with target market.
 - For challenge-heavy pages, prefer `--wait-until domcontentloaded` on `open`/`navigate` to avoid `load` stalls.

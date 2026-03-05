@@ -270,6 +270,14 @@ export function getPidFile(session?: string): string {
 }
 
 /**
+ * Get the daemon metadata file path for a session.
+ */
+export function getMetaFile(session?: string): string {
+  const sess = session ?? currentSession;
+  return path.join(getSocketDir(), `${sess}.meta.json`);
+}
+
+/**
  * Check if daemon is running for the current session
  */
 export function isDaemonRunning(session?: string): boolean {
@@ -313,9 +321,11 @@ export function getConnectionInfo(
 export function cleanupSocket(session?: string): void {
   const pidFile = getPidFile(session);
   const streamPortFile = getStreamPortFile(session);
+  const metaFile = getMetaFile(session);
   try {
     if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
     if (fs.existsSync(streamPortFile)) fs.unlinkSync(streamPortFile);
+    if (fs.existsSync(metaFile)) fs.unlinkSync(metaFile);
     if (isWindows) {
       const portFile = getPortFile(session);
       if (fs.existsSync(portFile)) fs.unlinkSync(portFile);
@@ -792,6 +802,28 @@ export async function startDaemon(options?: {
 
   // Write PID file before listening
   fs.writeFileSync(pidFile, process.pid.toString());
+  try {
+    fs.chmodSync(pidFile, 0o600);
+  } catch {
+    // Best-effort hardening; skip on platforms that don't support POSIX modes.
+  }
+
+  const metaFile = getMetaFile();
+  // Ownership/version proof consumed by the CLI before reusing default daemon.
+  const daemonMeta = {
+    session: currentSession,
+    pid: process.pid,
+    startedAt: Date.now(),
+    daemonPath: process.argv[1] ? path.resolve(process.argv[1]) : '',
+    cliVersion: process.env.AGENT_BROWSER_CLI_VERSION ?? '',
+    mode: residentMode ? 'resident' : 'idle',
+  } as const;
+  fs.writeFileSync(metaFile, JSON.stringify(daemonMeta, null, 2));
+  try {
+    fs.chmodSync(metaFile, 0o600);
+  } catch {
+    // Best-effort hardening; skip on platforms that don't support POSIX modes.
+  }
 
   if (isWindows) {
     // Windows: use TCP socket on localhost

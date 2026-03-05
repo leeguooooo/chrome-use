@@ -2425,7 +2425,7 @@ Confirmation:
 
 Sessions:
   session                    Show current session name
-  session list               List active sessions
+  session list               List active sessions (stale entries are auto-cleaned)
 
 Setup:
   install                    Install browser binaries
@@ -2471,6 +2471,7 @@ Options:
   --wait-until <mode>        Navigation wait strategy for open/navigate: load, domcontentloaded, networkidle
   --parallel <name>          Isolated runtime channel for parallel AI runs (maps to parallel-<name>)
                              Default behavior in this mode is stateless (no auto session persistence unless --session-name is explicitly passed)
+                             Note: starting default session reaps all non-default daemon sessions
   --resident                 Keep daemon running; disable 10-minute idle auto-shutdown
   --session-name <name>      Auto-save/restore session state (defaults to "default" in non-parallel mode)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
@@ -2514,6 +2515,7 @@ Environment:
   AGENT_BROWSER_CONFIG           Path to config file (or use --config)
   AGENT_BROWSER_PARALLEL         Isolated runtime channel for parallel AI runs (maps to parallel-<name>)
                                  Best for stateless/no-login tasks where throughput matters
+                                 Note: any default-session command reaps non-default daemon sessions
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path

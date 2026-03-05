@@ -216,6 +216,7 @@ agent-browser --parallel site2 snapshot -i
 ```
 
 Use `--parallel <name>` for stateless throughput tasks (navigation, extraction, checks). For login/auth continuity, use `--session-name` instead.
+Default-session commands intentionally reap all non-default daemon sessions (`parallel-*` and legacy named channels) to prevent stale daemon reuse.
 
 ### Connect to Existing Chrome
 
@@ -504,6 +505,7 @@ These behaviors are always active. For sensitive sites, combine with `--headed` 
 ## Session Management and Cleanup
 
 `--session` is ignored in this fork. Runtime defaults to `default`; use `--parallel <name>` for isolated concurrent channels, and `--session-name` for persistence isolation.
+When a default-session command runs, non-default daemon sessions are reaped automatically.
 
 Always close your browser session when done to avoid leaked processes:
 

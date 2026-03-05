@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -116,6 +116,30 @@ fn get_pid_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.pid", session))
 }
 
+fn get_stream_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{}.stream", session))
+}
+
+fn get_meta_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{}.meta.json", session))
+}
+
+fn remove_session_artifacts(session: &str) {
+    let _ = fs::remove_file(get_pid_path(session));
+    let _ = fs::remove_file(get_stream_path(session));
+    let _ = fs::remove_file(get_meta_path(session));
+
+    #[cfg(unix)]
+    {
+        let _ = fs::remove_file(get_socket_path(session));
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = fs::remove_file(get_port_path(session));
+    }
+}
+
 /// Clean up stale socket and PID files for a session
 fn cleanup_stale_files(session: &str) {
     // Never delete files for a live daemon. A missing PID file can happen in
@@ -124,20 +148,194 @@ fn cleanup_stale_files(session: &str) {
         return;
     }
 
+    remove_session_artifacts(session);
+}
+
+fn should_reap_for_default(session: &str) -> bool {
+    session != "default"
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let rc = unsafe { libc::kill(pid as i32, 0) };
+    if rc == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+#[cfg(windows)]
+fn process_exists(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid)])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.contains(&format!(" {}", pid))
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(unix)]
+fn terminate_pid(pid: u32) {
+    if !process_exists(pid) {
+        return;
+    }
+
+    let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    for _ in 0..20 {
+        if !process_exists(pid) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    for _ in 0..10 {
+        if !process_exists(pid) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(windows)]
+fn terminate_pid(pid: u32) {
+    if !process_exists(pid) {
+        return;
+    }
+
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn terminate_session_daemon(session: &str) {
     let pid_path = get_pid_path(session);
-    let _ = fs::remove_file(&pid_path);
+    if let Ok(pid_str) = fs::read_to_string(&pid_path) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            terminate_pid(pid);
+        }
+    }
+}
 
-    #[cfg(unix)]
-    {
-        let socket_path = get_socket_path(session);
-        let _ = fs::remove_file(&socket_path);
+fn reap_sessions_for_default_start() {
+    let socket_dir = get_socket_dir();
+    let entries = match fs::read_dir(&socket_dir) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".pid") {
+            continue;
+        }
+
+        let session = name.trim_end_matches(".pid");
+        if session.is_empty() || !should_reap_for_default(session) {
+            continue;
+        }
+
+        terminate_session_daemon(session);
+        remove_session_artifacts(session);
+    }
+}
+
+fn validate_default_daemon_identity(expected_daemon_path: &Path) -> bool {
+    let meta_path = get_meta_path("default");
+    let meta_raw = match fs::read_to_string(&meta_path) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let meta: Value = match serde_json::from_str(&meta_raw) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let cli_version = meta
+        .get("cliVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let daemon_path = meta
+        .get("daemonPath")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if cli_version != env!("CARGO_PKG_VERSION") || daemon_path.is_empty() {
+        return false;
     }
 
-    #[cfg(windows)]
-    {
-        let port_path = get_port_path(session);
-        let _ = fs::remove_file(&port_path);
+    let expected = expected_daemon_path
+        .canonicalize()
+        .unwrap_or_else(|_| expected_daemon_path.to_path_buf());
+    let observed = PathBuf::from(daemon_path);
+    let observed = observed.canonicalize().unwrap_or(observed);
+    observed == expected
+}
+
+fn resolve_daemon_path() -> Result<PathBuf, String> {
+    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
+    // Canonicalize to resolve symlinks (e.g., npm global bin symlink -> actual binary)
+    let exe_path = exe_path.canonicalize().unwrap_or(exe_path);
+    let exe_dir = exe_path.parent().unwrap();
+
+    let mut daemon_paths = vec![
+        exe_dir.join("daemon.js"),
+        exe_dir.join("../dist/daemon.js"),
+        PathBuf::from("dist/daemon.js"),
+    ];
+
+    if let Ok(home) = env::var("AGENT_BROWSER_HOME") {
+        let home_path = PathBuf::from(&home);
+        daemon_paths.insert(0, home_path.join("dist/daemon.js"));
+        daemon_paths.insert(1, home_path.join("daemon.js"));
     }
+
+    let daemon_path = daemon_paths
+        .into_iter()
+        .find(|p| p.exists())
+        .ok_or("Daemon not found. Set AGENT_BROWSER_HOME environment variable or run from project directory.")?;
+    Ok(daemon_path.canonicalize().unwrap_or(daemon_path))
+}
+
+pub fn list_live_sessions() -> Vec<String> {
+    let socket_dir = get_socket_dir();
+    let mut sessions = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(&socket_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".pid") {
+                continue;
+            }
+            let session_name = name.trim_end_matches(".pid");
+            if session_name.is_empty() {
+                continue;
+            }
+
+            if daemon_ready(session_name) {
+                sessions.push(session_name.to_string());
+            } else {
+                cleanup_stale_files(session_name);
+            }
+        }
+    }
+
+    sessions.sort();
+    sessions
 }
 
 #[cfg(windows)]
@@ -202,17 +400,35 @@ pub fn ensure_daemon(
     tab_group: Option<&str>,
     tab_group_plugin_id: Option<&str>,
 ) -> Result<DaemonResult, String> {
+    let daemon_path = resolve_daemon_path()?;
+
+    // Project policy: the default runtime channel is a singleton control plane.
+    // Before touching it, reap all non-default channels to avoid stale daemon reuse.
+    if session == "default" {
+        reap_sessions_for_default_start();
+    }
+
     // Socket readiness is the source of truth for a usable daemon.
     // PID files can be missing/stale under concurrent start/stop races.
     if daemon_ready(session) {
-        // Double-check it's actually responsive by waiting and checking again
-        // This handles the race condition where daemon is shutting down
-        // (daemon has a 100ms shutdown delay, so we wait longer)
-        thread::sleep(Duration::from_millis(150));
-        if daemon_ready(session) {
-            return Ok(DaemonResult {
-                already_running: true,
-            });
+        let mut should_reuse = true;
+        if session == "default" {
+            should_reuse = validate_default_daemon_identity(&daemon_path);
+        }
+
+        if should_reuse {
+            // Double-check it's actually responsive by waiting and checking again
+            // This handles the race condition where daemon is shutting down
+            // (daemon has a 100ms shutdown delay, so we wait longer)
+            thread::sleep(Duration::from_millis(150));
+            if daemon_ready(session) {
+                return Ok(DaemonResult {
+                    already_running: true,
+                });
+            }
+        } else {
+            terminate_session_daemon(session);
+            remove_session_artifacts(session);
         }
     }
 
@@ -257,29 +473,6 @@ pub fn ensure_daemon(
         }
     }
 
-    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
-    // Canonicalize to resolve symlinks (e.g., npm global bin symlink -> actual binary)
-    let exe_path = exe_path.canonicalize().unwrap_or(exe_path);
-    let exe_dir = exe_path.parent().unwrap();
-
-    let mut daemon_paths = vec![
-        exe_dir.join("daemon.js"),
-        exe_dir.join("../dist/daemon.js"),
-        PathBuf::from("dist/daemon.js"),
-    ];
-
-    // Check AGENT_BROWSER_HOME environment variable
-    if let Ok(home) = env::var("AGENT_BROWSER_HOME") {
-        let home_path = PathBuf::from(&home);
-        daemon_paths.insert(0, home_path.join("dist/daemon.js"));
-        daemon_paths.insert(1, home_path.join("daemon.js"));
-    }
-
-    let daemon_path = daemon_paths
-        .iter()
-        .find(|p| p.exists())
-        .ok_or("Daemon not found. Set AGENT_BROWSER_HOME environment variable or run from project directory.")?;
-
     // Keep handle to detect early daemon exit and surface startup errors.
     #[allow(unused_assignments)]
     let mut daemon_child: Option<std::process::Child> = None;
@@ -290,14 +483,15 @@ pub fn ensure_daemon(
         use std::os::unix::process::CommandExt;
 
         let mut cmd = Command::new("node");
-        cmd.arg(daemon_path)
+        cmd.arg(&daemon_path)
             .arg(if resident {
                 "--resident"
             } else {
                 "--idle-auto-shutdown"
             })
             .env("AGENT_BROWSER_DAEMON", "1")
-            .env("AGENT_BROWSER_SESSION", session);
+            .env("AGENT_BROWSER_SESSION", session)
+            .env("AGENT_BROWSER_CLI_VERSION", env!("CARGO_PKG_VERSION"));
 
         if headed {
             cmd.env("AGENT_BROWSER_HEADED", "1");
@@ -390,14 +584,15 @@ pub fn ensure_daemon(
         // On Windows, call node directly. Command::new handles PATH resolution (node.exe or node.cmd)
         // and automatically quotes arguments containing spaces.
         let mut cmd = Command::new("node");
-        cmd.arg(daemon_path)
+        cmd.arg(&daemon_path)
             .arg(if resident {
                 "--resident"
             } else {
                 "--idle-auto-shutdown"
             })
             .env("AGENT_BROWSER_DAEMON", "1")
-            .env("AGENT_BROWSER_SESSION", session);
+            .env("AGENT_BROWSER_SESSION", session)
+            .env("AGENT_BROWSER_CLI_VERSION", env!("CARGO_PKG_VERSION"));
 
         if headed {
             cmd.env("AGENT_BROWSER_HEADED", "1");
@@ -606,6 +801,15 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
 mod tests {
     use super::*;
     use crate::test_utils::EnvGuard;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_temp_dir(prefix: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nonce))
+    }
 
     #[test]
     fn test_get_socket_dir_explicit_override() {
@@ -666,6 +870,167 @@ mod tests {
         assert!(
             result.to_string_lossy().contains("home") || result.to_string_lossy().contains("Users")
         );
+    }
+
+    #[test]
+    fn test_should_reap_for_default_policy() {
+        assert!(!should_reap_for_default("default"));
+        assert!(should_reap_for_default("parallel-worker-a"));
+        assert!(should_reap_for_default("legacy-session"));
+    }
+
+    #[test]
+    fn test_reap_sessions_for_default_start_removes_non_default_artifacts() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = test_temp_dir("agent-browser-reap");
+        fs::create_dir_all(&dir).unwrap();
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_string_lossy().as_ref());
+
+        fs::write(dir.join("default.pid"), "999999").unwrap();
+        fs::write(dir.join("parallel-a.pid"), "999999").unwrap();
+        fs::write(dir.join("parallel-a.meta.json"), "{}").unwrap();
+        fs::write(dir.join("legacy-x.pid"), "not-a-pid").unwrap();
+        fs::write(dir.join("legacy-x.meta.json"), "{}").unwrap();
+        #[cfg(unix)]
+        {
+            fs::write(dir.join("parallel-a.sock"), "").unwrap();
+            fs::write(dir.join("legacy-x.sock"), "").unwrap();
+        }
+        #[cfg(windows)]
+        {
+            fs::write(dir.join("parallel-a.port"), "").unwrap();
+            fs::write(dir.join("legacy-x.port"), "").unwrap();
+        }
+
+        reap_sessions_for_default_start();
+
+        assert!(dir.join("default.pid").exists());
+        assert!(!dir.join("parallel-a.pid").exists());
+        assert!(!dir.join("parallel-a.meta.json").exists());
+        assert!(!dir.join("legacy-x.pid").exists());
+        assert!(!dir.join("legacy-x.meta.json").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_session_artifacts_cleans_all_known_files() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = test_temp_dir("agent-browser-clean-artifacts");
+        fs::create_dir_all(&dir).unwrap();
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_string_lossy().as_ref());
+
+        let session = "legacy-x";
+        fs::write(dir.join(format!("{}.pid", session)), "999999").unwrap();
+        fs::write(dir.join(format!("{}.stream", session)), "35555").unwrap();
+        fs::write(dir.join(format!("{}.meta.json", session)), "{}").unwrap();
+        #[cfg(unix)]
+        fs::write(dir.join(format!("{}.sock", session)), "").unwrap();
+        #[cfg(windows)]
+        fs::write(dir.join(format!("{}.port", session)), "45555").unwrap();
+
+        remove_session_artifacts(session);
+
+        assert!(!dir.join(format!("{}.pid", session)).exists());
+        assert!(!dir.join(format!("{}.stream", session)).exists());
+        assert!(!dir.join(format!("{}.meta.json", session)).exists());
+        #[cfg(unix)]
+        assert!(!dir.join(format!("{}.sock", session)).exists());
+        #[cfg(windows)]
+        assert!(!dir.join(format!("{}.port", session)).exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_validate_default_daemon_identity_match() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = test_temp_dir("agent-browser-meta-ok");
+        fs::create_dir_all(&dir).unwrap();
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_string_lossy().as_ref());
+
+        let daemon_path = dir.join("daemon.js");
+        fs::write(&daemon_path, "// test").unwrap();
+        let canonical = daemon_path.canonicalize().unwrap();
+        let meta = serde_json::json!({
+            "cliVersion": env!("CARGO_PKG_VERSION"),
+            "daemonPath": canonical.to_string_lossy(),
+        });
+        fs::write(dir.join("default.meta.json"), meta.to_string()).unwrap();
+
+        assert!(validate_default_daemon_identity(&daemon_path));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_validate_default_daemon_identity_version_mismatch() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = test_temp_dir("agent-browser-meta-bad");
+        fs::create_dir_all(&dir).unwrap();
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_string_lossy().as_ref());
+
+        let daemon_path = dir.join("daemon.js");
+        fs::write(&daemon_path, "// test").unwrap();
+        let canonical = daemon_path.canonicalize().unwrap();
+        let meta = serde_json::json!({
+            "cliVersion": "0.0.0-fork.0",
+            "daemonPath": canonical.to_string_lossy(),
+        });
+        fs::write(dir.join("default.meta.json"), meta.to_string()).unwrap();
+
+        assert!(!validate_default_daemon_identity(&daemon_path));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_validate_default_daemon_identity_path_mismatch() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = test_temp_dir("agent-browser-meta-path-mismatch");
+        fs::create_dir_all(&dir).unwrap();
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_string_lossy().as_ref());
+
+        let daemon_path = dir.join("daemon.js");
+        let other_path = dir.join("daemon-other.js");
+        fs::write(&daemon_path, "// test").unwrap();
+        fs::write(&other_path, "// other").unwrap();
+        let other_canonical = other_path.canonicalize().unwrap();
+        let meta = serde_json::json!({
+            "cliVersion": env!("CARGO_PKG_VERSION"),
+            "daemonPath": other_canonical.to_string_lossy(),
+        });
+        fs::write(dir.join("default.meta.json"), meta.to_string()).unwrap();
+
+        assert!(!validate_default_daemon_identity(&daemon_path));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_validate_default_daemon_identity_missing_meta() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = test_temp_dir("agent-browser-meta-missing");
+        fs::create_dir_all(&dir).unwrap();
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_string_lossy().as_ref());
+
+        let daemon_path = dir.join("daemon.js");
+        fs::write(&daemon_path, "// test").unwrap();
+
+        assert!(!validate_default_daemon_identity(&daemon_path));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_validate_default_daemon_identity_bad_json() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = test_temp_dir("agent-browser-meta-bad-json");
+        fs::create_dir_all(&dir).unwrap();
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_string_lossy().as_ref());
+
+        let daemon_path = dir.join("daemon.js");
+        fs::write(&daemon_path, "// test").unwrap();
+        fs::write(dir.join("default.meta.json"), "{invalid-json").unwrap();
+
+        assert!(!validate_default_daemon_identity(&daemon_path));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     // === Transient Error Detection Tests ===

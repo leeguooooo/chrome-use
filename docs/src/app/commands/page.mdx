@@ -279,9 +279,11 @@ agent-browser state clean --older-than <days>  # Delete old states
 
 ```bash
 agent-browser session                 # Show current session name
-agent-browser session list            # List active sessions
+agent-browser session list            # List active sessions (auto-cleans stale entries)
 agent-browser --parallel worker-a open https://example.com  # Isolated runtime for parallel AI tasks
 ```
+
+When a default-session command starts, all non-default daemon sessions are reaped to avoid stale daemon reuse.
 
 ## Daemon lifetime
 
@@ -327,7 +329,7 @@ agent-browser reload                  # Reload page
 --auto-connect           # Auto-discover and connect to running Chrome
 --tab-group <name>       # Base title for agent tab groups (CDP plugin mode)
 --tab-group-plugin-id <id> # Expected extension ID for tab-group handshake
---parallel <name>        # Isolated runtime channel for parallel AI runs (maps to parallel-<name>)
+--parallel <name>        # Isolated runtime channel for parallel AI runs (maps to parallel-<name>; reaped when default session starts)
 --resident               # Keep daemon running; disable 10-minute idle auto-shutdown
 --wait-until <mode>      # Navigation wait strategy for open/navigate (load, domcontentloaded, networkidle)
 --debug                  # Debug output (includes stealth connection type + capabilities)

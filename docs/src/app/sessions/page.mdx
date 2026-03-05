@@ -17,6 +17,7 @@ agent-browser --parallel worker-a session
 
 # Show active daemon sessions
 agent-browser session list
+# stale entries are auto-cleaned during listing
 ```
 
 ## Session isolation
@@ -39,6 +40,11 @@ agent-browser --parallel worker-b open https://example.org
 ```
 
 `--parallel` is intended for stateless throughput tasks (navigation/extraction/checks). For authenticated flows, use a stable `--session-name`.
+
+Default session isolation policy:
+
+- Running a default-session command reaps all non-default daemon sessions (`parallel-*` and legacy named channels).
+- This keeps the primary `default` runtime channel free from stale daemon reuse.
 
 For long-running workers, add `--resident` to disable idle auto-shutdown:
 
@@ -195,7 +201,7 @@ agent-browser set headers '{"X-Custom-Header": "value"}'
       <td>
         <code>AGENT_BROWSER_PARALLEL</code>
       </td>
-      <td>Isolated runtime channel name for parallel AI runs (maps to <code>parallel-&lt;name&gt;</code>)</td>
+      <td>Isolated runtime channel name for parallel AI runs (maps to <code>parallel-&lt;name&gt;</code>). Non-default daemons are reaped when a default-session command starts.</td>
     </tr>
     <tr>
       <td>
