@@ -1,5 +1,16 @@
 # agent-browser
 
+## 0.16.3-fork.1
+
+### Patch Changes
+
+- Sync upstream `v0.16.2` / `v0.16.3` core fixes into the fork baseline.
+- Import headed-mode behavior updates from upstream.
+- Improve CDP debug-port discovery by switching to `reqwest` in native Chrome probing.
+- Fix dialog dismiss command parsing consistency.
+- Surface daemon startup stderr on launch failure to avoid opaque timeout-only errors.
+- Keep fork stealth hardening for anti-debug self-destruct flows (`disable-devtool-auto` bootstrap neutralization).
+
 ## 0.16.1-fork.5
 
 ### Patch Changes
