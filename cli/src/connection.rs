@@ -278,6 +278,10 @@ pub fn ensure_daemon(
         .find(|p| p.exists())
         .ok_or("Daemon not found. Set AGENT_BROWSER_HOME environment variable or run from project directory.")?;
 
+    // Keep handle to detect early daemon exit and surface startup errors.
+    #[allow(unused_assignments)]
+    let mut daemon_child: Option<std::process::Child> = None;
+
     // Spawn daemon as a fully detached background process
     #[cfg(unix)]
     {
@@ -363,11 +367,13 @@ pub fn ensure_daemon(
             });
         }
 
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        cmd.spawn()
-            .map_err(|e| format!("Failed to start daemon: {}", e))?;
+        daemon_child = Some(
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Failed to start daemon: {}", e))?,
+        );
     }
 
     #[cfg(windows)]
@@ -451,12 +457,14 @@ pub fn ensure_daemon(
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         const DETACHED_PROCESS: u32 = 0x00000008;
 
-        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        cmd.spawn()
-            .map_err(|e| format!("Failed to start daemon: {}", e))?;
+        daemon_child = Some(
+            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Failed to start daemon: {}", e))?,
+        );
     }
 
     for _ in 0..50 {
@@ -465,6 +473,22 @@ pub fn ensure_daemon(
                 already_running: false,
             });
         }
+
+        // Surface daemon startup stderr instead of returning an opaque timeout.
+        if let Some(ref mut child) = daemon_child {
+            if let Ok(Some(_)) = child.try_wait() {
+                let mut stderr_output = String::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    let _ = stderr.read_to_string(&mut stderr_output);
+                }
+                let stderr_trimmed = stderr_output.trim();
+                if !stderr_trimmed.is_empty() {
+                    return Err(format!("Daemon failed to start: {}", stderr_trimmed));
+                }
+                return Err("Daemon failed to start: process exited during startup".to_string());
+            }
+        }
+
         thread::sleep(Duration::from_millis(100));
     }
 
