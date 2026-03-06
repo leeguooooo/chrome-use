@@ -507,9 +507,12 @@ impl BrowserManager {
             .send_command_no_params("Browser.close", None)
             .await;
 
-        // Kill Chrome process if we own it
-        if let Some(ref mut chrome) = self.chrome_process {
-            chrome.kill();
+        if let Some(mut chrome) = self.chrome_process.take() {
+            let timeout = std::time::Duration::from_secs(5);
+            let _ = tokio::task::spawn_blocking(move || {
+                chrome.wait_or_kill(timeout);
+            })
+            .await;
         }
 
         Ok(())

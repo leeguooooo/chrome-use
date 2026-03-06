@@ -16,6 +16,24 @@ impl ChromeProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+
+    /// Wait for Chrome to exit on its own (after Browser.close CDP command),
+    /// falling back to kill() if it doesn't exit within the timeout.
+    /// This allows Chrome to flush cookies and other state to the user-data-dir.
+    pub fn wait_or_kill(&mut self, timeout: Duration) {
+        let start = std::time::Instant::now();
+        let poll_interval = Duration::from_millis(50);
+
+        while start.elapsed() < timeout {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(poll_interval),
+                Err(_) => break,
+            }
+        }
+
+        self.kill();
+    }
 }
 
 impl Drop for ChromeProcess {
