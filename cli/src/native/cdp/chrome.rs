@@ -95,6 +95,7 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         "--disable-popup-blocking".to_string(),
         "--disable-prompt-on-repost".to_string(),
         "--disable-sync".to_string(),
+        "--disable-features=Translate".to_string(),
         "--enable-features=NetworkService,NetworkServiceInProcess".to_string(),
         "--metrics-recording-only".to_string(),
         "--password-store=basic".to_string(),
@@ -745,6 +746,19 @@ mod tests {
         let result = build_chrome_args(&opts).unwrap();
         assert!(!result.args.iter().any(|a| a == "--window-size=1280,720"));
         assert!(result.args.iter().any(|a| a == "--start-maximized"));
+        if let Some(ref dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn test_build_args_disables_translate() {
+        let opts = LaunchOptions::default();
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(result
+            .args
+            .iter()
+            .any(|a| a.contains("--disable-features") && a.contains("Translate")));
         if let Some(ref dir) = result.temp_user_data_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
