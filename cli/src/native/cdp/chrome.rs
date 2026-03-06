@@ -102,7 +102,14 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         "--use-mock-keychain".to_string(),
     ];
 
-    if options.headless {
+    let has_extensions = options
+        .extensions
+        .as_ref()
+        .map_or(false, |exts| !exts.is_empty());
+
+    // Extensions require headed mode in native Chrome (content scripts are not
+    // injected in headless mode).  Skip --headless when extensions are loaded.
+    if options.headless && !has_extensions {
         args.push("--headless=new".to_string());
     }
 
@@ -145,7 +152,7 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         .iter()
         .any(|a| a.starts_with("--start-maximized") || a.starts_with("--window-size="));
 
-    if !has_window_size && options.headless {
+    if !has_window_size && options.headless && !has_extensions {
         args.push("--window-size=1280,720".to_string());
     }
 
@@ -759,6 +766,52 @@ mod tests {
             .args
             .iter()
             .any(|a| a.contains("--disable-features") && a.contains("Translate")));
+        if let Some(ref dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn test_build_args_headless_with_extensions_skips_headless_flag() {
+        let opts = LaunchOptions {
+            headless: true,
+            extensions: Some(vec!["/tmp/my-ext".to_string()]),
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(
+            !result.args.iter().any(|a| a.contains("--headless")),
+            "headless flag should be omitted when extensions are present"
+        );
+        assert!(
+            !result.args.iter().any(|a| a.contains("--window-size")),
+            "window-size should be omitted when extensions force headed mode"
+        );
+        assert!(result
+            .args
+            .iter()
+            .any(|a| a.starts_with("--load-extension=")));
+        if let Some(ref dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn test_build_args_headed_with_extensions_no_headless_flag() {
+        let opts = LaunchOptions {
+            headless: false,
+            extensions: Some(vec!["/tmp/my-ext".to_string()]),
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(
+            !result.args.iter().any(|a| a.contains("--headless")),
+            "headless flag should not be present in headed mode"
+        );
+        assert!(result
+            .args
+            .iter()
+            .any(|a| a.starts_with("--load-extension=")));
         if let Some(ref dir) = result.temp_user_data_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
