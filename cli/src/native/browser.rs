@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Duration};
 
 use super::cdp::chrome::{
     auto_connect_cdp, discover_cdp_url, launch_chrome, ChromeProcess, LaunchOptions,
@@ -277,6 +278,50 @@ impl BrowserManager {
         Self::connect_cdp(&ws_url).await
     }
 
+    async fn create_and_attach_blank_page(&mut self) -> Result<(), String> {
+        let result: CreateTargetResult = self
+            .client
+            .send_command_typed(
+                "Target.createTarget",
+                &CreateTargetParams {
+                    url: "about:blank".to_string(),
+                },
+                None,
+            )
+            .await?;
+
+        let attach_result: AttachToTargetResult = self
+            .client
+            .send_command_typed(
+                "Target.attachToTarget",
+                &AttachToTargetParams {
+                    target_id: result.target_id.clone(),
+                    flatten: true,
+                },
+                None,
+            )
+            .await?;
+
+        self.enable_domains_with_timeout(&attach_result.session_id)
+            .await?;
+
+        self.pages = vec![PageInfo {
+            target_id: result.target_id,
+            session_id: attach_result.session_id,
+            url: "about:blank".to_string(),
+            title: String::new(),
+            target_type: "page".to_string(),
+        }];
+        self.active_page_index = 0;
+        Ok(())
+    }
+
+    async fn enable_domains_with_timeout(&self, session_id: &str) -> Result<(), String> {
+        timeout(Duration::from_secs(3), self.enable_domains(session_id))
+            .await
+            .map_err(|_| format!("Timed out enabling CDP domains for session {}", session_id))?
+    }
+
     async fn discover_and_attach_targets(&mut self) -> Result<(), String> {
         self.client
             .send_command_typed::<_, Value>(
@@ -300,40 +345,9 @@ impl BrowserManager {
             .collect();
 
         if page_targets.is_empty() {
-            // Create a new tab
-            let result: CreateTargetResult = self
-                .client
-                .send_command_typed(
-                    "Target.createTarget",
-                    &CreateTargetParams {
-                        url: "about:blank".to_string(),
-                    },
-                    None,
-                )
-                .await?;
-
-            let attach_result: AttachToTargetResult = self
-                .client
-                .send_command_typed(
-                    "Target.attachToTarget",
-                    &AttachToTargetParams {
-                        target_id: result.target_id.clone(),
-                        flatten: true,
-                    },
-                    None,
-                )
-                .await?;
-
-            self.pages.push(PageInfo {
-                target_id: result.target_id,
-                session_id: attach_result.session_id.clone(),
-                url: "about:blank".to_string(),
-                title: String::new(),
-                target_type: "page".to_string(),
-            });
-            self.active_page_index = 0;
-            self.enable_domains(&attach_result.session_id).await?;
+            self.create_and_attach_blank_page().await?;
         } else {
+            let mut attached_pages = Vec::new();
             for target in &page_targets {
                 let attach_result: AttachToTargetResult = self
                     .client
@@ -347,18 +361,36 @@ impl BrowserManager {
                     )
                     .await?;
 
-                self.pages.push(PageInfo {
+                let page_info = PageInfo {
                     target_id: target.target_id.clone(),
                     session_id: attach_result.session_id.clone(),
                     url: target.url.clone(),
                     title: target.title.clone(),
                     target_type: target.target_type.clone(),
-                });
+                };
+
+                match self
+                    .enable_domains_with_timeout(&attach_result.session_id)
+                    .await
+                {
+                    Ok(()) => attached_pages.push(page_info),
+                    Err(err) => {
+                        if std::env::var("AGENT_BROWSER_DEBUG").as_deref() == Ok("1") {
+                            eprintln!(
+                                "[DEBUG] Skipping CDP target '{}' ({}): {}",
+                                target.title, target.url, err
+                            );
+                        }
+                    }
+                }
             }
 
-            self.active_page_index = 0;
-            let session_id = self.pages[0].session_id.clone();
-            self.enable_domains(&session_id).await?;
+            if attached_pages.is_empty() {
+                self.create_and_attach_blank_page().await?;
+            } else {
+                self.pages = attached_pages;
+                self.active_page_index = 0;
+            }
         }
 
         Ok(())

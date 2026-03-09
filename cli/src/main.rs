@@ -107,8 +107,28 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut flags = parse_flags(&args);
     let clean = clean_args(&args);
+    let command_name = clean.first().map(|s| s.as_str());
 
     if flags.engine.is_some() && !flags.native {
+        flags.native = true;
+    }
+
+    let can_try_default_cdp = flags.cdp.is_none()
+        && !flags.auto_connect
+        && flags.provider.is_none()
+        && flags.executable_path.is_none()
+        && flags.state.is_none()
+        && flags.proxy.is_none()
+        && flags.args.is_none()
+        && flags.user_agent.is_none()
+        && !flags.ignore_https_errors
+        && !flags.allow_file_access
+        && flags.extensions.is_empty();
+    let can_force_native_for_cdp = !matches!(command_name, Some("close"));
+    if !flags.native
+        && can_force_native_for_cdp
+        && (flags.cdp.is_some() || flags.auto_connect || can_try_default_cdp)
+    {
         flags.native = true;
     }
 
@@ -605,18 +625,6 @@ fn main() {
     // Project policy: when no explicit connection mode is provided,
     // commands should attach to an existing browser.
     // Try CDP :9333 first, then fall back to auto-connect discovery.
-    let can_try_default_cdp = flags.cdp.is_none()
-        && !flags.auto_connect
-        && flags.provider.is_none()
-        && flags.executable_path.is_none()
-        && flags.state.is_none()
-        && flags.proxy.is_none()
-        && flags.args.is_none()
-        && flags.user_agent.is_none()
-        && !flags.ignore_https_errors
-        && !flags.allow_file_access
-        && flags.extensions.is_empty();
-
     if can_try_default_cdp {
         let mut launch_cmd = json!({
             "id": gen_id(),
