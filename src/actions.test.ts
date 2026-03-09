@@ -117,6 +117,26 @@ describe('tab grouping fallback', () => {
   });
 });
 
+describe('launch engine guard', () => {
+  it('should reject lightpanda on the Node.js path', async () => {
+    const browser = {
+      launch: vi.fn(),
+      getStealthStatus: vi.fn(),
+    };
+
+    const response = await executeCommand(
+      { id: 'lp1', action: 'launch', engine: 'lightpanda' },
+      browser as any
+    );
+
+    expect(response.success).toBe(false);
+    if (!response.success) {
+      expect(response.error).toContain('requires --native mode');
+    }
+    expect(browser.launch).not.toHaveBeenCalled();
+  });
+});
+
 describe('risk interstitial recovery', () => {
   it('should wait for cloudflare-style challenge to clear before retrying navigation', async () => {
     const challengeClearMs = 10_000;

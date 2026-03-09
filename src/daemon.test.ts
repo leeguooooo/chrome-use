@@ -3,7 +3,12 @@ import * as os from 'os';
 import * as path from 'path';
 import * as net from 'net';
 import { EventEmitter } from 'events';
-import { createSerializedExecutor, getSocketDir, safeWrite } from './daemon.js';
+import {
+  buildAutoLaunchOptionsFromEnv,
+  createSerializedExecutor,
+  getSocketDir,
+  safeWrite,
+} from './daemon.js';
 
 /**
  * HTTP request detection pattern used in daemon.ts to prevent cross-origin attacks.
@@ -94,6 +99,74 @@ describe('getSocketDir', () => {
       const expected = path.join(os.homedir(), '.agent-browser');
       expect(result).toBe(expected);
     });
+  });
+});
+
+describe('buildAutoLaunchOptionsFromEnv', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    delete process.env.AGENT_BROWSER_HEADED;
+    delete process.env.AGENT_BROWSER_EXTENSIONS;
+    delete process.env.AGENT_BROWSER_ARGS;
+    delete process.env.AGENT_BROWSER_PROXY;
+    delete process.env.AGENT_BROWSER_PROXY_BYPASS;
+    delete process.env.AGENT_BROWSER_COLOR_SCHEME;
+    delete process.env.AGENT_BROWSER_TAB_GROUP;
+    delete process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID;
+    delete process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS;
+    delete process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS;
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('should treat AGENT_BROWSER_HEADED=true as headed mode', () => {
+    process.env.AGENT_BROWSER_HEADED = 'true';
+
+    const options = buildAutoLaunchOptionsFromEnv();
+
+    expect(options.headless).toBe(false);
+  });
+
+  it('should keep default auto-launch headed behavior unchanged when env is unset', () => {
+    const options = buildAutoLaunchOptionsFromEnv();
+
+    expect(options.headless).toBe(true);
+  });
+
+  it('should parse extensions and args from comma or newline separated env vars', () => {
+    process.env.AGENT_BROWSER_EXTENSIONS = ' /tmp/ext-a,\n/tmp/ext-b ,, \n /tmp/ext-c ';
+    process.env.AGENT_BROWSER_ARGS = '--start-maximized,\n--disable-gpu';
+
+    const options = buildAutoLaunchOptionsFromEnv();
+
+    expect(options.extensions).toEqual(['/tmp/ext-a', '/tmp/ext-b', '/tmp/ext-c']);
+    expect(options.args).toEqual(['--start-maximized', '--disable-gpu']);
+  });
+
+  it('should preserve proxy and optional launch fields from env', () => {
+    process.env.AGENT_BROWSER_PROXY = 'http://127.0.0.1:8080';
+    process.env.AGENT_BROWSER_PROXY_BYPASS = 'localhost,*.internal';
+    process.env.AGENT_BROWSER_COLOR_SCHEME = 'dark';
+    process.env.AGENT_BROWSER_TAB_GROUP = ' Agent Browser ';
+    process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID = ' plugin-123 ';
+    process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS = '1';
+    process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS = '1';
+
+    const options = buildAutoLaunchOptionsFromEnv('/tmp/auto-state.json');
+
+    expect(options.proxy).toEqual({
+      server: 'http://127.0.0.1:8080',
+      bypass: 'localhost,*.internal',
+    });
+    expect(options.colorScheme).toBe('dark');
+    expect(options.tabGroup).toBe('Agent Browser');
+    expect(options.tabGroupPluginId).toBe('plugin-123');
+    expect(options.ignoreHTTPSErrors).toBe(true);
+    expect(options.allowFileAccess).toBe(true);
+    expect(options.autoStateFilePath).toBe('/tmp/auto-state.json');
   });
 });
 

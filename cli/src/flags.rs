@@ -33,6 +33,8 @@ pub struct Config {
     pub allow_file_access: Option<bool>,
     pub cdp: Option<String>,
     pub auto_connect: Option<bool>,
+    pub native: Option<bool>,
+    pub engine: Option<String>,
     pub headers: Option<String>,
     pub annotate: Option<bool>,
     pub color_scheme: Option<String>,
@@ -72,6 +74,8 @@ impl Config {
             allow_file_access: other.allow_file_access.or(self.allow_file_access),
             cdp: other.cdp.or(self.cdp),
             auto_connect: other.auto_connect.or(self.auto_connect),
+            native: other.native.or(self.native),
+            engine: other.engine.or(self.engine),
             headers: other.headers.or(self.headers),
             annotate: other.annotate.or(self.annotate),
             color_scheme: other.color_scheme.or(self.color_scheme),
@@ -152,6 +156,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--risk-mode",
         "--wait-until",
         "--parallel",
+        "--engine",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -222,6 +227,9 @@ pub struct Flags {
     pub allow_file_access: bool,
     pub device: Option<String>,
     pub auto_connect: bool,
+    pub native: bool,
+    /// Browser engine for native local launches. `chrome` is the default.
+    pub engine: Option<String>,
     // Defaults to "default" when unset in default runtime mode.
     // In --parallel mode, defaults to None unless explicitly provided on CLI.
     pub session_name: Option<String>,
@@ -251,6 +259,8 @@ pub struct Flags {
     pub cli_allow_file_access: bool,
     pub cli_annotate: bool,
     pub cli_download_path: bool,
+    pub cli_native: bool,
+    pub cli_engine: bool,
     pub cli_tab_group: bool,
     pub cli_tab_group_plugin_id: bool,
     pub cli_session_name: bool,
@@ -314,6 +324,8 @@ pub fn parse_flags(args: &[String]) -> Flags {
         device: env::var("AGENT_BROWSER_IOS_DEVICE").ok().or(config.device),
         auto_connect: env_var_is_truthy("AGENT_BROWSER_AUTO_CONNECT")
             || config.auto_connect.unwrap_or(false),
+        native: env_var_is_truthy("AGENT_BROWSER_NATIVE") || config.native.unwrap_or(false),
+        engine: env::var("AGENT_BROWSER_ENGINE").ok().or(config.engine),
         session_name: env::var("AGENT_BROWSER_SESSION_NAME")
             .ok()
             .or(config.session_name),
@@ -348,6 +360,8 @@ pub fn parse_flags(args: &[String]) -> Flags {
         cli_allow_file_access: false,
         cli_annotate: false,
         cli_download_path: false,
+        cli_native: false,
+        cli_engine: false,
         cli_tab_group: false,
         cli_tab_group_plugin_id: false,
         cli_session_name: false,
@@ -488,6 +502,21 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
+            "--native" => {
+                let (val, consumed) = parse_bool_arg(args, i);
+                flags.native = val;
+                flags.cli_native = true;
+                if consumed {
+                    i += 1;
+                }
+            }
+            "--engine" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.engine = Some(s.clone());
+                    flags.cli_engine = true;
+                    i += 1;
+                }
+            }
             "--session-name" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.session_name = Some(s.clone());
@@ -595,6 +624,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--ignore-https-errors",
         "--allow-file-access",
         "--auto-connect",
+        "--native",
         "--annotate",
     ];
     // Global flags that always take a value (need to skip the next arg too)
@@ -621,6 +651,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--wait-until",
         "--parallel",
         "--config",
+        "--engine",
     ];
 
     let mut i = 0;
@@ -1245,6 +1276,12 @@ mod tests {
     }
 
     #[test]
+    fn test_clean_args_removes_engine() {
+        let cleaned = clean_args(&args("--engine lightpanda open example.com"));
+        assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    #[test]
     fn test_load_config_with_config_flag() {
         use std::io::Write;
         let dir = std::env::temp_dir().join("ab-test-flag-config");
@@ -1351,6 +1388,57 @@ mod tests {
     fn test_auto_connect_false() {
         let flags = parse_flags(&args("--auto-connect false open"));
         assert!(!flags.auto_connect);
+    }
+
+    #[test]
+    fn test_native_false() {
+        let flags = parse_flags(&args("--native false open example.com"));
+        assert!(!flags.native);
+        assert!(flags.cli_native);
+    }
+
+    #[test]
+    fn test_engine_flag() {
+        let flags = parse_flags(&args("--engine lightpanda open example.com"));
+        assert_eq!(flags.engine.as_deref(), Some("lightpanda"));
+        assert!(flags.cli_engine);
+    }
+
+    #[test]
+    fn test_engine_from_env() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_ENGINE"]);
+        env::set_var("AGENT_BROWSER_ENGINE", "lightpanda");
+        let flags = parse_flags(&args("open example.com"));
+        assert_eq!(flags.engine.as_deref(), Some("lightpanda"));
+        assert!(!flags.cli_engine);
+    }
+
+    #[test]
+    fn test_native_bare_defaults_true() {
+        let flags = parse_flags(&args("--native open example.com"));
+        assert!(flags.native);
+        assert!(flags.cli_native);
+    }
+
+    #[test]
+    fn test_native_from_env_sets_native_without_cli_marker() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_NATIVE"]);
+        env::set_var("AGENT_BROWSER_NATIVE", "1");
+        let flags = parse_flags(&args("open example.com"));
+        assert!(flags.native);
+        assert!(!flags.cli_native);
+    }
+
+    #[test]
+    fn test_config_deserializes_native() {
+        let config: Config = serde_json::from_str(r#"{"native": true}"#).unwrap();
+        assert_eq!(config.native, Some(true));
+    }
+
+    #[test]
+    fn test_config_deserializes_engine() {
+        let config: Config = serde_json::from_str(r#"{"engine": "lightpanda"}"#).unwrap();
+        assert_eq!(config.engine.as_deref(), Some("lightpanda"));
     }
 
     #[test]

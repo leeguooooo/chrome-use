@@ -566,6 +566,7 @@ async fn e2e_tabs() {
     let tabs = get_data(&resp)["tabs"].as_array().unwrap();
     assert_eq!(tabs.len(), 1);
     assert_eq!(tabs[0]["active"], true);
+    assert_eq!(tabs[0]["type"], "page");
 
     // Open new tab
     let resp = execute_command(
@@ -582,6 +583,7 @@ async fn e2e_tabs() {
     let tabs = get_data(&resp)["tabs"].as_array().unwrap();
     assert_eq!(tabs.len(), 2);
     assert_eq!(tabs[1]["active"], true);
+    assert_eq!(tabs[1]["type"], "page");
 
     // Switch to first tab
     let resp = execute_command(

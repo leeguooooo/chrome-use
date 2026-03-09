@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-stealth",
-  "version": "0.16.3-fork.4",
+  "version": "0.16.3-fork.5",
   "description": "Stealth browser automation CLI for AI agents with anti-bot evasions",
   "type": "module",
   "main": "dist/daemon.js",
@@ -36,6 +36,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e:dogfood": "vitest run test/e2e/dogfood.eval.ts",
+    "bench": "pnpm build && tsx test/benchmarks/run.ts",
+    "bench:node": "pnpm build && tsx test/benchmarks/run.ts --node-only",
+    "bench:native": "pnpm build && tsx test/benchmarks/run.ts --native-only",
+    "bench:engine": "pnpm build && tsx test/benchmarks/run.ts --engine",
     "check:daemon-pid-recovery": "node scripts/check-daemon-pid-recovery.js",
     "check:stealth-regression": "node scripts/check-stealth-regression.js",
     "check:turnstile-testkey": "pnpm exec tsx scripts/check-turnstile-testkey.ts",

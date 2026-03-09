@@ -71,6 +71,7 @@ Default session isolation policy:
 | --- | --- | --- |
 | `--parallel <name>` | Isolate runtime channel for concurrent AI tasks | Stateless/no-login parallel jobs |
 | `--session-name <name>` | Persist cookies/localStorage across restarts | Login/auth continuity |
+| `--engine <name>` | Choose local browser engine (`chrome`, `lightpanda`) | Native-only engine experiments |
 
 ### Daemon Lifecycle
 
@@ -82,6 +83,32 @@ agent-browser --resident open https://example.com
 # ... long-lived background workflow ...
 agent-browser close
 ```
+
+### Browser Engine Selection
+
+`chrome` remains the default engine. If you want to try [Lightpanda](https://lightpanda.io/docs/open-source/installation), use `--engine lightpanda`; this automatically routes through the native daemon.
+
+```bash
+agent-browser --engine lightpanda open https://example.com
+
+export AGENT_BROWSER_ENGINE=lightpanda
+agent-browser open https://example.com
+```
+
+Lightpanda is headless-only and does not support `--extension`, `--state`, `--profile`, or `--allow-file-access`.
+
+### Headed Mode
+
+Use `--headed` when you want a visible browser window:
+
+```bash
+agent-browser --headed open https://example.com
+
+AGENT_BROWSER_HEADED=1 agent-browser open https://example.com
+AGENT_BROWSER_HEADED=true agent-browser open https://example.com
+```
+
+In this fork, local launches default to headed mode unless headless is explicitly requested. Extension launches also stay headed by default so the stealth/runtime policy remains stable.
 
 ### Default: Auto Group Agent Tabs (CDP + Plugin)
 

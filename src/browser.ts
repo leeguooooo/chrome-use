@@ -2126,7 +2126,8 @@ export class BrowserManager {
 
     let context: BrowserContext;
     if (hasExtensions) {
-      // Extensions require persistent context in a temp directory
+      // Extensions require persistent context in a temp directory. In this fork,
+      // extension launches stay headed by default unless headless is explicitly requested.
       const extPaths = configuredExtensions.join(',');
       const session = process.env.AGENT_BROWSER_SESSION || 'default';
       // Combine extension args with custom args and file access args

@@ -3,6 +3,7 @@ mod commands;
 mod connection;
 mod flags;
 mod install;
+mod native;
 mod output;
 #[cfg(test)]
 mod test_utils;
@@ -86,6 +87,17 @@ fn run_session(args: &[String], session: &str, json_mode: bool) {
 }
 
 fn main() {
+    if env::var("AGENT_BROWSER_DAEMON").is_ok() {
+        #[cfg(unix)]
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+        }
+        let session = env::var("AGENT_BROWSER_SESSION").unwrap_or_else(|_| "default".to_string());
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        rt.block_on(native::daemon::run_daemon(&session));
+        return;
+    }
+
     // Ignore SIGPIPE to prevent panic when piping to head/tail
     #[cfg(unix)]
     unsafe {
@@ -93,8 +105,12 @@ fn main() {
     }
 
     let args: Vec<String> = env::args().skip(1).collect();
-    let flags = parse_flags(&args);
+    let mut flags = parse_flags(&args);
     let clean = clean_args(&args);
+
+    if flags.engine.is_some() && !flags.native {
+        flags.native = true;
+    }
 
     let has_help = args.iter().any(|a| a == "--help" || a == "-h");
     let has_version = args.iter().any(|a| a == "--version" || a == "-V");
@@ -262,6 +278,8 @@ fn main() {
         flags.device.as_deref(),
         flags.session_name.as_deref(),
         flags.debug,
+        flags.native,
+        flags.engine.as_deref(),
         flags.download_path.as_deref(),
         flags.tab_group.as_deref(),
         flags.tab_group_plugin_id.as_deref(),
@@ -316,6 +334,8 @@ fn main() {
             flags.ignore_https_errors.then_some("--ignore-https-errors"),
             flags.cli_allow_file_access.then_some("--allow-file-access"),
             flags.cli_download_path.then_some("--download-path"),
+            flags.cli_native.then_some("--native"),
+            flags.cli_engine.then_some("--engine"),
             flags.cli_tab_group.then_some("--tab-group"),
             flags
                 .cli_tab_group_plugin_id
@@ -406,6 +426,9 @@ fn main() {
 
         if let Some(ref dp) = flags.download_path {
             launch_cmd["downloadPath"] = json!(dp);
+        }
+        if let Some(ref engine) = flags.engine {
+            launch_cmd["engine"] = json!(engine);
         }
         if let Some(ref tg) = flags.tab_group {
             launch_cmd["tabGroup"] = json!(tg);
@@ -504,6 +527,9 @@ fn main() {
 
         if let Some(ref dp) = flags.download_path {
             launch_cmd["downloadPath"] = json!(dp);
+        }
+        if let Some(ref engine) = flags.engine {
+            launch_cmd["engine"] = json!(engine);
         }
         if let Some(ref tg) = flags.tab_group {
             launch_cmd["tabGroup"] = json!(tg);
@@ -655,7 +681,8 @@ fn main() {
         || flags.allow_file_access
         || flags.debug
         || flags.color_scheme.is_some()
-        || flags.download_path.is_some())
+        || flags.download_path.is_some()
+        || flags.engine.is_some())
         && flags.cdp.is_none()
         && flags.provider.is_none()
         && !attached_to_existing_browser

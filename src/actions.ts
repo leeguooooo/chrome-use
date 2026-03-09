@@ -520,6 +520,10 @@ async function handleLaunch(
   command: Command & { action: 'launch' },
   browser: BrowserManager
 ): Promise<Response> {
+  if (command.engine === 'lightpanda') {
+    return errorResponse(command.id, 'Lightpanda engine requires --native mode');
+  }
+
   await browser.launch(command);
   return successResponse(command.id, {
     launched: true,

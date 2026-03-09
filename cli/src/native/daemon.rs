@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -24,6 +24,16 @@ pub async fn run_daemon(session: &str) {
 
     let pid_path = socket_dir.join(format!("{}.pid", session));
     let _ = fs::write(&pid_path, process::id().to_string());
+    let meta_path = socket_dir.join(format!("{}.meta.json", session));
+    if let Ok(current_exe) = env::current_exe() {
+        let daemon_path = current_exe.canonicalize().unwrap_or(current_exe);
+        let cli_version = env::var("AGENT_BROWSER_CLI_VERSION").unwrap_or_default();
+        let meta = json!({
+            "daemonPath": daemon_path.to_string_lossy(),
+            "cliVersion": cli_version,
+        });
+        let _ = fs::write(&meta_path, meta.to_string());
+    }
 
     let socket_path = socket_dir.join(format!("{}.sock", session));
 
@@ -43,6 +53,7 @@ pub async fn run_daemon(session: &str) {
 
     let _ = fs::remove_file(&socket_path);
     let _ = fs::remove_file(&pid_path);
+    let _ = fs::remove_file(&meta_path);
     let stream_path = socket_dir.join(format!("{}.stream", session));
     let _ = fs::remove_file(&stream_path);
 
@@ -185,8 +196,7 @@ async fn handle_connection<S>(
     state: std::sync::Arc<tokio::sync::Mutex<DaemonState>>,
     activity_tx: UnboundedSender<()>,
     active_commands: std::sync::Arc<AtomicUsize>,
-)
-where
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let (reader, mut writer) = tokio::io::split(stream);

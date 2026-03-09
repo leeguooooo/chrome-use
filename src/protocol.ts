@@ -57,6 +57,7 @@ const launchSchema = baseCommandSchema.extend({
   allowedDomains: z.array(z.string()).optional(),
   actionPolicy: z.string().optional(),
   confirmActions: z.array(z.string()).optional(),
+  engine: z.enum(['chrome', 'lightpanda']).optional(),
 });
 
 const navigateSchema = baseCommandSchema.extend({

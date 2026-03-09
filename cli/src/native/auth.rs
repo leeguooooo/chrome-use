@@ -215,16 +215,15 @@ fn decrypt_profile(data: &[u8]) -> Result<AuthProfile, String> {
         combined.extend_from_slice(&ciphertext);
         combined.extend_from_slice(&auth_tag);
 
-        let cipher = Aes256Gcm::new_from_slice(&key)
-            .map_err(|e| format!("Decryption key error: {}", e))?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Decryption key error: {}", e))?;
         let plaintext = cipher
             .decrypt(aes_gcm::Nonce::from_slice(&iv), combined.as_slice())
             .map_err(|e| format!("Decryption failed: {}", e))?;
 
         let json_str = String::from_utf8(plaintext)
             .map_err(|e| format!("Decrypted data is not valid UTF-8: {}", e))?;
-        return serde_json::from_str(&json_str)
-            .map_err(|e| format!("Invalid profile data: {}", e));
+        return serde_json::from_str(&json_str).map_err(|e| format!("Invalid profile data: {}", e));
     }
 
     // Fallback: try as plain unencrypted JSON profile

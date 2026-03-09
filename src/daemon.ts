@@ -8,6 +8,7 @@ import { parseCommand, serializeResponse, errorResponse } from './protocol.js';
 import { executeCommand } from './actions.js';
 import { executeIOSCommand } from './ios-actions.js';
 import { StreamServer } from './stream-server.js';
+import type { LaunchCommand } from './types.js';
 import {
   getSessionsDir,
   ensureSessionsDir,
@@ -198,6 +199,55 @@ export function setSession(session: string): void {
  */
 export function getSession(): string {
   return currentSession;
+}
+
+function parseEnvList(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const items = value
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
+export function buildAutoLaunchOptionsFromEnv(
+  autoStateFilePath: string | undefined = getSessionAutoStatePath()
+): LaunchCommand {
+  const proxyServer = process.env.AGENT_BROWSER_PROXY;
+  const proxyBypass = process.env.AGENT_BROWSER_PROXY_BYPASS;
+  const colorSchemeEnv = process.env.AGENT_BROWSER_COLOR_SCHEME;
+  const colorScheme: 'dark' | 'light' | 'no-preference' | undefined =
+    colorSchemeEnv === 'dark' || colorSchemeEnv === 'light' || colorSchemeEnv === 'no-preference'
+      ? colorSchemeEnv
+      : undefined;
+  const tabGroup = process.env.AGENT_BROWSER_TAB_GROUP?.trim();
+  const tabGroupPluginId = process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim();
+
+  return {
+    id: 'auto',
+    action: 'launch',
+    // Accept both AGENT_BROWSER_HEADED=1 and =true for daemon auto-launch.
+    headless:
+      process.env.AGENT_BROWSER_HEADED !== '1' && process.env.AGENT_BROWSER_HEADED !== 'true',
+    executablePath: process.env.AGENT_BROWSER_EXECUTABLE_PATH,
+    extensions: parseEnvList(process.env.AGENT_BROWSER_EXTENSIONS),
+    storageState: process.env.AGENT_BROWSER_STATE,
+    args: parseEnvList(process.env.AGENT_BROWSER_ARGS),
+    userAgent: process.env.AGENT_BROWSER_USER_AGENT,
+    proxy: proxyServer
+      ? {
+          server: proxyServer,
+          ...(proxyBypass && { bypass: proxyBypass }),
+        }
+      : undefined,
+    ignoreHTTPSErrors: process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1',
+    allowFileAccess: process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS === '1',
+    colorScheme,
+    tabGroup: tabGroup && tabGroup.length > 0 ? tabGroup : undefined,
+    tabGroupPluginId:
+      tabGroupPluginId && tabGroupPluginId.length > 0 ? tabGroupPluginId : undefined,
+    autoStateFilePath,
+  };
 }
 
 /**
@@ -484,66 +534,7 @@ export async function startDaemon(options?: {
                   });
                 } else if (manager instanceof BrowserManager) {
                   // Auto-launch desktop browser
-                  const extensions = process.env.AGENT_BROWSER_EXTENSIONS
-                    ? process.env.AGENT_BROWSER_EXTENSIONS.split(/[,\n]/)
-                        .map((p) => p.trim())
-                        .filter(Boolean)
-                    : undefined;
-
-                  // Parse args from env (comma or newline separated)
-                  const argsEnv = process.env.AGENT_BROWSER_ARGS;
-                  const args = argsEnv
-                    ? argsEnv
-                        .split(/[,\n]/)
-                        .map((a) => a.trim())
-                        .filter((a) => a.length > 0)
-                    : undefined;
-
-                  // Parse proxy from env
-                  const proxyServer = process.env.AGENT_BROWSER_PROXY;
-                  const proxyBypass = process.env.AGENT_BROWSER_PROXY_BYPASS;
-                  const proxy = proxyServer
-                    ? {
-                        server: proxyServer,
-                        ...(proxyBypass && { bypass: proxyBypass }),
-                      }
-                    : undefined;
-
-                  const ignoreHTTPSErrors = process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1';
-                  const allowFileAccess = process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS === '1';
-                  // Stealth is always enabled in agent-browser-stealth
-                  const colorSchemeEnv = process.env.AGENT_BROWSER_COLOR_SCHEME;
-                  const colorScheme: 'dark' | 'light' | 'no-preference' | undefined =
-                    colorSchemeEnv === 'dark' ||
-                    colorSchemeEnv === 'light' ||
-                    colorSchemeEnv === 'no-preference'
-                      ? colorSchemeEnv
-                      : undefined;
-                  const tabGroup = process.env.AGENT_BROWSER_TAB_GROUP?.trim();
-                  const tabGroupPluginId = process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim();
-                  const launchOptions = {
-                    id: 'auto',
-                    action: 'launch' as const,
-                    headless:
-                      process.env.AGENT_BROWSER_HEADED !== '1' &&
-                      process.env.AGENT_BROWSER_HEADED !== 'true',
-                    executablePath: process.env.AGENT_BROWSER_EXECUTABLE_PATH,
-                    extensions: extensions,
-                    storageState: process.env.AGENT_BROWSER_STATE,
-                    args,
-                    userAgent: process.env.AGENT_BROWSER_USER_AGENT,
-                    proxy,
-                    ignoreHTTPSErrors: ignoreHTTPSErrors,
-                    allowFileAccess: allowFileAccess,
-
-                    colorScheme,
-                    tabGroup: tabGroup && tabGroup.length > 0 ? tabGroup : undefined,
-                    tabGroupPluginId:
-                      tabGroupPluginId && tabGroupPluginId.length > 0
-                        ? tabGroupPluginId
-                        : undefined,
-                    autoStateFilePath: getSessionAutoStatePath(),
-                  };
+                  const launchOptions = buildAutoLaunchOptionsFromEnv();
 
                   let attachedToExistingBrowser = false;
                   try {

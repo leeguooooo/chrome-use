@@ -316,7 +316,7 @@ agent-browser profiler start         # Start Chrome DevTools profiling
 agent-browser profiler stop trace.json # Stop and save profile (path optional)
 ```
 
-Use `AGENT_BROWSER_HEADED=1` to enable headed mode via environment variable. Browser extensions work in both headed and headless mode.
+Use `AGENT_BROWSER_HEADED=1` or `AGENT_BROWSER_HEADED=true` to enable headed mode via environment variable. In this fork, local launches and extension launches stay headed by default unless headless is explicitly requested.
 
 ### Local Files (PDFs, HTML)
 
@@ -630,6 +630,29 @@ agent-browser open example.com
 ```
 
 The native daemon supports Chromium and Safari (via WebDriver). Firefox and WebKit are not yet supported. All core commands (navigate, snapshot, click, fill, screenshot, cookies, storage, tabs, eval, etc.) work identically in native mode. Use `agent-browser close` before switching between native and default mode within the same session.
+
+## Browser Engine Selection
+
+Use `--engine` to choose a local browser engine. The default is `chrome`.
+
+```bash
+# Use Lightpanda (fast headless browser, requires separate install)
+agent-browser --engine lightpanda open example.com
+
+# Via environment variable
+export AGENT_BROWSER_ENGINE=lightpanda
+agent-browser open example.com
+
+# With a custom binary path
+agent-browser --engine lightpanda --executable-path /path/to/lightpanda open example.com
+```
+
+Supported engines:
+
+- `chrome` (default) -- Chrome/Chromium via CDP
+- `lightpanda` -- Lightpanda headless browser via CDP
+
+Lightpanda is headless-only and does not support `--extension`, `--state`, `--profile`, or `--allow-file-access`. Install it from https://lightpanda.io/docs/open-source/installation.
 
 ## Ready-to-Use Templates
 

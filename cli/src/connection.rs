@@ -396,11 +396,18 @@ pub fn ensure_daemon(
     device: Option<&str>,
     session_name: Option<&str>,
     debug: bool,
+    native: bool,
+    engine: Option<&str>,
     download_path: Option<&str>,
     tab_group: Option<&str>,
     tab_group_plugin_id: Option<&str>,
 ) -> Result<DaemonResult, String> {
-    let daemon_path = resolve_daemon_path()?;
+    let daemon_path = if native {
+        let exe = env::current_exe().map_err(|e| e.to_string())?;
+        exe.canonicalize().unwrap_or(exe)
+    } else {
+        resolve_daemon_path()?
+    };
 
     // Project policy: the default runtime channel is a singleton control plane.
     // Before touching it, reap all non-default channels to avoid stale daemon reuse.
@@ -482,16 +489,21 @@ pub fn ensure_daemon(
     {
         use std::os::unix::process::CommandExt;
 
-        let mut cmd = Command::new("node");
-        cmd.arg(&daemon_path)
-            .arg(if resident {
-                "--resident"
-            } else {
-                "--idle-auto-shutdown"
-            })
-            .env("AGENT_BROWSER_DAEMON", "1")
-            .env("AGENT_BROWSER_SESSION", session)
-            .env("AGENT_BROWSER_CLI_VERSION", env!("CARGO_PKG_VERSION"));
+        let mut cmd = if native {
+            Command::new(&daemon_path)
+        } else {
+            let mut cmd = Command::new("node");
+            cmd.arg(&daemon_path);
+            cmd
+        };
+        cmd.arg(if resident {
+            "--resident"
+        } else {
+            "--idle-auto-shutdown"
+        })
+        .env("AGENT_BROWSER_DAEMON", "1")
+        .env("AGENT_BROWSER_SESSION", session)
+        .env("AGENT_BROWSER_CLI_VERSION", env!("CARGO_PKG_VERSION"));
 
         if headed {
             cmd.env("AGENT_BROWSER_HEADED", "1");
@@ -543,6 +555,9 @@ pub fn ensure_daemon(
 
         if let Some(sn) = session_name {
             cmd.env("AGENT_BROWSER_SESSION_NAME", sn);
+        }
+        if let Some(engine) = engine {
+            cmd.env("AGENT_BROWSER_ENGINE", engine);
         }
 
         cmd.env("AGENT_BROWSER_STEALTH", "1");
@@ -573,7 +588,13 @@ pub fn ensure_daemon(
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("Failed to start daemon: {}", e))?,
+                .map_err(|e| {
+                    if native {
+                        format!("Failed to start native daemon: {}", e)
+                    } else {
+                        format!("Failed to start daemon: {}", e)
+                    }
+                })?,
         );
     }
 
@@ -581,18 +602,24 @@ pub fn ensure_daemon(
     {
         use std::os::windows::process::CommandExt;
 
-        // On Windows, call node directly. Command::new handles PATH resolution (node.exe or node.cmd)
-        // and automatically quotes arguments containing spaces.
-        let mut cmd = Command::new("node");
-        cmd.arg(&daemon_path)
-            .arg(if resident {
-                "--resident"
-            } else {
-                "--idle-auto-shutdown"
-            })
-            .env("AGENT_BROWSER_DAEMON", "1")
-            .env("AGENT_BROWSER_SESSION", session)
-            .env("AGENT_BROWSER_CLI_VERSION", env!("CARGO_PKG_VERSION"));
+        let mut cmd = if native {
+            Command::new(&daemon_path)
+        } else {
+            // On Windows, call node directly. Command::new handles PATH
+            // resolution (node.exe or node.cmd) and automatically quotes
+            // arguments containing spaces.
+            let mut cmd = Command::new("node");
+            cmd.arg(&daemon_path);
+            cmd
+        };
+        cmd.arg(if resident {
+            "--resident"
+        } else {
+            "--idle-auto-shutdown"
+        })
+        .env("AGENT_BROWSER_DAEMON", "1")
+        .env("AGENT_BROWSER_SESSION", session)
+        .env("AGENT_BROWSER_CLI_VERSION", env!("CARGO_PKG_VERSION"));
 
         if headed {
             cmd.env("AGENT_BROWSER_HEADED", "1");
@@ -645,6 +672,9 @@ pub fn ensure_daemon(
         if let Some(sn) = session_name {
             cmd.env("AGENT_BROWSER_SESSION_NAME", sn);
         }
+        if let Some(engine) = engine {
+            cmd.env("AGENT_BROWSER_ENGINE", engine);
+        }
 
         cmd.env("AGENT_BROWSER_STEALTH", "1");
         if debug {
@@ -670,7 +700,13 @@ pub fn ensure_daemon(
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("Failed to start daemon: {}", e))?,
+                .map_err(|e| {
+                    if native {
+                        format!("Failed to start native daemon: {}", e)
+                    } else {
+                        format!("Failed to start daemon: {}", e)
+                    }
+                })?,
         );
     }
 

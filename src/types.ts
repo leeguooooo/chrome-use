@@ -46,6 +46,7 @@ export interface LaunchCommand extends BaseCommand {
   allowedDomains?: string[];
   actionPolicy?: string;
   confirmActions?: string[];
+  engine?: 'chrome' | 'lightpanda'; // Browser engine selection; lightpanda requires native mode
   // Auto-load state file for session persistence
   autoStateFilePath?: string;
 }

@@ -256,6 +256,15 @@ Most CLI flags can be set in the config file using their camelCase equivalents (
     </tr>
     <tr>
       <td>
+        <code>engine</code>
+      </td>
+      <td>
+        <code>--engine</code>
+      </td>
+      <td>string (<code>chrome</code>, <code>lightpanda</code>)</td>
+    </tr>
+    <tr>
+      <td>
         <code>colorScheme</code>
       </td>
       <td>
@@ -316,6 +325,8 @@ Most CLI flags can be set in the config file using their camelCase equivalents (
 </table>
 
 `riskMode` defaults to `warn` when unset.
+
+`engine` defaults to `chrome`. `lightpanda` implies native mode and is headless-only.
 
 For tab grouping in CDP mode, grouping is best-effort through the extension handshake:
 extension available => grouped by session; extension missing/unavailable => silent no-op.
@@ -399,11 +410,15 @@ agent-browser --headed true open example.com  # explicit
 
 This applies to all boolean flags: `--headed`, `--debug`, `--json`, `--ignore-https-errors`, `--allow-file-access`, `--auto-connect`, `--resident`.
 
+For environment variables, headed mode accepts either `AGENT_BROWSER_HEADED=1` or `AGENT_BROWSER_HEADED=true`.
+
 ## Extensions Merging
 
 Extensions from user-level and project-level configs are **concatenated**, not replaced. For example, if `~/.agent-browser/config.json` specifies `["/ext1"]` and `./agent-browser.json` specifies `["/ext2"]`, the result is `["/ext1", "/ext2"]`.
 
 The `AGENT_BROWSER_EXTENSIONS` environment variable and CLI `--extension` flags follow the standard priority rules (env replaces config, CLI appends).
+
+In this fork, local launches and extension launches remain headed by default unless headless is explicitly requested.
 
 ## Environment Variables
 
@@ -449,6 +464,17 @@ These environment variables configure additional daemon and runtime behavior:
       </td>
       <td>Default directory for browser downloads.</td>
       <td>(temp directory)</td>
+    </tr>
+    <tr>
+      <td>
+        <code>AGENT_BROWSER_ENGINE</code>
+      </td>
+      <td>
+        Browser engine to use: <code>chrome</code> (default), <code>lightpanda</code>. Implies native mode.
+      </td>
+      <td>
+        <code>chrome</code>
+      </td>
     </tr>
     <tr>
       <td>

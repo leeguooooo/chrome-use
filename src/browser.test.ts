@@ -260,6 +260,77 @@ describe('BrowserManager', () => {
       await cdpBrowser.close();
       spy.mockRestore();
     });
+
+    it('should keep local Chrome launch headed by default under fork policy', async () => {
+      const testBrowser = new BrowserManager();
+      const mockPage = {
+        close: vi.fn().mockResolvedValue(undefined),
+        emulateMedia: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue({ loose: true, strict: true }),
+        goto: vi.fn().mockResolvedValue(undefined),
+        isClosed: () => false,
+        on: vi.fn(),
+        url: () => 'about:blank',
+      };
+      const mockContext = {
+        addInitScript: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        newPage: vi.fn().mockResolvedValue(mockPage),
+        on: vi.fn(),
+        pages: () => [mockPage],
+        setDefaultTimeout: vi.fn(),
+      };
+      const mockBrowser = {
+        close: vi.fn().mockResolvedValue(undefined),
+        newContext: vi.fn().mockResolvedValue(mockContext),
+        version: vi.fn().mockReturnValue('123.0.6312.0'),
+      };
+      const launchSpy = vi.spyOn(chromium, 'launch').mockResolvedValue(mockBrowser as any);
+
+      await testBrowser.launch({ id: 'default-headed', action: 'launch' });
+
+      expect(launchSpy).toHaveBeenCalledTimes(1);
+      expect(launchSpy.mock.calls[0]?.[0]).toMatchObject({ headless: false });
+
+      await testBrowser.close();
+      launchSpy.mockRestore();
+    });
+
+    it('should keep extension launches headed by default under fork policy', async () => {
+      const testBrowser = new BrowserManager();
+      const mockPage = {
+        close: vi.fn().mockResolvedValue(undefined),
+        emulateMedia: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue({ loose: true, strict: true }),
+        goto: vi.fn().mockResolvedValue(undefined),
+        isClosed: () => false,
+        on: vi.fn(),
+        url: () => 'about:blank',
+      };
+      const mockContext = {
+        addInitScript: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        newPage: vi.fn().mockResolvedValue(mockPage),
+        on: vi.fn(),
+        pages: () => [mockPage],
+        setDefaultTimeout: vi.fn(),
+      };
+      const launchPersistentContextSpy = vi
+        .spyOn(chromium, 'launchPersistentContext')
+        .mockResolvedValue(mockContext as any);
+
+      await testBrowser.launch({
+        action: 'launch',
+        extensions: ['/tmp/ext-a', '/tmp/ext-b'],
+        id: 'ext-headed',
+      });
+
+      expect(launchPersistentContextSpy).toHaveBeenCalledTimes(1);
+      expect(launchPersistentContextSpy.mock.calls[0]?.[1]).toMatchObject({ headless: false });
+
+      await testBrowser.close();
+      launchPersistentContextSpy.mockRestore();
+    });
   });
 
   describe('tab-group plugin handshake', () => {
