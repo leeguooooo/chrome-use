@@ -4,7 +4,7 @@ use tokio::sync::broadcast;
 
 use super::auth;
 use super::browser::{BrowserManager, WaitUntil};
-use super::cdp::chrome::LaunchOptions;
+use super::cdp::chrome::{LaunchOptions, MANAGED_CDP_PORT};
 use super::cdp::types::{
     AttachToTargetParams, AttachToTargetResult, CdpEvent, ConsoleApiCalledEvent,
     CreateTargetResult, ExceptionThrownEvent, TargetCreatedEvent, TargetDestroyedEvent,
@@ -790,6 +790,7 @@ fn launch_options_from_env() -> LaunchOptions {
             .unwrap_or(false),
         color_scheme: env::var("AGENT_BROWSER_COLOR_SCHEME").ok(),
         download_path: env::var("AGENT_BROWSER_DOWNLOAD_PATH").ok(),
+        remote_debugging_port: None,
     }
 }
 
@@ -898,7 +899,22 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     }
 
     if let Some(port) = cdp_port {
-        state.browser = Some(BrowserManager::connect_cdp(&port.to_string()).await?);
+        let headed = !headless;
+        let port_u16 = u16::try_from(port).map_err(|_| format!("Invalid CDP port: {}", port))?;
+        let browser = match BrowserManager::connect_cdp(&port.to_string()).await {
+            Ok(browser) => browser,
+            Err(err) if port_u16 == MANAGED_CDP_PORT => {
+                if std::env::var("AGENT_BROWSER_DEBUG").as_deref() == Ok("1") {
+                    eprintln!(
+                        "[DEBUG] Preferred CDP port {} unavailable ({}), launching managed Chrome profile",
+                        MANAGED_CDP_PORT, err
+                    );
+                }
+                BrowserManager::launch_managed_cdp(executable_path.clone(), headed).await?
+            }
+            Err(err) => return Err(err),
+        };
+        state.browser = Some(browser);
         state.subscribe_to_browser_events();
         return Ok(json!({ "launched": true }));
     }
@@ -990,6 +1006,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
             .get("downloadPath")
             .and_then(|v| v.as_str())
             .map(String::from),
+        remote_debugging_port: None,
     };
 
     if let Some(ref domains) = cmd

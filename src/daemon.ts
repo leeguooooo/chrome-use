@@ -536,10 +536,10 @@ export async function startDaemon(options?: {
                   // Auto-launch desktop browser
                   const launchOptions = buildAutoLaunchOptionsFromEnv();
 
-                  let attachedToExistingBrowser = false;
+                  let attachedToManagedBrowser = false;
                   try {
-                    // Keep default CDP attempt minimal. Launch-only options like extensions
-                    // are incompatible with CDP and can cause false-negative attach failures.
+                    // Keep the preferred localhost:9333 path minimal so the daemon can
+                    // connect to or auto-start the dedicated automation Chrome profile.
                     const cdpLaunchOptions = {
                       id: launchOptions.id,
                       action: launchOptions.action,
@@ -553,52 +553,26 @@ export async function startDaemon(options?: {
                     await manager.launch({
                       ...cdpLaunchOptions,
                     });
-                    attachedToExistingBrowser = true;
+                    attachedToManagedBrowser = true;
                     if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                      console.error('[DEBUG] Auto-launch connected via default CDP port 9333');
+                      console.error('[DEBUG] Auto-launch connected via managed CDP port 9333');
                     }
                   } catch (error) {
                     if (process.env.AGENT_BROWSER_DEBUG === '1') {
                       const message = error instanceof Error ? error.message : String(error);
-                      console.error(
-                        `[DEBUG] Default CDP port 9333 unavailable, trying auto-connect discovery: ${message}`
-                      );
+                      console.error(`[DEBUG] Managed CDP port 9333 unavailable: ${message}`);
                     }
                   }
 
-                  if (!attachedToExistingBrowser) {
-                    try {
-                      await manager.launch({
-                        id: launchOptions.id,
-                        action: launchOptions.action,
-                        autoConnect: true,
-                        ignoreHTTPSErrors: launchOptions.ignoreHTTPSErrors,
-                        colorScheme: launchOptions.colorScheme,
-                        userAgent: launchOptions.userAgent,
-                        tabGroup: launchOptions.tabGroup,
-                        tabGroupPluginId: launchOptions.tabGroupPluginId,
-                      });
-                      attachedToExistingBrowser = true;
-                      if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                        console.error('[DEBUG] Auto-launch connected via auto-connect discovery');
-                      }
-                    } catch (error) {
-                      if (process.env.AGENT_BROWSER_DEBUG === '1') {
-                        const message = error instanceof Error ? error.message : String(error);
-                        console.error(`[DEBUG] Auto-connect discovery failed: ${message}`);
-                      }
-                    }
-                  }
-
-                  if (!attachedToExistingBrowser) {
+                  if (!attachedToManagedBrowser) {
                     throw new Error(
-                      'Project policy requires using your existing browser. Could not connect to CDP at localhost:9333 and auto-discovery also failed.'
+                      'Project policy requires using the dedicated automation browser on localhost:9333. Could not connect to or auto-start the managed Chrome profile.'
                     );
                   }
                 }
               }
 
-              // For doctor, attempt the same default attach flow but do not fail hard if attach is unavailable.
+              // For doctor, attempt the same managed localhost:9333 flow but do not fail hard if attach is unavailable.
               // This keeps diagnostics actionable even when CDP is down.
               if (!manager.isLaunched() && isDoctor && manager instanceof BrowserManager) {
                 try {
@@ -622,29 +596,7 @@ export async function startDaemon(options?: {
                       process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim() || undefined,
                   });
                 } catch {
-                  try {
-                    await manager.launch({
-                      id: 'doctor-auto-connect',
-                      action: 'launch',
-                      autoConnect: true,
-                      ignoreHTTPSErrors: process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1',
-                      userAgent: process.env.AGENT_BROWSER_USER_AGENT,
-                      colorScheme:
-                        process.env.AGENT_BROWSER_COLOR_SCHEME === 'dark' ||
-                        process.env.AGENT_BROWSER_COLOR_SCHEME === 'light' ||
-                        process.env.AGENT_BROWSER_COLOR_SCHEME === 'no-preference'
-                          ? (process.env.AGENT_BROWSER_COLOR_SCHEME as
-                              | 'dark'
-                              | 'light'
-                              | 'no-preference')
-                          : undefined,
-                      tabGroup: process.env.AGENT_BROWSER_TAB_GROUP?.trim() || undefined,
-                      tabGroupPluginId:
-                        process.env.AGENT_BROWSER_TAB_GROUP_PLUGIN_ID?.trim() || undefined,
-                    });
-                  } catch {
-                    // Keep running: doctor should report failures instead of exiting early.
-                  }
+                  // Keep running: doctor should report failures instead of exiting early.
                 }
               }
 

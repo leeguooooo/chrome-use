@@ -6,7 +6,7 @@ export const metadata = pageMetadata('cdp-mode');
 
 Connect to an existing browser via Chrome DevTools Protocol:
 
-Default behavior in this fork: when `--cdp` is omitted, agent-browser auto-attaches to an existing browser by trying `localhost:9333` first, then auto-discovery. If both fail, the command exits (no managed local-launch fallback).
+Default behavior in this fork: when `--cdp` is omitted, agent-browser targets the managed automation browser on `localhost:9333`. If `:9333` is unavailable, it auto-starts Chrome with the persistent profile `~/.agent-browser/chrome-bot-profile` and retries the CDP connection.
 
 Project policy:
 
@@ -66,6 +66,8 @@ This is useful when:
 - Chrome 144+ has remote debugging enabled via `chrome://inspect/#remote-debugging` (which uses a dynamic port)
 - You want a zero-configuration connection to your existing browser
 - You don't want to track which port Chrome is using
+
+Use this mode only when you intentionally want to attach to an existing manual browser session. Recent Chrome builds may display a permission prompt before allowing remote debugging access to that session.
 
 ## Color scheme
 

@@ -623,8 +623,9 @@ fn main() {
     }
 
     // Project policy: when no explicit connection mode is provided,
-    // commands should attach to an existing browser.
-    // Try CDP :9333 first, then fall back to auto-connect discovery.
+    // commands should use the dedicated automation browser on localhost:9333.
+    // If 9333 is unavailable, the native daemon auto-starts a managed Chrome
+    // instance with a non-default profile and retries the CDP connection.
     if can_try_default_cdp {
         let mut launch_cmd = json!({
             "id": gen_id(),
@@ -645,31 +646,9 @@ fn main() {
         if let Ok(resp) = send_command(launch_cmd, &flags.session) {
             attached_to_existing_browser = resp.success;
         }
-
-        if !attached_to_existing_browser {
-            let mut auto_connect_cmd = json!({
-                "id": gen_id(),
-                "action": "launch",
-                "autoConnect": true
-            });
-
-            if let Some(ref cs) = flags.color_scheme {
-                auto_connect_cmd["colorScheme"] = json!(cs);
-            }
-            if let Some(ref tg) = flags.tab_group {
-                auto_connect_cmd["tabGroup"] = json!(tg);
-            }
-            if let Some(ref plugin_id) = flags.tab_group_plugin_id {
-                auto_connect_cmd["tabGroupPluginId"] = json!(plugin_id);
-            }
-
-            if let Ok(resp) = send_command(auto_connect_cmd, &flags.session) {
-                attached_to_existing_browser = resp.success;
-            }
-        }
     }
     if can_try_default_cdp && !attached_to_existing_browser {
-        let msg = "Project policy requires using your existing browser. Could not connect to CDP at localhost:9333 and auto-discovery also failed. Start Chrome with remote debugging (for example, --remote-debugging-port=9333), or pass --cdp <port|url>.";
+        let msg = "Project policy requires using the dedicated automation browser on localhost:9333. Could not connect to or auto-start the managed Chrome profile. Start Chrome with --remote-debugging-port=9333 and a non-default --user-data-dir, or pass --cdp / --auto-connect explicitly.";
         if flags.json {
             println!(r#"{{"success":false,"error":"{}"}}"#, msg);
         } else {

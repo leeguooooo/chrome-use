@@ -73,6 +73,7 @@ pub struct LaunchOptions {
     pub ignore_https_errors: bool,
     pub color_scheme: Option<String>,
     pub download_path: Option<String>,
+    pub remote_debugging_port: Option<u16>,
 }
 
 impl Default for LaunchOptions {
@@ -91,6 +92,7 @@ impl Default for LaunchOptions {
             ignore_https_errors: false,
             color_scheme: None,
             download_path: None,
+            remote_debugging_port: None,
         }
     }
 }
@@ -101,8 +103,10 @@ struct ChromeArgs {
 }
 
 fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
+    let remote_debugging_port = options.remote_debugging_port.unwrap_or(0);
     let mut args = vec![
-        "--remote-debugging-port=0".to_string(),
+        format!("--remote-debugging-port={}", remote_debugging_port),
+        "--remote-debugging-address=127.0.0.1".to_string(),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
         "--disable-background-networking".to_string(),
@@ -184,6 +188,47 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         args,
         temp_user_data_dir,
     })
+}
+
+pub const MANAGED_CDP_PORT: u16 = 9333;
+
+pub fn managed_cdp_profile_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::env::temp_dir())
+        .join(".agent-browser")
+        .join("chrome-bot-profile")
+}
+
+fn cleanup_managed_profile_locks(profile_dir: &Path) {
+    let _ = std::fs::remove_file(profile_dir.join("DevToolsActivePort"));
+    if let Ok(entries) = std::fs::read_dir(profile_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with("Singleton") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+pub fn launch_managed_chrome(
+    executable_path: Option<String>,
+    headed: bool,
+) -> Result<ChromeProcess, String> {
+    let profile_dir = managed_cdp_profile_dir();
+    std::fs::create_dir_all(&profile_dir)
+        .map_err(|e| format!("Failed to create managed Chrome profile dir: {}", e))?;
+    cleanup_managed_profile_locks(&profile_dir);
+
+    let options = LaunchOptions {
+        headless: !headed,
+        executable_path,
+        profile: Some(profile_dir.to_string_lossy().to_string()),
+        remote_debugging_port: Some(MANAGED_CDP_PORT),
+        ..Default::default()
+    };
+
+    launch_chrome(&options)
 }
 
 pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {

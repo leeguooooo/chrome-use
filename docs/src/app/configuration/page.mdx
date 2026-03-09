@@ -6,7 +6,7 @@ export const metadata = pageMetadata('configuration');
 
 Create an `agent-browser.json` file to set persistent defaults instead of repeating flags on every command.
 
-In this fork, default launch behavior auto-attaches to an existing browser by trying `localhost:9333` (CDP) first, then auto-discovery. If both fail, commands exit instead of launching a managed browser.
+In this fork, default launch behavior uses a dedicated automation browser on `localhost:9333` (CDP). If `:9333` is unavailable, agent-browser auto-starts Chrome with the persistent profile `~/.agent-browser/chrome-bot-profile` and retries the connection.
 
 ## Config File Locations
 

@@ -14,9 +14,10 @@ import {
   type CDPSession,
   type Video,
 } from 'playwright-core';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync, mkdirSync, rmSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, statSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import type {
   DoctorCheck,
@@ -134,6 +135,8 @@ interface StealthContextDefaults {
 }
 
 const IGNORED_CDP_PAGE_URL_PREFIXES = ['chrome://omnibox-popup.top-chrome/'];
+const MANAGED_CDP_PORT = 9333;
+const MANAGED_CDP_START_TIMEOUT_MS = 20_000;
 const DEFAULT_TAB_GROUP_NAME = 'Agent Browser Stealth';
 const DEFAULT_TAB_GROUP_PLUGIN_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const TAB_GROUP_REQUEST_MESSAGE_TYPE = 'AB_TAB_GROUP_REQUEST';
@@ -147,6 +150,65 @@ interface TabGroupIntent {
   groupTitle: string;
   pluginId: string;
   allowedDomains: string[];
+}
+
+function getManagedCdpProfileDir(): string {
+  return path.join(os.homedir(), '.agent-browser', 'chrome-bot-profile');
+}
+
+function cleanupManagedCdpProfileLocks(profileDir: string): void {
+  rmSync(path.join(profileDir, 'DevToolsActivePort'), { force: true });
+  try {
+    for (const entry of readdirSync(profileDir)) {
+      if (entry.startsWith('Singleton')) {
+        rmSync(path.join(profileDir, entry), { force: true, recursive: true });
+      }
+    }
+  } catch {
+    // Best-effort cleanup for stale lock files.
+  }
+}
+
+function findManagedChromeExecutable(): string {
+  const configured = process.env.AGENT_BROWSER_EXECUTABLE_PATH;
+  if (configured && existsSync(configured)) {
+    return configured;
+  }
+
+  const platform = os.platform();
+  const candidates =
+    platform === 'darwin'
+      ? [
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+          '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        ]
+      : platform === 'win32'
+        ? [
+            'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+          ]
+        : [];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  if (platform !== 'win32') {
+    for (const name of ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium']) {
+      const result = spawnSync('which', [name], { encoding: 'utf8' });
+      if (result.status === 0) {
+        const resolved = result.stdout.trim();
+        if (resolved.length > 0) {
+          return resolved;
+        }
+      }
+    }
+  }
+
+  throw new Error('Chrome not found. Install Chrome or set AGENT_BROWSER_EXECUTABLE_PATH.');
 }
 
 /**
@@ -188,6 +250,61 @@ export class BrowserManager {
   private tabGroupIntent: TabGroupIntent | null = null;
   private tabGroupCapabilityBySession: Map<string, TabGroupPluginAvailability> = new Map();
   private tabGroupInFlight: WeakSet<Page> = new WeakSet();
+
+  private isManagedCdpEndpoint(cdpEndpoint: string): boolean {
+    return (
+      cdpEndpoint === String(MANAGED_CDP_PORT) ||
+      cdpEndpoint === `http://localhost:${MANAGED_CDP_PORT}` ||
+      cdpEndpoint === `http://127.0.0.1:${MANAGED_CDP_PORT}` ||
+      cdpEndpoint === `ws://127.0.0.1:${MANAGED_CDP_PORT}` ||
+      cdpEndpoint.includes(`127.0.0.1:${MANAGED_CDP_PORT}/devtools/browser/`) ||
+      cdpEndpoint.includes(`localhost:${MANAGED_CDP_PORT}/devtools/browser/`)
+    );
+  }
+
+  private async ensureManagedCdpBrowser(): Promise<void> {
+    if (await this.probeDebugPort(MANAGED_CDP_PORT)) {
+      return;
+    }
+
+    const profileDir = getManagedCdpProfileDir();
+    mkdirSync(profileDir, { recursive: true });
+    cleanupManagedCdpProfileLocks(profileDir);
+
+    const executablePath = findManagedChromeExecutable();
+    const headed =
+      process.env.AGENT_BROWSER_HEADED === '1' || process.env.AGENT_BROWSER_HEADED === 'true';
+    const args = [
+      '--remote-debugging-address=127.0.0.1',
+      `--remote-debugging-port=${MANAGED_CDP_PORT}`,
+      `--user-data-dir=${profileDir}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+    ];
+    if (!headed) {
+      args.push('--headless=new', '--window-size=1280,720');
+    }
+
+    const child = spawn(executablePath, args, {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    const deadline = Date.now() + MANAGED_CDP_START_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const wsUrl = await this.probeDebugPort(MANAGED_CDP_PORT);
+      if (wsUrl) {
+        return;
+      }
+      if (child.exitCode !== null) {
+        throw new Error(`Managed Chrome exited before opening CDP port ${MANAGED_CDP_PORT}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    throw new Error(`Timed out waiting for managed Chrome on localhost:${MANAGED_CDP_PORT}`);
+  }
 
   /**
    * Set the persistent color scheme preference.
@@ -2009,7 +2126,15 @@ export class BrowserManager {
     }
 
     if (cdpEndpoint) {
-      await this.connectViaCDP(cdpEndpoint);
+      try {
+        await this.connectViaCDP(cdpEndpoint);
+      } catch (error) {
+        if (!this.isManagedCdpEndpoint(cdpEndpoint)) {
+          throw error;
+        }
+        await this.ensureManagedCdpBrowser();
+        await this.connectViaCDP(cdpEndpoint);
+      }
       return;
     }
 

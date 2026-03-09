@@ -220,14 +220,14 @@ Default-session commands intentionally reap all non-default daemon sessions (`pa
 
 ### Connect to Existing Chrome
 
-By default in this fork, commands without `--cdp` auto-attach to your existing browser with this order:
+By default in this fork, commands without `--cdp` use a dedicated automation browser with this order:
 
 1. Try CDP at `localhost:9333`
-2. If unavailable, fall back to `--auto-connect`-style discovery
-3. If both fail, exit with guidance (no automatic managed local browser launch on this path)
+2. If unavailable, auto-start Chrome with the persistent profile `~/.agent-browser/chrome-bot-profile`
+3. If managed `:9333` startup fails, exit with guidance
 
 ```bash
-# Auto-discover running Chrome with remote debugging enabled
+# Explicitly attach to an existing manual Chrome session
 agent-browser --auto-connect open https://example.com
 agent-browser --auto-connect snapshot
 
@@ -331,7 +331,7 @@ agent-browser screenshot output.png
 
 - `--profile` / `AGENT_BROWSER_PROFILE` are forbidden
 - `--channel` / `AGENT_BROWSER_CHANNEL` are forbidden
-- Use existing browser sessions (default attach path: CDP `localhost:9333` then auto-discovery) or pass `--cdp` explicitly
+- Default mode uses the managed CDP browser on `localhost:9333`; use `--auto-connect` only for explicit existing-browser attachment
 
 ### Stealth Mode (Always On)
 

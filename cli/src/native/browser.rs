@@ -5,7 +5,8 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 use super::cdp::chrome::{
-    auto_connect_cdp, discover_cdp_url, launch_chrome, ChromeProcess, LaunchOptions,
+    auto_connect_cdp, discover_cdp_url, launch_chrome, launch_managed_chrome, ChromeProcess,
+    LaunchOptions,
 };
 use super::cdp::client::CdpClient;
 use super::cdp::lightpanda::{launch_lightpanda, LightpandaLaunchOptions, LightpandaProcess};
@@ -144,6 +145,7 @@ pub enum BrowserProcess {
 pub struct BrowserManager {
     pub client: CdpClient,
     browser_process: Option<BrowserProcess>,
+    cdp_connection: bool,
     pages: Vec<PageInfo>,
     active_page_index: usize,
     default_timeout_ms: u64,
@@ -202,6 +204,7 @@ impl BrowserManager {
         let mut manager = Self {
             client,
             browser_process: Some(process),
+            cdp_connection: false,
             pages: Vec::new(),
             active_page_index: 0,
             default_timeout_ms: 25_000,
@@ -264,6 +267,31 @@ impl BrowserManager {
         let mut manager = Self {
             client,
             browser_process: None,
+            cdp_connection: true,
+            pages: Vec::new(),
+            active_page_index: 0,
+            default_timeout_ms: 10_000,
+        };
+
+        manager.discover_and_attach_targets().await?;
+        Ok(manager)
+    }
+
+    pub async fn launch_managed_cdp(
+        executable_path: Option<String>,
+        headed: bool,
+    ) -> Result<Self, String> {
+        let process =
+            tokio::task::spawn_blocking(move || launch_managed_chrome(executable_path, headed))
+                .await
+                .map_err(|e| format!("Managed Chrome launch task failed: {}", e))??;
+
+        let ws_url = process.ws_url.clone();
+        let client = CdpClient::connect(&ws_url).await?;
+        let mut manager = Self {
+            client,
+            browser_process: Some(BrowserProcess::Chrome(process)),
+            cdp_connection: true,
             pages: Vec::new(),
             active_page_index: 0,
             default_timeout_ms: 10_000,
@@ -643,7 +671,7 @@ impl BrowserManager {
 
     /// Returns true if this manager was connected via CDP (as opposed to local launch).
     pub fn is_cdp_connection(&self) -> bool {
-        self.browser_process.is_none()
+        self.cdp_connection
     }
 
     /// Ensures the browser has at least one page. If `pages` is empty, creates a new

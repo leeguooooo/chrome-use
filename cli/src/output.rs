@@ -2461,7 +2461,7 @@ Options:
   --headed                   Show browser window (not headless) (or AGENT_BROWSER_HEADED=1/true)
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
   --auto-connect             Auto-discover and connect to running Chrome
-                             Project default: try localhost:9333 first, then auto-discovery (no managed local-launch fallback)
+                             Explicit existing-browser mode; may trigger Chrome permission prompts
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
   --tab-group <name>         Base title for agent tab groups (CDP plugin mode; silent no-op if plugin unavailable)
@@ -2490,7 +2490,8 @@ Policy:
   --profile / AGENT_BROWSER_PROFILE are forbidden
   --channel / AGENT_BROWSER_CHANNEL are forbidden
   Daemon auto-shuts down after 10 minutes of inactivity unless --resident is set
-  Auto-attach existing browser (prefer CDP localhost:9333, then auto-discovery), or pass --cdp explicitly
+  Default mode uses localhost:9333. If 9333 is unavailable, agent-browser auto-starts a dedicated Chrome profile at ~/.agent-browser/chrome-bot-profile
+  Use --auto-connect only when you explicitly want to attach to an existing manual browser session
 
 Configuration:
   agent-browser looks for agent-browser.json in these locations (lowest to highest priority):

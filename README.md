@@ -175,7 +175,7 @@ flowchart TD
 - Project policy forbids:
   - `--profile` / `AGENT_BROWSER_PROFILE`
   - `--channel` / `AGENT_BROWSER_CHANNEL`
-- Default CLI policy auto-attaches an existing browser: try CDP `localhost:9333` first, then auto-discovery unless explicit connection options are provided.
+- Default CLI policy uses a dedicated automation browser on CDP `localhost:9333`. If `:9333` is unavailable, agent-browser auto-starts Chrome with the persistent profile `~/.agent-browser/chrome-bot-profile`.
 
 ## Principle 2: Multi-Layer Fingerprint Hardening
 
