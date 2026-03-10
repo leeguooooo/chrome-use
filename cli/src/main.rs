@@ -11,11 +11,13 @@ mod validation;
 
 use serde_json::json;
 use std::env;
+use std::net::{SocketAddr, TcpStream};
 use std::process::exit;
+use std::time::Duration;
 
 use commands::{gen_id, parse_command, ParseError};
-use connection::{ensure_daemon, list_live_sessions, send_command};
-use flags::{clean_args, parse_flags};
+use connection::{ensure_daemon, list_live_sessions, send_command, Response};
+use flags::{clean_args, parse_flags, Flags};
 use install::run_install;
 use output::{print_command_help, print_help, print_response, print_version};
 
@@ -47,6 +49,29 @@ fn parse_proxy(proxy_str: &str) -> serde_json::Value {
         "username": &creds[..colon_pos],
         "password": &creds[colon_pos + 1..]
     })
+}
+
+fn should_try_default_cdp(flags: &Flags, command_name: Option<&str>) -> bool {
+    !matches!(command_name, Some("close"))
+        && flags.cdp.is_none()
+        && !flags.auto_connect
+        && flags.provider.is_none()
+        && flags.executable_path.is_none()
+        && flags.state.is_none()
+        && flags.proxy.is_none()
+        && flags.args.is_none()
+        && flags.user_agent.is_none()
+        && !flags.ignore_https_errors
+        && !flags.allow_file_access
+        && flags.extensions.is_empty()
+}
+
+fn managed_cdp_port_ready() -> bool {
+    let addr: SocketAddr = match "127.0.0.1:9333".parse() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
 
 fn run_session(args: &[String], session: &str, json_mode: bool) {
@@ -113,17 +138,7 @@ fn main() {
         flags.native = true;
     }
 
-    let can_try_default_cdp = flags.cdp.is_none()
-        && !flags.auto_connect
-        && flags.provider.is_none()
-        && flags.executable_path.is_none()
-        && flags.state.is_none()
-        && flags.proxy.is_none()
-        && flags.args.is_none()
-        && flags.user_agent.is_none()
-        && !flags.ignore_https_errors
-        && !flags.allow_file_access
-        && flags.extensions.is_empty();
+    let can_try_default_cdp = should_try_default_cdp(&flags, command_name);
     let can_force_native_for_cdp = !matches!(command_name, Some("close"));
     if !flags.native
         && can_force_native_for_cdp
@@ -622,41 +637,6 @@ fn main() {
         }
     }
 
-    // Project policy: when no explicit connection mode is provided,
-    // commands should use the dedicated automation browser on localhost:9333.
-    // If 9333 is unavailable, the native daemon auto-starts a managed Chrome
-    // instance with a non-default profile and retries the CDP connection.
-    if can_try_default_cdp {
-        let mut launch_cmd = json!({
-            "id": gen_id(),
-            "action": "launch",
-            "cdpPort": 9333
-        });
-
-        if let Some(ref cs) = flags.color_scheme {
-            launch_cmd["colorScheme"] = json!(cs);
-        }
-        if let Some(ref tg) = flags.tab_group {
-            launch_cmd["tabGroup"] = json!(tg);
-        }
-        if let Some(ref plugin_id) = flags.tab_group_plugin_id {
-            launch_cmd["tabGroupPluginId"] = json!(plugin_id);
-        }
-
-        if let Ok(resp) = send_command(launch_cmd, &flags.session) {
-            attached_to_existing_browser = resp.success;
-        }
-    }
-    if can_try_default_cdp && !attached_to_existing_browser {
-        let msg = "Project policy requires using the dedicated automation browser on localhost:9333. Could not connect to or auto-start the managed Chrome profile. Start Chrome with --remote-debugging-port=9333 and a non-default --user-data-dir, or pass --cdp / --auto-connect explicitly.";
-        if flags.json {
-            println!(r#"{{"success":false,"error":"{}"}}"#, msg);
-        } else {
-            eprintln!("{} {}", color::error_indicator(), msg);
-        }
-        exit(1);
-    }
-
     // Launch headed browser or configure browser options (without CDP or provider)
     if (flags.headed
         || flags.executable_path.is_some()
@@ -673,6 +653,7 @@ fn main() {
         && flags.cdp.is_none()
         && flags.provider.is_none()
         && !attached_to_existing_browser
+        && !can_try_default_cdp
     {
         let mut launch_cmd = json!({
             "id": gen_id(),
@@ -782,6 +763,18 @@ fn main() {
             }
         }
         Err(e) => {
+            let is_start = command_name == Some("start")
+                && cmd.get("action").and_then(|v| v.as_str()) == Some("launch")
+                && cmd.get("cdpPort").and_then(|v| v.as_u64()) == Some(9333);
+            if is_start && managed_cdp_port_ready() {
+                let resp = Response {
+                    success: true,
+                    data: Some(json!({ "launched": true })),
+                    error: None,
+                };
+                print_response(&resp, flags.json, Some("launch"));
+                return;
+            }
             if flags.json {
                 println!(r#"{{"success":false,"error":"{}"}}"#, e);
             } else {
@@ -848,5 +841,17 @@ mod tests {
         assert_eq!(result["server"], "http://proxy.com:8080");
         assert_eq!(result["username"], "user");
         assert_eq!(result["password"], "p@ss:w0rd");
+    }
+
+    #[test]
+    fn test_should_try_default_cdp_for_open() {
+        let flags = parse_flags(&[]);
+        assert!(should_try_default_cdp(&flags, Some("open")));
+    }
+
+    #[test]
+    fn test_should_not_try_default_cdp_for_close() {
+        let flags = parse_flags(&[]);
+        assert!(!should_try_default_cdp(&flags, Some("close")));
     }
 }

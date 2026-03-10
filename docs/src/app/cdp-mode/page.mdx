@@ -8,6 +8,13 @@ Connect to an existing browser via Chrome DevTools Protocol:
 
 Default behavior in this fork: when `--cdp` is omitted, agent-browser targets the managed automation browser on `localhost:9333`. If `:9333` is unavailable, it auto-starts Chrome with the persistent profile `~/.agent-browser/chrome-bot-profile` and retries the CDP connection.
 
+If you want to pre-start that managed browser explicitly, run:
+
+```bash
+agent-browser start
+abs start
+```
+
 Project policy:
 
 - `--profile` / `AGENT_BROWSER_PROFILE` are forbidden

@@ -215,6 +215,14 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
             }
             Ok(nav_cmd)
         }
+        // Prepare the managed automation browser on localhost:9333 without navigating.
+        // This reuses the existing launch action so both Node and native daemons stay aligned.
+        "start" => Ok(json!({
+            "id": id,
+            "action": "launch",
+            "cdpPort": 9333,
+            "headless": !flags.headed
+        })),
         "back" => Ok(json!({ "id": id, "action": "back" })),
         "forward" => Ok(json!({ "id": id, "action": "forward" })),
         "reload" => Ok(json!({ "id": id, "action": "reload" })),
@@ -2361,6 +2369,22 @@ mod tests {
         let cmd = parse_command(&args("open example.com"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "navigate");
         assert_eq!(cmd["url"], "https://example.com");
+    }
+
+    #[test]
+    fn test_start_command_uses_managed_cdp() {
+        let cmd = parse_command(&args("start"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "launch");
+        assert_eq!(cmd["cdpPort"], 9333);
+        assert_eq!(cmd["headless"], true);
+    }
+
+    #[test]
+    fn test_start_command_respects_headed_flag() {
+        let mut flags = default_flags();
+        flags.headed = true;
+        let cmd = parse_command(&args("start"), &flags).unwrap();
+        assert_eq!(cmd["headless"], false);
     }
 
     #[test]

@@ -47,6 +47,7 @@ abs install
 ### Minimal Usage
 
 ```bash
+agent-browser start
 agent-browser open https://example.com
 agent-browser snapshot -i
 agent-browser click @e2
@@ -176,6 +177,7 @@ flowchart TD
   - `--profile` / `AGENT_BROWSER_PROFILE`
   - `--channel` / `AGENT_BROWSER_CHANNEL`
 - Default CLI policy uses a dedicated automation browser on CDP `localhost:9333`. If `:9333` is unavailable, agent-browser auto-starts Chrome with the persistent profile `~/.agent-browser/chrome-bot-profile`.
+- Use `agent-browser start` (or `abs start`) when you want to pre-start that managed `:9333` browser before unattended work begins.
 
 ## Principle 2: Multi-Layer Fingerprint Hardening
 

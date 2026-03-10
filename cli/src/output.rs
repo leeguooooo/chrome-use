@@ -435,6 +435,12 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             }
             return;
         }
+        // Launch/start
+        if data.get("launched").is_some() {
+            let label = "Browser ready";
+            println!("{} {}", color::success_indicator(), label);
+            return;
+        }
         // Closed (browser or tab)
         if data.get("closed").is_some() {
             let label = match action {
@@ -884,6 +890,24 @@ Examples:
   agent-browser open localhost:3000
   agent-browser open api.example.com --headers '{"Authorization": "Bearer token"}'
     # ^ Headers only sent to api.example.com, not other domains
+"##
+        }
+        "start" => {
+            r##"
+agent-browser start - Start the managed automation browser on localhost:9333
+
+Usage: agent-browser start
+
+Starts or reuses the dedicated automation Chrome profile on localhost:9333
+without navigating to a page. Use this to pre-warm the managed browser for
+unattended runs.
+
+Global Options:
+  --json               Output as JSON
+
+Examples:
+  agent-browser start
+  abs start
 "##
         }
         "back" => {
@@ -2339,6 +2363,7 @@ Aliases: agent-browser, agent-browser-stealth, abs
 
 Core Commands:
   open <url>                 Navigate to URL
+  start                      Start managed browser on localhost:9333
   click <sel>                Click element (or @ref)
   dblclick <sel>             Double-click element
   type <sel> <text> [--delay <ms>]  Type into element

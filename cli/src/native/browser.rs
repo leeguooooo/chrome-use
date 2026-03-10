@@ -111,6 +111,11 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     error.to_string()
 }
 
+fn is_startup_internal_page(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.starts_with("chrome://profile-picker")
+}
+
 #[derive(Debug, Clone)]
 pub struct PageInfo {
     pub target_id: String,
@@ -416,8 +421,22 @@ impl BrowserManager {
             if attached_pages.is_empty() {
                 self.create_and_attach_blank_page().await?;
             } else {
+                let preferred_index = attached_pages
+                    .iter()
+                    .position(|page| !is_startup_internal_page(&page.url));
+
                 self.pages = attached_pages;
-                self.active_page_index = 0;
+
+                if let Some(index) = preferred_index {
+                    self.active_page_index = index;
+                } else {
+                    if std::env::var("AGENT_BROWSER_DEBUG").as_deref() == Ok("1") {
+                        eprintln!(
+                            "[DEBUG] All discovered pages were Chrome startup pages; creating a fresh about:blank target"
+                        );
+                    }
+                    self.create_and_attach_blank_page().await?;
+                }
             }
         }
 
@@ -450,6 +469,7 @@ impl BrowserManager {
 
     pub async fn navigate(&mut self, url: &str, wait_until: WaitUntil) -> Result<Value, String> {
         let session_id = self.active_session_id()?.to_string();
+        let rx = self.client.subscribe();
 
         let nav_result: PageNavigateResult = self
             .client
@@ -467,7 +487,7 @@ impl BrowserManager {
             return Err(format!("Navigation failed: {}", error_text));
         }
 
-        self.wait_for_lifecycle(wait_until, &session_id).await?;
+        self.wait_for_lifecycle(wait_until, &session_id, rx).await?;
 
         let page_url = self.get_url().await.unwrap_or_else(|_| url.to_string());
         let title = self.get_title().await.unwrap_or_default();
@@ -484,14 +504,14 @@ impl BrowserManager {
         &self,
         wait_until: WaitUntil,
         session_id: &str,
+        mut rx: tokio::sync::broadcast::Receiver<CdpEvent>,
     ) -> Result<(), String> {
         let event_name = match wait_until {
             WaitUntil::Load => "Page.loadEventFired",
             WaitUntil::DomContentLoaded => "Page.domContentEventFired",
-            WaitUntil::NetworkIdle => return self.wait_for_network_idle(session_id).await,
+            WaitUntil::NetworkIdle => return self.wait_for_network_idle(session_id, rx).await,
         };
 
-        let mut rx = self.client.subscribe();
         let timeout = tokio::time::Duration::from_millis(self.default_timeout_ms);
 
         tokio::time::timeout(timeout, async {
@@ -506,8 +526,11 @@ impl BrowserManager {
         .map_err(|_| format!("Timeout waiting for {}", event_name))?
     }
 
-    async fn wait_for_network_idle(&self, session_id: &str) -> Result<(), String> {
-        let mut rx = self.client.subscribe();
+    async fn wait_for_network_idle(
+        &self,
+        session_id: &str,
+        mut rx: tokio::sync::broadcast::Receiver<CdpEvent>,
+    ) -> Result<(), String> {
         let pending = Arc::new(Mutex::new(HashSet::<String>::new()));
         let timeout = tokio::time::Duration::from_millis(self.default_timeout_ms);
 
@@ -626,7 +649,8 @@ impl BrowserManager {
         wait_until: WaitUntil,
         session_id: &str,
     ) -> Result<(), String> {
-        self.wait_for_lifecycle(wait_until, session_id).await
+        self.wait_for_lifecycle(wait_until, session_id, self.client.subscribe())
+            .await
     }
 
     pub async fn close(&mut self) -> Result<(), String> {
@@ -1269,5 +1293,16 @@ mod tests {
     fn test_to_ai_friendly_error_unknown() {
         let msg = "Some custom error message";
         assert_eq!(to_ai_friendly_error(msg), msg);
+    }
+
+    #[test]
+    fn test_is_startup_internal_page_detects_profile_picker() {
+        assert!(is_startup_internal_page("chrome://profile-picker/"));
+    }
+
+    #[test]
+    fn test_is_startup_internal_page_ignores_normal_pages() {
+        assert!(!is_startup_internal_page("https://example.com/"));
+        assert!(!is_startup_internal_page("about:blank"));
     }
 }

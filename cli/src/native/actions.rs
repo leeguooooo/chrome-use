@@ -729,8 +729,12 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
 async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     let options = launch_options_from_env();
     let engine = env::var("AGENT_BROWSER_ENGINE").ok();
+    let debug_enabled = env::var("AGENT_BROWSER_DEBUG").as_deref() == Ok("1");
 
     if let Ok(cdp) = env::var("AGENT_BROWSER_CDP") {
+        if debug_enabled {
+            eprintln!("[DEBUG] auto_launch: connecting via AGENT_BROWSER_CDP={}", cdp);
+        }
         let mgr = BrowserManager::connect_cdp(&cdp).await?;
         state.browser = Some(mgr);
         state.subscribe_to_browser_events();
@@ -739,6 +743,9 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     }
 
     if env::var("AGENT_BROWSER_AUTO_CONNECT").is_ok() {
+        if debug_enabled {
+            eprintln!("[DEBUG] auto_launch: connecting via AGENT_BROWSER_AUTO_CONNECT");
+        }
         let mgr = BrowserManager::connect_auto().await?;
         state.browser = Some(mgr);
         state.subscribe_to_browser_events();
@@ -746,11 +753,34 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
         return Ok(());
     }
 
-    let mgr = BrowserManager::launch(options, engine.as_deref()).await?;
+    let mgr = if should_auto_launch_managed_cdp(&options) {
+        if debug_enabled {
+            eprintln!("[DEBUG] auto_launch: launching managed Chrome on localhost:9333");
+        }
+        BrowserManager::launch_managed_cdp(options.executable_path.clone(), !options.headless)
+            .await?
+    } else {
+        if debug_enabled {
+            eprintln!("[DEBUG] auto_launch: launching local browser from env options");
+        }
+        BrowserManager::launch(options, engine.as_deref()).await?
+    };
     state.browser = Some(mgr);
     state.subscribe_to_browser_events();
     try_auto_restore_state(state).await;
     Ok(())
+}
+
+fn should_auto_launch_managed_cdp(options: &LaunchOptions) -> bool {
+    options.proxy.is_none()
+        && options.proxy_bypass.is_none()
+        && options.profile.is_none()
+        && !options.allow_file_access
+        && options.args.is_empty()
+        && options.extensions.as_ref().is_none_or(|ext| ext.is_empty())
+        && options.storage_state.is_none()
+        && options.user_agent.is_none()
+        && !options.ignore_https_errors
 }
 
 fn launch_options_from_env() -> LaunchOptions {
@@ -5223,6 +5253,19 @@ mod tests {
             !opts.headless,
             "AGENT_BROWSER_HEADED=1 should set headless=false"
         );
+    }
+
+    #[test]
+    fn test_should_auto_launch_managed_cdp_for_bare_defaults() {
+        let opts = launch_options_from_env();
+        assert!(should_auto_launch_managed_cdp(&opts));
+    }
+
+    #[test]
+    fn test_should_not_auto_launch_managed_cdp_when_proxy_is_set() {
+        let mut opts = launch_options_from_env();
+        opts.proxy = Some("http://127.0.0.1:8080".to_string());
+        assert!(!should_auto_launch_managed_cdp(&opts));
     }
 
     #[tokio::test]

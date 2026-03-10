@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-stealth",
-  "version": "0.17.0-fork.1",
+  "version": "0.17.0-fork.2",
   "description": "Stealth browser automation CLI for AI agents with anti-bot evasions",
   "type": "module",
   "main": "dist/daemon.js",
@@ -23,7 +23,7 @@
     "build": "tsc",
     "build:native": "npm run version:sync && npm run native:clean && cargo build --release --manifest-path cli/Cargo.toml && node scripts/copy-native.js",
     "build:linux": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-linux",
-    "build:macos": "npm run version:sync && npm run native:clean && (cargo build --release --manifest-path cli/Cargo.toml --target aarch64-apple-darwin & cargo build --release --manifest-path cli/Cargo.toml --target x86_64-apple-darwin & wait) && cp cli/target/aarch64-apple-darwin/release/agent-browser bin/agent-browser-darwin-arm64 && cp cli/target/x86_64-apple-darwin/release/agent-browser bin/agent-browser-darwin-x64",
+    "build:macos": "npm run version:sync && npm run native:clean && (cargo build --release --manifest-path cli/Cargo.toml --target aarch64-apple-darwin & cargo build --release --manifest-path cli/Cargo.toml --target x86_64-apple-darwin & wait) && node scripts/copy-native.js cli/target/aarch64-apple-darwin/release/agent-browser bin/agent-browser-darwin-arm64 && node scripts/copy-native.js cli/target/x86_64-apple-darwin/release/agent-browser bin/agent-browser-darwin-x64",
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "npm run version:sync && (npm run build:linux & npm run build:windows & wait) && npm run build:macos",
     "build:docker": "docker build -t agent-browser-builder -f docker/Dockerfile.build .",

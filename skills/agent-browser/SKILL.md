@@ -8,6 +8,8 @@ allowed-tools: Bash(npx agent-browser-stealth:*), Bash(npx agent-browser:*), Bas
 
 Install package: `pnpm add -g agent-browser-stealth` (CLI commands: `agent-browser`, `agent-browser-stealth`, and short alias `abs`). If global install is unavailable in your environment, use `pnpm dlx agent-browser-stealth <command>` for one-off runs.
 
+Use `agent-browser start` when you want to pre-warm the managed automation browser on `localhost:9333` before the actual navigation or task commands run.
+
 ## Core Workflow
 
 Every browser automation follows this pattern:
@@ -50,6 +52,7 @@ agent-browser open https://example.com && agent-browser wait --load networkidle 
 
 ```bash
 # Navigation
+agent-browser start                   # Start/reuse managed browser on localhost:9333
 agent-browser open <url>              # Navigate (aliases: goto, navigate)
 agent-browser --risk-mode block open <url>  # Block if verification/captcha interstitial is detected
 agent-browser doctor                  # Diagnose CDP + sourceURL + tab-group plugin health
