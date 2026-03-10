@@ -27,7 +27,7 @@
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "npm run version:sync && (npm run build:linux & npm run build:windows & wait) && npm run build:macos",
     "build:docker": "docker build -t agent-browser-builder -f docker/Dockerfile.build .",
-    "release": "npm run version:sync && npm run build && npm run build:all-platforms && npm run verify:bundled-binaries && npm run verify:native-version && npm publish",
+    "release": "pnpm run version:sync && pnpm run build && pnpm run build:all-platforms && pnpm run verify:bundled-binaries && pnpm run verify:native-version && pnpm publish",
     "start": "node dist/daemon.js",
     "dev": "tsx src/daemon.ts",
     "typecheck": "tsc --noEmit",
@@ -71,6 +71,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/leeguooooo/agent-browser.git"
+  },
+  "publishConfig": {
+    "tag": "fork"
   },
   "bugs": {
     "url": "https://github.com/leeguooooo/agent-browser/issues"
