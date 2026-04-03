@@ -285,6 +285,7 @@ pub struct Flags {
     pub allow_file_access: bool,
     pub device: Option<String>,
     pub auto_connect: bool,
+    pub force_launch: bool,
     pub session_name: Option<String>,
     pub annotate: bool,
     pub color_scheme: Option<String>,
@@ -380,8 +381,11 @@ pub fn parse_flags(args: &[String]) -> Flags {
         allow_file_access: env_var_is_truthy("AGENT_BROWSER_ALLOW_FILE_ACCESS")
             || config.allow_file_access.unwrap_or(false),
         device: env::var("AGENT_BROWSER_IOS_DEVICE").ok().or(config.device),
-        auto_connect: env_var_is_truthy("AGENT_BROWSER_AUTO_CONNECT")
-            || config.auto_connect.unwrap_or(false),
+        auto_connect: !env_var_is_truthy("AGENT_BROWSER_NO_AUTO_CONNECT")
+            && (env_var_is_truthy("AGENT_BROWSER_AUTO_CONNECT")
+                || config.auto_connect.unwrap_or(true)),
+        force_launch: env_var_is_truthy("AGENT_BROWSER_FORCE_LAUNCH")
+            || env::var("CI").is_ok(),
         session_name: env::var("AGENT_BROWSER_SESSION_NAME")
             .ok()
             .or(config.session_name),
@@ -590,9 +594,16 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--auto-connect" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.auto_connect = val;
+                if !val {
+                    flags.force_launch = true;
+                }
                 if consumed {
                     i += 1;
                 }
+            }
+            "--launch" | "--new" => {
+                flags.force_launch = true;
+                flags.auto_connect = false;
             }
             "--session-name" => {
                 if let Some(s) = args.get(i + 1) {
@@ -738,6 +749,8 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--ignore-https-errors",
         "--allow-file-access",
         "--auto-connect",
+        "--launch",
+        "--new",
         "--annotate",
         "--content-boundaries",
         "--confirm-interactive",

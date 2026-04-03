@@ -1426,16 +1426,38 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
         return Ok(());
     }
 
-    if env::var("AGENT_BROWSER_AUTO_CONNECT").is_ok() {
-        state.reset_input_state();
-        state.browser = Some(connect_auto_with_fresh_tab().await?);
-        state.subscribe_to_browser_events();
-        state.start_fetch_handler();
-        state.start_dialog_handler();
-        state.update_stream_client().await;
-        try_auto_restore_state(state).await;
-        apply_stealth_to_browser(state).await;
-        return Ok(());
+    let force_launch = env::var("AGENT_BROWSER_FORCE_LAUNCH").is_ok();
+
+    // Default behavior: try to connect to the user's existing Chrome first.
+    // This shares cookies/sessions so the agent can reuse logged-in state.
+    // Skip if --launch/--new was passed or running in CI.
+    if env::var("AGENT_BROWSER_AUTO_CONNECT").is_ok() && !force_launch {
+        match connect_auto_with_fresh_tab().await {
+            Ok(mgr) => {
+                state.reset_input_state();
+                state.browser = Some(mgr);
+                state.subscribe_to_browser_events();
+                state.start_fetch_handler();
+                state.start_dialog_handler();
+                state.update_stream_client().await;
+                try_auto_restore_state(state).await;
+                apply_stealth_to_browser(state).await;
+                return Ok(());
+            }
+            Err(_e) => {
+                // Could not find a running Chrome with CDP enabled.
+                // Return a helpful error guiding the user to enable it.
+                return Err(format!(
+                    "Could not connect to your Chrome browser.\n\n\
+                     To let agent-browser work with your existing Chrome (recommended):\n\
+                     {}\n\n\
+                     Or start a standalone browser with: agent-browser --launch open <url>\n\n\
+                     Tip: On Chrome 144+, you can enable CDP without restarting:\n\
+                     Open chrome://inspect/#remote-debugging and toggle it on.",
+                    chrome_relaunch_hint(),
+                ));
+            }
+        }
     }
 
     let mgr = BrowserManager::launch(options, engine.as_deref()).await?;
@@ -1462,6 +1484,23 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
 }
 
 /// Inject stealth scripts into the active browser session.
+/// Platform-specific hint for relaunching Chrome with CDP enabled.
+fn chrome_relaunch_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "  1. Quit Chrome completely\n\
+         2. Run:  open -a \"Google Chrome\" --args --remote-debugging-port=9222\n\
+         3. Then retry your agent-browser command"
+    } else if cfg!(target_os = "windows") {
+        "  1. Close Chrome completely\n\
+         2. Run:  start chrome --remote-debugging-port=9222\n\
+         3. Then retry your agent-browser command"
+    } else {
+        "  1. Close Chrome completely\n\
+         2. Run:  google-chrome --remote-debugging-port=9222\n\
+         3. Then retry your agent-browser command"
+    }
+}
+
 /// Called after every successful launch / CDP connect / auto-connect.
 async fn apply_stealth_to_browser(state: &DaemonState) {
     if env::var("AGENT_BROWSER_STEALTH").map(|v| v == "0").unwrap_or(false) {
@@ -1635,13 +1674,29 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     }
 
     if auto_connect {
-        state.reset_input_state();
-        state.browser = Some(connect_auto_with_fresh_tab().await?);
-        state.subscribe_to_browser_events();
-        state.start_fetch_handler();
-        state.start_dialog_handler();
-        state.update_stream_client().await;
-        return Ok(json!({ "launched": true }));
+        match connect_auto_with_fresh_tab().await {
+            Ok(mgr) => {
+                state.reset_input_state();
+                state.browser = Some(mgr);
+                state.subscribe_to_browser_events();
+                state.start_fetch_handler();
+                state.start_dialog_handler();
+                state.update_stream_client().await;
+                apply_stealth_to_browser(state).await;
+                return Ok(json!({ "launched": true }));
+            }
+            Err(_e) => {
+                return Err(format!(
+                    "Could not connect to your Chrome browser.\n\n\
+                     To let agent-browser work with your existing Chrome (recommended):\n\
+                     {}\n\n\
+                     Or start a standalone browser with: agent-browser --launch open <url>\n\n\
+                     Tip: On Chrome 144+, you can enable CDP without restarting:\n\
+                     Open chrome://inspect/#remote-debugging and toggle it on.",
+                    chrome_relaunch_hint(),
+                ));
+            }
+        }
     }
 
     if let Some(provider) = cmd.get("provider").and_then(|v| v.as_str()) {

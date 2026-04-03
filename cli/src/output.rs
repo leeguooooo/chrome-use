@@ -2791,8 +2791,9 @@ Authentication:
                              (or AGENT_BROWSER_SESSION_NAME env)
   --state <path>             Load saved auth state (cookies + storage) from JSON file
                              (or AGENT_BROWSER_STATE env)
-  --auto-connect             Connect to a running Chrome to reuse its auth state
-                             Tip: agent-browser --auto-connect state save ./auth.json
+  --auto-connect             Connect to a running Chrome (DEFAULT - shares cookies/sessions)
+                             Tip: enable CDP via chrome://inspect/#remote-debugging
+  --launch, --new            Launch a fresh browser instead of connecting to existing
   --headers <json>           HTTP headers scoped to URL's origin (e.g., Authorization bearer token)
 
 Options:

@@ -511,7 +511,7 @@ fn main() {
     }
 
     let args: Vec<String> = env::args().skip(1).collect();
-    let flags = parse_flags(&args);
+    let mut flags = parse_flags(&args);
     let clean = clean_args(&args);
 
     let has_help = args.iter().any(|a| a == "--help" || a == "-h");
@@ -719,6 +719,7 @@ fn main() {
         confirm_actions: flags.confirm_actions.as_deref(),
         engine: flags.engine.as_deref(),
         auto_connect: flags.auto_connect,
+        force_launch: flags.force_launch,
         idle_timeout: flags.idle_timeout.as_deref(),
         cdp: flags.cdp.as_deref(),
         no_auto_dialog: flags.no_auto_dialog,
@@ -806,24 +807,9 @@ fn main() {
         exit(1);
     }
 
-    if flags.auto_connect && flags.cdp.is_some() {
-        let msg = "Cannot use --auto-connect and --cdp together";
-        if flags.json {
-            print_json_error(msg);
-        } else {
-            eprintln!("{} {}", color::error_indicator(), msg);
-        }
-        exit(1);
-    }
-
-    if flags.auto_connect && flags.provider.is_some() {
-        let msg = "Cannot use --auto-connect and -p/--provider together";
-        if flags.json {
-            print_json_error(msg);
-        } else {
-            eprintln!("{} {}", color::error_indicator(), msg);
-        }
-        exit(1);
+    // Explicit --cdp or --provider disables auto-connect (they specify the connection)
+    if flags.cdp.is_some() || flags.provider.is_some() {
+        flags.auto_connect = false;
     }
 
     if flags.provider.is_some() && !flags.extensions.is_empty() {
@@ -1035,7 +1021,7 @@ fn main() {
         || !flags.extensions.is_empty())
         && flags.cdp.is_none()
         && flags.provider.is_none()
-        && !flags.auto_connect
+        && (flags.force_launch || !flags.auto_connect)
     {
         let mut launch_cmd = json!({
             "id": gen_id(),
