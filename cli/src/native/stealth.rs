@@ -13,39 +13,11 @@ const STEALTH_SCRIPTS_RAW: &str = include_str!("stealth_scripts.js");
 
 /// Minimal stealth script for CDP-attach mode (connecting to user's real Chrome).
 /// Only removes navigator.webdriver — the browser's own fingerprint is already real.
-const MINIMAL_STEALTH_SCRIPT: &str = r#"
-(function(){
-  // CDP sets navigator.webdriver = true via a getter on Navigator.prototype.
-  // CreepJS detects THREE things:
-  //   1. navigator.webdriver === undefined (deletion = suspicious)
-  //   2. !!navigator.webdriver (true = automation)
-  //   3. lieProps (defineProperty tampering = suspicious)
-  //
-  // The correct fix: set it to FALSE using the native property descriptor
-  // pattern, not delete it or use defineProperty tricks.
-  // Normal Chrome has: Navigator.prototype.webdriver as a native getter returning false.
-  // CDP overrides it to return true. We override the value back to false.
-  try {
-    const proto = Navigator.prototype;
-    const desc = Object.getOwnPropertyDescriptor(proto, 'webdriver');
-    if (desc && desc.get) {
-      // CDP sets a getter that returns true. Replace it with a getter
-      // that returns false — preserving the getter/setter shape so lie
-      // detection sees the same descriptor structure as a normal browser.
-      const nativeToString = desc.get.toString();
-      const fakeGet = function webdriver() { return false; };
-      // Match the native toString to avoid toString-based lie detection
-      fakeGet.toString = () => nativeToString;
-      Object.defineProperty(proto, 'webdriver', {
-        get: fakeGet,
-        set: undefined,
-        configurable: true,
-        enumerable: true,
-      });
-    }
-  } catch {}
-})();
-"#;
+/// Minimal stealth script for CDP-attach mode.
+/// Emulation.setAutomationOverride handles navigator.webdriver at the native
+/// level, so no JS patching is needed in CdpAttach mode. An empty script
+/// avoids creating any detectable lie-props artifacts.
+const MINIMAL_STEALTH_SCRIPT: &str = "";
 
 /// Chrome launch arguments that reduce automation fingerprint surface.
 pub const STEALTH_CHROMIUM_ARGS: &[&str] = &[
@@ -103,6 +75,18 @@ pub async fn apply_stealth(
     mode: StealthMode,
     locale: Option<&str>,
 ) -> Result<(), String> {
+    // First: disable the automation flag at the CDP protocol level.
+    // This tells Chrome to natively set navigator.webdriver = false,
+    // which is undetectable by lie-detection systems like CreepJS.
+    // Falls back gracefully on older Chrome versions that don't support this.
+    let _ = client
+        .send_command(
+            "Emulation.setAutomationOverride",
+            Some(json!({ "enabled": false })),
+            Some(session_id),
+        )
+        .await;
+
     let script = build_stealth_script(mode, locale);
 
     // Inject stealth scripts to run before page JS
