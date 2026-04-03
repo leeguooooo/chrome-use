@@ -1,17 +1,21 @@
 {
-  "name": "agent-browser",
-  "version": "0.24.0",
-  "description": "Browser automation CLI for AI agents",
+  "name": "agent-browser-stealth",
+  "version": "0.24.0-fork.1",
+  "description": "Browser automation CLI for AI agents — stealth fork with anti-detection",
   "type": "module",
   "files": [
     "bin",
     "scripts",
-    "skills"
+    "skills",
+    "extensions"
   ],
   "bin": {
-    "agent-browser": "./bin/agent-browser.js"
+    "agent-browser-stealth": "./bin/agent-browser.js",
+    "agent-browser": "./bin/agent-browser.js",
+    "abs": "./bin/agent-browser.js"
   },
   "scripts": {
+    "prepare": "husky",
     "version:sync": "node scripts/sync-version.js",
     "version": "npm run version:sync && git add cli/Cargo.toml",
     "build:native": "npm run version:sync && cargo build --release --manifest-path cli/Cargo.toml && node scripts/copy-native.js",
@@ -20,9 +24,11 @@
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "npm run version:sync && (npm run build:linux & npm run build:windows & wait) && npm run build:macos",
     "build:docker": "docker build -t agent-browser-builder -f docker/Dockerfile.build .",
-    "release": "npm run version:sync && npm run build:all-platforms && npm publish",
-    "postinstall": "node scripts/postinstall.js",
-    "build:dashboard": "cd packages/dashboard && pnpm build"
+    "release": "npm run version:sync && npm run build:all-platforms && npm publish --tag fork",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "publishConfig": {
+    "tag": "fork"
   },
   "keywords": [
     "browser",
@@ -31,16 +37,20 @@
     "chrome",
     "cdp",
     "cli",
-    "agent"
+    "agent",
+    "stealth",
+    "anti-detection"
   ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vercel-labs/agent-browser.git"
+    "url": "git+https://github.com/leeguooooo/agent-browser-stealth.git"
   },
   "bugs": {
-    "url": "https://github.com/vercel-labs/agent-browser/issues"
+    "url": "https://github.com/leeguooooo/agent-browser-stealth/issues"
   },
-  "homepage": "https://agent-browser.dev",
-  "devDependencies": {}
+  "homepage": "https://github.com/leeguooooo/agent-browser-stealth",
+  "devDependencies": {
+    "husky": "^9.0.11"
+  }
 }

@@ -1,0 +1,8 @@
+if [ "${SKIP_CLAWHUB_SYNC:-0}" = "1" ]; then
+  echo "Skipping ClawHub sync (SKIP_CLAWHUB_SYNC=1)"
+  exit 0
+fi
+
+pnpm run clawhub:sync || {
+  echo "ClawHub sync failed. Push continues. Run 'pnpm run clawhub:sync' manually after fixing login/network."
+}

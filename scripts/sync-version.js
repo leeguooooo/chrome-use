@@ -20,13 +20,31 @@ const packageJson = JSON.parse(
 );
 const version = packageJson.version;
 
-console.log(`Syncing version ${version} to all config files...`);
+function parseForkVersion(raw) {
+  const match = raw.match(/^([0-9]+\.[0-9]+\.[0-9]+)-fork\.([A-Za-z0-9.-]+)$/);
+  if (!match) return null;
+  return {
+    upstream: match[1],
+    fork: match[2],
+  };
+}
+
+const forkVersion = parseForkVersion(version);
+if (forkVersion) {
+  console.log(
+    `Syncing version ${version} (upstream=${forkVersion.upstream}, fork=${forkVersion.fork}) to all config files...`
+  );
+} else {
+  console.log(`Syncing version ${version} to all config files...`);
+}
 
 // Update Cargo.toml
 const cargoTomlPath = join(cliDir, "Cargo.toml");
 let cargoToml = readFileSync(cargoTomlPath, "utf-8");
 const cargoVersionRegex = /^version\s*=\s*"[^"]*"/m;
 const newCargoVersion = `version = "${version}"`;
+const cargoNameMatch = cargoToml.match(/^name\s*=\s*"([^"]+)"/m);
+const cargoPackageName = cargoNameMatch?.[1] ?? "agent-browser-stealth";
 
 let cargoTomlUpdated = false;
 if (cargoVersionRegex.test(cargoToml)) {
@@ -44,22 +62,10 @@ if (cargoVersionRegex.test(cargoToml)) {
   process.exit(1);
 }
 
-// Update packages/dashboard/package.json
-const dashboardPkgPath = join(rootDir, "packages", "dashboard", "package.json");
-const dashboardPkg = JSON.parse(readFileSync(dashboardPkgPath, "utf-8"));
-if (dashboardPkg.version !== version) {
-  const oldVersion = dashboardPkg.version;
-  dashboardPkg.version = version;
-  writeFileSync(dashboardPkgPath, JSON.stringify(dashboardPkg, null, 2) + "\n");
-  console.log(`  Updated packages/dashboard/package.json: ${oldVersion} -> ${version}`);
-} else {
-  console.log(`  packages/dashboard/package.json already up to date`);
-}
-
 // Update Cargo.lock to match Cargo.toml
 if (cargoTomlUpdated) {
   try {
-    execSync("cargo update -p agent-browser --offline", {
+    execSync(`cargo update -p ${cargoPackageName} --offline`, {
       cwd: cliDir,
       stdio: "pipe",
     });
@@ -67,7 +73,7 @@ if (cargoTomlUpdated) {
   } catch {
     // --offline may fail if package not in cache, try without it
     try {
-      execSync("cargo update -p agent-browser", {
+      execSync(`cargo update -p ${cargoPackageName}`, {
         cwd: cliDir,
         stdio: "pipe",
       });

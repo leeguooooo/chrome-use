@@ -1,14 +1,18 @@
 [package]
-name = "agent-browser"
-version = "0.24.0"
+name = "agent-browser-stealth"
+version = "0.24.0-fork.1"
 edition = "2021"
 description = "Fast browser automation CLI for AI agents"
 license = "Apache-2.0"
-repository = "https://github.com/vercel-labs/agent-browser"
-homepage = "https://agent-browser.dev"
+repository = "https://github.com/leeguooooo/agent-browser-stealth"
+homepage = "https://github.com/leeguooooo/agent-browser-stealth"
 readme = "../README.md"
 keywords = ["browser", "automation", "ai", "cdp", "chrome"]
 categories = ["command-line-utilities", "web-programming"]
+
+[[bin]]
+name = "agent-browser"
+path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
