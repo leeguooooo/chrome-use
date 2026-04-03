@@ -1502,6 +1502,8 @@ fn chrome_relaunch_hint() -> &'static str {
 }
 
 /// Called after every successful launch / CDP connect / auto-connect.
+/// Uses `CdpAttach` mode for external connections (minimal patches) and
+/// `FullLaunch` mode for newly launched Chrome (all patches).
 async fn apply_stealth_to_browser(state: &DaemonState) {
     if env::var("AGENT_BROWSER_STEALTH").map(|v| v == "0").unwrap_or(false) {
         return; // Explicitly disabled
@@ -1512,10 +1514,21 @@ async fn apply_stealth_to_browser(state: &DaemonState) {
     let Ok(session_id) = mgr.active_session_id() else {
         return;
     };
+
+    // Determine mode: if we attached to an external browser, use minimal patches.
+    // The user's real Chrome already has a genuine fingerprint — heavy patches
+    // would create detectable "lies" (e.g. creepjs hasIframeProxy).
+    let mode = if mgr.is_cdp_connection() {
+        stealth::StealthMode::CdpAttach
+    } else {
+        stealth::StealthMode::FullLaunch
+    };
+
     let locale = env::var("AGENT_BROWSER_LOCALE").ok();
     if let Err(e) = stealth::apply_stealth(
         &mgr.client,
         session_id,
+        mode,
         locale.as_deref(),
     )
     .await
@@ -1524,7 +1537,7 @@ async fn apply_stealth_to_browser(state: &DaemonState) {
     }
     // Also inject into the current page (already loaded before our init script)
     if let Err(e) =
-        stealth::apply_stealth_to_current_page(&mgr.client, session_id, locale.as_deref()).await
+        stealth::apply_stealth_to_current_page(&mgr.client, session_id, mode, locale.as_deref()).await
     {
         eprintln!("[stealth] Failed to patch current page: {}", e);
     }

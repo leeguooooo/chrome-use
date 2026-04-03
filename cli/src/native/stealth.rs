@@ -8,10 +8,32 @@ use serde_json::json;
 
 use super::cdp::client::CdpClient;
 
-/// Default stealth JS payload compiled at build time.
-/// The first line is a config placeholder that `build_stealth_script` replaces
-/// at runtime with the actual locale/language settings.
+/// Full stealth JS payload compiled at build time (for --launch mode).
 const STEALTH_SCRIPTS_RAW: &str = include_str!("stealth_scripts.js");
+
+/// Minimal stealth script for CDP-attach mode (connecting to user's real Chrome).
+/// Only removes navigator.webdriver — the browser's own fingerprint is already real.
+const MINIMAL_STEALTH_SCRIPT: &str = r#"
+(function(){
+  // CDP sets a getter on Navigator.prototype.webdriver that returns true.
+  // Simple `delete` won't remove it. We must redefine the property with
+  // Object.defineProperty to fully hide it from `'webdriver' in navigator`.
+  const targets = [Navigator.prototype];
+  if (typeof WorkerNavigator !== 'undefined') targets.push(WorkerNavigator.prototype);
+  targets.push(Object.getPrototypeOf(navigator));
+  for (const target of targets) {
+    if (!target) continue;
+    try { delete target.webdriver; } catch {}
+    try {
+      Object.defineProperty(target, 'webdriver', {
+        get: undefined,
+        configurable: true,
+      });
+      delete target.webdriver;
+    } catch {}
+  }
+})();
+"#;
 
 /// Chrome launch arguments that reduce automation fingerprint surface.
 pub const STEALTH_CHROMIUM_ARGS: &[&str] = &[
@@ -20,10 +42,23 @@ pub const STEALTH_CHROMIUM_ARGS: &[&str] = &[
     "--use-angle=default",
 ];
 
-/// Build the stealth JS payload with the given locale.
-/// Replaces the default `__abStealth` config line with one reflecting the
-/// actual browser locale so that `navigator.language` patches are consistent.
-pub fn build_stealth_script(locale: Option<&str>) -> String {
+/// Connection mode determines which stealth patches to apply.
+#[derive(Clone, Copy, PartialEq)]
+pub enum StealthMode {
+    /// Connected to user's real Chrome — minimal patches only (webdriver removal).
+    /// The browser already has a real fingerprint; heavy patches would create detectable lies.
+    CdpAttach,
+    /// Launched a new Chrome instance — apply full stealth patches.
+    FullLaunch,
+}
+
+/// Build the stealth JS payload for the given mode and locale.
+pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
+    if mode == StealthMode::CdpAttach {
+        return MINIMAL_STEALTH_SCRIPT.to_string();
+    }
+
+    // Full launch mode: inject all patches
     let locale = locale.unwrap_or("en-US");
     let base_lang = locale.split('-').next().unwrap_or(locale);
     let languages: Vec<&str> = if base_lang == locale {
@@ -37,29 +72,28 @@ pub fn build_stealth_script(locale: Option<&str>) -> String {
         serde_json::to_string(&languages).unwrap_or_else(|_| r#"["en-US","en"]"#.to_string()),
     );
 
-    // Replace the placeholder first line
     if let Some(rest) = STEALTH_SCRIPTS_RAW.strip_prefix(
         r#"const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false };"#,
     ) {
         format!("{}{}", config_line, rest)
     } else {
-        // Fallback: prepend config and include everything
         format!("{}\n{}", config_line, STEALTH_SCRIPTS_RAW)
     }
 }
 
-/// Apply stealth patches to a browser session:
-/// 1. Inject init script (runs before any page JS on every navigation)
-/// 2. Override User-Agent via CDP to remove HeadlessChrome markers
-/// 3. Override navigator.userAgentData high-entropy hints
+/// Apply stealth patches to a browser session.
+///
+/// In `CdpAttach` mode (user's real Chrome): only removes `navigator.webdriver`.
+/// In `FullLaunch` mode (new Chrome): injects all 32 patches + UA override.
 pub async fn apply_stealth(
     client: &CdpClient,
     session_id: &str,
+    mode: StealthMode,
     locale: Option<&str>,
 ) -> Result<(), String> {
-    let script = build_stealth_script(locale);
+    let script = build_stealth_script(mode, locale);
 
-    // 1. Inject stealth scripts to run before page JS
+    // Inject stealth scripts to run before page JS
     client
         .send_command(
             "Page.addScriptToEvaluateOnNewDocument",
@@ -68,23 +102,25 @@ pub async fn apply_stealth(
         )
         .await?;
 
-    // 2. Detect current User-Agent and clean up HeadlessChrome marker
-    let ua = get_browser_user_agent(client, session_id).await;
-    if let Some(ua) = ua {
-        let cleaned = ua.replace("HeadlessChrome", "Chrome");
-        if cleaned != ua {
-            client
-                .send_command(
-                    "Emulation.setUserAgentOverride",
-                    Some(json!({
-                        "userAgent": cleaned,
-                        "acceptLanguage": locale.unwrap_or("en-US"),
-                        "platform": platform_string(),
-                        "userAgentMetadata": build_ua_metadata(&cleaned, locale),
-                    })),
-                    Some(session_id),
-                )
-                .await?;
+    // In full launch mode, also override UA to remove HeadlessChrome marker
+    if mode == StealthMode::FullLaunch {
+        let ua = get_browser_user_agent(client, session_id).await;
+        if let Some(ua) = ua {
+            let cleaned = ua.replace("HeadlessChrome", "Chrome");
+            if cleaned != ua {
+                client
+                    .send_command(
+                        "Emulation.setUserAgentOverride",
+                        Some(json!({
+                            "userAgent": cleaned,
+                            "acceptLanguage": locale.unwrap_or("en-US"),
+                            "platform": platform_string(),
+                            "userAgentMetadata": build_ua_metadata(&cleaned, locale),
+                        })),
+                        Some(session_id),
+                    )
+                    .await?;
+            }
         }
     }
 
@@ -112,9 +148,10 @@ async fn get_browser_user_agent(client: &CdpClient, session_id: &str) -> Option<
 pub async fn apply_stealth_to_current_page(
     client: &CdpClient,
     session_id: &str,
+    mode: StealthMode,
     locale: Option<&str>,
 ) -> Result<(), String> {
-    let script = build_stealth_script(locale);
+    let script = build_stealth_script(mode, locale);
     client
         .send_command(
             "Runtime.evaluate",
