@@ -124,6 +124,10 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
+        // Stealth: reduce automation fingerprint surface
+        "--disable-blink-features=AutomationControlled".to_string(),
+        "--use-gl=angle".to_string(),
+        "--use-angle=default".to_string(),
         "--disable-background-networking".to_string(),
         "--disable-backgrounding-occluded-windows".to_string(),
         "--disable-component-update".to_string(),

@@ -32,6 +32,7 @@ use super::recording::{self, RecordingState};
 use super::screenshot::{self, ScreenshotOptions};
 use super::snapshot::{self, SnapshotOptions};
 use super::state;
+use super::stealth;
 use super::storage;
 use super::stream::{self, StreamServer};
 use super::tracing::{self as native_tracing, TracingState};
@@ -1421,6 +1422,7 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
         state.start_dialog_handler();
         state.update_stream_client().await;
         try_auto_restore_state(state).await;
+        apply_stealth_to_browser(state).await;
         return Ok(());
     }
 
@@ -1432,6 +1434,7 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
         state.start_dialog_handler();
         state.update_stream_client().await;
         try_auto_restore_state(state).await;
+        apply_stealth_to_browser(state).await;
         return Ok(());
     }
 
@@ -1453,7 +1456,39 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     }
 
     try_auto_restore_state(state).await;
+    // Apply stealth anti-detection patches after browser is ready
+    apply_stealth_to_browser(state).await;
     Ok(())
+}
+
+/// Inject stealth scripts into the active browser session.
+/// Called after every successful launch / CDP connect / auto-connect.
+async fn apply_stealth_to_browser(state: &DaemonState) {
+    if env::var("AGENT_BROWSER_STEALTH").map(|v| v == "0").unwrap_or(false) {
+        return; // Explicitly disabled
+    }
+    let Some(ref mgr) = state.browser else {
+        return;
+    };
+    let Ok(session_id) = mgr.active_session_id() else {
+        return;
+    };
+    let locale = env::var("AGENT_BROWSER_LOCALE").ok();
+    if let Err(e) = stealth::apply_stealth(
+        &mgr.client,
+        session_id,
+        locale.as_deref(),
+    )
+    .await
+    {
+        eprintln!("[stealth] Failed to apply stealth patches: {}", e);
+    }
+    // Also inject into the current page (already loaded before our init script)
+    if let Err(e) =
+        stealth::apply_stealth_to_current_page(&mgr.client, session_id, locale.as_deref()).await
+    {
+        eprintln!("[stealth] Failed to patch current page: {}", e);
+    }
 }
 
 fn launch_options_from_env() -> LaunchOptions {
