@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-stealth",
-  "version": "0.24.0-fork.1",
+  "version": "0.24.0-fork.2",
   "description": "Browser automation CLI for AI agents — stealth fork with anti-detection",
   "type": "module",
   "files": [
@@ -26,9 +26,6 @@
     "build:docker": "docker build -t agent-browser-builder -f docker/Dockerfile.build .",
     "release": "npm run version:sync && npm run build:all-platforms && npm publish --tag fork",
     "postinstall": "node scripts/postinstall.js"
-  },
-  "publishConfig": {
-    "tag": "fork"
   },
   "keywords": [
     "browser",
