@@ -1583,6 +1583,8 @@ Usage: agent-browser screenshot [selector] [path]
 
 Captures a screenshot of the current page. If no path is provided,
 saves to a temporary directory with a generated filename.
+Headless Chromium screenshots hide native scrollbars for consistent image output.
+Pass --hide-scrollbars false when launching to keep native scrollbars visible.
 
 Options:
   --full, -f           Capture full page (not just viewport)
@@ -3097,6 +3099,8 @@ Options:
                              e.g., --proxy-bypass "localhost,*.internal.com"
   --ignore-https-errors      Ignore HTTPS certificate errors
   --allow-file-access        Allow file:// URLs to access local files (Chromium only)
+  --hide-scrollbars <bool>   Hide native scrollbars in headless Chromium screenshots (default: true)
+                             Use --hide-scrollbars false to keep scrollbars visible
   -p, --provider <name>      Browser provider: ios, browserbase, kernel, browseruse, browserless, agentcore
   --device <name>            iOS device name (e.g., "iPhone 15 Pro")
   --json                     JSON output
@@ -3136,11 +3140,12 @@ Configuration:
   Boolean flags accept an optional true/false value to override config:
     --headed           (same as --headed true)
     --headed false     (disables "headed": true from config)
+    --hide-scrollbars false (keeps native scrollbars visible in headless Chromium screenshots)
 
   Extensions from user and project configs are merged (not replaced).
 
   Example agent-browser.json:
-    {{"headed": true, "proxy": "http://localhost:8080", "profile": "./browser-data"}}
+    {{"headed": true, "hideScrollbars": false, "proxy": "http://localhost:8080"}}
 
 Environment:
   AGENT_BROWSER_CONFIG           Path to config file (or use --config)
@@ -3160,6 +3165,7 @@ Environment:
   AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore)
   AGENT_BROWSER_AUTO_CONNECT     Auto-discover and connect to running Chrome
   AGENT_BROWSER_ALLOW_FILE_ACCESS Allow file:// URLs to access local files
+  AGENT_BROWSER_HIDE_SCROLLBARS  Hide scrollbars in headless Chromium screenshots (default: true)
   AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
   AGENT_BROWSER_DOWNLOAD_PATH    Default download directory for browser downloads
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default action timeout in ms (default: 25000)

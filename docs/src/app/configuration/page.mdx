@@ -35,6 +35,7 @@ AGENT_BROWSER_CONFIG=./ci-config.json agent-browser open example.com
   "proxy": "http://localhost:8080",
   "profile": "./browser-data",
   "userAgent": "my-agent/1.0",
+  "hideScrollbars": false,
   "ignoreHttpsErrors": true
 }
 ```
@@ -73,6 +74,7 @@ Every CLI flag can be set in the config file using its camelCase equivalent:
     <tr><td><code>userAgent</code></td><td><code>--user-agent</code></td><td>string</td></tr>
     <tr><td><code>provider</code></td><td><code>-p, --provider</code></td><td>string</td></tr>
     <tr><td><code>device</code></td><td><code>--device</code></td><td>string</td></tr>
+    <tr><td><code>hideScrollbars</code></td><td><code>--hide-scrollbars</code></td><td>boolean</td></tr>
     <tr><td><code>ignoreHttpsErrors</code></td><td><code>--ignore-https-errors</code></td><td>boolean</td></tr>
     <tr><td><code>allowFileAccess</code></td><td><code>--allow-file-access</code></td><td>boolean</td></tr>
     <tr><td><code>cdp</code></td><td><code>--cdp</code></td><td>string</td></tr>
@@ -156,7 +158,7 @@ agent-browser --headed open example.com       # same as --headed true
 agent-browser --headed true open example.com  # explicit
 ```
 
-This applies to all boolean flags: `--headed`, `--debug`, `--json`, `--ignore-https-errors`, `--allow-file-access`, `--auto-connect`, `--content-boundaries`, `--confirm-interactive`.
+This applies to all boolean flags: `--headed`, `--debug`, `--json`, `--ignore-https-errors`, `--allow-file-access`, `--hide-scrollbars`, `--auto-connect`, `--content-boundaries`, `--confirm-interactive`.
 
 ## Extensions Merging
 
@@ -175,6 +177,7 @@ These environment variables configure additional daemon and runtime behavior:
   <tbody>
     <tr><td><code>AGENT_BROWSER_AUTO_CONNECT</code></td><td>Auto-discover and connect to a running Chrome instance.</td><td>(disabled)</td></tr>
     <tr><td><code>AGENT_BROWSER_ALLOW_FILE_ACCESS</code></td><td>Allow <code>file://</code> URLs to access local files.</td><td>(disabled)</td></tr>
+    <tr><td><code>AGENT_BROWSER_HIDE_SCROLLBARS</code></td><td>Hide native scrollbars in headless Chromium screenshots.</td><td><code>true</code></td></tr>
     <tr><td><code>AGENT_BROWSER_COLOR_SCHEME</code></td><td>Color scheme preference (<code>dark</code>, <code>light</code>, <code>no-preference</code>).</td><td>(none)</td></tr>
     <tr><td><code>AGENT_BROWSER_DOWNLOAD_PATH</code></td><td>Default directory for browser downloads.</td><td>(temp directory)</td></tr>
     <tr><td><code>AGENT_BROWSER_DEFAULT_TIMEOUT</code></td><td>Default timeout in ms. Keep below 30000 to avoid IPC timeouts.</td><td><code>25000</code></td></tr>

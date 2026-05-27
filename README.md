@@ -90,6 +90,9 @@ agent-browser screenshot page.png
 agent-browser close
 ```
 
+Headless Chromium screenshots hide native scrollbars for consistent image output.
+Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
+
 ### Traditional Selectors (also supported)
 
 ```bash
@@ -713,6 +716,7 @@ This is useful for multimodal AI models that can reason about visual layout, unl
 | `--proxy-bypass <hosts>` | Hosts to bypass proxy (or `AGENT_BROWSER_PROXY_BYPASS` env) |
 | `--ignore-https-errors` | Ignore HTTPS certificate errors (useful for self-signed certs) |
 | `--allow-file-access` | Allow file:// URLs to access local files (Chromium only) |
+| `--hide-scrollbars <bool>` | Hide native scrollbars in headless Chromium screenshots, enabled by default (or `AGENT_BROWSER_HIDE_SCROLLBARS` env) |
 | `-p, --provider <name>` | Cloud browser provider (or `AGENT_BROWSER_PROVIDER` env) |
 | `--device <name>` | iOS device name, e.g. "iPhone 15 Pro" (or `AGENT_BROWSER_IOS_DEVICE` env) |
 | `--json` | JSON output (for agents) |
@@ -809,6 +813,7 @@ Create an `agent-browser.json` file to set persistent defaults instead of repeat
   "proxy": "http://localhost:8080",
   "profile": "./browser-data",
   "userAgent": "my-agent/1.0",
+  "hideScrollbars": false,
   "ignoreHttpsErrors": true
 }
 ```
