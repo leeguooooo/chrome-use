@@ -95,10 +95,14 @@ fi
 mkdir -p "$bindir"
 
 mv "$tmp/${BIN_NAME}" "$bindir/${BIN_NAME}"
-# convenience aliases: `abs` (short) -> agent-browser
-ln -sf "$bindir/${BIN_NAME}" "$bindir/abs" 2>/dev/null || true
+# Aliases pointing at the same binary: `abs` (short) and `agent-browser-stealth`
+# (the fork's package name). All three names work, and an upgrade refreshes
+# whichever name you actually run.
+for alias_name in abs agent-browser-stealth; do
+  ln -sf "$bindir/${BIN_NAME}" "$bindir/${alias_name}" 2>/dev/null || true
+done
 
-info "installed ${BIN_NAME} -> ${bindir}/${BIN_NAME}"
+info "installed -> ${bindir}/ (agent-browser, agent-browser-stealth, abs)"
 "$bindir/${BIN_NAME}" --version 2>/dev/null || true
 
 case ":$PATH:" in
