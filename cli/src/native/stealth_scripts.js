@@ -1,14 +1,29 @@
 const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false };
 (function(){
-  const removeWebdriver = (target) => {
+  // Prefer the CDP-level automation override (Emulation.setAutomationOverride),
+  // which makes navigator.webdriver report `false` NATIVELY — undetectable by
+  // lie-detection (creepjs). Only intervene when webdriver is still truthy
+  // (e.g. older Chrome without that override) and force it to FALSE.
+  //
+  // Never `delete` webdriver: real Chrome reports `false`, so `undefined` is
+  // itself a tell, and deleting it removes the native `false` the override set.
+  const forceWebdriverFalse = (target) => {
     if (!target) return;
-    try { delete target.webdriver; } catch {}
+    try {
+      if (target.webdriver === true) {
+        Object.defineProperty(target, 'webdriver', {
+          get: () => false,
+          configurable: true,
+          enumerable: false,
+        });
+      }
+    } catch {}
   };
-  removeWebdriver(navigator);
-  removeWebdriver(Object.getPrototypeOf(navigator));
-  removeWebdriver(Navigator.prototype);
+  forceWebdriverFalse(navigator);
+  forceWebdriverFalse(Object.getPrototypeOf(navigator));
+  forceWebdriverFalse(Navigator.prototype);
   if (typeof WorkerNavigator !== 'undefined') {
-    removeWebdriver(WorkerNavigator.prototype);
+    forceWebdriverFalse(WorkerNavigator.prototype);
   }
 })();
 (function(){
