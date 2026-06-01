@@ -109,6 +109,7 @@ Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
 ## Video Recording
 
 ```bash
+agent-browser open https://example.com     # Launch a browser session first
 agent-browser record start ./demo.webm    # Start recording
 agent-browser click @e1                   # Perform actions
 agent-browser record stop                 # Stop and save video
@@ -303,7 +304,6 @@ agent-browser state load auth.json    # Restore saved state
 agent-browser --session <name> ...    # Isolated browser session
 agent-browser --json ...              # JSON output for parsing
 agent-browser --headed ...            # Show browser window (not headless)
-agent-browser --full ...              # Full page screenshot (-f)
 agent-browser --cdp <port> ...        # Connect via Chrome DevTools Protocol
 agent-browser -p <provider> ...       # Cloud browser provider (--provider)
 agent-browser --proxy <url> ...       # Use proxy server
@@ -331,7 +331,7 @@ agent-browser errors --clear              # Clear errors
 agent-browser highlight @e1               # Highlight element
 agent-browser inspect                     # Open Chrome DevTools for this session
 agent-browser trace start                 # Start recording trace
-agent-browser trace stop trace.zip        # Stop and save trace
+agent-browser trace stop trace.json       # Stop and save trace
 agent-browser profiler start              # Start Chrome DevTools profiling
 agent-browser profiler stop trace.json    # Stop and save profile
 ```
@@ -390,5 +390,6 @@ AGENT_BROWSER_ENABLE="react-devtools"        # Comma-separated built-in init scr
 AGENT_BROWSER_HIDE_SCROLLBARS="false"        # Keep native scrollbars visible in headless Chromium screenshots
 AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
-AGENT_BROWSER_HOME="/path/to/agent-browser"  # Custom install location
+AGENT_BROWSER_CONFIG="./agent-browser.json"  # Custom config file
+AGENT_BROWSER_CDP="9222"                     # Connect daemon to CDP port or WebSocket URL
 ```

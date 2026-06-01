@@ -365,7 +365,7 @@ agent-browser diff url https://v1.com https://v2.com --selector "#main"  # Scope
 ### Debug
 
 ```bash
-agent-browser trace start [path]      # Start recording trace
+agent-browser trace start             # Start recording trace
 agent-browser trace stop [path]       # Stop and save trace
 agent-browser profiler start          # Start Chrome DevTools profiling
 agent-browser profiler stop [path]    # Stop and save profile (.json)
@@ -632,14 +632,14 @@ agent-browser --session-name secure open example.com
 
 ## Security
 
-agent-browser includes security features for safe AI agent deployments. All features are opt-in -- existing workflows are unaffected until you explicitly enable a feature:
+agent-browser includes security features for safe AI agent deployments. All features are opt-in, and existing workflows are unaffected until you explicitly enable a feature:
 
-- **Authentication Vault** -- Store credentials locally (always encrypted), reference by name. The LLM never sees passwords. `auth login` navigates with `load` and then waits for login form selectors to appear (SPA-friendly, timeout follows the default action timeout). A key is auto-generated at `~/.agent-browser/.encryption-key` if `AGENT_BROWSER_ENCRYPTION_KEY` is not set: `echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin` then `agent-browser auth login github`
-- **Content Boundary Markers** -- Wrap page output in delimiters so LLMs can distinguish tool output from untrusted content: `--content-boundaries`
-- **Domain Allowlist** -- Restrict navigation to trusted domains (wildcards like `*.example.com` also match the bare domain): `--allowed-domains "example.com,*.example.com"`. Sub-resource requests (scripts, images, fetch) and WebSocket/EventSource connections to non-allowed domains are also blocked. Include any CDN domains your target pages depend on (e.g., `*.cdn.example.com`).
-- **Action Policy** -- Gate destructive actions with a static policy file: `--action-policy ./policy.json`
-- **Action Confirmation** -- Require explicit approval for sensitive action categories: `--confirm-actions eval,download`
-- **Output Length Limits** -- Prevent context flooding: `--max-output 50000`
+- **Authentication Vault**: Store credentials locally (always encrypted), reference by name. The LLM never sees passwords. `auth login` navigates with `load` and then waits for login form selectors to appear (SPA-friendly, timeout follows the default action timeout). A key is auto-generated at `~/.agent-browser/.encryption-key` if `AGENT_BROWSER_ENCRYPTION_KEY` is not set: `echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin` then `agent-browser auth login github`
+- **Content Boundary Markers**: Wrap page output in delimiters so LLMs can distinguish tool output from untrusted content: `--content-boundaries`
+- **Domain Allowlist**: Restrict navigation to trusted domains (wildcards like `*.example.com` also match the bare domain): `--allowed-domains "example.com,*.example.com"`. Sub-resource requests (scripts, images, fetch) and WebSocket/EventSource connections to non-allowed domains are also blocked. Include any CDN domains your target pages depend on (e.g., `*.cdn.example.com`).
+- **Action Policy**: Gate destructive actions with a static policy file: `--action-policy ./policy.json`
+- **Action Confirmation**: Require explicit approval for sensitive action categories: `--confirm-actions eval,download`
+- **Output Length Limits**: Prevent context flooding: `--max-output 50000`
 
 | Variable                            | Description                              |
 | ----------------------------------- | ---------------------------------------- |
@@ -762,11 +762,11 @@ agent-browser dashboard stop
 The dashboard runs as a standalone background process on port 4848, independent of browser sessions. It stays available even when no sessions are running, and it works from `http://localhost:4848` or a proxied/forwarded URL that reaches the dashboard server, such as `https://dashboard.agent-browser.localhost` or a Coder workspace URL. The browser stays on the dashboard origin; session-specific tabs, status, and stream traffic are proxied internally, so session ports do not need to be exposed.
 
 The dashboard displays:
-- **Live viewport** -- real-time JPEG frames from the browser
-- **Activity feed** -- chronological command/result stream with timing and expandable details
-- **Console output** -- browser console messages (log, warn, error)
-- **Session creation** -- create new sessions from the UI with local engines (Chrome, Lightpanda) or cloud providers (AgentCore, Browserbase, Browserless, Browser Use, Kernel)
-- **AI Chat** -- chat with an AI assistant directly in the dashboard (requires Vercel AI Gateway configuration)
+- **Live viewport**: real-time JPEG frames from the browser
+- **Activity feed**: chronological command/result stream with timing and expandable details
+- **Console output**: browser console messages (log, warn, error)
+- **Session creation**: create new sessions from the UI with local engines (Chrome, Lightpanda) or cloud providers (AgentCore, Browserbase, Browserless, Browser Use, Kernel)
+- **AI Chat**: chat with an AI assistant directly in the dashboard (requires Vercel AI Gateway configuration)
 
 ### AI Chat
 
@@ -800,8 +800,8 @@ Create an `agent-browser.json` file to set persistent defaults instead of repeat
 
 **Locations (lowest to highest priority):**
 
-1. `~/.agent-browser/config.json` -- user-level defaults
-2. `./agent-browser.json` -- project-level overrides (in working directory)
+1. `~/.agent-browser/config.json`: user-level defaults
+2. `./agent-browser.json`: project-level overrides (in working directory)
 3. `AGENT_BROWSER_*` environment variables override config file values
 4. CLI flags override everything
 
@@ -1237,7 +1237,7 @@ The daemon starts automatically on first command and persists between commands f
 
 ### Just ask the agent
 
-The simplest approach -- just tell your agent to use it:
+The simplest approach is to tell your agent to use it:
 
 ```
 Use agent-browser to test the login flow. Run agent-browser --help to see available commands.
@@ -1253,7 +1253,7 @@ Add the skill to your AI coding assistant for richer context:
 npx skills add vercel-labs/agent-browser
 ```
 
-This works with Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, Goose, OpenCode, and Windsurf. The skill is fetched from the repository, so it stays up to date automatically -- do not copy `SKILL.md` from `node_modules` as it will become stale.
+This works with Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, Goose, OpenCode, and Windsurf. The skill is fetched from the repository, so it stays up to date automatically. Do not copy `SKILL.md` from `node_modules` as it will become stale.
 
 ### Claude Code
 
@@ -1482,8 +1482,8 @@ Optional configuration via environment variables:
 
 | Variable                 | Description                                                                      | Default |
 | ------------------------ | -------------------------------------------------------------------------------- | ------- |
-| `KERNEL_HEADLESS`        | Run browser in headless mode (`true`/`false`)                                    | `false` |
-| `KERNEL_STEALTH`         | Enable stealth mode to avoid bot detection (`true`/`false`)                      | `true`  |
+| `KERNEL_HEADLESS`        | Run browser in headless mode (`true`/`false`)                                    | `true`  |
+| `KERNEL_STEALTH`         | Enable stealth mode to avoid bot detection (`true`/`false`)                      | `false` |
 | `KERNEL_TIMEOUT_SECONDS` | Session timeout in seconds                                                       | `300`   |
 | `KERNEL_PROFILE_NAME`    | Browser profile name for persistent cookies/logins (created if it doesn't exist) | (none)  |
 

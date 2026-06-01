@@ -2214,12 +2214,13 @@ Examples:
             r##"
 agent-browser trace - Record execution trace
 
-Usage: agent-browser trace <operation> [path]
+Usage: agent-browser trace start
+       agent-browser trace stop [path]
 
 Record a Chrome DevTools trace for debugging.
 
 Operations:
-  start [path]         Start recording trace
+  start                Start recording trace
   stop [path]          Stop recording and save trace
 
 Global Options:
@@ -2228,9 +2229,8 @@ Global Options:
 
 Examples:
   agent-browser trace start
-  agent-browser trace start ./my-trace
   agent-browser trace stop
-  agent-browser trace stop ./debug-trace.zip
+  agent-browser trace stop ./debug-trace.json
 "##
         }
 
@@ -2991,7 +2991,8 @@ Diff:
   diff url <u1> <u2>         Compare two pages
 
 Debug:
-  trace start|stop [path]    Record Chrome DevTools trace
+  trace start                Start Chrome DevTools trace
+  trace stop [path]          Stop and save Chrome DevTools trace
   profiler start|stop [path] Record Chrome DevTools profile
   record start <path> [url]  Start video recording (WebM)
   record stop                Stop and save video
