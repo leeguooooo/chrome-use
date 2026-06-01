@@ -311,6 +311,42 @@ const LIGHTPANDA_CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const LIGHTPANDA_CDP_CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const LIGHTPANDA_TARGET_INIT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Outcome of a single `Browser.getVersion` liveness probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LivenessProbe {
+    /// Chrome answered — the connection is definitely alive.
+    Responded,
+    /// The CDP transport errored (WebSocket closed/reset) — the socket is gone.
+    TransportError,
+    /// The probe timed out with no response.
+    TimedOut,
+}
+
+/// Decide whether a CDP connection should be considered alive from one probe.
+///
+/// The subtle case is [`LivenessProbe::TimedOut`]. For a browser we launched
+/// ourselves (`is_external_attach == false`) a hung CDP socket is a real
+/// problem and the daemon should reconnect. But for an *externally attached*
+/// browser — the stealth fork's default, where we attach to the user's real
+/// Chrome — a slow/no response is almost always Chrome being briefly busy or,
+/// critically, showing the Chrome 136+ "Allow remote debugging?" consent modal,
+/// which blocks CDP responses until the user clicks Allow.
+///
+/// Treating that timeout as "dead" tears down the already-consented connection
+/// and forces a reconnect, which re-pops the consent prompt; repeated on every
+/// command it produces an endless prompt loop and a connection storm that can
+/// freeze Chrome. So for external attaches we keep the connection alive on
+/// timeout. A genuinely dead external socket instead surfaces as
+/// [`LivenessProbe::TransportError`] (and Chrome being closed by the user is a
+/// transport error, not a timeout), so zombie-socket detection is preserved.
+fn connection_alive_from_probe(probe: LivenessProbe, is_external_attach: bool) -> bool {
+    match probe {
+        LivenessProbe::Responded => true,
+        LivenessProbe::TransportError => false,
+        LivenessProbe::TimedOut => is_external_attach,
+    }
+}
+
 impl BrowserManager {
     pub async fn launch(options: LaunchOptions, engine: Option<&str>) -> Result<Self, String> {
         let engine = engine.unwrap_or("chrome");
@@ -829,21 +865,27 @@ impl BrowserManager {
         self.default_timeout_ms
     }
 
-    /// Checks if the CDP connection is alive by sending a simple command.
-    /// Returns false if the command times out or fails.
+    /// Checks if the CDP connection is alive by sending a `Browser.getVersion`
+    /// probe. See [`connection_alive_from_probe`] for how the outcome maps to a
+    /// liveness verdict — in particular why a timeout does NOT tear down an
+    /// externally-attached browser.
     pub async fn is_connection_alive(&self) -> bool {
         let timeout = tokio::time::Duration::from_secs(3);
-        let result = tokio::time::timeout(
+        let probe = match tokio::time::timeout(
             timeout,
             self.client
                 .send_command_no_params("Browser.getVersion", None),
         )
-        .await;
-
-        match result {
-            Ok(Ok(_)) => true,
-            Ok(Err(_)) | Err(_) => false,
-        }
+        .await
+        {
+            Ok(Ok(_)) => LivenessProbe::Responded,
+            Ok(Err(_)) => LivenessProbe::TransportError,
+            Err(_) => LivenessProbe::TimedOut,
+        };
+        // No child process => we attached to an external browser (the user's
+        // real Chrome — the stealth fork's default).
+        let is_external_attach = self.browser_process.is_none();
+        connection_alive_from_probe(probe, is_external_attach)
     }
 
     /// Non-blocking check whether the locally-launched browser process has exited
@@ -1726,6 +1768,35 @@ mod tests {
     fn test_format_tab_id() {
         assert_eq!(format_tab_id(1), "t1");
         assert_eq!(format_tab_id(42), "t42");
+    }
+
+    #[test]
+    fn liveness_responded_is_alive_for_both_kinds() {
+        assert!(connection_alive_from_probe(LivenessProbe::Responded, true));
+        assert!(connection_alive_from_probe(LivenessProbe::Responded, false));
+    }
+
+    #[test]
+    fn liveness_transport_error_is_dead_for_both_kinds() {
+        // A closed/reset WebSocket is a genuine death — reconnect in both cases.
+        assert!(!connection_alive_from_probe(LivenessProbe::TransportError, true));
+        assert!(!connection_alive_from_probe(LivenessProbe::TransportError, false));
+    }
+
+    #[test]
+    fn liveness_timeout_keeps_external_attach_alive() {
+        // Regression guard for the remote-debugging consent storm: a timed-out
+        // probe must NOT tear down an externally-attached browser, otherwise the
+        // daemon reconnects and re-pops Chrome's "Allow remote debugging?" modal
+        // on every command (endless prompts + browser freeze).
+        assert!(connection_alive_from_probe(LivenessProbe::TimedOut, true));
+    }
+
+    #[test]
+    fn liveness_timeout_marks_launched_browser_dead() {
+        // A browser we launched that stops responding is a real problem worth a
+        // reconnect (and has no consent modal to worry about).
+        assert!(!connection_alive_from_probe(LivenessProbe::TimedOut, false));
     }
 
     #[test]
