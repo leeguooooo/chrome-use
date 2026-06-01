@@ -1,2 +1,9 @@
 packages:
   - '.'
+minimumReleaseAge: 2880
+allowBuilds:
+  '@mongodb-js/zstd': false
+  msw: false
+  node-liblzma: false
+  sharp: false
+  unrs-resolver: false
