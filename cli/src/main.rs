@@ -531,6 +531,18 @@ fn main() {
     let mut flags = parse_flags(&args);
     let clean = clean_args(&args);
 
+    // Loudly warn when launching a fresh browser with no profile: it gets a
+    // temporary EMPTY profile (no cookies / no login). For logged-in sites the
+    // user almost always wants --profile auto (their real Chrome profile).
+    // Skipped under CI (force_launch is implicit there and login isn't expected).
+    if flags.force_launch && flags.profile.is_none() && env::var("CI").is_err() {
+        eprintln!(
+            "⚠ --launch uses a temporary EMPTY browser profile (no cookies, no login). \
+             For logged-in sites, add `--profile auto` (or `--profile Default`) to reuse \
+             your real Chrome session."
+        );
+    }
+
     let has_help = args.iter().any(|a| a == "--help" || a == "-h");
     let has_version = args.iter().any(|a| a == "--version" || a == "-V");
 

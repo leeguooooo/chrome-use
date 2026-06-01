@@ -917,6 +917,18 @@ pub fn list_chrome_profiles(user_data_dir: &Path) -> Vec<ChromeProfile> {
 /// 3. Case-insensitive directory name match
 ///
 /// Returns the resolved directory name, or an error with available profiles.
+/// Read `profile.last_used` (the directory name of the profile Chrome opened
+/// most recently) from a user-data dir's `Local State`. Used to resolve
+/// `--profile auto`.
+fn read_last_used_profile(user_data_dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(user_data_dir.join("Local State")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    json.get("profile")?
+        .get("last_used")?
+        .as_str()
+        .map(String::from)
+}
+
 pub fn resolve_chrome_profile(user_data_dir: &Path, input: &str) -> Result<String, String> {
     let profiles = list_chrome_profiles(user_data_dir);
 
@@ -926,6 +938,21 @@ pub fn resolve_chrome_profile(user_data_dir: &Path, input: &str) -> Result<Strin
              If you meant a directory path, use a full path (e.g., /path/to/profile).",
             user_data_dir.display()
         ));
+    }
+
+    // "auto": pick the profile Chrome last used (else "Default", else the first
+    // one), so `--profile auto` reuses the real logged-in profile without the
+    // user having to name it explicitly.
+    if input.eq_ignore_ascii_case("auto") {
+        if let Some(lu) = read_last_used_profile(user_data_dir) {
+            if let Some(p) = profiles.iter().find(|p| p.directory == lu) {
+                return Ok(p.directory.clone());
+            }
+        }
+        if let Some(p) = profiles.iter().find(|p| p.directory == "Default") {
+            return Ok(p.directory.clone());
+        }
+        return Ok(profiles[0].directory.clone());
     }
 
     // Tier 1: exact directory name match
@@ -1671,6 +1698,44 @@ mod tests {
         assert!(!is_chrome_profile_name("~/my-profile"));
         assert!(!is_chrome_profile_name("C:\\Users\\foo"));
         assert!(!is_chrome_profile_name("relative/path"));
+    }
+
+    #[test]
+    fn test_resolve_chrome_profile_auto_prefers_last_used() {
+        let tmp = std::env::temp_dir().join("ab-auto-lastused-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let local_state = serde_json::json!({
+            "profile": {
+                "last_used": "Profile 2",
+                "info_cache": { "Default": {"name": "Person 1"}, "Profile 2": {"name": "Work"} }
+            }
+        });
+        std::fs::write(
+            tmp.join("Local State"),
+            serde_json::to_string(&local_state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(resolve_chrome_profile(&tmp, "auto").unwrap(), "Profile 2");
+        assert_eq!(resolve_chrome_profile(&tmp, "AUTO").unwrap(), "Profile 2");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_resolve_chrome_profile_auto_falls_back_to_default() {
+        let tmp = std::env::temp_dir().join("ab-auto-default-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let local_state = serde_json::json!({
+            "profile": { "info_cache": { "Default": {"name": "Person 1"}, "Profile 2": {"name": "Work"} } }
+        });
+        std::fs::write(
+            tmp.join("Local State"),
+            serde_json::to_string(&local_state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(resolve_chrome_profile(&tmp, "auto").unwrap(), "Default");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Helper to create a fake Chrome user-data dir with a `Local State` file.

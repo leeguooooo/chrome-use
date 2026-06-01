@@ -93,13 +93,23 @@ agent-browser screenshot ./page.png
 
 The agent operates in your Chrome — you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
 
-### Standalone mode
+### Standalone mode (`--launch`)
 
-If you need a separate browser (CI, testing, etc.):
+Spawn a separate browser instead of attaching to your running Chrome:
 
 ```bash
+# Throwaway: fresh, EMPTY profile — no cookies, no login (good for CI/testing)
 agent-browser --launch open https://example.com
+
+# Keep your login: launch with your real Chrome profile (cookies/sessions intact)
+agent-browser --launch --profile auto open https://x.com/home
+# or name it explicitly: --profile Default / --profile "Profile 1"
 ```
+
+> ⚠️ Plain `--launch` (no `--profile`) uses a **temporary empty profile** — you will
+> NOT be logged into anything. For logged-in sites use `--profile auto` (picks the
+> Chrome profile you used most recently) or `--profile <name>`. agent-browser prints
+> a warning when you `--launch` without a profile.
 
 In CI environments, standalone mode is used automatically.
 

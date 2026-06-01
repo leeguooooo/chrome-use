@@ -1609,9 +1609,12 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
                     "Could not connect to your Chrome browser.\n\n\
                      If Chrome showed an \"Allow remote debugging?\" dialog, click \
                      Allow and re-run — that consent is what lets agent-browser attach.\n\n\
-                     Otherwise, to let agent-browser work with your existing Chrome (recommended):\n\
+                     Otherwise, to let agent-browser reuse your logged-in Chrome (recommended):\n\
                      {}\n\n\
-                     Or start a standalone browser with: agent-browser --launch open <url>\n\n\
+                     Or launch a separate browser that KEEPS your login state:\n  \
+                     agent-browser --launch --profile auto open <url>\n\
+                     (plain `--launch` alone uses a temporary EMPTY profile — no cookies, \
+                     no logged-in sessions.)\n\n\
                      Note: remote debugging is a startup flag, not a Chrome setting — \
                      chrome://inspect/#remote-debugging only enables target discovery and \
                      does NOT expose the CDP HTTP API on /json/version. \
@@ -2172,9 +2175,12 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                     "Could not connect to your Chrome browser.\n\n\
                      If Chrome showed an \"Allow remote debugging?\" dialog, click \
                      Allow and re-run — that consent is what lets agent-browser attach.\n\n\
-                     Otherwise, to let agent-browser work with your existing Chrome (recommended):\n\
+                     Otherwise, to let agent-browser reuse your logged-in Chrome (recommended):\n\
                      {}\n\n\
-                     Or start a standalone browser with: agent-browser --launch open <url>\n\n\
+                     Or launch a separate browser that KEEPS your login state:\n  \
+                     agent-browser --launch --profile auto open <url>\n\
+                     (plain `--launch` alone uses a temporary EMPTY profile — no cookies, \
+                     no logged-in sessions.)\n\n\
                      Note: remote debugging is a startup flag, not a Chrome setting — \
                      chrome://inspect/#remote-debugging only enables target discovery and \
                      does NOT expose the CDP HTTP API on /json/version. \
