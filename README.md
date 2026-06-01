@@ -29,7 +29,7 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 <details>
 <summary>Other ways to install</summary>
 
-- **Pin a version:** `AGENT_BROWSER_VERSION=v0.27.0-fork.11 curl -fsSL https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/install.sh | sh`
+- **Pin a version:** `AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/install.sh | sh`
 - **Custom location:** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
 - **Windows:** download `agent-browser-win32-x64.tar.gz` from the [Releases page](https://github.com/leeguooooo/agent-browser-stealth/releases) and put `agent-browser.exe` on your PATH.
 - **npm (legacy):** `npm install -g agent-browser-stealth` — still published, but GitHub Releases is the primary channel now.
@@ -45,14 +45,39 @@ npx skills add leeguooooo/agent-browser-stealth
 
 This drops `skills/agent-browser` (and the specialized `skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}`) into your project so your AI agent gets the right usage patterns and pre-approved bash permissions for `agent-browser`, `agent-browser-stealth`, and `abs`.
 
-## Setup (one time)
+## Command names
 
-Enable Chrome DevTools Protocol in your Chrome:
+`agent-browser`, `agent-browser-stealth`, and `abs` are **the same binary** —
+`abs` is just a short alias. There is no separate "stealth executable"; stealth
+is a runtime behavior (see [Anti-detection](#anti-detection) below), applied
+automatically based on whether you attach to your real Chrome or `--launch` a
+fresh one.
 
-1. Open `chrome://inspect/#remote-debugging` in Chrome
-2. Toggle the switch on
+## Setup: connect to your Chrome
 
-That's it. This setting persists across Chrome restarts.
+Attaching uses the Chrome DevTools Protocol, which Chrome only exposes when it is
+**launched with a remote-debugging port**. This is a startup flag, not a setting
+— the `chrome://inspect` toggle alone is **not** enough (it only enables target
+discovery, not the CDP attach).
+
+**Recommended — fully quit Chrome, then relaunch with the port:**
+
+```bash
+# macOS
+open -a "Google Chrome" --args --remote-debugging-port=9222
+# Linux
+google-chrome --remote-debugging-port=9222
+# Windows: add --remote-debugging-port=9222 to your Chrome shortcut's target
+```
+
+Then run `agent-browser open <url>` — it auto-discovers the port and attaches.
+On first attach, **Chrome 136+ shows an "Allow remote debugging?" dialog — click
+Allow once** (it persists for that Chrome session).
+
+**No setup / don't want to touch your real Chrome?** Use
+`agent-browser --launch open <url>` to spawn a fresh isolated stealth browser
+(full anti-detection patches applied; see below). This always works without any
+port setup and is what CI uses automatically.
 
 ## Usage
 
