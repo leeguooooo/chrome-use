@@ -5014,14 +5014,10 @@ async fn handle_vitals(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         "hydratedComponents": hydrated_components,
     });
 
-    let return_json = cmd.get("json").and_then(|v| v.as_bool()).unwrap_or(false);
-    if return_json {
-        Ok(data_value)
-    } else {
-        let data: react::VitalsData = serde_json::from_value(data_value.clone())
-            .map_err(|e| format!("Failed to parse vitals data: {}", e))?;
-        Ok(json!({ "report": react::format_vitals_report(&data) }))
-    }
+    // Always return the structured payload. The CLI output layer renders a
+    // compact text summary in normal mode, while `--json` exposes these exact
+    // fields for automation.
+    Ok(data_value)
 }
 
 async fn handle_pushstate(cmd: &Value, state: &DaemonState) -> Result<Value, String> {

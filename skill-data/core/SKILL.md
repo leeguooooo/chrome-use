@@ -445,7 +445,8 @@ agent-browser pushstate <url>                    # SPA navigation (auto-detects 
 ```
 
 Without `--enable react-devtools`, the `react …` commands error. `vitals`
-and `pushstate` work on any site regardless of framework.
+and `pushstate` work on any site regardless of framework. `vitals` prints a
+summary by default; use `--json` for the full structured payload.
 
 ## Working safely
 

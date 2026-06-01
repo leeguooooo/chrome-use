@@ -353,6 +353,9 @@ agent-browser vitals [url] [--json]                 # LCP/CLS/TTFB/FCP/INP + hyd
 agent-browser pushstate <url>                       # SPA client-side nav (auto-detects Next router)
 ```
 
+`vitals` prints a summary by default and uses the same fields as the structured
+`--json` response.
+
 ## Init scripts
 
 ```bash

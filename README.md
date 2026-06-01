@@ -428,7 +428,7 @@ agent-browser react renders start                  # Begin fiber render recordin
 agent-browser react renders stop [--json]          # Stop and print profile (--json for raw data)
 agent-browser react suspense [--only-dynamic] [--json]  # Suspense boundaries + classifier
                                                          # --only-dynamic hides the "static" list
-agent-browser vitals [url] [--json]                # LCP/CLS/TTFB/FCP/INP + React hydration phases
+agent-browser vitals [url] [--json]                # LCP/CLS/TTFB/FCP/INP + hydration summary
 ```
 
 Each `react ...` subcommand requires `--enable react-devtools` to have been
@@ -438,6 +438,8 @@ binary). Without it the commands error with `React DevTools hook not installed
 
 Works on any React app — Next.js, Remix, Vite+React, CRA, TanStack Start,
 React Native Web, etc. `vitals` and `pushstate` are framework-agnostic.
+`vitals` prints a summary by default; pass `--json` for the full structured
+payload.
 
 ### Init scripts
 
