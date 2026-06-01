@@ -2318,6 +2318,11 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     load_storage_state_or_rollback(state, &storage_state_owned).await?;
 
     apply_launch_init_scripts(state).await;
+    // Apply stealth patches (the 32 JS patches + HeadlessChrome UA strip in
+    // FullLaunch mode). The fresh-launch path was missing this — only the launch
+    // FLAGS (e.g. --disable-blink-features) were applied, so the JS patches never
+    // ran and navigator.userAgent kept the HeadlessChrome marker.
+    apply_stealth_to_browser(state).await;
 
     Ok(json!({ "launched": true }))
 }
