@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use super::adaptive::{self, ElementFingerprint};
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
 
@@ -13,6 +14,9 @@ pub struct RefEntry {
     pub nth: Option<usize>,
     pub selector: Option<String>,
     pub frame_id: Option<String>,
+    /// AX fingerprint captured at snapshot time, used by adaptive relocation when
+    /// the node is gone and the role/name/nth re-query also fails.
+    pub fingerprint: Option<ElementFingerprint>,
 }
 
 pub struct RefMap {
@@ -57,8 +61,17 @@ impl RefMap {
                 nth,
                 selector: None,
                 frame_id: frame_id.map(|s| s.to_string()),
+                fingerprint: None,
             },
         );
+    }
+
+    /// Attach an AX fingerprint to an existing ref (set during snapshot, used by
+    /// adaptive relocation). No-op if the ref is unknown.
+    pub fn set_fingerprint(&mut self, ref_id: &str, fingerprint: ElementFingerprint) {
+        if let Some(entry) = self.map.get_mut(ref_id) {
+            entry.fingerprint = Some(fingerprint);
+        }
     }
 
     pub fn add_selector(
@@ -78,6 +91,7 @@ impl RefMap {
                 nth,
                 selector: Some(selector),
                 frame_id: None,
+                fingerprint: None,
             },
         );
     }
@@ -146,6 +160,46 @@ pub fn parse_ref(input: &str) -> Option<String> {
     None
 }
 
+/// When a saved `@ref`'s node is gone and the role/name/nth re-query also failed,
+/// try to relocate the element by AX fingerprint similarity. Returns the chosen
+/// backend node id only when confident (high score + clear margin over the
+/// runner-up). Opt out with `AGENT_BROWSER_ADAPTIVE_REF=0`.
+async fn relocate_stale_ref(
+    client: &CdpClient,
+    ref_id: &str,
+    entry: &RefEntry,
+    session_id: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Option<i64> {
+    if std::env::var("AGENT_BROWSER_ADAPTIVE_REF").as_deref() == Ok("0") {
+        return None;
+    }
+    let baseline = entry.fingerprint.as_ref()?;
+    let candidates = super::snapshot::collect_current_fingerprints(
+        client,
+        session_id,
+        entry.frame_id.as_deref(),
+        iframe_sessions,
+    )
+    .await
+    .ok()?;
+    match adaptive::pick_best(
+        baseline,
+        &candidates,
+        adaptive::ADAPTIVE_THRESHOLD,
+        adaptive::ADAPTIVE_MARGIN,
+    ) {
+        Ok(reloc) => {
+            eprintln!(
+                "[adaptive] relocated {ref_id} ({} \"{}\") score={:.2} second={:.2} -> backendNodeId {}",
+                entry.role, entry.name, reloc.score, reloc.second_score, reloc.backend_node_id
+            );
+            Some(reloc.backend_node_id)
+        }
+        Err(_) => None,
+    }
+}
+
 pub async fn resolve_element_center(
     client: &CdpClient,
     session_id: &str,
@@ -163,15 +217,19 @@ pub async fn resolve_element_center(
 
         // Try cached backend_node_id first (fast path)
         if let Some(backend_node_id) = entry.backend_node_id {
+            let mut active_id = backend_node_id;
             // Identity check: React often re-uses the same DOM node when
             // re-rendering — backendNodeId stays the same but accessibleName
             // / role changes. Without this verification, `click @e20` (saved
             // when the button said "Add post") happily clicks the *same*
             // node that now says "Post all", silently submitting the thread.
             //
-            // Set AGENT_BROWSER_VERIFY_REF=0 to skip (saves one CDP
-            // roundtrip per ref-based interaction; only safe if you know
-            // the page is static between snapshot and click).
+            // On mismatch, try adaptive fingerprint relocation before failing:
+            // a confident high-score/high-margin match is a stronger identity
+            // signal than role+name, and lets a moved+renamed element still
+            // resolve. If relocation isn't confident, surface the original
+            // identity error. Set AGENT_BROWSER_VERIFY_REF=0 to skip the check
+            // (and thus relocation) entirely.
             if std::env::var("AGENT_BROWSER_VERIFY_REF").as_deref() != Ok("0") {
                 if let Err(e) = verify_ref_identity(
                     client,
@@ -183,7 +241,12 @@ pub async fn resolve_element_center(
                 )
                 .await
                 {
-                    return Err(e);
+                    match relocate_stale_ref(client, &ref_id, entry, session_id, iframe_sessions)
+                        .await
+                    {
+                        Some(id) => active_id = id,
+                        None => return Err(e),
+                    }
                 }
             }
 
@@ -191,7 +254,7 @@ pub async fn resolve_element_center(
                 .send_command_typed(
                     "DOM.getBoxModel",
                     &DomGetBoxModelParams {
-                        backend_node_id: Some(backend_node_id),
+                        backend_node_id: Some(active_id),
                         node_id: None,
                         object_id: None,
                     },
@@ -213,15 +276,9 @@ pub async fn resolve_element_center(
                 //
                 // Set AGENT_BROWSER_VERIFY_CLICK_TARGET=0 to skip.
                 if std::env::var("AGENT_BROWSER_VERIFY_CLICK_TARGET").as_deref() != Ok("0") {
-                    if let Err(e) = verify_click_target(
-                        client,
-                        effective_session_id,
-                        backend_node_id,
-                        &ref_id,
-                        x,
-                        y,
-                    )
-                    .await
+                    if let Err(e) =
+                        verify_click_target(client, effective_session_id, active_id, &ref_id, x, y)
+                            .await
                     {
                         return Err(e);
                     }
@@ -231,8 +288,9 @@ pub async fn resolve_element_center(
             // backend_node_id is stale; re-query the accessibility tree below
         }
 
-        // Fallback: re-query the accessibility tree to find a fresh node by role/name
-        let fresh_id = find_node_id_by_role_name(
+        // Fallback: re-query the accessibility tree to find a fresh node by role/name.
+        // If that fails, try adaptive fingerprint relocation before giving up.
+        let fresh_id = match find_node_id_by_role_name(
             client,
             session_id,
             &entry.role,
@@ -241,7 +299,16 @@ pub async fn resolve_element_center(
             entry.frame_id.as_deref(),
             iframe_sessions,
         )
-        .await?;
+        .await
+        {
+            Ok(id) => id,
+            Err(e) => match relocate_stale_ref(client, &ref_id, entry, session_id, iframe_sessions)
+                .await
+            {
+                Some(id) => id,
+                None => return Err(e),
+            },
+        };
         let result: DomGetBoxModelResult = client
             .send_command_typed(
                 "DOM.getBoxModel",
@@ -279,9 +346,11 @@ pub async fn resolve_element_object_id(
 
         // Try cached backend_node_id first (fast path)
         if let Some(backend_node_id) = entry.backend_node_id {
+            let mut active_id = backend_node_id;
             // Same identity guard as resolve_element_center — see that
             // function for why React DOM-node-reuse breaks ref-based
-            // interactions if we skip this.
+            // interactions if we skip this, and why a confident adaptive
+            // relocation is allowed to override an identity mismatch.
             if std::env::var("AGENT_BROWSER_VERIFY_REF").as_deref() != Ok("0") {
                 if let Err(e) = verify_ref_identity(
                     client,
@@ -293,7 +362,12 @@ pub async fn resolve_element_object_id(
                 )
                 .await
                 {
-                    return Err(e);
+                    match relocate_stale_ref(client, &ref_id, entry, session_id, iframe_sessions)
+                        .await
+                    {
+                        Some(id) => active_id = id,
+                        None => return Err(e),
+                    }
                 }
             }
 
@@ -301,7 +375,7 @@ pub async fn resolve_element_object_id(
                 .send_command_typed(
                     "DOM.resolveNode",
                     &DomResolveNodeParams {
-                        backend_node_id: Some(backend_node_id),
+                        backend_node_id: Some(active_id),
                         node_id: None,
                         object_group: Some("agent-browser".to_string()),
                     },
@@ -317,8 +391,9 @@ pub async fn resolve_element_object_id(
             // backend_node_id is stale; re-query the accessibility tree below
         }
 
-        // Fallback: re-query the accessibility tree to find a fresh node by role/name
-        let fresh_id = find_node_id_by_role_name(
+        // Fallback: re-query the accessibility tree to find a fresh node by role/name.
+        // If that fails, try adaptive fingerprint relocation before giving up.
+        let fresh_id = match find_node_id_by_role_name(
             client,
             session_id,
             &entry.role,
@@ -327,7 +402,16 @@ pub async fn resolve_element_object_id(
             entry.frame_id.as_deref(),
             iframe_sessions,
         )
-        .await?;
+        .await
+        {
+            Ok(id) => id,
+            Err(e) => match relocate_stale_ref(client, &ref_id, entry, session_id, iframe_sessions)
+                .await
+            {
+                Some(id) => id,
+                None => return Err(e),
+            },
+        };
         let result: DomResolveNodeResult = client
             .send_command_typed(
                 "DOM.resolveNode",

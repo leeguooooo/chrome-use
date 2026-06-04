@@ -6,6 +6,7 @@ use super::cdp::client::CdpClient;
 use super::cdp::types::{
     AXNode, AXProperty, AXValue, EvaluateParams, EvaluateResult, GetFullAXTreeResult,
 };
+use super::adaptive::ElementFingerprint;
 use super::element::{resolve_ax_session, RefMap};
 
 const INTERACTIVE_ROLES: &[&str] = &[
@@ -146,6 +147,122 @@ impl TreeNode {
         self.depth = 0;
         self.cursor_info = None;
     }
+}
+
+/// Build an AX fingerprint for a tree node, used by adaptive @ref relocation.
+/// Pulls only data already in the AX tree (no extra CDP calls): role as `tag`,
+/// accessible name as `text`, a few discriminating AX properties as `attrs`, and
+/// the ancestor/parent/sibling structure from the tree links.
+fn build_ax_fingerprint(tree_nodes: &[TreeNode], idx: usize) -> ElementFingerprint {
+    let node = &tree_nodes[idx];
+
+    let mut attrs = std::collections::BTreeMap::new();
+    if let Some(v) = &node.value_text {
+        if !v.is_empty() {
+            attrs.insert("value".to_string(), v.clone());
+        }
+    }
+    if let Some(u) = &node.url {
+        if !u.is_empty() {
+            attrs.insert("url".to_string(), u.clone());
+        }
+    }
+    if let Some(l) = node.level {
+        attrs.insert("level".to_string(), l.to_string());
+    }
+    if let Some(c) = &node.checked {
+        attrs.insert("checked".to_string(), c.clone());
+    }
+
+    // Ancestor roles, nearest first, capped to keep the signature stable.
+    let mut ancestors = Vec::new();
+    let mut cur = node.parent_idx;
+    while let Some(pidx) = cur {
+        if ancestors.len() >= 6 {
+            break;
+        }
+        let role = tree_nodes[pidx].role.clone();
+        if !role.is_empty() {
+            ancestors.push(role);
+        }
+        cur = tree_nodes[pidx].parent_idx;
+    }
+
+    let (parent_tag, parent_text) = node
+        .parent_idx
+        .map(|pidx| (tree_nodes[pidx].role.clone(), tree_nodes[pidx].name.clone()))
+        .unwrap_or_default();
+
+    // Position among same-role siblings under the same parent.
+    let (sibling_index, sibling_count) = match node.parent_idx {
+        Some(pidx) => {
+            let mut count = 0u32;
+            let mut index = 0u32;
+            for &child in &tree_nodes[pidx].children {
+                if tree_nodes[child].role == node.role {
+                    if child == idx {
+                        index = count;
+                    }
+                    count += 1;
+                }
+            }
+            (index, count)
+        }
+        None => (0, 0),
+    };
+
+    ElementFingerprint {
+        tag: node.role.clone(),
+        text: node.name.clone(),
+        attrs,
+        ancestors,
+        parent_tag,
+        parent_text,
+        sibling_index,
+        sibling_count,
+    }
+}
+
+/// Collect AX fingerprints for every node that has a backend node id, used as the
+/// candidate set when relocating a stale @ref. Reuses the same extraction as the
+/// baseline so the two are scored in the same space.
+pub(super) fn collect_fingerprints(tree_nodes: &[TreeNode]) -> Vec<(i64, ElementFingerprint)> {
+    tree_nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, n)| {
+            n.backend_node_id
+                .map(|bid| (bid, build_ax_fingerprint(tree_nodes, idx)))
+        })
+        .collect()
+}
+
+/// Fetch a fresh AX tree for the given frame and return `(backend_node_id,
+/// fingerprint)` for every node — the candidate set for adaptive @ref
+/// relocation. One `getFullAXTree` call, no per-element work.
+pub(super) async fn collect_current_fingerprints(
+    client: &CdpClient,
+    session_id: &str,
+    frame_id: Option<&str>,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<Vec<(i64, ElementFingerprint)>, String> {
+    let (ax_params, effective_session_id) =
+        resolve_ax_session(frame_id, session_id, iframe_sessions);
+    let _ = client
+        .send_command_no_params("DOM.enable", Some(effective_session_id))
+        .await;
+    let _ = client
+        .send_command_no_params("Accessibility.enable", Some(effective_session_id))
+        .await;
+    let ax_tree: GetFullAXTreeResult = client
+        .send_command_typed(
+            "Accessibility.getFullAXTree",
+            &ax_params,
+            Some(effective_session_id),
+        )
+        .await?;
+    let (tree_nodes, _roots) = build_tree(&ax_tree.nodes);
+    Ok(collect_fingerprints(&tree_nodes))
 }
 
 /// The type of a hidden form input found inside a cursor-interactive element.
@@ -397,6 +514,7 @@ pub async fn take_snapshot(
             actual_nth,
             frame_id,
         );
+        ref_map.set_fingerprint(&ref_id, build_ax_fingerprint(&tree_nodes, *idx));
 
         tree_nodes[*idx].has_ref = true;
         tree_nodes[*idx].ref_id = Some(ref_id);

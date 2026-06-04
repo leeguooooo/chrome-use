@@ -1,6 +1,8 @@
 #[allow(dead_code)]
 pub mod actions;
 #[allow(dead_code)]
+pub mod adaptive;
+#[allow(dead_code)]
 pub mod auth;
 #[allow(dead_code)]
 pub mod browser;

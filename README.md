@@ -115,9 +115,10 @@ In CI environments, standalone mode is used automatically.
 
 ## Anti-detection
 
-When connected to your real Chrome, we inject **zero** JavaScript patches. Your browser's fingerprint is completely genuine.
+When connected to your real Chrome, we inject **zero** JavaScript patches. Your browser's fingerprint is completely genuine. The guiding rule is **native CDP/Chrome overrides over JS lies** — a re-defined getter is itself detectable; a native override isn't.
 
-The only thing we do is call `Emulation.setAutomationOverride` via CDP to set `navigator.webdriver = false` at the native Chrome level — undetectable by lie-detection systems like CreepJS.
+- `navigator.webdriver = false` via `Emulation.setAutomationOverride` (native, undetectable by CreepJS-style lie tests).
+- **`Runtime.enable` is left OFF by default.** A live `Runtime` domain is a detectable CDP signal (the patchright/rebrowser "runtime leak") — even when attached to your real Chrome. We only enable it when you opt into console/error capture (see below). `click`, `fill`, `eval`, etc. work without it.
 
 **Test results (connected to real Chrome):**
 
@@ -128,6 +129,16 @@ The only thing we do is call `Emulation.setAutomationOverride` via CDP to set `n
 | [Cloudflare Turnstile](https://nowsecure.nl) | Passed |
 
 When using `--launch` mode (standalone browser), a full suite of 32 stealth patches is applied for headless Chrome.
+
+### Tuning knobs (environment variables)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AGENT_BROWSER_CAPTURE_CONSOLE` | off | Enable `Runtime` domain so `console` / `errors` capture page output. Off keeps the stealthiest profile. |
+| `AGENT_BROWSER_TIMEZONE` | unset | `--launch` only. An IANA id (e.g. `Asia/Tokyo`) sets the timezone natively (Intl + Date follow, no JS lie) to match a proxy; `auto` derives one from the locale. |
+| `AGENT_BROWSER_BLOCK_WEBRTC` | auto | `--launch` only. Auto-forces WebRTC through the proxy when one is set (no real-IP leak). `1` hides the local IP without a proxy; `0` opts out. |
+| `AGENT_BROWSER_HIDE_CANVAS` | off | `--launch` only. Adds session-stable canvas/audio fingerprint noise. Off by default (noise is itself a "lie"). |
+| `AGENT_BROWSER_ADAPTIVE_REF` | on | When a saved `@ref` moves and the role/name re-query fails, relocate it by fingerprint similarity (high score + clear margin required, else it fails loudly). `0` disables. |
 
 ## Differences from upstream
 
