@@ -152,15 +152,13 @@ fn attr_score(base: &BTreeMap<String, String>, cand: &BTreeMap<String, String>) 
     for name in names {
         let w = attr_weight(name);
         total += w;
-        match (base.get(name), cand.get(name)) {
-            (Some(a), Some(b)) => {
-                if name == "class" {
-                    got += w * token_jaccard(a, b);
-                } else if a == b {
-                    got += w;
-                }
+        // present on only one side → no credit
+        if let (Some(a), Some(b)) = (base.get(name), cand.get(name)) {
+            if name == "class" {
+                got += w * token_jaccard(a, b);
+            } else if a == b {
+                got += w;
             }
-            _ => {} // present on only one side → no credit
         }
     }
     if total == 0.0 {

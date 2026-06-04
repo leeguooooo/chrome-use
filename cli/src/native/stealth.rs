@@ -196,46 +196,6 @@ fn resolve_timezone(locale: Option<&str>) -> Option<String> {
 /// Best-effort IANA timezone for a locale. Used only for
 /// `AGENT_BROWSER_TIMEZONE=auto`; unknown locales return `None` so the real
 /// timezone is left untouched rather than guessing a wrong one.
-#[cfg(test)]
-mod timezone_tests {
-    use super::{locale_default_timezone, resolve_timezone};
-
-    #[test]
-    fn maps_common_locales_case_insensitively() {
-        assert_eq!(locale_default_timezone("en-US"), Some("America/New_York"));
-        assert_eq!(locale_default_timezone("ja-JP"), Some("Asia/Tokyo"));
-        assert_eq!(locale_default_timezone("zh-CN"), Some("Asia/Shanghai"));
-        assert_eq!(locale_default_timezone("ZH-TW"), Some("Asia/Taipei"));
-        assert_eq!(locale_default_timezone("ja"), Some("Asia/Tokyo"));
-    }
-
-    #[test]
-    fn unknown_locale_returns_none() {
-        assert_eq!(locale_default_timezone("xx-YY"), None);
-        assert_eq!(locale_default_timezone(""), None);
-    }
-
-    #[test]
-    fn resolve_timezone_honors_env() {
-        // Serialized via a single test to avoid cross-test env races on this key.
-        std::env::remove_var("AGENT_BROWSER_TIMEZONE");
-        assert_eq!(resolve_timezone(Some("en-US")), None);
-
-        std::env::set_var("AGENT_BROWSER_TIMEZONE", "Europe/Berlin");
-        assert_eq!(resolve_timezone(None), Some("Europe/Berlin".to_string()));
-
-        std::env::set_var("AGENT_BROWSER_TIMEZONE", "  ");
-        assert_eq!(resolve_timezone(Some("en-US")), None);
-
-        std::env::set_var("AGENT_BROWSER_TIMEZONE", "auto");
-        assert_eq!(resolve_timezone(Some("ja-JP")), Some("Asia/Tokyo".to_string()));
-        assert_eq!(resolve_timezone(Some("xx-YY")), None);
-        assert_eq!(resolve_timezone(None), None);
-
-        std::env::remove_var("AGENT_BROWSER_TIMEZONE");
-    }
-}
-
 fn locale_default_timezone(locale: &str) -> Option<&'static str> {
     let tz = match locale.to_ascii_lowercase().as_str() {
         "en-us" => "America/New_York",
@@ -371,4 +331,44 @@ fn build_ua_metadata(ua: &str, locale: Option<&str>) -> serde_json::Value {
         "bitness": "64",
         "wow64": false,
     })
+}
+
+#[cfg(test)]
+mod timezone_tests {
+    use super::{locale_default_timezone, resolve_timezone};
+
+    #[test]
+    fn maps_common_locales_case_insensitively() {
+        assert_eq!(locale_default_timezone("en-US"), Some("America/New_York"));
+        assert_eq!(locale_default_timezone("ja-JP"), Some("Asia/Tokyo"));
+        assert_eq!(locale_default_timezone("zh-CN"), Some("Asia/Shanghai"));
+        assert_eq!(locale_default_timezone("ZH-TW"), Some("Asia/Taipei"));
+        assert_eq!(locale_default_timezone("ja"), Some("Asia/Tokyo"));
+    }
+
+    #[test]
+    fn unknown_locale_returns_none() {
+        assert_eq!(locale_default_timezone("xx-YY"), None);
+        assert_eq!(locale_default_timezone(""), None);
+    }
+
+    #[test]
+    fn resolve_timezone_honors_env() {
+        // Serialized via a single test to avoid cross-test env races on this key.
+        std::env::remove_var("AGENT_BROWSER_TIMEZONE");
+        assert_eq!(resolve_timezone(Some("en-US")), None);
+
+        std::env::set_var("AGENT_BROWSER_TIMEZONE", "Europe/Berlin");
+        assert_eq!(resolve_timezone(None), Some("Europe/Berlin".to_string()));
+
+        std::env::set_var("AGENT_BROWSER_TIMEZONE", "  ");
+        assert_eq!(resolve_timezone(Some("en-US")), None);
+
+        std::env::set_var("AGENT_BROWSER_TIMEZONE", "auto");
+        assert_eq!(resolve_timezone(Some("ja-JP")), Some("Asia/Tokyo".to_string()));
+        assert_eq!(resolve_timezone(Some("xx-YY")), None);
+        assert_eq!(resolve_timezone(None), None);
+
+        std::env::remove_var("AGENT_BROWSER_TIMEZONE");
+    }
 }

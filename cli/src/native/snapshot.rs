@@ -226,7 +226,7 @@ fn build_ax_fingerprint(tree_nodes: &[TreeNode], idx: usize) -> ElementFingerpri
 /// Collect AX fingerprints for every node that has a backend node id, used as the
 /// candidate set when relocating a stale @ref. Reuses the same extraction as the
 /// baseline so the two are scored in the same space.
-pub(super) fn collect_fingerprints(tree_nodes: &[TreeNode]) -> Vec<(i64, ElementFingerprint)> {
+fn collect_fingerprints(tree_nodes: &[TreeNode]) -> Vec<(i64, ElementFingerprint)> {
     tree_nodes
         .iter()
         .enumerate()
