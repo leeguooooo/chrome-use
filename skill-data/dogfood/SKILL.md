@@ -96,7 +96,7 @@ Read [references/issue-taxonomy.md](references/issue-taxonomy.md) for the full l
 - Within each section, test interactive elements: click buttons, fill forms, open dropdowns/modals.
 - Check edge cases: empty states, error handling, boundary inputs.
 - Try realistic end-to-end workflows (create, edit, delete flows).
-- Check the browser console for errors periodically.
+- Check the browser console for errors periodically. **Console/error capture is off by default in this stealth fork** — start the dogfood session with `AGENT_BROWSER_CAPTURE_CONSOLE=1` (e.g. `AGENT_BROWSER_CAPTURE_CONSOLE=1 agent-browser --session {SESSION} open <url>`) or `console`/`errors` will return empty.
 
 **At each page:**
 

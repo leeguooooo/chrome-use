@@ -324,9 +324,9 @@ agent-browser <command> --help        # Show detailed help for a command
 agent-browser --headed open example.com   # Show browser window
 agent-browser --cdp 9222 snapshot         # Connect via CDP port
 agent-browser connect 9222                # Alternative: connect command
-agent-browser console                     # View console messages
+agent-browser console                     # View console messages (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)
 agent-browser console --clear             # Clear console
-agent-browser errors                      # View page errors
+agent-browser errors                      # View page errors (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)
 agent-browser errors --clear              # Clear errors
 agent-browser highlight @e1               # Highlight element
 agent-browser inspect                     # Open Chrome DevTools for this session
@@ -392,3 +392,23 @@ AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
 AGENT_BROWSER_HOME="/path/to/agent-browser"  # Custom install location
 ```
+
+### Stealth / anti-detection knobs (fork)
+
+```bash
+AGENT_BROWSER_CAPTURE_CONSOLE="1"     # Enable `console`/`errors` capture. OFF by default:
+                                      #   a live CDP Runtime domain is a detectable bot signal,
+                                      #   so console/errors return empty (with a hint) until set.
+AGENT_BROWSER_TIMEZONE="Asia/Tokyo"   # --launch only. Native timezone override (IANA id, or
+                                      #   "auto" to derive from locale). Aligns Intl+Date to a proxy.
+AGENT_BROWSER_BLOCK_WEBRTC="1"        # --launch only. Hide local IP via WebRTC. Auto-forces WebRTC
+                                      #   through the proxy when one is set; "0" opts out.
+AGENT_BROWSER_HIDE_CANVAS="1"         # --launch only. Session-stable canvas/audio fingerprint noise.
+AGENT_BROWSER_ADAPTIVE_REF="0"        # Disable adaptive @ref relocation (on by default; relocates a
+                                      #   moved element by fingerprint when role/name re-query fails).
+```
+
+> **Heads-up for `console` / `errors`:** capture is **off by default** in this stealth
+> fork. Both commands return `{"messages":[]}` / `{"errors":[]}` plus a `hint` until you
+> launch the session with `AGENT_BROWSER_CAPTURE_CONSOLE=1`. This keeps the CDP `Runtime`
+> domain disabled (a known bot signal) for the common automation path.

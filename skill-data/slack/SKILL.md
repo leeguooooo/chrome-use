@@ -230,6 +230,9 @@ agent-browser snapshot -i | grep -c "treeitem"
 
 ### Check console for errors
 
+Console/error capture is off by default in this stealth fork — launch the session with
+`AGENT_BROWSER_CAPTURE_CONSOLE=1` first, or these return empty.
+
 ```bash
 agent-browser console
 agent-browser errors
