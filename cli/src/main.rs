@@ -3,6 +3,7 @@ mod color;
 mod commands;
 mod connection;
 mod doctor;
+mod findurl;
 mod flags;
 mod install;
 mod native;
@@ -628,6 +629,15 @@ fn main() {
     // Handle skills command (doesn't need daemon)
     if clean.first().map(|s| s.as_str()) == Some("skills") {
         skills::run_skills(&clean, flags.json);
+        return;
+    }
+
+    // Handle find-url (doesn't need daemon): search local bookmarks
+    if matches!(
+        clean.first().map(|s| s.as_str()),
+        Some("find-url") | Some("findurl")
+    ) {
+        findurl::run_find_url(&clean, flags.json);
         return;
     }
 

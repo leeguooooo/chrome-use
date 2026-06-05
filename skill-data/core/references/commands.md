@@ -336,6 +336,22 @@ agent-browser profiler start              # Start Chrome DevTools profiling
 agent-browser profiler stop trace.json    # Stop and save profile
 ```
 
+### Finding a page the user saved (`find-url`)
+
+Search the user's local Chrome/Edge **bookmarks** by keyword — for internal
+systems or previously-saved pages that public search can't reach. Local read, no
+browser/daemon needed.
+
+```bash
+agent-browser find-url jira board          # all keywords must match (name or url)
+agent-browser find-url --limit 10 invoices
+agent-browser find-url --browser edge --profile "Profile 1" wiki
+agent-browser find-url grafana --json      # {results:[{name,url,folder}], count}
+```
+
+Results are most-recently-added first. `javascript:`/`data:` bookmarklets are
+skipped. (Visited-history search isn't included yet — bookmarks only.)
+
 ### Debugging forms / hidden state with `eval`
 
 The a11y `snapshot` shows visible, interactive elements — it does **not** show

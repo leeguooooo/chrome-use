@@ -39,7 +39,7 @@ need a **real, logged-in browser** — not for reading text off a public page.
 | Discover what exists / find sources | `WebSearch` |
 | Specific facts from a static or public page | `WebFetch` or `curl` (no browser) |
 | Login state, interaction, JS-rendered or anti-bot pages | **agent-browser** (this skill) |
-| A page the user visited before / an internal system | local bookmarks & history, then agent-browser |
+| A page the user saved before / an internal system | `agent-browser find-url <keywords>` (their bookmarks), then open it |
 
 Don't hand-build deep URLs with query params — links discovered by *interacting*
 with the site carry the right hidden context and dodge anti-bot checks; a
