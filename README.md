@@ -139,6 +139,7 @@ When using `--launch` mode (standalone browser), a full suite of 32 stealth patc
 | `AGENT_BROWSER_BLOCK_WEBRTC` | auto | `--launch` only. Auto-forces WebRTC through the proxy when one is set (no real-IP leak). `1` hides the local IP without a proxy; `0` opts out. |
 | `AGENT_BROWSER_HIDE_CANVAS` | off | `--launch` only. Adds session-stable canvas/audio fingerprint noise. Off by default (noise is itself a "lie"). |
 | `AGENT_BROWSER_ADAPTIVE_REF` | on | When a saved `@ref` moves and the role/name re-query fails, relocate it by fingerprint similarity (high score + clear margin required, else it fails loudly). `0` disables. |
+| `AGENT_BROWSER_CLICK_MODE` | _(auto)_ | Click strategy. Default scrolls the target into view, dispatches a coordinate click, and falls back to a DOM `.click()` if a floating layer occludes the point. `dom` always uses `.click()` (best for autocomplete/menu items that close on blur); `coord` is strict coordinate-only (hard-fail on occlusion). |
 
 ## Differences from upstream
 

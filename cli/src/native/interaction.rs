@@ -15,7 +15,111 @@ pub async fn click(
     click_count: i32,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let (x, y, effective_session_id) = resolve_element_center(
+    // AGENT_BROWSER_CLICK_MODE: "" (default) = coordinate click with a DOM
+    // fallback; "coord" = strict coordinate only (no fallback); "dom" = always
+    // dispatch through the DOM.
+    let mode = std::env::var("AGENT_BROWSER_CLICK_MODE").unwrap_or_default();
+
+    // (A) Scroll the target into view first so the computed coordinates land
+    // inside the viewport. Without this, an element below the fold (or revealed
+    // after scroll/popup) yields off-viewport coordinates and the click lands on
+    // whatever currently occupies that point. Best-effort: ignore failures.
+    scroll_into_view_if_needed(client, session_id, ref_map, selector_or_ref, iframe_sessions).await;
+
+    if mode == "dom" {
+        return dom_click(client, session_id, ref_map, selector_or_ref, iframe_sessions).await;
+    }
+
+    let resolved = resolve_element_center(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await;
+
+    match resolved {
+        Ok((x, y, effective_session_id)) => {
+            dispatch_click(client, &effective_session_id, x, y, button, click_count).await
+        }
+        Err(e) => {
+            // (B) The coordinate path failed — typically a persistent overlay
+            // failing the occlusion guard, or coordinates that won't resolve.
+            // Fall back to a DOM-dispatched `.click()` on the intended element,
+            // which targets the element directly instead of a screen point.
+            // Skipped for strict "coord" mode and for non-left / multi-clicks
+            // (a DOM `.click()` can't express right/middle/double semantics).
+            if mode == "coord" || button != "left" || click_count != 1 {
+                return Err(e);
+            }
+            eprintln!(
+                "[click] coordinate click failed ({e}); falling back to DOM dispatch \
+                 (set AGENT_BROWSER_CLICK_MODE=coord to disable)"
+            );
+            dom_click(client, session_id, ref_map, selector_or_ref, iframe_sessions)
+                .await
+                .map_err(|dom_err| format!("{e}\n(DOM-dispatch fallback also failed: {dom_err})"))
+        }
+    }
+}
+
+/// Best-effort scroll-into-view before a coordinate click. Uses Chrome's
+/// `scrollIntoViewIfNeeded` (only scrolls when not already fully visible),
+/// falling back to centered `scrollIntoView`. Resolution failures are ignored —
+/// the subsequent resolve will surface a real "not found" error.
+async fn scroll_into_view_if_needed(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) {
+    let Ok((object_id, effective_session_id)) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await
+    else {
+        return;
+    };
+    let js = "function() { try { \
+        if (typeof this.scrollIntoViewIfNeeded === 'function') { this.scrollIntoViewIfNeeded(true); } \
+        else { this.scrollIntoView({ block: 'center', inline: 'center' }); } \
+    } catch (e) {} }";
+    let _ = client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: js.to_string(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await;
+    // Let the scroll settle so the following getBoxModel sees final coordinates.
+    wait_for_paint_settled(client, &effective_session_id).await;
+}
+
+/// Dispatch a click through the DOM (`element.click()`) instead of via screen
+/// coordinates. Targets the intended element directly, so it works when a
+/// floating layer occludes the click point or the element sits in a portal that
+/// confuses `elementFromPoint`. Used as the fallback for `click` and when
+/// `AGENT_BROWSER_CLICK_MODE=dom`.
+async fn dom_click(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<(), String> {
+    let (object_id, effective_session_id) = resolve_element_object_id(
         client,
         session_id,
         ref_map,
@@ -23,7 +127,21 @@ pub async fn click(
         iframe_sessions,
     )
     .await?;
-    dispatch_click(client, &effective_session_id, x, y, button, click_count).await
+    client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: "function() { this.click(); }".to_string(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+    wait_for_paint_settled(client, &effective_session_id).await;
+    Ok(())
 }
 
 pub async fn dblclick(

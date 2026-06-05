@@ -336,6 +336,25 @@ agent-browser profiler start              # Start Chrome DevTools profiling
 agent-browser profiler stop trace.json    # Stop and save profile
 ```
 
+### Debugging forms / hidden state with `eval`
+
+The a11y `snapshot` shows visible, interactive elements — it does **not** show
+hidden inputs or a control's actual submitted value. When a form "looks filled"
+but submit-validation rejects it, go straight to the DOM with `eval` instead of
+guessing from the snapshot. This is usually the fastest way to find the real
+problem (e.g. a hidden `point_choice=none` that the visible UI never exposes):
+
+```bash
+# Dump every field's name → value, including hidden inputs and unchecked radios
+agent-browser eval "JSON.stringify([...document.forms[0].elements].map(e=>({name:e.name,type:e.type,value:e.value,checked:e.checked})).filter(e=>e.name))"
+
+# Inspect one hidden field directly
+agent-browser eval "document.querySelector('[name=point_choice]')?.value"
+
+# Why won't it submit? Ask the browser's own validity API
+agent-browser eval "[...document.forms[0].elements].filter(e=>!e.validity?.valid).map(e=>e.name+': '+e.validationMessage)"
+```
+
 ## React / Web Vitals
 
 Requires `--enable react-devtools` at launch for the `react ...` commands.
@@ -391,7 +410,21 @@ AGENT_BROWSER_HIDE_SCROLLBARS="false"        # Keep native scrollbars visible in
 AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
 AGENT_BROWSER_HOME="/path/to/agent-browser"  # Custom install location
+AGENT_BROWSER_CLICK_MODE="dom"               # Click strategy: "" (default: scroll-in + coordinate
+                                             #   click, DOM-dispatch fallback), "coord" (strict
+                                             #   coordinate only), "dom" (always element.click())
 ```
+
+### Click reliability
+
+`click` auto-scrolls the target into view first, then dispatches a coordinate
+click. If that fails (a floating layer fails the occlusion guard, or the point
+won't resolve) it falls back to a DOM-dispatched `.click()` on the intended
+element. If a click *reports success but the page didn't react* — common for
+autocomplete/menu `<li>` items that close on the input's blur — retry that one
+with `AGENT_BROWSER_CLICK_MODE=dom` (a DOM dispatch doesn't move focus the way a
+real pointer press does, so the item still selects). `=coord` disables the
+fallback when you specifically want a hard failure on occlusion.
 
 ### Stealth / anti-detection knobs (fork)
 
