@@ -27,6 +27,8 @@ pub mod policy;
 #[allow(dead_code)]
 pub mod providers;
 #[allow(dead_code)]
+pub mod relay;
+#[allow(dead_code)]
 pub mod react;
 #[allow(dead_code)]
 pub mod recording;
