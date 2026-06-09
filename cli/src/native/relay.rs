@@ -107,6 +107,22 @@ impl RelayState {
         let session_id = raw.get("sessionId").and_then(|s| s.as_str());
 
         match method {
+            // Browser-level command the daemon uses as its liveness probe
+            // (`is_connection_alive` → `Browser.getVersion`). The extension only
+            // speaks per-tab `chrome.debugger`, so forwarding it errors → the
+            // daemon would deem the connection dead and reconnect+re-discover on
+            // EVERY command, resetting the active tab (eval/screenshot drift).
+            // Answer it locally so the relay connection reads as alive.
+            "Browser.getVersion" => ClientRoute::Local(json!({
+                "id": id,
+                "result": {
+                    "protocolVersion": "1.3",
+                    "product": "Chrome/ab-connect-relay",
+                    "revision": "",
+                    "userAgent": "",
+                    "jsVersion": ""
+                }
+            })),
             // Discovery is best-effort and event-driven in real CDP; abs only
             // reads the getTargets result, so an empty ack is enough here.
             "Target.setDiscoverTargets" | "Target.setAutoAttach" => {
@@ -299,6 +315,21 @@ mod tests {
                 assert_eq!(infos[0]["targetId"], "T1");
             }
             _ => panic!("getTargets must be local"),
+        }
+    }
+
+    #[test]
+    fn browser_get_version_is_answered_locally() {
+        // Liveness probe must NOT be forwarded (the extension can't do
+        // browser-level commands) — else the daemon reconnects on every command.
+        let mut s = RelayState::new();
+        let route = s.route_client_command(1, &json!({ "id": 7, "method": "Browser.getVersion" }));
+        match route {
+            ClientRoute::Local(v) => {
+                assert_eq!(v["id"], 7);
+                assert!(v["result"]["protocolVersion"].is_string());
+            }
+            _ => panic!("Browser.getVersion must be answered locally"),
         }
     }
 
