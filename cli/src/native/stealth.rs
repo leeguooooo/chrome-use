@@ -270,13 +270,18 @@ pub fn strip_source_url_labels(input: &str) -> String {
     re_block.replace_all(&output, "").to_string()
 }
 
+/// The legacy `navigator.platform` value (set via the CDP
+/// `Emulation.setUserAgentOverride` `platform` field). This is NOT the UA-CH
+/// platform (see `platform_hint`): real Chrome reports `MacIntel` on macOS and
+/// `Linux x86_64` on Linux, so emitting the UA-CH form ("macOS"/"Linux") here is
+/// a detectable mismatch against the UA's "Intel Mac OS X" / Linux strings.
 fn platform_string() -> &'static str {
     if cfg!(target_os = "macos") {
-        "macOS"
+        "MacIntel"
     } else if cfg!(target_os = "windows") {
         "Win32"
     } else {
-        "Linux"
+        "Linux x86_64"
     }
 }
 
