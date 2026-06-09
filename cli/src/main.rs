@@ -2,6 +2,7 @@ mod chat;
 mod color;
 mod commands;
 mod connection;
+mod connect;
 mod doctor;
 mod findurl;
 mod flags;
@@ -503,6 +504,14 @@ fn main() {
         env::set_var("MSYS2_ARG_CONV_EXCL", "*");
     }
 
+    // Native-messaging host mode: Chrome launches `agent-browser __nm-host
+    // <extension-origin> [...]` for the ab-connect extension. Must run before
+    // ANY stdout write — stdout is the Chrome native-messaging channel.
+    if env::args().nth(1).as_deref() == Some("__nm-host") {
+        connect::run_nm_host();
+        return;
+    }
+
     // Native daemon mode: when AGENT_BROWSER_DAEMON is set, run as the daemon process
     if env::var("AGENT_BROWSER_DAEMON").is_ok() {
         // Ignore SIGPIPE so the daemon isn't killed when the parent drops
@@ -638,6 +647,13 @@ fn main() {
         Some("find-url") | Some("findurl")
     ) {
         findurl::run_find_url(&clean, flags.json);
+        return;
+    }
+
+    // Handle extension (doesn't need daemon): native-messaging host install/status
+    // for the ab-connect extension. (`connect <port>` stays the CDP-attach command.)
+    if clean.first().map(|s| s.as_str()) == Some("extension") {
+        connect::run_connect(&clean, flags.json);
         return;
     }
 

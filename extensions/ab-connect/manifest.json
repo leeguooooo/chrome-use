@@ -1,25 +1,16 @@
 {
   "manifest_version": 3,
   "name": "agent-browser connect",
-  "version": "0.1.0",
-  "description": "Let agent-browser drive your existing logged-in Chrome tab via a local relay — install once, no per-use confirmation.",
+  "version": "0.2.0",
+  "description": "Let agent-browser drive your logged-in Chrome — install once, no token, no per-use confirmation.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvPGcSmMx7dSfq9gRBDbQuAgx/+TEavrDxP/4jLa2+Ycexf/FEmq1MN8gAHoTRjSyp66YKD+1qI1CF6bk0rH5ZtxpRO7DYRTUPcsA1IpHbgEn5mppx3YxNGZilfkEZyrxdhBqUIzq3J74+/kpZzEVsO+DQTbAZSsFfdUkoCb5mbJid2VQYeqeBnYGAhbpGvN1P99jdT9EA1nKINb3ji6tLobCpyQ1fjf2uWm4mUirWkkF/nbUFVFEAh33Q/IYZmtUHgDYea5LsM9xH4KAG2kxMvFGj6vHR39sZd5/+gnvwScTcItUWQ9lFIyWYiwrSB25Lu0FshfllevXUFrG5vrvRwIDAQAB",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["debugger", "tabs", "activeTab", "storage", "alarms", "webNavigation"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "permissions": ["debugger", "tabs", "nativeMessaging", "storage", "alarms", "webNavigation"],
   "background": { "service_worker": "background.js", "type": "module" },
-  "action": {
-    "default_title": "agent-browser connect (auto-attach enabled)",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "options_ui": { "page": "options.html", "open_in_tab": true }
+  "action": { "default_title": "agent-browser connect" }
 }
