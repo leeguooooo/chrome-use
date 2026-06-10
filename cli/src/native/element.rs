@@ -231,7 +231,9 @@ async fn resolve_center_in_same_process_frame(
                 y += frameRect.y + win.frameElement.clientTop;
                 win = win.parent;
             }}
-            return {{ x: x, y: y }};
+            const blockerAt = {BLOCKER_AT_JS};
+            const topDoc = win ? win.document : doc;
+            return {{ x: x, y: y, blocker: blockerAt(topDoc, el, x, y) }};
         }}"#,
     );
     let result = client
@@ -246,6 +248,12 @@ async fn resolve_center_in_same_process_frame(
         )
         .await?;
     let value = result.get("result").and_then(|r| r.get("value"));
+    if let Some(blocker) = value
+        .and_then(|v| v.get("blocker"))
+        .and_then(|v| v.as_str())
+    {
+        return Err(intercepted_error(selector, blocker));
+    }
     let x = value.and_then(|v| v.get("x")).and_then(|v| v.as_f64());
     let y = value.and_then(|v| v.get("y")).and_then(|v| v.as_f64());
     match (x, y) {
@@ -320,6 +328,15 @@ pub async fn resolve_element_center(
 
             if let Ok(r) = result {
                 let (x, y) = box_model_center(&r.model);
+                check_node_interception(
+                    client,
+                    effective_session_id,
+                    backend_node_id,
+                    selector_or_ref,
+                    x,
+                    y,
+                )
+                .await?;
                 return Ok((x, y, effective_session_id.to_string()));
             }
             // backend_node_id is stale; re-query the accessibility tree below
@@ -349,6 +366,15 @@ pub async fn resolve_element_center(
             )
             .await?;
         let (x, y) = box_model_center(&result.model);
+        check_node_interception(
+            client,
+            effective_session_id,
+            fresh_id,
+            selector_or_ref,
+            x,
+            y,
+        )
+        .await?;
         return Ok((x, y, effective_session_id.to_string()));
     }
 
@@ -367,6 +393,73 @@ pub async fn resolve_element_center(
     }
     let (x, y) = resolve_by_selector(client, session_id, selector_or_ref).await?;
     Ok((x, y, session_id.to_string()))
+}
+
+/// Hit-test a ref-resolved node at its computed click point and error if an
+/// unrelated element (overlay, banner, sticky header) would receive the input
+/// instead. Best effort: resolution failures skip the check rather than block
+/// the interaction.
+async fn check_node_interception(
+    client: &CdpClient,
+    session_id: &str,
+    backend_node_id: i64,
+    target: &str,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
+    let resolved: Result<DomResolveNodeResult, String> = client
+        .send_command_typed(
+            "DOM.resolveNode",
+            &DomResolveNodeParams {
+                backend_node_id: Some(backend_node_id),
+                node_id: None,
+                object_group: Some("agent-browser".to_string()),
+            },
+            Some(session_id),
+        )
+        .await;
+    let Ok(resolved) = resolved else {
+        return Ok(());
+    };
+    let Some(object_id) = resolved.object.object_id else {
+        return Ok(());
+    };
+    // Box-model coordinates are in the top-level viewport space, so the
+    // hit-test starts from the top document. For an OOPIF node the
+    // frameElement walk stops at the process boundary, where the frame's own
+    // document and session-local coordinates are already consistent.
+    let function = format!(
+        r#"function(x, y) {{
+            let topDoc = this.ownerDocument || document;
+            while (topDoc.defaultView && topDoc.defaultView.frameElement) {{
+                topDoc = topDoc.defaultView.frameElement.ownerDocument;
+            }}
+            const blockerAt = {BLOCKER_AT_JS};
+            return blockerAt(topDoc, this, x, y);
+        }}"#,
+    );
+    let result = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(serde_json::json!({
+                "objectId": object_id,
+                "functionDeclaration": function,
+                "arguments": [{ "value": x }, { "value": y }],
+                "returnByValue": true,
+            })),
+            Some(session_id),
+        )
+        .await;
+    if let Ok(value) = result {
+        if let Some(blocker) = value
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.as_str())
+        {
+            return Err(intercepted_error(target, blocker));
+        }
+    }
+    Ok(())
 }
 
 /// Coordinates from DOM.getBoxModel are viewport-relative, and input events
@@ -628,10 +721,51 @@ fn build_count_elements_js(selector: &str) -> String {
     }
 }
 
+/// JS function source for `blockerAt(doc, el, x, y)`: returns a short
+/// description of the element that would actually receive a click at (x, y)
+/// when that element is unrelated to `el`, or null when the click would land
+/// on `el` (or something that activates it). Relations that count as "lands
+/// on el": shadow-including ancestors/descendants in either direction, and
+/// label/control association (custom checkboxes hide the input under a styled
+/// sibling inside the same label).
+const BLOCKER_AT_JS: &str = r#"(doc, el, x, y) => {
+    // Descend from the given document through same-origin iframes so a point
+    // over a frame resolves to the element inside it, in that frame's space.
+    let d = doc, lx = x, ly = y;
+    let hit = d.elementFromPoint(lx, ly);
+    while (hit && (hit.tagName === 'IFRAME' || hit.tagName === 'FRAME') && hit.contentDocument && hit !== el) {
+        const r = hit.getBoundingClientRect();
+        lx -= r.x + hit.clientLeft;
+        ly -= r.y + hit.clientTop;
+        d = hit.contentDocument;
+        hit = d.elementFromPoint(lx, ly);
+    }
+    if (!hit || hit === el) return null;
+    const up = (n) => n.parentNode || n.host || (n.getRootNode && n.getRootNode().host) || null;
+    for (let n = hit; n; n = up(n)) { if (n === el) return null; }
+    for (let n = el; n; n = up(n)) { if (n === hit) return null; }
+    const hitLabel = hit.closest ? hit.closest('label') : null;
+    if (hitLabel && (hitLabel.control === el || hitLabel.contains(el))) return null;
+    const elLabel = el.closest ? el.closest('label') : null;
+    if (elLabel && elLabel.contains(hit)) return null;
+    let desc = hit.tagName.toLowerCase();
+    if (hit.id) desc += '#' + hit.id;
+    else if (typeof hit.className === 'string' && hit.className.trim())
+        desc += '.' + hit.className.trim().split(/\s+/).slice(0, 2).join('.');
+    if (!hit.id && hit.closest) {
+        const anchored = hit.closest('[id]');
+        if (anchored && anchored !== hit)
+            desc += ' inside ' + anchored.tagName.toLowerCase() + '#' + anchored.id;
+    }
+    return desc;
+}"#;
+
 fn build_selector_js(selector: &str) -> String {
     let find_expr = build_find_element_js(selector);
     // Input events dispatch at viewport coordinates, so an element outside the
     // viewport must be scrolled into view first or the click lands on nothing.
+    // The blocker check reports an overlay covering the click point instead of
+    // letting the input land on it and silently doing the wrong thing.
     format!(
         r#"(() => {{
             const el = {find_expr};
@@ -645,7 +779,10 @@ fn build_selector_js(selector: &str) -> String {
                 el.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }});
                 rect = el.getBoundingClientRect();
             }}
-            return {{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }};
+            const x = rect.x + rect.width / 2;
+            const y = rect.y + rect.height / 2;
+            const blockerAt = {BLOCKER_AT_JS};
+            return {{ x: x, y: y, blocker: blockerAt(document, el, x, y) }};
         }})()"#,
     )
 }
@@ -670,6 +807,9 @@ async fn resolve_by_selector(
         .await?;
 
     let val = result.result.value.unwrap_or(Value::Null);
+    if let Some(blocker) = val.get("blocker").and_then(|v| v.as_str()) {
+        return Err(intercepted_error(selector, blocker));
+    }
     let x = val.get("x").and_then(|v| v.as_f64());
     let y = val.get("y").and_then(|v| v.as_f64());
 
@@ -677,6 +817,13 @@ async fn resolve_by_selector(
         (Some(x), Some(y)) => Ok((x, y)),
         _ => Err(format!("Element not found: {}", selector)),
     }
+}
+
+fn intercepted_error(target: &str, blocker: &str) -> String {
+    format!(
+        "Element '{}' is covered by <{}> at its click point, so the input would land on that element instead. Dismiss or interact with the covering element first (it is often a dialog, banner, or sticky header).",
+        target, blocker
+    )
 }
 
 fn box_model_center(model: &BoxModel) -> (f64, f64) {

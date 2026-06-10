@@ -71,6 +71,11 @@ agent-browser drag @e1 @e2        # Drag and drop
 agent-browser upload @e1 file.pdf # Upload files
 ```
 
+Clicks fail before dispatch when another element covers the target's click
+point. The error names the covering element, for example
+`covered by <div#consent-banner>`. Dismiss or interact with that element, run a
+fresh snapshot, then retry the original action.
+
 ## Get Information
 
 ```bash

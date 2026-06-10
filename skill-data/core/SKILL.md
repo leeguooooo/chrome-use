@@ -367,8 +367,9 @@ agent-browser snapshot -i
 ```
 
 **Click does nothing / overlay swallows the click**
-Some modals and cookie banners block other clicks. Snapshot, find the
-dismiss/close button, click it, then re-snapshot.
+Some modals and cookie banners block other clicks. If `click` reports
+`covered by <...>`, interact with that covering element first. Otherwise,
+snapshot, find the dismiss/close button, click it, then re-snapshot.
 
 **Fill / type doesn't work**
 Some custom input components intercept key events. Try:

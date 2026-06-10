@@ -1259,6 +1259,9 @@ Usage: agent-browser click <selector> [--new-tab]
 Clicks on the specified element. The selector can be a CSS selector,
 XPath, or an element reference from snapshot (e.g., @e1).
 
+If another element covers the click point, agent-browser reports the
+covering element instead of dispatching a click to the wrong target.
+
 Options:
   --new-tab            Open link in a new tab instead of navigating current tab
                        (only works on elements with href attribute)
