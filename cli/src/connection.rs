@@ -580,26 +580,26 @@ pub fn ensure_daemon(session: &str, opts: &DaemonOptions) -> Result<DaemonResult
     // Socket connectivity is the sole liveness check — no PID check — so
     // callers in a different PID namespace (e.g. unshare) can still reuse
     // an existing daemon they can reach over the socket.
+    //
+    // No settle-sleep here: this runs on every CLI invocation, so a fixed
+    // delay would tax every command (a 150ms sleep used to dominate warm
+    // command latency). The rare race where the daemon exits right after
+    // this check is handled at request time: callers respawn via
+    // ensure_daemon when the request fails with daemon_unreachable().
     if daemon_ready(session) {
-        // Double-check it's actually responsive by waiting and checking again
-        // This handles the race condition where daemon is shutting down
-        // (daemon has a 100ms shutdown delay, so we wait longer)
-        thread::sleep(Duration::from_millis(150));
-        if daemon_ready(session) {
-            // Check version: if the running daemon is from a different CLI
-            // version (e.g. after an upgrade), kill it and start a fresh one.
-            if !daemon_version_matches(session) {
-                eprintln!(
-                    "{} Daemon version mismatch detected, restarting...",
-                    crate::color::warning_indicator()
-                );
-                kill_stale_daemon(session);
-                // Fall through to spawn a new daemon below
-            } else {
-                return Ok(DaemonResult {
-                    already_running: true,
-                });
-            }
+        // Check version: if the running daemon is from a different CLI
+        // version (e.g. after an upgrade), kill it and start a fresh one.
+        if !daemon_version_matches(session) {
+            eprintln!(
+                "{} Daemon version mismatch detected, restarting...",
+                crate::color::warning_indicator()
+            );
+            kill_stale_daemon(session);
+            // Fall through to spawn a new daemon below
+        } else {
+            return Ok(DaemonResult {
+                already_running: true,
+            });
         }
     }
 
@@ -807,34 +807,69 @@ pub fn send_command(cmd: Value, session: &str) -> Result<Response, String> {
     ))
 }
 
-/// Check if an error is transient and worth retrying.
+/// Check if an error is transient and worth retrying against the SAME daemon.
 /// Transient errors include:
 /// - EAGAIN/EWOULDBLOCK (os error 35 on macOS, 11 on Linux)
 /// - EOF errors (daemon closed connection before responding)
 /// - Connection reset/broken pipe (daemon crashed or restarting)
-/// - Connection refused/socket not found (daemon still starting)
+///
+/// Connection refused / missing socket are NOT transient: no daemon is
+/// listening, so backing off cannot help. Callers use daemon_unreachable()
+/// to respawn via ensure_daemon and retry once instead.
 fn is_transient_error(error: &str) -> bool {
-    error.contains("os error 35") // EAGAIN on macOS
-        || error.contains("os error 11") // EAGAIN on Linux
+    has_os_error(error, 35) // EAGAIN on macOS
+        || has_os_error(error, 11) // EAGAIN on Linux
         || error.contains("WouldBlock")
         || error.contains("Resource temporarily unavailable")
         || error.contains("EOF")
         || error.contains("line 1 column 0") // Empty JSON response
         || error.contains("Connection reset")
         || error.contains("Broken pipe")
-        || error.contains("os error 54") // Connection reset by peer (macOS)
-        || error.contains("os error 104") // Connection reset by peer (Linux)
-        || error.contains("os error 2") // No such file or directory (socket gone)
-        || error.contains("os error 61") // Connection refused (macOS)
-        || error.contains("os error 111") // Connection refused (Linux)
-        || error.contains("os error 10061") // Connection refused (Windows)
-        || error.contains("os error 10054") // Connection reset by peer (Windows)
+        || has_os_error(error, 54) // Connection reset by peer (macOS)
+        || has_os_error(error, 104) // Connection reset by peer (Linux)
+        || has_os_error(error, 10054) // Connection reset by peer (Windows)
+}
+
+/// True when the error means no daemon is listening on the session socket
+/// (exited or never started), as opposed to a live-but-busy daemon. The
+/// remedy is a respawn through ensure_daemon, not a retry.
+pub fn daemon_unreachable(error: &str) -> bool {
+    error.contains("Failed to connect")
+        || has_os_error(error, 2) // No such file or directory (socket gone)
+        || has_os_error(error, 61) // Connection refused (macOS)
+        || has_os_error(error, 111) // Connection refused (Linux)
+        || has_os_error(error, 10061) // Connection refused (Windows)
+}
+
+/// Exact `(os error N)` match. Bare substring checks like "os error 11"
+/// also matched "os error 111" (connection refused on Linux), which made
+/// EAGAIN handling swallow refused connections.
+fn has_os_error(error: &str, code: u32) -> bool {
+    error.contains(&format!("(os error {})", code))
+}
+
+/// Socket read timeout for one request. Ordinary commands get a 30s floor.
+/// Commands carrying an operation timeout (the wait family, which
+/// parse_command stamps with AGENT_BROWSER_DEFAULT_TIMEOUT when no explicit
+/// --timeout is given) get that timeout plus margin, so the daemon can report
+/// a proper operation timeout instead of the client dying with EAGAIN at 30s
+/// and the retry loop re-sending the whole long-running command.
+///
+/// The env var is deliberately NOT consulted here. Reading it would apply a
+/// long wait budget to every command, so a genuinely hung daemon on a simple
+/// `url`/`title`/`snapshot` call would take the full budget to surface
+/// instead of 30s. Only commands that actually carry a `timeout` field get
+/// the extended budget, and that field is set client-side per invocation,
+/// avoiding the daemon's spawn-time env snapshot drifting from the client.
+fn read_timeout_for(cmd: &Value) -> Duration {
+    let op_ms = cmd.get("timeout").and_then(|v| v.as_u64()).unwrap_or(0);
+    Duration::from_millis(op_ms.saturating_add(10_000).max(30_000))
 }
 
 fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
     let mut stream = connect(session)?;
 
-    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+    stream.set_read_timeout(Some(read_timeout_for(cmd))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
     let mut json_str = serde_json::to_string(cmd).map_err(|e| e.to_string())?;
@@ -983,32 +1018,35 @@ mod tests {
         ));
     }
 
+    // Connection refused / missing socket mean no daemon is listening:
+    // not transient (retry can't help), handled by respawn via
+    // daemon_unreachable instead.
     #[test]
-    fn test_is_transient_error_socket_not_found() {
-        assert!(is_transient_error(
-            "Failed to connect: No such file or directory (os error 2)"
-        ));
+    fn test_socket_not_found_is_unreachable_not_transient() {
+        let error = "Failed to connect: No such file or directory (os error 2)";
+        assert!(!is_transient_error(error));
+        assert!(daemon_unreachable(error));
     }
 
     #[test]
-    fn test_is_transient_error_connection_refused_macos() {
-        assert!(is_transient_error(
-            "Failed to connect: Connection refused (os error 61)"
-        ));
+    fn test_connection_refused_macos_is_unreachable_not_transient() {
+        let error = "Failed to connect: Connection refused (os error 61)";
+        assert!(!is_transient_error(error));
+        assert!(daemon_unreachable(error));
     }
 
     #[test]
-    fn test_is_transient_error_connection_refused_linux() {
-        assert!(is_transient_error(
-            "Failed to connect: Connection refused (os error 111)"
-        ));
+    fn test_connection_refused_linux_is_unreachable_not_transient() {
+        let error = "Failed to connect: Connection refused (os error 111)";
+        assert!(!is_transient_error(error));
+        assert!(daemon_unreachable(error));
     }
 
     #[test]
-    fn test_is_transient_error_connection_refused_windows() {
-        assert!(is_transient_error(
-            "Failed to connect: No connection could be made because the target machine actively refused it. (os error 10061)"
-        ));
+    fn test_connection_refused_windows_is_unreachable_not_transient() {
+        let error = "Failed to connect: No connection could be made because the target machine actively refused it. (os error 10061)";
+        assert!(!is_transient_error(error));
+        assert!(daemon_unreachable(error));
     }
 
     #[test]

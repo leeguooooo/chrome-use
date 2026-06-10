@@ -150,6 +150,9 @@ pub struct PendingDialog {
     pub message: String,
     pub url: String,
     pub default_prompt: Option<String>,
+    /// Flat CDP session the dialog opened on. A dialog on a background tab
+    /// must not block commands targeting the active tab.
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -245,6 +248,9 @@ pub struct DaemonState {
     pub mouse_state: MouseState,
     /// Tracks the currently open JavaScript dialog (alert/confirm/prompt), if any.
     pub pending_dialog: Option<PendingDialog>,
+    /// A mouse button left logically down because a dialog opened between
+    /// mousePressed and mouseReleased; released when the dialog is resolved.
+    pub pending_pointer_release: Option<super::interaction::PendingRelease>,
     /// When true, automatically dismiss `beforeunload` dialogs and accept `alert`
     /// dialogs so they never block the agent.  Enabled by default.
     pub auto_dialog: bool,
@@ -302,6 +308,7 @@ impl DaemonState {
             dialog_handler_task: None,
             mouse_state: MouseState::default(),
             pending_dialog: None,
+            pending_pointer_release: None,
             auto_dialog: !matches!(
                 env::var("AGENT_BROWSER_NO_AUTO_DIALOG").as_deref(),
                 Ok("1" | "true" | "yes")
@@ -310,10 +317,13 @@ impl DaemonState {
             stream_server: None,
             launch_hash: None,
             engine: env::var("AGENT_BROWSER_ENGINE").unwrap_or_else(|_| "chrome".to_string()),
+            // README documents 25s, intentionally below the CLI's 30s IPC
+            // read timeout so the daemon reports a proper timeout error
+            // instead of the client dying with EAGAIN and retrying.
             default_timeout_ms: env::var("AGENT_BROWSER_DEFAULT_TIMEOUT")
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(30_000),
+                .unwrap_or(25_000),
             viewport: None,
         }
     }
@@ -1103,6 +1113,7 @@ impl DaemonState {
                                         message: dialog_event.message,
                                         url: dialog_event.url,
                                         default_prompt: dialog_event.default_prompt,
+                                        session_id: event.session_id.clone(),
                                     });
                                 }
                             }
@@ -1167,6 +1178,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
 
     // Drain and apply pending CDP events (console, errors, screencast frames, target lifecycle)
     state.drain_cdp_events_background().await;
+
+    // Keep element resolution in sync with the `frame` selection (see
+    // element::set_active_frame for why this is mirrored).
+    super::element::set_active_frame(state.active_frame_id.as_deref());
 
     // Hot-reload and check action policy
     if let Some(ref mut policy) = state.policy {
@@ -1280,6 +1295,47 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 action
             ),
         );
+    }
+
+    // A pending confirm/prompt dialog blocks the renderer's main thread, so
+    // any command that touches the page would hang until the client read
+    // timeout. Fail fast with instructions instead. Actions in skip_launch
+    // never touch the page; dialog/screenshot/url/title are browser-side.
+    // Only a dialog on the ACTIVE tab blocks: one on a background tab leaves
+    // the active tab's renderer responsive.
+    if let Some(ref dialog) = state.pending_dialog {
+        let active_session = state
+            .browser
+            .as_ref()
+            .and_then(|m| m.active_session_id().ok().map(|s| s.to_string()));
+        let on_active_tab = match (&dialog.session_id, &active_session) {
+            (Some(dialog_sid), Some(active_sid)) => dialog_sid == active_sid,
+            // No session on the event = top-level page dialog; no browser = be safe.
+            _ => true,
+        };
+        // Tab and session management must stay usable: switching or closing
+        // tabs is exactly how an agent escapes a tab blocked by a dialog.
+        let safe_during_dialog = skip_launch
+            || matches!(
+                action,
+                "dialog"
+                    | "screenshot"
+                    | "url"
+                    | "title"
+                    | "tab_list"
+                    | "tab_new"
+                    | "tab_switch"
+                    | "tab_close"
+            );
+        if on_active_tab && !safe_during_dialog {
+            return error_response(
+                &id,
+                &format!(
+                    "A JavaScript {} dialog is blocking the page: \"{}\". Resolve it with `dialog accept` or `dialog dismiss`, then retry `{}`.",
+                    dialog.dialog_type, dialog.message, action
+                ),
+            );
+        }
     }
 
     let result = match action {
@@ -1452,6 +1508,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         Ok(data) => success_response(&id, data),
         Err(e) => error_response(&id, &super::browser::to_ai_friendly_error(&e)),
     };
+
+    // Re-drain so a dialog opened by THIS command is reflected in the warning
+    // below; events are otherwise only drained at the start of a command.
+    state.drain_cdp_events_background().await;
 
     // Auto-report pending JavaScript dialog so agents know why commands may hang
     if action != "dialog" {
@@ -2686,7 +2746,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     let button = cmd.get("button").and_then(|v| v.as_str()).unwrap_or("left");
     let click_count = cmd.get("clickCount").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
 
-    interaction::click(
+    let result = interaction::click(
         &mgr.client,
         &session_id,
         &state.ref_map,
@@ -2697,6 +2757,10 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     )
     .await?;
 
+    if result.dialog_opened {
+        state.pending_pointer_release = result.pending_release;
+        return Ok(json!({ "clicked": selector, "dialogOpened": true }));
+    }
     Ok(json!({ "clicked": selector }))
 }
 
@@ -2708,7 +2772,7 @@ async fn handle_dblclick(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         .and_then(|v| v.as_str())
         .ok_or("Missing 'selector' parameter")?;
 
-    interaction::dblclick(
+    let result = interaction::dblclick(
         &mgr.client,
         &session_id,
         &state.ref_map,
@@ -2716,6 +2780,10 @@ async fn handle_dblclick(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         &state.iframe_sessions,
     )
     .await?;
+    if result.dialog_opened {
+        state.pending_pointer_release = result.pending_release;
+        return Ok(json!({ "clicked": selector, "dialogOpened": true }));
+    }
     Ok(json!({ "clicked": selector }))
 }
 
@@ -2973,7 +3041,29 @@ async fn handle_wait(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             .get("state")
             .and_then(|v| v.as_str())
             .unwrap_or("visible");
-        wait_for_selector(&mgr.client, &session_id, selector, state_str, timeout_ms).await?;
+        // Honor an active `frame <sel>` selection, like element resolution does.
+        match state.active_frame_id.as_deref() {
+            Some(frame_id) => match state.iframe_sessions.get(frame_id) {
+                Some(frame_session) => {
+                    wait_for_selector(&mgr.client, frame_session, selector, state_str, timeout_ms)
+                        .await?
+                }
+                None => {
+                    wait_for_selector_in_frame(
+                        &mgr.client,
+                        &session_id,
+                        frame_id,
+                        selector,
+                        state_str,
+                        timeout_ms,
+                    )
+                    .await?
+                }
+            },
+            None => {
+                wait_for_selector(&mgr.client, &session_id, selector, state_str, timeout_ms).await?
+            }
+        }
         return Ok(json!({ "waited": "selector", "selector": selector }));
     }
 
@@ -3258,6 +3348,72 @@ async fn wait_for_function(
 ) -> Result<(), String> {
     let check_fn = format!("!!({})", fn_str);
     poll_until_true(client, session_id, &check_fn, timeout_ms).await
+}
+
+/// wait_for_selector inside a same-process iframe selected via `frame <sel>`:
+/// polls through the owner element's contentDocument, which stays correct
+/// even if the frame navigates (the getter re-resolves every poll).
+async fn wait_for_selector_in_frame(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    frame_id: &str,
+    selector: &str,
+    state: &str,
+    timeout_ms: u64,
+) -> Result<(), String> {
+    let owner_object_id =
+        super::element::frame_owner_object_id(client, session_id, frame_id).await?;
+    let sel = serde_json::to_string(selector).unwrap_or_default();
+    let check = match state {
+        "attached" => format!("!!doc.querySelector({sel})"),
+        "detached" => format!("!doc.querySelector({sel})"),
+        "hidden" => format!(
+            r#"(() => {{
+                const el = doc.querySelector({sel});
+                if (!el) return true;
+                const s = doc.defaultView.getComputedStyle(el);
+                return s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0;
+            }})()"#,
+        ),
+        _ => format!(
+            r#"(() => {{
+                const el = doc.querySelector({sel});
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = doc.defaultView.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+            }})()"#,
+        ),
+    };
+    let function = format!(
+        "function() {{ const doc = this.contentDocument; if (!doc) return false; return {check}; }}",
+    );
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
+    loop {
+        let result = client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": owner_object_id,
+                    "functionDeclaration": function,
+                    "returnByValue": true,
+                })),
+                Some(session_id),
+            )
+            .await?;
+        let satisfied = result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if satisfied {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("Wait timed out after {}ms", timeout_ms));
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
 }
 
 async fn poll_until_true(
@@ -4680,8 +4836,21 @@ async fn handle_dialog(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         .unwrap_or(true);
     let prompt_text = cmd.get("promptText").and_then(|v| v.as_str());
 
-    mgr.handle_dialog(accept, prompt_text).await?;
+    // Clear tracked state even if Chrome reports no dialog (e.g. it was
+    // already resolved and the closed event was missed); otherwise a stale
+    // pending_dialog would make every page command fail fast forever.
+    let result = mgr.handle_dialog(accept, prompt_text).await;
     state.pending_dialog = None;
+    result?;
+
+    // If a click's mousedown opened this dialog, the button is still logically
+    // down. Release it now that the page is unblocked so the next click does
+    // not register as a drag or double-click.
+    if let Some(release) = state.pending_pointer_release.take() {
+        if let Some(ref mgr) = state.browser {
+            let _ = interaction::dispatch_pending_release(&mgr.client, &release).await;
+        }
+    }
     Ok(json!({ "handled": true, "accepted": accept }))
 }
 
@@ -5651,7 +5820,7 @@ async fn execute_subaction(
 
     match subaction {
         "click" => {
-            interaction::click(
+            let result = interaction::click(
                 &mgr.client,
                 &session_id,
                 &state.ref_map,
@@ -5661,6 +5830,10 @@ async fn execute_subaction(
                 &state.iframe_sessions,
             )
             .await?;
+            if result.dialog_opened {
+                state.pending_pointer_release = result.pending_release;
+                return Ok(json!({ "clicked": selector, "dialogOpened": true }));
+            }
             Ok(json!({ "clicked": selector }))
         }
         "fill" => {
@@ -5837,17 +6010,38 @@ async fn handle_semantic_locator(
     };
 
     let query = match strategy {
-        "label" => format!(
-            r#"(() => {{
-                const label = Array.from(document.querySelectorAll('label')).find(el => {match_fn});
-                if (!label) return false;
-                const forId = label.getAttribute('for');
-                const target = forId ? document.getElementById(forId) : label.querySelector('input,select,textarea');
-                if (target) {{ target.setAttribute('data-agent-browser-located', 'true'); return true; }}
+        // Like Playwright's getByLabel: match <label> associations AND
+        // aria-label / aria-labelledby. Icon buttons and custom controls
+        // are usually labelled via aria-label only.
+        "label" => {
+            let value_json = serde_json::to_string(value).unwrap_or_default();
+            let matches_fn = if exact {
+                format!("(s) => !!s && s.trim() === {value_json}")
+            } else {
+                format!("(s) => !!s && s.includes({value_json})")
+            };
+            format!(
+                r#"(() => {{
+                const matches = {matches_fn};
+                const label = Array.from(document.querySelectorAll('label')).find(el => matches(el.textContent));
+                if (label) {{
+                    const forId = label.getAttribute('for');
+                    const target = forId ? document.getElementById(forId) : label.querySelector('input,select,textarea');
+                    if (target) {{ target.setAttribute('data-agent-browser-located', 'true'); return true; }}
+                }}
+                const aria = Array.from(document.querySelectorAll('[aria-label]')).find(el => matches(el.getAttribute('aria-label')));
+                if (aria) {{ aria.setAttribute('data-agent-browser-located', 'true'); return true; }}
+                const referenced = Array.from(document.querySelectorAll('[aria-labelledby]')).find(el => {{
+                    const text = el.getAttribute('aria-labelledby').split(/\s+/)
+                        .map(id => {{ const r = document.getElementById(id); return r ? r.textContent : ''; }})
+                        .join(' ');
+                    return matches(text);
+                }});
+                if (referenced) {{ referenced.setAttribute('data-agent-browser-located', 'true'); return true; }}
                 return false;
             }})()"#,
-            match_fn = match_fn,
-        ),
+            )
+        }
         "placeholder" => format!(
             r#"(() => {{
                 const el = document.querySelector('input[placeholder={val}], textarea[placeholder={val}]');
@@ -8834,10 +9028,11 @@ mod tests {
 
     #[test]
     fn test_default_timeout_ms_fallback() {
-        // When AGENT_BROWSER_DEFAULT_TIMEOUT is unset, DaemonState uses 30000
+        // When AGENT_BROWSER_DEFAULT_TIMEOUT is unset, DaemonState uses the
+        // documented 25s default (below the CLI's 30s IPC read timeout).
         env::remove_var("AGENT_BROWSER_DEFAULT_TIMEOUT");
         let state = DaemonState::new();
-        assert_eq!(state.default_timeout_ms, 30_000);
+        assert_eq!(state.default_timeout_ms, 25_000);
     }
 
     #[tokio::test]

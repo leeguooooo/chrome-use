@@ -146,6 +146,148 @@ pub fn parse_ref(input: &str) -> Option<String> {
     None
 }
 
+/// Mirror of DaemonState.active_frame_id, refreshed before every command
+/// (commands are serialized by the daemon's state lock, so this cannot
+/// race). It lets CSS-selector resolution honor `frame <sel>` without
+/// threading a parameter through every interaction signature; snapshot refs
+/// already carry their frame through the ref map.
+static ACTIVE_FRAME: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+pub fn set_active_frame(frame_id: Option<&str>) {
+    *ACTIVE_FRAME
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap() = frame_id.map(String::from);
+}
+
+fn active_frame() -> Option<String> {
+    ACTIVE_FRAME.get().and_then(|m| m.lock().unwrap().clone())
+}
+
+/// Object handle for the <iframe> element that owns a frame, resolved on the
+/// parent session. Works for same-process frames where no dedicated CDP
+/// session exists.
+pub(super) async fn frame_owner_object_id(
+    client: &CdpClient,
+    session_id: &str,
+    frame_id: &str,
+) -> Result<String, String> {
+    let owner = client
+        .send_command(
+            "DOM.getFrameOwner",
+            Some(serde_json::json!({ "frameId": frame_id })),
+            Some(session_id),
+        )
+        .await?;
+    let backend_node_id = owner
+        .get("backendNodeId")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| format!("Could not resolve the owner element of frame {}", frame_id))?;
+    let result: DomResolveNodeResult = client
+        .send_command_typed(
+            "DOM.resolveNode",
+            &DomResolveNodeParams {
+                backend_node_id: Some(backend_node_id),
+                node_id: None,
+                object_group: Some("agent-browser".to_string()),
+            },
+            Some(session_id),
+        )
+        .await?;
+    result
+        .object
+        .object_id
+        .ok_or_else(|| format!("No objectId for the owner element of frame {}", frame_id))
+}
+
+/// Find a selector inside a same-process iframe and return its center in
+/// top-level viewport coordinates (input events dispatch in that space).
+/// Same-origin access to contentDocument is what makes this possible; a
+/// cross-origin frame never takes this path because it has its own session.
+async fn resolve_center_in_same_process_frame(
+    client: &CdpClient,
+    session_id: &str,
+    frame_id: &str,
+    selector: &str,
+) -> Result<(f64, f64), String> {
+    let owner_object_id = frame_owner_object_id(client, session_id, frame_id).await?;
+    let find_expr = build_find_element_js_in("doc", selector);
+    let function = format!(
+        r#"function() {{
+            const doc = this.contentDocument;
+            if (!doc) return null;
+            const el = {find_expr};
+            if (!el) return null;
+            if (el.scrollIntoViewIfNeeded) el.scrollIntoViewIfNeeded(true);
+            else el.scrollIntoView({{ block: 'center', inline: 'center' }});
+            const rect = el.getBoundingClientRect();
+            let x = rect.x + rect.width / 2;
+            let y = rect.y + rect.height / 2;
+            let win = doc.defaultView;
+            while (win && win.frameElement) {{
+                const frameRect = win.frameElement.getBoundingClientRect();
+                x += frameRect.x + win.frameElement.clientLeft;
+                y += frameRect.y + win.frameElement.clientTop;
+                win = win.parent;
+            }}
+            return {{ x: x, y: y }};
+        }}"#,
+    );
+    let result = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(serde_json::json!({
+                "objectId": owner_object_id,
+                "functionDeclaration": function,
+                "returnByValue": true,
+            })),
+            Some(session_id),
+        )
+        .await?;
+    let value = result.get("result").and_then(|r| r.get("value"));
+    let x = value.and_then(|v| v.get("x")).and_then(|v| v.as_f64());
+    let y = value.and_then(|v| v.get("y")).and_then(|v| v.as_f64());
+    match (x, y) {
+        (Some(x), Some(y)) => Ok((x, y)),
+        _ => Err(format!(
+            "Element not found in the selected frame: {}",
+            selector
+        )),
+    }
+}
+
+/// Find a selector inside a same-process iframe and return its object handle.
+async fn resolve_object_in_same_process_frame(
+    client: &CdpClient,
+    session_id: &str,
+    frame_id: &str,
+    selector: &str,
+) -> Result<String, String> {
+    let owner_object_id = frame_owner_object_id(client, session_id, frame_id).await?;
+    let find_expr = build_find_element_js_in("doc", selector);
+    let function = format!(
+        "function() {{ const doc = this.contentDocument; if (!doc) return null; return {find_expr}; }}",
+    );
+    let result = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(serde_json::json!({
+                "objectId": owner_object_id,
+                "functionDeclaration": function,
+                "returnByValue": false,
+            })),
+            Some(session_id),
+        )
+        .await?;
+    result
+        .get("result")
+        .and_then(|r| r.get("objectId"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| format!("Element not found in the selected frame: {}", selector))
+}
+
 pub async fn resolve_element_center(
     client: &CdpClient,
     session_id: &str,
@@ -163,6 +305,7 @@ pub async fn resolve_element_center(
 
         // Try cached backend_node_id first (fast path)
         if let Some(backend_node_id) = entry.backend_node_id {
+            scroll_node_into_view(client, effective_session_id, backend_node_id).await;
             let result: Result<DomGetBoxModelResult, String> = client
                 .send_command_typed(
                     "DOM.getBoxModel",
@@ -193,6 +336,7 @@ pub async fn resolve_element_center(
             iframe_sessions,
         )
         .await?;
+        scroll_node_into_view(client, effective_session_id, fresh_id).await;
         let result: DomGetBoxModelResult = client
             .send_command_typed(
                 "DOM.getBoxModel",
@@ -208,9 +352,35 @@ pub async fn resolve_element_center(
         return Ok((x, y, effective_session_id.to_string()));
     }
 
-    // CSS selector
+    // CSS selector: honor an active `frame <sel>` selection.
+    if let Some(frame_id) = active_frame() {
+        // Cross-process iframe: its dedicated session's main frame IS the
+        // iframe, so plain document-rooted resolution works there.
+        if let Some(frame_session) = iframe_sessions.get(&frame_id) {
+            let (x, y) = resolve_by_selector(client, frame_session, selector_or_ref).await?;
+            return Ok((x, y, frame_session.clone()));
+        }
+        let (x, y) =
+            resolve_center_in_same_process_frame(client, session_id, &frame_id, selector_or_ref)
+                .await?;
+        return Ok((x, y, session_id.to_string()));
+    }
     let (x, y) = resolve_by_selector(client, session_id, selector_or_ref).await?;
     Ok((x, y, session_id.to_string()))
+}
+
+/// Coordinates from DOM.getBoxModel are viewport-relative, and input events
+/// only land inside the viewport, so make sure the node is visible first.
+/// Best effort: a node that cannot be scrolled (display:none, detached) will
+/// fail in DOM.getBoxModel with a clearer error anyway.
+async fn scroll_node_into_view(client: &CdpClient, session_id: &str, backend_node_id: i64) {
+    let _ = client
+        .send_command(
+            "DOM.scrollIntoViewIfNeeded",
+            Some(serde_json::json!({ "backendNodeId": backend_node_id })),
+            Some(session_id),
+        )
+        .await;
 }
 
 pub async fn resolve_element_object_id(
@@ -279,7 +449,33 @@ pub async fn resolve_element_object_id(
         return Ok((object_id, effective_session_id.to_string()));
     }
 
-    // Selector fallback (CSS or XPath)
+    // Selector fallback (CSS or XPath): honor an active `frame <sel>` selection.
+    if let Some(frame_id) = active_frame() {
+        if let Some(frame_session) = iframe_sessions.get(&frame_id) {
+            let js = build_find_element_js(selector_or_ref);
+            let result: EvaluateResult = client
+                .send_command_typed(
+                    "Runtime.evaluate",
+                    &EvaluateParams {
+                        expression: js,
+                        return_by_value: Some(false),
+                        await_promise: Some(false),
+                    },
+                    Some(frame_session.as_str()),
+                )
+                .await?;
+            let object_id = result
+                .result
+                .object_id
+                .ok_or_else(|| format!("Element not found: {}", selector_or_ref))?;
+            return Ok((object_id, frame_session.clone()));
+        }
+        let object_id =
+            resolve_object_in_same_process_frame(client, session_id, &frame_id, selector_or_ref)
+                .await?;
+        return Ok((object_id, session_id.to_string()));
+    }
+
     let js = build_find_element_js(selector_or_ref);
     let result: EvaluateResult = client
         .send_command_typed(
@@ -398,15 +594,21 @@ pub(super) fn extract_ax_string(value: &Option<AXValue>) -> String {
 
 /// Build a JS expression that finds a DOM element by CSS selector or XPath.
 fn build_find_element_js(selector: &str) -> String {
+    build_find_element_js_in("document", selector)
+}
+
+/// Same as build_find_element_js but rooted at an arbitrary Document
+/// expression (e.g. an iframe's contentDocument).
+fn build_find_element_js_in(root: &str, selector: &str) -> String {
     if let Some(xpath) = selector.strip_prefix("xpath=") {
         format!(
-            "document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
-            serde_json::to_string(xpath).unwrap_or_default()
+            "{root}.evaluate({xpath}, {root}, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
+            xpath = serde_json::to_string(xpath).unwrap_or_default(),
         )
     } else {
         format!(
-            "document.querySelector({})",
-            serde_json::to_string(selector).unwrap_or_default()
+            "{root}.querySelector({selector})",
+            selector = serde_json::to_string(selector).unwrap_or_default(),
         )
     }
 }
@@ -428,11 +630,21 @@ fn build_count_elements_js(selector: &str) -> String {
 
 fn build_selector_js(selector: &str) -> String {
     let find_expr = build_find_element_js(selector);
+    // Input events dispatch at viewport coordinates, so an element outside the
+    // viewport must be scrolled into view first or the click lands on nothing.
     format!(
         r#"(() => {{
             const el = {find_expr};
             if (!el) return null;
-            const rect = el.getBoundingClientRect();
+            const inView = (r) => r.width > 0 && r.height > 0 &&
+                r.bottom > 0 && r.right > 0 &&
+                r.top < (window.innerHeight || document.documentElement.clientHeight) &&
+                r.left < (window.innerWidth || document.documentElement.clientWidth);
+            let rect = el.getBoundingClientRect();
+            if (!inView(rect)) {{
+                el.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }});
+                rect = el.getBoundingClientRect();
+            }}
             return {{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }};
         }})()"#,
     )
