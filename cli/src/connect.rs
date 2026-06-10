@@ -24,6 +24,11 @@ pub const HOST_NAME: &str = "com.agent_browser.connect";
 /// that extension talk to this host, and the force-install policy references it.
 pub const EXTENSION_ID: &str = "ciiljdlhdpfckdcfkphgmfalanpdejep";
 
+/// The Chrome Web Store assigns its own id (the manifest "key" is stripped from
+/// store uploads), so the published build has a different origin than the local
+/// Load-unpacked one. Allow both to talk to the native-messaging host.
+pub const STORE_EXTENSION_ID: &str = "knfcmbamhjmaonkfnjhldjedeobeafmk";
+
 /// Update URL the force-install policy points at. MUST be the Chrome Web Store
 /// endpoint: Chrome 149 tags any **off-Web-Store** force-installed extension
 /// `[BLOCKED]` on an unmanaged browser (verified on macOS — chrome://policy shows
@@ -182,7 +187,10 @@ fn install_native_host() -> Result<Vec<String>, String> {
         "description": "agent-browser connect — native messaging host",
         "path": launcher.display().to_string(),
         "type": "stdio",
-        "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")],
+        "allowed_origins": [
+            format!("chrome-extension://{EXTENSION_ID}/"),
+            format!("chrome-extension://{STORE_EXTENSION_ID}/"),
+        ],
     });
     let body = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
 
