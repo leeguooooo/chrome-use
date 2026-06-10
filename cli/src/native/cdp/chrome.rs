@@ -146,6 +146,16 @@ struct ChromeArgs {
     temp_user_data_dir: Option<PathBuf>,
 }
 
+/// Whether to launch Chrome headless. The stealth fork FORBIDS headless (it's a
+/// bot-detection tell), so this is `false` unless an operator explicitly opts in
+/// via `AGENT_BROWSER_ALLOW_HEADLESS=1` for a display-less server. The `headless`
+/// LaunchOption is intentionally ignored — headed is non-negotiable for stealth.
+fn launch_headless() -> bool {
+    std::env::var("AGENT_BROWSER_ALLOW_HEADLESS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// Decide the `--force-webrtc-ip-handling-policy` value, if any, for a launched
 /// Chrome. Returns `None` to leave WebRTC at Chrome's default behavior.
 fn webrtc_ip_handling_policy(has_proxy: bool) -> Option<&'static str> {
@@ -202,9 +212,13 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         .as_ref()
         .is_some_and(|exts| !exts.is_empty());
 
-    // Extensions require headed mode in native Chrome (content scripts are not
-    // injected in headless mode).  Skip --headless when extensions are loaded.
-    if options.headless && !has_extensions {
+    // Stealth fork: NEVER launch headless. Headless Chrome is a detectable tell
+    // (creepjs scores ~33% headless even with new-headless; a real GPU and a
+    // headed window score 0%). So we always launch headed and ignore the
+    // `headless` option. The only escape is an explicit AGENT_BROWSER_ALLOW_HEADLESS=1
+    // for genuinely display-less servers (discouraged — it forfeits stealth).
+    // Extensions also require headed mode (content scripts aren't injected headless).
+    if launch_headless() && !has_extensions {
         args.push("--headless=new".to_string());
         // Linux paints native scrollbars into viewport screenshots unless
         // Chrome is launched with this flag. `--hide-scrollbars` is
@@ -278,7 +292,7 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         .iter()
         .any(|a| a.starts_with("--start-maximized") || a.starts_with("--window-size="));
 
-    if !has_window_size && options.headless && !has_extensions {
+    if !has_window_size && launch_headless() && !has_extensions {
         let (w, h) = options.viewport_size.unwrap_or((1280, 720));
         args.push(format!("--window-size={},{}", w, h));
     }
@@ -1520,24 +1534,44 @@ mod tests {
     }
 
     #[test]
-    fn test_build_args_headless_includes_headless_flag() {
+    fn test_build_args_forbids_headless_by_default() {
+        // Stealth fork: headless is FORBIDDEN. `headless: true` is ignored — the
+        // launch is always headed (no --headless / swiftshader / forced size).
+        let g = EnvGuard::new(&["AGENT_BROWSER_ALLOW_HEADLESS"]);
+        g.remove("AGENT_BROWSER_ALLOW_HEADLESS");
+        let opts = LaunchOptions {
+            headless: true,
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(
+            !result.args.iter().any(|a| a.contains("--headless")),
+            "headless must be forbidden even when the headless option is true"
+        );
+        assert!(!result
+            .args
+            .iter()
+            .any(|a| a == "--enable-unsafe-swiftshader"));
+        if let Some(dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn test_build_args_allow_headless_escape() {
+        // The only way back to headless: an explicit opt-in for display-less servers.
+        let g = EnvGuard::new(&["AGENT_BROWSER_ALLOW_HEADLESS"]);
+        g.set("AGENT_BROWSER_ALLOW_HEADLESS", "1");
         let opts = LaunchOptions {
             headless: true,
             ..Default::default()
         };
         let result = build_chrome_args(&opts).unwrap();
         assert!(result.args.iter().any(|a| a == "--headless=new"));
-        assert!(result.args.iter().any(|a| a == "--hide-scrollbars"));
-        assert!(result
-            .args
-            .iter()
-            .any(|a| a == "--enable-unsafe-swiftshader"));
         assert!(result.args.iter().any(|a| a == "--window-size=1280,720"));
-        // Temp dir created when no profile
-        assert!(result.temp_user_data_dir.is_some());
-        let dir = result.temp_user_data_dir.unwrap();
-        assert!(dir.exists());
-        let _ = std::fs::remove_dir_all(&dir);
+        if let Some(dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

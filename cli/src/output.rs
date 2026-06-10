@@ -1082,7 +1082,7 @@ Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
   --headers <json>     Set HTTP headers (scoped to this origin)
-  --headed             Show browser window
+  --headed             Show browser window (default; headless is forbidden — it's a bot tell)
   --enable react-devtools   Inject the React DevTools hook before any page JS
   --init-script <path>      Register a page init script (repeatable)
 
@@ -3114,7 +3114,8 @@ Options:
   --screenshot-dir <path>    Default screenshot output directory (or AGENT_BROWSER_SCREENSHOT_DIR)
   --screenshot-quality <n>   JPEG quality 0-100; ignored for PNG (or AGENT_BROWSER_SCREENSHOT_QUALITY)
   --screenshot-format <fmt>  Screenshot format: png, jpeg (or AGENT_BROWSER_SCREENSHOT_FORMAT)
-  --headed                   Show browser window (not headless) (or AGENT_BROWSER_HEADED env)
+  --headed                   Always on (default). Headless is forbidden (bot-detection tell);
+                             display-less servers can opt back in with AGENT_BROWSER_ALLOW_HEADLESS=1
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
