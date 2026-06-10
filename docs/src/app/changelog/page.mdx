@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.27.2
+
+<p className="text-[#888] text-sm">June 10, 2026</p>
+
+### Bug Fixes
+
+- Fixed **click reliability** by scrolling off-viewport elements into view before resolving coordinates, handling JavaScript dialogs promptly, recovering mouse state after dialog-opening clicks, and detecting click interception by overlays before dispatching input (#1432, #1434)
+- Fixed **frame-scoped selectors and waits** so CSS-selector actions and `wait` respect the selected iframe, including cross-process iframes, with translated click coordinates (#1432)
+- Fixed **wait timeout handling** so the documented 25s default is used, `--timeout` is honored across wait variants, and long waits receive an appropriate client read budget (#1432)
+- Fixed **agent-facing form commands** so `find label` matches `aria-label` and `aria-labelledby`, `select` errors when no option matches, and `type` parses `--clear` and `--delay` instead of typing them as text (#1432)
+
+### Improvements
+
+- Cut **warm CLI command latency** from about 150ms to about 1ms by removing the unconditional daemon settle sleep and retrying once when a stale daemon socket is discovered (#1432)
+- Extended **daemon respawn and retry** handling to batch commands so batches recover from a daemon exit after the initial liveness check (#1432)
+
+### Infrastructure
+
+- Pinned **GNU Linux release artifacts** to glibc 2.28 with zigbuild, added a release guard for newer GLIBC symbols, and aligned Docker release helpers with the pinned target (#1417)
+
+---
+
+## v0.27.1
+
+<p className="text-[#888] text-sm">June 1, 2026</p>
+
+### Improvements
+
+- Improved **`vitals` command** output formatting for better readability (#1404)
+
+### Documentation
+
+- Surfaced agent-browser feature coverage in documentation (#1403)
+
+---
+
 ## v0.27.0
 
 <p className="text-[#888] text-sm">May 7, 2026</p>
