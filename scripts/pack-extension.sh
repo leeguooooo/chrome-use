@@ -1,11 +1,16 @@
 #!/bin/sh
 # Build the Chrome Web Store upload package extensions/ab-connect.zip (and a signed
-# extensions/ab-connect.crx for reference) from extensions/ab-connect, keeping the
-# extension id constant via the stable signing key + manifest "key".
+# extensions/ab-connect.crx for reference) from extensions/ab-connect.
 #
-# The id MUST stay ciiljdlhdpfckdcfkphgmfalanpdejep so the native-messaging
-# allowed_origins and the force-install policy keep matching. The id is pinned by
-# the "key" field in manifest.json (kept in the uploaded zip on purpose).
+# IMPORTANT — the "key" field:
+#   * The unpacked DIR (Load-unpacked) and the signed .crx KEEP the manifest "key",
+#     which pins the id to ciiljdlhdpfckdcfkphgmfalanpdejep so the native-messaging
+#     allowed_origins + managed force-install policy keep matching for local/dev use.
+#   * The Web Store UPLOAD zip MUST NOT contain "key" — the store rejects it
+#     ("manifest must not contain 'key'") and assigns its own id. So this script
+#     strips "key" from the manifest inside the zip only. After the first upload,
+#     note the store-assigned id and add it to the native-messaging allowed_origins
+#     (cli/src/connect.rs EXTENSION_ID) so the store build can pair too.
 #
 # The private key lives at .secrets/ab-connect.pem and is git-ignored.
 #
@@ -20,20 +25,35 @@ KEY=.secrets/ab-connect.pem
 EXT=extensions/ab-connect
 CHROME="${CHROME_BIN:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 
-# Web Store upload package (zip of the unpacked extension, dotfiles excluded).
+# Web Store upload package: stage a copy with the "key" field removed, then zip.
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+cp -R "$EXT/." "$STAGE/"
+python3 - "$STAGE/manifest.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p))
+m.pop("key", None)  # the Web Store forbids the "key" field in uploads
+json.dump(m, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+PY
 rm -f extensions/ab-connect.zip
-( cd "$EXT" && zip -rq ../ab-connect.zip . -x '.*' )
+( cd "$STAGE" && zip -rq "$OLDPWD/extensions/ab-connect.zip" . -x '.*' )
 [ -f extensions/ab-connect.zip ] || { echo "error: zip failed" >&2; exit 1; }
+if unzip -p extensions/ab-connect.zip manifest.json | grep -q '"key"'; then
+  echo "error: 'key' still present in upload zip" >&2; exit 1
+fi
+echo "packed extensions/ab-connect.zip (key stripped for Web Store)"
 
-# Signed crx (reference / non-store force-install for managed setups).
+# Signed crx (reference / non-store force-install for managed setups) — keeps "key"
+# via the signing key so the id stays ciiljdlhdpfckdcfkphgmfalanpdejep.
 if [ -f "$KEY" ]; then
   rm -f extensions/ab-connect.crx
   "$CHROME" --pack-extension="$PWD/$EXT" --pack-extension-key="$PWD/$KEY" >/dev/null 2>&1 || true
   ID=$(openssl rsa -in "$KEY" -pubout -outform DER 2>/dev/null \
        | openssl dgst -sha256 -binary | xxd -p -c256 | head -c32 | tr '0-9a-f' 'a-p')
-  echo "extension id: $ID"
+  echo "local/crx extension id: $ID"
 else
   echo "note: $KEY missing — built zip only (no crx)."
 fi
-echo "packed extensions/ab-connect.zip"
 echo "manifest version: $(grep -o '"version"[^,]*' "$EXT/manifest.json" | head -1)"
