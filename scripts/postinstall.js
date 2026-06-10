@@ -287,21 +287,20 @@ async function fixWindowsShims() {
     return;
   }
 
-  // Detect architecture so ARM64 Windows is handled correctly
-  const cpuArch = arch() === 'arm64' ? 'arm64' : 'x64';
-  const relativeBinaryPath = `node_modules\\agent-browser\\bin\\agent-browser-win32-${cpuArch}.exe`;
-  const absoluteBinaryPath = join(npmBinDir, relativeBinaryPath);
-
-  // Only rewrite shims if the native binary actually exists
-  if (!existsSync(absoluteBinaryPath)) {
+  // Point the shims at the binary's ABSOLUTE path. The previous code rebuilt a
+  // relative `node_modules\agent-browser\bin\...` path, but this fork's package
+  // is `agent-browser-stealth`, so that path never existed → the rewrite was
+  // skipped and the shim stayed the (slower) JS wrapper. `binaryPath` is the
+  // real absolute path to the native binary inside this package.
+  if (!existsSync(binaryPath)) {
     return;
   }
 
   try {
-    const cmdContent = `@ECHO off\r\n"%~dp0${relativeBinaryPath}" %*\r\n`;
+    const cmdContent = `@ECHO off\r\n"${binaryPath}" %*\r\n`;
     writeFileSync(cmdShim, cmdContent);
 
-    const ps1Content = `#!/usr/bin/env pwsh\r\n$basedir = Split-Path $MyInvocation.MyCommand.Definition -Parent\r\n& "$basedir\\${relativeBinaryPath}" $args\r\nexit $LASTEXITCODE\r\n`;
+    const ps1Content = `#!/usr/bin/env pwsh\r\n& "${binaryPath}" $args\r\nexit $LASTEXITCODE\r\n`;
     writeFileSync(ps1Shim, ps1Content);
 
     console.log('✓ Optimized: shims point to native binary (zero overhead)');
