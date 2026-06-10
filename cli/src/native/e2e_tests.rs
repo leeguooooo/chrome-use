@@ -2252,9 +2252,13 @@ async fn e2e_save_state_cross_domain() {
     .await;
     assert_success(&resp);
 
-    // Navigate to domain A and set cookie + localStorage
+    // Navigate to domain A and set cookie + localStorage. Use example.org (a
+    // stable IANA-reserved domain, like example.com below) rather than an
+    // external service such as httpbin.org — cookie/localStorage are set
+    // client-side via CDP, so the only requirement is that the page loads
+    // reliably. A flaky external domain made this test intermittently fail in CI.
     let resp = execute_command(
-        &json!({ "id": "2", "action": "navigate", "url": "https://httpbin.org/html" }),
+        &json!({ "id": "2", "action": "navigate", "url": "https://example.org/" }),
         &mut state,
     )
     .await;
@@ -2263,7 +2267,7 @@ async fn e2e_save_state_cross_domain() {
     let resp = execute_command(
         &json!({
             "id": "3", "action": "cookies_set",
-            "name": "domainA_cookie", "value": "from_httpbin"
+            "name": "domainA_cookie", "value": "from_example_org"
         }),
         &mut state,
     )
@@ -2330,7 +2334,7 @@ async fn e2e_save_state_cross_domain() {
     let has_domain_b = cookies.iter().any(|c| c["name"] == "domainB_cookie");
     assert!(
         has_domain_a,
-        "Should include cross-domain cookie from httpbin.org: {:?}",
+        "Should include cross-domain cookie from example.org: {:?}",
         cookies
     );
     assert!(
@@ -2341,21 +2345,26 @@ async fn e2e_save_state_cross_domain() {
 
     // Verify BOTH origins' localStorage are present
     let origins = state_data["origins"].as_array().unwrap();
+    // Match full hostnames so the two example.* origins don't alias each other.
     let has_origin_a = origins.iter().any(|o| {
-        o["origin"].as_str().is_some_and(|s| s.contains("httpbin"))
+        o["origin"]
+            .as_str()
+            .is_some_and(|s| s.contains("example.org"))
             && o["localStorage"]
                 .as_array()
                 .is_some_and(|ls| ls.iter().any(|e| e["name"] == "domainA_key"))
     });
     let has_origin_b = origins.iter().any(|o| {
-        o["origin"].as_str().is_some_and(|s| s.contains("example"))
+        o["origin"]
+            .as_str()
+            .is_some_and(|s| s.contains("example.com"))
             && o["localStorage"]
                 .as_array()
                 .is_some_and(|ls| ls.iter().any(|e| e["name"] == "domainB_key"))
     });
     assert!(
         has_origin_a,
-        "Should include localStorage from httpbin.org origin: {:?}",
+        "Should include localStorage from example.org origin: {:?}",
         origins
     );
     assert!(
