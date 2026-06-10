@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-stealth",
-  "version": "0.27.0-fork.27",
+  "version": "0.27.0-fork.28",
   "description": "Browser automation CLI for AI agents \u2014 stealth fork with anti-detection",
   "type": "module",
   "packageManager": "pnpm@11.1.3",
