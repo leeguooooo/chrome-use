@@ -302,7 +302,8 @@ agent-browser state load auth.json    # Restore saved state
 ```bash
 agent-browser --session <name> ...    # Isolated browser session
 agent-browser --json ...              # JSON output for parsing
-agent-browser --headed ...            # Show browser window (not headless)
+agent-browser --headed ...            # Default & always-on (stealth). Headless is FORBIDDEN
+                                      #   (bot tell); display-less servers: AGENT_BROWSER_ALLOW_HEADLESS=1
 agent-browser --full ...              # Full page screenshot (-f)
 agent-browser --cdp <port> ...        # Connect via Chrome DevTools Protocol
 agent-browser -p <provider> ...       # Cloud browser provider (--provider)

@@ -57,6 +57,15 @@ GUI-automation tool** like the `cua-driver` skill — see
 `agent-browser extension connect`. After that it's zero-confirmation, zero-token
 CLI. Use `--launch` instead when a fresh, isolated browser is fine.
 
+Each `--session` that connects gets its **own colored Chrome tab group** (named
+after the session) and drives only its own tabs — multiple agents share the one
+real browser without cross-talk, and the user's own tabs are never grouped. CDP
+drives the page without moving the user's mouse/keyboard, so it doesn't fight
+them for control. **Anti-detection ranking: this real logged-in Chrome (extension
+connect) > a headed launched browser > headless (forbidden).** A genuine human
+browser has no headless/automation tells at all, so prefer it for anything
+anti-bot-sensitive.
+
 ## Two ways to drive a page — and when to drop to `eval`
 
 You have a **real Chrome with the user's DOM**. Two layers, mix them freely:
@@ -506,7 +515,9 @@ and [references/authentication.md](references/authentication.md).
 ```bash
 --session <name>        # isolated browser session
 --json                  # JSON output (for machine parsing)
---headed                # show the window (default is headless)
+--headed                # default & always-on for stealth — headless is FORBIDDEN
+                        #   (a bot tell: creepjs flags ~33% headless vs 0% headed).
+                        #   Display-less servers only: AGENT_BROWSER_ALLOW_HEADLESS=1
 --auto-connect          # connect to an already-running Chrome
 --cdp <port>            # connect to a specific CDP port
 --profile <name|path>   # use a Chrome profile (login state survives)
