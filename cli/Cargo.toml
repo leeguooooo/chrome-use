@@ -1,6 +1,6 @@
 [package]
 name = "agent-browser-stealth"
-version = "0.27.0-fork.47"
+version = "0.27.0-fork.48"
 edition = "2021"
 description = "Fast browser automation CLI for AI agents"
 license = "Apache-2.0"
