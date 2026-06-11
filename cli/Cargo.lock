@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agent-browser-stealth"
-version = "0.27.0-fork.41"
+version = "0.27.0-fork.42"
 dependencies = [
  "aes-gcm",
  "async-trait",
