@@ -309,6 +309,12 @@ pub struct BrowserManager {
     pub ignore_https_errors: bool,
     /// Origins visited during this session, used by save_state to collect cross-origin localStorage.
     visited_origins: HashSet<String>,
+    /// Target IDs of tabs THIS session created via `Target.createTarget`. When
+    /// connected to the user's real Chrome (not a launched browser), these are
+    /// closed on `close()` so the session's tabs don't pile up in the user's
+    /// browser after it ends. Only ever holds tabs we created — never the user's
+    /// existing tabs or other sessions' tabs — so closing them is always safe.
+    created_targets: HashSet<String>,
     next_tab_id: u32,
     /// Whether to enable the CDP `Runtime` domain (console / error / exception capture).
     /// OFF by default for stealth: a live `Runtime.enable` is a detectable CDP signal
@@ -433,6 +439,7 @@ impl BrowserManager {
                 download_path: download_path.clone(),
                 ignore_https_errors,
                 visited_origins: HashSet::new(),
+                created_targets: HashSet::new(),
                 next_tab_id: 1,
                 capture_console: console_capture_enabled(),
             };
@@ -523,6 +530,7 @@ impl BrowserManager {
             download_path: None,
             ignore_https_errors: false,
             visited_origins: HashSet::new(),
+            created_targets: HashSet::new(),
             next_tab_id: 1,
             capture_console: console_capture_enabled(),
         };
@@ -586,6 +594,8 @@ impl BrowserManager {
                     None,
                 )
                 .await?;
+            // We created this tab — own it so close() can clean it up.
+            self.created_targets.insert(result.target_id.clone());
 
             let attach_result: AttachToTargetResult = self
                 .client
@@ -892,6 +902,24 @@ impl BrowserManager {
                 .client
                 .send_command_no_params("Browser.close", None)
                 .await;
+        } else {
+            // Connected to the user's real Chrome: we must NOT close their
+            // browser, but we DO own the tabs this session created. Close them so
+            // they don't pile up in the user's window (in their per-session tab
+            // group) every time a session ends, idles out, or the daemon shuts
+            // down. `created_targets` only holds tabs we made via
+            // Target.createTarget — never the user's existing tabs or other
+            // sessions' — so this is always safe. Best-effort per tab.
+            for target_id in self.created_targets.drain() {
+                let _ = self
+                    .client
+                    .send_command_typed::<_, Value>(
+                        "Target.closeTarget",
+                        &CloseTargetParams { target_id },
+                        None,
+                    )
+                    .await;
+            }
         }
 
         if let Some(mut process) = self.browser_process.take() {
@@ -993,6 +1021,8 @@ impl BrowserManager {
                 None,
             )
             .await?;
+        // We created this tab — own it so close() can clean it up.
+        self.created_targets.insert(result.target_id.clone());
 
         let attach_result: AttachToTargetResult = self
             .client
@@ -1158,6 +1188,8 @@ impl BrowserManager {
                 None,
             )
             .await?;
+        // We created this tab — own it so close() can clean it up.
+        self.created_targets.insert(result.target_id.clone());
 
         let attach: AttachToTargetResult = self
             .client
@@ -1750,6 +1782,7 @@ async fn initialize_lightpanda_manager(
             download_path: None,
             ignore_https_errors: false,
             visited_origins: HashSet::new(),
+            created_targets: HashSet::new(),
             next_tab_id: 1,
             capture_console: console_capture_enabled(),
         };
