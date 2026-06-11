@@ -49,17 +49,27 @@ hand-constructed URL often doesn't.
 ### Driving the user's real, already-open Chrome (extension)
 
 When the task needs the user's *live* logged-in window (their real session, the
-window they're looking at — not a fresh browser), use the extension connect flow:
-`agent-browser extension install` once, load `extensions/ab-connect` in
-`chrome://extensions` once (it shows up as **agent-browser-stealth**; a GUI step
-you can perform with a **computer-use / GUI-automation tool** like the
-`cua-driver` skill — see `references/commands.md` → "Drive your real, logged-in
-Chrome"). Once the extension is loaded, plain `agent-browser open <url>`
-auto-connects through it — `auto_connect_cdp` **prefers the live extension relay
-over a raw `--remote-debugging-port`**, so Chrome 136+'s "Allow remote debugging?"
-consent popup never fires. `agent-browser extension connect` is the explicit form
-of the same path. Zero-confirmation, zero-token. Use `--launch` instead when a
-fresh, isolated browser is fine.
+window they're looking at — not a fresh browser), use the extension connect flow.
+One-time setup:
+1. `agent-browser extension install` — registers the native-messaging host.
+2. Install the **agent-browser-stealth** extension. Easiest (and restart-stable):
+   the **Chrome Web Store**, one-click *Add to Chrome*:
+   <https://chromewebstore.google.com/detail/agent-browser-stealth/knfcmbamhjmaonkfnjhldjedeobeafmk>
+   (Dev fallback: `chrome://extensions` → Developer mode → *Load unpacked* →
+   `extensions/ab-connect`. Load-unpacked can be disabled on Chrome restart, so
+   prefer the Store build for unattended setups.)
+
+Once installed, plain `agent-browser open <url>` auto-connects through the
+extension relay — `auto_connect_cdp` **prefers the live relay over a raw
+`--remote-debugging-port`**, so Chrome 136+'s "Allow remote debugging?" consent
+popup never fires. `agent-browser extension connect` is the explicit form of the
+same path. Zero-confirmation, zero-token. Use `--launch` instead when a fresh,
+isolated browser is fine.
+
+**If you DO hit the "Allow remote debugging?" dialog**, the relay wasn't live, so
+`open` fell back to the raw debug port. Don't keep retrying — tell the user to
+install the Store extension above (one click); after that the relay stays up and
+the dialog never returns.
 
 Each `--session` that connects gets its **own colored Chrome tab group** (named
 after the session) and drives only its own tabs — multiple agents share the one
