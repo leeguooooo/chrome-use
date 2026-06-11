@@ -1160,6 +1160,23 @@ impl Drop for DaemonState {
 
 pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Apply per-invocation overrides the client forwarded (the daemon's own env
+    // is frozen at spawn). CLICK_MODE is read fresh from the process env by
+    // interaction::click, so mirror it here — set when this command provided it,
+    // clear otherwise, so a value from an earlier command never leaks forward.
+    match cmd.get("_clickMode").and_then(|v| v.as_str()) {
+        Some(m) if !m.is_empty() => std::env::set_var("AGENT_BROWSER_CLICK_MODE", m),
+        _ => std::env::remove_var("AGENT_BROWSER_CLICK_MODE"),
+    }
+    // Humanize: set the session level from the client's --humanize / env. Only
+    // set when provided (don't clear — the adaptive per-navigation detector also
+    // owns this level between explicit overrides).
+    if let Some(h) = cmd.get("_humanize").and_then(|v| v.as_str()) {
+        if let Some(level) = super::humanize::HumanizeLevel::parse(h) {
+            super::humanize::set_detected_level(level);
+        }
+    }
     let id = cmd
         .get("id")
         .and_then(|v| v.as_str())

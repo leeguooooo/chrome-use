@@ -821,7 +821,21 @@ fn connect(session: &str) -> Result<Connection, String> {
     }
 }
 
-pub fn send_command(cmd: Value, session: &str) -> Result<Response, String> {
+pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
+    // Forward per-invocation env to the daemon. The daemon's environment is
+    // frozen at spawn, so settings like AGENT_BROWSER_CLICK_MODE /
+    // AGENT_BROWSER_HUMANIZE (incl. the --humanize flag, which sets the latter)
+    // are otherwise silently ignored on an already-running daemon. Carry them in
+    // the envelope so they apply to THIS command.
+    if let Some(obj) = cmd.as_object_mut() {
+        if let Ok(m) = std::env::var("AGENT_BROWSER_CLICK_MODE") {
+            obj.insert("_clickMode".to_string(), Value::String(m));
+        }
+        if let Ok(h) = std::env::var("AGENT_BROWSER_HUMANIZE") {
+            obj.insert("_humanize".to_string(), Value::String(h));
+        }
+    }
+
     // Retry logic for transient errors (EAGAIN/EWOULDBLOCK/connection issues)
     const MAX_RETRIES: u32 = 5;
     const RETRY_DELAY_MS: u64 = 200;
