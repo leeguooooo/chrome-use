@@ -1,4 +1,4 @@
-const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0 };
+const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0, disableIframeProxy: false };
 // Redefine a navigator property on its PROTOTYPE (Navigator / WorkerNavigator),
 // the way real Chrome exposes these — as prototype getters, NOT instance own
 // properties. Adding an own property to the `navigator` instance is itself a
@@ -289,6 +289,10 @@ const __abRedefineNavProto = (name, getterImpl) => {
 })();
 (function(){
   if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
+  // The srcdoc-iframe contentWindow Proxy below is itself a fingerprintable tell
+  // (CreepJS `hasIframeProxy`). Honor the opt-out so callers can trade the niche
+  // srcdoc masking for a clean 0% CreepJS fingerprint.
+  if (typeof __abStealth !== 'undefined' && __abStealth.disableIframeProxy) return;
   const nativeCreateElement = document.createElement.bind(document);
   const nativeSrcdocDescriptor =
     typeof HTMLIFrameElement !== 'undefined'

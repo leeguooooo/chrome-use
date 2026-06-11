@@ -225,7 +225,7 @@ When connected to your real Chrome, we inject **zero** JavaScript patches. Your 
 
 `0% stealth` on CreepJS is the key number: because the connect path patches **nothing**, there is no override for a lie-detector to catch. (Dashboards that read `navigator.languages` order or IP geolocation may show a soft "navigator"/"location" flag — that tracks *your real Chrome's* language list and network, not an automation tell.)
 
-When using `--launch` mode (standalone browser), a full suite of stealth patches is applied instead, and it still passes the suite above.
+When using `--launch` mode (standalone browser), a full suite of stealth patches is applied instead, and it passes the suite above — with one caveat: CreepJS reports **~20% stealth** because the srcdoc-iframe `contentWindow` patch trips its `hasIframeProxy` probe (the proxy that hides automation is itself a tell). Everything else is clean (`0% headless`, sannysoft/browserscan green, Cloudflare passed). Set **`AGENT_BROWSER_DISABLE_IFRAME_PROXY=1`** to drop that patch for a clean **0% stealth** (trades the niche srcdoc-iframe masking). The **extension-connect path** (your real Chrome) injects zero JS and is unaffected — it's the genuine 0% path.
 
 ### Human-like input (behavioural stealth)
 

@@ -51,18 +51,19 @@ pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
         vec![locale, base_lang]
     };
     let config_line = format!(
-        r#"const __abStealth = {{ locale: "{}", languages: {}, allowWebGLContextFallback: false, hideCanvas: {}, canvasSeed: {} }};"#,
+        r#"const __abStealth = {{ locale: "{}", languages: {}, allowWebGLContextFallback: false, hideCanvas: {}, canvasSeed: {}, disableIframeProxy: {} }};"#,
         locale,
         serde_json::to_string(&languages).unwrap_or_else(|_| r#"["en-US","en"]"#.to_string()),
         hide_canvas_enabled(),
         canvas_noise_seed(),
+        disable_iframe_proxy_enabled(),
     );
 
     // NB: this prefix MUST match the first line of stealth_scripts.js verbatim,
     // otherwise the fallback below prepends a SECOND `const __abStealth`
     // declaration and the whole script dies with a redeclaration SyntaxError.
     if let Some(rest) = STEALTH_SCRIPTS_RAW.strip_prefix(
-        r#"const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0 };"#,
+        r#"const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0, disableIframeProxy: false };"#,
     ) {
         format!("{}{}", config_line, rest)
     } else {
@@ -76,6 +77,18 @@ pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
 /// `AGENT_BROWSER_HIDE_CANVAS=1`.
 fn hide_canvas_enabled() -> bool {
     std::env::var("AGENT_BROWSER_HIDE_CANVAS")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Whether to DROP the srcdoc-iframe `contentWindow` Proxy patch (FullLaunch).
+/// That patch masks automation in srcdoc iframes, but the JS `Proxy` is itself a
+/// fingerprintable tell (CreepJS `hasIframeProxy` → ~20% stealth). Off by default
+/// (keep the patch); `AGENT_BROWSER_DISABLE_IFRAME_PROXY=1` drops it for a clean
+/// 0% CreepJS at the cost of that niche srcdoc-iframe masking.
+fn disable_iframe_proxy_enabled() -> bool {
+    std::env::var("AGENT_BROWSER_DISABLE_IFRAME_PROXY")
         .ok()
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
