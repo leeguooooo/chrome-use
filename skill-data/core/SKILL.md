@@ -408,6 +408,13 @@ top-level `const x`/`let x`/`var x` in one call collides with the next
 names, assign to `window.x`, or wrap the body in an IIFE
 (`(() => { const x = …; return x; })()`).
 
+**For array/object results, use `eval --json`** — the plain renderer
+pretty-prints across multiple lines, which `tail`/`head`/pipes mangle; `--json`
+emits one parseable line. Also note **`type`/`fill` insert text without firing
+`keydown`/`keyup`** (CDP insertText) — the value lands, but a page that gates on
+key events (some search-as-you-type widgets) won't react; use `keyboard type` (or
+`press` per key) when real keystrokes are required.
+
 ### Screenshot
 
 ```bash
@@ -453,11 +460,16 @@ shell.
 
 **Concurrent agents MUST each use a distinct `--session <name>`.** Within one
 session, commands are pinned to the tab you opened (by target_id, so a foreign
-tab can't drift your `eval`/`screenshot`). But two agents sharing the *same*
-session (e.g. both on the bare default) share one daemon and one active tab —
-they will clobber each other's tab/eval context. A unique session per agent gives
-each its own isolated tab group (own cookies, tabs, pin) on the one real Chrome,
-with no cross-talk.
+tab can't drift your `eval`/`screenshot`). Two agents sharing the *same* session
+(e.g. both on the bare default) share one daemon and one active tab and will
+clobber each other.
+
+True multi-agent isolation requires the **extension-connect path**: each
+`--session` gets its own colored Chrome tab group, so sessions never touch each
+other's tabs. **Raw `--cdp <port>` does NOT isolate** — every session attaches to
+the same browser's existing targets, so a second session's first `open` can
+navigate a sibling's tab. For concurrent agents on one real Chrome, use the
+extension (each with a distinct `--session`), not raw `--cdp`.
 
 ### Mock network requests
 

@@ -478,6 +478,11 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                     .get("title")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Untitled");
+                // A page can set its title to a multi-KB string (e.g. equal to a
+                // giant JWT/OTP URL); truncate it like the URL so the row stays
+                // readable.
+                let title = truncate_middle(title, 120);
+                let title = title.as_str();
                 let url = tab.get("url").and_then(|v| v.as_str()).unwrap_or("");
                 // Truncate very long URLs (e.g. multi-KB JWT/OTP login links) so
                 // the list stays readable instead of flooding the terminal.
