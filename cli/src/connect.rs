@@ -235,10 +235,12 @@ fn install_force_install_profile(no_open: bool) -> Result<PathBuf, String> {
 }
 
 /// The `.mobileconfig` payload: a user-scope Chrome policy that force-installs
-/// the extension by id from our hosted update manifest. User scope installs
-/// without admin — just a one-time approval click.
+/// the extension from the Chrome Web Store. User scope installs without admin —
+/// just a one-time approval click. Must use the STORE id (the Web Store update
+/// server serves the published extension under the id it assigned, not the local
+/// Load-unpacked id).
 fn force_install_mobileconfig() -> String {
-    let forcelist = format!("{EXTENSION_ID};{UPDATE_URL}");
+    let forcelist = format!("{STORE_EXTENSION_ID};{UPDATE_URL}");
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
