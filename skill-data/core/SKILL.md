@@ -73,10 +73,25 @@ popup never fires. `agent-browser extension connect` is the explicit form of the
 same path. Zero-confirmation, zero-token. Use `--launch` instead when a fresh,
 isolated browser is fine.
 
-**If you DO hit the "Allow remote debugging?" dialog**, the relay wasn't live, so
-`open` fell back to the raw debug port. Don't keep retrying — tell the user to
-install the Store extension above (one click); after that the relay stays up and
-the dialog never returns.
+**If you DO hit the "Allow remote debugging?" dialog**, don't keep retrying (every
+attempt re-pops it). One of two things is true:
+
+1. **You're on a stale build.** The relay-preference that avoids this dialog
+   landed in **fork.30**. Run `agent-browser --version`: if it's below
+   `0.27.0-fork.30`, upgrade and retry:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/install.sh | sh
+   ```
+   If `which -a agent-browser` shows more than one install, an old **npm/pnpm**
+   copy (the npm registry lags behind — Releases are the source of truth) may be
+   shadowing the upgraded one; remove the stale copy
+   (`npm rm -g agent-browser-stealth` / `pnpm rm -g agent-browser-stealth`) so the
+   `install.sh` build wins. A tool that bundles its *own* pinned copy
+   (e.g. `node .../agent-browser-stealth@0.24.x/.../agent-browser`) needs that
+   copy upgraded too.
+2. **The extension/relay isn't live.** Tell the user to install the Store
+   extension (one click, above); after that the relay stays up and the dialog
+   never returns.
 
 Each `--session` that connects gets its **own colored Chrome tab group** (named
 after the session) and drives only its own tabs — multiple agents share the one
