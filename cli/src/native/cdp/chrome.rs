@@ -790,8 +790,14 @@ pub async fn auto_connect_cdp() -> Result<String, String> {
     // the extension is set up we must NEVER fall through to the raw :9222 path
     // below: that pops Chrome 136+'s "Allow remote debugging?" dialog, the exact
     // thing the extension exists to avoid.
+    // ~15s of retries (500ms apart) when the extension is installed: long enough
+    // for the MV3 service worker to wake and reconnect on its own (onStartup
+    // after a Chrome restart, or the keepalive alarm) so the relay self-heals
+    // with NO user action. The loop re-checks the relay file every iteration, so
+    // a recovery mid-wait is picked up immediately — the full window is only ever
+    // spent when the extension is genuinely down.
     let host_installed = crate::connect::host_installed();
-    let relay_attempts = if host_installed { 10 } else { 1 };
+    let relay_attempts = if host_installed { 30 } else { 1 };
     for attempt in 0..relay_attempts {
         if let Some(relay) = crate::connect::relay_url() {
             // The relay is a local CDP-over-WS endpoint we connect to like Chrome.
