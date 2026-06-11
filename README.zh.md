@@ -148,6 +148,25 @@ agent-browser --launch --profile auto open https://x.com/home
 
 `--launch` 独立模式下会改用一整套隐身补丁，同样过上述检测。
 
+### 类人输入（行为隐身）
+
+指纹隐身只是一半——最强的反爬厂商（Akamai、PerimeterX、DataDome）还会给**行为**打分。点击时光标瞬移到元素正中心、没有接近轨迹、按下即抬起,这本身就是破绽,**哪怕我们的 CDP 事件是 `isTrusted`**。
+
+开启 humanize 后,光标像手在动:点击走带减速的贝塞尔曲线、落在元素内**偏离正中心**的抖动点;打字用变速的击键间隔;滚动分段缓动;拖拽走曲线。而且**自适应**——每次导航探测页面是否有已知反爬厂商(cookie/脚本/全局变量),命中就自动升到全套类人动作,普通站点保持瞬时(零开销)。
+
+页面自己的 `mousemove` 流看到的(行为检测器分析的正是这个):
+
+| | 轨迹 |
+|---|---|
+| **off**（默认） | 直线 · 死磕正中心 · 瞬时 |
+| **human** | 曲线 · 先慢后快再慢 · 落点偏移 |
+
+用 `--humanize off\|fast\|human` 或 `AGENT_BROWSER_HUMANIZE` 控制。默认 `off`,自适应检测器按页面自动升档。
+
+### 静默操作
+
+操作你的真实 Chrome 不该打断你的工作。agent **全程在后台操作**:新标签后台打开(在自己的彩色会话标签组里),**从不强制把标签拽到前台**,并用 `Emulation.setFocusEmulationEnabled` 让每个 agent 标签照常渲染、`document.hasFocus()` / `visibilityState` 仍报 `visible`。于是截图正常、页面不被降频,"标签全程隐藏"也不会变成新的机器人信号。你在自己的标签里照常工作,agent 在旁边默默干活。(想置顶某个标签仍可显式调用命令。)
+
 ## 与上游的差异
 
 基于 [agent-browser v0.27.0](https://github.com/vercel-labs/agent-browser)：

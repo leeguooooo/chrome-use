@@ -227,6 +227,25 @@ When connected to your real Chrome, we inject **zero** JavaScript patches. Your 
 
 When using `--launch` mode (standalone browser), a full suite of stealth patches is applied instead, and it still passes the suite above.
 
+### Human-like input (behavioural stealth)
+
+Fingerprint stealth isn't the whole story — the strongest anti-bot vendors (Akamai, PerimeterX, DataDome) also score *behaviour*. A click that teleports the cursor to an element's exact centre with no approach path and zero press delay is a tell, **even though our CDP events are `isTrusted`**.
+
+With humanize on, the cursor moves like a hand: clicks follow a curved, decelerating Bézier path and land on a jittered point *inside* the element (never the dead centre); typing uses variable inter-keystroke timing; scrolling eases in segments; drags follow a curve. It's **adaptive** — every navigation is probed for known anti-bot vendors (cookies / scripts / globals) and a guarded page auto-escalates to full human motion, while ordinary sites stay instant (zero overhead).
+
+What the page's own `mousemove` stream sees (this *is* what a behavioural detector analyses):
+
+| | trajectory |
+|---|---|
+| **off** (default) | straight lines · dead-centre · instant |
+| **human** | curved trails · slow-in/slow-out · off-centre landings |
+
+Control with `--humanize off\|fast\|human` or `AGENT_BROWSER_HUMANIZE`. Default `off`; the adaptive detector escalates per page.
+
+### Silent operation
+
+Driving your real Chrome should never interrupt your work. The agent operates **entirely in the background**: new tabs open un-focused (in their own colored per-session tab group), the agent **never force-fronts a tab**, and `Emulation.setFocusEmulationEnabled` keeps each agent tab rendering and reporting `document.hasFocus()` / `visibilityState: 'visible'`. So screenshots still work, pages aren't render-throttled, and "the tab was hidden the whole session" never becomes its own bot tell. You keep working in your active tab; the agent works alongside you, silently. (Surfacing a tab stays available as an explicit command.)
+
 ### Verify it yourself
 
 Don't take our word for it — point your connected Chrome at the toughest public detectors and compare:
@@ -244,6 +263,7 @@ We deliberately **don't ship our own bot detector** — the strongest, most hone
 | Variable | Default | Effect |
 |---|---|---|
 | `AGENT_BROWSER_CAPTURE_CONSOLE` | off | Enable `Runtime` domain so `console` / `errors` capture page output. Off keeps the stealthiest profile. |
+| `AGENT_BROWSER_HUMANIZE` | off | Human-like input motion: `off` (instant), `fast` (light eased trajectory), `human` (full curved trajectory + landing jitter + typing cadence + eased scroll/drag). Also `--humanize`. Default `off`; the adaptive detector auto-escalates pages guarded by Akamai/PerimeterX/DataDome to `human`. |
 | `AGENT_BROWSER_TIMEZONE` | unset | `--launch` only. An IANA id (e.g. `Asia/Tokyo`) sets the timezone natively (Intl + Date follow, no JS lie) to match a proxy; `auto` derives one from the locale. |
 | `AGENT_BROWSER_BLOCK_WEBRTC` | auto | `--launch` only. Auto-forces WebRTC through the proxy when one is set (no real-IP leak). `1` hides the local IP without a proxy; `0` opts out. |
 | `AGENT_BROWSER_HIDE_CANVAS` | off | `--launch` only. Adds session-stable canvas/audio fingerprint noise. Off by default (noise is itself a "lie"). |

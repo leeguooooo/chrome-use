@@ -102,6 +102,20 @@ connect) > a headed launched browser > headless (forbidden).** A genuine human
 browser has no headless/automation tells at all, so prefer it for anything
 anti-bot-sensitive.
 
+**Silent by default.** When driving the user's real Chrome the agent works
+entirely in the background — new tabs open un-focused, the agent never force-
+fronts a tab, and focus is emulated so the page still renders and reports
+`visibilityState: 'visible'`. You don't need to do anything; just don't expect
+the user's view to follow you (use the explicit `bringToFront` only if you
+deliberately want to surface a tab).
+
+**Human-like input for behavioural anti-bot.** Beyond fingerprint stealth,
+`--humanize off|fast|human` (or `AGENT_BROWSER_HUMANIZE`) makes clicks follow a
+curved, decelerating path with in-element landing jitter, typing use variable
+cadence, and scroll/drag ease. Default `off`; a per-navigation detector
+auto-escalates pages guarded by Akamai/PerimeterX/DataDome to `human`. Leave it
+on auto; force `human` only when you already know the target scores behaviour.
+
 ## Two ways to drive a page — and when to drop to `eval`
 
 You have a **real Chrome with the user's DOM**. Two layers, mix them freely:
