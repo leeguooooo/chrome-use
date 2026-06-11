@@ -1511,12 +1511,11 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
 /// subsequent navigations don't hijack the user's existing tabs.
 async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
     let mut mgr = BrowserManager::connect_auto().await?;
+    // tab_new creates the tab in the background (CreateTargetParams.background),
+    // so attaching to the user's Chrome never steals their foreground tab. We
+    // deliberately do NOT bring it to front — silent operation.
     mgr.tab_new(None, None).await?;
     let session_id = mgr.active_session_id()?.to_string();
-    let _ = mgr
-        .client
-        .send_command("Page.bringToFront", None, Some(&session_id))
-        .await;
 
     // Liveness probe: confirm the CDP session can actually round-trip
     // before returning success. Without this, a zombie CDP socket (process

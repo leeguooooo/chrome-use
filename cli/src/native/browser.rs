@@ -581,6 +581,7 @@ impl BrowserManager {
                     &CreateTargetParams {
                         url: "about:blank".to_string(),
                         agent_group,
+                        background: None,
                     },
                     None,
                 )
@@ -684,6 +685,20 @@ impl BrowserManager {
                     "waitForDebuggerOnStart": false,
                     "flatten": true
                 })),
+                Some(session_id),
+            )
+            .await;
+        // Silent operation: agent tabs are driven in the background (we never
+        // force them to the foreground), so emulate focus. Without this a
+        // backgrounded tab is render-throttled and reports `document.hidden` /
+        // `!document.hasFocus()` — which both breaks timing-sensitive pages and
+        // is itself a bot signal (a real user looks at the page). Best-effort;
+        // ignored on engines without Emulation support.
+        let _ = self
+            .client
+            .send_command(
+                "Emulation.setFocusEmulationEnabled",
+                Some(json!({ "enabled": true })),
                 Some(session_id),
             )
             .await;
@@ -973,6 +988,7 @@ impl BrowserManager {
                 &CreateTargetParams {
                     url: "about:blank".to_string(),
                     agent_group,
+                    background: None,
                 },
                 None,
             )
@@ -1137,6 +1153,7 @@ impl BrowserManager {
                 &CreateTargetParams {
                     url: target_url.to_string(),
                     agent_group,
+                    background: Some(true),
                 },
                 None,
             )
@@ -1192,11 +1209,10 @@ impl BrowserManager {
         let session_id = self.pages[index].session_id.clone();
         self.enable_domains(&session_id).await?;
 
-        // Bring tab to front
-        let _ = self
-            .client
-            .send_command("Page.bringToFront", None, Some(&session_id))
-            .await;
+        // Silent: switching the agent's *internal* active page must not yank the
+        // user's foreground tab. The page is driven in the background (focus is
+        // emulated in enable_domains); the explicit `bringToFront` command is the
+        // only way a tab is deliberately surfaced.
 
         let url = self.get_url().await.unwrap_or_default();
         let title = self.get_title().await.unwrap_or_default();

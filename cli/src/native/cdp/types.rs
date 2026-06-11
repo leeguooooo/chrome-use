@@ -153,6 +153,12 @@ pub struct CreateTargetParams {
     /// endpoint never receives an unknown parameter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_group: Option<String>,
+    /// Create the tab in the background so opening it never steals the user's
+    /// foreground tab (silent operation). Standard CDP param; the ab-connect
+    /// extension creates its tabs `active: false` regardless, so this only
+    /// affects the raw-CDP (no extension) path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
