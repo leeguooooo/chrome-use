@@ -101,7 +101,62 @@ pub fn parse_curl_cookies(raw: &str) -> Result<Vec<Value>, String> {
                 .get("value")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| format!("cookies[{}] missing string value", i))?;
-            out.push(json!({ "name": name, "value": value }));
+            let mut cookie = json!({ "name": name, "value": value });
+            let obj = cookie.as_object_mut().unwrap();
+            // Preserve any CDP Network.setCookie attributes present on the
+            // source object so a full auth state round-trips: httpOnly session
+            // tokens, per-domain cookies (a single export spans .chatgpt.com,
+            // .openai.com, ...), and secure/sameSite/expiry. A bare
+            // {name,value} export is unchanged. Common aliases from DevTools /
+            // EditThisCookie / extension exports are accepted.
+            if let Some(v) = c.get("url").and_then(|v| v.as_str()) {
+                obj.insert("url".into(), json!(v));
+            }
+            if let Some(v) = c.get("domain").and_then(|v| v.as_str()) {
+                obj.insert("domain".into(), json!(v));
+            }
+            if let Some(v) = c.get("path").and_then(|v| v.as_str()) {
+                obj.insert("path".into(), json!(v));
+            }
+            if let Some(v) = c.get("secure").and_then(|v| v.as_bool()) {
+                obj.insert("secure".into(), json!(v));
+            }
+            if let Some(v) = c
+                .get("httpOnly")
+                .or_else(|| c.get("httponly"))
+                .or_else(|| c.get("http_only"))
+                .and_then(|v| v.as_bool())
+            {
+                obj.insert("httpOnly".into(), json!(v));
+            }
+            if let Some(v) = c
+                .get("sameSite")
+                .or_else(|| c.get("samesite"))
+                .or_else(|| c.get("same_site"))
+                .and_then(|v| v.as_str())
+            {
+                let norm = match v.to_lowercase().as_str() {
+                    "strict" => "Strict",
+                    "lax" => "Lax",
+                    "none" | "no_restriction" => "None",
+                    _ => "",
+                };
+                if !norm.is_empty() {
+                    obj.insert("sameSite".into(), json!(norm));
+                }
+            }
+            // CDP `expires` is seconds since the Unix epoch (f64). Accept
+            // `expires` or EditThisCookie's `expirationDate`.
+            if let Some(v) = c
+                .get("expires")
+                .or_else(|| c.get("expirationDate"))
+                .and_then(|v| v.as_f64())
+            {
+                if v > 0.0 {
+                    obj.insert("expires".into(), json!(v));
+                }
+            }
+            out.push(cookie);
         }
         return Ok(out);
     }
@@ -2860,12 +2915,36 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_curl_cookies_json_preserves_attributes() {
+        // A full cookie export (httpOnly session token, per-domain, secure,
+        // sameSite, expiry) must round-trip — not get flattened to name/value.
+        let input = r#"[
+            {"name":"__Secure-next-auth.session-token","value":"eyJ.tok","domain":".chatgpt.com","path":"/","secure":true,"httpOnly":true,"sameSite":"Lax","expires":1893456000},
+            {"name":"cf_clearance","value":"abc","domain":".openai.com","path":"/","secure":true,"http_only":true,"same_site":"no_restriction"}
+        ]"#;
+        let out = parse_curl_cookies(input).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["domain"], ".chatgpt.com");
+        assert_eq!(out[0]["secure"], true);
+        assert_eq!(out[0]["httpOnly"], true);
+        assert_eq!(out[0]["sameSite"], "Lax");
+        assert_eq!(out[0]["expires"], 1893456000.0);
+        // alias keys (http_only, same_site=no_restriction) normalize to CDP shape
+        assert_eq!(out[1]["domain"], ".openai.com");
+        assert_eq!(out[1]["httpOnly"], true);
+        assert_eq!(out[1]["sameSite"], "None");
+    }
+
+    #[test]
     fn test_parse_curl_cookies_json_array() {
         let input = r#"[{"name":"a","value":"1"},{"name":"b","value":"2"}]"#;
         let out = parse_curl_cookies(input).unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["name"], "a");
         assert_eq!(out[0]["value"], "1");
+        // bare {name,value} stays minimal — no spurious attribute keys
+        assert!(out[0].get("domain").is_none());
+        assert!(out[0].get("secure").is_none());
         assert_eq!(out[1]["name"], "b");
         assert_eq!(out[1]["value"], "2");
     }
