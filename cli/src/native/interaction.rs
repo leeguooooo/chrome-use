@@ -5,6 +5,7 @@ use serde_json::Value;
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
 use super::element::{resolve_element_center, resolve_element_object_id, RefMap};
+use super::humanize;
 
 pub async fn click(
     client: &CdpClient,
@@ -1070,24 +1071,38 @@ async fn dispatch_click(
     button: &str,
     click_count: i32,
 ) -> Result<(), String> {
-    // Move
-    client
-        .send_command_typed::<_, Value>(
-            "Input.dispatchMouseEvent",
-            &DispatchMouseEventParams {
-                event_type: "mouseMoved".to_string(),
-                x,
-                y,
-                button: None,
-                buttons: None,
-                click_count: None,
-                delta_x: None,
-                delta_y: None,
-                modifiers: None,
-            },
-            Some(session_id),
-        )
-        .await?;
+    // Move toward the target along a human-like path. At HumanizeLevel::Off this
+    // is a single zero-delay step to (x, y) — identical to the old teleport — so
+    // the default behaviour is unchanged. At Fast/Human it's a curved,
+    // decelerating trajectory starting from where the cursor last landed, which
+    // removes the "instant jump to exact centre, no prior movement" tell that
+    // behavioural anti-bot systems flag.
+    let level = humanize::active_level();
+    let start = humanize::last_cursor();
+    let seed = humanize::next_seed();
+    for step in humanize::move_path(start, (x, y), level, seed) {
+        client
+            .send_command_typed::<_, Value>(
+                "Input.dispatchMouseEvent",
+                &DispatchMouseEventParams {
+                    event_type: "mouseMoved".to_string(),
+                    x: step.x,
+                    y: step.y,
+                    button: None,
+                    buttons: None,
+                    click_count: None,
+                    delta_x: None,
+                    delta_y: None,
+                    modifiers: None,
+                },
+                Some(session_id),
+            )
+            .await?;
+        if !step.delay.is_zero() {
+            tokio::time::sleep(step.delay).await;
+        }
+    }
+    humanize::set_last_cursor((x, y));
 
     let button_value = match button {
         "right" => 2,
@@ -1113,6 +1128,13 @@ async fn dispatch_click(
             Some(session_id),
         )
         .await?;
+
+    // Hold briefly before releasing — a real click isn't instantaneous. Zero at
+    // HumanizeLevel::Off.
+    let dwell = humanize::press_dwell(level, seed);
+    if !dwell.is_zero() {
+        tokio::time::sleep(dwell).await;
+    }
 
     // Release
     client
