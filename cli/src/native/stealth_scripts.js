@@ -308,12 +308,39 @@ const __abRedefineNavProto = (name, getterImpl) => {
     try {
       if (iframe.contentWindow) return;
     } catch {}
+    // Native window methods are bound to the real Window via an internal slot;
+    // calling them with the Proxy as `this` throws "Illegal invocation". Wrap
+    // each function in an apply/construct trap that swaps the Proxy receiver for
+    // the real window, while passing `.prototype`/`.name`/`.toString`/identity
+    // straight through (a plain `.bind()` would drop `.prototype` and break
+    // `instanceof`). Cached so repeated reads return the same function.
+    const fnProxyCache = new WeakMap();
+    const bindToRealWindow = (fn) => {
+      let wrapped = fnProxyCache.get(fn);
+      if (wrapped) return wrapped;
+      try {
+        wrapped = new Proxy(fn, {
+          apply(target, thisArg, args) {
+            return Reflect.apply(target, thisArg === proxy ? window : thisArg, args);
+          },
+          construct(target, args, newTarget) {
+            return Reflect.construct(target, args, newTarget);
+          },
+        });
+      } catch {
+        wrapped = fn;
+      }
+      fnProxyCache.set(fn, wrapped);
+      return wrapped;
+    };
     const proxy = new Proxy(window, {
       get(target, key) {
         if (key === 'self') return proxy;
         if (key === 'frameElement') return iframe;
         if (key === '0') return undefined;
-        return Reflect.get(target, key, target);
+        const value = Reflect.get(target, key, target);
+        if (typeof value === 'function') return bindToRealWindow(value);
+        return value;
       },
     });
     iframeProxyMap.set(iframe, proxy);
