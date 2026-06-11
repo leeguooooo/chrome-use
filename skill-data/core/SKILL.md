@@ -451,6 +451,14 @@ agent-browser --session b fill @e1 "bob@test.com"
 `AGENT_BROWSER_SESSION=myapp` sets the default session for the current
 shell.
 
+**Concurrent agents MUST each use a distinct `--session <name>`.** Within one
+session, commands are pinned to the tab you opened (by target_id, so a foreign
+tab can't drift your `eval`/`screenshot`). But two agents sharing the *same*
+session (e.g. both on the bare default) share one daemon and one active tab —
+they will clobber each other's tab/eval context. A unique session per agent gives
+each its own isolated tab group (own cookies, tabs, pin) on the one real Chrome,
+with no cross-talk.
+
 ### Mock network requests
 
 ```bash
