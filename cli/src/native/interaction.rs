@@ -350,9 +350,18 @@ pub async fn type_text_into_active_context(
     text: &str,
     delay_ms: Option<u64>,
 ) -> Result<(), String> {
-    let delay = delay_ms.unwrap_or(0);
+    // Per-character timing: an explicit `delay_ms` wins (caller asked for a
+    // fixed cadence); otherwise fall back to humanize — variable, human-like
+    // inter-keystroke gaps at Fast/Human, all-zero (instant) at Off.
+    let chars: Vec<char> = text.chars().collect();
+    let cadence: Vec<std::time::Duration> = match delay_ms {
+        Some(d) => vec![std::time::Duration::from_millis(d); chars.len()],
+        None => {
+            humanize::keystroke_delays(chars.len(), humanize::active_level(), humanize::next_seed())
+        }
+    };
 
-    for ch in text.chars() {
+    for (i, ch) in chars.into_iter().enumerate() {
         if matches!(ch, '\n' | '\r' | '\t') {
             let (key, code, key_code) = char_to_key_info(ch);
             let text_str = key_text(&key);
@@ -404,8 +413,9 @@ pub async fn type_text_into_active_context(
                 .await?;
         }
 
-        if delay > 0 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+        let gap = cadence[i];
+        if !gap.is_zero() {
+            tokio::time::sleep(gap).await;
         }
     }
 

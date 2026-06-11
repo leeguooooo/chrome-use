@@ -248,6 +248,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--screenshot-format",
         "--idle-timeout",
         "--model",
+        "--humanize",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -796,6 +797,21 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
+            "--humanize" => {
+                // Human-like input motion level (off|fast|human). Surface it as
+                // AGENT_BROWSER_HUMANIZE so the daemon — spawned as a child that
+                // inherits this process's env — picks it up and it overrides the
+                // adaptive detector. Applies when the session's daemon launches.
+                if let Some(s) = args.get(i + 1) {
+                    match crate::native::humanize::HumanizeLevel::parse(s) {
+                        Some(_) => std::env::set_var("AGENT_BROWSER_HUMANIZE", s),
+                        None => eprintln!(
+                            "warning: --humanize must be off|fast|human, got {s:?} (ignored)"
+                        ),
+                    }
+                    i += 1;
+                }
+            }
             "--screenshot-dir" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.screenshot_dir = Some(s.clone());
@@ -922,6 +938,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--screenshot-format",
         "--idle-timeout",
         "--model",
+        "--humanize",
     ];
 
     let mut i = 0;
