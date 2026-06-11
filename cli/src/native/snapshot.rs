@@ -1305,6 +1305,39 @@ fn render_tree(
     }
 }
 
+/// True if a snapshot line names an interactive ARIA role. Compaction keeps
+/// these even without a `ref=`/`": "` marker, so a clickable control never gets
+/// dropped from `-c` output (the dogfood reports saw a button present in the full
+/// snapshot vanish from compact, leaving the agent clicking an empty ref).
+fn is_interactive_line(line: &str) -> bool {
+    const ROLES: &[&str] = &[
+        "button",
+        "link",
+        "textbox",
+        "checkbox",
+        "radio",
+        "combobox",
+        "listbox",
+        "menuitem",
+        "menuitemcheckbox",
+        "menuitemradio",
+        "option",
+        "switch",
+        "slider",
+        "spinbutton",
+        "searchbox",
+        "tab ",
+        "clickable",
+        "focusable",
+        "editable",
+    ];
+    let t = line.trim_start();
+    // Lines look like `- button "Label" [ref=e1]`; match the role token after the
+    // leading "- " marker.
+    let t = t.strip_prefix("- ").unwrap_or(t);
+    ROLES.iter().any(|r| t.starts_with(r))
+}
+
 fn compact_tree(tree: &str, interactive: bool) -> String {
     let lines: Vec<&str> = tree.lines().collect();
     if lines.is_empty() {
@@ -1314,7 +1347,7 @@ fn compact_tree(tree: &str, interactive: bool) -> String {
     let mut keep = vec![false; lines.len()];
 
     for (i, line) in lines.iter().enumerate() {
-        if line.contains("ref=") || line.contains(": ") {
+        if line.contains("ref=") || line.contains(": ") || is_interactive_line(line) {
             keep[i] = true;
             // Mark ancestors
             let my_indent = count_indent(line);

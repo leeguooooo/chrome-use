@@ -556,8 +556,12 @@ async fn verify_ref_identity(
     Err(format!(
         "Ref {} no longer matches its snapshot. Was [{} \"{}\"], now [{} \"{}\"].\n\
          The DOM mutated between snapshot and interaction (typical with React/Vue \
-         reusing nodes during re-render). Take a fresh snapshot, then re-target.\n\
-         To bypass this guard set AGENT_BROWSER_VERIFY_REF=0.",
+         reusing nodes during re-render). Fix: take a fresh `snapshot` and re-target \
+         with the new ref. For SPAs where refs churn every interaction, drive the \
+         element directly with `eval` (e.g. `eval \"document.querySelector(...).click()\"`), \
+         which doesn't depend on refs.\n\
+         (Last resort: AGENT_BROWSER_VERIFY_REF=0 disables this safety check — only \
+         if you accept clicks may land on a re-rendered/wrong node.)",
         ref_id, expected_role, expected_name, actual_role, actual_name,
     ))
 }
