@@ -16,8 +16,18 @@ use std::io::Write;
 use std::path::PathBuf;
 
 /// Native-messaging host name; must match `HOST_NAME` in the extension and the
-/// manifest filename.
+/// manifest filename. `com.agent_browser.connect` is the original name, used by
+/// every shipped extension up to ab-connect 0.4.2.
 pub const HOST_NAME: &str = "com.agent_browser.connect";
+
+/// Alternate host name for the chrome-use rebrand era (ab-connect 0.5.0+). We
+/// install AND recognize both names so the relay works regardless of which
+/// extension version a user has — old (0.4.2) or new — with no forced
+/// re-install. See [`install_native_host`] / [`host_installed`].
+pub const HOST_NAME_ALT: &str = "com.leeguoo.chrome_use";
+
+/// Every native-messaging host name this CLI installs and accepts.
+pub const HOST_NAMES: &[&str] = &[HOST_NAME, HOST_NAME_ALT];
 
 /// Stable id of the `ab-connect` extension, pinned by the `key` in its
 /// manifest.json (and the signing key of the published `.crx`). Chrome only lets
@@ -182,18 +192,9 @@ fn install_native_host() -> Result<Vec<String>, String> {
         let _ = std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755));
     }
 
-    let manifest = serde_json::json!({
-        "name": HOST_NAME,
-        "description": "chrome-use connect — native messaging host",
-        "path": launcher.display().to_string(),
-        "type": "stdio",
-        "allowed_origins": [
-            format!("chrome-extension://{EXTENSION_ID}/"),
-            format!("chrome-extension://{STORE_EXTENSION_ID}/"),
-        ],
-    });
-    let body = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
-
+    // Write a manifest under EVERY accepted host name (both point to the same
+    // launcher + allowed extensions), so any extension version's
+    // `connectNative(<its host name>)` finds a matching host json.
     let mut written = Vec::new();
     for dir in native_messaging_dirs() {
         if let Some(parent) = dir.parent() {
@@ -202,9 +203,22 @@ fn install_native_host() -> Result<Vec<String>, String> {
             }
         }
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = dir.join(format!("{HOST_NAME}.json"));
-        std::fs::write(&path, &body).map_err(|e| e.to_string())?;
-        written.push(path.display().to_string());
+        for host in HOST_NAMES {
+            let manifest = serde_json::json!({
+                "name": host,
+                "description": "chrome-use connect — native messaging host",
+                "path": launcher.display().to_string(),
+                "type": "stdio",
+                "allowed_origins": [
+                    format!("chrome-extension://{EXTENSION_ID}/"),
+                    format!("chrome-extension://{STORE_EXTENSION_ID}/"),
+                ],
+            });
+            let body = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+            let path = dir.join(format!("{host}.json"));
+            std::fs::write(&path, &body).map_err(|e| e.to_string())?;
+            written.push(path.display().to_string());
+        }
     }
     if written.is_empty() {
         return Err("no Chrome/Chromium NativeMessagingHosts directory found".into());
@@ -289,9 +303,11 @@ fn remove_force_install_profile() -> bool {
 fn remove_host_manifests() -> usize {
     let mut n = 0;
     for dir in native_messaging_dirs() {
-        let path = dir.join(format!("{HOST_NAME}.json"));
-        if path.exists() && std::fs::remove_file(&path).is_ok() {
-            n += 1;
+        for host in HOST_NAMES {
+            let path = dir.join(format!("{host}.json"));
+            if path.exists() && std::fs::remove_file(&path).is_ok() {
+                n += 1;
+            }
         }
     }
     n
@@ -334,7 +350,7 @@ fn native_messaging_dirs() -> Vec<PathBuf> {
 fn host_manifest_path_for_chrome() -> Option<PathBuf> {
     native_messaging_dirs()
         .into_iter()
-        .map(|d| d.join(format!("{HOST_NAME}.json")))
+        .flat_map(|d| HOST_NAMES.iter().map(move |h| d.join(format!("{h}.json"))))
         .find(|p| p.exists())
         .or_else(|| {
             native_messaging_dirs()
@@ -352,9 +368,11 @@ fn host_manifest_path_for_chrome() -> Option<PathBuf> {
 /// service worker; this manifest is the durable signal that the extension is
 /// the chosen path.
 pub fn host_installed() -> bool {
-    native_messaging_dirs()
-        .into_iter()
-        .any(|d| d.join(format!("{HOST_NAME}.json")).exists())
+    native_messaging_dirs().into_iter().any(|d| {
+        HOST_NAMES
+            .iter()
+            .any(|h| d.join(format!("{h}.json")).exists())
+    })
 }
 
 fn report(json: bool, ok: bool, msg: &str) {
