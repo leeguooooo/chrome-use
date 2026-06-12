@@ -28,7 +28,7 @@
 <body>
 <header>
   <h1>Chrome Web Store 提交指南</h1>
-  <div class="sub">chrome-use · 上传包 <code>extensions/ab-connect.zip</code> · id 锁定为 <code>ciiljdlhdpfckdcfkphgmfalanpdejep</code></div>
+  <div class="sub">chrome-use · <strong>更新现有商店条目</strong> <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code> · 上传 <strong>key 已删</strong> 的包(纯改名,保住老用户/评分)</div>
 </header>
 
 <p>为什么必须走商店:实测 Chrome 149 在<strong>非企业托管</strong>的 Mac 上,会把"非 Web Store"的 force-install 扩展直接标成 <code>[BLOCKED]</code>。商店扩展不受此限。这也是 codex / claude 扩展都发商店的原因。</p>
@@ -44,11 +44,15 @@
   <li>(隐私政策需要一个公开 URL,见第四节 —— 我可以帮你开 GitHub Pages 托管 <code>privacy.html</code>)</li>
 </ol>
 
-<h2>二、上传</h2>
+<h2>二、上传(更新现有条目,纯改名)</h2>
+<p>你已经有一个上架条目(原名 <em>agent-browser-stealth</em>,Item ID <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>)。这次只是把它<strong>改名成 chrome-use</strong>,所以走 <span class="field">更新版本</span>,<u>不要</u> New item —— 这样老用户自动更新、评分/安装量都保留。</p>
 <ol>
-  <li>devconsole → <span class="field">New item</span> → 上传 <code>extensions/ab-connect.zip</code></li>
-  <li>上传后确认分配到的 Item ID = <code>ciiljdlhdpfckdcfkphgmfalanpdejep</code>(因为 manifest 里保留了 <code>key</code>,id 会被锁成这个,native messaging 的 allowed_origins 才对得上)。<strong>若 id 不是这个,告诉我,我重签。</strong></li>
+  <li>devconsole → 打开 <strong>现有的 agent-browser-stealth 条目</strong>(id <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>)→ <span class="field">Package → Upload new package</span>。</li>
+  <li>上传 <strong>key 已删</strong> 的包 <code>chrome-use-store-vX.Y.Z.zip</code>(<em>必须删掉 manifest 的 <code>key</code> 字段</em>,否则商店报"key 字段不符";仓库里 <code>ab-connect/manifest.json</code> 带 key 是给本地 Load-unpacked 用的,别直接传那个)。上传后 Item ID <strong>保持 <code>knfcmbam…</code> 不变</strong>;用户看到的扩展名变成 <strong>chrome-use</strong>。</li>
+  <li>native messaging 的 <code>allowed_origins</code> 同时放行 <code>knfcmbam…</code> 和 <code>ciiljdl…</code> 两个 id,所以改名后 relay 照常连得上,<strong>不会断现有用户</strong>。</li>
+  <li><strong>不要</strong>在这次发布里改 <code>background.js</code> 的 native host 名(保持 <code>com.agent_browser.connect</code>);<code>com.leeguoo.chrome_use</code> 是给将来真迁移用的。</li>
 </ol>
+<div class="warn"><strong>若你确实想另开一个全新的 "chrome-use" 条目(新 id、评分清零、用户需重装)</strong>:那才用保留 key 的包,id 会锁成 <code>ciiljdlhdpfckdcfkphgmfalanpdejep</code>。仅在你想彻底脱离旧 <em>stealth</em> 品牌时才这么做 —— 默认按上面"更新现有条目"走。</div>
 
 <h2>三、商店信息(直接复制以下文案)</h2>
 
@@ -114,8 +118,12 @@ automate pages the user is working with, entirely on the user's machine and at t
 <pre>https://leeguooooo.github.io/chrome-use/extensions/store/privacy.html</pre>
 <p>(部署需 1–2 分钟生效。raw 备用直链:<code>https://raw.githubusercontent.com/leeguooooo/chrome-use/main/extensions/store/privacy.html</code>。)</p>
 
-<h2>六、截图 / Screenshots（至少 1 张，1280×800 或 640×400）</h2>
-<p>可以截一张 CLI + Chrome 并排的演示图。<em>需要的话我用 cua-driver 截一张合规尺寸的图给你。</em></p>
+<h2>六、图标 + 截图 / Icon &amp; Screenshots</h2>
+<p><strong>已生成,涂鸦风(和 cookie-use README 同一套)。</strong>上传到对应字段即可:</p>
+<ul>
+  <li><span class="field">Store icon(128×128)</span>:<code>chrome-use-store-icon-128.png</code></li>
+  <li><span class="field">Screenshots(每张正好 1280×800)</span>:<code>chrome-use-store-shot1-1280x800.png</code>(CMD 牵线操控已登录浏览器)、<code>shot2</code>(机械臂抓浏览器方向盘)、<code>shot3</code>(浏览器插线连终端 CONNECTED)。</li>
+</ul>
 
 <h2>七、提交后</h2>
 <ol>
@@ -127,6 +135,6 @@ automate pages the user is working with, entirely on the user's machine and at t
   <strong>今天的临时可用方案:</strong> 在你这台 Mac 上 <code>chrome://extensions</code> → 打开开发者模式 → Load unpacked → 选 <code>extensions/ab-connect</code>,30 秒手动装一次,native messaging + <code>extension connect</code> 立即可用。等商店过审再切静默路径。
 </div>
 
-<footer>chrome-use · 提交包与文案随扩展版本更新;改扩展后重跑 <code>scripts/pack-extension.sh</code> 并重打 <code>ab-connect.zip</code>。</footer>
+<footer>chrome-use · 更新现有条目 <code>knfcmbam…</code>(纯改名);上传包必须删 key。改扩展后重打 key-stripped 的 <code>chrome-use-store-vX.Y.Z.zip</code> 再传。</footer>
 </body>
 </html>
