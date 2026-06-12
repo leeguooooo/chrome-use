@@ -133,5 +133,10 @@ jobs:
             dist/*.tar.gz
             dist/*.tar.gz.sha256
           fail_on_unmatched_files: true
-          # keep existing release notes if the release was created beforehand
+          # Auto-generate a changelog (commits + merged PRs since the previous
+          # tag) so every release shows what actually changed, instead of an
+          # empty body. The first matrix job to run creates the release with
+          # these notes; `append_body: false` keeps later jobs from clobbering
+          # or duplicating them while they attach their platform's binaries.
+          generate_release_notes: true
           append_body: false
