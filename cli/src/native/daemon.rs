@@ -498,15 +498,15 @@ fn get_daemon_socket_dir() -> PathBuf {
 
     if let Ok(xdg) = env::var("XDG_RUNTIME_DIR") {
         if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("agent-browser");
+            return PathBuf::from(xdg).join("chrome-use");
         }
     }
 
     if let Some(home) = dirs::home_dir() {
-        return home.join(".agent-browser");
+        return home.join(".chrome-use");
     }
 
-    std::env::temp_dir().join("agent-browser")
+    std::env::temp_dir().join("chrome-use")
 }
 
 #[cfg(windows)]

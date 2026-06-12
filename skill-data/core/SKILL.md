@@ -1,10 +1,10 @@
 ---
 name: core
-description: Core agent-browser usage guide. Read this before running any agent-browser commands. Covers the snapshot-and-ref workflow, navigating pages, interacting with elements (click, fill, type, select), extracting text and data, taking screenshots, managing tabs, handling forms and auth, waiting for content, running multiple browser sessions in parallel, and troubleshooting common failures. Use when the user asks to interact with a website, fill a form, click something, extract data, take a screenshot, log into a site, test a web app, or automate any browser task.
-allowed-tools: Bash(agent-browser:*), Bash(agent-browser-stealth:*), Bash(abs:*), Bash(npx agent-browser:*), Bash(npx agent-browser-stealth:*)
+description: Core chrome-use usage guide. Read this before running any chrome-use commands. Covers the snapshot-and-ref workflow, navigating pages, interacting with elements (click, fill, type, select), extracting text and data, taking screenshots, managing tabs, handling forms and auth, waiting for content, running multiple browser sessions in parallel, and troubleshooting common failures. Use when the user asks to interact with a website, fill a form, click something, extract data, take a screenshot, log into a site, test a web app, or automate any browser task.
+allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
 ---
 
-# agent-browser core
+# chrome-use core
 
 Fast browser automation CLI for AI agents. Chrome/Chromium via CDP, no
 Playwright or Puppeteer dependency. Accessibility-tree snapshots with compact
@@ -18,17 +18,17 @@ web pages — see [When to load another skill](#when-to-load-another-skill).
 > **Hit a rough edge? Please report it.** If a command surprised you — a
 > confusing error, a stale `@ref`, an occluded click, a flaky wait, a missing
 > feature, or anything that cost you extra turns — open a quick issue at
-> **<https://github.com/leeguooooo/agent-browser-stealth/issues>** with the exact
+> **<https://github.com/leeguooooo/chrome-use/issues>** with the exact
 > command and what happened vs. what you expected. Agent-filed friction reports
 > are how this tool gets sharper; a 30-second issue is genuinely valuable.
 
 ## The core loop
 
 ```bash
-agent-browser open <url>        # 1. Open a page
-agent-browser snapshot -i       # 2. See what's on it (interactive elements only)
-agent-browser click @e3         # 3. Act on refs from the snapshot
-agent-browser snapshot -i       # 4. Re-snapshot after any page change
+chrome-use open <url>        # 1. Open a page
+chrome-use snapshot -i       # 2. See what's on it (interactive elements only)
+chrome-use click @e3         # 3. Act on refs from the snapshot
+chrome-use snapshot -i       # 4. Re-snapshot after any page change
 ```
 
 Refs (`@e1`, `@e2`, ...) are assigned fresh on every snapshot. They become
@@ -38,15 +38,15 @@ next ref interaction.
 
 ## Before you automate: pick the cheapest tool
 
-Driving a browser is the heavy option. agent-browser earns its keep when you
+Driving a browser is the heavy option. chrome-use earns its keep when you
 need a **real, logged-in browser** — not for reading text off a public page.
 
 | You need | Use |
 |---|---|
 | Discover what exists / find sources | `WebSearch` |
 | Specific facts from a static or public page | `WebFetch` or `curl` (no browser) |
-| Login state, interaction, JS-rendered or anti-bot pages | **agent-browser** (this skill) |
-| A page the user saved before / an internal system | `agent-browser find-url <keywords>` (their bookmarks), then open it |
+| Login state, interaction, JS-rendered or anti-bot pages | **chrome-use** (this skill) |
+| A page the user saved before / an internal system | `chrome-use find-url <keywords>` (their bookmarks), then open it |
 | The user's **own already-open, logged-in** Chrome window | the **extension connect** flow (below) |
 
 Don't hand-build deep URLs with query params — links discovered by *interacting*
@@ -58,24 +58,24 @@ hand-constructed URL often doesn't.
 When the task needs the user's *live* logged-in window (their real session, the
 window they're looking at — not a fresh browser), use the extension connect flow.
 One-time setup:
-1. `agent-browser extension install` — registers the native-messaging host.
-2. Install the **agent-browser-stealth** extension. Easiest (and restart-stable):
+1. `chrome-use extension install` — registers the native-messaging host.
+2. Install the **chrome-use** extension. Easiest (and restart-stable):
    the **Chrome Web Store**, one-click *Add to Chrome*:
-   <https://chromewebstore.google.com/detail/agent-browser-stealth/knfcmbamhjmaonkfnjhldjedeobeafmk>
+   <https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk>
    (Dev fallback: `chrome://extensions` → Developer mode → *Load unpacked* →
    `extensions/ab-connect`. Load-unpacked can be disabled on Chrome restart, so
    prefer the Store build for unattended setups.)
 
-Once installed, plain `agent-browser open <url>` auto-connects through the
+Once installed, plain `chrome-use open <url>` auto-connects through the
 extension relay — `auto_connect_cdp` **prefers the live relay over a raw
 `--remote-debugging-port`**, so Chrome 136+'s "Allow remote debugging?" consent
-popup never fires. `agent-browser extension connect` is the explicit form of the
+popup never fires. `chrome-use extension connect` is the explicit form of the
 same path. Zero-confirmation, zero-token. Use `--launch` instead when a fresh,
 isolated browser is fine.
 
 `--launch` opens an **isolated, empty test profile** — no cookies, no login, no
 extensions (so the extension-relay path is off). Its window is labelled
-`agent-browser (<session>)` in Chrome's profile menu so a human watching the
+`chrome-use (<session>)` in Chrome's profile menu so a human watching the
 desktop knows which session owns it. If a launched session needs more:
 
 - **Real cookies / login / extensions** → drop `--launch`, use `--profile auto`
@@ -88,17 +88,17 @@ desktop knows which session owns it. If a launched session needs more:
 attempt re-pops it). One of two things is true:
 
 1. **You're on a stale build.** The relay-preference that avoids this dialog
-   landed in **fork.30**. Run `agent-browser --version`: if it's below
+   landed in **fork.30**. Run `chrome-use --version`: if it's below
    `0.27.0-fork.30`, upgrade and retry:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/install.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
    ```
-   If `which -a agent-browser` shows more than one install, an old **npm/pnpm**
+   If `which -a chrome-use` shows more than one install, an old **npm/pnpm**
    copy (the npm registry lags behind — Releases are the source of truth) may be
    shadowing the upgraded one; remove the stale copy
-   (`npm rm -g agent-browser-stealth` / `pnpm rm -g agent-browser-stealth`) so the
+   (`npm rm -g chrome-use` / `pnpm rm -g chrome-use`) so the
    `install.sh` build wins. A tool that bundles its *own* pinned copy
-   (e.g. `node .../agent-browser-stealth@0.24.x/.../agent-browser`) needs that
+   (e.g. `node .../chrome-use@0.24.x/.../chrome-use`) needs that
    copy upgraded too.
 2. **The extension/relay isn't live.** Tell the user to install the Store
    extension (one click, above); after that the relay stays up and the dialog
@@ -135,7 +135,7 @@ You have a **real Chrome with the user's DOM**. Two layers, mix them freely:
    readable; best for straightforward forms and navigation. But the a11y view is
    *lossy and fragile*: refs go stale on any change, hidden inputs never show up,
    overlays can block coordinate clicks.
-2. **eval-first** (`agent-browser eval "<js>"`) — your eyes and hands on the real
+2. **eval-first** (`chrome-use eval "<js>"`) — your eyes and hands on the real
    DOM: read hidden inputs, reach into Shadow DOM / iframes, inspect
    `form.elements` and `.validity`, extract the exact shape you want, or call
    `el.click()` directly. **The moment the structured path fights you, drop to
@@ -144,47 +144,47 @@ You have a **real Chrome with the user's DOM**. Two layers, mix them freely:
 
 ```bash
 # "what's actually in this form / why won't it submit?"
-agent-browser eval "[...document.forms[0].elements].map(e=>[e.name,e.type,e.value,e.checked])"
-agent-browser eval "document.querySelector('[name=point_choice]')?.value"
-agent-browser eval "[...document.forms[0].elements].filter(e=>!e.validity.valid).map(e=>e.name+': '+e.validationMessage)"
-agent-browser eval "document.querySelector('#stubborn').click()"   # direct DOM click, bypasses overlays
+chrome-use eval "[...document.forms[0].elements].map(e=>[e.name,e.type,e.value,e.checked])"
+chrome-use eval "document.querySelector('[name=point_choice]')?.value"
+chrome-use eval "[...document.forms[0].elements].filter(e=>!e.validity.valid).map(e=>e.name+': '+e.validationMessage)"
+chrome-use eval "document.querySelector('#stubborn').click()"   # direct DOM click, bypasses overlays
 ```
 
 ## Quickstart
 
 ```bash
 # Install once
-npm i -g agent-browser && agent-browser install
+npm i -g chrome-use && chrome-use install
 
 # Take a screenshot of a page
-agent-browser open https://example.com
-agent-browser screenshot home.png
-agent-browser close
+chrome-use open https://example.com
+chrome-use screenshot home.png
+chrome-use close
 
 # Search, click a result, and capture it
-agent-browser open https://duckduckgo.com
-agent-browser snapshot -i                      # find the search box ref
-agent-browser fill @e1 "agent-browser cli"
-agent-browser press Enter
-agent-browser wait --load networkidle
-agent-browser snapshot -i                      # refs now reflect results
-agent-browser click @e5                        # click a result
-agent-browser screenshot result.png
+chrome-use open https://duckduckgo.com
+chrome-use snapshot -i                      # find the search box ref
+chrome-use fill @e1 "chrome-use cli"
+chrome-use press Enter
+chrome-use wait --load networkidle
+chrome-use snapshot -i                      # refs now reflect results
+chrome-use click @e5                        # click a result
+chrome-use screenshot result.png
 ```
 
 The browser stays running across commands so these feel like a single
-session. Use `agent-browser close` (or `close --all`) when you're done.
+session. Use `chrome-use close` (or `close --all`) when you're done.
 
 ## Reading a page
 
 ```bash
-agent-browser snapshot                    # full tree (verbose)
-agent-browser snapshot -i                 # interactive elements only (preferred)
-agent-browser snapshot -i -u              # include href urls on links
-agent-browser snapshot -i -c              # compact (no empty structural nodes)
-agent-browser snapshot -i -d 3            # cap depth at 3 levels
-agent-browser snapshot -s "#main"         # scope to a CSS selector
-agent-browser snapshot -i --json          # machine-readable output
+chrome-use snapshot                    # full tree (verbose)
+chrome-use snapshot -i                 # interactive elements only (preferred)
+chrome-use snapshot -i -u              # include href urls on links
+chrome-use snapshot -i -c              # compact (no empty structural nodes)
+chrome-use snapshot -i -d 3            # cap depth at 3 levels
+chrome-use snapshot -s "#main"         # scope to a CSS selector
+chrome-use snapshot -i --json          # machine-readable output
 ```
 
 Snapshot output looks like:
@@ -207,32 +207,32 @@ assigned fresh on every snapshot.
 For unstructured reading (no refs needed):
 
 ```bash
-agent-browser get text @e1                # visible text of an element
-agent-browser get html @e1                # innerHTML
-agent-browser get attr @e1 href           # any attribute
-agent-browser get value @e1               # input value
-agent-browser get title                   # page title
-agent-browser get url                     # current URL
-agent-browser get count ".item"           # count matching elements
+chrome-use get text @e1                # visible text of an element
+chrome-use get html @e1                # innerHTML
+chrome-use get attr @e1 href           # any attribute
+chrome-use get value @e1               # input value
+chrome-use get title                   # page title
+chrome-use get url                     # current URL
+chrome-use get count ".item"           # count matching elements
 ```
 
 ## Interacting
 
 ```bash
-agent-browser click @e1                   # click
-agent-browser click @e1 --new-tab         # open link in new tab instead of navigating
-agent-browser dblclick @e1                # double-click
-agent-browser hover @e1                   # hover
-agent-browser focus @e1                   # focus (useful before keyboard input)
-agent-browser fill @e2 "hello"            # clear then type
-agent-browser type @e2 " world"           # type without clearing
-agent-browser press Enter                 # press a key at current focus
-agent-browser press Control+a             # key combination
-agent-browser check @e3                   # check checkbox
-agent-browser uncheck @e3                 # uncheck
-agent-browser select @e4 "option-value"   # native <select> only
-agent-browser select @e4 "a" "b"          # select multiple
-agent-browser pick @e4 --option "Europe"  # ANY combobox (react-select / ARIA /
+chrome-use click @e1                   # click
+chrome-use click @e1 --new-tab         # open link in new tab instead of navigating
+chrome-use dblclick @e1                # double-click
+chrome-use hover @e1                   # hover
+chrome-use focus @e1                   # focus (useful before keyboard input)
+chrome-use fill @e2 "hello"            # clear then type
+chrome-use type @e2 " world"           # type without clearing
+chrome-use press Enter                 # press a key at current focus
+chrome-use press Control+a             # key combination
+chrome-use check @e3                   # check checkbox
+chrome-use uncheck @e3                 # uncheck
+chrome-use select @e4 "option-value"   # native <select> only
+chrome-use select @e4 "a" "b"          # select multiple
+chrome-use pick @e4 --option "Europe"  # ANY combobox (react-select / ARIA /
                                           # native): opens it, waits for the menu
                                           # (incl. portal-rendered), matches by
                                           # visible text, fires the right events,
@@ -240,10 +240,10 @@ agent-browser pick @e4 --option "Europe"  # ANY combobox (react-select / ARIA /
                                           # (no silent no-op). Use this for custom
                                           # dropdowns where `select` returns ✓ but
                                           # changes nothing.
-agent-browser upload @e5 file1.pdf        # upload file(s)
-agent-browser scroll down 500             # scroll page (up/down/left/right)
-agent-browser scrollintoview @e1          # scroll element into view
-agent-browser drag @e1 @e2                # drag and drop
+chrome-use upload @e5 file1.pdf        # upload file(s)
+chrome-use scroll down 500             # scroll page (up/down/left/right)
+chrome-use scrollintoview @e1          # scroll element into view
+chrome-use drag @e1 @e2                # drag and drop
 ```
 
 ### When refs don't work or you don't want to snapshot
@@ -251,22 +251,22 @@ agent-browser drag @e1 @e2                # drag and drop
 Use semantic locators:
 
 ```bash
-agent-browser find role button click --name "Submit"
-agent-browser find text "Sign In" click
-agent-browser find text "Sign In" click --exact     # exact match only
-agent-browser find label "Email" fill "user@test.com"
-agent-browser find placeholder "Search" type "query"
-agent-browser find testid "submit-btn" click
-agent-browser find first ".card" click
-agent-browser find nth 2 ".card" hover
+chrome-use find role button click --name "Submit"
+chrome-use find text "Sign In" click
+chrome-use find text "Sign In" click --exact     # exact match only
+chrome-use find label "Email" fill "user@test.com"
+chrome-use find placeholder "Search" type "query"
+chrome-use find testid "submit-btn" click
+chrome-use find first ".card" click
+chrome-use find nth 2 ".card" hover
 ```
 
 Or a raw CSS selector:
 
 ```bash
-agent-browser click "#submit"
-agent-browser fill "input[name=email]" "user@test.com"
-agent-browser click "button.primary"
+chrome-use click "#submit"
+chrome-use fill "input[name=email]" "user@test.com"
+chrome-use click "button.primary"
 ```
 
 Escalation ladder: snapshot + `@eN` refs are quickest for straightforward
@@ -278,16 +278,16 @@ occluded clicks). Don't retry a flaky structured locator three times; drop to
 `click` auto-scrolls into view and, if the coordinate click is occluded, falls
 back to a DOM `.click()`. If a click *reports success but nothing happened* —
 classic for an autocomplete/menu `<li>` that closes on the input's blur — retry
-that one with `AGENT_BROWSER_CLICK_MODE=dom agent-browser click ...`, or just
-`agent-browser eval "<select the item via JS>"`.
+that one with `AGENT_BROWSER_CLICK_MODE=dom chrome-use click ...`, or just
+`chrome-use eval "<select the item via JS>"`.
 
 Click a raw pixel point when the only handle you have is a coordinate (canvas,
 a marker from a screenshot, a target with no stable selector):
 
 ```bash
-agent-browser click 449 320            # click viewport point (x y)
-agent-browser click 449,320            # same, comma form
-agent-browser click --coords 449,320   # same, explicit flag
+chrome-use click 449 320            # click viewport point (x y)
+chrome-use click 449,320            # same, comma form
+chrome-use click --coords 449,320   # same, explicit flag
 ```
 
 A bare-number argument is always a coordinate, never a selector.
@@ -298,13 +298,13 @@ Agents fail more often from bad waits than from bad selectors. Pick the
 right wait for the situation:
 
 ```bash
-agent-browser wait @e1                     # until an element appears
-agent-browser wait 2000                    # dumb wait, milliseconds (last resort)
-agent-browser wait --text "Success"        # until the text appears on the page
-agent-browser wait --url "**/dashboard"    # until URL matches pattern (glob)
-agent-browser wait --load networkidle      # until network idle (post-navigation)
-agent-browser wait --load domcontentloaded # until DOMContentLoaded
-agent-browser wait --fn "window.myApp.ready === true"  # until JS condition
+chrome-use wait @e1                     # until an element appears
+chrome-use wait 2000                    # dumb wait, milliseconds (last resort)
+chrome-use wait --text "Success"        # until the text appears on the page
+chrome-use wait --url "**/dashboard"    # until URL matches pattern (glob)
+chrome-use wait --load networkidle      # until network idle (post-navigation)
+chrome-use wait --load domcontentloaded # until DOMContentLoaded
+chrome-use wait --fn "window.myApp.ready === true"  # until JS condition
 ```
 
 After any page-changing action, pick one:
@@ -321,42 +321,42 @@ flaky. Timeouts default to 25 seconds.
 ### Log in
 
 ```bash
-agent-browser open https://app.example.com/login
-agent-browser snapshot -i
+chrome-use open https://app.example.com/login
+chrome-use snapshot -i
 
 # Pick the email/password refs out of the snapshot, then:
-agent-browser fill @e3 "user@example.com"
-agent-browser fill @e4 "hunter2"
-agent-browser click @e5
-agent-browser wait --url "**/dashboard"
-agent-browser snapshot -i
+chrome-use fill @e3 "user@example.com"
+chrome-use fill @e4 "hunter2"
+chrome-use click @e5
+chrome-use wait --url "**/dashboard"
+chrome-use snapshot -i
 ```
 
 Credentials in shell history are a leak. For anything sensitive, use the
 auth vault (see [references/authentication.md](references/authentication.md)):
 
 ```bash
-agent-browser auth save my-app --url https://app.example.com/login \
+chrome-use auth save my-app --url https://app.example.com/login \
   --username user@example.com --password-stdin
 # (type password, Ctrl+D)
 
-agent-browser auth login my-app    # fills + clicks, waits for form
+chrome-use auth login my-app    # fills + clicks, waits for form
 ```
 
 ### Persist session across runs
 
 ```bash
 # Log in once, save cookies + localStorage
-agent-browser state save ./auth.json
+chrome-use state save ./auth.json
 
 # Later runs start already-logged-in
-agent-browser --state ./auth.json open https://app.example.com
+chrome-use --state ./auth.json open https://app.example.com
 ```
 
 Or use `--session-name` for auto-save/restore:
 
 ```bash
-AGENT_BROWSER_SESSION_NAME=my-app agent-browser open https://app.example.com
+AGENT_BROWSER_SESSION_NAME=my-app chrome-use open https://app.example.com
 # State is auto-saved and restored on subsequent runs with the same name.
 ```
 
@@ -369,7 +369,7 @@ re-discover it.** Keep one markdown file per domain (these are your own notes,
 not shipped with the skill):
 
 ```
-~/.agent-browser/site-patterns/<domain>.md
+~/.chrome-use/site-patterns/<domain>.md
 ```
 
 **Before** working on a domain, read its file if it exists (use your normal file
@@ -402,15 +402,15 @@ page every time.
 
 ```bash
 # Structured snapshot (best for AI reasoning over page content)
-agent-browser snapshot -i --json > page.json
+chrome-use snapshot -i --json > page.json
 
 # Targeted extraction with refs
-agent-browser snapshot -i
-agent-browser get text @e5
-agent-browser get attr @e10 href
+chrome-use snapshot -i
+chrome-use get text @e5
+chrome-use get attr @e10 href
 
 # Arbitrary shape via JavaScript
-cat <<'EOF' | agent-browser eval --stdin
+cat <<'EOF' | chrome-use eval --stdin
 const rows = document.querySelectorAll("table tbody tr");
 Array.from(rows).map(r => ({
   name: r.cells[0].innerText,
@@ -421,7 +421,7 @@ EOF
 
 Prefer `eval --stdin` (heredoc), `eval --file <path>`, or `eval -b <base64>`
 for any JS with quotes, **non-ASCII identifiers/strings (e.g. Chinese)**, or
-large scripts — inline `agent-browser eval "..."` is shell-mangled and works
+large scripts — inline `chrome-use eval "..."` is shell-mangled and works
 only for simple ASCII expressions.
 
 **`eval` runs in the page's MAIN world and state persists across calls**, so a
@@ -440,10 +440,10 @@ key events (some search-as-you-type widgets) won't react; use `keyboard type` (o
 ### Screenshot
 
 ```bash
-agent-browser screenshot                        # temp path, printed on stdout
-agent-browser screenshot page.png               # specific path
-agent-browser screenshot --full full.png        # full scroll height
-agent-browser screenshot --annotate map.png     # numbered labels + legend keyed to snapshot refs
+chrome-use screenshot                        # temp path, printed on stdout
+chrome-use screenshot page.png               # specific path
+chrome-use screenshot --full full.png        # full scroll height
+chrome-use screenshot --annotate map.png     # numbered labels + legend keyed to snapshot refs
 ```
 
 Headless Chromium screenshots hide native scrollbars for consistent image output.
@@ -454,11 +454,11 @@ Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
 ### Handle multiple pages via tabs
 
 ```bash
-agent-browser tab                      # list open tabs (with stable tabId)
-agent-browser tabs                     # alias for `tab` (lists too)
-agent-browser tab new https://docs...  # open a new tab (and switch to it)
-agent-browser tab t2                   # switch to tab t2
-agent-browser tab close t2             # close tab t2
+chrome-use tab                      # list open tabs (with stable tabId)
+chrome-use tabs                     # alias for `tab` (lists too)
+chrome-use tab new https://docs...  # open a new tab (and switch to it)
+chrome-use tab t2                   # switch to tab t2
+chrome-use tab close t2             # close tab t2
 ```
 
 (`tabs` → the `tab` subcommand tree, and `get-text <sel>` → `get text <sel>` —
@@ -475,10 +475,10 @@ Each `--session <name>` is an isolated browser with its own cookies, tabs,
 and refs. Useful for testing multi-user flows or parallel scraping:
 
 ```bash
-agent-browser --session a open https://app.example.com
-agent-browser --session b open https://app.example.com
-agent-browser --session a fill @e1 "alice@test.com"
-agent-browser --session b fill @e1 "bob@test.com"
+chrome-use --session a open https://app.example.com
+chrome-use --session b open https://app.example.com
+chrome-use --session a fill @e1 "alice@test.com"
+chrome-use --session b fill @e1 "bob@test.com"
 ```
 
 `AGENT_BROWSER_SESSION=myapp` sets the default session for the current
@@ -500,23 +500,23 @@ extension (each with a distinct `--session`), not raw `--cdp`.
 ### Mock network requests
 
 ```bash
-agent-browser network route "**/api/users" --body '{"users":[]}'   # stub a response
-agent-browser network route "**/analytics" --abort                 # block entirely
-agent-browser network requests --clear                             # start capturing fresh
-agent-browser network requests                                     # inspect what fired
-agent-browser network har start                                    # record all traffic
+chrome-use network route "**/api/users" --body '{"users":[]}'   # stub a response
+chrome-use network route "**/analytics" --abort                 # block entirely
+chrome-use network requests --clear                             # start capturing fresh
+chrome-use network requests                                     # inspect what fired
+chrome-use network har start                                    # record all traffic
 # ... perform actions ...
-agent-browser network har stop /tmp/trace.har
+chrome-use network har stop /tmp/trace.har
 ```
 
 ### Record a video of the workflow
 
 ```bash
-agent-browser record start demo.webm
-agent-browser open https://example.com
-agent-browser snapshot -i
-agent-browser click @e3
-agent-browser record stop
+chrome-use record start demo.webm
+chrome-use open https://example.com
+chrome-use snapshot -i
+chrome-use click @e3
+chrome-use record stop
 ```
 
 See [references/video-recording.md](references/video-recording.md) for
@@ -527,21 +527,21 @@ codec options, GIF export, and more.
 Iframes are auto-inlined in the snapshot — their refs work transparently:
 
 ```bash
-agent-browser snapshot -i
+chrome-use snapshot -i
 # @e3 [Iframe] "payment-frame"
 #   @e4 [input] "Card number"
 #   @e5 [button] "Pay"
 
-agent-browser fill @e4 "4111111111111111"
-agent-browser click @e5
+chrome-use fill @e4 "4111111111111111"
+chrome-use click @e5
 ```
 
 To scope a snapshot to an iframe (for focus or deep nesting):
 
 ```bash
-agent-browser frame @e3      # switch context to the iframe
-agent-browser snapshot -i
-agent-browser frame main     # back to main frame
+chrome-use frame @e3      # switch context to the iframe
+chrome-use snapshot -i
+chrome-use frame main     # back to main frame
 ```
 
 ### Dialogs
@@ -550,10 +550,10 @@ agent-browser frame main     # back to main frame
 `confirm` and `prompt`:
 
 ```bash
-agent-browser dialog status          # is there a pending dialog?
-agent-browser dialog accept           # accept
-agent-browser dialog accept "text"    # accept with prompt input
-agent-browser dialog dismiss          # cancel
+chrome-use dialog status          # is there a pending dialog?
+chrome-use dialog accept           # accept
+chrome-use dialog accept "text"    # accept with prompt input
+chrome-use dialog dismiss          # cancel
 ```
 
 ## Diagnosing install issues
@@ -563,12 +563,12 @@ stale daemons, version mismatches after `upgrade`, missing Chrome, etc.)
 run `doctor` before anything else:
 
 ```bash
-agent-browser doctor                     # full diagnosis (env, Chrome, daemons, config, providers, network, launch test)
-agent-browser doctor --offline --quick   # fast, local-only
-agent-browser doctor --fix               # also run destructive repairs (reinstall Chrome, purge old state, ...)
-agent-browser doctor --json              # structured output for programmatic consumption
-agent-browser stealth status             # stealth self-check: mode + live probes
-agent-browser stealth status --json      #   (webdriver/chrome/plugins/UA) + applied
+chrome-use doctor                     # full diagnosis (env, Chrome, daemons, config, providers, network, launch test)
+chrome-use doctor --offline --quick   # fast, local-only
+chrome-use doctor --fix               # also run destructive repairs (reinstall Chrome, purge old state, ...)
+chrome-use doctor --json              # structured output for programmatic consumption
+chrome-use stealth status             # stealth self-check: mode + live probes
+chrome-use stealth status --json      #   (webdriver/chrome/plugins/UA) + applied
                                          #   overrides. Gate a sensitive flow on this
                                          #   instead of driving an external detector.
 ```
@@ -580,18 +580,18 @@ Destructive actions require `--fix`. Exit code is `0` if all checks pass
 ## Troubleshooting
 
 **"Ref not found" / "Element not found: @eN"**
-Page changed since the snapshot. Run `agent-browser snapshot -i` again,
+Page changed since the snapshot. Run `chrome-use snapshot -i` again,
 then use the new refs.
 
 **Element exists in the DOM but not in the snapshot**
 It's probably off-screen or not yet rendered. Try:
 
 ```bash
-agent-browser scroll down 1000
-agent-browser snapshot -i
+chrome-use scroll down 1000
+chrome-use snapshot -i
 # or
-agent-browser wait --text "..."
-agent-browser snapshot -i
+chrome-use wait --text "..."
+chrome-use snapshot -i
 ```
 
 **Click does nothing / overlay swallows the click**
@@ -602,7 +602,7 @@ dismiss/close button, click it, then re-snapshot.
 Your tab was closed, navigated across processes, or its debugger detached
 (e.g. it landed on a `chrome://` or Chrome Web Store page, which Chrome
 forbids debugging). The session no longer has a live tab — re-run
-`agent-browser open <your URL>` to re-attach, then retry. This loud error
+`chrome-use open <your URL>` to re-attach, then retry. This loud error
 replaces the old silent behaviour where the command ran on some *other*
 tab and returned wrong data.
 
@@ -617,17 +617,17 @@ sanity check on every read.
 Some custom input components intercept key events. Try:
 
 ```bash
-agent-browser focus @e1
-agent-browser keyboard inserttext "text"    # bypasses key events
+chrome-use focus @e1
+chrome-use keyboard inserttext "text"    # bypasses key events
 # or
-agent-browser keyboard type "text"          # raw keystrokes, no selector
+chrome-use keyboard type "text"          # raw keystrokes, no selector
 ```
 
 **Page needs JS you can't get right in one shot**
 Use `eval --stdin` with a heredoc instead of inline:
 
 ```bash
-cat <<'EOF' | agent-browser eval --stdin
+cat <<'EOF' | chrome-use eval --stdin
 // Complex script with quotes, backticks, whatever
 document.querySelectorAll('[data-id]').length
 EOF
@@ -665,28 +665,28 @@ and [references/authentication.md](references/authentication.md).
 ## When to load another skill
 
 - **Electron desktop app** (VS Code, Slack desktop, Discord, Figma, etc.):
-  `agent-browser skills get electron`
-- **Slack workspace automation**: `agent-browser skills get slack`
-- **Exploratory testing / QA / bug hunts**: `agent-browser skills get dogfood`
-- **Vercel Sandbox microVMs**: `agent-browser skills get vercel-sandbox`
-- **AWS Bedrock AgentCore cloud browser**: `agent-browser skills get agentcore`
+  `chrome-use skills get electron`
+- **Slack workspace automation**: `chrome-use skills get slack`
+- **Exploratory testing / QA / bug hunts**: `chrome-use skills get dogfood`
+- **Vercel Sandbox microVMs**: `chrome-use skills get vercel-sandbox`
+- **AWS Bedrock AgentCore cloud browser**: `chrome-use skills get agentcore`
 
 ## React / Web Vitals (built-in, any React app)
 
-agent-browser ships with first-class React introspection. Works on any
+chrome-use ships with first-class React introspection. Works on any
 React app — Next.js, Remix, Vite+React, CRA, TanStack Start, React Native
 Web, etc. The `react …` commands require the React DevTools hook to be
 installed at launch via `--enable react-devtools`:
 
 ```bash
-agent-browser open --enable react-devtools http://localhost:3000
-agent-browser react tree                         # component tree
-agent-browser react inspect <fiberId>            # props, hooks, state, source
-agent-browser react renders start                # begin re-render recording
-agent-browser react renders stop                 # print render profile
-agent-browser react suspense [--only-dynamic]    # Suspense boundaries + classifier
-agent-browser vitals [url]                       # LCP/CLS/TTFB/FCP/INP + hydration
-agent-browser pushstate <url>                    # SPA navigation (auto-detects Next router)
+chrome-use open --enable react-devtools http://localhost:3000
+chrome-use react tree                         # component tree
+chrome-use react inspect <fiberId>            # props, hooks, state, source
+chrome-use react renders start                # begin re-render recording
+chrome-use react renders stop                 # print render profile
+chrome-use react suspense [--only-dynamic]    # Suspense boundaries + classifier
+chrome-use vitals [url]                       # LCP/CLS/TTFB/FCP/INP + hydration
+chrome-use pushstate <url>                    # SPA navigation (auto-detects Next router)
 ```
 
 Without `--enable react-devtools`, the `react …` commands error. `vitals`
@@ -706,7 +706,7 @@ instructed. See `references/trust-boundaries.md` for the full rules.
 Everything covered here plus the complete command/flag/env listing:
 
 ```bash
-agent-browser skills get core --full
+chrome-use skills get core --full
 ```
 
 That pulls in:

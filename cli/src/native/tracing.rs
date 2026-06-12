@@ -358,16 +358,16 @@ fn get_clock_domain() -> Option<&'static str> {
 
 fn get_traces_dir() -> PathBuf {
     if let Some(home) = dirs::home_dir() {
-        home.join(".agent-browser").join("tmp").join("traces")
+        home.join(".chrome-use").join("tmp").join("traces")
     } else {
-        std::env::temp_dir().join("agent-browser").join("traces")
+        std::env::temp_dir().join("chrome-use").join("traces")
     }
 }
 
 fn get_profiles_dir() -> PathBuf {
     if let Some(home) = dirs::home_dir() {
-        home.join(".agent-browser").join("tmp").join("profiles")
+        home.join(".chrome-use").join("tmp").join("profiles")
     } else {
-        std::env::temp_dir().join("agent-browser").join("profiles")
+        std::env::temp_dir().join("chrome-use").join("profiles")
     }
 }

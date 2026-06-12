@@ -815,21 +815,21 @@ mod tests {
 
     #[test]
     fn test_same_origin_ws_request_proxied() {
-        let req = "GET /api/session/9222/stream HTTP/1.1\r\nHost: dashboard.agent-browser.localhost\r\nOrigin: https://dashboard.agent-browser.localhost\r\nUpgrade: websocket\r\n\r\n";
+        let req = "GET /api/session/9222/stream HTTP/1.1\r\nHost: dashboard.chrome-use.localhost\r\nOrigin: https://dashboard.chrome-use.localhost\r\nUpgrade: websocket\r\n\r\n";
         assert!(is_same_origin_ws_request(req));
     }
 
     #[test]
     fn test_normalize_origin_authority_https_without_port() {
         assert_eq!(
-            normalize_origin_authority("https://dashboard.agent-browser.localhost"),
-            Some("dashboard.agent-browser.localhost".to_string())
+            normalize_origin_authority("https://dashboard.chrome-use.localhost"),
+            Some("dashboard.chrome-use.localhost".to_string())
         );
     }
 
     #[test]
     fn test_same_origin_ws_request_default_https_port() {
-        let req = "GET /api/session/9222/stream HTTP/1.1\r\nHost: dashboard.agent-browser.localhost:443\r\nOrigin: https://dashboard.agent-browser.localhost\r\nUpgrade: websocket\r\n\r\n";
+        let req = "GET /api/session/9222/stream HTTP/1.1\r\nHost: dashboard.chrome-use.localhost:443\r\nOrigin: https://dashboard.chrome-use.localhost\r\nUpgrade: websocket\r\n\r\n";
         assert!(is_same_origin_ws_request(req));
     }
 
@@ -841,7 +841,7 @@ mod tests {
 
     #[test]
     fn test_same_origin_http_request_matching_referer() {
-        let req = "GET /api/session/9222/tabs HTTP/1.1\r\nHost: dashboard.agent-browser.localhost:443\r\nReferer: https://dashboard.agent-browser.localhost/sessions\r\n\r\n";
+        let req = "GET /api/session/9222/tabs HTTP/1.1\r\nHost: dashboard.chrome-use.localhost:443\r\nReferer: https://dashboard.chrome-use.localhost/sessions\r\n\r\n";
         assert!(is_same_origin_http_request(req));
     }
 

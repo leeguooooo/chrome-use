@@ -1,6 +1,6 @@
 //! Human-like input behaviour for stealth.
 //!
-//! When agent-browser drives a real Chrome over CDP, the input events it
+//! When chrome-use drives a real Chrome over CDP, the input events it
 //! dispatches are already `isTrusted` — but a click that teleports the cursor
 //! straight to an element's exact centre, with no approach path and zero delay
 //! between move/press/release, is a behavioural tell that advanced anti-bot

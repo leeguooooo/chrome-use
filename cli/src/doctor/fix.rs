@@ -240,8 +240,8 @@ mod tests {
             "fixed summary should mention the key generation"
         );
         assert!(
-            tmp.path().join(".agent-browser/.encryption-key").exists(),
-            "key file should exist at ~/.agent-browser/.encryption-key"
+            tmp.path().join(".chrome-use/.encryption-key").exists(),
+            "key file should exist at ~/.chrome-use/.encryption-key"
         );
     }
 }

@@ -23,17 +23,17 @@
     border-radius:999px;margin-left:14px;vertical-align:middle;font-weight:600}
 </style></head>
 <body><div class="wrap">
-  <h1>agent-browser&nbsp;connect <span class="pill">local · no token · no remote</span></h1>
-  <p class="tag">Let your own <span class="accent">agent-browser</span> CLI drive the Chrome you're already logged into.</p>
+  <h1>chrome-use&nbsp;connect <span class="pill">local · no token · no remote</span></h1>
+  <p class="tag">Let your own <span class="accent">chrome-use</span> CLI drive the Chrome you're already logged into.</p>
   <div class="term">
-    <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="bartitle">zsh — agent-browser</span></div>
-<pre><span class="p">$</span> <span class="c">agent-browser extension install</span>
+    <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="bartitle">zsh — chrome-use</span></div>
+<pre><span class="p">$</span> <span class="c">chrome-use extension install</span>
 <span class="ok">✓</span> <span class="o">native-messaging host installed (com.agent_browser.connect)</span>
 <span class="ok">✓</span> <span class="o">extension ready — add it from the Chrome Web Store</span>
 
-<span class="p">$</span> <span class="c">agent-browser open</span> <span class="o">"https://mail.google.com"</span>   <span class="dim"># your logged-in tab</span>
-<span class="p">$</span> <span class="c">agent-browser snapshot -i</span>                    <span class="dim"># read the page</span>
-<span class="p">$</span> <span class="c">agent-browser click</span> <span class="o">@e42</span>                      <span class="dim"># act on it</span>
+<span class="p">$</span> <span class="c">chrome-use open</span> <span class="o">"https://mail.google.com"</span>   <span class="dim"># your logged-in tab</span>
+<span class="p">$</span> <span class="c">chrome-use snapshot -i</span>                    <span class="dim"># read the page</span>
+<span class="p">$</span> <span class="c">chrome-use click</span> <span class="o">@e42</span>                      <span class="dim"># act on it</span>
 <span class="ok">✓</span> <span class="o">driving your real session — no re-login, no confirmation</span>
 </pre>
   </div>

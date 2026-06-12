@@ -51,7 +51,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 format!("Session {} (pid {}){}", session.name, session.pid, suffix),
             );
             if !version_match {
-                check = check.with_fix(format!("agent-browser --session {} close", session.name));
+                check = check.with_fix(format!("chrome-use --session {} close", session.name));
             }
             checks.push(check);
         }

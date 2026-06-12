@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Postinstall script for agent-browser
+ * Postinstall script for chrome-use
  * 
  * Downloads the platform-specific native binary if not present.
  * On global installs, patches npm's bin entry to use the native binary directly:
@@ -35,7 +35,7 @@ function isMusl() {
 const osKey = platform() === 'linux' && isMusl() ? 'linux-musl' : platform();
 const platformKey = `${osKey}-${arch()}`;
 const ext = platform() === 'win32' ? '.exe' : '';
-const binaryName = `agent-browser-${platformKey}${ext}`;
+const binaryName = `chrome-use-${platformKey}${ext}`;
 const binaryPath = join(binDir, binaryName);
 
 // Package info
@@ -82,7 +82,7 @@ async function downloadFile(url, dest) {
 
 /**
  * Detect which package manager ran this postinstall and write a marker file
- * next to the binary so `agent-browser upgrade` can use the correct one
+ * next to the binary so `chrome-use upgrade` can use the correct one
  * without fragile path heuristics or slow subprocess probing.
  *
  * npm_config_user_agent is set by npm/pnpm/yarn/bun during lifecycle scripts,
@@ -193,7 +193,7 @@ function showInstallReminder() {
   if (systemChrome) {
     console.log('');
     console.log(`  ✓ System Chrome found: ${systemChrome}`);
-    console.log('    agent-browser will use it automatically.');
+    console.log('    chrome-use will use it automatically.');
     console.log('');
     return;
   }
@@ -202,12 +202,12 @@ function showInstallReminder() {
   console.log('  ⚠ No Chrome installation detected.');
   console.log('  If you plan to use a local browser, run:');
   console.log('');
-  console.log('    agent-browser install');
+  console.log('    chrome-use install');
   if (platform() === 'linux') {
     console.log('');
     console.log('  On Linux, include system dependencies with:');
     console.log('');
-    console.log('    agent-browser install --with-deps');
+    console.log('    chrome-use install --with-deps');
   }
   console.log('');
   console.log('  You can skip this if you use --cdp, --provider, --engine, or --executable-path.');
@@ -240,7 +240,7 @@ async function fixUnixSymlink() {
     return; // npm not available
   }
 
-  const symlinkPath = join(npmBinDir, 'agent-browser');
+  const symlinkPath = join(npmBinDir, 'chrome-use');
 
   // Check if symlink exists (indicates global install)
   try {
@@ -277,19 +277,19 @@ async function fixWindowsShims() {
     return;
   }
 
-  const cmdShim = join(npmBinDir, 'agent-browser.cmd');
-  const ps1Shim = join(npmBinDir, 'agent-browser.ps1');
+  const cmdShim = join(npmBinDir, 'chrome-use.cmd');
+  const ps1Shim = join(npmBinDir, 'chrome-use.ps1');
 
   // Shims may not exist yet during postinstall (npm creates them after
   // lifecycle scripts). If missing, fall back: the JS wrapper at
-  // bin/agent-browser.js handles Windows correctly via child_process.spawn.
+  // bin/chrome-use.js handles Windows correctly via child_process.spawn.
   if (!existsSync(cmdShim)) {
     return;
   }
 
   // Point the shims at the binary's ABSOLUTE path. The previous code rebuilt a
-  // relative `node_modules\agent-browser\bin\...` path, but this fork's package
-  // is `agent-browser-stealth`, so that path never existed → the rewrite was
+  // relative `node_modules\chrome-use\bin\...` path, but this fork's package
+  // is `chrome-use`, so that path never existed → the rewrite was
   // skipped and the shim stayed the (slower) JS wrapper. `binaryPath` is the
   // real absolute path to the native binary inside this package.
   if (!existsSync(binaryPath)) {

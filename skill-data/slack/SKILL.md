@@ -1,7 +1,7 @@
 ---
 name: slack
 description: Interact with Slack workspaces using browser automation. Use when the user needs to check unread channels, navigate Slack, send messages, extract data, find information, search conversations, or automate any Slack task. Triggers include "check my Slack", "what channels have unreads", "send a message to", "search Slack for", "extract from Slack", "find who said", or any task requiring programmatic Slack interaction.
-allowed-tools: Bash(agent-browser:*), Bash(agent-browser-stealth:*), Bash(abs:*), Bash(npx agent-browser:*), Bash(npx agent-browser-stealth:*)
+allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # Slack Automation
@@ -14,16 +14,16 @@ Connect to an existing Slack browser session or open Slack:
 
 ```bash
 # Connect to existing session on port 9222 (typical for already-open Slack)
-agent-browser connect 9222
+chrome-use connect 9222
 
 # Or open Slack if not already running
-agent-browser open https://app.slack.com
+chrome-use open https://app.slack.com
 ```
 
 Then take a snapshot to see what's available:
 
 ```bash
-agent-browser snapshot -i
+chrome-use snapshot -i
 ```
 
 ## Core Workflow
@@ -36,11 +36,11 @@ agent-browser snapshot -i
 
 ```bash
 # Example: Check unread channels
-agent-browser connect 9222
-agent-browser snapshot -i
+chrome-use connect 9222
+chrome-use snapshot -i
 # Look for "More unreads" button
-agent-browser click @e21  # Ref for "More unreads" button
-agent-browser screenshot slack-unreads.png
+chrome-use click @e21  # Ref for "More unreads" button
+chrome-use screenshot slack-unreads.png
 ```
 
 ## Common Tasks
@@ -49,10 +49,10 @@ agent-browser screenshot slack-unreads.png
 
 ```bash
 # Connect to Slack
-agent-browser connect 9222
+chrome-use connect 9222
 
 # Take snapshot to locate unreads button
-agent-browser snapshot -i
+chrome-use snapshot -i
 
 # Look for:
 # - "More unreads" button (usually near top of sidebar)
@@ -60,50 +60,50 @@ agent-browser snapshot -i
 # - Channel names with badges/bold text indicating unreads
 
 # Navigate to Activity tab to see all unreads in one view
-agent-browser click @e14  # Activity tab (ref may vary)
-agent-browser wait 1000
-agent-browser screenshot activity-unreads.png
+chrome-use click @e14  # Activity tab (ref may vary)
+chrome-use wait 1000
+chrome-use screenshot activity-unreads.png
 
 # Or check DMs tab
-agent-browser click @e13  # DMs tab
-agent-browser screenshot dms.png
+chrome-use click @e13  # DMs tab
+chrome-use screenshot dms.png
 
 # Or expand "More unreads" in sidebar
-agent-browser click @e21  # More unreads button
-agent-browser wait 500
-agent-browser screenshot expanded-unreads.png
+chrome-use click @e21  # More unreads button
+chrome-use wait 500
+chrome-use screenshot expanded-unreads.png
 ```
 
 ### Navigating to a Channel
 
 ```bash
 # Search for channel in sidebar or by name
-agent-browser snapshot -i
+chrome-use snapshot -i
 
 # Look for channel name in the list (e.g., "engineering", "product-design")
 # Click on the channel treeitem ref
-agent-browser click @e94  # Example: engineering channel ref
-agent-browser wait --load networkidle
-agent-browser screenshot channel.png
+chrome-use click @e94  # Example: engineering channel ref
+chrome-use wait --load networkidle
+chrome-use screenshot channel.png
 ```
 
 ### Finding Messages/Threads
 
 ```bash
 # Use Slack search
-agent-browser snapshot -i
-agent-browser click @e5  # Search button (typical ref)
-agent-browser fill @e_search "keyword"
-agent-browser press Enter
-agent-browser wait --load networkidle
-agent-browser screenshot search-results.png
+chrome-use snapshot -i
+chrome-use click @e5  # Search button (typical ref)
+chrome-use fill @e_search "keyword"
+chrome-use press Enter
+chrome-use wait --load networkidle
+chrome-use screenshot search-results.png
 ```
 
 ### Extracting Channel Information
 
 ```bash
 # Get list of all visible channels
-agent-browser snapshot --json > slack-snapshot.json
+chrome-use snapshot --json > slack-snapshot.json
 
 # Parse for channel names and metadata
 # Look for treeitem elements with level=2 (sub-channels under sections)
@@ -113,16 +113,16 @@ agent-browser snapshot --json > slack-snapshot.json
 
 ```bash
 # Open a channel
-agent-browser click @e_channel_ref
-agent-browser wait 1000
+chrome-use click @e_channel_ref
+chrome-use wait 1000
 
 # Get channel info (members, description, etc.)
-agent-browser snapshot -i
-agent-browser screenshot channel-details.png
+chrome-use snapshot -i
+chrome-use screenshot channel-details.png
 
 # Scroll through messages
-agent-browser scroll down 500
-agent-browser screenshot channel-messages.png
+chrome-use scroll down 500
+chrome-use screenshot channel-messages.png
 ```
 
 ### Taking Notes/Capturing State
@@ -131,16 +131,16 @@ When you need to document findings from Slack:
 
 ```bash
 # Take annotated screenshot (shows element numbers)
-agent-browser screenshot --annotate slack-state.png
+chrome-use screenshot --annotate slack-state.png
 
 # Take full-page screenshot
-agent-browser screenshot --full slack-full.png
+chrome-use screenshot --full slack-full.png
 
 # Get current URL for reference
-agent-browser get url
+chrome-use get url
 
 # Get page title
-agent-browser get title
+chrome-use get title
 ```
 
 ## Sidebar Structure
@@ -185,14 +185,14 @@ Click tab refs to switch views and get different information.
 
 ```bash
 # Get a message or element's text
-agent-browser get text @e_message_ref
+chrome-use get text @e_message_ref
 ```
 
 ### Parse Accessibility Tree
 
 ```bash
 # Full snapshot as JSON for programmatic parsing
-agent-browser snapshot --json > output.json
+chrome-use snapshot --json > output.json
 
 # Look for:
 # - Channel names (name field in treeitem)
@@ -205,19 +205,19 @@ agent-browser snapshot --json > output.json
 
 ```bash
 # After expanding unreads section:
-agent-browser snapshot -i | grep -c "treeitem"
+chrome-use snapshot -i | grep -c "treeitem"
 # Each treeitem with a channel name in the unreads section is one unread
 ```
 
 ## Best Practices
 
-- **Connect to existing sessions**: Use `agent-browser connect 9222` if Slack is already open. This is faster than opening a new browser.
+- **Connect to existing sessions**: Use `chrome-use connect 9222` if Slack is already open. This is faster than opening a new browser.
 - **Take snapshots before clicking**: Always `snapshot -i` to identify refs before clicking buttons.
 - **Re-snapshot after navigation**: After navigating to a new channel or section, take a fresh snapshot to find new refs.
 - **Use JSON snapshots for parsing**: When you need to extract structured data, use `snapshot --json` for machine-readable output.
 - **Pace interactions**: Add `sleep 1` between rapid interactions to let the UI update.
 - **Check accessibility tree**: The accessibility tree shows what screen readers (and your automation) can see. If an element isn't in the snapshot, it may be hidden or require scrolling.
-- **Scroll in sidebar**: Use `agent-browser scroll down 300 --selector ".p-sidebar"` to scroll within the Slack sidebar if channel list is long.
+- **Scroll in sidebar**: Use `chrome-use scroll down 300 --selector ".p-sidebar"` to scroll within the Slack sidebar if channel list is long.
 
 ## Limitations
 
@@ -234,16 +234,16 @@ Console/error capture is off by default in this stealth fork — launch the sess
 `AGENT_BROWSER_CAPTURE_CONSOLE=1` first, or these return empty.
 
 ```bash
-agent-browser console
-agent-browser errors
+chrome-use console
+chrome-use errors
 ```
 
 ### Get current page state
 
 ```bash
-agent-browser get url
-agent-browser get title
-agent-browser screenshot page-state.png
+chrome-use get url
+chrome-use get title
+chrome-use screenshot page-state.png
 ```
 
 ## Example: Full Unread Check
@@ -252,29 +252,29 @@ agent-browser screenshot page-state.png
 #!/bin/bash
 
 # Connect to Slack
-agent-browser connect 9222
+chrome-use connect 9222
 
 # Take initial snapshot
 echo "=== Checking Slack unreads ==="
-agent-browser snapshot -i > snapshot.txt
+chrome-use snapshot -i > snapshot.txt
 
 # Check Activity tab for unreads
-agent-browser click @e14  # Activity tab
-agent-browser wait 1000
-agent-browser screenshot activity.png
-ACTIVITY_RESULT=$(agent-browser get text @e_main_area)
+chrome-use click @e14  # Activity tab
+chrome-use wait 1000
+chrome-use screenshot activity.png
+ACTIVITY_RESULT=$(chrome-use get text @e_main_area)
 echo "Activity: $ACTIVITY_RESULT"
 
 # Check DMs
-agent-browser click @e13  # DMs tab
-agent-browser wait 1000
-agent-browser screenshot dms.png
+chrome-use click @e13  # DMs tab
+chrome-use wait 1000
+chrome-use screenshot dms.png
 
 # Check unread channels in sidebar
-agent-browser click @e21  # More unreads button
-agent-browser wait 500
-agent-browser snapshot -i > unreads-expanded.txt
-agent-browser screenshot unreads.png
+chrome-use click @e21  # More unreads button
+chrome-use wait 500
+chrome-use snapshot -i > unreads-expanded.txt
+chrome-use screenshot unreads.png
 
 # Summary
 echo "=== Summary ==="

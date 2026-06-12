@@ -47,7 +47,7 @@ fn find_package_root() -> Option<PathBuf> {
     if let Ok(exe) = env::current_exe() {
         let exe = exe.canonicalize().unwrap_or(exe);
         if let Some(parent) = exe.parent() {
-            // npm install layout: bin/agent-browser-* -> ../
+            // npm install layout: bin/chrome-use-* -> ../
             let candidate = parent.join("..");
             if candidate.join("skills").is_dir() {
                 return Some(candidate.canonicalize().unwrap_or(candidate));
@@ -77,7 +77,7 @@ fn find_package_root() -> Option<PathBuf> {
 /// upgraded binary re-extracts fresh content.
 fn embedded_skills_root() -> Option<PathBuf> {
     let base = dirs::cache_dir()?
-        .join("agent-browser")
+        .join("chrome-use")
         .join(concat!("skills-", env!("CARGO_PKG_VERSION")));
     let marker = base.join(".extracted");
     if !marker.exists() {
@@ -344,13 +344,13 @@ fn run_get(skills_dirs: &[PathBuf], names: &[String], get_all: bool, full: bool,
                 "{}",
                 serde_json::to_string(&json!({
                     "success": false,
-                    "error": "No skill name provided. Usage: agent-browser skills get <name>",
+                    "error": "No skill name provided. Usage: chrome-use skills get <name>",
                 }))
                 .unwrap_or_default()
             );
         } else {
             eprintln!(
-                "{} No skill name provided. Usage: agent-browser skills get <name>",
+                "{} No skill name provided. Usage: chrome-use skills get <name>",
                 color::error_indicator()
             );
         }

@@ -10,7 +10,7 @@ REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "https://github.com/v
 echo "Syncing branch '$BRANCH' on Windows instance..."
 
 "$RUN" "
-cd C:\agent-browser
+cd C:\chrome-use
 git remote set-url origin '$REMOTE_URL'
 git fetch origin
 git checkout -B '$BRANCH' 'origin/$BRANCH'
@@ -21,7 +21,7 @@ echo ""
 echo "Branch synced. Rebuilding..."
 
 "$RUN" "
-cd C:\agent-browser
+cd C:\chrome-use
 cargo build --release --manifest-path cli\Cargo.toml
 Write-Host 'Build complete.'
 "

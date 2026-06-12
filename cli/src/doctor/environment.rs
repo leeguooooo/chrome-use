@@ -39,7 +39,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     let socket_dir = get_socket_dir();
 
     // Under the default setup, state and socket dirs are the same
-    // (~/.agent-browser). Collapse to a single line when they match;
+    // (~/.chrome-use). Collapse to a single line when they match;
     // split when XDG_RUNTIME_DIR or AGENT_BROWSER_SOCKET_DIR diverts
     // sockets elsewhere.
     if state_dir == socket_dir {

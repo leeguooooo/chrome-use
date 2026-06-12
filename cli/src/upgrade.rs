@@ -5,22 +5,21 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Canonical installer for the stealth fork. `upgrade` just re-runs it, so the
 /// upgrade path and the install path are identical (GitHub Release, no npm).
-const INSTALL_URL: &str =
-    "https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/install.sh";
+const INSTALL_URL: &str = "https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh";
 
 /// Upgrade to the latest GitHub Release.
 ///
 /// The stealth fork ships as a prebuilt binary attached to a GitHub Release —
 /// NOT via the npm registry. Earlier this command (inherited from upstream)
-/// ran `npm/pnpm install -g agent-browser@latest`, which installed the
-/// UNRELATED upstream `agent-browser` package and clobbered the user's setup.
+/// ran `npm/pnpm install -g chrome-use@latest`, which installed the
+/// UNRELATED upstream `chrome-use` package and clobbered the user's setup.
 /// Now `upgrade` simply re-runs install.sh into the same directory as the
 /// current binary, so it always tracks the freshest GitHub Release.
 pub fn run_upgrade() {
     println!(
         "{}",
         color::cyan(&format!(
-            "Upgrading agent-browser-stealth (currently v{}) from the latest GitHub Release...",
+            "Upgrading chrome-use (currently v{}) from the latest GitHub Release...",
             CURRENT_VERSION
         ))
     );
@@ -31,9 +30,9 @@ pub fn run_upgrade() {
             "{} Automatic upgrade isn't supported on Windows.",
             color::warning_indicator()
         );
-        eprintln!("  Download the latest agent-browser-win32-x64.tar.gz from:");
-        eprintln!("    https://github.com/leeguooooo/agent-browser-stealth/releases/latest");
-        eprintln!("  and replace agent-browser.exe on your PATH.");
+        eprintln!("  Download the latest chrome-use-win32-x64.tar.gz from:");
+        eprintln!("    https://github.com/leeguooooo/chrome-use/releases/latest");
+        eprintln!("  and replace chrome-use.exe on your PATH.");
         exit(1);
     }
 
@@ -58,7 +57,7 @@ pub fn run_upgrade() {
         let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
         if ok {
             println!(
-                "{} Upgrade complete — run `agent-browser-stealth --version` to confirm.",
+                "{} Upgrade complete — run `chrome-use --version` to confirm.",
                 color::success_indicator()
             );
         } else {

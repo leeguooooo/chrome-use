@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Chrome Web Store 提交指南 — agent-browser-stealth</title>
+<title>Chrome Web Store 提交指南 — chrome-use</title>
 <style>
   :root{--fg:#1a1a1a;--muted:#5c5c5c;--accent:#2563eb;--warn:#b45309;--ok:#15803d;--border:#e2e2e2;--bg:#fff;--code:#f5f5f7}
   *{box-sizing:border-box}
@@ -28,7 +28,7 @@
 <body>
 <header>
   <h1>Chrome Web Store 提交指南</h1>
-  <div class="sub">agent-browser-stealth · 上传包 <code>extensions/ab-connect.zip</code> · id 锁定为 <code>ciiljdlhdpfckdcfkphgmfalanpdejep</code></div>
+  <div class="sub">chrome-use · 上传包 <code>extensions/ab-connect.zip</code> · id 锁定为 <code>ciiljdlhdpfckdcfkphgmfalanpdejep</code></div>
 </header>
 
 <p>为什么必须走商店:实测 Chrome 149 在<strong>非企业托管</strong>的 Mac 上,会把"非 Web Store"的 force-install 扩展直接标成 <code>[BLOCKED]</code>。商店扩展不受此限。这也是 codex / claude 扩展都发商店的原因。</p>
@@ -53,18 +53,18 @@
 <h2>三、商店信息(直接复制以下文案)</h2>
 
 <h3>名称 / Name</h3>
-<pre>agent-browser-stealth</pre>
+<pre>chrome-use</pre>
 
 <h3>简介 / Summary（≤132 字符）</h3>
-<pre>Let your own agent-browser CLI drive your logged-in Chrome — a local automation bridge. No remote server, no token.</pre>
+<pre>Let your own chrome-use CLI drive your logged-in Chrome — a local automation bridge. No remote server, no token.</pre>
 
 <h3>详细描述 / Description</h3>
-<pre>agent-browser-stealth is the in-browser half of the open-source agent-browser CLI. It lets the
+<pre>chrome-use is the in-browser half of the open-source chrome-use CLI. It lets the
 command-line tool you installed on this same computer automate the Chrome you're already logged
 into — opening pages, clicking, filling forms, reading the DOM — driven entirely by you.
 
 How it works
-- The extension talks ONLY to the local agent-browser CLI over Chrome native messaging (a local
+- The extension talks ONLY to the local chrome-use CLI over Chrome native messaging (a local
   inter-process channel — no network socket, no token, no remote server).
 - When you run an automation command, the extension relays Chrome DevTools Protocol operations to
   the tab you target, then returns the result to the CLI.
@@ -72,9 +72,9 @@ How it works
 Privacy
 - No analytics, no trackers, no data collection.
 - Nothing is sent to any remote server. The only message peer is the local CLI.
-- Source is open (Apache-2.0): https://github.com/leeguooooo/agent-browser-stealth
+- Source is open (Apache-2.0): https://github.com/leeguooooo/chrome-use
 
-You need the agent-browser CLI installed and paired (run: agent-browser extension install) for this
+You need the chrome-use CLI installed and paired (run: chrome-use extension install) for this
 extension to do anything.</pre>
 
 <h3>类别 / Category</h3>
@@ -86,16 +86,16 @@ extension to do anything.</pre>
 <h2>四、隐私实践（Privacy practices 标签页 —— 必填）</h2>
 
 <h3>Single purpose（单一用途）</h3>
-<pre>Bridge the user's locally-installed agent-browser CLI to their own logged-in Chrome so the CLI can
+<pre>Bridge the user's locally-installed chrome-use CLI to their own logged-in Chrome so the CLI can
 automate pages the user is working with, entirely on the user's machine and at the user's command.</pre>
 
 <h3>各权限理由 / Permission justifications</h3>
 <table>
   <tr><th>权限</th><th>理由（复制到对应输入框）</th></tr>
-  <tr><td class="field">debugger</td><td>Attaches the Chrome DevTools Protocol to the user's own active tab so the paired local agent-browser CLI can automate it (navigate, click, read DOM) only while the user is running a command. Commands arrive solely from the local CLI via native messaging; there is no remote endpoint.</td></tr>
+  <tr><td class="field">debugger</td><td>Attaches the Chrome DevTools Protocol to the user's own active tab so the paired local chrome-use CLI can automate it (navigate, click, read DOM) only while the user is running a command. Commands arrive solely from the local CLI via native messaging; there is no remote endpoint.</td></tr>
   <tr><td class="field">tabs</td><td>Enumerate and target the correct open tab to attach automation to.</td></tr>
-  <tr><td class="field">tabGroups</td><td>Organizes the tabs the local agent-browser CLI drives into a labeled, colored Chrome tab group per automation session, so the user can see at a glance which tabs are under automation and they stay visually separated from the user's own tabs.</td></tr>
-  <tr><td class="field">nativeMessaging</td><td>The sole communication channel: a local native-messaging connection to the agent-browser CLI installed on the same machine. No network is used.</td></tr>
+  <tr><td class="field">tabGroups</td><td>Organizes the tabs the local chrome-use CLI drives into a labeled, colored Chrome tab group per automation session, so the user can see at a glance which tabs are under automation and they stay visually separated from the user's own tabs.</td></tr>
+  <tr><td class="field">nativeMessaging</td><td>The sole communication channel: a local native-messaging connection to the chrome-use CLI installed on the same machine. No network is used.</td></tr>
   <tr><td class="field">storage</td><td>Persist small local pairing/configuration state for the extension.</td></tr>
   <tr><td class="field">alarms</td><td>Keep the MV3 service worker alive during longer automation sessions.</td></tr>
   <tr><td class="field">webNavigation</td><td>Detect page loads/navigations so automation can wait for the right moment before acting.</td></tr>
@@ -111,8 +111,8 @@ automate pages the user is working with, entirely on the user's machine and at t
 
 <h2>五、隐私政策 URL</h2>
 <p>商店要求一个公开可访问的隐私政策地址。GitHub Pages <strong>已开启</strong>,直接填这个(渲染好看):</p>
-<pre>https://leeguooooo.github.io/agent-browser-stealth/extensions/store/privacy.html</pre>
-<p>(部署需 1–2 分钟生效。raw 备用直链:<code>https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/extensions/store/privacy.html</code>。)</p>
+<pre>https://leeguooooo.github.io/chrome-use/extensions/store/privacy.html</pre>
+<p>(部署需 1–2 分钟生效。raw 备用直链:<code>https://raw.githubusercontent.com/leeguooooo/chrome-use/main/extensions/store/privacy.html</code>。)</p>
 
 <h2>六、截图 / Screenshots（至少 1 张，1280×800 或 640×400）</h2>
 <p>可以截一张 CLI + Chrome 并排的演示图。<em>需要的话我用 cua-driver 截一张合规尺寸的图给你。</em></p>
@@ -127,6 +127,6 @@ automate pages the user is working with, entirely on the user's machine and at t
   <strong>今天的临时可用方案:</strong> 在你这台 Mac 上 <code>chrome://extensions</code> → 打开开发者模式 → Load unpacked → 选 <code>extensions/ab-connect</code>,30 秒手动装一次,native messaging + <code>extension connect</code> 立即可用。等商店过审再切静默路径。
 </div>
 
-<footer>agent-browser-stealth · 提交包与文案随扩展版本更新;改扩展后重跑 <code>scripts/pack-extension.sh</code> 并重打 <code>ab-connect.zip</code>。</footer>
+<footer>chrome-use · 提交包与文案随扩展版本更新;改扩展后重跑 <code>scripts/pack-extension.sh</code> 并重打 <code>ab-connect.zip</code>。</footer>
 </body>
 </html>

@@ -1,7 +1,7 @@
 ---
 name: dogfood
 description: Systematically explore and test a web application to find bugs, UX issues, and other problems. Use when asked to "dogfood", "QA", "exploratory test", "find issues", "bug hunt", "test this app/site/platform", or review the quality of a web application. Produces a structured report with full reproduction evidence -- step-by-step screenshots, repro videos, and detailed repro steps for every issue -- so findings can be handed directly to the responsible teams.
-allowed-tools: Bash(agent-browser:*), Bash(agent-browser-stealth:*), Bash(abs:*), Bash(npx agent-browser:*), Bash(npx agent-browser-stealth:*)
+allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # Dogfood
@@ -22,7 +22,7 @@ Only the **Target URL** is required. Everything else has sensible defaults -- us
 
 If the user says something like "dogfood vercel.com", start immediately with defaults. Do not ask clarifying questions unless authentication is mentioned but credentials are missing.
 
-Always use `agent-browser` directly -- never `npx agent-browser`. The direct binary uses the fast Rust client. `npx` routes through Node.js and is significantly slower.
+Always use `chrome-use` directly -- never `npx chrome-use`. The direct binary uses the fast Rust client. `npx` routes through Node.js and is significantly slower.
 
 ## Workflow
 
@@ -50,8 +50,8 @@ cp {SKILL_DIR}/templates/dogfood-report-template.md {OUTPUT_DIR}/report.md
 Start a named session:
 
 ```bash
-agent-browser --session {SESSION} open {TARGET_URL}
-agent-browser --session {SESSION} wait --load networkidle
+chrome-use --session {SESSION} open {TARGET_URL}
+chrome-use --session {SESSION} wait --load networkidle
 ```
 
 ### 2. Authenticate
@@ -59,12 +59,12 @@ agent-browser --session {SESSION} wait --load networkidle
 If the app requires login:
 
 ```bash
-agent-browser --session {SESSION} snapshot -i
+chrome-use --session {SESSION} snapshot -i
 # Identify login form refs, fill credentials
-agent-browser --session {SESSION} fill @e1 "{EMAIL}"
-agent-browser --session {SESSION} fill @e2 "{PASSWORD}"
-agent-browser --session {SESSION} click @e3
-agent-browser --session {SESSION} wait --load networkidle
+chrome-use --session {SESSION} fill @e1 "{EMAIL}"
+chrome-use --session {SESSION} fill @e2 "{PASSWORD}"
+chrome-use --session {SESSION} click @e3
+chrome-use --session {SESSION} wait --load networkidle
 ```
 
 For OTP/email codes: ask the user, wait for their response, then enter the code.
@@ -72,7 +72,7 @@ For OTP/email codes: ask the user, wait for their response, then enter the code.
 After successful login, save state for potential reuse:
 
 ```bash
-agent-browser --session {SESSION} state save {OUTPUT_DIR}/auth-state.json
+chrome-use --session {SESSION} state save {OUTPUT_DIR}/auth-state.json
 ```
 
 ### 3. Orient
@@ -80,8 +80,8 @@ agent-browser --session {SESSION} state save {OUTPUT_DIR}/auth-state.json
 Take an initial annotated screenshot and snapshot to understand the app structure:
 
 ```bash
-agent-browser --session {SESSION} screenshot --annotate {OUTPUT_DIR}/screenshots/initial.png
-agent-browser --session {SESSION} snapshot -i
+chrome-use --session {SESSION} screenshot --annotate {OUTPUT_DIR}/screenshots/initial.png
+chrome-use --session {SESSION} snapshot -i
 ```
 
 Identify the main navigation elements and map out the sections to visit.
@@ -96,15 +96,15 @@ Read [references/issue-taxonomy.md](references/issue-taxonomy.md) for the full l
 - Within each section, test interactive elements: click buttons, fill forms, open dropdowns/modals.
 - Check edge cases: empty states, error handling, boundary inputs.
 - Try realistic end-to-end workflows (create, edit, delete flows).
-- Check the browser console for errors periodically. **Console/error capture is off by default in this stealth fork** — start the dogfood session with `AGENT_BROWSER_CAPTURE_CONSOLE=1` (e.g. `AGENT_BROWSER_CAPTURE_CONSOLE=1 agent-browser --session {SESSION} open <url>`) or `console`/`errors` will return empty.
+- Check the browser console for errors periodically. **Console/error capture is off by default in this stealth fork** — start the dogfood session with `AGENT_BROWSER_CAPTURE_CONSOLE=1` (e.g. `AGENT_BROWSER_CAPTURE_CONSOLE=1 chrome-use --session {SESSION} open <url>`) or `console`/`errors` will return empty.
 
 **At each page:**
 
 ```bash
-agent-browser --session {SESSION} snapshot -i
-agent-browser --session {SESSION} screenshot --annotate {OUTPUT_DIR}/screenshots/{page-name}.png
-agent-browser --session {SESSION} errors
-agent-browser --session {SESSION} console
+chrome-use --session {SESSION} snapshot -i
+chrome-use --session {SESSION} screenshot --annotate {OUTPUT_DIR}/screenshots/{page-name}.png
+chrome-use --session {SESSION} errors
+chrome-use --session {SESSION} console
 ```
 
 Use your judgment on how deep to go. Spend more time on core features and less on peripheral pages. If you find a cluster of issues in one area, investigate deeper.
@@ -124,17 +124,17 @@ These require user interaction to reproduce -- use full repro with video and ste
 1. **Start a repro video** _before_ reproducing:
 
 ```bash
-agent-browser --session {SESSION} record start {OUTPUT_DIR}/videos/issue-{NNN}-repro.webm
+chrome-use --session {SESSION} record start {OUTPUT_DIR}/videos/issue-{NNN}-repro.webm
 ```
 
 2. **Walk through the steps at human pace.** Pause 1-2 seconds between actions so the video is watchable. Take a screenshot at each step:
 
 ```bash
-agent-browser --session {SESSION} screenshot {OUTPUT_DIR}/screenshots/issue-{NNN}-step-1.png
+chrome-use --session {SESSION} screenshot {OUTPUT_DIR}/screenshots/issue-{NNN}-step-1.png
 sleep 1
 # Perform action (click, fill, etc.)
 sleep 1
-agent-browser --session {SESSION} screenshot {OUTPUT_DIR}/screenshots/issue-{NNN}-step-2.png
+chrome-use --session {SESSION} screenshot {OUTPUT_DIR}/screenshots/issue-{NNN}-step-2.png
 sleep 1
 # ...continue until the issue manifests
 ```
@@ -143,13 +143,13 @@ sleep 1
 
 ```bash
 sleep 2
-agent-browser --session {SESSION} screenshot --annotate {OUTPUT_DIR}/screenshots/issue-{NNN}-result.png
+chrome-use --session {SESSION} screenshot --annotate {OUTPUT_DIR}/screenshots/issue-{NNN}-result.png
 ```
 
 4. **Stop the video:**
 
 ```bash
-agent-browser --session {SESSION} record stop
+chrome-use --session {SESSION} record stop
 ```
 
 5. Write numbered repro steps in the report, each referencing its screenshot.
@@ -159,7 +159,7 @@ agent-browser --session {SESSION} record stop
 These are visible without interaction -- a single annotated screenshot is sufficient. No video, no multi-step repro:
 
 ```bash
-agent-browser --session {SESSION} screenshot --annotate {OUTPUT_DIR}/screenshots/issue-{NNN}.png
+chrome-use --session {SESSION} screenshot --annotate {OUTPUT_DIR}/screenshots/issue-{NNN}.png
 ```
 
 Write a brief description and reference the screenshot in the report. Set **Repro Video** to `N/A`.
@@ -182,7 +182,7 @@ After exploring:
 2. Close the session:
 
 ```bash
-agent-browser --session {SESSION} close
+chrome-use --session {SESSION} close
 ```
 
 3. Tell the user the report is ready and summarize findings: total issues, breakdown by severity, and the most critical items.
@@ -205,7 +205,7 @@ agent-browser --session {SESSION} close
 - **Test like a user, not a robot.** Try common workflows end-to-end. Click things a real user would click. Enter realistic data.
 - **Type like a human.** When filling form fields during video recording, use `type` instead of `fill` -- it types character-by-character. Use `fill` only outside of video recording when speed matters.
 - **Pace repro videos for humans.** Add `sleep 1` between actions and `sleep 2` before the final result screenshot. Videos should be watchable at 1x speed -- a human reviewing the report needs to see what happened, not a blur of instant state changes.
-- **Be efficient with commands.** Batch multiple `agent-browser` commands in a single shell call when they are independent (e.g., `agent-browser ... screenshot ... && agent-browser ... console`). Use `agent-browser --session {SESSION} scroll down 300` for scrolling -- do not use `key` or `evaluate` to scroll.
+- **Be efficient with commands.** Batch multiple `chrome-use` commands in a single shell call when they are independent (e.g., `chrome-use ... screenshot ... && chrome-use ... console`). Use `chrome-use --session {SESSION} scroll down 300` for scrolling -- do not use `key` or `evaluate` to scroll.
 
 ## References
 

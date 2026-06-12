@@ -1,12 +1,12 @@
 ---
 name: agentcore
-description: Run agent-browser on AWS Bedrock AgentCore cloud browsers. Use when the user wants to use AgentCore, run browser automation on AWS, use a cloud browser with AWS credentials, or needs a managed browser session backed by AWS infrastructure. Triggers include "use agentcore", "run on AWS", "cloud browser with AWS", "bedrock browser", "agentcore session", or any task requiring AWS-hosted browser automation.
-allowed-tools: Bash(agent-browser:*), Bash(agent-browser-stealth:*), Bash(abs:*), Bash(npx agent-browser:*), Bash(npx agent-browser-stealth:*)
+description: Run chrome-use on AWS Bedrock AgentCore cloud browsers. Use when the user wants to use AgentCore, run browser automation on AWS, use a cloud browser with AWS credentials, or needs a managed browser session backed by AWS infrastructure. Triggers include "use agentcore", "run on AWS", "cloud browser with AWS", "bedrock browser", "agentcore session", or any task requiring AWS-hosted browser automation.
+allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # AWS Bedrock AgentCore
 
-Run agent-browser on cloud browser sessions hosted by AWS Bedrock AgentCore. All standard agent-browser commands work identically; the only difference is where the browser runs.
+Run chrome-use on cloud browser sessions hosted by AWS Bedrock AgentCore. All standard chrome-use commands work identically; the only difference is where the browser runs.
 
 ## Setup
 
@@ -21,13 +21,13 @@ No additional setup is needed if the user already has working AWS credentials.
 
 ```bash
 # Open a page on an AgentCore cloud browser
-agent-browser -p agentcore open https://example.com
+chrome-use -p agentcore open https://example.com
 
 # Everything else is the same as local Chrome
-agent-browser snapshot -i
-agent-browser click @e1
-agent-browser screenshot page.png
-agent-browser close
+chrome-use snapshot -i
+chrome-use click @e1
+chrome-use screenshot page.png
+chrome-use close
 ```
 
 ## Environment Variables
@@ -46,15 +46,15 @@ Use `AGENTCORE_PROFILE_ID` to persist browser state across sessions. This is use
 
 ```bash
 # First run: log in
-AGENTCORE_PROFILE_ID=my-app agent-browser -p agentcore open https://app.example.com/login
-agent-browser snapshot -i
-agent-browser fill @e1 "user@example.com"
-agent-browser fill @e2 "password"
-agent-browser click @e3
-agent-browser close
+AGENTCORE_PROFILE_ID=my-app chrome-use -p agentcore open https://app.example.com/login
+chrome-use snapshot -i
+chrome-use fill @e1 "user@example.com"
+chrome-use fill @e2 "password"
+chrome-use click @e3
+chrome-use close
 
 # Future runs: already authenticated
-AGENTCORE_PROFILE_ID=my-app agent-browser -p agentcore open https://app.example.com/dashboard
+AGENTCORE_PROFILE_ID=my-app chrome-use -p agentcore open https://app.example.com/dashboard
 ```
 
 ## Live View
@@ -70,10 +70,10 @@ Live View: https://us-east-1.console.aws.amazon.com/bedrock-agentcore/browser/aw
 
 ```bash
 # Default: us-east-1
-agent-browser -p agentcore open https://example.com
+chrome-use -p agentcore open https://example.com
 
 # Explicit region
-AGENTCORE_REGION=eu-west-1 agent-browser -p agentcore open https://example.com
+AGENTCORE_REGION=eu-west-1 chrome-use -p agentcore open https://example.com
 ```
 
 ## Credential Patterns
@@ -82,14 +82,14 @@ AGENTCORE_REGION=eu-west-1 agent-browser -p agentcore open https://example.com
 # Explicit credentials (CI/CD, scripts)
 export AWS_ACCESS_KEY_ID=AKIA...
 export AWS_SECRET_ACCESS_KEY=...
-agent-browser -p agentcore open https://example.com
+chrome-use -p agentcore open https://example.com
 
 # SSO (interactive)
 aws sso login --profile my-profile
-AWS_PROFILE=my-profile agent-browser -p agentcore open https://example.com
+AWS_PROFILE=my-profile chrome-use -p agentcore open https://example.com
 
 # IAM role / default credential chain
-agent-browser -p agentcore open https://example.com
+chrome-use -p agentcore open https://example.com
 ```
 
 ## Using with AGENT_BROWSER_PROVIDER
@@ -100,10 +100,10 @@ Set the provider via environment variable to avoid passing `-p agentcore` on eve
 export AGENT_BROWSER_PROVIDER=agentcore
 export AGENTCORE_REGION=us-east-2
 
-agent-browser open https://example.com
-agent-browser snapshot -i
-agent-browser click @e1
-agent-browser close
+chrome-use open https://example.com
+chrome-use snapshot -i
+chrome-use click @e1
+chrome-use close
 ```
 
 ## Common Issues

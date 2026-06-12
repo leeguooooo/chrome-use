@@ -36,7 +36,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 Status::Fail,
                 "No Chrome binary found",
             )
-            .with_fix("agent-browser install"),
+            .with_fix("chrome-use install"),
         ),
     }
 

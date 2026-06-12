@@ -44,41 +44,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-browser-stealth"
-version = "0.27.0-fork.51"
-dependencies = [
- "aes-gcm",
- "async-trait",
- "base64",
- "chrono",
- "dirs",
- "futures-util",
- "getrandom 0.2.17",
- "hex",
- "hmac",
- "image",
- "include_dir",
- "libc",
- "regex-lite",
- "reqwest",
- "rust-embed",
- "serde",
- "serde_json",
- "sha2",
- "similar",
- "socket2",
- "tempfile",
- "time",
- "tokio",
- "tokio-tungstenite",
- "url",
- "urlencoding",
- "uuid",
- "windows-sys 0.52.0",
- "zip",
-]
-
-[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -304,6 +269,41 @@ name = "cfg_aliases"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+
+[[package]]
+name = "chrome-use"
+version = "1.0.0"
+dependencies = [
+ "aes-gcm",
+ "async-trait",
+ "base64",
+ "chrono",
+ "dirs",
+ "futures-util",
+ "getrandom 0.2.17",
+ "hex",
+ "hmac",
+ "image",
+ "include_dir",
+ "libc",
+ "regex-lite",
+ "reqwest",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "sha2",
+ "similar",
+ "socket2",
+ "tempfile",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
+ "urlencoding",
+ "uuid",
+ "windows-sys 0.52.0",
+ "zip",
+]
 
 [[package]]
 name = "chrono"

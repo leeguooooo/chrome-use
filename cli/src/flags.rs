@@ -4,9 +4,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CONFIG_DIR: &str = ".agent-browser";
+const CONFIG_DIR: &str = ".chrome-use";
 const CONFIG_FILENAME: &str = "config.json";
-const PROJECT_CONFIG_FILENAME: &str = "agent-browser.json";
+const PROJECT_CONFIG_FILENAME: &str = "chrome-use.json";
 
 /// Parse idle timeout from user-friendly format.
 /// Supports: "10s" (seconds), "3m" (minutes), "1h" (hours), or raw milliseconds.
@@ -1344,7 +1344,7 @@ mod tests {
 
     #[test]
     fn test_load_config_missing_file_returns_none() {
-        let result = read_config_file(&PathBuf::from("/nonexistent/agent-browser.json"));
+        let result = read_config_file(&PathBuf::from("/nonexistent/chrome-use.json"));
         assert!(result.is_none());
     }
 

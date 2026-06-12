@@ -13,7 +13,7 @@ use super::cdp::client::InspectProxyHandle;
 /// Counter for unique attach IDs so concurrent connections don't collide.
 static ATTACH_ID: AtomicI64 = AtomicI64::new(-1000);
 
-/// Lightweight HTTP + WebSocket server for `agent-browser inspect`.
+/// Lightweight HTTP + WebSocket server for `chrome-use inspect`.
 ///
 /// Serves two purposes:
 /// - `GET /` redirects to Chrome's built-in DevTools frontend with `ws=` pointing to this server

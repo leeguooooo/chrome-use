@@ -1,4 +1,4 @@
-//! `agent-browser connect` — zero-confirmation control of the user's real,
+//! `chrome-use connect` — zero-confirmation control of the user's real,
 //! logged-in Chrome via the `ab-connect` MV3 extension over Chrome **native
 //! messaging** (no localhost port, no token; Chrome authenticates the extension
 //! to this host by id).
@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 /// Native-messaging host name; must match `HOST_NAME` in the extension and the
 /// manifest filename.
-pub const HOST_NAME: &str = "com.agent_browser.connect";
+pub const HOST_NAME: &str = "com.leeguoo.chrome_use";
 
 /// Stable id of the `ab-connect` extension, pinned by the `key` in its
 /// manifest.json (and the signing key of the published `.crx`). Chrome only lets
@@ -44,11 +44,11 @@ pub const STORE_URL: &str =
 
 /// Stable identifiers for the generated Chrome configuration profile, so a
 /// re-install replaces (rather than duplicates) it in System Settings.
-const PROFILE_ID: &str = "work.pwtk.agent-browser.ab-connect";
+const PROFILE_ID: &str = "work.pwtk.chrome-use.ab-connect";
 const PROFILE_UUID: &str = "A1B2C3D4-AB00-4CCE-9E10-AAAABBBBCCCC";
 const PROFILE_PAYLOAD_UUID: &str = "A1B2C3D4-AB01-4CCE-9E10-DDDDEEEEFFFF";
 
-/// `agent-browser extension <install|uninstall|status>` (local; no daemon).
+/// `chrome-use extension <install|uninstall|status>` (local; no daemon).
 /// `args` is the cleaned argv including the leading "extension".
 pub fn run_connect(args: &[String], json: bool) {
     let install = args.iter().any(|a| a == "--install" || a == "install");
@@ -66,11 +66,11 @@ pub fn run_connect(args: &[String], json: bool) {
         } else {
             println!("✓ removed {removed} native-host manifest(s).");
             if profile_removed {
-                println!("✓ removed ~/.agent-browser/ab-connect.mobileconfig");
+                println!("✓ removed ~/.chrome-use/ab-connect.mobileconfig");
             }
             if cfg!(target_os = "macos") {
                 println!(
-                    "  To fully remove the extension, delete the \"agent-browser connect\" profile\n\
+                    "  To fully remove the extension, delete the \"chrome-use connect\" profile\n\
                      in System Settings → Profiles (or run: profiles remove -identifier {PROFILE_ID})."
                 );
             }
@@ -114,7 +114,7 @@ pub fn run_connect(args: &[String], json: bool) {
                                      A) One click: open {STORE_URL}\n   and press \"Add to Chrome\".\n\
                                      B) Silent: approve the profile, then restart Chrome —\n   \
                                      System Settings → General → Device Management → double-click\n   \
-                                     \"agent-browser connect\" → Install. Chrome then force-installs +\n   \
+                                     \"chrome-use connect\" → Install. Chrome then force-installs +\n   \
                                      auto-updates it (no token, no per-use confirmation).\n\
                                      Both need the extension published to the Web Store; until then use\n   \
                                      chrome://extensions → Developer mode → Load unpacked → extensions/ab-connect."
@@ -156,23 +156,23 @@ pub fn run_connect(args: &[String], json: bool) {
         println!("✓ native-messaging host installed ({HOST_NAME}).");
         println!("  Load the ab-connect extension and it connects automatically.");
     } else {
-        println!("✗ not installed. Run: agent-browser connect --install");
+        println!("✗ not installed. Run: chrome-use connect --install");
     }
 }
 
 /// Write the launcher script + native-messaging host manifest(s).
 fn install_native_host() -> Result<Vec<String>, String> {
     let home = dirs::home_dir().ok_or("no home dir")?;
-    let ab_dir = home.join(".agent-browser");
+    let ab_dir = home.join(".chrome-use");
     std::fs::create_dir_all(&ab_dir).map_err(|e| e.to_string())?;
 
     // Chrome execs the manifest `path` directly with the calling extension's
     // origin as argv[1]; a launcher lets us run the binary in __nm-host mode
-    // regardless of how/where agent-browser is installed.
+    // regardless of how/where chrome-use is installed.
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let launcher = ab_dir.join("nm-host.sh");
     let script = format!(
-        "#!/bin/sh\n# agent-browser native-messaging host launcher (auto-generated)\nexec \"{}\" __nm-host \"$@\"\n",
+        "#!/bin/sh\n# chrome-use native-messaging host launcher (auto-generated)\nexec \"{}\" __nm-host \"$@\"\n",
         exe.display()
     );
     std::fs::write(&launcher, script).map_err(|e| e.to_string())?;
@@ -184,7 +184,7 @@ fn install_native_host() -> Result<Vec<String>, String> {
 
     let manifest = serde_json::json!({
         "name": HOST_NAME,
-        "description": "agent-browser connect — native messaging host",
+        "description": "chrome-use connect — native messaging host",
         "path": launcher.display().to_string(),
         "type": "stdio",
         "allowed_origins": [
@@ -223,7 +223,7 @@ fn install_force_install_profile(no_open: bool) -> Result<PathBuf, String> {
             .into());
     }
     let home = dirs::home_dir().ok_or("no home dir")?;
-    let ab_dir = home.join(".agent-browser");
+    let ab_dir = home.join(".chrome-use");
     std::fs::create_dir_all(&ab_dir).map_err(|e| e.to_string())?;
     let path = ab_dir.join("ab-connect.mobileconfig");
     std::fs::write(&path, force_install_mobileconfig()).map_err(|e| e.to_string())?;
@@ -254,7 +254,7 @@ fn force_install_mobileconfig() -> String {
       <key>PayloadIdentifier</key><string>{PROFILE_ID}.chrome</string>
       <key>PayloadUUID</key><string>{PROFILE_PAYLOAD_UUID}</string>
       <key>PayloadEnabled</key><true/>
-      <key>PayloadDisplayName</key><string>agent-browser connect (Chrome)</string>
+      <key>PayloadDisplayName</key><string>chrome-use connect (Chrome)</string>
       <key>ExtensionInstallForcelist</key>
       <array>
         <string>{forcelist}</string>
@@ -265,9 +265,9 @@ fn force_install_mobileconfig() -> String {
   <key>PayloadVersion</key><integer>1</integer>
   <key>PayloadIdentifier</key><string>{PROFILE_ID}</string>
   <key>PayloadUUID</key><string>{PROFILE_UUID}</string>
-  <key>PayloadDisplayName</key><string>agent-browser connect</string>
-  <key>PayloadDescription</key><string>Force-installs the agent-browser connect extension so agent-browser can drive your logged-in Chrome. No token, no per-use confirmation.</string>
-  <key>PayloadOrganization</key><string>agent-browser-stealth</string>
+  <key>PayloadDisplayName</key><string>chrome-use connect</string>
+  <key>PayloadDescription</key><string>Force-installs the chrome-use connect extension so chrome-use can drive your logged-in Chrome. No token, no per-use confirmation.</string>
+  <key>PayloadOrganization</key><string>chrome-use</string>
   <key>PayloadScope</key><string>User</string>
   <key>PayloadRemovalDisallowed</key><false/>
 </dict>
@@ -280,7 +280,7 @@ fn force_install_mobileconfig() -> String {
 /// the user from System Settings, or via `profiles remove`).
 fn remove_force_install_profile() -> bool {
     dirs::home_dir()
-        .map(|h| h.join(".agent-browser").join("ab-connect.mobileconfig"))
+        .map(|h| h.join(".chrome-use").join("ab-connect.mobileconfig"))
         .filter(|p| p.exists())
         .map(|p| std::fs::remove_file(&p).is_ok())
         .unwrap_or(false)
@@ -378,7 +378,7 @@ fn report(json: bool, ok: bool, msg: &str) {
 
 fn nm_log(line: &str) {
     let path = dirs::home_dir()
-        .map(|h| h.join(".agent-browser").join("nm-host.log"))
+        .map(|h| h.join(".chrome-use").join("nm-host.log"))
         .unwrap_or_else(|| PathBuf::from("/tmp/ab-nm-host.log"));
     if let Some(p) = path.parent() {
         let _ = std::fs::create_dir_all(p);
@@ -401,13 +401,13 @@ fn random_guid() -> String {
 /// Where the daemon/CLI reads the relay's CDP WebSocket URL (perms 600).
 fn relay_url_path() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".agent-browser").join("relay-cdp-url"))
+        .map(|h| h.join(".chrome-use").join("relay-cdp-url"))
         .unwrap_or_else(|| PathBuf::from("/tmp/ab-relay-cdp-url"))
 }
 
 /// The live relay CDP WebSocket URL, if the native-messaging host is running
 /// (it writes the file on connect and removes it on exit). Used by
-/// `agent-browser extension connect` to attach without the user copying a URL.
+/// `chrome-use extension connect` to attach without the user copying a URL.
 pub fn relay_url() -> Option<String> {
     let s = std::fs::read_to_string(relay_url_path()).ok()?;
     let s = s.trim().to_string();
@@ -421,10 +421,10 @@ pub fn relay_url() -> Option<String> {
 /// Hidden `__nm-host` mode: launched by Chrome for the ab-connect extension.
 ///
 /// Bridges the extension (native-messaging stdio, envelope protocol) to a local
-/// **CDP WebSocket endpoint** that agent-browser connects to like any Chrome.
+/// **CDP WebSocket endpoint** that chrome-use connects to like any Chrome.
 /// `relay::RelayState` translates envelope ⇄ raw CDP and emulates browser-level
 /// Target discovery. The ws URL carries an unguessable guid (written to a 600
-/// file) so only this user's agent-browser — not arbitrary local processes —
+/// file) so only this user's chrome-use — not arbitrary local processes —
 /// can drive the browser. No token, no user interaction.
 pub fn run_nm_host() {
     let rt = match tokio::runtime::Builder::new_multi_thread()
@@ -496,7 +496,7 @@ async fn nm_host_main() {
         }
     });
 
-    // Accept agent-browser CDP clients on the guid-scoped ws endpoint.
+    // Accept chrome-use CDP clients on the guid-scoped ws endpoint.
     {
         let state = state.clone();
         let clients = clients.clone();

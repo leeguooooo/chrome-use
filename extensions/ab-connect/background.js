@@ -1,6 +1,6 @@
-// agent-browser connect — MV3 service worker.
+// chrome-use connect — MV3 service worker.
 //
-// Bridges the user's real Chrome tabs to the local agent-browser daemon over a
+// Bridges the user's real Chrome tabs to the local chrome-use daemon over a
 // Chrome **native messaging** channel (no localhost port, no token: Chrome
 // authenticates this extension to the host by id). It attaches chrome.debugger
 // to eligible tabs and relays CDP both ways via a tiny envelope:
@@ -16,12 +16,12 @@
 // attach + Target handling; the transport is rewritten from WebSocket+token to
 // native messaging.
 
-const HOST_NAME = 'com.agent_browser.connect'
+const HOST_NAME = 'com.leeguoo.chrome_use'
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i
 
 /** @type {chrome.runtime.Port|null} */
 let port = null
-/** Whether the native-messaging host (the local agent-browser CLI) is linked.
+/** Whether the native-messaging host (the local chrome-use CLI) is linked.
  *  Read by the popup status page. */
 let hostConnected = false
 let nextSession = 1

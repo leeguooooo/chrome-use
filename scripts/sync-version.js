@@ -44,7 +44,7 @@ let cargoToml = readFileSync(cargoTomlPath, "utf-8");
 const cargoVersionRegex = /^version\s*=\s*"[^"]*"/m;
 const newCargoVersion = `version = "${version}"`;
 const cargoNameMatch = cargoToml.match(/^name\s*=\s*"([^"]+)"/m);
-const cargoPackageName = cargoNameMatch?.[1] ?? "agent-browser-stealth";
+const cargoPackageName = cargoNameMatch?.[1] ?? "chrome-use";
 
 let cargoTomlUpdated = false;
 if (cargoVersionRegex.test(cargoToml)) {

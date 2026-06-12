@@ -221,7 +221,7 @@ impl TabRef {
         if input.chars().all(|c| c.is_ascii_digit()) {
             return Err(format!(
                 "Expected a tab id like `t{}` or a label; positional integers are not accepted \
-                 (run `agent-browser tab` to list stable tab ids)",
+                 (run `chrome-use tab` to list stable tab ids)",
                 input
             ));
         }
@@ -1179,7 +1179,7 @@ impl BrowserManager {
                     Ok(*id)
                 } else {
                     Err(format!(
-                        "Tab {} not found; run `agent-browser tab` to list open tabs",
+                        "Tab {} not found; run `chrome-use tab` to list open tabs",
                         format_tab_id(*id)
                     ))
                 }
@@ -1191,7 +1191,7 @@ impl BrowserManager {
                 .map(|p| p.tab_id)
                 .ok_or_else(|| {
                     format!(
-                        "No tab with label `{}`; run `agent-browser tab` to list open tabs",
+                        "No tab with label `{}`; run `chrome-use tab` to list open tabs",
                         name
                     )
                 }),

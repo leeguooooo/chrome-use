@@ -27,7 +27,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     };
 
     let client = match reqwest::Client::builder()
-        .user_agent(format!("agent-browser/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("chrome-use/{}", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(3))
         .connect_timeout(Duration::from_secs(3))
         .build()

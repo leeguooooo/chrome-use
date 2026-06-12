@@ -114,7 +114,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 Status::Fail,
                 format!("Browser launch failed: {}", e),
             )
-            .with_fix("agent-browser install   # or check --debug output"),
+            .with_fix("chrome-use install   # or check --debug output"),
         );
         return;
     }

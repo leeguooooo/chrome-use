@@ -61,7 +61,7 @@ pub async fn discover_cdp_url_with_timeout(
             "All CDP discovery methods failed for {host}:{port}. \
              Note: Chrome 136+ no longer serves the HTTP discovery endpoints \
              (/json/version, /json/list), so `--cdp <port>` cannot find the target — \
-             use the default auto-connect (just `agent-browser open <url>`), which reads \
+             use the default auto-connect (just `chrome-use open <url>`), which reads \
              DevToolsActivePort and attaches over WebSocket. \
              (details: /json/version: {version_err}; /json/list: {list_err}; WebSocket: {ws_err})"
         )),

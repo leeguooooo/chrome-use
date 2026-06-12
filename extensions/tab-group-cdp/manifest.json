@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "agent-browser-stealth",
+  "name": "chrome-use",
   "version": "0.2.0",
-  "description": "Session-aware tab grouping and coordination for CDP-driven agent-browser workflows.",
+  "description": "Session-aware tab grouping and coordination for CDP-driven chrome-use workflows.",
   "icons": {
     "128": "icons/icon.svg"
   },
@@ -12,7 +12,7 @@
     "service_worker": "service-worker.js"
   },
   "action": {
-    "default_title": "agent-browser-stealth"
+    "default_title": "chrome-use"
   },
   "side_panel": {
     "default_path": "sidepanel.html"

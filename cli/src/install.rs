@@ -10,7 +10,7 @@ const LAST_KNOWN_GOOD_URL: &str =
 pub fn get_browsers_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".agent-browser")
+        .join(".chrome-use")
         .join("browsers")
 }
 
@@ -238,7 +238,7 @@ fn format_reqwest_error(e: &reqwest::Error) -> String {
 
 fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .user_agent(format!("agent-browser/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("chrome-use/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(120))
         .connect_timeout(std::time::Duration::from_secs(30))
         .build()
@@ -406,7 +406,7 @@ pub fn run_install(with_deps: bool) {
         eprintln!("  Install Chromium from your system package manager instead:");
         eprintln!("    sudo apt install chromium-browser   # Debian/Ubuntu");
         eprintln!("    sudo dnf install chromium            # Fedora");
-        eprintln!("  Then use: agent-browser --executable-path /usr/bin/chromium");
+        eprintln!("  Then use: chrome-use --executable-path /usr/bin/chromium");
         exit(1);
     }
 
@@ -420,7 +420,7 @@ pub fn run_install(with_deps: bool) {
                 "{} Linux detected. If browser fails to launch, run:",
                 color::warning_indicator()
             );
-            println!("  agent-browser install --with-deps");
+            println!("  chrome-use install --with-deps");
             println!();
         }
     }
@@ -486,7 +486,7 @@ pub fn run_install(with_deps: bool) {
                     "{} If you see \"shared library\" errors when running, use:",
                     color::yellow("Note:")
                 );
-                println!("  agent-browser install --with-deps");
+                println!("  chrome-use install --with-deps");
             }
         }
         Err(e) => {
@@ -930,7 +930,7 @@ mod tests {
         let url = format!("http://127.0.0.1:{}/test", port);
         let _ = client.get(&url).send().await;
         let request_text = server.await.unwrap();
-        let expected_ua = format!("agent-browser/{}", env!("CARGO_PKG_VERSION"));
+        let expected_ua = format!("chrome-use/{}", env!("CARGO_PKG_VERSION"));
         assert!(
             request_text.contains(&expected_ua),
             "expected User-Agent '{}' in request:\n{}",

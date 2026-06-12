@@ -1,18 +1,18 @@
-# agent-browser-stealth
+# chrome-use
 
 **English** · [简体中文](README.zh.md)
 
-![agent-browser-stealth](assets/hero.png)
+![chrome-use](assets/hero.png)
 
-Stealth fork of [agent-browser](https://github.com/vercel-labs/agent-browser) — connects to your real Chrome, shares your login sessions, and is undetectable by anti-bot systems.
+**chrome-use** drives your real, logged-in Chrome from any AI agent — it shares your existing login sessions and is undetectable by anti-bot systems because it *is* your real browser. Part of the `*-use` family ([iphone-use](https://github.com/leeguooooo) drives your real iPhone; chrome-use drives your real Chrome).
 
-For basic usage, commands, and API reference, see the [upstream documentation](https://github.com/vercel-labs/agent-browser).
+<sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); now a standalone project — the stealth/extension-relay architecture, anti-detection, humanize, multi-agent isolation, and CLI have diverged substantially.</sub>
 
 ## Give your AI agent the browser you already live in
 
 **No fresh Chrome. No re-login. No "are you a robot?" walls.**
 
-agent-browser-stealth points **any** agent — Claude Code, Cursor, Codex, your own scripts — at the **Chrome you're already signed into everything on**. It clicks in *your* window, so you watch it work and grab the wheel the moment it hits a 2FA prompt or captcha. And because it's literally your real browser (over a one-click extension, native messaging — no debug port), sites read it as 100% human: **[CreepJS scores it 0% bot](#anti-detection).**
+chrome-use points **any** agent — Claude Code, Cursor, Codex, your own scripts — at the **Chrome you're already signed into everything on**. It clicks in *your* window, so you watch it work and grab the wheel the moment it hits a 2FA prompt or captcha. And because it's literally your real browser (over a one-click extension, native messaging — no debug port), sites read it as 100% human: **[CreepJS scores it 0% bot](#anti-detection).**
 
 **Why not just use…**
 
@@ -23,7 +23,7 @@ agent-browser-stealth points **any** agent — Claude Code, Cursor, Codex, your 
 <details>
 <summary><b>Full feature comparison</b> (the receipts)</summary>
 
-| | [Claude in Chrome](https://www.anthropic.com/claude/chrome) | web-access / raw CDP port | Playwright · Puppeteer · browser-use | **agent-browser-stealth** |
+| | [Claude in Chrome](https://www.anthropic.com/claude/chrome) | web-access / raw CDP port | Playwright · Puppeteer · browser-use | **chrome-use** |
 |---|:---:|:---:|:---:|:---:|
 | Works with **any** agent / CLI (not one app) | ❌ Claude only | ✅ | ✅ | ✅ |
 | Drives your **real, logged-in** Chrome | ✅ | ✅ | ❌ fresh empty profile | ✅ |
@@ -37,15 +37,15 @@ agent-browser-stealth points **any** agent — Claude Code, Cursor, Codex, your 
 
 </details>
 
-## Why this fork?
+## Why chrome-use?
 
 <img src="assets/fingerprint.png" alt="real but undetectable fingerprint" width="300" align="right" />
 
-**agent-browser** launches a fresh browser with an empty profile. You need to log in again, and websites can detect it's automated.
+**Typical browser automation** (Playwright, Puppeteer, or a fresh `--launch`) opens a brand-new browser with an empty profile. You have to log in again, and websites can tell it's automated.
 
-**agent-browser-stealth** connects to your existing Chrome. Your cookies, sessions, and browser fingerprint are all real — because it IS your real browser.
+**chrome-use** connects to your existing Chrome. Your cookies, sessions, and browser fingerprint are all real — because it IS your real browser.
 
-| | agent-browser | agent-browser-stealth |
+| | chrome-use | chrome-use |
 |---|---|---|
 | Browser | Launches new Chrome | Connects to your Chrome |
 | Login state | Empty, need to re-login | Your existing sessions |
@@ -57,7 +57,7 @@ agent-browser-stealth points **any** agent — Claude Code, Cursor, Codex, your 
 
 ![how it works](assets/how-it-works.png)
 
-Your **agent-browser CLI** talks to a tiny **browser extension** over Chrome
+Your **chrome-use CLI** talks to a tiny **browser extension** over Chrome
 **native messaging** — a local inter-process channel, *no network socket, no
 token, no remote server*. The extension uses `chrome.debugger` to drive the tabs
 you target in **your own, already-logged-in Chrome**, then hands results back to
@@ -76,7 +76,7 @@ Other local tools drive Chrome over a raw `--remote-debugging-port` (CDP). Since
 consent dialog — and the port has to be enabled up front. Our extension uses
 native messaging instead: **install once, then zero per-use confirmation.**
 
-| | **agent-browser-stealth** (this extension) | web-access (raw CDP port) | Claude in Chrome (chrome.debugger) |
+| | **chrome-use** (this extension) | web-access (raw CDP port) | Claude in Chrome (chrome.debugger) |
 |---|---|---|---|
 | Connect method | native messaging — no port, no token | `--remote-debugging-port` | `chrome.debugger` |
 | **"Allow remote debugging?" popup** | **never** ✅ | **every connection** 🔴 | no |
@@ -84,7 +84,7 @@ native messaging instead: **install once, then zero per-use confirmation.**
 | `Runtime.enable` (CDP) leak¹ | **off by default → clean** ✅ | domain enabled | n/a |
 | CreepJS stealth score² | **0% stealth · 0% headless** ✅ | real Chrome | real Chrome |
 | Per-session tab groups / concurrent agents | **yes** ✅ | no | no |
-| Built for the agent-browser CLI | yes | a separate proxy | a single-app assistant |
+| Built for the chrome-use CLI | yes | a separate proxy | a single-app assistant |
 
 > ¹ Verified against [rebrowser-bot-detector](https://bot-detector.rebrowser.net/):
 > our relay reports `runtimeEnableLeak: 🟢 No leak` and `navigatorWebdriver: 🟢`.
@@ -97,18 +97,18 @@ native messaging instead: **install once, then zero per-use confirmation.**
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 ```
 
-Downloads the prebuilt binary for your platform from the latest [GitHub Release](https://github.com/leeguooooo/agent-browser-stealth/releases) and installs `agent-browser` (+ the `abs` alias). No npm, no tokens.
+Downloads the prebuilt binary for your platform from the latest [GitHub Release](https://github.com/leeguooooo/chrome-use/releases) and installs `chrome-use` (+ the `abs` alias). No npm, no tokens.
 
 <details>
 <summary>Other ways to install</summary>
 
-- **Pin a version:** `AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/install.sh | sh`
+- **Pin a version:** `AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh`
 - **Custom location:** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
-- **Windows:** download `agent-browser-win32-x64.tar.gz` from the [Releases page](https://github.com/leeguooooo/agent-browser-stealth/releases) and put `agent-browser.exe` on your PATH.
-- **npm (legacy):** `npm install -g agent-browser-stealth` — still published, but GitHub Releases is the primary channel now.
+- **Windows:** download `chrome-use-win32-x64.tar.gz` from the [Releases page](https://github.com/leeguooooo/chrome-use/releases) and put `chrome-use.exe` on your PATH.
+- **npm (legacy):** `npm install -g chrome-use` — still published, but GitHub Releases is the primary channel now.
 </details>
 
 ### Install the AI agent skills
@@ -116,14 +116,14 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 The repo ships SKILL.md files for Claude Code, Cursor, etc. Pull them into the current project with [skills.sh](https://skills.sh):
 
 ```bash
-npx skills add leeguooooo/agent-browser-stealth
+npx skills add leeguooooo/chrome-use
 ```
 
-This drops `skills/agent-browser` (and the specialized `skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}`) into your project so your AI agent gets the right usage patterns and pre-approved bash permissions for `agent-browser`, `agent-browser-stealth`, and `abs`.
+This drops `skills/chrome-use` (and the specialized `skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}`) into your project so your AI agent gets the right usage patterns and pre-approved bash permissions for `chrome-use`, `chrome-use`, and `abs`.
 
 ## Command names
 
-`agent-browser`, `agent-browser-stealth`, and `abs` are **the same binary** —
+`chrome-use`, `chrome-use`, and `abs` are **the same binary** —
 `abs` is just a short alias. There is no separate "stealth executable"; stealth
 is a runtime behavior (see [Anti-detection](#anti-detection) below), applied
 automatically based on whether you attach to your real Chrome or `--launch` a
@@ -132,15 +132,15 @@ fresh one.
 ## Setup: connect to your Chrome
 
 **Recommended — the browser extension (one click, no popups).** Install the
-[**agent-browser-stealth** extension from the Chrome Web Store](https://chromewebstore.google.com/detail/agent-browser-stealth/knfcmbamhjmaonkfnjhldjedeobeafmk),
+[**chrome-use** extension from the Chrome Web Store](https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk),
 then register the local bridge once:
 
 ```bash
-agent-browser extension install      # register the native-messaging host (one-time)
-agent-browser open https://x.com/home
+chrome-use extension install      # register the native-messaging host (one-time)
+chrome-use open https://x.com/home
 ```
 
-`agent-browser open` then drives your real, logged-in Chrome over **native
+`chrome-use open` then drives your real, logged-in Chrome over **native
 messaging** — no debug port, no token, and **no "Allow remote debugging?" dialog,
 ever**. The extension auto-updates and survives Chrome restarts, so it stays
 connected with zero per-use confirmation (ideal for unattended/agent use).
@@ -148,7 +148,7 @@ connected with zero per-use confirmation (ideal for unattended/agent use).
 <details>
 <summary>Alternative — raw remote-debugging port (pops a consent dialog)</summary>
 
-Without the extension, agent-browser attaches over the Chrome DevTools Protocol,
+Without the extension, chrome-use attaches over the Chrome DevTools Protocol,
 which Chrome only exposes when **launched with a remote-debugging port** (a
 startup flag — the `chrome://inspect` toggle alone is not enough):
 
@@ -160,13 +160,13 @@ google-chrome --remote-debugging-port=9222
 # Windows: add --remote-debugging-port=9222 to your Chrome shortcut's target
 ```
 
-Then `agent-browser open <url>` auto-discovers the port. On first attach,
+Then `chrome-use open <url>` auto-discovers the port. On first attach,
 **Chrome 136+ shows an "Allow remote debugging?" dialog** — click Allow once (it
 persists for that Chrome session). The extension above avoids this entirely.
 </details>
 
 **No setup / don't want to touch your real Chrome?** Use
-`agent-browser --launch open <url>` to spawn a fresh isolated stealth browser
+`chrome-use --launch open <url>` to spawn a fresh isolated stealth browser
 (full anti-detection patches applied; see below). This always works without any
 port setup and is what CI uses automatically.
 
@@ -174,13 +174,13 @@ port setup and is what CI uses automatically.
 
 ```bash
 # Connect to your Chrome and navigate
-agent-browser open https://example.com
+chrome-use open https://example.com
 
 # Everything works through your logged-in browser
-agent-browser click "Post"
-agent-browser click 449 320            # …or click a raw viewport coordinate
-agent-browser fill "Title" "Hello World"
-agent-browser screenshot ./page.png
+chrome-use click "Post"
+chrome-use click 449 320            # …or click a raw viewport coordinate
+chrome-use fill "Title" "Hello World"
+chrome-use screenshot ./page.png
 ```
 
 The agent operates in your Chrome — you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
@@ -191,16 +191,16 @@ Spawn a separate browser instead of attaching to your running Chrome:
 
 ```bash
 # Throwaway: fresh, EMPTY profile — no cookies, no login (good for CI/testing)
-agent-browser --launch open https://example.com
+chrome-use --launch open https://example.com
 
 # Keep your login: launch with your real Chrome profile (cookies/sessions intact)
-agent-browser --launch --profile auto open https://x.com/home
+chrome-use --launch --profile auto open https://x.com/home
 # or name it explicitly: --profile Default / --profile "Profile 1"
 ```
 
 > ⚠️ Plain `--launch` (no `--profile`) uses a **temporary empty profile** — you will
 > NOT be logged into anything. For logged-in sites use `--profile auto` (picks the
-> Chrome profile you used most recently) or `--profile <name>`. agent-browser prints
+> Chrome profile you used most recently) or `--profile <name>`. chrome-use prints
 > a warning when you `--launch` without a profile.
 
 In CI environments, standalone mode is used automatically.
@@ -271,18 +271,17 @@ We deliberately **don't ship our own bot detector** — the strongest, most hone
 | `AGENT_BROWSER_ADAPTIVE_REF` | on | When a saved `@ref` moves and the role/name re-query fails, relocate it by fingerprint similarity (high score + clear margin required, else it fails loudly). `0` disables. |
 | `AGENT_BROWSER_CLICK_MODE` | _(auto)_ | Click strategy. Default scrolls the target into view, dispatches a coordinate click, and falls back to a DOM `.click()` if a floating layer occludes the point. `dom` always uses `.click()` (best for autocomplete/menu items that close on blur); `coord` is strict coordinate-only (hard-fail on occlusion). |
 
-## Differences from upstream
+## What makes chrome-use different
 
-Based on [agent-browser v0.27.0](https://github.com/vercel-labs/agent-browser). Changes:
+- **Auto-connect is default** — `chrome-use open <url>` drives your existing Chrome instead of launching a new one
+- **Extension-relay transport** — a one-click Chrome Web Store extension + native messaging, so there's no debug port and no "Allow remote debugging?" dialog
+- **CDP-native stealth** — anti-detection via Chrome/CDP overrides rather than JS patches; zero patches when attached to your real Chrome, full patches only for `--launch`
+- **Humanize** — human-like cursor trajectories + adaptive anti-bot handling
+- **Multi-agent isolation** — concurrent agents share one real Chrome via per-session tab groups, no cross-talk
+- **Silent operation** — runs in the background; never steals your foreground tab
 
-- **Auto-connect is default** — `agent-browser open <url>` connects to your Chrome instead of launching a new one
-- **CDP-native stealth** — `Emulation.setAutomationOverride` instead of JS patches
-- **Dual stealth mode** — zero patches for real Chrome, full patches for `--launch` mode
-- **`--launch` / `--new` flag** — explicitly start a standalone browser
-- **CI auto-detection** — standalone mode when `CI` env var is set
-
-All upstream features (commands, snapshots, screenshots, recordings, tabs, sessions, etc.) work the same. See the [upstream repo](https://github.com/vercel-labs/agent-browser) for full documentation.
+<sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); the projects have since diverged substantially.</sub>
 
 ## License
 
-Apache-2.0 (same as upstream)
+Apache-2.0

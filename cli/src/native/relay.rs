@@ -12,7 +12,7 @@
 //!
 //! ## Multiple clients (concurrent agents on one shared browser)
 //!
-//! Several agent-browser daemons (one per `--session`) can connect to the same
+//! Several chrome-use daemons (one per `--session`) can connect to the same
 //! relay/Chrome at once. The extension is a single peer, so the relay must
 //! demultiplex: every forwarded command is re-keyed to a relay-global id mapped
 //! back to the originating client, and the extension's reply is routed to **only
@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 /// Protocol version advertised in the connect handshake (matches the extension).
 pub const RELAY_PROTOCOL: i64 = 3;
 
-/// Identifies one connected CDP client (agent-browser daemon) for routing.
+/// Identifies one connected CDP client (chrome-use daemon) for routing.
 pub type ClientId = u64;
 
 /// One target (tab) the extension has attached, as the relay tracks it.

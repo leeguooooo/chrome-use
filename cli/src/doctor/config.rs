@@ -1,5 +1,5 @@
-//! Check user config files: `~/.agent-browser/config.json`,
-//! `./agent-browser.json`, and any file referenced by
+//! Check user config files: `~/.chrome-use/config.json`,
+//! `./chrome-use.json`, and any file referenced by
 //! `AGENT_BROWSER_CONFIG`.
 
 use std::env;
@@ -11,7 +11,7 @@ use super::{Check, Status};
 pub(super) fn check(checks: &mut Vec<Check>) {
     let category = "Config";
 
-    let user_path = dirs::home_dir().map(|d| d.join(".agent-browser").join("config.json"));
+    let user_path = dirs::home_dir().map(|d| d.join(".chrome-use").join("config.json"));
     if let Some(p) = user_path {
         if p.exists() {
             match parse_json_file(&p) {
@@ -34,7 +34,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         }
     }
 
-    let project_path = PathBuf::from("agent-browser.json");
+    let project_path = PathBuf::from("chrome-use.json");
     if project_path.exists() {
         match parse_json_file(&project_path) {
             Ok(_) => checks.push(Check::new(

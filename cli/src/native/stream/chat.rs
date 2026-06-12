@@ -76,7 +76,7 @@ pub(super) async fn handle_models_request(
     let _ = stream.write_all(body.as_bytes()).await;
 }
 
-const SKILL_NAMES: &[&str] = &["agent-browser", "slack", "electron", "dogfood", "agentcore"];
+const SKILL_NAMES: &[&str] = &["chrome-use", "slack", "electron", "dogfood", "agentcore"];
 
 /// Locate the `skills/` directory by walking up from the executable.
 /// Works for npm installs (binary in `bin/`, skills at `../skills/`) and
@@ -87,7 +87,7 @@ fn find_skills_dir() -> Option<std::path::PathBuf> {
     let mut dir = real.parent();
     while let Some(d) = dir {
         let candidate = d.join("skills");
-        if candidate.join("agent-browser").join("SKILL.md").exists() {
+        if candidate.join("chrome-use").join("SKILL.md").exists() {
             return Some(candidate);
         }
         dir = d.parent();
@@ -133,7 +133,7 @@ pub(crate) fn get_system_prompt() -> &'static str {
         }
 
         format!(
-            r#"You are an AI assistant that controls a browser through agent-browser. You have an active browser session, but you can also create new sessions.
+            r#"You are an AI assistant that controls a browser through chrome-use. You have an active browser session, but you can also create new sessions.
 
 RULES:
 - You MUST use the agent_browser tool for every browser action. NEVER claim you performed an action without calling the tool.
@@ -141,19 +141,19 @@ RULES:
 - If a request is outside your capabilities (e.g. system operations), say so honestly. Do not improvise or pretend.
 - One tool call per command. Do not chain with `&&` or `;`.
 - Do not add `--json`.
-- Do not run non-agent-browser programs.
+- Do not run non-chrome-use programs.
 - Keep responses concise.
 - For screenshots, omit the path argument so they save to the default location (which will be displayed inline). Screenshots from tool calls are ALREADY shown to the user. Do NOT re-display them with markdown image syntax in your text response. Never use `![...]()` to reference screenshots.
-- To create a new session: add `--session <name>` to any command (e.g. `agent-browser --session my-session open https://example.com`). If the session does not exist, it will be created automatically.
-- To use a different browser engine: add `--engine <engine>` (e.g. `agent-browser --session lp-session --engine lightpanda open https://example.com`). Supported engines: chrome (default), lightpanda.
+- To create a new session: add `--session <name>` to any command (e.g. `chrome-use --session my-session open https://example.com`). If the session does not exist, it will be created automatically.
+- To use a different browser engine: add `--engine <engine>` (e.g. `chrome-use --session lp-session --engine lightpanda open https://example.com`). Supported engines: chrome (default), lightpanda.
 
-The following skill references describe agent-browser capabilities in detail. Use them when deciding which commands to run and how to approach tasks.
+The following skill references describe chrome-use capabilities in detail. Use them when deciding which commands to run and how to approach tasks.
 {sections}"#,
         )
     })
 }
 
-pub(crate) const CHAT_TOOLS: &str = r#"[{"type":"function","function":{"name":"agent_browser","description":"Execute an agent-browser command. Runs against the active session by default. Add --session <name> to target or create a different session, and --engine <engine> to choose a browser engine.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"The command to execute, e.g. 'agent-browser open https://google.com' or 'agent-browser --session new-session open https://example.com' or 'agent-browser snapshot -i' or 'agent-browser click @e3'"}},"required":["command"]}}}]"#;
+pub(crate) const CHAT_TOOLS: &str = r#"[{"type":"function","function":{"name":"agent_browser","description":"Execute an chrome-use command. Runs against the active session by default. Add --session <name> to target or create a different session, and --engine <engine> to choose a browser engine.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"The command to execute, e.g. 'chrome-use open https://google.com' or 'chrome-use --session new-session open https://example.com' or 'chrome-use snapshot -i' or 'chrome-use click @e3'"}},"required":["command"]}}}]"#;
 
 pub(crate) const COMPACT_THRESHOLD_CHARS: usize = 200_000;
 pub(crate) const KEEP_RECENT_MESSAGES: usize = 6;
@@ -462,7 +462,7 @@ pub(crate) async fn execute_chat_tool(session: &str, command: &str) -> String {
 
     let single = command.split("&&").next().unwrap_or(command);
     let single = single.split(';').next().unwrap_or(single).trim();
-    let stripped = single.strip_prefix("agent-browser ").unwrap_or(single);
+    let stripped = single.strip_prefix("chrome-use ").unwrap_or(single);
     let words = crate::commands::shell_words_split(stripped);
 
     let mut global_flags: Vec<String> = Vec::new();
@@ -490,7 +490,7 @@ pub(crate) async fn execute_chat_tool(session: &str, command: &str) -> String {
     let first_cmd = cmd_words.first().map(|s| s.as_str()).unwrap_or("");
     if !ALLOWED_COMMANDS.contains(&first_cmd) {
         return format!(
-            "Blocked: '{}' is not a valid agent-browser command.",
+            "Blocked: '{}' is not a valid chrome-use command.",
             first_cmd
         );
     }

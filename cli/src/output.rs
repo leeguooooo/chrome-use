@@ -1130,8 +1130,8 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 .unwrap_or("");
             println!("Confirmation required:");
             println!("  {}: {}", category, description);
-            println!("  Run: agent-browser confirm {}", cid);
-            println!("  Or:  agent-browser deny {}", cid);
+            println!("  Run: chrome-use confirm {}", cid);
+            println!("  Or:  chrome-use deny {}", cid);
             return;
         }
         if data
@@ -1175,9 +1175,9 @@ pub fn print_command_help(command: &str) -> bool {
         // === Navigation ===
         "open" | "goto" | "navigate" => {
             r##"
-agent-browser open - Launch the browser, optionally navigate
+chrome-use open - Launch the browser, optionally navigate
 
-Usage: agent-browser open [url]
+Usage: chrome-use open [url]
 
 Without a URL, launches the browser but stays on about:blank. This lets
 you stage state (network routes, cookies, init scripts) before the first
@@ -1198,15 +1198,15 @@ Global Options:
   --init-script <path>      Register a page init script (repeatable)
 
 Examples:
-  agent-browser open                     # Launch, no nav
-  agent-browser open example.com
-  agent-browser open https://github.com
-  agent-browser open localhost:3000
-  agent-browser open api.example.com --headers '{"Authorization": "Bearer token"}'
+  chrome-use open                     # Launch, no nav
+  chrome-use open example.com
+  chrome-use open https://github.com
+  chrome-use open localhost:3000
+  chrome-use open api.example.com --headers '{"Authorization": "Bearer token"}'
     # ^ Headers only sent to api.example.com, not other domains
 
   # Pre-navigation setup in one turn:
-  agent-browser batch \
+  chrome-use batch \
     '["open"]' \
     '["network","route","*","--abort","--resource-type","script"]' \
     '["navigate","http://localhost:3000/target"]'
@@ -1214,9 +1214,9 @@ Examples:
         }
         "back" => {
             r##"
-agent-browser back - Navigate back in history
+chrome-use back - Navigate back in history
 
-Usage: agent-browser back
+Usage: chrome-use back
 
 Goes back one page in the browser history, equivalent to clicking
 the browser's back button.
@@ -1226,14 +1226,14 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser back
+  chrome-use back
 "##
         }
         "forward" => {
             r##"
-agent-browser forward - Navigate forward in history
+chrome-use forward - Navigate forward in history
 
-Usage: agent-browser forward
+Usage: chrome-use forward
 
 Goes forward one page in the browser history, equivalent to clicking
 the browser's forward button.
@@ -1243,14 +1243,14 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser forward
+  chrome-use forward
 "##
         }
         "reload" => {
             r##"
-agent-browser reload - Reload the current page
+chrome-use reload - Reload the current page
 
-Usage: agent-browser reload
+Usage: chrome-use reload
 
 Reloads the current page, equivalent to pressing F5 or clicking
 the browser's reload button.
@@ -1260,17 +1260,17 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser reload
+  chrome-use reload
 "##
         }
 
         // === Core Actions ===
         "click" => {
             r##"
-agent-browser click - Click an element or a coordinate
+chrome-use click - Click an element or a coordinate
 
-Usage: agent-browser click <selector> [--new-tab]
-       agent-browser click <x> <y> | <x>,<y> | --coords <x>,<y>
+Usage: chrome-use click <selector> [--new-tab]
+       chrome-use click <x> <y> | <x>,<y> | --coords <x>,<y>
 
 Clicks on the specified element. The selector can be a CSS selector,
 XPath, or an element reference from snapshot (e.g., @e1).
@@ -1288,18 +1288,18 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser click "#submit-button"
-  agent-browser click @e1
-  agent-browser click "button.primary"
-  agent-browser click "//button[@type='submit']"
-  agent-browser click @e3 --new-tab
+  chrome-use click "#submit-button"
+  chrome-use click @e1
+  chrome-use click "button.primary"
+  chrome-use click "//button[@type='submit']"
+  chrome-use click @e3 --new-tab
 "##
         }
         "dblclick" => {
             r##"
-agent-browser dblclick - Double-click an element
+chrome-use dblclick - Double-click an element
 
-Usage: agent-browser dblclick <selector>
+Usage: chrome-use dblclick <selector>
 
 Double-clicks on the specified element. Useful for text selection
 or triggering double-click handlers.
@@ -1309,15 +1309,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser dblclick "#editable-text"
-  agent-browser dblclick @e5
+  chrome-use dblclick "#editable-text"
+  chrome-use dblclick @e5
 "##
         }
         "fill" => {
             r##"
-agent-browser fill - Clear and fill an input field
+chrome-use fill - Clear and fill an input field
 
-Usage: agent-browser fill <selector> <text>
+Usage: chrome-use fill <selector> <text>
 
 Clears the input field and fills it with the specified text.
 This replaces any existing content in the field.
@@ -1327,16 +1327,16 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser fill "#email" "user@example.com"
-  agent-browser fill @e3 "Hello World"
-  agent-browser fill "input[name='search']" "query"
+  chrome-use fill "#email" "user@example.com"
+  chrome-use fill @e3 "Hello World"
+  chrome-use fill "input[name='search']" "query"
 "##
         }
         "type" => {
             r##"
-agent-browser type - Type text into an element
+chrome-use type - Type text into an element
 
-Usage: agent-browser type <selector> <text>
+Usage: chrome-use type <selector> <text>
 
 Types text into the specified element character by character.
 Unlike fill, this does not clear existing content first.
@@ -1346,20 +1346,20 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser type "#search" "hello"
-  agent-browser type @e2 "additional text"
+  chrome-use type "#search" "hello"
+  chrome-use type @e2 "additional text"
 
 See Also:
   For typing into contenteditable editors (Lexical, ProseMirror, etc.)
   without a selector, use 'keyboard type' instead:
-    agent-browser keyboard type "# My Heading"
+    chrome-use keyboard type "# My Heading"
 "##
         }
         "hover" => {
             r##"
-agent-browser hover - Hover over an element
+chrome-use hover - Hover over an element
 
-Usage: agent-browser hover <selector>
+Usage: chrome-use hover <selector>
 
 Moves the mouse to hover over the specified element. Useful for
 triggering hover states or dropdown menus.
@@ -1369,15 +1369,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser hover "#dropdown-trigger"
-  agent-browser hover @e4
+  chrome-use hover "#dropdown-trigger"
+  chrome-use hover @e4
 "##
         }
         "focus" => {
             r##"
-agent-browser focus - Focus an element
+chrome-use focus - Focus an element
 
-Usage: agent-browser focus <selector>
+Usage: chrome-use focus <selector>
 
 Sets keyboard focus to the specified element.
 
@@ -1386,15 +1386,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser focus "#input-field"
-  agent-browser focus @e2
+  chrome-use focus "#input-field"
+  chrome-use focus @e2
 "##
         }
         "check" => {
             r##"
-agent-browser check - Check a checkbox
+chrome-use check - Check a checkbox
 
-Usage: agent-browser check <selector>
+Usage: chrome-use check <selector>
 
 Checks a checkbox element. If already checked, no action is taken.
 
@@ -1403,15 +1403,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser check "#terms-checkbox"
-  agent-browser check @e7
+  chrome-use check "#terms-checkbox"
+  chrome-use check @e7
 "##
         }
         "uncheck" => {
             r##"
-agent-browser uncheck - Uncheck a checkbox
+chrome-use uncheck - Uncheck a checkbox
 
-Usage: agent-browser uncheck <selector>
+Usage: chrome-use uncheck <selector>
 
 Unchecks a checkbox element. If already unchecked, no action is taken.
 
@@ -1420,15 +1420,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser uncheck "#newsletter-opt-in"
-  agent-browser uncheck @e8
+  chrome-use uncheck "#newsletter-opt-in"
+  chrome-use uncheck @e8
 "##
         }
         "select" => {
             r##"
-agent-browser select - Select a dropdown option
+chrome-use select - Select a dropdown option
 
-Usage: agent-browser select <selector> <value...>
+Usage: chrome-use select <selector> <value...>
 
 Selects one or more options in a <select> dropdown by value.
 
@@ -1437,16 +1437,16 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser select "#country" "US"
-  agent-browser select @e5 "option2"
-  agent-browser select "#menu" "opt1" "opt2" "opt3"
+  chrome-use select "#country" "US"
+  chrome-use select @e5 "option2"
+  chrome-use select "#menu" "opt1" "opt2" "opt3"
 "##
         }
         "drag" => {
             r##"
-agent-browser drag - Drag and drop
+chrome-use drag - Drag and drop
 
-Usage: agent-browser drag <source> <target>
+Usage: chrome-use drag <source> <target>
 
 Drags an element from source to target location.
 
@@ -1455,15 +1455,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser drag "#draggable" "#drop-zone"
-  agent-browser drag @e1 @e2
+  chrome-use drag "#draggable" "#drop-zone"
+  chrome-use drag @e1 @e2
 "##
         }
         "upload" => {
             r##"
-agent-browser upload - Upload files
+chrome-use upload - Upload files
 
-Usage: agent-browser upload <selector> <files...>
+Usage: chrome-use upload <selector> <files...>
 
 Uploads one or more files to a file input element.
 
@@ -1472,15 +1472,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser upload "#file-input" ./document.pdf
-  agent-browser upload @e3 ./image1.png ./image2.png
+  chrome-use upload "#file-input" ./document.pdf
+  chrome-use upload @e3 ./image1.png ./image2.png
 "##
         }
         "download" => {
             r##"
-agent-browser download - Download a file by clicking an element
+chrome-use download - Download a file by clicking an element
 
-Usage: agent-browser download <selector> <path>
+Usage: chrome-use download <selector> <path>
 
 Clicks an element that triggers a download and saves the file to the specified path.
 
@@ -1493,18 +1493,18 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser download "#download-btn" ./file.pdf
-  agent-browser download @e5 ./report.xlsx
-  agent-browser download "a[href$='.zip']" ./archive.zip
+  chrome-use download "#download-btn" ./file.pdf
+  chrome-use download @e5 ./report.xlsx
+  chrome-use download "a[href$='.zip']" ./archive.zip
 "##
         }
 
         // === Keyboard ===
         "press" | "key" => {
             r##"
-agent-browser press - Press a key or key combination
+chrome-use press - Press a key or key combination
 
-Usage: agent-browser press <key>
+Usage: chrome-use press <key>
 
 Presses a key or key combination. Supports special keys and modifiers.
 
@@ -1524,18 +1524,18 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser press Enter
-  agent-browser press Tab
-  agent-browser press Control+a
-  agent-browser press Control+Shift+s
-  agent-browser press Escape
+  chrome-use press Enter
+  chrome-use press Tab
+  chrome-use press Control+a
+  chrome-use press Control+Shift+s
+  chrome-use press Escape
 "##
         }
         "keydown" => {
             r##"
-agent-browser keydown - Press a key down (without release)
+chrome-use keydown - Press a key down (without release)
 
-Usage: agent-browser keydown <key>
+Usage: chrome-use keydown <key>
 
 Presses a key down without releasing it. Use keyup to release.
 Useful for holding modifier keys.
@@ -1545,15 +1545,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser keydown Shift
-  agent-browser keydown Control
+  chrome-use keydown Shift
+  chrome-use keydown Control
 "##
         }
         "keyup" => {
             r##"
-agent-browser keyup - Release a key
+chrome-use keyup - Release a key
 
-Usage: agent-browser keyup <key>
+Usage: chrome-use keyup <key>
 
 Releases a key that was pressed with keydown.
 
@@ -1562,15 +1562,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser keyup Shift
-  agent-browser keyup Control
+  chrome-use keyup Shift
+  chrome-use keyup Control
 "##
         }
         "keyboard" => {
             r##"
-agent-browser keyboard - Raw keyboard input (no selector needed)
+chrome-use keyboard - Raw keyboard input (no selector needed)
 
-Usage: agent-browser keyboard <subcommand> <text>
+Usage: chrome-use keyboard <subcommand> <text>
 
 Sends keyboard input to whatever element currently has focus.
 Unlike 'type' which requires a selector, 'keyboard' operates on
@@ -1590,25 +1590,25 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser keyboard type "Hello, World!"
-  agent-browser keyboard type "# My Heading"
-  agent-browser keyboard inserttext "pasted content"
+  chrome-use keyboard type "Hello, World!"
+  chrome-use keyboard type "# My Heading"
+  chrome-use keyboard inserttext "pasted content"
 
 Use Cases:
   # Type into a Lexical/ProseMirror contenteditable editor:
-  agent-browser click "[contenteditable]"
-  agent-browser keyboard type "# My Heading"
-  agent-browser press Enter
-  agent-browser keyboard type "Some paragraph text"
+  chrome-use click "[contenteditable]"
+  chrome-use keyboard type "# My Heading"
+  chrome-use press Enter
+  chrome-use keyboard type "Some paragraph text"
 "##
         }
 
         // === Scroll ===
         "scroll" => {
             r##"
-agent-browser scroll - Scroll the page
+chrome-use scroll - Scroll the page
 
-Usage: agent-browser scroll [direction] [amount] [options]
+Usage: chrome-use scroll [direction] [amount] [options]
 
 Scrolls the page or a specific element in the specified direction.
 
@@ -1624,18 +1624,18 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser scroll
-  agent-browser scroll down 500
-  agent-browser scroll up 200
-  agent-browser scroll left 100
-  agent-browser scroll down 500 --selector "div.scroll-container"
+  chrome-use scroll
+  chrome-use scroll down 500
+  chrome-use scroll up 200
+  chrome-use scroll left 100
+  chrome-use scroll down 500 --selector "div.scroll-container"
 "##
         }
         "scrollintoview" | "scrollinto" => {
             r##"
-agent-browser scrollintoview - Scroll element into view
+chrome-use scrollintoview - Scroll element into view
 
-Usage: agent-browser scrollintoview <selector>
+Usage: chrome-use scrollintoview <selector>
 
 Scrolls the page until the specified element is visible in the viewport.
 
@@ -1646,17 +1646,17 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser scrollintoview "#footer"
-  agent-browser scrollintoview @e15
+  chrome-use scrollintoview "#footer"
+  chrome-use scrollintoview @e15
 "##
         }
 
         // === Wait ===
         "wait" => {
             r##"
-agent-browser wait - Wait for condition
+chrome-use wait - Wait for condition
 
-Usage: agent-browser wait <selector|ms|option>
+Usage: chrome-use wait <selector|ms|option>
 
 Waits for an element to appear, a timeout, or other conditions.
 
@@ -1683,24 +1683,24 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser wait "#loading-spinner"
-  agent-browser wait 2000
-  agent-browser wait --url "**/dashboard"
-  agent-browser wait --load networkidle
-  agent-browser wait --fn "window.appReady === true"
-  agent-browser wait --text "Welcome back"
-  agent-browser wait --download ./file.pdf
-  agent-browser wait --download ./report.xlsx --timeout 30000
-  agent-browser wait --fn "!document.body.innerText.includes('Loading...')"
+  chrome-use wait "#loading-spinner"
+  chrome-use wait 2000
+  chrome-use wait --url "**/dashboard"
+  chrome-use wait --load networkidle
+  chrome-use wait --fn "window.appReady === true"
+  chrome-use wait --text "Welcome back"
+  chrome-use wait --download ./file.pdf
+  chrome-use wait --download ./report.xlsx --timeout 30000
+  chrome-use wait --fn "!document.body.innerText.includes('Loading...')"
 "##
         }
 
         // === Screenshot/PDF ===
         "screenshot" => {
             r##"
-agent-browser screenshot - Take a screenshot
+chrome-use screenshot - Take a screenshot
 
-Usage: agent-browser screenshot [selector] [path]
+Usage: chrome-use screenshot [selector] [path]
 
 Captures a screenshot of the current page. If no path is provided,
 saves to a temporary directory with a generated filename.
@@ -1726,21 +1726,21 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser screenshot
-  agent-browser screenshot ./screenshot.png
-  agent-browser screenshot --full ./full-page.png
-  agent-browser screenshot --annotate              # Labeled screenshot + legend
-  agent-browser screenshot --annotate ./page.png   # Save annotated screenshot
-  agent-browser screenshot --annotate --json       # JSON output with annotations
-  agent-browser screenshot --screenshot-dir ./shots # Save to custom directory
-  agent-browser screenshot --screenshot-format jpeg --screenshot-quality 80
+  chrome-use screenshot
+  chrome-use screenshot ./screenshot.png
+  chrome-use screenshot --full ./full-page.png
+  chrome-use screenshot --annotate              # Labeled screenshot + legend
+  chrome-use screenshot --annotate ./page.png   # Save annotated screenshot
+  chrome-use screenshot --annotate --json       # JSON output with annotations
+  chrome-use screenshot --screenshot-dir ./shots # Save to custom directory
+  chrome-use screenshot --screenshot-format jpeg --screenshot-quality 80
 "##
         }
         "pdf" => {
             r##"
-agent-browser pdf - Save page as PDF
+chrome-use pdf - Save page as PDF
 
-Usage: agent-browser pdf <path>
+Usage: chrome-use pdf <path>
 
 Saves the current page as a PDF file.
 
@@ -1749,17 +1749,17 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser pdf ./page.pdf
-  agent-browser pdf ~/Documents/report.pdf
+  chrome-use pdf ./page.pdf
+  chrome-use pdf ~/Documents/report.pdf
 "##
         }
 
         // === Snapshot ===
         "snapshot" => {
             r##"
-agent-browser snapshot - Get accessibility tree snapshot
+chrome-use snapshot - Get accessibility tree snapshot
 
-Usage: agent-browser snapshot [options]
+Usage: chrome-use snapshot [options]
 
 Returns an accessibility tree representation of the page with element
 references (like @e1, @e2) that can be used in subsequent commands.
@@ -1777,20 +1777,20 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser snapshot
-  agent-browser snapshot -i
-  agent-browser snapshot -i --urls
-  agent-browser snapshot --compact --depth 5
-  agent-browser snapshot -s "#main-content"
+  chrome-use snapshot
+  chrome-use snapshot -i
+  chrome-use snapshot -i --urls
+  chrome-use snapshot --compact --depth 5
+  chrome-use snapshot -s "#main-content"
 "##
         }
 
         // === Eval ===
         "eval" => {
             r##"
-agent-browser eval - Execute JavaScript
+chrome-use eval - Execute JavaScript
 
-Usage: agent-browser eval [options] <script>
+Usage: chrome-use eval [options] <script>
 
 Executes JavaScript code in the browser context and returns the result.
 
@@ -1803,13 +1803,13 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser eval "document.title"
-  agent-browser eval "window.location.href"
-  agent-browser eval "document.querySelectorAll('a').length"
-  agent-browser eval -b "ZG9jdW1lbnQudGl0bGU="
+  chrome-use eval "document.title"
+  chrome-use eval "window.location.href"
+  chrome-use eval "document.querySelectorAll('a').length"
+  chrome-use eval -b "ZG9jdW1lbnQudGl0bGU="
 
   # Read from stdin with heredoc
-  cat <<'EOF' | agent-browser eval --stdin
+  cat <<'EOF' | chrome-use eval --stdin
   const links = document.querySelectorAll('a');
   links.length;
   EOF
@@ -1819,9 +1819,9 @@ Examples:
         // === Close ===
         "close" | "quit" | "exit" => {
             r##"
-agent-browser close - Close the browser
+chrome-use close - Close the browser
 
-Usage: agent-browser close [options]
+Usage: chrome-use close [options]
 
 Closes the browser instance for the current session.
 
@@ -1835,37 +1835,37 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser close
-  agent-browser close --session mysession
-  agent-browser close --all
+  chrome-use close
+  chrome-use close --session mysession
+  chrome-use close --all
 "##
         }
 
         // === Inspect ===
         "inspect" => {
             r##"
-agent-browser inspect - Open Chrome DevTools for the active page
+chrome-use inspect - Open Chrome DevTools for the active page
 
 Starts a local WebSocket proxy and opens Chrome's DevTools frontend in your
 default browser. The proxy routes DevTools traffic through the daemon's
-existing CDP connection, so both DevTools and agent-browser commands work
+existing CDP connection, so both DevTools and chrome-use commands work
 simultaneously.
 
-Usage: agent-browser inspect
+Usage: chrome-use inspect
 
 Examples:
-  agent-browser open example.com
-  agent-browser inspect          # opens DevTools in your browser
-  agent-browser click "Submit"   # commands still work while DevTools is open
+  chrome-use open example.com
+  chrome-use inspect          # opens DevTools in your browser
+  chrome-use click "Submit"   # commands still work while DevTools is open
 "##
         }
 
         // === Get ===
         "get" => {
             r##"
-agent-browser get - Retrieve information from elements or page
+chrome-use get - Retrieve information from elements or page
 
-Usage: agent-browser get <subcommand> [args]
+Usage: chrome-use get <subcommand> [args]
 
 Retrieves various types of information from elements or the page.
 
@@ -1886,25 +1886,25 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser get text @e1
-  agent-browser get html "#content"
-  agent-browser get value "#email-input"
-  agent-browser get attr "#link" href
-  agent-browser get title
-  agent-browser get url
-  agent-browser get count "li.item"
-  agent-browser get box "#header"
-  agent-browser get styles "button"
-  agent-browser get styles @e1
+  chrome-use get text @e1
+  chrome-use get html "#content"
+  chrome-use get value "#email-input"
+  chrome-use get attr "#link" href
+  chrome-use get title
+  chrome-use get url
+  chrome-use get count "li.item"
+  chrome-use get box "#header"
+  chrome-use get styles "button"
+  chrome-use get styles @e1
 "##
         }
 
         // === Is ===
         "is" => {
             r##"
-agent-browser is - Check element state
+chrome-use is - Check element state
 
-Usage: agent-browser is <subcommand> <selector>
+Usage: chrome-use is <subcommand> <selector>
 
 Checks the state of an element and returns true/false.
 
@@ -1918,18 +1918,18 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser is visible "#modal"
-  agent-browser is enabled "#submit-btn"
-  agent-browser is checked "#agree-checkbox"
+  chrome-use is visible "#modal"
+  chrome-use is enabled "#submit-btn"
+  chrome-use is checked "#agree-checkbox"
 "##
         }
 
         // === Find ===
         "find" => {
             r##"
-agent-browser find - Find and interact with elements by locator
+chrome-use find - Find and interact with elements by locator
 
-Usage: agent-browser find <locator> <value> [action] [text]
+Usage: chrome-use find <locator> <value> [action] [text]
 
 Finds elements using semantic locators and optionally performs an action.
 
@@ -1957,22 +1957,22 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser find role button click --name Submit
-  agent-browser find text "Sign In" click
-  agent-browser find label "Email" fill "user@example.com"
-  agent-browser find placeholder "Search..." type "query"
-  agent-browser find testid "login-form" click
-  agent-browser find first "li.item" click
-  agent-browser find nth 2 ".card" hover
+  chrome-use find role button click --name Submit
+  chrome-use find text "Sign In" click
+  chrome-use find label "Email" fill "user@example.com"
+  chrome-use find placeholder "Search..." type "query"
+  chrome-use find testid "login-form" click
+  chrome-use find first "li.item" click
+  chrome-use find nth 2 ".card" hover
 "##
         }
 
         // === Mouse ===
         "mouse" => {
             r##"
-agent-browser mouse - Low-level mouse operations
+chrome-use mouse - Low-level mouse operations
 
-Usage: agent-browser mouse <subcommand> [args]
+Usage: chrome-use mouse <subcommand> [args]
 
 Performs low-level mouse operations for precise control.
 
@@ -1987,21 +1987,21 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser mouse move 100 200
-  agent-browser mouse down
-  agent-browser mouse up
-  agent-browser mouse down right
-  agent-browser mouse wheel 100
-  agent-browser mouse wheel -50 0
+  chrome-use mouse move 100 200
+  chrome-use mouse down
+  chrome-use mouse up
+  chrome-use mouse down right
+  chrome-use mouse wheel 100
+  chrome-use mouse wheel -50 0
 "##
         }
 
         // === Set ===
         "set" => {
             r##"
-agent-browser set - Configure browser settings
+chrome-use set - Configure browser settings
 
-Usage: agent-browser set <setting> [args]
+Usage: chrome-use set <setting> [args]
 
 Configures various browser settings and emulation options.
 
@@ -2020,24 +2020,24 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser set viewport 1920 1080
-  agent-browser set viewport 1920 1080 2    # 2x retina
-  agent-browser set device "iPhone 12"
-  agent-browser set geo 37.7749 -122.4194
-  agent-browser set offline on
-  agent-browser set headers '{"X-Custom": "value"}'
-  agent-browser set credentials admin secret123
-  agent-browser set media dark
-  agent-browser set media light reduced-motion
+  chrome-use set viewport 1920 1080
+  chrome-use set viewport 1920 1080 2    # 2x retina
+  chrome-use set device "iPhone 12"
+  chrome-use set geo 37.7749 -122.4194
+  chrome-use set offline on
+  chrome-use set headers '{"X-Custom": "value"}'
+  chrome-use set credentials admin secret123
+  chrome-use set media dark
+  chrome-use set media light reduced-motion
 "##
         }
 
         // === Network ===
         "network" => {
             r##"
-agent-browser network - Network interception and monitoring
+chrome-use network - Network interception and monitoring
 
-Usage: agent-browser network <subcommand> [args]
+Usage: chrome-use network <subcommand> [args]
 
 Intercept, mock, or monitor network requests.
 
@@ -2060,26 +2060,26 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser network route "**/api/*" --abort
-  agent-browser network route "**/data.json" --body '{"mock": true}'
-  agent-browser network unroute
-  agent-browser network requests
-  agent-browser network requests --filter "api"
-  agent-browser network requests --type xhr,fetch
-  agent-browser network requests --method POST --status 2xx
-  agent-browser network requests --clear
-  agent-browser network request 1234.5
-  agent-browser network har start
-  agent-browser network har stop ./capture.har
+  chrome-use network route "**/api/*" --abort
+  chrome-use network route "**/data.json" --body '{"mock": true}'
+  chrome-use network unroute
+  chrome-use network requests
+  chrome-use network requests --filter "api"
+  chrome-use network requests --type xhr,fetch
+  chrome-use network requests --method POST --status 2xx
+  chrome-use network requests --clear
+  chrome-use network request 1234.5
+  chrome-use network har start
+  chrome-use network har stop ./capture.har
 "##
         }
 
         // === Storage ===
         "storage" => {
             r##"
-agent-browser storage - Manage web storage
+chrome-use storage - Manage web storage
 
-Usage: agent-browser storage <type> [operation] [key] [value]
+Usage: chrome-use storage <type> [operation] [key] [value]
 
 Manage localStorage and sessionStorage.
 
@@ -2097,20 +2097,20 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser storage local
-  agent-browser storage local get authToken
-  agent-browser storage local set theme "dark"
-  agent-browser storage local clear
-  agent-browser storage session get userId
+  chrome-use storage local
+  chrome-use storage local get authToken
+  chrome-use storage local set theme "dark"
+  chrome-use storage local clear
+  chrome-use storage session get userId
 "##
         }
 
         // === Cookies ===
         "cookies" => {
             r##"
-agent-browser cookies - Manage browser cookies
+chrome-use cookies - Manage browser cookies
 
-Usage: agent-browser cookies [operation] [args]
+Usage: chrome-use cookies [operation] [args]
 
 Manage browser cookies for the current context.
 
@@ -2137,34 +2137,34 @@ Global Options:
 
 Examples:
   # Simple cookie for current page
-  agent-browser cookies set session_id "abc123"
+  chrome-use cookies set session_id "abc123"
 
   # Set cookie for a URL before loading it (useful for authentication)
-  agent-browser cookies set session_id "abc123" --url https://app.example.com
+  chrome-use cookies set session_id "abc123" --url https://app.example.com
 
   # Set secure, httpOnly cookie with domain and path
-  agent-browser cookies set auth_token "xyz789" --domain example.com --path /api --httpOnly --secure
+  chrome-use cookies set auth_token "xyz789" --domain example.com --path /api --httpOnly --secure
 
   # Set cookie with SameSite policy
-  agent-browser cookies set tracking_consent "yes" --sameSite Strict
+  chrome-use cookies set tracking_consent "yes" --sameSite Strict
 
   # Set cookie with expiration (Unix timestamp)
-  agent-browser cookies set temp_token "temp123" --expires 1735689600
+  chrome-use cookies set temp_token "temp123" --expires 1735689600
 
   # Get all cookies
-  agent-browser cookies
+  chrome-use cookies
 
   # Clear all cookies
-  agent-browser cookies clear
+  chrome-use cookies clear
 "##
         }
 
         // === Tabs ===
         "tab" => {
             r##"
-agent-browser tab - Manage browser tabs
+chrome-use tab - Manage browser tabs
 
-Usage: agent-browser tab [operation] [args]
+Usage: chrome-use tab [operation] [args]
 
 Manage browser tabs in the current window. Stable tab ids look like `t1`,
 `t2`, `t3`. An id is never reused within a session, so scripts can keep
@@ -2184,25 +2184,25 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser tab
-  agent-browser tab list
-  agent-browser tab new
-  agent-browser tab new https://example.com
-  agent-browser tab new --label docs https://docs.example.com
-  agent-browser tab t2
-  agent-browser tab docs
-  agent-browser tab close
-  agent-browser tab close t1
-  agent-browser tab close docs
+  chrome-use tab
+  chrome-use tab list
+  chrome-use tab new
+  chrome-use tab new https://example.com
+  chrome-use tab new --label docs https://docs.example.com
+  chrome-use tab t2
+  chrome-use tab docs
+  chrome-use tab close
+  chrome-use tab close t1
+  chrome-use tab close docs
 "##
         }
 
         // === Window ===
         "window" => {
             r##"
-agent-browser window - Manage browser windows
+chrome-use window - Manage browser windows
 
-Usage: agent-browser window <operation>
+Usage: chrome-use window <operation>
 
 Manage browser windows.
 
@@ -2214,16 +2214,16 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser window new
+  chrome-use window new
 "##
         }
 
         // === Frame ===
         "frame" => {
             r##"
-agent-browser frame - Switch frame context
+chrome-use frame - Switch frame context
 
-Usage: agent-browser frame <selector|main>
+Usage: chrome-use frame <selector|main>
 
 Switch to an iframe or back to the main frame.
 
@@ -2236,18 +2236,18 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser frame "#embed-iframe"
-  agent-browser frame "iframe[name='content']"
-  agent-browser frame main
+  chrome-use frame "#embed-iframe"
+  chrome-use frame "iframe[name='content']"
+  chrome-use frame main
 "##
         }
 
         // === Auth ===
         "auth" => {
             r##"
-agent-browser auth - Manage authentication profiles
+chrome-use auth - Manage authentication profiles
 
-Usage: agent-browser auth <subcommand> [args]
+Usage: chrome-use auth <subcommand> [args]
 
 Subcommands:
   save <name>              Save credentials for a login profile
@@ -2274,23 +2274,23 @@ Global Options:
   --session <name>         Use specific session
 
 Examples:
-  echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin
-  agent-browser auth save github --url https://github.com/login --username user --password pass
-  agent-browser auth login github
-  agent-browser auth list
-  agent-browser auth show github
-  agent-browser auth delete github
+  echo "pass" | chrome-use auth save github --url https://github.com/login --username user --password-stdin
+  chrome-use auth save github --url https://github.com/login --username user --password pass
+  chrome-use auth login github
+  chrome-use auth list
+  chrome-use auth show github
+  chrome-use auth delete github
 "##
         }
 
         // === Confirm/Deny ===
         "confirm" | "deny" => {
             r##"
-agent-browser confirm/deny - Approve or deny pending actions
+chrome-use confirm/deny - Approve or deny pending actions
 
 Usage:
-  agent-browser confirm <confirmation-id>
-  agent-browser deny <confirmation-id>
+  chrome-use confirm <confirmation-id>
+  chrome-use deny <confirmation-id>
 
 When --confirm-actions is set, certain action categories return a
 confirmation_required response with a confirmation ID. Use confirm/deny
@@ -2299,17 +2299,17 @@ to approve or reject the action.
 Pending confirmations auto-deny after 60 seconds.
 
 Examples:
-  agent-browser confirm c_8f3a1234
-  agent-browser deny c_8f3a1234
+  chrome-use confirm c_8f3a1234
+  chrome-use deny c_8f3a1234
 "##
         }
 
         // === Dialog ===
         "dialog" => {
             r##"
-agent-browser dialog - Handle browser dialogs
+chrome-use dialog - Handle browser dialogs
 
-Usage: agent-browser dialog <accept|dismiss|status> [text]
+Usage: chrome-use dialog <accept|dismiss|status> [text]
 
 Respond to or check for browser dialogs (alert, confirm, prompt).
 
@@ -2323,19 +2323,19 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser dialog accept
-  agent-browser dialog accept "my input"
-  agent-browser dialog dismiss
-  agent-browser dialog status
+  chrome-use dialog accept
+  chrome-use dialog accept "my input"
+  chrome-use dialog dismiss
+  chrome-use dialog status
 "##
         }
 
         // === Trace ===
         "trace" => {
             r##"
-agent-browser trace - Record execution trace
+chrome-use trace - Record execution trace
 
-Usage: agent-browser trace <operation> [path]
+Usage: chrome-use trace <operation> [path]
 
 Record a Chrome DevTools trace for debugging.
 
@@ -2348,19 +2348,19 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser trace start
-  agent-browser trace start ./my-trace
-  agent-browser trace stop
-  agent-browser trace stop ./debug-trace.zip
+  chrome-use trace start
+  chrome-use trace start ./my-trace
+  chrome-use trace stop
+  chrome-use trace stop ./debug-trace.zip
 "##
         }
 
         // === Profile (CDP Tracing) ===
         "profiler" => {
             r##"
-agent-browser profiler - Record Chrome DevTools performance profile
+chrome-use profiler - Record Chrome DevTools performance profile
 
-Usage: agent-browser profiler <operation> [options]
+Usage: chrome-use profiler <operation> [options]
 
 Record a performance profile using Chrome DevTools Protocol (CDP) Tracing.
 The output JSON file can be loaded into Chrome DevTools Performance panel,
@@ -2380,14 +2380,14 @@ Global Options:
 
 Examples:
   # Basic profiling
-  agent-browser profiler start
-  agent-browser navigate https://example.com
-  agent-browser click "#button"
-  agent-browser profiler stop ./trace.json
+  chrome-use profiler start
+  chrome-use navigate https://example.com
+  chrome-use click "#button"
+  chrome-use profiler stop ./trace.json
 
   # With custom categories
-  agent-browser profiler start --categories "devtools.timeline,v8.execute,blink.user_timing"
-  agent-browser profiler stop ./custom-trace.json
+  chrome-use profiler start --categories "devtools.timeline,v8.execute,blink.user_timing"
+  chrome-use profiler stop ./custom-trace.json
 
 The output file can be viewed in:
   - Chrome DevTools: Performance panel > Load profile
@@ -2398,11 +2398,11 @@ The output file can be viewed in:
         // === Record (video) ===
         "record" => {
             r##"
-agent-browser record - Record browser session to video
+chrome-use record - Record browser session to video
 
-Usage: agent-browser record start <path.webm> [url]
-       agent-browser record stop
-       agent-browser record restart <path.webm> [url]
+Usage: chrome-use record start <path.webm> [url]
+       chrome-use record stop
+       chrome-use record restart <path.webm> [url]
 
 Record the browser to a WebM video file.
 Creates a fresh browser context but preserves cookies and localStorage.
@@ -2419,26 +2419,26 @@ Global Options:
 
 Examples:
   # Record from current page (preserves login state)
-  agent-browser open https://app.example.com/dashboard
-  agent-browser snapshot -i            # Explore and plan
-  agent-browser record start ./demo.webm
-  agent-browser click @e3              # Execute planned actions
-  agent-browser record stop
+  chrome-use open https://app.example.com/dashboard
+  chrome-use snapshot -i            # Explore and plan
+  chrome-use record start ./demo.webm
+  chrome-use click @e3              # Execute planned actions
+  chrome-use record stop
 
   # Or specify a different URL
-  agent-browser record start ./demo.webm https://example.com
+  chrome-use record start ./demo.webm https://example.com
 
   # Restart recording with a new file (stops previous, starts new)
-  agent-browser record restart ./take2.webm
+  chrome-use record restart ./take2.webm
 "##
         }
 
         // === Console/Errors ===
         "console" => {
             r##"
-agent-browser console - View console logs
+chrome-use console - View console logs
 
-Usage: agent-browser console [--clear]
+Usage: chrome-use console [--clear]
 
 View browser console output (log, warn, error, info).
 
@@ -2450,15 +2450,15 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser console
-  agent-browser console --clear
+  chrome-use console
+  chrome-use console --clear
 "##
         }
         "errors" => {
             r##"
-agent-browser errors - View page errors
+chrome-use errors - View page errors
 
-Usage: agent-browser errors [--clear]
+Usage: chrome-use errors [--clear]
 
 View JavaScript errors and uncaught exceptions.
 
@@ -2470,17 +2470,17 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser errors
-  agent-browser errors --clear
+  chrome-use errors
+  chrome-use errors --clear
 "##
         }
 
         // === Highlight ===
         "highlight" => {
             r##"
-agent-browser highlight - Highlight an element
+chrome-use highlight - Highlight an element
 
-Usage: agent-browser highlight <selector>
+Usage: chrome-use highlight <selector>
 
 Visually highlights an element on the page for debugging.
 
@@ -2489,17 +2489,17 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser highlight "#target-element"
-  agent-browser highlight @e5
+  chrome-use highlight "#target-element"
+  chrome-use highlight @e5
 "##
         }
 
         // === Clipboard ===
         "clipboard" => {
             r##"
-agent-browser clipboard - Read and write clipboard
+chrome-use clipboard - Read and write clipboard
 
-Usage: agent-browser clipboard <operation> [text]
+Usage: chrome-use clipboard <operation> [text]
 
 Read from or write to the browser clipboard.
 
@@ -2514,19 +2514,19 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser clipboard read
-  agent-browser clipboard write "Hello, World!"
-  agent-browser clipboard copy
-  agent-browser clipboard paste
+  chrome-use clipboard read
+  chrome-use clipboard write "Hello, World!"
+  chrome-use clipboard copy
+  chrome-use clipboard paste
 "##
         }
 
         // === State ===
         "state" => {
             r##"
-agent-browser state - Manage browser state
+chrome-use state - Manage browser state
 
-Usage: agent-browser state <operation> [args]
+Usage: chrome-use state <operation> [args]
 
 Save, restore, list, and manage browser state (cookies, localStorage, sessionStorage).
 
@@ -2541,7 +2541,7 @@ Operations:
 
 Automatic State Persistence:
   Use --session-name to auto-save/restore state across restarts:
-  agent-browser --session-name myapp open https://example.com
+  chrome-use --session-name myapp open https://example.com
   Or set AGENT_BROWSER_SESSION_NAME environment variable.
 
 State Encryption:
@@ -2553,22 +2553,22 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser state save ./auth-state.json
-  agent-browser state load ./auth-state.json
-  agent-browser state list
-  agent-browser state show myapp-default.json
-  agent-browser state rename old-name new-name
-  agent-browser state clear --all
-  agent-browser state clean --older-than 7
+  chrome-use state save ./auth-state.json
+  chrome-use state load ./auth-state.json
+  chrome-use state list
+  chrome-use state show myapp-default.json
+  chrome-use state rename old-name new-name
+  chrome-use state clear --all
+  chrome-use state clean --older-than 7
 "##
         }
 
         // === Session ===
         "session" => {
             r##"
-agent-browser session - Manage sessions
+chrome-use session - Manage sessions
 
-Usage: agent-browser session [operation]
+Usage: chrome-use session [operation]
 
 Manage isolated browser sessions. Each session has its own browser
 instance with separate cookies, storage, and state.
@@ -2585,18 +2585,18 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser session
-  agent-browser session list
-  agent-browser --session test open example.com
+  chrome-use session
+  chrome-use session list
+  chrome-use --session test open example.com
 "##
         }
 
         // === Install ===
         "install" => {
             r##"
-agent-browser install - Install browser binaries
+chrome-use install - Install browser binaries
 
-Usage: agent-browser install [--with-deps]
+Usage: chrome-use install [--with-deps]
 
 Downloads and installs browser binaries required for automation.
 
@@ -2604,33 +2604,33 @@ Options:
   -d, --with-deps      Also install system dependencies (Linux only)
 
 Examples:
-  agent-browser install
-  agent-browser install --with-deps
+  chrome-use install
+  chrome-use install --with-deps
 "##
         }
 
         // === Upgrade ===
         "upgrade" => {
             r##"
-agent-browser upgrade - Upgrade to the latest version
+chrome-use upgrade - Upgrade to the latest version
 
-Usage: agent-browser upgrade
+Usage: chrome-use upgrade
 
 Detects the current installation method (npm, Homebrew, or Cargo) and runs
 the appropriate update command. Displays the version change on success, or
 informs you if you are already on the latest version.
 
 Examples:
-  agent-browser upgrade
+  chrome-use upgrade
 "##
         }
 
         // === Doctor ===
         "doctor" => {
             r##"
-agent-browser doctor - Diagnose and repair your install
+chrome-use doctor - Diagnose and repair your install
 
-Usage: agent-browser doctor [options]
+Usage: chrome-use doctor [options]
 
 Runs a battery of checks across environment, Chrome install, daemon state,
 config files, encryption key, providers, network reachability, and a live
@@ -2651,19 +2651,19 @@ Exit codes:
   1  At least one check failed
 
 Examples:
-  agent-browser doctor
-  agent-browser doctor --offline --quick
-  agent-browser doctor --fix
-  agent-browser doctor --json
+  chrome-use doctor
+  chrome-use doctor --offline --quick
+  chrome-use doctor --fix
+  chrome-use doctor --json
 "##
         }
 
         // === Dashboard ===
         "dashboard" => {
             r##"
-agent-browser dashboard - Observability dashboard
+chrome-use dashboard - Observability dashboard
 
-Usage: agent-browser dashboard [start|stop] [options]
+Usage: chrome-use dashboard [start|stop] [options]
 
 Manage the observability dashboard, a local web UI that shows live
 browser viewports and command activity feeds for all sessions.
@@ -2673,12 +2673,12 @@ Subcommands:
   start [--port <n>]   Start the dashboard server (default port: 4848)
   stop                 Stop the dashboard server
 
-Running 'agent-browser dashboard' with no subcommand is equivalent to 'dashboard start'.
+Running 'chrome-use dashboard' with no subcommand is equivalent to 'dashboard start'.
 
 The dashboard runs as a standalone background process, independent of
 browser sessions. All sessions automatically stream to the dashboard.
 It works from http://localhost:4848 or a proxied/forwarded URL that
-reaches the dashboard server, such as https://dashboard.agent-browser.localhost
+reaches the dashboard server, such as https://dashboard.chrome-use.localhost
 or a Coder workspace URL. The browser stays on the dashboard origin;
 session tabs, status, and stream traffic are proxied internally, so
 session ports do not need to be exposed.
@@ -2690,18 +2690,18 @@ Global Options:
   --json               Output as JSON
 
 Examples:
-  agent-browser dashboard start
-  agent-browser dashboard start --port 8080
-  agent-browser dashboard stop
+  chrome-use dashboard start
+  chrome-use dashboard start --port 8080
+  chrome-use dashboard stop
 "##
         }
 
         // === Connect ===
         "connect" => {
             r##"
-agent-browser connect - Connect to browser via CDP
+chrome-use connect - Connect to browser via CDP
 
-Usage: agent-browser connect <port|url>
+Usage: chrome-use connect <port|url>
 
 Connects to a running browser instance via Chrome DevTools Protocol (CDP).
 This allows controlling browsers, Electron apps, or remote browser services.
@@ -2722,32 +2722,32 @@ Global Options:
 Examples:
   # Connect to local Chrome with remote debugging
   # Start Chrome: google-chrome --remote-debugging-port=9222
-  agent-browser connect 9222
+  chrome-use connect 9222
 
   # Connect using WebSocket URL from /json/version endpoint
-  agent-browser connect "ws://localhost:9222/devtools/browser/abc123"
+  chrome-use connect "ws://localhost:9222/devtools/browser/abc123"
 
   # Connect to remote browser service
-  agent-browser connect "wss://browser-service.example.com/cdp?token=xyz"
+  chrome-use connect "wss://browser-service.example.com/cdp?token=xyz"
 
   # After connecting, run commands normally
-  agent-browser snapshot
-  agent-browser click @e1
+  chrome-use snapshot
+  chrome-use click @e1
 "##
         }
 
         // === Runtime streaming ===
         "stream" => {
             r##"
-agent-browser stream - Manage live WebSocket browser streaming
+chrome-use stream - Manage live WebSocket browser streaming
 
 Usage:
-  agent-browser stream enable [--port <port>]
-  agent-browser stream disable
-  agent-browser stream status
+  chrome-use stream enable [--port <port>]
+  chrome-use stream disable
+  chrome-use stream status
 
 Enables or disables the session-scoped WebSocket stream server without restarting
-an already-running daemon. If --port is omitted, agent-browser binds an
+an already-running daemon. If --port is omitted, chrome-use binds an
 available localhost port automatically and reports it back.
 
 Notes:
@@ -2762,19 +2762,19 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser stream status
-  agent-browser stream enable
-  agent-browser stream enable --port 9223
-  agent-browser stream disable
+  chrome-use stream status
+  chrome-use stream enable
+  chrome-use stream enable --port 9223
+  chrome-use stream disable
 "##
         }
 
         // === iOS Commands ===
         "tap" => {
             r##"
-agent-browser tap - Tap an element (touch gesture)
+chrome-use tap - Tap an element (touch gesture)
 
-Usage: agent-browser tap <selector>
+Usage: chrome-use tap <selector>
 
 Taps an element. This is an alias for 'click' that provides semantic clarity
 for touch-based interfaces like iOS Safari.
@@ -2784,16 +2784,16 @@ Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser tap "#submit-button"
-  agent-browser tap @e1
-  agent-browser -p ios tap "button:has-text('Sign In')"
+  chrome-use tap "#submit-button"
+  chrome-use tap @e1
+  chrome-use -p ios tap "button:has-text('Sign In')"
 "##
         }
         "swipe" => {
             r##"
-agent-browser swipe - Swipe gesture (iOS)
+chrome-use swipe - Swipe gesture (iOS)
 
-Usage: agent-browser swipe <direction> [distance]
+Usage: chrome-use swipe <direction> [distance]
 
 Performs a swipe gesture on iOS Safari. The direction determines
 which way the content moves (swipe up scrolls down, etc.).
@@ -2807,16 +2807,16 @@ Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser -p ios swipe up
-  agent-browser -p ios swipe down 500
-  agent-browser -p ios swipe left
+  chrome-use -p ios swipe up
+  chrome-use -p ios swipe down 500
+  chrome-use -p ios swipe left
 "##
         }
         "device" => {
             r##"
-agent-browser device - Manage iOS simulators
+chrome-use device - Manage iOS simulators
 
-Usage: agent-browser device <subcommand>
+Usage: chrome-use device <subcommand>
 
 Subcommands:
   list    List available iOS simulators
@@ -2826,14 +2826,14 @@ Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser device list
-  agent-browser -p ios device list
+  chrome-use device list
+  chrome-use -p ios device list
 "##
         }
 
         "diff" => {
             r##"
-agent-browser diff - Compare page states
+chrome-use diff - Compare page states
 
 Subcommands:
 
@@ -2843,7 +2843,7 @@ Subcommands:
 
 Snapshot Diff:
 
-  Usage: agent-browser diff snapshot [options]
+  Usage: chrome-use diff snapshot [options]
 
   Options:
     -b, --baseline <file>    Compare against a saved snapshot file
@@ -2855,7 +2855,7 @@ Snapshot Diff:
 
 Screenshot Diff:
 
-  Usage: agent-browser diff screenshot --baseline <file> [options]
+  Usage: chrome-use diff screenshot --baseline <file> [options]
 
   Options:
     -b, --baseline <file>    Baseline image to compare against (required)
@@ -2866,7 +2866,7 @@ Screenshot Diff:
 
 URL Diff:
 
-  Usage: agent-browser diff url <url1> <url2> [options]
+  Usage: chrome-use diff url <url1> <url2> [options]
 
   Options:
     --screenshot             Also compare screenshots (default: snapshot only)
@@ -2881,21 +2881,21 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  agent-browser diff snapshot
-  agent-browser diff snapshot --baseline before.txt
-  agent-browser diff screenshot --baseline before.png
-  agent-browser diff screenshot --baseline before.png --output diff.png --threshold 0.2
-  agent-browser diff url https://staging.example.com https://prod.example.com
-  agent-browser diff url https://v1.example.com https://v2.example.com --screenshot
+  chrome-use diff snapshot
+  chrome-use diff snapshot --baseline before.txt
+  chrome-use diff screenshot --baseline before.png
+  chrome-use diff screenshot --baseline before.png --output diff.png --threshold 0.2
+  chrome-use diff url https://staging.example.com https://prod.example.com
+  chrome-use diff url https://v1.example.com https://v2.example.com --screenshot
 "##
         }
 
         "batch" => {
             r##"
-agent-browser batch - Execute multiple commands sequentially
+chrome-use batch - Execute multiple commands sequentially
 
-Usage: agent-browser batch [options] "<cmd1>" "<cmd2>" ...
-       echo '<json>' | agent-browser batch [options]
+Usage: chrome-use batch [options] "<cmd1>" "<cmd2>" ...
+       echo '<json>' | chrome-use batch [options]
 
 Runs multiple commands in sequence. Commands can be passed as quoted
 arguments or piped as JSON via stdin. Results are printed in order,
@@ -2907,7 +2907,7 @@ Options:
 
 Argument Mode:
   Each quoted argument is a full command string:
-  agent-browser batch "open https://example.com" "snapshot -i" "screenshot"
+  chrome-use batch "open https://example.com" "snapshot -i" "screenshot"
 
 Stdin Mode (JSON):
   A JSON array of string arrays. Each inner array is one command:
@@ -2920,18 +2920,18 @@ Stdin Mode (JSON):
   ]
 
 Examples:
-  agent-browser batch "open https://example.com" "screenshot"
-  agent-browser batch --bail "open https://example.com" "click @e1" "screenshot"
-  echo '[["open", "https://example.com"], ["snapshot"]]' | agent-browser batch
-  agent-browser batch --bail < commands.json
+  chrome-use batch "open https://example.com" "screenshot"
+  chrome-use batch --bail "open https://example.com" "click @e1" "screenshot"
+  echo '[["open", "https://example.com"], ["snapshot"]]' | chrome-use batch
+  chrome-use batch --bail < commands.json
 "##
         }
 
         "profiles" => {
             r##"
-agent-browser profiles - List available Chrome profiles
+chrome-use profiles - List available Chrome profiles
 
-Usage: agent-browser profiles
+Usage: chrome-use profiles
 
 Lists all Chrome profiles found in your Chrome user data directory, showing
 the directory name and display name for each profile. Use the directory name
@@ -2941,23 +2941,23 @@ Global Options:
   --json               Output as JSON
 
 Examples:
-  agent-browser profiles
-  agent-browser profiles --json
-  agent-browser --profile Default open https://gmail.com
+  chrome-use profiles
+  chrome-use profiles --json
+  chrome-use --profile Default open https://gmail.com
 "##
         }
 
         "chat" => {
             r##"
-agent-browser chat - Natural language browser control via AI
+chrome-use chat - Natural language browser control via AI
 
 Usage:
-  agent-browser chat <message>         Single-shot: execute instruction and exit
-  agent-browser chat                   Interactive REPL (when stdin is a TTY)
-  echo "instruction" | agent-browser chat   Piped input
+  chrome-use chat <message>         Single-shot: execute instruction and exit
+  chrome-use chat                   Interactive REPL (when stdin is a TTY)
+  echo "instruction" | chrome-use chat   Piped input
 
 Sends natural language instructions to an AI model that translates them
-into agent-browser commands and executes them against the active session.
+into chrome-use commands and executes them against the active session.
 Requires AI_GATEWAY_API_KEY to be set.
 
 In interactive mode, type "quit", "exit", or "q" to leave the REPL.
@@ -2972,20 +2972,20 @@ Global Options:
   --session <name>       Target session for commands
 
 Examples:
-  agent-browser chat "open google.com and search for cats"
-  agent-browser chat "take a screenshot of the current page"
-  agent-browser -q chat "summarize this page"
-  agent-browser -v chat "fill in the login form with test@example.com"
-  agent-browser --model openai/gpt-4o chat "navigate to hacker news"
-  agent-browser chat
+  chrome-use chat "open google.com and search for cats"
+  chrome-use chat "take a screenshot of the current page"
+  chrome-use -q chat "summarize this page"
+  chrome-use -v chat "fill in the login form with test@example.com"
+  chrome-use --model openai/gpt-4o chat "navigate to hacker news"
+  chrome-use chat
 "##
         }
 
         "skills" => {
             r##"
-agent-browser skills - List and retrieve bundled skill content
+chrome-use skills - List and retrieve bundled skill content
 
-Usage: agent-browser skills [subcommand] [options]
+Usage: chrome-use skills [subcommand] [options]
 
 Subcommands:
   list                       List all available skills (default)
@@ -3002,14 +3002,14 @@ installed CLI version. Agents should use this to get current instructions
 rather than relying on cached copies.
 
 Examples:
-  agent-browser skills
-  agent-browser skills list
-  agent-browser skills get core
-  agent-browser skills get core --full
-  agent-browser skills get electron --full
-  agent-browser skills get --all
-  agent-browser skills path core
-  agent-browser skills list --json
+  chrome-use skills
+  chrome-use skills list
+  chrome-use skills get core
+  chrome-use skills get core --full
+  chrome-use skills get electron --full
+  chrome-use skills get --all
+  chrome-use skills path core
+  chrome-use skills list --json
 
 Environment:
   AGENT_BROWSER_SKILLS_DIR   Override the skills directory path
@@ -3025,12 +3025,12 @@ Environment:
 pub fn print_help() {
     println!(
         r#"
-agent-browser - fast browser automation CLI for AI agents
+chrome-use - fast browser automation CLI for AI agents
 
-Usage: agent-browser <command> [args] [options]
+Usage: chrome-use <command> [args] [options]
 
 Start here (for AI agents):
-  agent-browser skills get core --full
+  chrome-use skills get core --full
 
   Skills ship with the CLI (always version-matched) and include workflow
   patterns, ref/selector usage, and copy-paste examples. Prefer this over
@@ -3075,24 +3075,24 @@ Navigation:
   forward                    Go forward
   reload                     Reload page
 
-Get Info:  agent-browser get <what> [selector]
+Get Info:  chrome-use get <what> [selector]
   text, html, value, attr <name>, title, url, count, box, styles, cdp-url
 
-Check State:  agent-browser is <what> <selector>
+Check State:  chrome-use is <what> <selector>
   visible, enabled, checked
 
-Find Elements:  agent-browser find <locator> <value> <action> [text]
+Find Elements:  chrome-use find <locator> <value> <action> [text]
   role, text, label, placeholder, alt, title, testid, first, last, nth
 
-Mouse:  agent-browser mouse <action> [args]
+Mouse:  chrome-use mouse <action> [args]
   move <x> <y>, down [btn], up [btn], wheel <dy> [dx]
 
-Browser Settings:  agent-browser set <setting> [value]
+Browser Settings:  chrome-use set <setting> [value]
   viewport <w> <h>, device <name>, geo <lat> <lng>
   offline [on|off], headers <json>, credentials <user> <pass>
   media [dark|light] [reduced-motion]
 
-Network:  agent-browser network <action>
+Network:  chrome-use network <action>
   route <url> [--abort|--body <json>] [--resource-type <csv>]
   unroute [url]
   requests [--clear] [--filter <pattern>]
@@ -3251,14 +3251,14 @@ Options:
   --version, -V              Show version
 
 Configuration:
-  agent-browser looks for agent-browser.json in these locations (lowest to highest priority):
-    1. ~/.agent-browser/config.json      User-level defaults
-    2. ./agent-browser.json              Project-level overrides
+  chrome-use looks for chrome-use.json in these locations (lowest to highest priority):
+    1. ~/.chrome-use/config.json      User-level defaults
+    2. ./chrome-use.json              Project-level overrides
     3. Environment variables             Override config file values
     4. CLI flags                         Override everything
 
   Use --config <path> to load a specific config file instead of the defaults.
-  If --config points to a missing or invalid file, agent-browser exits with an error.
+  If --config points to a missing or invalid file, chrome-use exits with an error.
 
   Boolean flags accept an optional true/false value to override config:
     --headed           (same as --headed true)
@@ -3267,7 +3267,7 @@ Configuration:
 
   Extensions from user and project configs are merged (not replaced).
 
-  Example agent-browser.json:
+  Example chrome-use.json:
     {{"headed": true, "hideScrollbars": false, "proxy": "http://localhost:8080"}}
 
 Environment:
@@ -3318,47 +3318,47 @@ Environment:
   AI_GATEWAY_MODEL               Default AI model (default: anthropic/claude-sonnet-4.6, or --model flag)
 
 Install:
-  npm install -g agent-browser           # npm
-  brew install agent-browser             # Homebrew
-  cargo install agent-browser            # Cargo
-  agent-browser install                  # Download Chrome (first time)
+  npm install -g chrome-use           # npm
+  brew install chrome-use             # Homebrew
+  cargo install chrome-use            # Cargo
+  chrome-use install                  # Download Chrome (first time)
 
 Examples:
-  agent-browser open example.com
-  agent-browser snapshot -i              # Interactive elements only
-  agent-browser click @e2                # Click by ref from snapshot
-  agent-browser fill @e3 "test@example.com"
-  agent-browser find role button click --name Submit
-  agent-browser get text @e1
-  agent-browser screenshot --full
-  agent-browser screenshot --annotate    # Labeled screenshot for vision models
-  agent-browser wait 2000               # Wait for slow pages to settle
-  agent-browser --cdp 9222 snapshot      # Connect via CDP port
-  agent-browser --auto-connect snapshot  # Auto-discover running Chrome
-  agent-browser stream enable            # Start runtime streaming on an auto-selected port
-  agent-browser stream status            # Inspect runtime streaming state
-  agent-browser --color-scheme dark open example.com  # Dark mode
-  agent-browser --profile Default open gmail.com        # Reuse Chrome login state
-  agent-browser --profile ~/.myapp open example.com    # Persistent custom profile
-  agent-browser profiles                               # List available Chrome profiles
-  agent-browser --session-name myapp open example.com  # Auto-save/restore state
-  agent-browser chat "open google.com and search for cats"  # AI chat (single-shot)
-  agent-browser chat                                        # AI chat (interactive REPL)
-  agent-browser -q chat "summarize this page"               # Quiet mode (text only)
+  chrome-use open example.com
+  chrome-use snapshot -i              # Interactive elements only
+  chrome-use click @e2                # Click by ref from snapshot
+  chrome-use fill @e3 "test@example.com"
+  chrome-use find role button click --name Submit
+  chrome-use get text @e1
+  chrome-use screenshot --full
+  chrome-use screenshot --annotate    # Labeled screenshot for vision models
+  chrome-use wait 2000               # Wait for slow pages to settle
+  chrome-use --cdp 9222 snapshot      # Connect via CDP port
+  chrome-use --auto-connect snapshot  # Auto-discover running Chrome
+  chrome-use stream enable            # Start runtime streaming on an auto-selected port
+  chrome-use stream status            # Inspect runtime streaming state
+  chrome-use --color-scheme dark open example.com  # Dark mode
+  chrome-use --profile Default open gmail.com        # Reuse Chrome login state
+  chrome-use --profile ~/.myapp open example.com    # Persistent custom profile
+  chrome-use profiles                               # List available Chrome profiles
+  chrome-use --session-name myapp open example.com  # Auto-save/restore state
+  chrome-use chat "open google.com and search for cats"  # AI chat (single-shot)
+  chrome-use chat                                        # AI chat (interactive REPL)
+  chrome-use -q chat "summarize this page"               # Quiet mode (text only)
 
 Command Chaining:
   Chain commands with && in a single shell call (browser persists via daemon):
 
-  agent-browser open example.com && agent-browser snapshot -i
-  agent-browser fill @e1 "user@example.com" && agent-browser fill @e2 "pass" && agent-browser click @e3
-  agent-browser open example.com && agent-browser screenshot
+  chrome-use open example.com && chrome-use snapshot -i
+  chrome-use fill @e1 "user@example.com" && chrome-use fill @e2 "pass" && chrome-use click @e3
+  chrome-use open example.com && chrome-use screenshot
 
 iOS Simulator (requires Xcode and Appium):
-  agent-browser -p ios open example.com                    # Use default iPhone
-  agent-browser -p ios --device "iPhone 15 Pro" open url   # Specific device
-  agent-browser -p ios device list                         # List simulators
-  agent-browser -p ios swipe up                            # Swipe gesture
-  agent-browser -p ios tap @e1                             # Touch element
+  chrome-use -p ios open example.com                    # Use default iPhone
+  chrome-use -p ios --device "iPhone 15 Pro" open url   # Specific device
+  chrome-use -p ios device list                         # List simulators
+  chrome-use -p ios swipe up                            # Swipe gesture
+  chrome-use -p ios tap @e1                             # Touch element
 "#
     );
 }
@@ -3440,7 +3440,7 @@ fn print_screenshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
 }
 
 pub fn print_version() {
-    println!("agent-browser {}", env!("CARGO_PKG_VERSION"));
+    println!("chrome-use {}", env!("CARGO_PKG_VERSION"));
 }
 
 #[cfg(test)]

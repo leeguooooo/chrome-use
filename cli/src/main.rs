@@ -504,7 +504,7 @@ fn main() {
         env::set_var("MSYS2_ARG_CONV_EXCL", "*");
     }
 
-    // Native-messaging host mode: Chrome launches `agent-browser __nm-host
+    // Native-messaging host mode: Chrome launches `chrome-use __nm-host
     // <extension-origin> [...]` for the ab-connect extension. Must run before
     // ANY stdout write — stdout is the Chrome native-messaging channel.
     if env::args().nth(1).as_deref() == Some("__nm-host") {
@@ -548,7 +548,7 @@ fn main() {
     if flags.force_launch && flags.profile.is_none() && env::var("CI").is_err() {
         eprintln!(
             "⚠ --launch opens a fresh, isolated test profile (no cookies, no login, no \
-             extensions). The window is labelled `agent-browser (<session>)` in Chrome's \
+             extensions). The window is labelled `chrome-use (<session>)` in Chrome's \
              profile menu so you can tell it apart from your real browser.\n  \
              • reuse your real Chrome (cookies/login/extensions): `--profile auto` \
              (or set AGENT_BROWSER_PROFILE=auto once)\n  \
@@ -674,7 +674,7 @@ fn main() {
                 }
                 None => {
                     eprintln!(
-                        "{} extension not connected. Run `agent-browser extension install`, load the\n  ab-connect extension in Chrome (chrome://extensions → Developer mode →\n  Load unpacked → extensions/ab-connect), then retry.",
+                        "{} extension not connected. Run `chrome-use extension install`, load the\n  ab-connect extension in Chrome (chrome://extensions → Developer mode →\n  Load unpacked → extensions/ab-connect), then retry.",
                         color::error_indicator()
                     );
                     exit(1);
@@ -910,7 +910,7 @@ fn main() {
         if !ignored_flags.is_empty() && !flags.json {
             // Special case: --headed is irrelevant in CDP-attach mode
             // (your existing Chrome is always already visible). The
-            // "agent-browser close + reopen" advice doesn't help because
+            // "chrome-use close + reopen" advice doesn't help because
             // the new daemon will attach right back to the same Chrome.
             // Don't suggest a useless workaround.
             if ignored_flags == ["--headed"] {
@@ -921,7 +921,7 @@ fn main() {
                 );
             } else {
                 eprintln!(
-                    "{} {} ignored: daemon already running. Use 'agent-browser close' first to restart with new options.",
+                    "{} {} ignored: daemon already running. Use 'chrome-use close' first to restart with new options.",
                     color::warning_indicator(),
                     ignored_flags.join(", ")
                 );
@@ -1315,7 +1315,7 @@ fn main() {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
-                        eprintln!("[agent-browser] Action requires confirmation:");
+                        eprintln!("[chrome-use] Action requires confirmation:");
                         eprintln!("  {}: {}", category, desc);
                         eprint!("  Allow? [y/N]: ");
 

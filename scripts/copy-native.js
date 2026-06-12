@@ -13,13 +13,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
 
 const sourceExt = platform() === 'win32' ? '.exe' : '';
-const sourcePath = join(projectRoot, `cli/target/release/agent-browser${sourceExt}`);
+const sourcePath = join(projectRoot, `cli/target/release/chrome-use${sourceExt}`);
 const binDir = join(projectRoot, 'bin');
 
 // Determine platform suffix
 const platformKey = `${platform()}-${arch()}`;
 const ext = platform() === 'win32' ? '.exe' : '';
-const targetName = `agent-browser-${platformKey}${ext}`;
+const targetName = `chrome-use-${platformKey}${ext}`;
 const targetPath = join(binDir, targetName);
 
 if (!existsSync(sourcePath)) {

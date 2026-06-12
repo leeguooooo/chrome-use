@@ -115,7 +115,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                     ),
                 )
                 .with_fix(format!(
-                    "agent-browser state clean --older-than {}",
+                    "chrome-use state clean --older-than {}",
                     expire_days
                 )),
             );

@@ -48,12 +48,12 @@ impl ParseError {
             }
             ParseError::MissingArguments { context, usage } => {
                 format!(
-                    "Missing arguments for: {}\nUsage: agent-browser {}",
+                    "Missing arguments for: {}\nUsage: chrome-use {}",
                     context, usage
                 )
             }
             ParseError::InvalidValue { message, usage } => {
-                format!("{}\nUsage: agent-browser {}", message, usage)
+                format!("{}\nUsage: chrome-use {}", message, usage)
             }
             ParseError::InvalidSessionName { name } => session_name_error(name),
         }
@@ -1003,7 +1003,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 Some("save") => {
                     let name = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                         context: "auth save".to_string(),
-                        usage: "agent-browser auth save <name> --url <url> --username <user> --password <pass>",
+                        usage: "chrome-use auth save <name> --url <url> --username <user> --password <pass>",
                     })?;
 
                     let mut url = None;
@@ -1048,7 +1048,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                                 if other.starts_with("--") {
                                     return Err(ParseError::InvalidValue {
                                         message: format!("unknown flag '{}' for auth save", other),
-                                        usage: "agent-browser auth save <name> --url <url> --username <user> --password <pass>",
+                                        usage: "chrome-use auth save <name> --url <url> --username <user> --password <pass>",
                                     });
                                 }
                             }
@@ -1058,17 +1058,17 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
                     let url_val = url.ok_or_else(|| ParseError::MissingArguments {
                         context: "auth save".to_string(),
-                        usage: "agent-browser auth save <name> --url <url> --username <user> --password <pass> [--password-stdin]",
+                        usage: "chrome-use auth save <name> --url <url> --username <user> --password <pass> [--password-stdin]",
                     })?;
                     let user_val = username.ok_or_else(|| ParseError::MissingArguments {
                         context: "auth save".to_string(),
-                        usage: "agent-browser auth save <name> --url <url> --username <user> --password <pass> [--password-stdin]",
+                        usage: "chrome-use auth save <name> --url <url> --username <user> --password <pass> [--password-stdin]",
                     })?;
 
                     if !password_stdin && password.is_none() {
                         return Err(ParseError::MissingArguments {
                             context: "auth save".to_string(),
-                            usage: "agent-browser auth save <name> --url <url> --username <user> --password <pass> [--password-stdin]",
+                            usage: "chrome-use auth save <name> --url <url> --username <user> --password <pass> [--password-stdin]",
                         });
                     }
 
@@ -1099,7 +1099,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 Some("login") => {
                     let name = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                         context: "auth login".to_string(),
-                        usage: "agent-browser auth login <name>",
+                        usage: "chrome-use auth login <name>",
                     })?;
                     Ok(json!({ "id": id, "action": "auth_login", "name": name }))
                 }
@@ -1107,14 +1107,14 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 Some("delete") | Some("remove") => {
                     let name = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                         context: "auth delete".to_string(),
-                        usage: "agent-browser auth delete <name>",
+                        usage: "chrome-use auth delete <name>",
                     })?;
                     Ok(json!({ "id": id, "action": "auth_delete", "name": name }))
                 }
                 Some("show") => {
                     let name = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                         context: "auth show".to_string(),
-                        usage: "agent-browser auth show <name>",
+                        usage: "chrome-use auth show <name>",
                     })?;
                     Ok(json!({ "id": id, "action": "auth_show", "name": name }))
                 }
@@ -1129,14 +1129,14 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "confirm" => {
             let cid = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "confirm".to_string(),
-                usage: "agent-browser confirm <confirmation-id>",
+                usage: "chrome-use confirm <confirmation-id>",
             })?;
             Ok(json!({ "id": id, "action": "confirm", "confirmationId": cid }))
         }
         "deny" => {
             let cid = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "deny".to_string(),
-                usage: "agent-browser deny <confirmation-id>",
+                usage: "chrome-use deny <confirmation-id>",
             })?;
             Ok(json!({ "id": id, "action": "deny", "confirmationId": cid }))
         }
@@ -1247,7 +1247,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "get" => parse_get(&rest, &id),
 
         // Top-level shortcuts for `get <x>` status reads — users naturally type
-        // `agent-browser url` / `cdp-url` / `title` without the `get` prefix
+        // `chrome-use url` / `cdp-url` / `title` without the `get` prefix
         // (and expect `cdp-url`/`cdp_url` to work interchangeably).
         "url" | "cdp-url" | "cdp_url" | "title" | "html" | "text" | "value" | "count" | "box"
         | "styles" | "attr" => {
@@ -2404,7 +2404,7 @@ fn parse_find(rest: &[&str], id: &str) -> Result<Value, ParseError> {
                         message: format!(
                             "Missing action verb for `find {locator}` (got `{flag}` where action was expected).\n\
                              Valid actions: click, fill, check, hover, text\n\
-                             Did you mean: agent-browser find {locator} <value> click {flag} ...?",
+                             Did you mean: chrome-use find {locator} <value> click {flag} ...?",
                             locator = locator,
                             flag = s,
                         ),
@@ -2549,12 +2549,12 @@ fn parse_find(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             // with the corrected command using their own value, then the menu.
             message: format!(
                 "`{loc}` is not a find locator. To match by visible text, name the locator:\n  \
-                 agent-browser find text \"{loc}\" click\n\n\
+                 chrome-use find text \"{loc}\" click\n\n\
                  Locators: role, text, label, placeholder, alt, title, testid, first, last, nth\n\
                  Examples:\n  \
-                 agent-browser find text \"Sign in\" click\n  \
-                 agent-browser find role button --name \"Submit\" click\n  \
-                 agent-browser find label \"Email\" fill you@example.com",
+                 chrome-use find text \"Sign in\" click\n  \
+                 chrome-use find role button --name \"Submit\" click\n  \
+                 chrome-use find label \"Email\" fill you@example.com",
                 loc = locator,
             ),
             usage: "find <locator> <value> [action] [text]",

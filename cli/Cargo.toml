@@ -1,17 +1,17 @@
 [package]
-name = "agent-browser-stealth"
-version = "0.27.0-fork.51"
+name = "chrome-use"
+version = "1.0.0"
 edition = "2021"
 description = "Fast browser automation CLI for AI agents"
 license = "Apache-2.0"
-repository = "https://github.com/leeguooooo/agent-browser-stealth"
-homepage = "https://github.com/leeguooooo/agent-browser-stealth"
+repository = "https://github.com/leeguooooo/chrome-use"
+homepage = "https://github.com/leeguooooo/chrome-use"
 readme = "../README.md"
 keywords = ["browser", "automation", "ai", "cdp", "chrome"]
 categories = ["command-line-utilities", "web-programming"]
 
 [[bin]]
-name = "agent-browser"
+name = "chrome-use"
 path = "src/main.rs"
 
 [dependencies]

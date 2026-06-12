@@ -306,7 +306,7 @@ async fn e2e_lightpanda_auto_launch_can_open_page() {
 async fn e2e_runtime_stream_enable_before_launch_attaches_and_disables() {
     let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_SESSION"]);
     let socket_dir = std::env::temp_dir().join(format!(
-        "agent-browser-e2e-stream-{}-{}",
+        "chrome-use-e2e-stream-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -609,7 +609,7 @@ async fn e2e_screenshot() {
 
     // Named screenshot
     let tmp_path = std::env::temp_dir()
-        .join("agent-browser-e2e-test-screenshot.png")
+        .join("chrome-use-e2e-test-screenshot.png")
         .to_string_lossy()
         .to_string();
     let resp = execute_command(
@@ -2202,7 +2202,7 @@ async fn e2e_state_management() {
 
     // Save state
     let tmp_state = std::env::temp_dir()
-        .join("agent-browser-e2e-state.json")
+        .join("chrome-use-e2e-state.json")
         .to_string_lossy()
         .to_string();
     let resp = execute_command(
@@ -2314,7 +2314,7 @@ async fn e2e_save_state_cross_domain() {
 
     // Save state (currently on example.com)
     let tmp_state = std::env::temp_dir()
-        .join("agent-browser-e2e-cross-domain-state.json")
+        .join("chrome-use-e2e-cross-domain-state.json")
         .to_string_lossy()
         .to_string();
     let resp = execute_command(
@@ -2718,10 +2718,8 @@ async fn e2e_error_handling() {
 #[tokio::test]
 #[ignore]
 async fn e2e_profile_cookie_persistence() {
-    let profile_dir = std::env::temp_dir().join(format!(
-        "agent-browser-e2e-profile-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let profile_dir =
+        std::env::temp_dir().join(format!("chrome-use-e2e-profile-{}", uuid::Uuid::new_v4()));
 
     // Session 1: launch with profile, set a cookie, close
     {
@@ -4254,7 +4252,7 @@ async fn e2e_headers_case_insensitive_no_duplicates() {
 // Regression: externally opened tabs must appear in tab_list (#1037)
 //
 // When connected to Chrome (launched or via --cdp), a tab opened outside of
-// agent-browser (e.g. by the user or another CDP client) should be detected
+// chrome-use (e.g. by the user or another CDP client) should be detected
 // and listed. Previously, chrome://newtab/ was filtered by
 // is_internal_chrome_target, and Target.targetInfoChanged for untracked
 // targets was silently ignored.
@@ -4280,7 +4278,7 @@ async fn e2e_externally_opened_tab_detected() {
 
     // Simulate an external client opening a new tab via the browser-level CDP
     // session (no sessionId). This mirrors what happens when a user manually
-    // opens a tab while agent-browser is connected via --cdp.
+    // opens a tab while chrome-use is connected via --cdp.
     let browser = state.browser.as_ref().expect("browser should be launched");
     let _: Value = browser
         .client
@@ -4373,7 +4371,7 @@ async fn e2e_relaunch_on_options_change() {
             "id": "3",
             "action": "launch",
             "headless": true,
-            "userAgent": "agent-browser-test/1.0"
+            "userAgent": "chrome-use-test/1.0"
         }),
         &mut state,
     )
@@ -4397,7 +4395,7 @@ async fn e2e_relaunch_on_options_change() {
 async fn e2e_stream_frame_metadata_respects_custom_viewport() {
     let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_SESSION"]);
     let socket_dir = std::env::temp_dir().join(format!(
-        "agent-browser-e2e-stream-viewport-{}-{}",
+        "chrome-use-e2e-stream-viewport-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -4703,7 +4701,7 @@ async fn e2e_recording_inherits_viewport() {
 /// Verify that launching with `storageState` in the launch command restores
 /// cookies that were previously saved with `state_save`.
 ///
-/// This is the e2e equivalent of `agent-browser --state ./auth.json open <url>`.
+/// This is the e2e equivalent of `chrome-use --state ./auth.json open <url>`.
 /// The launch command accepts a `storageState` field that should load the
 /// state file (cookies + localStorage) before the first navigation.
 #[tokio::test]
@@ -4711,7 +4709,7 @@ async fn e2e_recording_inherits_viewport() {
 async fn e2e_state_flag_restores_cookies() {
     let state_path = std::env::temp_dir()
         .join(format!(
-            "agent-browser-e2e-state-flag-{}.json",
+            "chrome-use-e2e-state-flag-{}.json",
             uuid::Uuid::new_v4()
         ))
         .to_string_lossy()
@@ -4819,7 +4817,7 @@ async fn e2e_state_flag_missing_file_fails_launch() {
 
     let missing_path = std::env::temp_dir()
         .join(format!(
-            "agent-browser-e2e-missing-state-{}.json",
+            "chrome-use-e2e-missing-state-{}.json",
             uuid::Uuid::new_v4()
         ))
         .to_string_lossy()
@@ -4859,14 +4857,14 @@ async fn e2e_state_flag_missing_file_fails_launch() {
 async fn e2e_storage_state_launch_restarts_clean_browser() {
     let state_one = std::env::temp_dir()
         .join(format!(
-            "agent-browser-e2e-storage-reuse-1-{}.json",
+            "chrome-use-e2e-storage-reuse-1-{}.json",
             uuid::Uuid::new_v4()
         ))
         .to_string_lossy()
         .to_string();
     let state_two = std::env::temp_dir()
         .join(format!(
-            "agent-browser-e2e-storage-reuse-2-{}.json",
+            "chrome-use-e2e-storage-reuse-2-{}.json",
             uuid::Uuid::new_v4()
         ))
         .to_string_lossy()
@@ -4967,7 +4965,7 @@ async fn e2e_storage_state_launch_restarts_clean_browser() {
 async fn e2e_state_env_restores_cookies_on_auto_launch() {
     let state_path = std::env::temp_dir()
         .join(format!(
-            "agent-browser-e2e-state-env-{}.json",
+            "chrome-use-e2e-state-env-{}.json",
             uuid::Uuid::new_v4()
         ))
         .to_string_lossy()
@@ -5149,7 +5147,7 @@ async fn e2e_session_name_auto_restores_cookies() {
     // Clean up auto-saved state files
     let sessions_dir = dirs::home_dir()
         .unwrap()
-        .join(".agent-browser")
+        .join(".chrome-use")
         .join("sessions");
     if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
         for entry in entries.flatten() {
@@ -5168,7 +5166,7 @@ async fn e2e_session_name_auto_restores_cookies() {
 async fn e2e_explicit_state_load_restores_cookies() {
     let state_path = std::env::temp_dir()
         .join(format!(
-            "agent-browser-e2e-explicit-load-{}.json",
+            "chrome-use-e2e-explicit-load-{}.json",
             uuid::Uuid::new_v4()
         ))
         .to_string_lossy()

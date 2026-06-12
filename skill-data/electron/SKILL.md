@@ -1,17 +1,17 @@
 ---
 name: electron
-description: Automate Electron desktop apps (VS Code, Slack, Discord, Figma, Notion, Spotify, etc.) using agent-browser via Chrome DevTools Protocol. Use when the user needs to interact with an Electron app, automate a desktop app, connect to a running app, control a native app, or test an Electron application. Triggers include "automate Slack app", "control VS Code", "interact with Discord app", "test this Electron app", "connect to desktop app", or any task requiring automation of a native Electron application.
-allowed-tools: Bash(agent-browser:*), Bash(agent-browser-stealth:*), Bash(abs:*), Bash(npx agent-browser:*), Bash(npx agent-browser-stealth:*)
+description: Automate Electron desktop apps (VS Code, Slack, Discord, Figma, Notion, Spotify, etc.) using chrome-use via Chrome DevTools Protocol. Use when the user needs to interact with an Electron app, automate a desktop app, connect to a running app, control a native app, or test an Electron application. Triggers include "automate Slack app", "control VS Code", "interact with Discord app", "test this Electron app", "connect to desktop app", or any task requiring automation of a native Electron application.
+allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # Electron App Automation
 
-Automate any Electron desktop app using agent-browser. Electron apps are built on Chromium and expose a Chrome DevTools Protocol (CDP) port that agent-browser can connect to, enabling the same snapshot-interact workflow used for web pages.
+Automate any Electron desktop app using chrome-use. Electron apps are built on Chromium and expose a Chrome DevTools Protocol (CDP) port that chrome-use can connect to, enabling the same snapshot-interact workflow used for web pages.
 
 ## Core Workflow
 
 1. **Launch** the Electron app with remote debugging enabled
-2. **Connect** agent-browser to the CDP port
+2. **Connect** chrome-use to the CDP port
 3. **Snapshot** to discover interactive elements
 4. **Interact** using element refs
 5. **Re-snapshot** after navigation or state changes
@@ -20,13 +20,13 @@ Automate any Electron desktop app using agent-browser. Electron apps are built o
 # Launch an Electron app with remote debugging
 open -a "Slack" --args --remote-debugging-port=9222
 
-# Connect agent-browser to the app
-agent-browser connect 9222
+# Connect chrome-use to the app
+chrome-use connect 9222
 
 # Standard workflow from here
-agent-browser snapshot -i
-agent-browser click @e5
-agent-browser screenshot slack-desktop.png
+chrome-use snapshot -i
+chrome-use click @e5
+chrome-use screenshot slack-desktop.png
 ```
 
 ## Launching Electron Apps with CDP
@@ -76,13 +76,13 @@ discord --remote-debugging-port=9224
 
 ```bash
 # Connect to a specific port
-agent-browser connect 9222
+chrome-use connect 9222
 
 # Or use --cdp on each command
-agent-browser --cdp 9222 snapshot -i
+chrome-use --cdp 9222 snapshot -i
 
 # Auto-discover a running Chromium-based app
-agent-browser --auto-connect snapshot -i
+chrome-use --auto-connect snapshot -i
 ```
 
 After `connect`, all subsequent commands target the connected app without needing `--cdp`.
@@ -93,13 +93,13 @@ Electron apps often have multiple windows or webviews. Use tab commands to list 
 
 ```bash
 # List all available targets (windows, webviews, etc.)
-agent-browser tab
+chrome-use tab
 
 # Switch to a specific tab by id (t1, t2, …; integers not accepted)
-agent-browser tab t2
+chrome-use tab t2
 
 # Switch by URL pattern
-agent-browser tab --url "*settings*"
+chrome-use tab --url "*settings*"
 ```
 
 ## Webview Support
@@ -108,21 +108,21 @@ Electron `<webview>` elements are automatically discovered and can be controlled
 
 ```bash
 # Connect to running Electron app
-agent-browser connect 9222
+chrome-use connect 9222
 
 # List targets -- webviews appear alongside pages
-agent-browser tab
+chrome-use tab
 # Example output:
 #   0: [page]    Slack - Main Window     https://app.slack.com/
 #   1: [webview] Embedded Content        https://example.com/widget
 
 # Switch to a webview
-agent-browser tab t1
+chrome-use tab t1
 
 # Interact with the webview normally
-agent-browser snapshot -i
-agent-browser click @e3
-agent-browser screenshot webview.png
+chrome-use snapshot -i
+chrome-use click @e3
+chrome-use screenshot webview.png
 ```
 
 **Note:** Webview support works via raw CDP connection.
@@ -134,40 +134,40 @@ agent-browser screenshot webview.png
 ```bash
 open -a "Slack" --args --remote-debugging-port=9222
 sleep 3  # Wait for app to start
-agent-browser connect 9222
-agent-browser snapshot -i
+chrome-use connect 9222
+chrome-use snapshot -i
 # Read the snapshot output to identify UI elements
-agent-browser click @e10  # Navigate to a section
-agent-browser snapshot -i  # Re-snapshot after navigation
+chrome-use click @e10  # Navigate to a section
+chrome-use snapshot -i  # Re-snapshot after navigation
 ```
 
 ### Take Screenshots of Desktop Apps
 
 ```bash
-agent-browser connect 9222
-agent-browser screenshot app-state.png
-agent-browser screenshot --full full-app.png
-agent-browser screenshot --annotate annotated-app.png
+chrome-use connect 9222
+chrome-use screenshot app-state.png
+chrome-use screenshot --full full-app.png
+chrome-use screenshot --annotate annotated-app.png
 ```
 
 ### Extract Data from a Desktop App
 
 ```bash
-agent-browser connect 9222
-agent-browser snapshot -i
-agent-browser get text @e5
-agent-browser snapshot --json > app-state.json
+chrome-use connect 9222
+chrome-use snapshot -i
+chrome-use get text @e5
+chrome-use snapshot --json > app-state.json
 ```
 
 ### Fill Forms in Desktop Apps
 
 ```bash
-agent-browser connect 9222
-agent-browser snapshot -i
-agent-browser fill @e3 "search query"
-agent-browser press Enter
-agent-browser wait 1000
-agent-browser snapshot -i
+chrome-use connect 9222
+chrome-use snapshot -i
+chrome-use fill @e3 "search query"
+chrome-use press Enter
+chrome-use wait 1000
+chrome-use snapshot -i
 ```
 
 ### Run Multiple Apps Simultaneously
@@ -176,14 +176,14 @@ Use named sessions to control multiple Electron apps at the same time:
 
 ```bash
 # Connect to Slack
-agent-browser --session slack connect 9222
+chrome-use --session slack connect 9222
 
 # Connect to VS Code
-agent-browser --session vscode connect 9223
+chrome-use --session vscode connect 9223
 
 # Interact with each independently
-agent-browser --session slack snapshot -i
-agent-browser --session vscode snapshot -i
+chrome-use --session slack snapshot -i
+chrome-use --session vscode snapshot -i
 ```
 
 ## Color Scheme
@@ -191,14 +191,14 @@ agent-browser --session vscode snapshot -i
 The default color scheme when connecting via CDP may be `light`. To preserve dark mode:
 
 ```bash
-agent-browser connect 9222
-agent-browser --color-scheme dark snapshot -i
+chrome-use connect 9222
+chrome-use --color-scheme dark snapshot -i
 ```
 
 Or set it globally:
 
 ```bash
-AGENT_BROWSER_COLOR_SCHEME=dark agent-browser connect 9222
+AGENT_BROWSER_COLOR_SCHEME=dark chrome-use connect 9222
 ```
 
 ## Troubleshooting
@@ -216,12 +216,12 @@ AGENT_BROWSER_COLOR_SCHEME=dark agent-browser connect 9222
 
 ### Elements not appearing in snapshot
 
-- The app may use multiple webviews. Use `agent-browser tab` to list targets and switch to the right one
+- The app may use multiple webviews. Use `chrome-use tab` to list targets and switch to the right one
 
 ### Cannot type in input fields
 
-- Try `agent-browser keyboard type "text"` to type at the current focus without a selector
-- Some Electron apps use custom input components; use `agent-browser keyboard inserttext "text"` to bypass key events
+- Try `chrome-use keyboard type "text"` to type at the current focus without a selector
+- Some Electron apps use custom input components; use `chrome-use keyboard inserttext "text"` to bypass key events
 
 ## Supported Apps
 
@@ -233,4 +233,4 @@ Any app built on Electron works, including:
 - **Media:** Spotify, Tidal
 - **Productivity:** Todoist, Linear, 1Password
 
-If an app is built with Electron, it supports `--remote-debugging-port` and can be automated with agent-browser.
+If an app is built with Electron, it supports `--remote-debugging-port` and can be automated with chrome-use.

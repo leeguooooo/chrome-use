@@ -1,30 +1,30 @@
 # Command Reference
 
-Complete reference for all agent-browser commands. For quick start and common patterns, see SKILL.md.
+Complete reference for all chrome-use commands. For quick start and common patterns, see SKILL.md.
 
 ## Navigation
 
 ```bash
-agent-browser open            # Launch browser (no navigation); stays on about:blank.
+chrome-use open            # Launch browser (no navigation); stays on about:blank.
                               # Pair with `network route`, `cookies set --curl`, or
                               # `addinitscript` to stage state before the first navigation.
-agent-browser open <url>      # Launch + navigate (aliases: goto, navigate)
+chrome-use open <url>      # Launch + navigate (aliases: goto, navigate)
                               # Supports: https://, http://, file://, about:, data://
                               # Auto-prepends https:// if no protocol given
-agent-browser back            # Go back
-agent-browser forward         # Go forward
-agent-browser reload          # Reload page
-agent-browser pushstate <url> # SPA client-side navigation. Auto-detects
+chrome-use back            # Go back
+chrome-use forward         # Go forward
+chrome-use reload          # Reload page
+chrome-use pushstate <url> # SPA client-side navigation. Auto-detects
                               # window.next.router.push (triggers RSC fetch on Next.js);
                               # falls back to history.pushState + popstate/navigate events.
-agent-browser close           # Close browser (aliases: quit, exit)
-agent-browser connect 9222    # Connect to browser via CDP port
+chrome-use close           # Close browser (aliases: quit, exit)
+chrome-use connect 9222    # Connect to browser via CDP port
 ```
 
 ### Pre-navigation setup (one-turn batch)
 
 ```bash
-agent-browser batch \
+chrome-use batch \
   '["open"]' \
   '["network","route","*","--abort","--resource-type","script"]' \
   '["cookies","set","--curl","cookies.curl","--domain","localhost"]' \
@@ -40,67 +40,67 @@ prior page.
 ## Snapshot (page analysis)
 
 ```bash
-agent-browser snapshot            # Full accessibility tree
-agent-browser snapshot -i         # Interactive elements only (recommended)
-agent-browser snapshot -c         # Compact output
-agent-browser snapshot -d 3       # Limit depth to 3
-agent-browser snapshot -s "#main" # Scope to CSS selector
+chrome-use snapshot            # Full accessibility tree
+chrome-use snapshot -i         # Interactive elements only (recommended)
+chrome-use snapshot -c         # Compact output
+chrome-use snapshot -d 3       # Limit depth to 3
+chrome-use snapshot -s "#main" # Scope to CSS selector
 ```
 
 ## Interactions (use @refs from snapshot)
 
 ```bash
-agent-browser click @e1           # Click
-agent-browser click @e1 --new-tab # Click and open in new tab
-agent-browser dblclick @e1        # Double-click
-agent-browser focus @e1           # Focus element
-agent-browser fill @e2 "text"     # Clear and type
-agent-browser type @e2 "text"     # Type without clearing
-agent-browser press Enter         # Press key (alias: key)
-agent-browser press Control+a     # Key combination
-agent-browser keydown Shift       # Hold key down
-agent-browser keyup Shift         # Release key
-agent-browser hover @e1           # Hover
-agent-browser check @e1           # Check checkbox
-agent-browser uncheck @e1         # Uncheck checkbox
-agent-browser select @e1 "value"  # Select dropdown option
-agent-browser select @e1 "a" "b"  # Select multiple options
-agent-browser scroll down 500     # Scroll page (default: down 300px)
-agent-browser scrollintoview @e1  # Scroll element into view (alias: scrollinto)
-agent-browser drag @e1 @e2        # Drag and drop
-agent-browser upload @e1 file.pdf # Upload files
+chrome-use click @e1           # Click
+chrome-use click @e1 --new-tab # Click and open in new tab
+chrome-use dblclick @e1        # Double-click
+chrome-use focus @e1           # Focus element
+chrome-use fill @e2 "text"     # Clear and type
+chrome-use type @e2 "text"     # Type without clearing
+chrome-use press Enter         # Press key (alias: key)
+chrome-use press Control+a     # Key combination
+chrome-use keydown Shift       # Hold key down
+chrome-use keyup Shift         # Release key
+chrome-use hover @e1           # Hover
+chrome-use check @e1           # Check checkbox
+chrome-use uncheck @e1         # Uncheck checkbox
+chrome-use select @e1 "value"  # Select dropdown option
+chrome-use select @e1 "a" "b"  # Select multiple options
+chrome-use scroll down 500     # Scroll page (default: down 300px)
+chrome-use scrollintoview @e1  # Scroll element into view (alias: scrollinto)
+chrome-use drag @e1 @e2        # Drag and drop
+chrome-use upload @e1 file.pdf # Upload files
 ```
 
 ## Get Information
 
 ```bash
-agent-browser get text @e1        # Get element text
-agent-browser get html @e1        # Get innerHTML
-agent-browser get value @e1       # Get input value
-agent-browser get attr @e1 href   # Get attribute
-agent-browser get title           # Get page title
-agent-browser get url             # Get current URL
-agent-browser get cdp-url         # Get CDP WebSocket URL
-agent-browser get count ".item"   # Count matching elements
-agent-browser get box @e1         # Get bounding box
-agent-browser get styles @e1      # Get computed styles (font, color, bg, etc.)
+chrome-use get text @e1        # Get element text
+chrome-use get html @e1        # Get innerHTML
+chrome-use get value @e1       # Get input value
+chrome-use get attr @e1 href   # Get attribute
+chrome-use get title           # Get page title
+chrome-use get url             # Get current URL
+chrome-use get cdp-url         # Get CDP WebSocket URL
+chrome-use get count ".item"   # Count matching elements
+chrome-use get box @e1         # Get bounding box
+chrome-use get styles @e1      # Get computed styles (font, color, bg, etc.)
 ```
 
 ## Check State
 
 ```bash
-agent-browser is visible @e1      # Check if visible
-agent-browser is enabled @e1      # Check if enabled
-agent-browser is checked @e1      # Check if checked
+chrome-use is visible @e1      # Check if visible
+chrome-use is enabled @e1      # Check if enabled
+chrome-use is checked @e1      # Check if checked
 ```
 
 ## Screenshots and PDF
 
 ```bash
-agent-browser screenshot          # Save to temporary directory
-agent-browser screenshot path.png # Save to specific path
-agent-browser screenshot --full   # Full page
-agent-browser pdf output.pdf      # Save as PDF
+chrome-use screenshot          # Save to temporary directory
+chrome-use screenshot path.png # Save to specific path
+chrome-use screenshot --full   # Full page
+chrome-use pdf output.pdf      # Save as PDF
 ```
 
 Headless Chromium screenshots hide native scrollbars for consistent image output.
@@ -109,97 +109,97 @@ Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
 ## Video Recording
 
 ```bash
-agent-browser record start ./demo.webm    # Start recording
-agent-browser click @e1                   # Perform actions
-agent-browser record stop                 # Stop and save video
-agent-browser record restart ./take2.webm # Stop current + start new
+chrome-use record start ./demo.webm    # Start recording
+chrome-use click @e1                   # Perform actions
+chrome-use record stop                 # Stop and save video
+chrome-use record restart ./take2.webm # Stop current + start new
 ```
 
 ## Wait
 
 ```bash
-agent-browser wait @e1                     # Wait for element
-agent-browser wait 2000                    # Wait milliseconds
-agent-browser wait --text "Success"        # Wait for text (or -t)
-agent-browser wait --url "**/dashboard"    # Wait for URL pattern (or -u)
-agent-browser wait --load networkidle      # Wait for network idle (or -l)
-agent-browser wait --fn "window.ready"     # Wait for JS condition (or -f)
+chrome-use wait @e1                     # Wait for element
+chrome-use wait 2000                    # Wait milliseconds
+chrome-use wait --text "Success"        # Wait for text (or -t)
+chrome-use wait --url "**/dashboard"    # Wait for URL pattern (or -u)
+chrome-use wait --load networkidle      # Wait for network idle (or -l)
+chrome-use wait --fn "window.ready"     # Wait for JS condition (or -f)
 ```
 
 ## Mouse Control
 
 ```bash
-agent-browser mouse move 100 200      # Move mouse
-agent-browser mouse down left         # Press button
-agent-browser mouse up left           # Release button
-agent-browser mouse wheel 100         # Scroll wheel
+chrome-use mouse move 100 200      # Move mouse
+chrome-use mouse down left         # Press button
+chrome-use mouse up left           # Release button
+chrome-use mouse wheel 100         # Scroll wheel
 ```
 
 ## Semantic Locators (alternative to refs)
 
 ```bash
-agent-browser find role button click --name "Submit"
-agent-browser find text "Sign In" click
-agent-browser find text "Sign In" click --exact      # Exact match only
-agent-browser find label "Email" fill "user@test.com"
-agent-browser find placeholder "Search" type "query"
-agent-browser find alt "Logo" click
-agent-browser find title "Close" click
-agent-browser find testid "submit-btn" click
-agent-browser find first ".item" click
-agent-browser find last ".item" click
-agent-browser find nth 2 "a" hover
+chrome-use find role button click --name "Submit"
+chrome-use find text "Sign In" click
+chrome-use find text "Sign In" click --exact      # Exact match only
+chrome-use find label "Email" fill "user@test.com"
+chrome-use find placeholder "Search" type "query"
+chrome-use find alt "Logo" click
+chrome-use find title "Close" click
+chrome-use find testid "submit-btn" click
+chrome-use find first ".item" click
+chrome-use find last ".item" click
+chrome-use find nth 2 "a" hover
 ```
 
 ## Browser Settings
 
 ```bash
-agent-browser set viewport 1920 1080          # Set viewport size
-agent-browser set viewport 1920 1080 2        # 2x retina (same CSS size, higher res screenshots)
-agent-browser set device "iPhone 14"          # Emulate device
-agent-browser set geo 37.7749 -122.4194       # Set geolocation (alias: geolocation)
-agent-browser set offline on                  # Toggle offline mode
-agent-browser set headers '{"X-Key":"v"}'     # Extra HTTP headers
-agent-browser set credentials user pass       # HTTP basic auth (alias: auth)
-agent-browser set media dark                  # Emulate color scheme
-agent-browser set media light reduced-motion  # Light mode + reduced motion
+chrome-use set viewport 1920 1080          # Set viewport size
+chrome-use set viewport 1920 1080 2        # 2x retina (same CSS size, higher res screenshots)
+chrome-use set device "iPhone 14"          # Emulate device
+chrome-use set geo 37.7749 -122.4194       # Set geolocation (alias: geolocation)
+chrome-use set offline on                  # Toggle offline mode
+chrome-use set headers '{"X-Key":"v"}'     # Extra HTTP headers
+chrome-use set credentials user pass       # HTTP basic auth (alias: auth)
+chrome-use set media dark                  # Emulate color scheme
+chrome-use set media light reduced-motion  # Light mode + reduced motion
 ```
 
 ## Cookies and Storage
 
 ```bash
-agent-browser cookies                     # Get all cookies
-agent-browser cookies set name value      # Set cookie
-agent-browser cookies clear               # Clear cookies
-agent-browser storage local               # Get all localStorage
-agent-browser storage local key           # Get specific key
-agent-browser storage local set k v       # Set value
-agent-browser storage local clear         # Clear all
+chrome-use cookies                     # Get all cookies
+chrome-use cookies set name value      # Set cookie
+chrome-use cookies clear               # Clear cookies
+chrome-use storage local               # Get all localStorage
+chrome-use storage local key           # Get specific key
+chrome-use storage local set k v       # Set value
+chrome-use storage local clear         # Clear all
 ```
 
 ## Network
 
 ```bash
-agent-browser network route <url>              # Intercept requests
-agent-browser network route <url> --abort      # Block requests
-agent-browser network route <url> --body '{}'  # Mock response
-agent-browser network unroute [url]            # Remove routes
-agent-browser network requests                 # View tracked requests
-agent-browser network requests --filter api    # Filter requests
+chrome-use network route <url>              # Intercept requests
+chrome-use network route <url> --abort      # Block requests
+chrome-use network route <url> --body '{}'  # Mock response
+chrome-use network unroute [url]            # Remove routes
+chrome-use network requests                 # View tracked requests
+chrome-use network requests --filter api    # Filter requests
 ```
 
 ## Tabs and Windows
 
 ```bash
-agent-browser tab                              # List tabs with tabId and label
-agent-browser tab new [url]                    # New tab
-agent-browser tab new --label docs [url]       # New tab with a memorable label
-agent-browser tab t2                           # Switch to tab by id
-agent-browser tab docs                         # Switch to tab by label
-agent-browser tab close                        # Close current tab
-agent-browser tab close t2                     # Close tab by id
-agent-browser tab close docs                   # Close tab by label
-agent-browser window new                       # New window
+chrome-use tab                              # List tabs with tabId and label
+chrome-use tab new [url]                    # New tab
+chrome-use tab new --label docs [url]       # New tab with a memorable label
+chrome-use tab t2                           # Switch to tab by id
+chrome-use tab docs                         # Switch to tab by label
+chrome-use tab close                        # Close current tab
+chrome-use tab close t2                     # Close tab by id
+chrome-use tab close docs                   # Close tab by label
+chrome-use window new                       # New window
 ```
 
 Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused
@@ -212,13 +212,13 @@ everywhere a tab ref is accepted. Labels are the agent-friendly way to write
 multi-tab workflows:
 
 ```bash
-agent-browser tab new --label docs https://docs.example.com
-agent-browser tab new --label app  https://app.example.com
-agent-browser tab docs                   # switch to docs
-agent-browser snapshot                   # populate refs for docs
-agent-browser click @e1                  # ref click on docs
-agent-browser tab app                    # switch to app
-agent-browser tab close docs             # close by label
+chrome-use tab new --label docs https://docs.example.com
+chrome-use tab new --label app  https://app.example.com
+chrome-use tab docs                   # switch to docs
+chrome-use snapshot                   # populate refs for docs
+chrome-use click @e1                  # ref click on docs
+chrome-use tab app                    # switch to app
+chrome-use tab close docs             # close by label
 ```
 
 Labels are never auto-generated, never rewritten on navigation, and must be
@@ -229,9 +229,9 @@ that was active when the snapshot ran.
 ## Frames
 
 ```bash
-agent-browser frame "#iframe"     # Switch to iframe by CSS selector
-agent-browser frame @e3           # Switch to iframe by element ref
-agent-browser frame main          # Back to main frame
+chrome-use frame "#iframe"     # Switch to iframe by CSS selector
+chrome-use frame @e3           # Switch to iframe by element ref
+chrome-use frame main          # Back to main frame
 ```
 
 ### Iframe support
@@ -239,19 +239,19 @@ agent-browser frame main          # Back to main frame
 Iframes are detected automatically during snapshots. When the main-frame snapshot runs, `Iframe` nodes are resolved and their content is inlined beneath the iframe element in the output (one level of nesting; iframes within iframes are not expanded).
 
 ```bash
-agent-browser snapshot -i
+chrome-use snapshot -i
 # @e3 [Iframe] "payment-frame"
 #   @e4 [input] "Card number"
 #   @e5 [button] "Pay"
 
 # Interact directly — refs inside iframes already work
-agent-browser fill @e4 "4111111111111111"
-agent-browser click @e5
+chrome-use fill @e4 "4111111111111111"
+chrome-use click @e5
 
 # Or switch frame context for scoped snapshots
-agent-browser frame @e3               # Switch using element ref
-agent-browser snapshot -i             # Snapshot scoped to that iframe
-agent-browser frame main              # Return to main frame
+chrome-use frame @e3               # Switch using element ref
+chrome-use snapshot -i             # Snapshot scoped to that iframe
+chrome-use frame main              # Return to main frame
 ```
 
 The `frame` command accepts:
@@ -264,27 +264,27 @@ The `frame` command accepts:
 By default, `alert` and `beforeunload` dialogs are automatically accepted so they never block the agent. `confirm` and `prompt` dialogs still require explicit handling. Use `--no-auto-dialog` to disable this behavior.
 
 ```bash
-agent-browser dialog accept [text]  # Accept dialog
-agent-browser dialog dismiss        # Dismiss dialog
-agent-browser dialog status         # Check if a dialog is currently open
+chrome-use dialog accept [text]  # Accept dialog
+chrome-use dialog dismiss        # Dismiss dialog
+chrome-use dialog status         # Check if a dialog is currently open
 ```
 
 ## JavaScript
 
 ```bash
-agent-browser eval "document.title"          # Simple expressions only
-agent-browser eval -b "<base64>"             # Any JavaScript (base64 encoded)
-agent-browser eval --stdin                   # Read script from stdin
+chrome-use eval "document.title"          # Simple expressions only
+chrome-use eval -b "<base64>"             # Any JavaScript (base64 encoded)
+chrome-use eval --stdin                   # Read script from stdin
 ```
 
 Use `-b`/`--base64` or `--stdin` for reliable execution. Shell escaping with nested quotes and special characters is error-prone.
 
 ```bash
 # Base64 encode your script, then:
-agent-browser eval -b "ZG9jdW1lbnQucXVlcnlTZWxlY3RvcignW3NyYyo9Il9uZXh0Il0nKQ=="
+chrome-use eval -b "ZG9jdW1lbnQucXVlcnlTZWxlY3RvcignW3NyYyo9Il9uZXh0Il0nKQ=="
 
 # Or use stdin with heredoc for multiline scripts:
-cat <<'EOF' | agent-browser eval --stdin
+cat <<'EOF' | chrome-use eval --stdin
 const links = document.querySelectorAll('a');
 Array.from(links).map(a => a.href);
 EOF
@@ -293,49 +293,49 @@ EOF
 ## State Management
 
 ```bash
-agent-browser state save auth.json    # Save cookies, storage, auth state
-agent-browser state load auth.json    # Restore saved state
+chrome-use state save auth.json    # Save cookies, storage, auth state
+chrome-use state load auth.json    # Restore saved state
 ```
 
 ## Global Options
 
 ```bash
-agent-browser --session <name> ...    # Isolated browser session
-agent-browser --json ...              # JSON output for parsing
-agent-browser --headed ...            # Default & always-on (stealth). Headless is FORBIDDEN
+chrome-use --session <name> ...    # Isolated browser session
+chrome-use --json ...              # JSON output for parsing
+chrome-use --headed ...            # Default & always-on (stealth). Headless is FORBIDDEN
                                       #   (bot tell); display-less servers: AGENT_BROWSER_ALLOW_HEADLESS=1
-agent-browser --full ...              # Full page screenshot (-f)
-agent-browser --cdp <port> ...        # Connect via Chrome DevTools Protocol
-agent-browser -p <provider> ...       # Cloud browser provider (--provider)
-agent-browser --proxy <url> ...       # Use proxy server
-agent-browser --proxy-bypass <hosts>  # Hosts to bypass proxy
-agent-browser --headers <json> ...    # HTTP headers scoped to URL's origin
-agent-browser --executable-path <p>   # Custom browser executable
-agent-browser --extension <path> ...  # Load browser extension (repeatable)
-agent-browser --ignore-https-errors   # Ignore SSL certificate errors
-agent-browser --hide-scrollbars false # Keep native scrollbars visible in headless Chromium screenshots
-agent-browser --help                  # Show help (-h)
-agent-browser --version               # Show version (-V)
-agent-browser <command> --help        # Show detailed help for a command
+chrome-use --full ...              # Full page screenshot (-f)
+chrome-use --cdp <port> ...        # Connect via Chrome DevTools Protocol
+chrome-use -p <provider> ...       # Cloud browser provider (--provider)
+chrome-use --proxy <url> ...       # Use proxy server
+chrome-use --proxy-bypass <hosts>  # Hosts to bypass proxy
+chrome-use --headers <json> ...    # HTTP headers scoped to URL's origin
+chrome-use --executable-path <p>   # Custom browser executable
+chrome-use --extension <path> ...  # Load browser extension (repeatable)
+chrome-use --ignore-https-errors   # Ignore SSL certificate errors
+chrome-use --hide-scrollbars false # Keep native scrollbars visible in headless Chromium screenshots
+chrome-use --help                  # Show help (-h)
+chrome-use --version               # Show version (-V)
+chrome-use <command> --help        # Show detailed help for a command
 ```
 
 ## Drive your real, logged-in Chrome (extension — zero confirmation)
 
 Chrome 136 blocked `--remote-debugging-port` on the default profile, so to drive
-the user's *existing* logged-in window, agent-browser uses a Chrome **extension**
+the user's *existing* logged-in window, chrome-use uses a Chrome **extension**
 over native messaging — no port, no token, no per-use confirmation (the
 codex/claude approach).
 
 One-time setup:
 ```bash
-agent-browser extension install        # writes the native-messaging host manifest
+chrome-use extension install        # writes the native-messaging host manifest
 ```
 
 The native-messaging host accepts **both** extension origins, so either install
 works — but prefer the Store build:
 
 1. **Chrome Web Store (recommended)** — one-click *Add to Chrome*:
-   <https://chromewebstore.google.com/detail/agent-browser-stealth/knfcmbamhjmaonkfnjhldjedeobeafmk>
+   <https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk>
    Restart-stable and auto-updating (store id `knfcmbamhjmaonkfnjhldjedeobeafmk`).
 2. **Load unpacked (dev)** — load `<repo>/extensions/ab-connect` from source;
    its pinned `key` gives the stable id `ciiljdlhd…`. NOTE: Load-unpacked
@@ -347,12 +347,12 @@ CLI can't load an unpacked extension):
 
 > chrome://extensions → enable **Developer mode** (top-right) → **Load unpacked** →
 > select `<repo>/extensions/ab-connect` (it appears in the list as
-> **agent-browser-stealth**)
+> **chrome-use**)
 
-Once loaded, the relay goes live and plain `agent-browser open <url>` connects
+Once loaded, the relay goes live and plain `chrome-use open <url>` connects
 through it automatically — `auto_connect_cdp` prefers the live extension relay
 over a raw `--remote-debugging-port`, so Chrome 136+'s "Allow remote debugging?"
-consent popup never appears. `agent-browser extension connect` is the explicit
+consent popup never appears. `chrome-use extension connect` is the explicit
 form of the same path.
 
 **You can do this load step yourself with a computer-use / GUI-automation tool**
@@ -368,35 +368,35 @@ the folder (one click). After it loads, Chrome assigns the extension a fixed id
 
 Then, any time (pure CLI, zero confirmation):
 ```bash
-agent-browser extension connect        # auto-attaches to the live, logged-in tabs
-agent-browser tab                      # list the real tabs it now controls
-agent-browser tab t3                   # switch the session to one of them
-agent-browser snapshot -i / eval / click ...   # drive it like any session
-agent-browser extension status         # is the host installed?
-agent-browser extension uninstall      # remove the host manifest
+chrome-use extension connect        # auto-attaches to the live, logged-in tabs
+chrome-use tab                      # list the real tabs it now controls
+chrome-use tab t3                   # switch the session to one of them
+chrome-use snapshot -i / eval / click ...   # drive it like any session
+chrome-use extension status         # is the host installed?
+chrome-use extension uninstall      # remove the host manifest
 ```
 
 Security: the extension↔host link is authenticated by Chrome (extension id); the
-host↔agent-browser CDP link uses an unguessable URL in a 0600 file. Use this when
+host↔chrome-use CDP link uses an unguessable URL in a 0600 file. Use this when
 you need the user's real cookies/login on their actual machine. (`--extension
 <path>` is unrelated — that loads an extension into a *launched* browser.)
 
 ## Debugging
 
 ```bash
-agent-browser --headed open example.com   # Show browser window
-agent-browser --cdp 9222 snapshot         # Connect via CDP port
-agent-browser connect 9222                # Alternative: connect command
-agent-browser console                     # View console messages (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)
-agent-browser console --clear             # Clear console
-agent-browser errors                      # View page errors (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)
-agent-browser errors --clear              # Clear errors
-agent-browser highlight @e1               # Highlight element
-agent-browser inspect                     # Open Chrome DevTools for this session
-agent-browser trace start                 # Start recording trace
-agent-browser trace stop trace.zip        # Stop and save trace
-agent-browser profiler start              # Start Chrome DevTools profiling
-agent-browser profiler stop trace.json    # Stop and save profile
+chrome-use --headed open example.com   # Show browser window
+chrome-use --cdp 9222 snapshot         # Connect via CDP port
+chrome-use connect 9222                # Alternative: connect command
+chrome-use console                     # View console messages (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)
+chrome-use console --clear             # Clear console
+chrome-use errors                      # View page errors (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)
+chrome-use errors --clear              # Clear errors
+chrome-use highlight @e1               # Highlight element
+chrome-use inspect                     # Open Chrome DevTools for this session
+chrome-use trace start                 # Start recording trace
+chrome-use trace stop trace.zip        # Stop and save trace
+chrome-use profiler start              # Start Chrome DevTools profiling
+chrome-use profiler stop trace.json    # Stop and save profile
 ```
 
 ### Finding a page the user saved (`find-url`)
@@ -406,10 +406,10 @@ systems or previously-saved pages that public search can't reach. Local read, no
 browser/daemon needed.
 
 ```bash
-agent-browser find-url jira board          # all keywords must match (name or url)
-agent-browser find-url --limit 10 invoices
-agent-browser find-url --browser edge --profile "Profile 1" wiki
-agent-browser find-url grafana --json      # {results:[{name,url,folder}], count}
+chrome-use find-url jira board          # all keywords must match (name or url)
+chrome-use find-url --limit 10 invoices
+chrome-use find-url --browser edge --profile "Profile 1" wiki
+chrome-use find-url grafana --json      # {results:[{name,url,folder}], count}
 ```
 
 Results are most-recently-added first. `javascript:`/`data:` bookmarklets are
@@ -425,13 +425,13 @@ problem (e.g. a hidden `point_choice=none` that the visible UI never exposes):
 
 ```bash
 # Dump every field's name → value, including hidden inputs and unchecked radios
-agent-browser eval "JSON.stringify([...document.forms[0].elements].map(e=>({name:e.name,type:e.type,value:e.value,checked:e.checked})).filter(e=>e.name))"
+chrome-use eval "JSON.stringify([...document.forms[0].elements].map(e=>({name:e.name,type:e.type,value:e.value,checked:e.checked})).filter(e=>e.name))"
 
 # Inspect one hidden field directly
-agent-browser eval "document.querySelector('[name=point_choice]')?.value"
+chrome-use eval "document.querySelector('[name=point_choice]')?.value"
 
 # Why won't it submit? Ask the browser's own validity API
-agent-browser eval "[...document.forms[0].elements].filter(e=>!e.validity?.valid).map(e=>e.name+': '+e.validationMessage)"
+chrome-use eval "[...document.forms[0].elements].filter(e=>!e.validity?.valid).map(e=>e.name+': '+e.validationMessage)"
 ```
 
 ## React / Web Vitals
@@ -440,30 +440,30 @@ Requires `--enable react-devtools` at launch for the `react ...` commands.
 `vitals` and `pushstate` are framework-agnostic.
 
 ```bash
-agent-browser open --enable react-devtools <url>    # Launch with React hook installed
-agent-browser react tree                            # Full component tree
-agent-browser react inspect <fiberId>               # Props, hooks, state, source
-agent-browser react renders start                   # Begin re-render recording
-agent-browser react renders stop [--json]           # Stop and print render profile
-agent-browser react suspense [--only-dynamic] [--json]  # Suspense boundaries + classifier
+chrome-use open --enable react-devtools <url>    # Launch with React hook installed
+chrome-use react tree                            # Full component tree
+chrome-use react inspect <fiberId>               # Props, hooks, state, source
+chrome-use react renders start                   # Begin re-render recording
+chrome-use react renders stop [--json]           # Stop and print render profile
+chrome-use react suspense [--only-dynamic] [--json]  # Suspense boundaries + classifier
                                                          # --only-dynamic hides the "static" list
-agent-browser vitals [url] [--json]                 # LCP/CLS/TTFB/FCP/INP + hydration
-agent-browser pushstate <url>                       # SPA client-side nav (auto-detects Next router)
+chrome-use vitals [url] [--json]                 # LCP/CLS/TTFB/FCP/INP + hydration
+chrome-use pushstate <url>                       # SPA client-side nav (auto-detects Next router)
 ```
 
 ## Init scripts
 
 ```bash
-agent-browser open --init-script <path>             # Register before first navigation (repeatable)
-agent-browser addinitscript <js>                    # Register at runtime (returns identifier)
-agent-browser removeinitscript <identifier>         # Remove a previously registered init script
+chrome-use open --init-script <path>             # Register before first navigation (repeatable)
+chrome-use addinitscript <js>                    # Register at runtime (returns identifier)
+chrome-use removeinitscript <identifier>         # Remove a previously registered init script
 ```
 
 ## cURL cookie import
 
 ```bash
-agent-browser cookies set --curl <file>                             # Auto-detects JSON/cURL/Cookie-header
-agent-browser cookies set --curl <file> --domain example.com        # Scope to a domain
+chrome-use cookies set --curl <file>                             # Auto-detects JSON/cURL/Cookie-header
+chrome-use cookies set --curl <file> --domain example.com        # Scope to a domain
 ```
 
 Supported formats: JSON array of `{name, value}`, a cURL dump from
@@ -473,8 +473,8 @@ echo cookie values.
 ## Network route by resource type
 
 ```bash
-agent-browser network route '*' --abort --resource-type script       # Block scripts only (SSR-lock pattern)
-agent-browser network route '*' --resource-type image,font --body '' # Stub images and fonts
+chrome-use network route '*' --abort --resource-type script       # Block scripts only (SSR-lock pattern)
+chrome-use network route '*' --resource-type image,font --body '' # Stub images and fonts
 ```
 
 ## Environment Variables
@@ -488,7 +488,7 @@ AGENT_BROWSER_ENABLE="react-devtools"        # Comma-separated built-in init scr
 AGENT_BROWSER_HIDE_SCROLLBARS="false"        # Keep native scrollbars visible in headless Chromium screenshots
 AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
-AGENT_BROWSER_HOME="/path/to/agent-browser"  # Custom install location
+AGENT_BROWSER_HOME="/path/to/chrome-use"  # Custom install location
 AGENT_BROWSER_CLICK_MODE="dom"               # Click strategy: "" (default: scroll-in + coordinate
                                              #   click, DOM-dispatch fallback), "coord" (strict
                                              #   coordinate only), "dom" (always element.click())

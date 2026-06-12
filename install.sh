@@ -1,16 +1,16 @@
 #!/bin/sh
-# agent-browser-stealth installer — downloads the prebuilt binary from the
+# chrome-use installer — downloads the prebuilt binary from the
 # GitHub Release (no npm, no auth for you or your users).
 #
-#   curl -fsSL https://raw.githubusercontent.com/leeguooooo/agent-browser-stealth/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 #
 # Env overrides:
 #   AGENT_BROWSER_VERSION=v0.27.0-fork.11   pin a specific release tag
 #   AGENT_BROWSER_BIN_DIR=/usr/local/bin    install location (auto-detected otherwise)
 set -eu
 
-REPO="leeguooooo/agent-browser-stealth"
-BIN_NAME="agent-browser"
+REPO="leeguooooo/chrome-use"
+BIN_NAME="chrome-use"
 
 err() { printf '\033[31merror:\033[0m %s\n' "$1" >&2; exit 1; }
 info() { printf '\033[36m==>\033[0m %s\n' "$1" >&2; }
@@ -39,7 +39,7 @@ if [ "$plat" = "linux" ] && ! ldd /bin/sh 2>/dev/null | grep -qi 'gnu\|glibc'; t
     libc="-musl"
   fi
 fi
-asset="agent-browser-${plat}${libc}-${cpu}"
+asset="chrome-use-${plat}${libc}-${cpu}"
 
 # --- resolve release tag --------------------------------------------------
 tag="${AGENT_BROWSER_VERSION:-}"
@@ -95,14 +95,8 @@ fi
 mkdir -p "$bindir"
 
 mv "$tmp/${BIN_NAME}" "$bindir/${BIN_NAME}"
-# Aliases pointing at the same binary: `abs` (short) and `agent-browser-stealth`
-# (the fork's package name). All three names work, and an upgrade refreshes
-# whichever name you actually run.
-for alias_name in abs agent-browser-stealth; do
-  ln -sf "$bindir/${BIN_NAME}" "$bindir/${alias_name}" 2>/dev/null || true
-done
 
-info "installed -> ${bindir}/ (agent-browser, agent-browser-stealth, abs)"
+info "installed -> ${bindir}/${BIN_NAME}"
 "$bindir/${BIN_NAME}" --version 2>/dev/null || true
 
 case ":$PATH:" in

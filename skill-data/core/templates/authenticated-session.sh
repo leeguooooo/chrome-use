@@ -4,8 +4,8 @@
 # Usage: ./authenticated-session.sh <login-url> [state-file]
 #
 # RECOMMENDED: Use the auth vault instead of this template:
-#   echo "<pass>" | agent-browser auth save myapp --url <login-url> --username <user> --password-stdin
-#   agent-browser auth login myapp
+#   echo "<pass>" | chrome-use auth save myapp --url <login-url> --username <user> --password-stdin
+#   chrome-use auth login myapp
 # The auth vault stores credentials securely and the LLM never sees passwords.
 #
 # Environment variables:
@@ -34,17 +34,17 @@ echo "Authentication workflow: $LOGIN_URL"
 # ================================================================
 if [[ -f "$STATE_FILE" ]]; then
     echo "Loading saved state from $STATE_FILE..."
-    if agent-browser --state "$STATE_FILE" open "$LOGIN_URL" 2>/dev/null; then
-        agent-browser wait --load networkidle
+    if chrome-use --state "$STATE_FILE" open "$LOGIN_URL" 2>/dev/null; then
+        chrome-use wait --load networkidle
 
-        CURRENT_URL=$(agent-browser get url)
+        CURRENT_URL=$(chrome-use get url)
         if [[ "$CURRENT_URL" != *"login"* ]] && [[ "$CURRENT_URL" != *"signin"* ]]; then
             echo "Session restored successfully"
-            agent-browser snapshot -i
+            chrome-use snapshot -i
             exit 0
         fi
         echo "Session expired, performing fresh login..."
-        agent-browser close 2>/dev/null || true
+        chrome-use close 2>/dev/null || true
     else
         echo "Failed to load state, re-authenticating..."
     fi
@@ -55,13 +55,13 @@ fi
 # DISCOVERY MODE: Shows form structure (delete after setup)
 # ================================================================
 echo "Opening login page..."
-agent-browser open "$LOGIN_URL"
-agent-browser wait --load networkidle
+chrome-use open "$LOGIN_URL"
+chrome-use wait --load networkidle
 
 echo ""
 echo "Login form structure:"
 echo "---"
-agent-browser snapshot -i
+chrome-use snapshot -i
 echo "---"
 echo ""
 echo "Next steps:"
@@ -70,7 +70,7 @@ echo "  2. Update the LOGIN FLOW section below with your refs"
 echo "  3. Set: export APP_USERNAME='...' APP_PASSWORD='...'"
 echo "  4. Delete this DISCOVERY MODE section"
 echo ""
-agent-browser close
+chrome-use close
 exit 0
 
 # ================================================================
@@ -79,27 +79,27 @@ exit 0
 # : "${APP_USERNAME:?Set APP_USERNAME environment variable}"
 # : "${APP_PASSWORD:?Set APP_PASSWORD environment variable}"
 #
-# agent-browser open "$LOGIN_URL"
-# agent-browser wait --load networkidle
-# agent-browser snapshot -i
+# chrome-use open "$LOGIN_URL"
+# chrome-use wait --load networkidle
+# chrome-use snapshot -i
 #
 # # Fill credentials (update refs to match your form)
-# agent-browser fill @e1 "$APP_USERNAME"
-# agent-browser fill @e2 "$APP_PASSWORD"
-# agent-browser click @e3
-# agent-browser wait --load networkidle
+# chrome-use fill @e1 "$APP_USERNAME"
+# chrome-use fill @e2 "$APP_PASSWORD"
+# chrome-use click @e3
+# chrome-use wait --load networkidle
 #
 # # Verify login succeeded
-# FINAL_URL=$(agent-browser get url)
+# FINAL_URL=$(chrome-use get url)
 # if [[ "$FINAL_URL" == *"login"* ]] || [[ "$FINAL_URL" == *"signin"* ]]; then
 #     echo "Login failed - still on login page"
-#     agent-browser screenshot /tmp/login-failed.png
-#     agent-browser close
+#     chrome-use screenshot /tmp/login-failed.png
+#     chrome-use close
 #     exit 1
 # fi
 #
 # # Save state for future runs
 # echo "Saving state to $STATE_FILE"
-# agent-browser state save "$STATE_FILE"
+# chrome-use state save "$STATE_FILE"
 # echo "Login successful"
-# agent-browser snapshot -i
+# chrome-use snapshot -i

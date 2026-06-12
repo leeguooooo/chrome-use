@@ -717,14 +717,14 @@ pub fn dispatch_state_command(cmd: &Value) -> Option<Result<Value, String>> {
     }
 }
 
-/// Return the agent-browser state root (`~/.agent-browser`, falling back to
-/// `<tempdir>/agent-browser` when the home directory can't be resolved).
+/// Return the chrome-use state root (`~/.chrome-use`, falling back to
+/// `<tempdir>/chrome-use` when the home directory can't be resolved).
 /// This is the parent of `sessions/`, auth storage, and the encryption key.
 pub fn get_state_dir() -> PathBuf {
     if let Some(home) = dirs::home_dir() {
-        home.join(".agent-browser")
+        home.join(".chrome-use")
     } else {
-        std::env::temp_dir().join("agent-browser")
+        std::env::temp_dir().join("chrome-use")
     }
 }
 
@@ -783,19 +783,19 @@ mod tests {
 
     #[test]
     fn test_state_show_nonexistent_file() {
-        let result = state_show("/tmp/nonexistent-agent-browser-state-file.json");
+        let result = state_show("/tmp/nonexistent-chrome-use-state-file.json");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_state_clear_nonexistent_file() {
-        let result = state_clear(Some("/tmp/nonexistent-agent-browser-state-file.json"));
+        let result = state_clear(Some("/tmp/nonexistent-chrome-use-state-file.json"));
         assert!(result.is_err());
     }
 
     #[test]
     fn test_state_rename_nonexistent() {
-        let result = state_rename("/tmp/nonexistent-agent-browser-state-file.json", "new-name");
+        let result = state_rename("/tmp/nonexistent-chrome-use-state-file.json", "new-name");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found"));
     }

@@ -1124,7 +1124,7 @@ impl DaemonState {
                 }
                 Err(broadcast::error::TryRecvError::Empty) => break,
                 Err(broadcast::error::TryRecvError::Lagged(n)) => {
-                    eprintln!("[agent-browser] Warning: CDP event buffer overflowed, {} events dropped. Network requests may be missing from HAR output.", n);
+                    eprintln!("[chrome-use] Warning: CDP event buffer overflowed, {} events dropped. Network requests may be missing from HAR output.", n);
                     continue;
                 }
                 Err(broadcast::error::TryRecvError::Closed) => {
@@ -1540,7 +1540,7 @@ async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
     // before returning success. Without this, a zombie CDP socket (process
     // alive, websocket dead) would let `connect_auto` and `tab_new` succeed,
     // we'd return Ok, the next user command would silently no-op, and
-    // `agent-browser open URL` would exit 0 with the browser still on
+    // `chrome-use open URL` would exit 0 with the browser still on
     // about:blank. Failing here lets the caller surface the real error.
     if let Err(e) = mgr
         .client
@@ -1557,7 +1557,7 @@ async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
         return Err(format!(
             "CDP session is unresponsive after attaching ({}). \
              The browser may have lost its DevTools connection. \
-             Try: agent-browser close, then re-run.",
+             Try: chrome-use close, then re-run.",
             e
         ));
     }
@@ -1634,11 +1634,11 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
                 return Err(format!(
                     "Could not connect to your Chrome browser.\n\n\
                      If Chrome showed an \"Allow remote debugging?\" dialog, click \
-                     Allow and re-run — that consent is what lets agent-browser attach.\n\n\
-                     Otherwise, to let agent-browser reuse your logged-in Chrome (recommended):\n\
+                     Allow and re-run — that consent is what lets chrome-use attach.\n\n\
+                     Otherwise, to let chrome-use reuse your logged-in Chrome (recommended):\n\
                      {}\n\n\
                      Or launch a separate browser that KEEPS your login state:\n  \
-                     agent-browser --launch --profile auto open <url>\n\
+                     chrome-use --launch --profile auto open <url>\n\
                      (plain `--launch` alone uses a temporary EMPTY profile — no cookies, \
                      no logged-in sessions.)\n\n\
                      Note: remote debugging is a startup flag, not a Chrome setting — \
@@ -1777,15 +1777,15 @@ fn chrome_relaunch_hint() -> &'static str {
     if cfg!(target_os = "macos") {
         "  1. Quit Chrome completely\n\
          2. Run:  open -a \"Google Chrome\" --args --remote-debugging-port=9222\n\
-         3. Then retry your agent-browser command"
+         3. Then retry your chrome-use command"
     } else if cfg!(target_os = "windows") {
         "  1. Close Chrome completely\n\
          2. Run:  start chrome --remote-debugging-port=9222\n\
-         3. Then retry your agent-browser command"
+         3. Then retry your chrome-use command"
     } else {
         "  1. Close Chrome completely\n\
          2. Run:  google-chrome --remote-debugging-port=9222\n\
-         3. Then retry your agent-browser command"
+         3. Then retry your chrome-use command"
     }
 }
 
@@ -1854,7 +1854,7 @@ async fn apply_stealth_to_browser(state: &DaemonState) {
 
 /// If the previous daemon left a `.restore-url` sidecar (because it was killed
 /// by a version-mismatch restart), navigate the freshly-connected browser to
-/// that URL so `agent-browser get url` after `npm i -g` upgrade still reports
+/// that URL so `chrome-use get url` after `npm i -g` upgrade still reports
 /// the page the user was on. Read-and-delete: the file is removed regardless
 /// of whether navigation succeeds, so a stale sidecar can't haunt later
 /// auto-launches.
@@ -2204,11 +2204,11 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                 return Err(format!(
                     "Could not connect to your Chrome browser.\n\n\
                      If Chrome showed an \"Allow remote debugging?\" dialog, click \
-                     Allow and re-run — that consent is what lets agent-browser attach.\n\n\
-                     Otherwise, to let agent-browser reuse your logged-in Chrome (recommended):\n\
+                     Allow and re-run — that consent is what lets chrome-use attach.\n\n\
+                     Otherwise, to let chrome-use reuse your logged-in Chrome (recommended):\n\
                      {}\n\n\
                      Or launch a separate browser that KEEPS your login state:\n  \
-                     agent-browser --launch --profile auto open <url>\n\
+                     chrome-use --launch --profile auto open <url>\n\
                      (plain `--launch` alone uses a temporary EMPTY profile — no cookies, \
                      no logged-in sessions.)\n\n\
                      Note: remote debugging is a startup flag, not a Chrome setting — \
@@ -4897,7 +4897,7 @@ async fn handle_pdf(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
         None => {
             let dir = dirs::home_dir()
                 .unwrap_or_else(std::env::temp_dir)
-                .join(".agent-browser")
+                .join(".chrome-use")
                 .join("tmp")
                 .join("pdfs");
             let _ = std::fs::create_dir_all(&dir);
@@ -6435,7 +6435,7 @@ async fn handle_getbyrole(cmd: &Value, state: &mut DaemonState) -> Result<Value,
                 const __an = (el.getAttribute('aria-label') || el.getAttribute('title')
                     || el.getAttribute('alt') || el.value || el.textContent || '').trim();
                 if ({name_match}) {{
-                    el.setAttribute('data-agent-browser-located', 'true');
+                    el.setAttribute('data-chrome-use-located', 'true');
                     return true;
                 }}
             }}
@@ -6469,7 +6469,7 @@ async fn handle_getbyrole(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         return Err(format!("No element found: {}", desc));
     }
 
-    let selector = "[data-agent-browser-located='true']";
+    let selector = "[data-chrome-use-located='true']";
     let result = execute_subaction(cmd, state, selector).await;
 
     // Clean up the marker attribute
@@ -6477,7 +6477,7 @@ async fn handle_getbyrole(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         if browser.active_session_id().is_ok() {
             let _ = browser
                 .evaluate(
-                    "document.querySelector('[data-agent-browser-located]')?.removeAttribute('data-agent-browser-located')",
+                    "document.querySelector('[data-chrome-use-located]')?.removeAttribute('data-chrome-use-located')",
                     None,
                 )
                 .await;
@@ -6520,7 +6520,7 @@ async fn handle_semantic_locator(
                 if (!label) return false;
                 const forId = label.getAttribute('for');
                 const target = forId ? document.getElementById(forId) : label.querySelector('input,select,textarea');
-                if (target) {{ target.setAttribute('data-agent-browser-located', 'true'); return true; }}
+                if (target) {{ target.setAttribute('data-chrome-use-located', 'true'); return true; }}
                 return false;
             }})()"#,
             match_fn = match_fn,
@@ -6528,7 +6528,7 @@ async fn handle_semantic_locator(
         "placeholder" => format!(
             r#"(() => {{
                 const el = document.querySelector('input[placeholder={val}], textarea[placeholder={val}]');
-                if (el) {{ el.setAttribute('data-agent-browser-located', 'true'); return true; }}
+                if (el) {{ el.setAttribute('data-chrome-use-located', 'true'); return true; }}
                 return false;
             }})()"#,
             val = serde_json::to_string(value).unwrap_or_default(),
@@ -6536,7 +6536,7 @@ async fn handle_semantic_locator(
         "alttext" => format!(
             r#"(() => {{
                 const el = document.querySelector('img[alt={val}], [alt={val}]');
-                if (el) {{ el.setAttribute('data-agent-browser-located', 'true'); return true; }}
+                if (el) {{ el.setAttribute('data-chrome-use-located', 'true'); return true; }}
                 return false;
             }})()"#,
             val = serde_json::to_string(value).unwrap_or_default(),
@@ -6544,7 +6544,7 @@ async fn handle_semantic_locator(
         "title" => format!(
             r#"(() => {{
                 const el = document.querySelector('[title={val}]');
-                if (el) {{ el.setAttribute('data-agent-browser-located', 'true'); return true; }}
+                if (el) {{ el.setAttribute('data-chrome-use-located', 'true'); return true; }}
                 return false;
             }})()"#,
             val = serde_json::to_string(value).unwrap_or_default(),
@@ -6552,7 +6552,7 @@ async fn handle_semantic_locator(
         "testid" => format!(
             r#"(() => {{
                 const el = document.querySelector('[data-testid={val}]');
-                if (el) {{ el.setAttribute('data-agent-browser-located', 'true'); return true; }}
+                if (el) {{ el.setAttribute('data-chrome-use-located', 'true'); return true; }}
                 return false;
             }})()"#,
             val = serde_json::to_string(value).unwrap_or_default(),
@@ -6564,7 +6564,7 @@ async fn handle_semantic_locator(
                     const all = document.querySelectorAll('*');
                     for (const el of all) {{
                         if (el.children.length === 0 && {match_fn}) {{
-                            el.setAttribute('data-agent-browser-located', 'true');
+                            el.setAttribute('data-chrome-use-located', 'true');
                             return true;
                         }}
                     }}
@@ -6598,13 +6598,13 @@ async fn handle_semantic_locator(
         return Err(format!("No element found by {} '{}'", strategy, value));
     }
 
-    let selector = "[data-agent-browser-located='true']";
+    let selector = "[data-chrome-use-located='true']";
     let action_result = execute_subaction(cmd, state, selector).await;
 
     if let Some(ref browser) = state.browser {
         let _ = browser
             .evaluate(
-                "document.querySelector('[data-agent-browser-located]')?.removeAttribute('data-agent-browser-located')",
+                "document.querySelector('[data-chrome-use-located]')?.removeAttribute('data-chrome-use-located')",
                 None,
             )
             .await;
@@ -6654,7 +6654,7 @@ async fn handle_nth(cmd: &Value, state: &mut DaemonState) -> Result<Value, Strin
             const els = document.querySelectorAll({sel});
             const idx = {idx} < 0 ? els.length + {idx} : {idx};
             if (idx < 0 || idx >= els.length) return false;
-            els[idx].setAttribute('data-agent-browser-located', 'true');
+            els[idx].setAttribute('data-chrome-use-located', 'true');
             return true;
         }})()"#,
         sel = serde_json::to_string(selector).unwrap_or_default(),
@@ -6687,13 +6687,13 @@ async fn handle_nth(cmd: &Value, state: &mut DaemonState) -> Result<Value, Strin
         ));
     }
 
-    let located = "[data-agent-browser-located='true']";
+    let located = "[data-chrome-use-located='true']";
     let action_result = execute_subaction(cmd, state, located).await;
 
     if let Some(ref browser) = state.browser {
         let _ = browser
             .evaluate(
-                "document.querySelector('[data-agent-browser-located]')?.removeAttribute('data-agent-browser-located')",
+                "document.querySelector('[data-chrome-use-located]')?.removeAttribute('data-chrome-use-located')",
                 None,
             )
             .await;
@@ -7230,7 +7230,7 @@ async fn handle_har_stop(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     let mut log = json!({
         "version": "1.2",
         "creator": {
-            "name": "agent-browser",
+            "name": "chrome-use",
             "version": env!("CARGO_PKG_VERSION")
         },
         "entries": entries
@@ -7529,9 +7529,9 @@ fn har_output_path(explicit_path: Option<&str>) -> String {
 
 fn get_har_dir() -> PathBuf {
     if let Some(home) = dirs::home_dir() {
-        home.join(".agent-browser").join("tmp").join("har")
+        home.join(".chrome-use").join("tmp").join("har")
     } else {
-        std::env::temp_dir().join("agent-browser").join("har")
+        std::env::temp_dir().join("chrome-use").join("har")
     }
 }
 
@@ -8902,10 +8902,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock should be after unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "agent-browser-{label}-{}-{nanos}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("chrome-use-{label}-{}-{nanos}", std::process::id()))
     }
 
     #[tokio::test]
@@ -9451,7 +9448,7 @@ mod tests {
 
         let har: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(har["log"]["version"], "1.2");
-        assert_eq!(har["log"]["creator"]["name"], "agent-browser");
+        assert_eq!(har["log"]["creator"]["name"], "chrome-use");
         assert!(har["log"].get("browser").is_none());
         assert_eq!(har["log"]["entries"][0]["response"]["content"]["size"], 128);
 
@@ -9461,7 +9458,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_har_stop_skips_browser_auto_launch() {
         let path = std::env::temp_dir().join(format!(
-            "agent-browser-har-stop-{}.har",
+            "chrome-use-har-stop-{}.har",
             unix_timestamp_millis()
         ));
         let mut state = DaemonState::new();

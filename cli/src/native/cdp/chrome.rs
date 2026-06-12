@@ -181,14 +181,14 @@ fn webrtc_ip_handling_policy(has_proxy: bool) -> Option<&'static str> {
 }
 
 /// Seed a throwaway `--launch` profile with a human-readable name
-/// (`agent-browser (<session>)`) so Chrome's toolbar profile chip identifies the
+/// (`chrome-use (<session>)`) so Chrome's toolbar profile chip identifies the
 /// window as an agent's test profile rather than an anonymous empty profile
 /// (issue #9). The name lives in `Local State`'s `profile.info_cache.<dir>.name`
 /// — the same field `resolve_chrome_profile("auto")` reads. Best-effort: any
 /// write error is ignored (the profile still works, just unlabeled).
 fn write_temp_profile_label(dir: &std::path::Path) {
     let session = std::env::var("AGENT_BROWSER_SESSION").unwrap_or_else(|_| "default".to_string());
-    let label = format!("agent-browser ({session})");
+    let label = format!("chrome-use ({session})");
     let local_state = serde_json::json!({
         "profile": {
             "info_cache": {
@@ -246,7 +246,7 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         args.push("--headless=new".to_string());
         // Linux paints native scrollbars into viewport screenshots unless
         // Chrome is launched with this flag. `--hide-scrollbars` is
-        // presence-based, so agent-browser exposes --hide-scrollbars false
+        // presence-based, so chrome-use exposes --hide-scrollbars false
         // as the public opt-out instead of forwarding a fake inverse switch.
         if options.hide_scrollbars {
             args.push("--hide-scrollbars".to_string());
@@ -286,8 +286,7 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         args.push(format!("--user-data-dir={}", expanded));
         (dir, None)
     } else {
-        let dir =
-            std::env::temp_dir().join(format!("agent-browser-chrome-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("chrome-use-chrome-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Failed to create temp profile dir: {}", e))?;
         // Label the throwaway profile so a human watching the desktop can tell
@@ -349,11 +348,11 @@ pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
             let cache_dir = crate::install::get_browsers_dir();
             format!(
                 "Chrome not found. Checked:\n  \
-                 - agent-browser cache: {}\n  \
+                 - chrome-use cache: {}\n  \
                  - System Chrome installations\n  \
                  - Puppeteer browser cache\n  \
                  - Playwright browser cache\n\
-                 Run `agent-browser install` to download Chrome, or use --executable-path.",
+                 Run `chrome-use install` to download Chrome, or use --executable-path.",
                 cache_dir.display()
             )
         })?,
@@ -639,7 +638,7 @@ fn chrome_launch_error(message: &str, stderr_lines: &[String]) -> String {
 }
 
 pub fn find_chrome() -> Option<PathBuf> {
-    // 1. Check Chrome downloaded by `agent-browser install`
+    // 1. Check Chrome downloaded by `chrome-use install`
     if let Some(p) = crate::install::find_installed_chrome() {
         return Some(p);
     }
@@ -651,7 +650,7 @@ pub fn find_chrome() -> Option<PathBuf> {
         let _ = writeln!(
             std::io::stderr(),
             "Warning: Chrome cache directory exists ({}) but no Chrome binary found inside. \
-             Falling back to system Chrome. Run `agent-browser install` to re-download.",
+             Falling back to system Chrome. Run `chrome-use install` to re-download.",
             cache_dir.display()
         );
     }
@@ -762,7 +761,7 @@ pub fn cleanup_orphaned_chrome_profiles() {
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        if !name.to_string_lossy().starts_with("agent-browser-chrome-") {
+        if !name.to_string_lossy().starts_with("chrome-use-chrome-") {
             continue;
         }
         let path = entry.path();
@@ -806,7 +805,7 @@ pub async fn auto_connect_cdp() -> Result<String, String> {
     // `chrome.debugger` permission, which — unlike a raw `--remote-debugging-port`
     // CDP attach — never triggers Chrome 136+'s per-connection
     // "Allow remote debugging?" consent modal. The native-messaging host writes
-    // ~/.agent-browser/relay-cdp-url while connected and removes it on exit, so a
+    // ~/.chrome-use/relay-cdp-url while connected and removes it on exit, so a
     // present URL means the relay is up. This must win over the DevToolsActivePort
     // / :9222 probes below: if the user's Chrome happens to also be listening on a
     // debug port, attaching there would pop the consent dialog and defeat the
@@ -842,15 +841,13 @@ pub async fn auto_connect_cdp() -> Result<String, String> {
     }
 
     if host_installed {
-        return Err(
-            "The agent-browser-stealth extension is installed, but its relay \
+        return Err("The chrome-use extension is installed, but its relay \
              isn't connected right now. Wake it up — click the extension's \
              toolbar icon, or reload it at chrome://extensions — then retry. \
-             (agent-browser will not attach to a raw --remote-debugging-port \
+             (chrome-use will not attach to a raw --remote-debugging-port \
              while the extension is set up, because that pops Chrome's \"Allow \
              remote debugging?\" dialog. Use --cdp <port> to force the raw path.)"
-                .to_string(),
-        );
+            .to_string());
     }
 
     let user_data_dirs = get_chrome_user_data_dirs();
@@ -876,7 +873,7 @@ pub async fn auto_connect_cdp() -> Result<String, String> {
     Err(
         "No running Chrome with remote debugging found. Remote debugging is a \
          startup flag, not a setting: fully quit Chrome and relaunch it with \
-         --remote-debugging-port=9222 (then agent-browser auto-connects), or pass \
+         --remote-debugging-port=9222 (then chrome-use auto-connects), or pass \
          --cdp <port>/--launch."
             .to_string(),
     )
@@ -1177,7 +1174,7 @@ pub fn copy_chrome_profile(
     profile_directory: &str,
 ) -> Result<PathBuf, String> {
     let temp_dir =
-        std::env::temp_dir().join(format!("agent-browser-profile-{}", uuid::Uuid::new_v4()));
+        std::env::temp_dir().join(format!("chrome-use-profile-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to create temp profile dir: {}", e))?;
 
@@ -1611,7 +1608,7 @@ mod tests {
         guard.set("PLAYWRIGHT_BROWSERS_PATH", "/nonexistent/path");
 
         let temp_home = std::env::temp_dir().join(format!(
-            "agent-browser-test-home-{}-{}",
+            "chrome-use-test-home-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1741,7 +1738,7 @@ mod tests {
         let result = build_chrome_args(&opts).unwrap();
         assert!(
             !result.args.iter().any(|a| a == "--hide-scrollbars"),
-            "--hide-scrollbars false should suppress agent-browser's default hide switch"
+            "--hide-scrollbars false should suppress chrome-use's default hide switch"
         );
         if let Some(ref dir) = result.temp_user_data_dir {
             let _ = std::fs::remove_dir_all(dir);
@@ -1858,7 +1855,7 @@ mod tests {
     #[test]
     fn test_chrome_process_drop_cleans_temp_dir() {
         let dir = std::env::temp_dir().join(format!(
-            "agent-browser-chrome-drop-test-{}",
+            "chrome-use-chrome-drop-test-{}",
             uuid::Uuid::new_v4()
         ));
         let _ = std::fs::create_dir_all(&dir);
@@ -1933,7 +1930,7 @@ mod tests {
         let name = ls["profile"]["info_cache"]["Default"]["name"]
             .as_str()
             .unwrap();
-        assert!(name.starts_with("agent-browser ("), "got: {name}");
+        assert!(name.starts_with("chrome-use ("), "got: {name}");
         assert_eq!(
             ls["profile"]["info_cache"]["Default"]["is_using_default_name"],
             serde_json::json!(false)
@@ -1946,7 +1943,7 @@ mod tests {
         assert!(prefs["profile"]["name"]
             .as_str()
             .unwrap()
-            .starts_with("agent-browser ("));
+            .starts_with("chrome-use ("));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1999,7 +1996,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             Self(std::env::temp_dir().join(format!(
-                "agent-browser-test-{}-{}-{}",
+                "chrome-use-test-{}-{}-{}",
                 name,
                 std::process::id(),
                 std::time::SystemTime::now()

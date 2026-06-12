@@ -26,7 +26,7 @@ const CONTENT_GET_DOM_STATE = 'AB_CONTENT_GET_DOM_STATE';
 const CONTENT_PING = 'AB_CONTENT_PING';
 
 const DEFAULT_GROUP_TITLE = 'Agent Browser Stealth';
-const DOWNLOAD_ARCHIVE_ROOT = 'agent-browser-stealth';
+const DOWNLOAD_ARCHIVE_ROOT = 'chrome-use';
 const STORAGE_POLICY_KEY = 'abSessionPoliciesV1';
 const STORAGE_OPTIONS_KEY = 'abExtensionOptionsV1';
 const STORAGE_WORKFLOWS_KEY = 'abWorkflowsV1';
@@ -932,7 +932,7 @@ async function enforceSessionWindowAffinity(tabId) {
 
 async function updateRiskBadge(tabId) {
   let text = '';
-  let title = 'agent-browser-stealth';
+  let title = 'chrome-use';
 
   const session = getManagedSessionForTab(tabId);
   if (session) {

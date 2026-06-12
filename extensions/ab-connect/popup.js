@@ -1,6 +1,6 @@
-// Popup status page for agent-browser-stealth.
+// Popup status page for chrome-use.
 // Asks the service worker whether the native-messaging link to the local
-// agent-browser CLI is live, and renders a paired / not-paired indicator.
+// chrome-use CLI is live, and renders a paired / not-paired indicator.
 
 const dot = document.getElementById('dot')
 const label = document.getElementById('statusLabel')
@@ -25,7 +25,7 @@ function render(state) {
   } else {
     dot.classList.add('off')
     label.textContent = 'Not paired'
-    sub.textContent = 'no local agent-browser CLI linked'
+    sub.textContent = 'no local chrome-use CLI linked'
     hint.style.display = 'block'
   }
 }
