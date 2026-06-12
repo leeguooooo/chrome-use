@@ -24,7 +24,6 @@ let port = null
 /** Whether the native-messaging host (the local chrome-use CLI) is linked.
  *  Read by the popup status page. */
 let hostConnected = false
-let nextSession = 1
 /** tabId -> { sessionId, targetId } */
 const tabs = new Map()
 /** sessionId -> tabId (main session per tab) */
@@ -261,7 +260,16 @@ async function attachTab(tabId) {
   const targetInfo = info?.targetInfo
   const targetId = String(targetInfo?.targetId || '')
   if (!targetId) throw new Error('attachTab: no targetId')
-  const sessionId = `cb-tab-${nextSession++}`
+  // Derive the session id from the STABLE Chrome tabId, not a monotonic counter
+  // (issue #17). A tab's chrome.debugger session can be torn down and
+  // re-established — cross-process navigation, a service-worker restart wiping
+  // these in-memory maps, DevTools stealing the debugger — and each time the tab
+  // re-attaches. With a counter, re-attach minted a BRAND-NEW `cb-tab-N`, which
+  // orphaned the daemon's binding (it's still pinned to the old id and the relay
+  // never tells it to rebind) → permanent "stale sessionId / tab is gone". The
+  // tabId is stable across all of that, so `cb-tab-<tabId>` restores the SAME
+  // session the daemon already holds → eval/snapshot auto-follow the new page.
+  const sessionId = `cb-tab-${tabId}`
   const entry = { sessionId, targetId }
   tabs.set(tabId, entry)
   sessionToTab.set(sessionId, tabId)

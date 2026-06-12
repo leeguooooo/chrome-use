@@ -331,6 +331,45 @@ mod tests {
     }
 
     #[test]
+    fn reattach_with_same_session_restores_target() {
+        // Issue #17 recovery contract. A tab's chrome.debugger session is torn
+        // down (cross-process nav, SW restart, …) then re-attached. The fix has
+        // the extension reuse the SAME `cb-tab-<tabId>` id across that churn, so
+        // after detach+reattach the relay must expose the NEW target under the
+        // SAME session — which is exactly the session the daemon is still bound
+        // to, so its eval/snapshot auto-follow the new page instead of going stale.
+        let mut s = RelayState::new();
+        s.handle_ext_message(&attached_event("T_old", "cb-tab-42"), "tok");
+        s.handle_ext_message(
+            &json!({
+                "method": "forwardCDPEvent",
+                "params": { "method": "Target.detachedFromTarget", "params": { "sessionId": "cb-tab-42" } }
+            }),
+            "tok",
+        );
+        s.handle_ext_message(&attached_event("T_new", "cb-tab-42"), "tok");
+
+        let route = s.route_client_command(1, &json!({ "id": 1, "method": "Target.getTargets" }));
+        match route {
+            ClientRoute::Local(v) => {
+                let infos = v["result"]["targetInfos"].as_array().unwrap();
+                assert_eq!(infos.len(), 1, "only the new target should remain");
+                assert_eq!(infos[0]["targetId"], "T_new");
+            }
+            _ => panic!("getTargets must be local"),
+        }
+        // The daemon's existing session id still resolves — to the new target.
+        let route = s.route_client_command(
+            1,
+            &json!({ "id": 2, "method": "Target.attachToTarget", "params": { "targetId": "T_new" } }),
+        );
+        assert_eq!(
+            route,
+            ClientRoute::Local(json!({ "id": 2, "result": { "sessionId": "cb-tab-42" } }))
+        );
+    }
+
+    #[test]
     fn browser_get_version_is_answered_locally() {
         // Liveness probe must NOT be forwarded (the extension can't do
         // browser-level commands) — else the daemon reconnects on every command.
