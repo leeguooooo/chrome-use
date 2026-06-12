@@ -320,7 +320,27 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // scripts before the first real navigation (see `batch`).
             // `goto` and `navigate` still require a URL since those verbs
             // imply the navigation itself.
-            let first_url = rest.iter().find(|a| !a.starts_with("--"));
+            // The URL is the first positional arg, skipping flags AND any value
+            // consumed by `--wait-until` (so it isn't mistaken for the URL).
+            let first_url = {
+                let mut url = None;
+                let mut skip_next = false;
+                for a in &rest {
+                    if skip_next {
+                        skip_next = false;
+                        continue;
+                    }
+                    if *a == "--wait-until" {
+                        skip_next = true;
+                        continue;
+                    }
+                    if !a.starts_with("--") {
+                        url = Some(a);
+                        break;
+                    }
+                }
+                url
+            };
             let url = match first_url {
                 Some(u) => *u,
                 None if cmd == "open" => {
@@ -349,6 +369,23 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let mut nav_cmd = json!({ "id": id, "action": "navigate", "url": url });
             if flags.provider.is_some() {
                 nav_cmd["waitUntil"] = json!("none");
+            }
+            // Explicit readiness override (issue #10): SPAs whose `load` event
+            // never fires (a long-lived XHR/websocket holds it open) hang out the
+            // load-event wait. `--wait-until domcontentloaded` returns as soon as
+            // the DOM is parsed.
+            if let Some(i) = rest.iter().position(|a| *a == "--wait-until") {
+                let val = rest.get(i + 1).ok_or(ParseError::MissingArguments {
+                    context: "open --wait-until".to_string(),
+                    usage: "open <url> --wait-until <load|domcontentloaded|networkidle|none>",
+                })?;
+                if !["load", "domcontentloaded", "networkidle", "none"].contains(val) {
+                    return Err(ParseError::InvalidValue {
+                        message: format!("Unknown --wait-until value: {}", val),
+                        usage: "open <url> --wait-until <load|domcontentloaded|networkidle|none>",
+                    });
+                }
+                nav_cmd["waitUntil"] = json!(val);
             }
             if let Some(ref headers_json) = flags.headers {
                 let headers =
@@ -3641,6 +3678,44 @@ mod tests {
             assert_eq!(cmd["action"], "gettext", "{verb}");
             assert_eq!(cmd["selector"], ".price", "{verb}");
         }
+    }
+
+    #[test]
+    fn test_open_wait_until_after_url() {
+        let cmd = parse_command(
+            &args("open https://x.com --wait-until domcontentloaded"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "navigate");
+        assert_eq!(cmd["url"], "https://x.com");
+        assert_eq!(cmd["waitUntil"], "domcontentloaded");
+    }
+
+    #[test]
+    fn test_open_wait_until_before_url_not_mistaken_for_url() {
+        // The --wait-until value must not be picked up as the URL.
+        let cmd = parse_command(
+            &args("open --wait-until domcontentloaded https://x.com"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["url"], "https://x.com");
+        assert_eq!(cmd["waitUntil"], "domcontentloaded");
+    }
+
+    #[test]
+    fn test_open_wait_until_rejects_bogus_value() {
+        let err = parse_command(
+            &args("open https://x.com --wait-until wat"),
+            &default_flags(),
+        )
+        .unwrap_err();
+        assert!(
+            err.format().contains("--wait-until"),
+            "got: {}",
+            err.format()
+        );
     }
 
     #[test]

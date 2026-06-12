@@ -256,6 +256,12 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 // empty title line.
                 None => println!("{} {}", color::success_indicator(), color::dim(url)),
             }
+            // Soft warning carried in the response (e.g. the load event timed out
+            // but the DOM was ready — issue #10). Goes to stderr so it doesn't
+            // pollute the stdout url/title that scripts parse.
+            if let Some(w) = data.get("warning").and_then(|v| v.as_str()) {
+                eprintln!("⚠ navigation: {w}");
+            }
             return;
         }
         if let Some(cdp_url) = data.get("cdpUrl").and_then(|v| v.as_str()) {

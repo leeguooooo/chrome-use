@@ -265,6 +265,15 @@ impl WaitUntil {
             _ => Self::Load,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Load => "load",
+            Self::DomContentLoaded => "domcontentloaded",
+            Self::NetworkIdle => "networkidle",
+            Self::None => "none",
+        }
+    }
 }
 
 pub enum BrowserProcess {
@@ -800,9 +809,38 @@ impl BrowserManager {
         // Only wait for lifecycle events if Chrome created a new loader (full navigation).
         // If loader_id is None, it was a same-document navigation (e.g., hash routing)
         // which does not fire Page.loadEventFired or Page.domContentEventFired.
+        let mut nav_warning: Option<String> = None;
         if nav_result.loader_id.is_some() && wait_until != WaitUntil::None {
-            self.wait_for_lifecycle(wait_until, &session_id, &mut lifecycle_rx)
-                .await?;
+            if let Err(e) = self
+                .wait_for_lifecycle(wait_until, &session_id, &mut lifecycle_rx)
+                .await
+            {
+                // The lifecycle event (e.g. `load`) didn't fire within the
+                // timeout. On SPAs this is common — a long-pending XHR or a stuck
+                // sub-resource holds `load` open long after the DOM is interactive
+                // and the page is usable, so `open` would hard-fail even though
+                // eval/screenshot work immediately (issue #10). If the DOM is
+                // already ready, treat navigation as done (with a warning, carried
+                // in the response so the CLI can surface it) instead of failing.
+                // Only a still-loading document is a real failure.
+                let ready = self
+                    .evaluate_simple("document.readyState")
+                    .await
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default();
+                if ready == "interactive" || ready == "complete" {
+                    nav_warning = Some(format!(
+                        "`{}` didn't complete within the timeout, but the DOM is ready ({}) — \
+                         continuing. Pass `--wait-until domcontentloaded` to skip this wait on \
+                         SPAs with long-lived requests.",
+                        wait_until.as_str(),
+                        ready
+                    ));
+                } else {
+                    return Err(e);
+                }
+            }
         }
 
         let page_url = self.get_url().await.unwrap_or_else(|_| url.to_string());
@@ -821,7 +859,11 @@ impl BrowserManager {
             page.title = title.clone();
         }
 
-        Ok(json!({ "url": page_url, "title": title }))
+        let mut out = json!({ "url": page_url, "title": title });
+        if let Some(w) = nav_warning {
+            out["warning"] = json!(w);
+        }
+        Ok(out)
     }
 
     async fn wait_for_lifecycle(
