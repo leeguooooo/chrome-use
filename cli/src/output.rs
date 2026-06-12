@@ -3101,6 +3101,10 @@ Network:  chrome-use network <action>
 Storage:
   cookies [get|set|clear]    Manage cookies (set supports --url, --domain, --path, --httpOnly, --secure, --sameSite, --expires)
                              Or:  cookies set --curl <file> [--domain <host>] (auto-detects JSON/cURL/Cookie-header files)
+  cookies export --from <profile> [--domain <d>[,<d>]]
+                             Decrypt another Chrome profile's cookies -> JSON for `cookies set --curl` (macOS)
+  cookies transfer --from <profile> [--domain <d>[,<d>]]
+                             Copy a logged-in session from another profile into the connected browser (macOS)
   storage <local|session>    Manage web storage
 
 Tabs:

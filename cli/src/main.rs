@@ -3,6 +3,7 @@ mod color;
 mod commands;
 mod connect;
 mod connection;
+mod cookie_export;
 mod doctor;
 mod findurl;
 mod flags;
@@ -196,6 +197,64 @@ fn run_profiles(json_mode: bool) {
                 color::bold(&p.directory),
                 color::dim(&format!("({})", p.name))
             );
+        }
+    }
+}
+
+fn run_cookies_export(args: &[String], flags: &Flags) {
+    // Source profile comes from `--from <profile>`, falling back to the global
+    // `--profile` (which the flag parser has already moved into flags.profile).
+    let from = args
+        .iter()
+        .position(|a| a == "--from")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .or(flags.profile.as_deref());
+    let profile = match from {
+        Some(p) => p,
+        None => {
+            let msg = "cookies export needs a source profile: cookies export --from <profile> [--domain <d>]";
+            if flags.json {
+                print_json_error(msg);
+            } else {
+                eprintln!("{} {}", color::error_indicator(), msg);
+            }
+            exit(1);
+        }
+    };
+    let domain = args
+        .iter()
+        .position(|a| a == "--domain")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str());
+
+    match cookie_export::export_cookies(profile, domain) {
+        Ok(cookies) => {
+            if flags.json {
+                print_json_value(json!({ "success": true, "data": cookies }));
+            } else {
+                // A JSON array ready for `cookies set --curl <file>`.
+                println!(
+                    "{}",
+                    serde_json::to_string(&cookies).unwrap_or_else(|_| "[]".to_string())
+                );
+                eprintln!(
+                    "{}",
+                    color::dim(&format!(
+                        "{} cookies exported from \"{}\"",
+                        cookies.len(),
+                        profile
+                    ))
+                );
+            }
+        }
+        Err(e) => {
+            if flags.json {
+                print_json_error(&e);
+            } else {
+                eprintln!("{} {}", color::error_indicator(), e);
+            }
+            exit(1);
         }
     }
 }
@@ -636,6 +695,15 @@ fn main() {
     // Handle profiles command (doesn't need daemon)
     if clean.first().map(|s| s.as_str()) == Some("profiles") {
         run_profiles(flags.json);
+        return;
+    }
+
+    // Handle `cookies export` (doesn't need daemon): decrypt an on-disk Chrome
+    // profile's cookies and print them as JSON for `cookies set --curl`.
+    if clean.first().map(|s| s.as_str()) == Some("cookies")
+        && clean.get(1).map(|s| s.as_str()) == Some("export")
+    {
+        run_cookies_export(&clean, &flags);
         return;
     }
 

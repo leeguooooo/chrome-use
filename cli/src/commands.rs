@@ -1289,6 +1289,51 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "cookies" => {
             let op = rest.first().unwrap_or(&"get");
             match *op {
+                "transfer" => {
+                    // Copy a logged-in session between Chrome profiles: decrypt
+                    // the SOURCE profile's on-disk cookie store and inject the
+                    // cookies into the active (connected) session — no CDP access
+                    // to the source, no Chrome restart.
+                    //   cookies transfer --from <profile> [--domain <d>[,<d>]]
+                    // `--from` wins; otherwise the global `--profile` is used.
+                    let from = rest
+                        .iter()
+                        .position(|a| *a == "--from")
+                        .and_then(|i| rest.get(i + 1).copied())
+                        .or(flags.profile.as_deref());
+                    let from = from.ok_or_else(|| ParseError::MissingArguments {
+                        context: "cookies transfer".to_string(),
+                        usage: "cookies transfer --from <profile> [--domain <domain>[,<domain>]]",
+                    })?;
+                    let domain = rest
+                        .iter()
+                        .position(|a| *a == "--domain")
+                        .and_then(|i| rest.get(i + 1).copied());
+                    let cookies =
+                        crate::cookie_export::export_cookies(from, domain).map_err(|e| {
+                            ParseError::InvalidValue {
+                                message: format!("cookies transfer: {}", e),
+                                usage: "cookies transfer --from <profile> [--domain <domain>]",
+                            }
+                        })?;
+                    if cookies.is_empty() {
+                        return Err(ParseError::InvalidValue {
+                            message: format!(
+                                "cookies transfer: no cookies found in profile \"{}\"{}",
+                                from,
+                                domain
+                                    .map(|d| format!(" for domain {}", d))
+                                    .unwrap_or_default()
+                            ),
+                            usage: "cookies transfer --from <profile> [--domain <domain>]",
+                        });
+                    }
+                    return Ok(json!({
+                        "id": id,
+                        "action": "cookies_set",
+                        "cookies": cookies,
+                    }));
+                }
                 "set" => {
                     // --curl <file> mode: import cookies from a JSON array,
                     // raw cURL dump, or bare Cookie header. Scoped to the
