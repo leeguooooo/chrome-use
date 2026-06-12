@@ -1261,14 +1261,19 @@ Examples:
         // === Core Actions ===
         "click" => {
             r##"
-agent-browser click - Click an element
+agent-browser click - Click an element or a coordinate
 
 Usage: agent-browser click <selector> [--new-tab]
+       agent-browser click <x> <y> | <x>,<y> | --coords <x>,<y>
 
 Clicks on the specified element. The selector can be a CSS selector,
 XPath, or an element reference from snapshot (e.g., @e1).
 
+A bare-number argument is treated as a viewport coordinate, not a
+selector — `click 449 320` clicks the pixel point (no element needed).
+
 Options:
+  --coords <x>,<y>     Click a viewport coordinate (explicit form)
   --new-tab            Open link in a new tab instead of navigating current tab
                        (only works on elements with href attribute)
 
@@ -3034,7 +3039,7 @@ Start here (for AI agents):
 
 Core Commands:
   open <url>                 Navigate to URL
-  click <sel>                Click element (or @ref)
+  click <sel|x y>            Click element/@ref, or a viewport coordinate
   dblclick <sel>             Double-click element
   type <sel> <text>          Type into element
   fill <sel> <text>          Clear and fill

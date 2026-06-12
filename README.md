@@ -178,6 +178,7 @@ agent-browser open https://example.com
 
 # Everything works through your logged-in browser
 agent-browser click "Post"
+agent-browser click 449 320            # …or click a raw viewport coordinate
 agent-browser fill "Title" "Hello World"
 agent-browser screenshot ./page.png
 ```

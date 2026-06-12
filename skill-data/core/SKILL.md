@@ -270,6 +270,17 @@ classic for an autocomplete/menu `<li>` that closes on the input's blur — retr
 that one with `AGENT_BROWSER_CLICK_MODE=dom agent-browser click ...`, or just
 `agent-browser eval "<select the item via JS>"`.
 
+Click a raw pixel point when the only handle you have is a coordinate (canvas,
+a marker from a screenshot, a target with no stable selector):
+
+```bash
+agent-browser click 449 320            # click viewport point (x y)
+agent-browser click 449,320            # same, comma form
+agent-browser click --coords 449,320   # same, explicit flag
+```
+
+A bare-number argument is always a coordinate, never a selector.
+
 ## Waiting (read this)
 
 Agents fail more often from bad waits than from bad selectors. Pick the
@@ -433,10 +444,14 @@ Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
 
 ```bash
 agent-browser tab                      # list open tabs (with stable tabId)
+agent-browser tabs                     # alias for `tab` (lists too)
 agent-browser tab new https://docs...  # open a new tab (and switch to it)
 agent-browser tab t2                   # switch to tab t2
 agent-browser tab close t2             # close tab t2
 ```
+
+(`tabs` → the `tab` subcommand tree, and `get-text <sel>` → `get text <sel>` —
+common-guess aliases so you don't waste a round on the wrong spelling.)
 
 Tab ids are stable strings (`t1`, `t2`, …), never reused within a session, so
 the same id keeps referring to the same tab across commands. Positional
@@ -476,6 +491,7 @@ extension (each with a distinct `--session`), not raw `--cdp`.
 ```bash
 agent-browser network route "**/api/users" --body '{"users":[]}'   # stub a response
 agent-browser network route "**/analytics" --abort                 # block entirely
+agent-browser network requests --clear                             # start capturing fresh
 agent-browser network requests                                     # inspect what fired
 agent-browser network har start                                    # record all traffic
 # ... perform actions ...
@@ -570,6 +586,21 @@ agent-browser snapshot -i
 **Click does nothing / overlay swallows the click**
 Some modals and cookie banners block other clicks. Snapshot, find the
 dismiss/close button, click it, then re-snapshot.
+
+**`stale sessionId … re-open your target URL` (extension-relay mode)**
+Your tab was closed, navigated across processes, or its debugger detached
+(e.g. it landed on a `chrome://` or Chrome Web Store page, which Chrome
+forbids debugging). The session no longer has a live tab — re-run
+`agent-browser open <your URL>` to re-attach, then retry. This loud error
+replaces the old silent behaviour where the command ran on some *other*
+tab and returned wrong data.
+
+**Reads landing on the wrong page**
+`eval`, `screenshot`, and `network requests` print the page they ran
+against to stderr: `eval @ <url>`, `screenshot @ <url>`, `network @ <url>`.
+If that URL isn't the page you expected (the active tab drifted), re-`open`
+your target URL — don't trust the result. Treat the stamp as a built-in
+sanity check on every read.
 
 **Fill / type doesn't work**
 Some custom input components intercept key events. Try:
