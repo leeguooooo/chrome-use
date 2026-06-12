@@ -136,6 +136,24 @@ fn active_page_index_after_removal(
     active_page_index
 }
 
+/// Resolve the session's active page index: prefer the pinned `active_target_id`
+/// (stable across tab reorder / passive discovery / removal), falling back to the
+/// raw `active_page_index` only when nothing is pinned or the pin is gone. Keeping
+/// commands anchored to the pinned target is what stops `eval`/`get url`/`snapshot`
+/// from drifting onto a foreign tab between commands (issue #14).
+fn resolve_active_index(
+    pages: &[PageInfo],
+    active_target_id: Option<&str>,
+    active_page_index: usize,
+) -> usize {
+    if let Some(tid) = active_target_id {
+        if let Some(i) = pages.iter().position(|p| p.target_id == tid) {
+            return i;
+        }
+    }
+    active_page_index
+}
+
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     let lower = error.to_lowercase();
@@ -762,12 +780,11 @@ impl BrowserManager {
     /// falling back to `active_page_index` when nothing is pinned or the pin is
     /// gone. This is what keeps commands on the tab the agent actually opened.
     fn resolved_active_index(&self) -> usize {
-        if let Some(tid) = &self.active_target_id {
-            if let Some(i) = self.pages.iter().position(|p| &p.target_id == tid) {
-                return i;
-            }
-        }
-        self.active_page_index
+        resolve_active_index(
+            &self.pages,
+            self.active_target_id.as_deref(),
+            self.active_page_index,
+        )
     }
 
     /// Pin the current active page by target_id so later commands stick to it.
@@ -854,10 +871,20 @@ impl BrowserManager {
             }
         }
 
+        // An explicit `open`/navigate IS the "explicit open" the pin invariant is
+        // built around (see `active_target_id`). On the relay path `open` reuses an
+        // existing tab via this method rather than `add_page`, so without pinning
+        // here `active_target_id` stayed `None` and the session rode the fragile
+        // `active_page_index` — a later passive tab close/reorder then drifted
+        // `eval`/`get url`/`snapshot` onto a foreign tab between commands (issue
+        // #14). Sync the index to the resolved active page, then pin it by stable
+        // target_id so subsequent commands stick to the tab we just navigated.
+        self.active_page_index = self.resolved_active_index();
         if let Some(page) = self.pages.get_mut(self.active_page_index) {
             page.url = page_url.clone();
             page.title = title.clone();
         }
+        self.pin_active_target();
 
         let mut out = json!({ "url": page_url, "title": title });
         if let Some(w) = nav_warning {
@@ -1124,6 +1151,9 @@ impl BrowserManager {
             target_type: "page".to_string(),
         });
         self.active_page_index = 0;
+        // Pin this freshly-created tab (matches `add_page`) so it's a stable
+        // anchor from the first command, not a bare index (issue #14).
+        self.pin_active_target();
         self.enable_domains(&attach_result.session_id).await?;
 
         Ok(())
@@ -2173,6 +2203,55 @@ mod tests {
     #[test]
     fn test_active_page_index_after_removal_resets_when_last_page_disappears() {
         assert_eq!(active_page_index_after_removal(0, 0, 0), 0);
+    }
+
+    fn page(target_id: &str) -> PageInfo {
+        PageInfo {
+            tab_id: 1,
+            label: None,
+            target_id: target_id.to_string(),
+            session_id: format!("session-{target_id}"),
+            url: String::new(),
+            title: String::new(),
+            target_type: "page".to_string(),
+        }
+    }
+
+    // --- issue #14: a pinned target must keep commands on the right tab ---
+
+    #[test]
+    fn resolve_active_index_prefers_pin_over_stale_index() {
+        // The tab we opened ("A") is at index 0, but `active_page_index` is stale
+        // and points at a foreign tab ("B"). With the pin set, resolution sticks
+        // to A — the drift that bit issue #14 (eval landing on /notifications).
+        let pages = vec![page("A"), page("B")];
+        assert_eq!(resolve_active_index(&pages, Some("A"), 1), 0);
+    }
+
+    #[test]
+    fn resolve_active_index_unpinned_drifts_with_index() {
+        // Documents the pre-fix hazard: with no pin, resolution blindly trusts
+        // `active_page_index`, so a clamp/reorder from passive tab discovery lands
+        // commands on a foreign tab. This is exactly what pinning on `open` avoids.
+        let pages = vec![page("A"), page("B")];
+        assert_eq!(resolve_active_index(&pages, None, 1), 1);
+    }
+
+    #[test]
+    fn resolve_active_index_falls_back_when_pin_is_gone() {
+        // If the pinned tab was closed (target_id no longer present), fall back to
+        // the index rather than panicking or returning a bogus slot.
+        let pages = vec![page("A"), page("B")];
+        assert_eq!(resolve_active_index(&pages, Some("CLOSED"), 1), 1);
+    }
+
+    #[test]
+    fn resolve_active_index_pin_survives_passive_background_tab() {
+        // A foreign tab ("Z") gets appended by passive discovery after we pinned
+        // "A". The append doesn't shift A's position, and the pin keeps us on A
+        // regardless of what `active_page_index` happens to be.
+        let pages = vec![page("A"), page("B"), page("Z")];
+        assert_eq!(resolve_active_index(&pages, Some("A"), 2), 0);
     }
 
     // issue #7: removing the pinned active target must re-anchor the pin to a
