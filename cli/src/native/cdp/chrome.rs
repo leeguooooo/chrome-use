@@ -341,6 +341,46 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
     })
 }
 
+/// Cross-process advisory lock that serializes concurrent launches of the SAME
+/// Chrome profile (issue #11). Held via `flock` on a per-profile lock file; the
+/// kernel releases it automatically when the holding process exits, so a crash
+/// can't wedge the queue. Best-effort: if the lock can't be acquired the launch
+/// proceeds unlocked rather than failing.
+struct ProfileLaunchLock {
+    #[cfg(unix)]
+    _file: std::fs::File,
+}
+
+impl ProfileLaunchLock {
+    fn acquire(profile: &str) -> Option<Self> {
+        let safe: String = profile
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let path = std::env::temp_dir().join(format!("chrome-use-launch-{safe}.lock"));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            // Blocking exclusive lock: concurrent same-profile launches queue.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return None;
+            }
+            Some(ProfileLaunchLock { _file: file })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            Some(ProfileLaunchLock {})
+        }
+    }
+}
+
 pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
     let chrome_path = match &options.executable_path {
         Some(p) => PathBuf::from(p),
@@ -363,6 +403,13 @@ pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
     // rewrite options so the retry loop uses the copied profile.
     let mut resolved_options: Option<LaunchOptions> = None;
     let mut profile_temp_dir: Option<PathBuf> = None;
+    // Serialize concurrent launches of the SAME named profile across processes
+    // (issue #11). Without this, N parallel `open --profile <same>` collide on
+    // the profile-copy disk I/O / Chrome's profile lock, every candidate burns
+    // its full launch timeout, and all fail. The flock queues them instead and
+    // auto-releases on process exit, so a crash can't wedge the queue. Held
+    // until Chrome is up (function return).
+    let mut _launch_lock: Option<ProfileLaunchLock> = None;
 
     if let Some(ref profile) = options.profile {
         if is_chrome_profile_name(profile) {
@@ -372,6 +419,7 @@ pub fn launch_chrome(options: &LaunchOptions) -> Result<ChromeProcess, String> {
                     .to_string()
             })?;
             let resolved = resolve_chrome_profile(&user_data_dir, profile)?;
+            _launch_lock = ProfileLaunchLock::acquire(&resolved);
             let temp_path = copy_chrome_profile(&user_data_dir, &resolved)?;
 
             let mut opts = options.clone();
@@ -1884,6 +1932,17 @@ mod tests {
         assert!(is_chrome_profile_name("Default"));
         assert!(is_chrome_profile_name("Profile 1"));
         assert!(is_chrome_profile_name(""));
+    }
+
+    #[test]
+    fn test_profile_launch_lock_acquires_and_sanitizes() {
+        // Uncontended acquire succeeds and writes a sanitized per-profile lock
+        // file (issue #11: serialize concurrent same-profile launches).
+        let lock = ProfileLaunchLock::acquire("Profile 5/weird:name");
+        assert!(lock.is_some(), "uncontended lock should acquire");
+        let expected = std::env::temp_dir().join("chrome-use-launch-Profile_5_weird_name.lock");
+        assert!(expected.exists(), "lock file should exist at {expected:?}");
+        drop(lock);
     }
 
     #[test]
