@@ -1,8 +1,19 @@
 # agent-browser
 
-## 0.27.2
+## 0.27.3
 
 <!-- release:start -->
+### Bug Fixes
+
+- Fixed **Windows ARM64 installs** by falling back to the Windows x64 binary during postinstall, avoiding failed downloads for a native ARM64 artifact that is not published (#1269)
+
+### Contributors
+
+- @EternalRights
+<!-- release:end -->
+
+## 0.27.2
+
 ### Bug Fixes
 
 - Fixed **click reliability** by scrolling off-viewport elements into view before resolving coordinates, handling JavaScript dialogs promptly, recovering mouse state after dialog-opening clicks, and detecting click interception by overlays before dispatching input (#1432, #1434)
@@ -23,7 +34,6 @@
 
 - @ctate
 - @heshamkhaledd
-<!-- release:end -->
 
 ## 0.27.1
 
