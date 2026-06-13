@@ -149,6 +149,25 @@ function tabForTarget(targetId) {
   return null
 }
 
+// Best-effort recovery for a stale `cb-tab-<tabId>` session: the handle is gone
+// from our maps, but if the underlying Chrome tab still exists and is eligible,
+// re-attach to it and return its id so the in-flight command can be retried.
+// Returns null when the tab is genuinely gone (closed / restricted), in which
+// case the caller surfaces the stale-session error. (issue #20.1)
+async function recoverSessionTab(sessionId) {
+  const m = /^cb-tab-(\d+)$/.exec(sessionId)
+  if (!m) return null
+  const tabId = Number(m[1])
+  const tab = await chrome.tabs.get(tabId).catch(() => null)
+  if (!eligible(tab)) return null
+  try {
+    await attachTab(tabId)
+  } catch {
+    return null
+  }
+  return tabs.has(tabId) ? tabId : null
+}
+
 function anyConnectedTab() {
   const it = tabs.keys().next()
   return it.done ? null : it.value
@@ -209,11 +228,22 @@ async function handleForwardCdpCommand(msg) {
   if (sessionId) {
     tabId = tabForSession(sessionId)
     if (!tabId) {
-      throw new Error(
-        `stale sessionId ${sessionId} for ${method}: its tab is gone (closed, ` +
-          `navigated across processes, or lost after an extension restart). ` +
-          `Re-attach by re-opening your target URL before retrying.`,
-      )
+      // The session's debugger handle is gone, but `cb-tab-<tabId>` encodes the
+      // STABLE Chrome tabId (#17). A cross-process navigation (e.g. an SSO
+      // redirect to another origin), a service-worker restart, or DevTools
+      // briefly stealing the debugger all tear the handle down while the tab
+      // itself lives on. Before failing, try to transparently re-attach to that
+      // same tab and retry — so `open`/`navigate`/`eval` self-heal instead of
+      // dead-ending the agent (issue #20.1). attachTab re-mints the identical
+      // `cb-tab-<tabId>` session, so the daemon's binding stays valid.
+      tabId = await recoverSessionTab(sessionId)
+      if (!tabId) {
+        throw new Error(
+          `stale sessionId ${sessionId} for ${method}: its tab is gone (closed, ` +
+            `navigated across processes, or lost after an extension restart). ` +
+            `Re-attach by re-opening your target URL before retrying.`,
+        )
+      }
     }
   } else if (typeof params?.targetId === 'string') {
     tabId = tabForTarget(params.targetId)
