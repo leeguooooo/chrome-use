@@ -501,6 +501,13 @@ the same browser's existing targets, so a second session's first `open` can
 navigate a sibling's tab. For concurrent agents on one real Chrome, use the
 extension (each with a distinct `--session`), not raw `--cdp`.
 
+Because each session owns its own tab group, **one session cannot read another
+session's tabs** — a fresh session's `tab list` shows only its own (empty) group,
+not the tab the first session opened. So if a session's handle dies (e.g. a tab
+navigates across render processes), recover *that* session — reload, re-`open`
+the URL, or `daemon restart` — rather than opening a second session to read the
+first one's tab. There's no "settle in session A, attach session B to read it".
+
 ### Reset stuck daemon state
 
 Each session runs a background daemon worker that holds the page handles. If a
