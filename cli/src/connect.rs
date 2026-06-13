@@ -449,6 +449,28 @@ pub fn relay_url() -> Option<String> {
     }
 }
 
+/// Sidecar recording the connected extension's version, written by the host when
+/// it receives the extension's `hello` (sibling of `relay-cdp-url`). Lets
+/// `doctor` surface which extension build is live without a CDP round-trip.
+fn relay_ext_version_path() -> PathBuf {
+    relay_url_path().with_file_name("relay-ext-version")
+}
+
+/// Version of the connected `ab-connect` extension, if the host learned it from
+/// the extension's `hello`. `None` when no extension has connected since the
+/// host started, or the extension predates version reporting.
+pub fn relay_ext_version() -> Option<String> {
+    let s = std::fs::read_to_string(relay_ext_version_path())
+        .ok()?
+        .trim()
+        .to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 /// Hidden `__nm-host` mode: launched by Chrome for the ab-connect extension.
 ///
 /// Bridges the extension (native-messaging stdio, envelope protocol) to a local
@@ -570,6 +592,15 @@ async fn nm_host_main() {
             Ok(v) => v,
             Err(_) => continue,
         };
+        // Extension version handshake: record it next to the relay URL so
+        // `doctor` can report which extension build is live (and whether it's
+        // behind). Best-effort; the message carries no CDP payload.
+        if v.get("method").and_then(|m| m.as_str()) == Some("hello") {
+            if let Some(ver) = v.get("version").and_then(|x| x.as_str()) {
+                let _ = std::fs::write(relay_ext_version_path(), ver);
+            }
+            continue;
+        }
         let outs = {
             let mut s = state.lock().await;
             s.handle_ext_message(&v, "")
@@ -602,6 +633,7 @@ async fn nm_host_main() {
     }
     nm_log("[nm-host] stdin EOF — Chrome closed the port");
     let _ = std::fs::remove_file(relay_url_path());
+    let _ = std::fs::remove_file(relay_ext_version_path());
 }
 
 #[allow(clippy::too_many_arguments)]

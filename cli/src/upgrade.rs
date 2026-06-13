@@ -52,6 +52,27 @@ fn is_newer(latest: &str, current: &str) -> bool {
     matches!((parse_version(latest), parse_version(current)), (Some(l), Some(c)) if l > c)
 }
 
+/// Public semver-ish comparison (`latest` strictly newer than `current`), so
+/// `doctor` can flag a stale extension/CLI without re-implementing parsing.
+pub fn version_is_newer(latest: &str, current: &str) -> bool {
+    is_newer(latest, current)
+}
+
+/// The latest CLI version recorded by the background update check, if any.
+/// `doctor` uses it to show "a newer chrome-use is available" without a network
+/// call (the `__update-check` worker refreshes the cache out of band).
+pub fn cached_latest_version() -> Option<String> {
+    std::fs::read_to_string(update_cache_path())
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|j| {
+            j.get("latest")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .filter(|s| !s.is_empty())
+}
+
 /// Hidden `__update-check` subcommand: fetch the latest release tag and cache it.
 /// Spawned detached by [`maybe_notify_update`] so the network call never blocks a
 /// real command. Uses `curl` (no extra deps, matches `upgrade`).

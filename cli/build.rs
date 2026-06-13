@@ -3,6 +3,23 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+/// Embed the version of the `ab-connect` extension this CLI ships alongside, so
+/// `doctor` can tell a connected extension "you're older than what this CLI
+/// expects, update it." Read from the extension manifest at build time so it
+/// stays in sync with whatever extension version is in the same checkout/release
+/// (the ext is on its own 0.4.x line, separate from the CLI version). Falls back
+/// to "unknown" if the manifest can't be read.
+fn embed_extension_version() {
+    let manifest = Path::new("../extensions/ab-connect/manifest.json");
+    println!("cargo:rerun-if-changed=../extensions/ab-connect/manifest.json");
+    let version = fs::read_to_string(manifest)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from))
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=AB_CONNECT_VERSION={}", version);
+}
+
 /// Ensure `packages/dashboard/out/` exists so `rust-embed` doesn't fail during
 /// Rust-only dev builds where the dashboard hasn't been built. The placeholder
 /// `index.html` is only written when the directory is completely absent.
@@ -20,6 +37,7 @@ fn ensure_dashboard_dir() {
 
 fn main() {
     ensure_dashboard_dir();
+    embed_extension_version();
 
     let protocol_dir = Path::new("cdp-protocol");
     let out_dir = env::var("OUT_DIR").unwrap();

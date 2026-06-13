@@ -18,6 +18,7 @@ mod launch;
 mod network;
 mod providers;
 mod security;
+mod versions;
 
 use serde_json::{json, Value};
 
@@ -97,6 +98,7 @@ pub fn run_doctor(opts: DoctorOptions) -> i32 {
     let mut fixed: Vec<String> = Vec::new();
 
     environment::check(&mut checks);
+    versions::check(&mut checks);
     chrome::check(&mut checks);
     daemon::check(&mut checks);
     config::check(&mut checks);

@@ -108,6 +108,12 @@ function connectHost() {
     // reconnect. Keep chrome.debugger attached so reconnect is cheap.
     for (const tabId of tabs.keys()) setBadge(tabId, 'connecting')
   })
+  // Report our version so the host can tell the CLI/`doctor` which extension
+  // build is live (otherwise the extension version is a black box — the user
+  // can't tell they're on an old one). Best-effort; ignored by older hosts.
+  try {
+    postToHost({ method: 'hello', version: chrome.runtime.getManifest().version })
+  } catch {}
   // Tell the daemon about everything we already have attached, then attach
   // anything new.
   reannounceAttachedTabs()
