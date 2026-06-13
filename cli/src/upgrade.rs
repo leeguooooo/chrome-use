@@ -100,7 +100,7 @@ pub fn maybe_notify_update() {
     if first.starts_with("__")
         || matches!(
             first.as_str(),
-            "upgrade" | "install" | "doctor" | "dashboard"
+            "upgrade" | "install" | "doctor" | "dashboard" | "daemon"
         )
     {
         return;

@@ -642,6 +642,22 @@ fn kill_stale_daemon(session: &str) {
     cleanup_stale_files(session);
 }
 
+/// Kill every per-session daemon worker (SIGTERM→SIGKILL + sidecar cleanup),
+/// leaving the Chrome-launched `__nm-host` native-messaging bridge alone — it's
+/// not a tracked session daemon, so the extension relay stays up. Returns the
+/// session names that were stopped. Powers `chrome-use daemon restart`, which
+/// clears corrupted/cross-leaked daemon state (e.g. after a version-mismatch
+/// restart) without the user resorting to `pgrep`/`kill` (issue #20).
+pub fn restart_all_daemons() -> Vec<String> {
+    let inventory = walk_daemons();
+    let mut stopped = Vec::new();
+    for session in &inventory.sessions {
+        kill_stale_daemon(&session.name);
+        stopped.push(session.name.clone());
+    }
+    stopped
+}
+
 pub fn ensure_daemon(session: &str, opts: &DaemonOptions) -> Result<DaemonResult, String> {
     // Socket connectivity is the sole liveness check — no PID check — so
     // callers in a different PID namespace (e.g. unshare) can still reuse
@@ -1178,6 +1194,55 @@ mod tests {
         // No version file: treated as mismatch so stale pre-version-tracking
         // daemons (including Node.js era) are always restarted.
         assert!(!daemon_version_matches("test-session"));
+
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn test_restart_all_daemons_empty_dir() {
+        let dir = std::env::temp_dir().join("ab-test-restart-empty");
+        let _ = fs::create_dir_all(&dir);
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_str().unwrap());
+
+        // No daemons registered → nothing to stop, and it must not blow up.
+        assert!(restart_all_daemons().is_empty());
+
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_restart_all_daemons_kills_live_session() {
+        let dir = std::env::temp_dir().join("ab-test-restart-live");
+        let _ = fs::create_dir_all(&dir);
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_str().unwrap());
+
+        // Spawn a real, killable child and register it as a session daemon.
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        let _ = fs::write(dir.join("rktest.pid"), pid.to_string());
+        let _ = fs::write(get_socket_path("rktest"), b"");
+
+        let stopped = restart_all_daemons();
+        assert!(
+            stopped.contains(&"rktest".to_string()),
+            "stopped: {:?}",
+            stopped
+        );
+
+        // Reap the killed child first — until the parent waits, it lingers as a
+        // zombie that still answers `kill(pid, 0)`, so is_pid_alive would lie.
+        let _ = child.wait();
+        assert!(!is_pid_alive(pid));
+
+        // Sidecars are cleaned up.
+        assert!(!dir.join("rktest.pid").exists());
+        assert!(!get_socket_path("rktest").exists());
 
         let _ = fs::remove_dir(&dir);
     }

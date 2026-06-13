@@ -501,6 +501,22 @@ the same browser's existing targets, so a second session's first `open` can
 navigate a sibling's tab. For concurrent agents on one real Chrome, use the
 extension (each with a distinct `--session`), not raw `--cdp`.
 
+### Reset stuck daemon state
+
+Each session runs a background daemon worker that holds the page handles. If a
+session starts misbehaving — commands hit the wrong tab, refs/handles look stale,
+or you upgraded `chrome-use` mid-session and old workers linger — restart the
+daemons instead of hunting PIDs with `pgrep`/`kill`:
+
+```bash
+chrome-use daemon status     # list running session daemons (+ relay state)
+chrome-use daemon restart    # kill every session daemon worker
+```
+
+`daemon restart` leaves the extension's native-messaging bridge (`__nm-host`)
+alone, so the relay to your live Chrome stays up — the next command just spins up
+a fresh, clean daemon against the same browser. It does **not** close any tabs.
+
 ### Mock network requests
 
 ```bash

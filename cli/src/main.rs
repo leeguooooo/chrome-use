@@ -29,8 +29,8 @@ use windows_sys::Win32::System::Threading::OpenProcess;
 
 use commands::{gen_id, parse_command, ParseError};
 use connection::{
-    cleanup_stale_files, ensure_daemon, get_socket_dir, is_pid_alive, send_command, walk_daemons,
-    DaemonOptions,
+    cleanup_stale_files, ensure_daemon, get_socket_dir, is_pid_alive, restart_all_daemons,
+    send_command, walk_daemons, DaemonOptions,
 };
 use flags::{clean_args, parse_flags, Flags};
 use install::run_install;
@@ -316,6 +316,94 @@ fn run_session(args: &[String], session: &str, json_mode: bool) {
             } else {
                 println!("{}", session);
             }
+        }
+    }
+}
+
+/// `chrome-use daemon <restart|status>` — manage the per-session daemon workers
+/// without resorting to `pgrep`/`kill`. `restart` clears corrupted or
+/// cross-leaked daemon state (e.g. after a mid-session `chrome-use upgrade`
+/// where stale tab handles bleed across sessions, issue #20) by killing every
+/// session worker. The Chrome-launched `__nm-host` native-messaging bridge is
+/// NOT a tracked session daemon, so the extension relay survives a restart —
+/// the next command spins up a fresh, clean daemon against the same live Chrome.
+fn run_daemon(args: &[String], json_mode: bool) {
+    match args.get(1).map(|s| s.as_str()) {
+        Some("restart") => {
+            let stopped = restart_all_daemons();
+            let relay_up = connect::relay_url().is_some();
+            if json_mode {
+                print_json_value(json!({
+                    "success": true,
+                    "data": { "stopped": stopped, "count": stopped.len(), "relay": relay_up },
+                }));
+            } else if stopped.is_empty() {
+                println!("No session daemons running — nothing to restart.");
+                if relay_up {
+                    println!(
+                        "{}",
+                        color::dim("Extension relay still up; next command starts a fresh daemon.")
+                    );
+                }
+            } else {
+                for s in &stopped {
+                    println!("{} Stopped daemon: {}", color::green("✓"), s);
+                }
+                println!(
+                    "{}",
+                    color::dim(if relay_up {
+                        "Extension relay (__nm-host) left running; next command starts a fresh daemon."
+                    } else {
+                        "Next command starts a fresh daemon."
+                    })
+                );
+            }
+        }
+        Some("status") | Some("list") => {
+            let inventory = walk_daemons();
+            let relay_up = connect::relay_url().is_some();
+            if json_mode {
+                let sessions: Vec<_> = inventory
+                    .sessions
+                    .iter()
+                    .map(|s| json!({ "name": s.name, "pid": s.pid, "version": s.version }))
+                    .collect();
+                print_json_value(json!({
+                    "success": true,
+                    "data": { "sessions": sessions, "relay": relay_up },
+                }));
+            } else if inventory.sessions.is_empty() {
+                println!("No session daemons running.");
+                if relay_up {
+                    println!("{}", color::dim("Extension relay (__nm-host): up"));
+                }
+            } else {
+                println!("Session daemons:");
+                for s in &inventory.sessions {
+                    let ver = s
+                        .version
+                        .as_deref()
+                        .map(|v| format!(" {}", color::dim(&format!("(v{})", v))))
+                        .unwrap_or_default();
+                    println!("  {} pid {}{}", s.name, s.pid, ver);
+                }
+                if relay_up {
+                    println!("{}", color::dim("Extension relay (__nm-host): up"));
+                }
+            }
+        }
+        other => {
+            eprintln!(
+                "{} usage: chrome-use daemon <restart|status>",
+                color::error_indicator()
+            );
+            if let Some(unknown) = other {
+                eprintln!(
+                    "{}",
+                    color::dim(&format!("  unknown subcommand: {}", unknown))
+                );
+            }
+            exit(2);
         }
     }
 }
@@ -796,6 +884,12 @@ fn main() {
     // Handle session separately (doesn't need daemon)
     if clean.first().map(|s| s.as_str()) == Some("session") {
         run_session(&clean, &flags.session, flags.json);
+        return;
+    }
+
+    // Handle daemon management (doesn't talk to a daemon — it manages them).
+    if clean.first().map(|s| s.as_str()) == Some("daemon") {
+        run_daemon(&clean, flags.json);
         return;
     }
 

@@ -3178,6 +3178,9 @@ Confirmation:
 Sessions:
   session                    Show current session name
   session list               List active sessions
+  daemon status              List running session daemons (+ relay state)
+  daemon restart             Kill all session daemons; keeps the extension relay
+                             up. Clears stale/cross-leaked state after an upgrade.
 
 Chat (AI):
   chat <message>             Send a natural language instruction (single-shot)
