@@ -610,6 +610,13 @@ forbids debugging). The session no longer has a live tab — re-run
 replaces the old silent behaviour where the command ran on some *other*
 tab and returned wrong data.
 
+To recover, you need the tab's **exact** URL (query params and all — a long
+SSO/redirect link breaks if truncated). `tab list` shortens long URLs with
+`…`; use **`tab list --full`** to print them untruncated, then re-`open` the
+right one. For multi-redirect SSO flows, re-open the **stable entry URL**
+(not the mid-redirect one) and `wait` a few seconds for the SPA to settle
+before snapshotting.
+
 **Reads landing on the wrong page**
 `eval`, `screenshot`, and `network requests` print the page they ran
 against to stderr: `eval @ <url>`, `screenshot @ <url>`, `network @ <url>`.

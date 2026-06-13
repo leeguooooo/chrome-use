@@ -1364,7 +1364,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "recording_stop" => handle_recording_stop(state).await,
         "recording_restart" => handle_recording_restart(cmd, state).await,
         "pdf" => handle_pdf(cmd, state).await,
-        "tab_list" => handle_tab_list(state).await,
+        "tab_list" => handle_tab_list(cmd, state).await,
         "tab_new" => handle_tab_new(cmd, state).await,
         "tab_switch" => handle_tab_switch(cmd, state).await,
         "tab_close" => handle_tab_close(cmd, state).await,
@@ -4355,10 +4355,15 @@ async fn handle_keyboard(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
 // Phase 5 handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_tab_list(state: &DaemonState) -> Result<Value, String> {
+async fn handle_tab_list(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let tabs = mgr.tab_list();
-    Ok(json!({ "tabs": tabs }))
+    // Echo `full` so the formatter prints untruncated URLs (issue #19).
+    if cmd.get("full").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(json!({ "tabs": tabs, "full": true }))
+    } else {
+        Ok(json!({ "tabs": tabs }))
+    }
 }
 
 async fn handle_tab_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {

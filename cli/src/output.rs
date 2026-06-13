@@ -477,6 +477,9 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         }
         // Tabs
         if let Some(tabs) = data.get("tabs").and_then(|v| v.as_array()) {
+            // `tab list --full` prints untruncated URLs so a long SSO/redirect
+            // URL can actually be re-opened after a stale session (issue #19).
+            let full = data.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
             for tab in tabs {
                 let tab_id = tab.get("tabId").and_then(|v| v.as_str()).unwrap_or("?");
                 let tab_label = tab.get("label").and_then(|v| v.as_str());
@@ -491,8 +494,13 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 let title = title.as_str();
                 let url = tab.get("url").and_then(|v| v.as_str()).unwrap_or("");
                 // Truncate very long URLs (e.g. multi-KB JWT/OTP login links) so
-                // the list stays readable instead of flooding the terminal.
-                let url = truncate_middle(url, 120);
+                // the list stays readable instead of flooding the terminal —
+                // unless `--full` was asked for (to re-open the exact URL).
+                let url = if full {
+                    url.to_string()
+                } else {
+                    truncate_middle(url, 120)
+                };
                 let active = tab.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
                 let marker = if active {
                     color::cyan("→")

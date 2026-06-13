@@ -408,6 +408,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "back" => Ok(json!({ "id": id, "action": "back" })),
         "forward" => Ok(json!({ "id": id, "action": "forward" })),
         "reload" => Ok(json!({ "id": id, "action": "reload" })),
+        // Explicit opt-in to raise the active tab to the foreground (the core
+        // skill references it; the daemon handler existed but the CLI didn't map
+        // it — issue #19). Accept the documented camelCase + kebab/lowercase.
+        "bringToFront" | "bring-to-front" | "bringtofront" => {
+            Ok(json!({ "id": id, "action": "bringtofront" }))
+        }
 
         // === Core Actions ===
         "click" => {
@@ -1496,7 +1502,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         // `tabs` (plural) is a natural guess for the `tab` subcommand tree —
         // alias it so `tabs` / `tabs list` / `tabs new` all work (issue #8.4).
         "tab" | "tabs" => {
-            match rest.first().copied() {
+            // `--full` makes `tab list` emit untruncated URLs (needed to re-open
+            // a long SSO/redirect URL after a stale session — issue #19). Pick
+            // the subcommand as the first non-flag arg so the flag can appear
+            // anywhere (`tab --full`, `tab list --full`).
+            let full = rest.contains(&"--full");
+            match rest.iter().find(|a| !a.starts_with("--")).copied() {
                 Some("new") => {
                     // Accepted forms:
                     //   tab new [url]
@@ -1528,7 +1539,13 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
-                Some("list") => Ok(json!({ "id": id, "action": "tab_list" })),
+                Some("list") => {
+                    let mut cmd = json!({ "id": id, "action": "tab_list" });
+                    if full {
+                        cmd["full"] = json!(true);
+                    }
+                    Ok(cmd)
+                }
                 Some("close") => {
                     let mut cmd = json!({ "id": id, "action": "tab_close" });
                     if let Some(tab_ref) = rest.get(1) {
@@ -1541,7 +1558,13 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "action": "tab_switch",
                     "tabId": tab_ref,
                 })),
-                None => Ok(json!({ "id": id, "action": "tab_list" })),
+                None => {
+                    let mut cmd = json!({ "id": id, "action": "tab_list" });
+                    if full {
+                        cmd["full"] = json!(true);
+                    }
+                    Ok(cmd)
+                }
             }
         }
 
@@ -3714,6 +3737,30 @@ mod tests {
             parse_command(&args("tabs new"), &default_flags()).unwrap()["action"],
             "tab_new"
         );
+    }
+
+    #[test]
+    fn test_tab_list_full_flag() {
+        // issue #19: `--full` → untruncated URLs; works as `tab list --full`,
+        // `tab --full`, and `tabs --full`. Plain list has no `full`.
+        for inv in ["tab list --full", "tab --full", "tabs --full"] {
+            let cmd = parse_command(&args(inv), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "tab_list", "{inv}");
+            assert_eq!(cmd["full"], true, "{inv}");
+        }
+        let plain = parse_command(&args("tab list"), &default_flags()).unwrap();
+        assert_eq!(plain["action"], "tab_list");
+        assert!(plain.get("full").is_none());
+    }
+
+    #[test]
+    fn test_bring_to_front_aliases() {
+        // issue #19: the documented `bringToFront` (+ kebab/lowercase) maps to
+        // the existing daemon action.
+        for inv in ["bringToFront", "bring-to-front", "bringtofront"] {
+            let cmd = parse_command(&args(inv), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "bringtofront", "{inv}");
+        }
     }
 
     #[test]
