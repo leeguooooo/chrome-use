@@ -355,9 +355,33 @@ chrome.debugger.onEvent.addListener((source, method, params) =>
   }),
 )
 
-chrome.debugger.onDetach.addListener((source) =>
-  void whenReady(() => {
-    if (source.tabId) detachTab(source.tabId, true)
+chrome.debugger.onDetach.addListener((source, reason) =>
+  void whenReady(async () => {
+    const tabId = source.tabId
+    if (!tabId) return
+    detachTab(tabId, true)
+    // A cross-process navigation (e.g. an SSO redirect like
+    // login.account.rakuten.com that swaps the render process / spawns OOPIFs)
+    // detaches the debugger, but the TAB survives. Without re-attaching, the
+    // session goes permanently stale and even open/navigate fails — exactly the
+    // #19 follow-up. So proactively re-attach (the stable `cb-tab-<tabId>`
+    // session id then restores the daemon's binding). Don't fight a detach the
+    // user or DevTools initiated.
+    if (reason === 'canceled_by_user' || reason === 'replaced_with_devtools') return
+    if (!port) return
+    // The swapped-in process needs a moment to settle; retry with backoff.
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, 250 + i * 200))
+      if (tabs.has(tabId)) return // already re-attached (e.g. via onUpdated)
+      const tab = await chrome.tabs.get(tabId).catch(() => null)
+      if (!tab || !eligible(tab)) return // tab gone or now a restricted page
+      try {
+        await attachTab(tabId)
+        return
+      } catch (e) {
+        console.warn(`ab-connect: reattach attempt ${i + 1} for tab ${tabId} failed:`, e)
+      }
+    }
   }),
 )
 
