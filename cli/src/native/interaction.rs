@@ -306,49 +306,56 @@ pub async fn fill(
     )
     .await?;
 
-    // Focus the element
-    client
-        .send_command_typed::<_, Value>(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: "function() { this.focus(); }".to_string(),
-                object_id: Some(object_id.clone()),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(&effective_session_id),
-        )
-        .await?;
+    // Emulate a real edit so framework-controlled inputs (React/Vue) and
+    // site-side listeners actually see the change (issue #25): the old path set
+    // `this.value` directly and used Input.insertText, which left React's
+    // internal value-tracker out of sync and never fired change/blur — so
+    // dependent logic (e.g. Mercari's postal-code → 都道府県 autocomplete) never
+    // ran even though the value was visible. Set the value through the element's
+    // PROTOTYPE setter (which React's _valueTracker hooks), then dispatch
+    // input → change → blur/focusout. `type <sel> <text>` remains for sites that
+    // need per-keystroke events.
+    let fill_js = format!(
+        r#"function() {{
+            const el = this;
+            const v = {val};
+            try {{ el.focus(); }} catch (e) {{}}
+            const tag = el.tagName;
+            const fire = (type, ctor) => el.dispatchEvent(new (ctor || Event)(type, {{ bubbles: true }}));
+            if (tag === 'SELECT') {{
+                el.value = v; fire('input'); fire('change'); return true;
+            }}
+            if (el.isContentEditable) {{
+                el.textContent = v; fire('input', window.InputEvent || Event); fire('change');
+                try {{ el.blur(); }} catch (e) {{}} fire('focusout'); return true;
+            }}
+            const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
+                                             : window.HTMLInputElement.prototype;
+            const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+            const set = desc && desc.set ? (x) => desc.set.call(el, x) : (x) => {{ el.value = x; }};
+            set('');                                   // reset the framework tracker
+            fire('input', window.InputEvent || Event);
+            set(v);                                    // native setter → React/Vue registers
+            fire('input', window.InputEvent || Event);
+            fire('change');
+            try {{ el.blur(); }} catch (e) {{}}
+            fire('focusout');                          // blur-triggered lookups/validation
+            return true;
+        }}"#,
+        val = serde_json::to_string(value).unwrap_or_default()
+    );
 
-    // Select all + delete to clear
     client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
-                function_declaration: r#"function() {
-                    this.select && this.select();
-                    this.value = '';
-                    this.dispatchEvent(new Event('input', { bubbles: true }));
-                }"#
-                .to_string(),
+                function_declaration: fill_js,
                 object_id: Some(object_id),
                 arguments: None,
                 return_by_value: Some(true),
                 await_promise: Some(false),
             },
             Some(&effective_session_id),
-        )
-        .await?;
-
-    // Insert text (keyboard input dispatched at page level, use parent session_id)
-    client
-        .send_command_typed::<_, Value>(
-            "Input.insertText",
-            &InsertTextParams {
-                text: value.to_string(),
-            },
-            Some(session_id),
         )
         .await?;
 

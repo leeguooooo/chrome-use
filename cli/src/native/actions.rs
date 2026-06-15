@@ -1395,6 +1395,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "count" => handle_count(cmd, state).await,
         "styles" => handle_styles(cmd, state).await,
         "bringtofront" => handle_bringtofront(state).await,
+        "current" => handle_current(state).await,
         "timezone" => handle_timezone(cmd, state).await,
         "locale" => handle_locale(cmd, state).await,
         "geolocation" => handle_geolocation(cmd, state).await,
@@ -5331,6 +5332,18 @@ async fn handle_bringtofront(state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     mgr.bring_to_front().await?;
     Ok(json!({ "broughtToFront": true }))
+}
+
+async fn handle_current(state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    // Refresh so `current` reflects the live URL/title even after a cross-process
+    // nav (the relay's cached target_info can lag) (#26).
+    mgr.resync_targets().await.ok();
+    let mut info = mgr.active_page_info().ok_or("No active tab")?;
+    if let Some(obj) = info.as_object_mut() {
+        obj.insert("current".to_string(), json!(true));
+    }
+    Ok(info)
 }
 
 async fn handle_timezone(cmd: &Value, state: &DaemonState) -> Result<Value, String> {

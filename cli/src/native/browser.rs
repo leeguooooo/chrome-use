@@ -1263,6 +1263,22 @@ impl BrowserManager {
             .collect()
     }
 
+    /// The active tab's stable handle + current location, for `chrome-use
+    /// current` (#26). `targetId` survives cross-process navigation, so it's the
+    /// handle an agent should hold across a multi-step flow.
+    pub fn active_page_info(&self) -> Option<Value> {
+        let i = self.resolved_active_index();
+        self.pages.get(i).map(|p| {
+            json!({
+                "tabId": format_tab_id(p.tab_id),
+                "targetId": p.target_id,
+                "label": p.label,
+                "url": p.url,
+                "title": p.title,
+            })
+        })
+    }
+
     /// Stable `tab_id` for a page identified by its CDP `targetId`, if tracked.
     /// Lets callers adopt a tab by the cross-session-stable target id.
     pub fn tab_id_for_target(&self, target_id: &str) -> Option<u32> {

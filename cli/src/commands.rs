@@ -1026,7 +1026,22 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         }
 
         // === Close ===
-        "close" | "quit" | "exit" => Ok(json!({ "id": id, "action": "close" })),
+        "close" | "quit" | "exit" => {
+            // `close <tab>` closes only that tab (and the output says "Tab
+            // closed"); bare `close` closes the browser/session. `close --all` is
+            // intercepted earlier in the dispatcher. Previously `close t12` still
+            // ran a browser close and alarmingly printed "Browser closed" (#26).
+            if let Some(tab_ref) = rest.iter().find(|a| !a.starts_with("--")) {
+                Ok(json!({ "id": id, "action": "tab_close", "tabId": tab_ref }))
+            } else {
+                Ok(json!({ "id": id, "action": "close" }))
+            }
+        }
+
+        // The active tab's stable handle — `targetId` survives cross-process
+        // navigation and is reusable across sessions, so an agent can hold it
+        // instead of re-deriving "which tab is live" from `tabs` each step (#26).
+        "current" => Ok(json!({ "id": id, "action": "current" })),
 
         // === Inspect ===
         "inspect" => Ok(json!({ "id": id, "action": "inspect" })),
@@ -4012,6 +4027,28 @@ mod tests {
         let cmd = parse_command(&args("tab close docs"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "tab_close");
         assert_eq!(cmd["tabId"], "docs");
+    }
+
+    #[test]
+    fn test_close_tab_vs_browser() {
+        // `close <tab>` closes that tab (says "Tab closed"); bare `close` closes
+        // the browser (#26).
+        let tab = parse_command(&args("close t12"), &default_flags()).unwrap();
+        assert_eq!(tab["action"], "tab_close");
+        assert_eq!(tab["tabId"], "t12");
+        let browser = parse_command(&args("close"), &default_flags()).unwrap();
+        assert_eq!(browser["action"], "close");
+        // `quit`/`exit` aliases still browser-close.
+        assert_eq!(
+            parse_command(&args("quit"), &default_flags()).unwrap()["action"],
+            "close"
+        );
+    }
+
+    #[test]
+    fn test_current_command() {
+        let cmd = parse_command(&args("current"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "current");
     }
 
     #[test]

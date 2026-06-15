@@ -209,6 +209,21 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             );
         }
 
+        // `current`: the active tab's stable handle (#26).
+        if data
+            .get("current")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            let tid = data.get("tabId").and_then(|v| v.as_str()).unwrap_or("?");
+            let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let url = data.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let target = data.get("targetId").and_then(|v| v.as_str()).unwrap_or("");
+            println!("{} [{}] {} - {}", color::cyan("→"), tid, title, url);
+            println!("      {}", color::dim(&format!("target: {}", target)));
+            return;
+        }
+
         // Dialog status response
         if action == Some("dialog") {
             if let Some(has_dialog) = data.get("hasDialog").and_then(|v| v.as_bool()) {
