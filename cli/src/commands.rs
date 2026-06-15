@@ -2463,16 +2463,16 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             if main {
                 return Ok(json!({ "id": id, "action": "gettext", "main": true }));
             }
-            // `get text` with no selector returns the whole page's text (body) —
-            // a common convenience; previously it errored without a selector
-            // (issue #24-D).
-            let sel = rest
-                .iter()
-                .skip(1)
-                .find(|a| !a.starts_with("--"))
-                .copied()
-                .unwrap_or("body");
-            Ok(json!({ "id": id, "action": "gettext", "selector": sel }))
+            // `get text` with no selector reads the WHOLE PAGE and now defaults
+            // to cross-frame aggregation, so an agent gets a page's iframed
+            // content (listing descriptions etc.) without having to know about
+            // `--all-frames` (#27). On a single-frame page this is identical to
+            // the old body read; multi-frame pages get the child frames too —
+            // a strict superset. An explicit selector stays element-scoped.
+            match rest.iter().skip(1).find(|a| !a.starts_with("--")).copied() {
+                Some(sel) => Ok(json!({ "id": id, "action": "gettext", "selector": sel })),
+                None => Ok(json!({ "id": id, "action": "gettext", "allFrames": true })),
+            }
         }
         Some("html") => {
             let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
@@ -4830,15 +4830,21 @@ mod tests {
     }
 
     #[test]
-    fn test_get_text_defaults_to_body() {
-        // `get text` with no selector now returns the whole page (body) instead
-        // of erroring (issue #24-D).
+    fn test_get_text_defaults_to_all_frames() {
+        // `get text` with no selector now reads the whole page across ALL frames
+        // by default (#27), so iframed content isn't silently missed. (Was: a
+        // top-frame `body` read, #24-D.)
         let cmd = parse_command(&args("get text"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "gettext");
-        assert_eq!(cmd["selector"], "body");
-        // An explicit selector still wins.
+        assert_eq!(cmd["allFrames"], true);
+        assert!(cmd.get("selector").is_none());
+        // An explicit selector still wins and stays element-scoped.
         let cmd2 = parse_command(&args("get text h1"), &default_flags()).unwrap();
         assert_eq!(cmd2["selector"], "h1");
+        assert!(cmd2.get("allFrames").is_none());
+        // `text` top-level shortcut behaves the same.
+        let cmd3 = parse_command(&args("text"), &default_flags()).unwrap();
+        assert_eq!(cmd3["allFrames"], true);
     }
 
     #[test]

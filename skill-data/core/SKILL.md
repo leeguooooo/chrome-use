@@ -207,8 +207,8 @@ assigned fresh on every snapshot.
 For unstructured reading (no refs needed):
 
 ```bash
-chrome-use get text @e1                # visible text of an element
-chrome-use get text --all-frames       # whole page, aggregated across ALL frames
+chrome-use get text                    # WHOLE PAGE — all frames by default (see below)
+chrome-use get text @e1                # visible text of one element (or a CSS selector)
 chrome-use get text --main             # main content only — skip nav/header/sidebar
 chrome-use frames                      # list every frame + where the text lives
 chrome-use get html @e1                # innerHTML
@@ -219,13 +219,20 @@ chrome-use get url                     # current URL
 chrome-use get count ".item"           # count matching elements
 ```
 
-On listing/marketplace pages (Yahoo Auctions, Rakuten, Mercari shops) the seller's
-description often lives in a **child frame** or is buried under a "related items"
-sidebar, so a plain `get text body` returns only header/nav boilerplate. When the
-text you expect is missing: run `chrome-use frames` to see where it is, then
-`get text --all-frames` (reads every reachable frame incl. cross-origin iframes)
-or `get text --main` (drops the global chrome). If the content is lazy-loaded,
-`scroll` it into view first.
+**Whole-page text is cross-frame by default.** `chrome-use get text` with no
+selector aggregates visible text across **every** frame — top document plus
+same-process child frames plus cross-origin iframes — so you never silently miss
+content that lives in an iframe (Yahoo Auctions / Rakuten / Mercari shop
+descriptions, embedded checkout/spec frames). Each child frame is delimited with
+a `----- frame [kind] url -----` marker. You do **not** need to remember a flag —
+the default already reads all frames. (`--all-frames` is still accepted as an
+explicit alias.)
+
+So: when text looks missing or wrong, you don't have to guess — just
+`chrome-use get text` reads everything. To **see** the structure (which frame
+holds what), run `chrome-use frames`. To **cut boilerplate** (global nav/header/
+footer, "related items" sidebars), use `chrome-use get text --main`. If content
+is lazy-loaded, `scroll` it into view first, then read.
 
 ## Interacting
 

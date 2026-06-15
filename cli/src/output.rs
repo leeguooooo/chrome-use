@@ -1959,8 +1959,7 @@ Usage: chrome-use get <subcommand> [args]
 Retrieves various types of information from elements or the page.
 
 Subcommands:
-  text <selector>            Get text content of element
-  text --all-frames          Aggregate text across ALL frames (incl. iframes)
+  text [selector]            Element text; no selector = WHOLE PAGE, all frames
   text --main                Main-content text only (skip nav/header/sidebar)
   html <selector>            Get inner HTML of element
   value <selector>           Get value of input element
@@ -1977,8 +1976,8 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
-  chrome-use get text @e1
-  chrome-use get text --all-frames     # read iframed content (listing pages)
+  chrome-use get text                  # whole page across ALL frames (default)
+  chrome-use get text @e1              # one element
   chrome-use get text --main           # main content, no nav/sidebar boilerplate
   chrome-use frames                    # list frames + where the text lives
   chrome-use get html "#content"
@@ -3190,7 +3189,7 @@ Navigation:
 
 Get Info:  chrome-use get <what> [selector]
   text, html, value, attr <name>, title, url, count, box, styles, cdp-url
-  text --all-frames (cross-frame), text --main (no boilerplate), frames (list)
+  text (no selector = whole page, all frames), text --main, frames (list)
 
 Check State:  chrome-use is <what> <selector>
   visible, enabled, checked
