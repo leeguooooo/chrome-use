@@ -1961,6 +1961,7 @@ Retrieves various types of information from elements or the page.
 Subcommands:
   text [selector]            Element text; no selector = WHOLE PAGE, all frames
   text --main                Main-content text only (skip nav/header/sidebar)
+  text --pierce              Read through CLOSED shadow DOM (injected panels)
   html <selector>            Get inner HTML of element
   value <selector>           Get value of input element
   attr <selector> <name>     Get attribute value

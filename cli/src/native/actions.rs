@@ -3628,6 +3628,15 @@ async fn handle_gettext(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
         }));
     }
 
+    // `get text --pierce` reads text through CLOSED shadow roots and child
+    // documents via the CDP DOM tree — content `innerText`/`eval` can't see,
+    // e.g. an extension's injected panel in a closed shadow DOM (#30).
+    if cmd.get("pierce").and_then(|v| v.as_bool()) == Some(true) {
+        let text = super::element::get_pierced_text(&mgr.client, &session_id).await?;
+        let url = mgr.get_url().await.unwrap_or_default();
+        return Ok(json!({ "text": text, "origin": url, "pierce": true }));
+    }
+
     // `get text --main` returns the page's main-content region (readability-lite),
     // skipping global header/nav/footer/sidebar boilerplate (#27).
     if cmd.get("main").and_then(|v| v.as_bool()) == Some(true) {

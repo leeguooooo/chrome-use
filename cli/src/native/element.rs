@@ -1169,6 +1169,69 @@ pub async fn get_main_content_text(client: &CdpClient, session_id: &str) -> Resu
         .to_string())
 }
 
+// Text nodes whose parent is one of these carry no visible content.
+fn is_noise_tag(name: &str) -> bool {
+    matches!(name, "SCRIPT" | "STYLE" | "NOSCRIPT" | "TEMPLATE" | "HEAD")
+}
+
+// Walk a CDP DOM.Node tree, collecting text-node values. Unlike `innerText`
+// (JS, blocked by CLOSED shadow roots), the CDP DOM tree from
+// `DOM.getDocument(pierce:true)` includes closed shadow roots and child
+// documents — so this reaches text JS can't. `parent_noise` carries whether an
+// ancestor was <script>/<style>/etc so their text is skipped.
+fn collect_dom_text(node: &Value, parent_noise: bool, out: &mut String) {
+    let node_type = node.get("nodeType").and_then(|v| v.as_i64()).unwrap_or(0);
+    let node_name = node.get("nodeName").and_then(|v| v.as_str()).unwrap_or("");
+    if node_type == 3 {
+        if !parent_noise {
+            if let Some(t) = node.get("nodeValue").and_then(|v| v.as_str()) {
+                let t = t.trim();
+                if !t.is_empty() {
+                    if !out.is_empty() {
+                        out.push(' ');
+                    }
+                    out.push_str(t);
+                }
+            }
+        }
+        return;
+    }
+    let noise = parent_noise || is_noise_tag(node_name);
+    if let Some(children) = node.get("children").and_then(|v| v.as_array()) {
+        for child in children {
+            collect_dom_text(child, noise, out);
+        }
+    }
+    if let Some(shadow) = node.get("shadowRoots").and_then(|v| v.as_array()) {
+        for sr in shadow {
+            collect_dom_text(sr, noise, out);
+        }
+    }
+    if let Some(doc) = node.get("contentDocument") {
+        collect_dom_text(doc, noise, out);
+    }
+}
+
+/// Extract text from the page via the CDP DOM tree with `pierce:true`, which
+/// reaches into CLOSED shadow roots and child documents that `innerText`/`eval`
+/// cannot. Lets an agent read content rendered into a closed shadow DOM (e.g. an
+/// extension's injected debug panel) without any extra Chrome permission — it
+/// rides the per-tab debugger session that's already attached (#30).
+pub async fn get_pierced_text(client: &CdpClient, session_id: &str) -> Result<String, String> {
+    let doc = client
+        .send_command(
+            "DOM.getDocument",
+            Some(serde_json::json!({ "depth": -1, "pierce": true })),
+            Some(session_id),
+        )
+        .await?;
+    let mut out = String::new();
+    if let Some(root) = doc.get("root") {
+        collect_dom_text(root, false, &mut out);
+    }
+    Ok(out)
+}
+
 pub async fn get_element_attribute(
     client: &CdpClient,
     session_id: &str,
@@ -1640,6 +1703,31 @@ mod tests {
     fn test_parse_ref_at_prefix() {
         assert_eq!(parse_ref("@e1"), Some("e1".to_string()));
         assert_eq!(parse_ref("@e123"), Some("e123".to_string()));
+    }
+
+    #[test]
+    fn test_collect_dom_text_pierces_closed_shadow_and_skips_noise() {
+        // A CDP DOM.Node tree: a host element whose CLOSED shadow root holds the
+        // text, plus a <script> whose text must be skipped.
+        let tree = serde_json::json!({
+            "nodeType": 1, "nodeName": "BODY",
+            "children": [
+                { "nodeType": 1, "nodeName": "SCRIPT",
+                  "children": [ { "nodeType": 3, "nodeName": "#text", "nodeValue": "var secret=1;" } ] },
+                { "nodeType": 1, "nodeName": "DIV",
+                  "shadowRoots": [
+                    { "nodeType": 11, "nodeName": "#document-fragment",
+                      "children": [
+                        { "nodeType": 1, "nodeName": "SPAN",
+                          "children": [ { "nodeType": 3, "nodeName": "#text", "nodeValue": "DECRYPTED 42" } ] }
+                      ] }
+                  ] }
+            ]
+        });
+        let mut out = String::new();
+        collect_dom_text(&tree, false, &mut out);
+        assert_eq!(out, "DECRYPTED 42");
+        assert!(!out.contains("secret"), "script text must be skipped");
     }
 
     #[test]

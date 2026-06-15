@@ -2455,6 +2455,15 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             if all_frames {
                 return Ok(json!({ "id": id, "action": "gettext", "allFrames": true }));
             }
+            // `get text --pierce` reads through CLOSED shadow DOM / child docs
+            // via the CDP DOM tree — content eval/innerText can't reach, e.g. an
+            // extension's injected panel in a closed shadow root (issue #30).
+            let pierce = rest[1..]
+                .iter()
+                .any(|a| matches!(*a, "--pierce" | "--shadow" | "--deep"));
+            if pierce {
+                return Ok(json!({ "id": id, "action": "gettext", "pierce": true }));
+            }
             // `get text --main` returns the main-content region (readability),
             // skipping header/nav/footer/sidebar boilerplate (issue #27).
             let main = rest[1..]
@@ -4893,6 +4902,16 @@ mod tests {
             let cmd = parse_command(&args(variant), &default_flags()).unwrap();
             assert_eq!(cmd["action"], "gettext", "{variant}");
             assert_eq!(cmd["main"], true, "{variant}");
+            assert!(cmd.get("selector").is_none(), "{variant}");
+        }
+    }
+
+    #[test]
+    fn test_get_text_pierce() {
+        for variant in ["get text --pierce", "get text --shadow", "text --deep"] {
+            let cmd = parse_command(&args(variant), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "gettext", "{variant}");
+            assert_eq!(cmd["pierce"], true, "{variant}");
             assert!(cmd.get("selector").is_none(), "{variant}");
         }
     }

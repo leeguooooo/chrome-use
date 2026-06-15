@@ -210,6 +210,7 @@ For unstructured reading (no refs needed):
 chrome-use get text                    # WHOLE PAGE — all frames by default (see below)
 chrome-use get text @e1                # visible text of one element (or a CSS selector)
 chrome-use get text --main             # main content only — skip nav/header/sidebar
+chrome-use get text --pierce           # read through CLOSED shadow DOM (injected panels)
 chrome-use frames                      # list every frame + where the text lives
 chrome-use get html @e1                # innerHTML
 chrome-use get attr @e1 href           # any attribute
@@ -233,6 +234,12 @@ So: when text looks missing or wrong, you don't have to guess — just
 holds what), run `chrome-use frames`. To **cut boilerplate** (global nav/header/
 footer, "related items" sidebars), use `chrome-use get text --main`. If content
 is lazy-loaded, `scroll` it into view first, then read.
+
+**Closed shadow DOM.** Some injected UI (browser-extension debug panels, web
+components) renders into a *closed* shadow root that `eval`/`innerText` cannot
+read. `chrome-use get text --pierce` reads through closed shadow roots and child
+documents via the CDP DOM tree — use it when content is clearly on screen (you
+see it in a screenshot) but `get text`/`eval` come back empty.
 
 ## Interacting
 
