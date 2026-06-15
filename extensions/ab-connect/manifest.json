@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "chrome-use",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "Let chrome-use drive your logged-in Chrome \u2014 install once, no token, no per-use confirmation.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6vQIyscGIPYPZdSpPwPL0+0gxUROyRgCpmvCSDoc8XUm4qm97VbKnD9Ijc1lV22lNWZtE78gaRjt6BeSfuMgnBymnhLKjN1gU6AI5QUU0mrJyeHdWKvrKQR5FmsM2A7Xr1ykE2SiiS8zNUS3Y/6O5l+Nva7wrVy6E4a2dkBVQkOsu+DV+nEZvhIyuDY5D5SPXqNwUTWTaglwj5mjvHz36xSwCWlPmrtJ+ED0AUyrb2z4GIOmvk4kqtBVrh/UD058klLo4CkYOnIybB5aV6WYuwarfPY4bF/dLggPem+ewLNTUNBuwrxj/A4nUv0LJTuRO8rR7f8WR9qnRCY0Ic5saQIDAQAB",
   "icons": {

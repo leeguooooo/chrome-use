@@ -30,6 +30,16 @@ const tabs = new Map()
 const sessionToTab = new Map()
 /** child (OOPIF/worker) sessionId -> tabId */
 const childSessionToTab = new Map()
+/** sessionId -> CDP targetId, kept ACROSS detach so a dead `cb-tab-<oldTabId>`
+ * session can be recovered by its stable targetId when the cross-process nav
+ * gave the tab a new Chrome tabId (issue #24). Capped to bound memory. */
+const sessionTargets = new Map()
+function rememberSessionTarget(sessionId, targetId) {
+  if (!sessionId || !targetId) return
+  sessionTargets.delete(sessionId)
+  sessionTargets.set(sessionId, targetId)
+  if (sessionTargets.size > 256) sessionTargets.delete(sessionTargets.keys().next().value)
+}
 /** tab-group name -> chrome tabGroups id (best-effort cache) */
 const groupIdByName = new Map()
 
@@ -172,17 +182,49 @@ function tabIdFromSession(sessionId) {
 // (closed / restricted). (issues #20.1, #23)
 async function recoverSessionTab(sessionId) {
   const tabId = tabIdFromSession(sessionId)
-  if (tabId == null) return null
-  for (let i = 0; i < 3; i++) {
-    const tab = await chrome.tabs.get(tabId).catch(() => null)
-    if (!eligible(tab)) return null
-    try {
-      await attachTab(tabId)
-      if (tabs.has(tabId)) return tabId
-    } catch {
-      // mid-swap: the tab exists but isn't attachable yet — back off and retry.
+  // 1) Fast path: the encoded Chrome tabId still exists — re-attach it (covers
+  //    the common renderer-process swap where the tabId is preserved, #23).
+  if (tabId != null) {
+    for (let i = 0; i < 3; i++) {
+      const tab = await chrome.tabs.get(tabId).catch(() => null)
+      if (!eligible(tab)) break // tabId is gone — fall through to targetId recovery
+      try {
+        await attachTab(tabId)
+        if (tabs.has(tabId)) return tabId
+      } catch {
+        // mid-swap: tab exists but isn't attachable yet — back off and retry.
+      }
+      await new Promise((r) => setTimeout(r, 120 + i * 150))
     }
-    await new Promise((r) => setTimeout(r, 120 + i * 150))
+  }
+  // 2) The Chrome tabId is gone, but the CDP targetId is STABLE across the nav.
+  //    Some cross-process hops (Mercari's signin token exchange) give the tab a
+  //    NEW tabId while keeping the same target, so `cb-tab-<oldTabId>` can't be
+  //    recovered by tabId. Find the tab now hosting our remembered targetId via
+  //    chrome.debugger.getTargets(), attach it, and ALIAS the dead session to it
+  //    so the daemon's session id keeps resolving. Longer window: this hop can
+  //    take several seconds to settle (issue #24).
+  const targetId = sessionTargets.get(sessionId)
+  if (targetId) {
+    for (let i = 0; i < 6; i++) {
+      const targets = await chrome.debugger.getTargets().catch(() => null)
+      const t = targets && targets.find((x) => x.id === targetId && x.tabId != null)
+      if (t && t.tabId != null) {
+        const tab = await chrome.tabs.get(t.tabId).catch(() => null)
+        if (eligible(tab)) {
+          try {
+            await attachTab(t.tabId)
+            if (tabs.has(t.tabId)) {
+              sessionToTab.set(sessionId, t.tabId) // alias dead session -> live tab
+              return t.tabId
+            }
+          } catch {
+            // not attachable yet — keep waiting for the swap to settle.
+          }
+        }
+      }
+      await new Promise((r) => setTimeout(r, 300 + i * 300))
+    }
   }
   return null
 }
@@ -343,6 +385,7 @@ async function attachTab(tabId) {
   const entry = { sessionId, targetId }
   tabs.set(tabId, entry)
   sessionToTab.set(sessionId, tabId)
+  rememberSessionTarget(sessionId, targetId)
   setBadge(tabId, port ? 'on' : 'connecting')
   postToHost({
     method: 'forwardCDPEvent',
