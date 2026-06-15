@@ -449,6 +449,47 @@ pub fn relay_url() -> Option<String> {
     }
 }
 
+/// Append a one-line record of how a CDP connection was established, to
+/// `~/.chrome-use/connect-mode.log`. This is the smoking-gun detector for the
+/// "Allow remote debugging?" consent modal: that modal ONLY appears on a raw
+/// remote-debugging attach / a browser we launched with a debug port — NEVER on
+/// the extension relay. When the modal reappears, this log says which session
+/// took which path and when, so we can tell a code regression (`raw-port` /
+/// `launched` while the relay was up) from Chrome's own extension-debugger
+/// consent UX. Low volume (one line per connection); best-effort, never fails a
+/// connection.
+pub fn log_connect_mode(ws_url: &str, launched: bool, session: &str) {
+    let relay = relay_url();
+    let relay_up = relay.is_some();
+    let mode = if launched {
+        "launched(debug-port)"
+    } else if relay.as_deref() == Some(ws_url) {
+        "relay"
+    } else if ws_url.contains("127.0.0.1") || ws_url.contains("localhost") {
+        "raw-port-attach"
+    } else {
+        "remote-ws"
+    };
+    // A raw-port attach or a self-launch while the relay was available is the
+    // exact thing that pops the consent modal — flag it loudly in the line.
+    let suspect = (mode == "raw-port-attach" || launched) && relay_up;
+    let line = format!(
+        "session={session} mode={mode} relay_up={relay_up}{} ws={ws_url}\n",
+        if suspect { " CONSENT-MODAL-RISK" } else { "" }
+    );
+    if let Some(home) = dirs::home_dir() {
+        let path = home.join(".chrome-use").join("connect-mode.log");
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+}
+
 /// Sidecar recording the connected extension's version, written by the host when
 /// it receives the extension's `hello` (sibling of `relay-cdp-url`). Lets
 /// `doctor` surface which extension build is live without a CDP round-trip.

@@ -490,6 +490,13 @@ impl BrowserManager {
             }
         };
 
+        // A launched browser carries a debug port → it's the other path that can
+        // pop Chrome's consent modal; record it for #31 diagnosis.
+        crate::connect::log_connect_mode(
+            &ws_url,
+            true,
+            DAEMON_SESSION.get().map(String::as_str).unwrap_or("default"),
+        );
         let manager = if engine == "lightpanda" {
             initialize_lightpanda_manager(ws_url, process).await?
         } else {
@@ -585,6 +592,13 @@ impl BrowserManager {
         headers: Option<Vec<(String, String)>>,
     ) -> Result<Self, String> {
         let ws_url = resolve_cdp_url(url).await?;
+        // Record the transport so a reappearing "Allow remote debugging?" modal
+        // can be traced to a raw-port attach vs the consent-free relay (#31).
+        crate::connect::log_connect_mode(
+            &ws_url,
+            false,
+            DAEMON_SESSION.get().map(String::as_str).unwrap_or("default"),
+        );
         let client = Arc::new(CdpClient::connect_with_headers(&ws_url, headers).await?);
         let mut manager = Self {
             client,
