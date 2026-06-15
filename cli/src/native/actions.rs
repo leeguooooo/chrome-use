@@ -1332,6 +1332,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "uncheck" => handle_uncheck(cmd, state).await,
         "wait" => handle_wait(cmd, state).await,
         "gettext" => handle_gettext(cmd, state).await,
+        "frames" => handle_frames(cmd, state).await,
         "getattribute" => handle_getattribute(cmd, state).await,
         "isvisible" => handle_isvisible(cmd, state).await,
         "isenabled" => handle_isenabled(cmd, state).await,
@@ -3594,6 +3595,47 @@ async fn handle_wait(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
 async fn handle_gettext(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
+
+    // `get text --all-frames` aggregates visible text across every frame the
+    // session can reach — including out-of-process iframes that never show up
+    // in the top document (#27: Yahoo/Rakuten/Mercari listing descriptions).
+    if cmd.get("allFrames").and_then(|v| v.as_bool()) == Some(true) {
+        let frames = super::element::collect_all_frames_text(
+            &mgr.client,
+            &session_id,
+            &state.iframe_sessions,
+        )
+        .await?;
+        let mut combined = String::new();
+        let mut frame_count = 0usize;
+        for f in &frames {
+            let t = f.text.trim();
+            if t.is_empty() {
+                continue;
+            }
+            frame_count += 1;
+            if f.kind != "top" {
+                combined.push_str(&format!("\n\n----- frame [{}] {} -----\n", f.kind, f.url));
+            }
+            combined.push_str(t);
+        }
+        let url = mgr.get_url().await.unwrap_or_default();
+        return Ok(json!({
+            "text": combined,
+            "origin": url,
+            "frames": frame_count,
+            "allFrames": true,
+        }));
+    }
+
+    // `get text --main` returns the page's main-content region (readability-lite),
+    // skipping global header/nav/footer/sidebar boilerplate (#27).
+    if cmd.get("main").and_then(|v| v.as_bool()) == Some(true) {
+        let text = super::element::get_main_content_text(&mgr.client, &session_id).await?;
+        let url = mgr.get_url().await.unwrap_or_default();
+        return Ok(json!({ "text": text, "origin": url, "main": true }));
+    }
+
     let selector = cmd
         .get("selector")
         .and_then(|v| v.as_str())
@@ -3609,6 +3651,32 @@ async fn handle_gettext(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
     .await?;
     let url = mgr.get_url().await.unwrap_or_default();
     Ok(json!({ "text": text, "origin": url }))
+}
+
+async fn handle_frames(_cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let frames = super::element::collect_all_frames_text(
+        &mgr.client,
+        &session_id,
+        &state.iframe_sessions,
+    )
+    .await?;
+    let list: Vec<Value> = frames
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            json!({
+                "index": i,
+                "kind": f.kind,
+                "url": f.url,
+                "frameId": f.frame_id,
+                "textLen": f.text.trim().chars().count(),
+            })
+        })
+        .collect();
+    let url = mgr.get_url().await.unwrap_or_default();
+    Ok(json!({ "frames": list, "count": list.len(), "origin": url }))
 }
 
 async fn handle_getattribute(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {

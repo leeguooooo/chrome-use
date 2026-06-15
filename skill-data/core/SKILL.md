@@ -208,6 +208,9 @@ For unstructured reading (no refs needed):
 
 ```bash
 chrome-use get text @e1                # visible text of an element
+chrome-use get text --all-frames       # whole page, aggregated across ALL frames
+chrome-use get text --main             # main content only — skip nav/header/sidebar
+chrome-use frames                      # list every frame + where the text lives
 chrome-use get html @e1                # innerHTML
 chrome-use get attr @e1 href           # any attribute
 chrome-use get value @e1               # input value
@@ -215,6 +218,14 @@ chrome-use get title                   # page title
 chrome-use get url                     # current URL
 chrome-use get count ".item"           # count matching elements
 ```
+
+On listing/marketplace pages (Yahoo Auctions, Rakuten, Mercari shops) the seller's
+description often lives in a **child frame** or is buried under a "related items"
+sidebar, so a plain `get text body` returns only header/nav boilerplate. When the
+text you expect is missing: run `chrome-use frames` to see where it is, then
+`get text --all-frames` (reads every reachable frame incl. cross-origin iframes)
+or `get text --main` (drops the global chrome). If the content is lazy-loaded,
+`scroll` it into view first.
 
 ## Interacting
 

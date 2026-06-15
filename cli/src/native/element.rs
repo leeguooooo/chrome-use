@@ -975,6 +975,200 @@ pub async fn get_element_text(
         .unwrap_or_default())
 }
 
+/// Text content collected from a single frame of the page.
+#[derive(Debug, Clone)]
+pub struct FrameText {
+    pub frame_id: String,
+    pub url: String,
+    /// "top" | "inline" (same-process child frame) | "oopif" (out-of-process).
+    pub kind: &'static str,
+    pub text: String,
+}
+
+// The expression we run in every frame to read its visible text. innerText
+// honors CSS visibility (skips display:none), textContent is the fallback.
+const FRAME_INNERTEXT_JS: &str = "(function(){try{var b=document.body||document.documentElement;return b?(b.innerText||b.textContent||''):'';}catch(e){return '';}})()";
+
+async fn eval_text_default(client: &CdpClient, session_id: &str) -> String {
+    let res = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(serde_json::json!({
+                "expression": FRAME_INNERTEXT_JS,
+                "returnByValue": true,
+            })),
+            Some(session_id),
+        )
+        .await;
+    res.ok()
+        .and_then(|v| v.get("result").and_then(|r| r.get("value")).cloned())
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+// Same-process child frames share the top renderer but live in their own
+// execution context. Page.createIsolatedWorld hands us a context id bound to
+// that frame so Runtime.evaluate reads the child document, not the parent.
+async fn eval_text_in_frame(client: &CdpClient, session_id: &str, frame_id: &str) -> String {
+    let ctx = client
+        .send_command(
+            "Page.createIsolatedWorld",
+            Some(serde_json::json!({ "frameId": frame_id, "worldName": "chrome_use_text" })),
+            Some(session_id),
+        )
+        .await
+        .ok()
+        .and_then(|v| v.get("executionContextId").and_then(|c| c.as_i64()));
+    let Some(ctx_id) = ctx else { return String::new() };
+    let res = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(serde_json::json!({
+                "expression": FRAME_INNERTEXT_JS,
+                "returnByValue": true,
+                "contextId": ctx_id,
+            })),
+            Some(session_id),
+        )
+        .await;
+    res.ok()
+        .and_then(|v| v.get("result").and_then(|r| r.get("value")).cloned())
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+fn flatten_frame_tree(node: &Value, is_top: bool, out: &mut Vec<(String, String, bool)>) {
+    if let Some(frame) = node.get("frame") {
+        if let Some(id) = frame.get("id").and_then(|v| v.as_str()) {
+            let url = frame
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            out.push((id.to_string(), url, is_top));
+        }
+    }
+    if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
+        for child in children {
+            flatten_frame_tree(child, false, out);
+        }
+    }
+}
+
+/// Collect visible text from every frame reachable in the active session,
+/// including out-of-process iframes (which never appear in the top frame's
+/// `Page.getFrameTree` and so are invisible to `document.body.innerText`).
+///
+/// Same-process child frames are read through `Page.createIsolatedWorld`;
+/// OOPIFs are read through their own auto-attached debugger session
+/// (`iframe_sessions`, keyed by frameId == targetId). This is the engine
+/// behind `get text --all-frames` and `chrome-use frames` — the fix for
+/// listing/marketplace pages whose description lives in a child frame (#27).
+pub async fn collect_all_frames_text(
+    client: &CdpClient,
+    top_session: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<Vec<FrameText>, String> {
+    let mut out: Vec<FrameText> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // 1. Top session: the top frame plus its same-process descendants. OOPIF
+    //    frames that happen to surface here are skipped — they're read via
+    //    their dedicated session in step 2 (cross-process isolated worlds fail).
+    let tree = client
+        .send_command_no_params("Page.getFrameTree", Some(top_session))
+        .await?;
+    let mut frames: Vec<(String, String, bool)> = Vec::new();
+    flatten_frame_tree(&tree["frameTree"], true, &mut frames);
+    for (fid, url, is_top) in frames {
+        if iframe_sessions.contains_key(&fid) {
+            continue;
+        }
+        if !seen.insert(fid.clone()) {
+            continue;
+        }
+        let (kind, text) = if is_top {
+            ("top", eval_text_default(client, top_session).await)
+        } else {
+            ("inline", eval_text_in_frame(client, top_session, &fid).await)
+        };
+        out.push(FrameText {
+            frame_id: fid,
+            url,
+            kind,
+            text,
+        });
+    }
+
+    // 2. Each out-of-process iframe, read through its own session.
+    for (fid, sid) in iframe_sessions {
+        if !seen.insert(fid.clone()) {
+            continue;
+        }
+        let url = client
+            .send_command_no_params("Page.getFrameTree", Some(sid))
+            .await
+            .ok()
+            .and_then(|t| {
+                t.get("frameTree")
+                    .and_then(|ft| ft.get("frame"))
+                    .and_then(|f| f.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default();
+        let text = eval_text_default(client, sid).await;
+        out.push(FrameText {
+            frame_id: fid.clone(),
+            url,
+            kind: "oopif",
+            text,
+        });
+    }
+
+    Ok(out)
+}
+
+// Readability-lite: prefer the page's semantic main-content region over the
+// whole body so global header/nav/footer chrome (and, on many listing pages,
+// the "related items" sidebar) doesn't drown out the actual content. Runs on
+// the live, rendered tree (innerText needs layout — a detached clone returns
+// empty), so we pick the densest <main>/<article> region rather than cloning
+// and stripping. Falls back to <body> when no substantial main region exists.
+const MAIN_CONTENT_JS: &str = r#"(function(){
+  function txt(el){try{return (el.innerText||'').trim();}catch(e){return '';}}
+  var sels=['main','[role=main]','article','#main','#contents','#l-content'];
+  var best=null,bestLen=0;
+  for(var i=0;i<sels.length;i++){
+    var els=document.querySelectorAll(sels[i]);
+    for(var j=0;j<els.length;j++){var l=txt(els[j]).length;if(l>bestLen){bestLen=l;best=els[j];}}
+  }
+  if(best&&bestLen>200)return txt(best);
+  return txt(document.body);
+})()"#;
+
+/// Extract the page's main-content text (readability-lite), preferring a
+/// semantic `<main>`/`<article>` region over the full body. Used by
+/// `get text --main` to avoid header/nav/sidebar boilerplate (#27).
+pub async fn get_main_content_text(client: &CdpClient, session_id: &str) -> Result<String, String> {
+    let res = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(serde_json::json!({
+                "expression": MAIN_CONTENT_JS,
+                "returnByValue": true,
+            })),
+            Some(session_id),
+        )
+        .await?;
+    Ok(res
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string())
+}
+
 pub async fn get_element_attribute(
     client: &CdpClient,
     session_id: &str,

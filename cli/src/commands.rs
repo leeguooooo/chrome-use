@@ -1296,6 +1296,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         // === Get ===
         "get" => parse_get(&rest, &id),
 
+        // List every frame the session can reach (top + same-process child
+        // frames + out-of-process iframes), with a text-length per frame so you
+        // can see where a listing's description actually lives (issue #27).
+        "frames" => Ok(json!({ "id": id, "action": "frames" })),
+
         // Top-level shortcuts for `get <x>` status reads — users naturally type
         // `chrome-use url` / `cdp-url` / `title` without the `get` prefix
         // (and expect `cdp-url`/`cdp_url` to work interchangeably).
@@ -2388,10 +2393,32 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
 
     match rest.first().copied() {
         Some("text") => {
+            // `get text --all-frames` aggregates visible text across every
+            // frame, including out-of-process iframes invisible to the top
+            // document (issue #27). The selector is ignored in this mode.
+            let all_frames = rest[1..]
+                .iter()
+                .any(|a| matches!(*a, "--all-frames" | "--frames" | "-a"));
+            if all_frames {
+                return Ok(json!({ "id": id, "action": "gettext", "allFrames": true }));
+            }
+            // `get text --main` returns the main-content region (readability),
+            // skipping header/nav/footer/sidebar boilerplate (issue #27).
+            let main = rest[1..]
+                .iter()
+                .any(|a| matches!(*a, "--main" | "--readable" | "-m"));
+            if main {
+                return Ok(json!({ "id": id, "action": "gettext", "main": true }));
+            }
             // `get text` with no selector returns the whole page's text (body) —
             // a common convenience; previously it errored without a selector
             // (issue #24-D).
-            let sel = rest.get(1).copied().unwrap_or("body");
+            let sel = rest
+                .iter()
+                .skip(1)
+                .find(|a| !a.starts_with("--"))
+                .copied()
+                .unwrap_or("body");
             Ok(json!({ "id": id, "action": "gettext", "selector": sel }))
         }
         Some("html") => {
@@ -4759,6 +4786,41 @@ mod tests {
         // An explicit selector still wins.
         let cmd2 = parse_command(&args("get text h1"), &default_flags()).unwrap();
         assert_eq!(cmd2["selector"], "h1");
+    }
+
+    #[test]
+    fn test_get_text_all_frames() {
+        // `--all-frames` switches to whole-page, cross-frame aggregation and
+        // drops the selector (issue #27).
+        for variant in ["get text --all-frames", "get text --frames", "text -a"] {
+            let cmd = parse_command(&args(variant), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "gettext", "{variant}");
+            assert_eq!(cmd["allFrames"], true, "{variant}");
+            assert!(cmd.get("selector").is_none(), "{variant}");
+        }
+        // A flag mixed with a selector still triggers all-frames.
+        let cmd = parse_command(&args("get text body --all-frames"), &default_flags()).unwrap();
+        assert_eq!(cmd["allFrames"], true);
+        // Without the flag, a leading flag-like token is skipped for the selector.
+        let cmd = parse_command(&args("get text main"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "main");
+        assert!(cmd.get("allFrames").is_none());
+    }
+
+    #[test]
+    fn test_frames_command() {
+        let cmd = parse_command(&args("frames"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "frames");
+    }
+
+    #[test]
+    fn test_get_text_main() {
+        for variant in ["get text --main", "get text --readable", "text -m"] {
+            let cmd = parse_command(&args(variant), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "gettext", "{variant}");
+            assert_eq!(cmd["main"], true, "{variant}");
+            assert!(cmd.get("selector").is_none(), "{variant}");
+        }
     }
 
     #[test]

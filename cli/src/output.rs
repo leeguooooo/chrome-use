@@ -342,6 +342,34 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             }
             return;
         }
+        // Frame list (`chrome-use frames`)
+        if action == Some("frames") {
+            if let Some(list) = data.get("frames").and_then(|v| v.as_array()) {
+                let count = list.len();
+                println!(
+                    "{}",
+                    color::bold(&format!("{} frame{}", count, if count == 1 { "" } else { "s" }))
+                );
+                for f in list {
+                    let idx = f.get("index").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let kind = f.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+                    let url = f.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    let len = f.get("textLen").and_then(|v| v.as_i64()).unwrap_or(0);
+                    println!(
+                        "  [{}] {:<6} {} chars  {}",
+                        idx,
+                        kind,
+                        len,
+                        color::dim(if url.is_empty() { "(about:blank)" } else { url })
+                    );
+                }
+                eprintln!(
+                    "{}",
+                    color::dim("read everything with: chrome-use get text --all-frames")
+                );
+            }
+            return;
+        }
         // Title
         if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
             println!("{}", title);
@@ -1930,6 +1958,8 @@ Retrieves various types of information from elements or the page.
 
 Subcommands:
   text <selector>            Get text content of element
+  text --all-frames          Aggregate text across ALL frames (incl. iframes)
+  text --main                Main-content text only (skip nav/header/sidebar)
   html <selector>            Get inner HTML of element
   value <selector>           Get value of input element
   attr <selector> <name>     Get attribute value
@@ -1946,6 +1976,9 @@ Global Options:
 
 Examples:
   chrome-use get text @e1
+  chrome-use get text --all-frames     # read iframed content (listing pages)
+  chrome-use get text --main           # main content, no nav/sidebar boilerplate
+  chrome-use frames                    # list frames + where the text lives
   chrome-use get html "#content"
   chrome-use get value "#email-input"
   chrome-use get attr "#link" href
@@ -3155,6 +3188,7 @@ Navigation:
 
 Get Info:  chrome-use get <what> [selector]
   text, html, value, attr <name>, title, url, count, box, styles, cdp-url
+  text --all-frames (cross-frame), text --main (no boilerplate), frames (list)
 
 Check State:  chrome-use is <what> <selector>
   visible, enabled, checked
