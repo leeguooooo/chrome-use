@@ -152,9 +152,16 @@ jobs:
           # Group commit subjects by conventional-commit type so the notes are
           # scannable ("what's new / what's fixed") instead of a flat dev log.
           LOG="$(git log "$RANGE" --no-merges --pretty='%s' | grep -v '^chore(release)' || true)"
+          # NOTE: the job runs under `bash -e`. grep returning 1 (no match) and
+          # the `[ -n "$body" ]` test returning 1 (empty section) must NOT abort
+          # the script — otherwise a release whose commit range lacks a whole
+          # category (e.g. only `feat`, no `fix`) dies before writing the closing
+          # heredoc delimiter and the whole release step fails. `|| true` +
+          # `return 0` keep section() always-succeeding.
           section() { # $1=header  $2=grep-pattern
-            local body; body="$(printf '%s\n' "$LOG" | grep -E "$2" | sed 's/^/- /')"
-            [ -n "$body" ] && { printf '\n### %s\n%s\n' "$1" "$body"; }
+            local body; body="$(printf '%s\n' "$LOG" | grep -E "$2" | sed 's/^/- /' || true)"
+            [ -n "$body" ] && printf '\n### %s\n%s\n' "$1" "$body"
+            return 0
           }
           {
             echo "notes<<__NOTES_EOF__"
