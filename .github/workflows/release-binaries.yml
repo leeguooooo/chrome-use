@@ -147,16 +147,24 @@ jobs:
           git fetch --tags --force --quiet origin 2>/dev/null || true
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          RANGE="${TAG}"
+          [ -n "$PREV" ] && RANGE="${PREV}..${TAG}"
+          # Group commit subjects by conventional-commit type so the notes are
+          # scannable ("what's new / what's fixed") instead of a flat dev log.
+          LOG="$(git log "$RANGE" --no-merges --pretty='%s' | grep -v '^chore(release)' || true)"
+          section() { # $1=header  $2=grep-pattern
+            local body; body="$(printf '%s\n' "$LOG" | grep -E "$2" | sed 's/^/- /')"
+            [ -n "$body" ] && { printf '\n### %s\n%s\n' "$1" "$body"; }
+          }
           {
             echo "notes<<__NOTES_EOF__"
             echo "## What changed"
-            echo ""
+            section "✨ Features" '^feat'
+            section "🐛 Fixes" '^fix'
+            section "🔧 Other" '^(perf|refactor|docs|build|ci|test|style|revert)'
             if [ -n "$PREV" ]; then
-              git log "${PREV}..${TAG}" --no-merges --pretty='- %s' | grep -v '^- chore(release)' || true
               echo ""
               echo "**Full changelog**: https://github.com/${{ github.repository }}/compare/${PREV}...${TAG}"
-            else
-              git log "${TAG}" --no-merges --pretty='- %s' | grep -v '^- chore(release)' || true
             fi
             echo "__NOTES_EOF__"
           } >> "$GITHUB_OUTPUT"
