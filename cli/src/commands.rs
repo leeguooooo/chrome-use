@@ -1575,11 +1575,16 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
-                Some(tab_ref) => Ok(json!({
-                    "id": id,
-                    "action": "tab_switch",
-                    "tabId": tab_ref,
-                })),
+                Some(tab_ref) => {
+                    // `tab <ref> --activate` (alias `--front`) switches to the tab
+                    // AND raises it to the foreground — for handing a specific tab
+                    // to the human (SMS code, captcha) (issue #24-C).
+                    let mut cmd = json!({ "id": id, "action": "tab_switch", "tabId": tab_ref });
+                    if rest.iter().any(|a| *a == "--activate" || *a == "--front") {
+                        cmd["activate"] = json!(true);
+                    }
+                    Ok(cmd)
+                }
                 None => {
                     let mut cmd = json!({ "id": id, "action": "tab_list" });
                     if full {
@@ -2361,10 +2366,10 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
 
     match rest.first().copied() {
         Some("text") => {
-            let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
-                context: "get text".to_string(),
-                usage: "get text <selector>",
-            })?;
+            // `get text` with no selector returns the whole page's text (body) —
+            // a common convenience; previously it errored without a selector
+            // (issue #24-D).
+            let sel = rest.get(1).copied().unwrap_or("body");
             Ok(json!({ "id": id, "action": "gettext", "selector": sel }))
         }
         Some("html") => {
@@ -4686,12 +4691,30 @@ mod tests {
     }
 
     #[test]
-    fn test_get_text_missing_selector() {
-        let result = parse_command(&args("get text"), &default_flags());
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, ParseError::MissingArguments { .. }));
-        assert!(err.format().contains("get text"));
+    fn test_get_text_defaults_to_body() {
+        // `get text` with no selector now returns the whole page (body) instead
+        // of erroring (issue #24-D).
+        let cmd = parse_command(&args("get text"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "gettext");
+        assert_eq!(cmd["selector"], "body");
+        // An explicit selector still wins.
+        let cmd2 = parse_command(&args("get text h1"), &default_flags()).unwrap();
+        assert_eq!(cmd2["selector"], "h1");
+    }
+
+    #[test]
+    fn test_tab_activate_flag() {
+        let plain = parse_command(&args("tab t3"), &default_flags()).unwrap();
+        assert_eq!(plain["action"], "tab_switch");
+        assert!(plain.get("activate").is_none());
+
+        let act = parse_command(&args("tab t3 --activate"), &default_flags()).unwrap();
+        assert_eq!(act["action"], "tab_switch");
+        assert_eq!(act["tabId"], "t3");
+        assert_eq!(act["activate"], true);
+        // `--front` alias.
+        let front = parse_command(&args("tab t3 --front"), &default_flags()).unwrap();
+        assert_eq!(front["activate"], true);
     }
 
     // === Protocol alignment tests ===

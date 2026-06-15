@@ -4466,6 +4466,17 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     state.active_frame_id = None;
     let result = mgr.tab_switch_by_id(tab_id).await?;
 
+    // `--activate`: raise this tab to the foreground (the switch made it active;
+    // bring_to_front acts on the active tab) — for handing a specific tab to the
+    // human (issue #24-C). Best-effort; don't fail the switch if it can't.
+    if cmd
+        .get("activate")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let _ = mgr.bring_to_front().await;
+    }
+
     if let Some(ref server) = state.stream_server {
         if let Ok(dims) = mgr
             .evaluate(

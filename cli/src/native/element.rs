@@ -796,16 +796,43 @@ pub(super) fn extract_ax_string(value: &Option<AXValue>) -> String {
 /// Build a JS expression that finds a DOM element by CSS selector or XPath.
 fn build_find_element_js(selector: &str) -> String {
     if let Some(xpath) = selector.strip_prefix("xpath=") {
-        format!(
+        return format!(
             "document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
             serde_json::to_string(xpath).unwrap_or_default()
-        )
-    } else {
-        format!(
-            "document.querySelector({})",
-            serde_json::to_string(selector).unwrap_or_default()
-        )
+        );
     }
+    // Bare string (or explicit `text=`): try CSS first, then fall back to
+    // matching an interactive element by its VISIBLE TEXT. snapshot exposes
+    // buttons/links by their name, so `click "購入手続きへ"` should resolve by
+    // that label — previously it was fed straight to `querySelector` as CSS and
+    // failed as an invalid selector even though the button was right there
+    // (issue #24-B). CSS still wins when it matches, so existing selectors are
+    // unaffected; nested/non-ASCII labels now resolve too.
+    let text_only = selector.strip_prefix("text=");
+    let force_text = text_only.is_some();
+    let sel_json = serde_json::to_string(selector).unwrap_or_default();
+    let want_json = serde_json::to_string(text_only.unwrap_or(selector)).unwrap_or_default();
+    format!(
+        r#"(() => {{
+  const sel = {sel};
+  const css = {force_text} ? null : (() => {{ try {{ return document.querySelector(sel); }} catch (_e) {{ return null; }} }})();
+  if (css) return css;
+  const norm = s => (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
+  const w = norm({want}); if (!w) return null;
+  const wl = w.toLowerCase();
+  const interactive = Array.from(document.querySelectorAll(
+    'button,a,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],input[type=submit],input[type=button],input[type=reset],summary,label,[onclick]'));
+  const textOf = e => norm(e.innerText || e.textContent) || norm(e.value) ||
+    norm(e.getAttribute && e.getAttribute('aria-label')) || norm(e.getAttribute && e.getAttribute('title'));
+  let hit = interactive.find(e => textOf(e) === w) || interactive.find(e => textOf(e).toLowerCase().includes(wl));
+  if (hit) return hit;
+  const leaves = Array.from(document.querySelectorAll('*')).filter(e => !e.children.length);
+  return leaves.find(e => norm(e.textContent) === w) || leaves.find(e => norm(e.textContent).toLowerCase().includes(wl)) || null;
+}})()"#,
+        sel = sel_json,
+        want = want_json,
+        force_text = force_text
+    )
 }
 
 /// Build a JS expression that counts matching DOM elements by CSS selector or XPath.
@@ -1452,8 +1479,28 @@ mod tests {
     #[test]
     fn test_build_selector_js_css() {
         let js = build_selector_js("#submit-btn");
-        assert!(js.contains("document.querySelector(\"#submit-btn\")"));
+        // CSS is now tried via a `sel` variable, with a visible-text fallback
+        // appended (issue #24-B). It must still use querySelector (not xpath).
+        assert!(js.contains("const sel = \"#submit-btn\""));
+        assert!(js.contains("document.querySelector(sel)"));
         assert!(!js.contains("document.evaluate"));
+    }
+
+    #[test]
+    fn test_build_find_element_js_text_fallback() {
+        // A bare label gets a text-matching fallback so `click "購入手続きへ"`
+        // resolves by visible text, not just CSS (issue #24-B).
+        let js = build_find_element_js("購入手続きへ");
+        assert!(js.contains("購入手続きへ"));
+        assert!(js.contains("interactive")); // the text-match branch
+        assert!(js.contains("textOf"));
+        // `text=` forces the text path (skips CSS).
+        let forced = build_find_element_js("text=Buy now");
+        assert!(forced.contains("true ? null")); // force_text => css skipped
+                                                 // xpath is unchanged.
+        let xp = build_find_element_js("xpath=//button");
+        assert!(xp.contains("document.evaluate"));
+        assert!(!xp.contains("interactive"));
     }
 
     #[test]
