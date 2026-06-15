@@ -166,6 +166,27 @@ fn resolve_active_index(
     active_page_index
 }
 
+/// Target ids to prune after a `Target.getTargets` resync: tracked pages whose
+/// target is no longer in the live set — EXCEPT the explicitly-pinned active
+/// target, which is protected. The relay against a busy real Chrome occasionally
+/// returns a different window's tabs for a single `getTargets` call ("tab list
+/// hops windows", issue #31); pruning on that transient snapshot would drop the
+/// agent's adopted tab and drift subsequent eval/click onto a foreign tab. A
+/// genuine close still arrives as `Target.targetDestroyed` (handled in the event
+/// drain), which removes the pin properly — so protecting it here only guards
+/// against flaky snapshots, not real closures.
+fn prunable_target_ids(
+    pages: &[PageInfo],
+    live_ids: &HashSet<String>,
+    pinned: Option<&str>,
+) -> Vec<String> {
+    pages
+        .iter()
+        .map(|p| p.target_id.clone())
+        .filter(|tid| !live_ids.contains(tid) && pinned != Some(tid.as_str()))
+        .collect()
+}
+
 /// Whether the resolved active page is a tab the session created (its target_id
 /// is in `created_targets`). Pure core of [`BrowserManager::active_is_session_owned`]
 /// so the relay no-hijack rule is unit-testable without a live browser.
@@ -1425,13 +1446,10 @@ impl BrowserManager {
             let _ = self.enable_domains(&attach_result.session_id).await;
         }
 
-        // Drop tabs that no longer exist so `tab list` doesn't show phantom rows.
-        let gone: Vec<String> = self
-            .pages
-            .iter()
-            .map(|p| p.target_id.clone())
-            .filter(|tid| !live_ids.contains(tid))
-            .collect();
+        // Drop tabs that no longer exist so `tab list` doesn't show phantom rows —
+        // but never prune the explicitly-pinned active target on a transient
+        // getTargets snapshot (issue #31; see `prunable_target_ids`).
+        let gone = prunable_target_ids(&self.pages, &live_ids, self.active_target_id.as_deref());
         for tid in gone {
             self.remove_page_by_target_id(&tid);
         }
@@ -2594,6 +2612,25 @@ mod tests {
     fn active_not_owned_when_no_pages() {
         let created = HashSet::new();
         assert!(!active_index_is_owned(&[], None, 0, &created));
+    }
+
+    #[test]
+    fn prune_protects_pinned_target_on_transient_snapshot() {
+        // The relay returned a getTargets snapshot missing the pinned tab "A"
+        // (it hopped to another window). "B" is also absent. Without protection
+        // both would be pruned and the next command would drift; with the pin
+        // protected, only the genuinely-unpinned "B" is dropped (issue #31).
+        let pages = vec![page("A"), page("B")];
+        let live: HashSet<String> = HashSet::new(); // snapshot returned neither
+        let gone = prunable_target_ids(&pages, &live, Some("A"));
+        assert_eq!(gone, vec!["B".to_string()]);
+        // With no pin, both are prunable (unchanged behavior).
+        let gone_unpinned = prunable_target_ids(&pages, &live, None);
+        assert_eq!(gone_unpinned.len(), 2);
+        // A pinned target that IS in the live set is simply not prunable anyway.
+        let mut live2 = HashSet::new();
+        live2.insert("A".to_string());
+        assert_eq!(prunable_target_ids(&pages, &live2, Some("A")), vec!["B".to_string()]);
     }
 
     #[test]
