@@ -4561,7 +4561,22 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     state.ref_map.clear();
     state.iframe_sessions.clear();
     state.active_frame_id = None;
-    let result = mgr.tab_switch_by_id(tab_id).await?;
+    let mut result = mgr.tab_switch_by_id(tab_id).await?;
+
+    // Liveness probe: confirm the new session actually answers before we report
+    // success, so `tab <id>` doesn't print a misleading ✓ for a session that's
+    // stale and will fail on the very next command (issue #29.3). On the churned
+    // -tabId case the ext-0.4.9 targetId recovery (#24) self-heals within ~6s, so
+    // we surface a warning rather than a hard error to avoid a false failure
+    // during that window.
+    if mgr.evaluate("1", None).await.is_err() {
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert(
+                "warning".to_string(),
+                json!("switched tab is not responding yet (session re-attaching); retry the next command"),
+            );
+        }
+    }
 
     // `--activate`: raise this tab to the foreground (the switch made it active;
     // bring_to_front acts on the active tab) — for handing a specific tab to the

@@ -597,19 +597,21 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         // Tab switch
         if action == Some("tab_switch") {
             if let Some(tab_id) = data.get("tabId").and_then(|v| v.as_str()) {
-                if let Some(url) = data.get("url").and_then(|v| v.as_str()) {
-                    println!(
-                        "{} Switched to tab [{}] ({})",
-                        color::success_indicator(),
-                        tab_id,
-                        url
-                    );
+                let warning = data.get("warning").and_then(|v| v.as_str());
+                // A non-responding session isn't a real success — show a warning
+                // indicator instead of the green ✓ (issue #29.3).
+                let indicator = if warning.is_some() {
+                    color::warning_indicator()
                 } else {
-                    println!(
-                        "{} Switched to tab [{}]",
-                        color::success_indicator(),
-                        tab_id
-                    );
+                    color::success_indicator()
+                };
+                if let Some(url) = data.get("url").and_then(|v| v.as_str()) {
+                    println!("{} Switched to tab [{}] ({})", indicator, tab_id, url);
+                } else {
+                    println!("{} Switched to tab [{}]", indicator, tab_id);
+                }
+                if let Some(w) = warning {
+                    eprintln!("{}", color::dim(w));
                 }
                 return;
             }
@@ -3287,6 +3289,7 @@ Confirmation:
 Sessions:
   session                    Show current session name
   session list               List active sessions
+  sessions                   List running session daemons (alias of daemon status)
   daemon status              List running session daemons (+ relay state)
   daemon restart             Kill all session daemons; keeps the extension relay
                              up. Clears stale/cross-leaked state after an upgrade.

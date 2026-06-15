@@ -893,6 +893,14 @@ fn main() {
         return;
     }
 
+    // `sessions` is a natural top-level guess for "list my sessions" (the skill
+    // advertises sessions as a feature) — route it to the daemon inventory the
+    // same way `daemon status` does (issue #29).
+    if clean.first().map(|s| s.as_str()) == Some("sessions") {
+        run_daemon(&["sessions".to_string(), "status".to_string()], flags.json);
+        return;
+    }
+
     // Handle close --all: close all active sessions
     if matches!(
         clean.first().map(|s| s.as_str()),

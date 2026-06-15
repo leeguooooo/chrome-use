@@ -30,12 +30,65 @@ pub enum ParseError {
     InvalidSessionName { name: String },
 }
 
+/// Top-level commands an agent is likely to mistype, used for "did you mean"
+/// suggestions on an unknown command (issue #29). Not exhaustive — just the
+/// common verbs plus a few known wrong-guesses mapped to the real command.
+const KNOWN_COMMANDS: &[&str] = &[
+    "open", "navigate", "click", "fill", "type", "press", "snapshot", "screenshot", "eval", "get",
+    "text", "html", "frames", "find", "wait", "scroll", "hover", "select", "check", "uncheck",
+    "tab", "tabs", "close", "back", "forward", "reload", "sessions", "status", "daemon", "doctor",
+    "upgrade", "connect", "cookies", "mouse", "keyboard", "stream", "frame", "profiles", "title",
+    "url", "is", "drag", "dialog", "upload",
+];
+
+/// Levenshtein distance, capped — small inputs only (command names).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Closest known command within a small edit distance, or a prefix/substring
+/// match — `None` if nothing is close enough to suggest confidently.
+fn nearest_command(input: &str) -> Option<String> {
+    let lower = input.to_lowercase();
+    // Exact prefix/substring hits first (e.g. "session" -> "sessions").
+    if let Some(c) = KNOWN_COMMANDS
+        .iter()
+        .find(|c| c.starts_with(&lower) || lower.starts_with(**c))
+    {
+        return Some(c.to_string());
+    }
+    // Tolerance scales with length: short words get distance 1, longer get 2.
+    let max_dist = if lower.len() <= 4 { 1 } else { 2 };
+    KNOWN_COMMANDS
+        .iter()
+        .map(|c| (*c, edit_distance(&lower, c)))
+        .filter(|(_, d)| *d <= max_dist)
+        .min_by_key(|(_, d)| *d)
+        .map(|(c, _)| c.to_string())
+}
+
 impl ParseError {
     pub fn format(&self) -> String {
         match self {
-            ParseError::UnknownCommand { command } => {
-                format!("Unknown command: {}", command)
-            }
+            ParseError::UnknownCommand { command } => match nearest_command(command) {
+                Some(suggestion) => format!(
+                    "Unknown command: {}\nDid you mean: chrome-use {}?",
+                    command, suggestion
+                ),
+                None => format!("Unknown command: {}", command),
+            },
             ParseError::UnknownSubcommand {
                 subcommand,
                 valid_options,
@@ -4811,6 +4864,21 @@ mod tests {
     fn test_frames_command() {
         let cmd = parse_command(&args("frames"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "frames");
+    }
+
+    #[test]
+    fn test_nearest_command_suggestions() {
+        assert_eq!(nearest_command("sesions").as_deref(), Some("sessions"));
+        assert_eq!(nearest_command("session").as_deref(), Some("sessions"));
+        assert_eq!(nearest_command("clik").as_deref(), Some("click"));
+        assert_eq!(nearest_command("screenshits").as_deref(), Some("screenshot"));
+        // Nonsense with no close match stays silent.
+        assert_eq!(nearest_command("xyzzy"), None);
+        // The unknown-command error embeds the suggestion.
+        let err = ParseError::UnknownCommand {
+            command: "sesions".to_string(),
+        };
+        assert!(err.format().contains("Did you mean: chrome-use sessions?"));
     }
 
     #[test]
