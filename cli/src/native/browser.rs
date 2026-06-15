@@ -1279,6 +1279,67 @@ impl BrowserManager {
     /// the active tab is preserved, and re-pinned if it was pruned. Powers a live
     /// `tab list` and adopt-by-targetId so a fresh session can reach a stranded,
     /// still-filled tab without reloading it (issue #21).
+    /// Detect targets that appeared since the `before` set (e.g. a click that
+    /// opened a new tab via a `target=_blank` link or `window.open`), attach +
+    /// track each in the background, and return the first newly-opened page.
+    ///
+    /// Lighter than [`resync_targets`] — one `getTargets` and work only on the
+    /// new targets, no whole-tab url/title refresh — so it's cheap enough to run
+    /// after every click. The new tab is added in the background (never steals
+    /// the active tab, per #7/#8.1); the caller surfaces it so the agent knows a
+    /// tab opened instead of seeing the old page (issue #24-A).
+    pub async fn adopt_newly_opened(&mut self, before: &HashSet<String>) -> Option<PageInfo> {
+        let result: GetTargetsResult = self
+            .client
+            .send_command_typed("Target.getTargets", &json!({}), None)
+            .await
+            .ok()?;
+        let live: Vec<TargetInfo> = result
+            .target_infos
+            .into_iter()
+            .filter(should_track_target)
+            .collect();
+        let mut opened: Option<PageInfo> = None;
+        for target in &live {
+            if before.contains(&target.target_id)
+                || self.pages.iter().any(|p| p.target_id == target.target_id)
+            {
+                continue;
+            }
+            let attach: AttachToTargetResult = match self
+                .client
+                .send_command_typed(
+                    "Target.attachToTarget",
+                    &AttachToTargetParams {
+                        target_id: target.target_id.clone(),
+                        flatten: true,
+                    },
+                    None,
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let tab_id = self.assign_tab_id();
+            let page = PageInfo {
+                tab_id,
+                label: None,
+                target_id: target.target_id.clone(),
+                session_id: attach.session_id.clone(),
+                url: target.url.clone(),
+                title: target.title.clone(),
+                target_type: target.target_type.clone(),
+            };
+            self.add_background_page(page.clone());
+            let _ = self.enable_domains(&attach.session_id).await;
+            if opened.is_none() {
+                opened = Some(page);
+            }
+        }
+        opened
+    }
+
     pub async fn resync_targets(&mut self) -> Result<(), String> {
         self.client
             .send_command_typed::<_, Value>(

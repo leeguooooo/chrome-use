@@ -424,6 +424,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         // === Core Actions ===
         "click" => {
             let new_tab = rest.contains(&"--new-tab");
+            // `--follow`: if the click opens a new tab, switch the active tab to
+            // it (default reports the opened tab but stays put) (issue #24-A).
+            let follow = rest.contains(&"--follow");
             // Coordinate click as a first-class form (issue #8.4): when the only
             // handle is a pixel position, no element/selector is needed.
             //   click <x> <y>          e.g. click 449 320
@@ -432,23 +435,27 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let coord_args: Vec<&str> = rest
                 .iter()
                 .copied()
-                .filter(|a| *a != "--new-tab" && *a != "--coords")
+                .filter(|a| !a.starts_with("--"))
                 .collect();
             if let Some((x, y)) = parse_coords(&coord_args) {
                 return Ok(json!({ "id": id, "action": "click", "x": x, "y": y }));
             }
             let sel = rest
                 .iter()
-                .find(|arg| **arg != "--new-tab")
+                .find(|arg| !arg.starts_with("--"))
                 .ok_or_else(|| ParseError::MissingArguments {
                     context: "click".to_string(),
-                    usage: "click <selector> | click <x> <y> | click --coords <x>,<y> [--new-tab]",
+                    usage:
+                        "click <selector> | click <x> <y> | click --coords <x>,<y> [--new-tab] [--follow]",
                 })?;
+            let mut cmd = json!({ "id": id, "action": "click", "selector": sel });
             if new_tab {
-                Ok(json!({ "id": id, "action": "click", "selector": sel, "newTab": true }))
-            } else {
-                Ok(json!({ "id": id, "action": "click", "selector": sel }))
+                cmd["newTab"] = json!(true);
             }
+            if follow {
+                cmd["follow"] = json!(true);
+            }
+            Ok(cmd)
         }
         "dblclick" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
@@ -3782,6 +3789,21 @@ mod tests {
         assert_eq!(cmd["action"], "click");
         assert_eq!(cmd["selector"], "button.submit");
         assert!(cmd.get("x").is_none());
+    }
+
+    #[test]
+    fn test_click_follow_flag() {
+        // `--follow` sets the flag; the selector is still found even with the flag
+        // before it (issue #24-A).
+        let cmd = parse_command(&args("click @e5 --follow"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "@e5");
+        assert_eq!(cmd["follow"], true);
+        let cmd2 = parse_command(&args("click --follow @e5"), &default_flags()).unwrap();
+        assert_eq!(cmd2["selector"], "@e5");
+        assert_eq!(cmd2["follow"], true);
+        // Absent by default.
+        let plain = parse_command(&args("click @e5"), &default_flags()).unwrap();
+        assert!(plain.get("follow").is_none());
     }
 
     #[test]

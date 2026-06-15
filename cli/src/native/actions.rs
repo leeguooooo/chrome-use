@@ -3116,6 +3116,15 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
 
     let button = cmd.get("button").and_then(|v| v.as_str()).unwrap_or("left");
     let click_count = cmd.get("clickCount").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    let follow = cmd.get("follow").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // Snapshot tracked targets so we can tell if this click opened a NEW tab
+    // (target=_blank link / window.open). On the relay the new tab is discovered
+    // passively and doesn't steal focus (#7/#8.1), so without surfacing it the
+    // post-click snapshot shows the OLD page and looks like the click failed
+    // (issue #24-A).
+    let before: std::collections::HashSet<String> =
+        mgr.pages_list().into_iter().map(|p| p.target_id).collect();
 
     interaction::click(
         &mgr.client,
@@ -3128,7 +3137,26 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     )
     .await?;
 
-    Ok(json!({ "clicked": selector }))
+    // Give a just-opened tab a moment to register, then look for it.
+    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let opened = mgr.adopt_newly_opened(&before).await;
+
+    let mut out = json!({ "clicked": selector });
+    if let Some(page) = opened {
+        let tab_id = super::browser::format_tab_id(page.tab_id);
+        out["openedTab"] = json!({ "tabId": tab_id, "url": page.url, "title": page.title });
+        // `--follow`: switch the active tab to the newly-opened one (default is
+        // to report it but stay put, so multi-tab flows aren't hijacked).
+        if follow {
+            state.ref_map.clear();
+            state.iframe_sessions.clear();
+            state.active_frame_id = None;
+            let _ = mgr.tab_switch_by_id(page.tab_id).await;
+            out["followed"] = json!(true);
+        }
+    }
+    Ok(out)
 }
 
 async fn handle_dblclick(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {

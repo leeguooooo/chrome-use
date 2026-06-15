@@ -186,6 +186,29 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
     }
 
     if let Some(data) = &resp.data {
+        // A click that opened a new tab: surface it so the agent doesn't read the
+        // unchanged old page as a failed click (issue #24-A).
+        if let Some(opened) = data.get("openedTab") {
+            let tid = opened.get("tabId").and_then(|v| v.as_str()).unwrap_or("?");
+            let url = opened.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let followed = data
+                .get("followed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let verb = if followed {
+                "switched to new tab"
+            } else {
+                "opened new tab"
+            };
+            eprintln!(
+                "{} {} [{}] {}",
+                color::cyan("→"),
+                verb,
+                tid,
+                color::dim(url)
+            );
+        }
+
         // Dialog status response
         if action == Some("dialog") {
             if let Some(has_dialog) = data.get("hasDialog").and_then(|v| v.as_bool()) {
