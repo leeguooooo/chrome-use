@@ -166,6 +166,31 @@ fn resolve_active_index(
     active_page_index
 }
 
+/// Best-effort MIME type from a filename extension, for the relay file-upload
+/// fallback (the page-constructed `File` needs a sensible `type`). Covers the
+/// common upload kinds; anything unknown falls back to a generic binary type.
+fn mime_for_path(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Target ids to prune after a `Target.getTargets` resync: tracked pages whose
 /// target is no longer in the live set — EXCEPT the explicitly-pinned active
 /// target, which is protected. The relay against a busy real Chrome occasionally
@@ -1926,7 +1951,8 @@ impl BrowserManager {
             .and_then(|v| v.as_i64())
             .ok_or("Could not get backendNodeId for file input")?;
 
-        self.client
+        let set_files = self
+            .client
             .send_command(
                 "DOM.setFileInputFiles",
                 Some(json!({
@@ -1935,26 +1961,153 @@ impl BrowserManager {
                 })),
                 Some(&effective_session_id),
             )
-            .await
-            .map_err(|e| {
-                // Chrome's chrome.debugger API (the extension-relay transport)
-                // forbids DOM.setFileInputFiles for security, surfacing as an
-                // opaque `-32000 "Not allowed"`. Translate it into an actionable
-                // message rather than leaking the raw CDP error (issue #13).
-                if e.contains("Not allowed") || e.contains("-32000") {
-                    "file upload isn't supported over the extension relay — \
-                     Chrome's chrome.debugger API forbids DOM.setFileInputFiles. \
-                     Use a direct-CDP session instead: \
-                     `chrome-use --session up --launch open <url>` (carry your \
-                     login over with `cookies export` | `cookies set --curl`), \
-                     then run `upload` in that session. \
-                     See https://github.com/leeguooooo/chrome-use/issues/13"
-                        .to_string()
-                } else {
-                    e
-                }
-            })?;
+            .await;
 
+        if let Err(e) = set_files {
+            // Chrome's chrome.debugger API (the extension-relay transport) forbids
+            // DOM.setFileInputFiles for security, surfacing as an opaque
+            // `-32000 "Not allowed"`. Fall back to constructing the File entirely
+            // IN THE PAGE and assigning it to the input — the standard
+            // Playwright/Cypress trick, which needs no privileged CDP and so works
+            // over the relay (issue #13).
+            if e.contains("Not allowed") || e.contains("-32000") {
+                return self
+                    .upload_files_via_page(object_id, files, &effective_session_id)
+                    .await;
+            }
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    /// Relay-safe file upload: read each file locally, hand its bytes to the page
+    /// as base64, and rebuild a `File` there — then either assign it to a file
+    /// `<input>` (Chrome allows `input.files = dataTransfer.files`) or, for a
+    /// dropzone/composer, dispatch synthetic `paste`/`drop` events carrying the
+    /// `DataTransfer`. No `DOM.setFileInputFiles`, so chrome.debugger permits it.
+    async fn upload_files_via_page(
+        &self,
+        object_id: String,
+        files: &[String],
+        session_id: &str,
+    ) -> Result<(), String> {
+        use base64::Engine;
+        // The relay tunnels every CDP message through Chrome native messaging,
+        // which caps a single message at ~1 MiB. A whole image's base64 blows
+        // past that ("CDP response channel closed"), so we STREAM the bytes into
+        // a page-side buffer in sub-limit chunks, then assemble the File from it.
+        const CHUNK: usize = 96 * 1024; // base64 chars per message; safe under 1 MiB
+
+        // Reset the staging buffer.
+        self.client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({ "expression": "window.__cuUpload = [];", "returnByValue": true })),
+                Some(session_id),
+            )
+            .await
+            .map_err(|e| format!("relay upload (reset) failed: {}", e))?;
+
+        for path in files {
+            let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
+            let name = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("upload.bin")
+                .to_string();
+            let mime = mime_for_path(&name);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+            // Push the file's metadata with an empty buffer.
+            let init = format!(
+                "window.__cuUpload.push({{ name: {}, type: {}, b64: '' }});",
+                serde_json::to_string(&name).unwrap_or_default(),
+                serde_json::to_string(mime).unwrap_or_default(),
+            );
+            self.client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(json!({ "expression": init, "returnByValue": true })),
+                    Some(session_id),
+                )
+                .await
+                .map_err(|e| format!("relay upload (init) failed: {}", e))?;
+
+            // Stream the base64 in chunks. base64's alphabet (A–Za–z0–9+/=) needs
+            // no escaping inside a single-quoted JS string, so concatenation is safe.
+            let idx = "window.__cuUpload[window.__cuUpload.length-1].b64";
+            let mut start = 0;
+            while start < b64.len() {
+                let end = (start + CHUNK).min(b64.len());
+                let chunk = &b64[start..end];
+                let expr = format!("{idx} += '{chunk}';");
+                self.client
+                    .send_command(
+                        "Runtime.evaluate",
+                        Some(json!({ "expression": expr, "returnByValue": true })),
+                        Some(session_id),
+                    )
+                    .await
+                    .map_err(|e| format!("relay upload (chunk) failed: {}", e))?;
+                start = end;
+            }
+        }
+
+        // Assemble the Files from the buffer and attach to the element, then clean up.
+        let func = r#"function() {
+            const filesData = window.__cuUpload || [];
+            const dt = new DataTransfer();
+            for (const f of filesData) {
+                const bin = atob(f.b64);
+                const arr = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                dt.items.add(new File([arr], f.name, { type: f.type }));
+            }
+            try { delete window.__cuUpload; } catch (e) { window.__cuUpload = undefined; }
+            const el = this;
+            if (el.tagName === 'INPUT' && el.type === 'file') {
+                el.files = dt.files;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return 'input:' + dt.files.length;
+            }
+            // Dropzone / rich composer: replay paste then drop with the files.
+            try { el.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: dt })); } catch (e) {}
+            try {
+                const ev = new DragEvent('drop', { bubbles: true, cancelable: true });
+                Object.defineProperty(ev, 'dataTransfer', { value: dt });
+                el.dispatchEvent(ev);
+            } catch (e) {}
+            return 'event:' + dt.files.length;
+        }"#;
+
+        let result: EvaluateResult = self
+            .client
+            .send_command_typed(
+                "Runtime.callFunctionOn",
+                &CallFunctionOnParams {
+                    function_declaration: func.to_string(),
+                    object_id: Some(object_id),
+                    arguments: None,
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(session_id),
+            )
+            .await
+            .map_err(|e| format!("relay file-injection failed: {}", e))?;
+
+        if let Some(ref details) = result.exception_details {
+            return Err(format!(
+                "relay file-injection threw: {}",
+                details
+                    .exception
+                    .as_ref()
+                    .and_then(|ex| ex.description.as_deref())
+                    .unwrap_or(&details.text)
+            ));
+        }
         Ok(())
     }
 
@@ -2612,6 +2765,16 @@ mod tests {
     fn active_not_owned_when_no_pages() {
         let created = HashSet::new();
         assert!(!active_index_is_owned(&[], None, 0, &created));
+    }
+
+    #[test]
+    fn test_mime_for_path() {
+        assert_eq!(mime_for_path("a.png"), "image/png");
+        assert_eq!(mime_for_path("PHOTO.JPG"), "image/jpeg");
+        assert_eq!(mime_for_path("clip.webp"), "image/webp");
+        assert_eq!(mime_for_path("doc.pdf"), "application/pdf");
+        assert_eq!(mime_for_path("noext"), "application/octet-stream");
+        assert_eq!(mime_for_path("weird.xyz"), "application/octet-stream");
     }
 
     #[test]

@@ -281,11 +281,11 @@ chrome-use pick @e4 --option "Europe"  # ANY combobox (react-select / ARIA /
                                           # (no silent no-op). Use this for custom
                                           # dropdowns where `select` returns ✓ but
                                           # changes nothing.
-chrome-use upload @e5 file1.pdf        # upload file(s) — NOTE: needs a --launch/direct-CDP
-                                          # session. Over the extension relay it CANNOT work
-                                          # (Chrome's chrome.debugger forbids it); chrome-use
-                                          # errors with a hint. Carry your login into a launched
-                                          # session via `cookies export` | `cookies set --curl`.
+chrome-use upload @e5 file1.pdf        # upload file(s) — works over the extension relay too:
+                                          # chrome.debugger forbids setFileInputFiles, so the
+                                          # file's bytes are streamed into the page and rebuilt as
+                                          # a File there (chunked under native-messaging's 1 MiB cap).
+                                          # Works on file <input>s and drop/paste composers (e.g. X).
 chrome-use scroll down 500             # scroll page (up/down/left/right)
 chrome-use scrollintoview @e1          # scroll element into view
 chrome-use drag @e1 @e2                # drag and drop
