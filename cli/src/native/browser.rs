@@ -579,7 +579,10 @@ impl BrowserManager {
         crate::connect::log_connect_mode(
             &ws_url,
             true,
-            DAEMON_SESSION.get().map(String::as_str).unwrap_or("default"),
+            DAEMON_SESSION
+                .get()
+                .map(String::as_str)
+                .unwrap_or("default"),
         );
         let manager = if engine == "lightpanda" {
             initialize_lightpanda_manager(ws_url, process).await?
@@ -681,7 +684,10 @@ impl BrowserManager {
         crate::connect::log_connect_mode(
             &ws_url,
             false,
-            DAEMON_SESSION.get().map(String::as_str).unwrap_or("default"),
+            DAEMON_SESSION
+                .get()
+                .map(String::as_str)
+                .unwrap_or("default"),
         );
         let client = Arc::new(CdpClient::connect_with_headers(&ws_url, headers).await?);
         let mut manager = Self {
@@ -2815,7 +2821,9 @@ mod tests {
              its tab is gone (closed, navigated across processes, or lost after an extension \
              restart). Re-attach by re-opening your target URL before retrying."
         ));
-        assert!(is_stale_target_error("unknown sessionId cb-tab-7 for Page.navigate"));
+        assert!(is_stale_target_error(
+            "unknown sessionId cb-tab-7 for Page.navigate"
+        ));
         assert!(is_stale_target_error("no attached tab for Page.navigate"));
     }
 
@@ -2823,8 +2831,12 @@ mod tests {
     fn stale_target_error_ignores_unrelated_failures() {
         // A genuine navigation failure (bad URL, DNS, blocked) must NOT trigger
         // the open-a-fresh-tab recovery — that would mask the real error.
-        assert!(!is_stale_target_error("Navigation failed: net::ERR_NAME_NOT_RESOLVED"));
-        assert!(!is_stale_target_error("CDP command timed out: Page.navigate"));
+        assert!(!is_stale_target_error(
+            "Navigation failed: net::ERR_NAME_NOT_RESOLVED"
+        ));
+        assert!(!is_stale_target_error(
+            "CDP command timed out: Page.navigate"
+        ));
     }
 
     fn page(target_id: &str) -> PageInfo {
@@ -2931,7 +2943,10 @@ mod tests {
         let dirty = "\u{200d}\u{2061}\u{200d}\u{2063}\u{200b}\u{2062}\u{feff}GitHub";
         assert_eq!(sanitize_title(dirty), "GitHub");
         // Clean titles (incl. CJK + normal punctuation) pass through untouched.
-        assert_eq!(sanitize_title("購入手続きへ - メルカリ"), "購入手続きへ - メルカリ");
+        assert_eq!(
+            sanitize_title("購入手続きへ - メルカリ"),
+            "購入手続きへ - メルカリ"
+        );
         assert_eq!(sanitize_title("  Hello World  "), "Hello World");
         // Emoji and real content survive; only the invisibles are dropped.
         assert_eq!(sanitize_title("✓ Done\u{200b}"), "✓ Done");
@@ -2963,7 +2978,10 @@ mod tests {
         // A pinned target that IS in the live set is simply not prunable anyway.
         let mut live2 = HashSet::new();
         live2.insert("A".to_string());
-        assert_eq!(prunable_target_ids(&pages, &live2, Some("A")), vec!["B".to_string()]);
+        assert_eq!(
+            prunable_target_ids(&pages, &live2, Some("A")),
+            vec!["B".to_string()]
+        );
     }
 
     #[test]

@@ -1028,7 +1028,9 @@ async fn eval_text_in_frame(client: &CdpClient, session_id: &str, frame_id: &str
         .await
         .ok()
         .and_then(|v| v.get("executionContextId").and_then(|c| c.as_i64()));
-    let Some(ctx_id) = ctx else { return String::new() };
+    let Some(ctx_id) = ctx else {
+        return String::new();
+    };
     let res = client
         .send_command(
             "Runtime.evaluate",
@@ -1099,7 +1101,10 @@ pub async fn collect_all_frames_text(
         let (kind, text) = if is_top {
             ("top", eval_text_default(client, top_session).await)
         } else {
-            ("inline", eval_text_in_frame(client, top_session, &fid).await)
+            (
+                "inline",
+                eval_text_in_frame(client, top_session, &fid).await,
+            )
         };
         out.push(FrameText {
             frame_id: fid,

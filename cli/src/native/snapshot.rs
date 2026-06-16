@@ -345,7 +345,16 @@ pub async fn take_snapshot(
     frame_id: Option<&str>,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<String, String> {
-    take_snapshot_at_depth(client, session_id, options, ref_map, frame_id, iframe_sessions, 0).await
+    take_snapshot_at_depth(
+        client,
+        session_id,
+        options,
+        ref_map,
+        frame_id,
+        iframe_sessions,
+        0,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]

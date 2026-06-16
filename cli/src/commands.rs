@@ -34,11 +34,50 @@ pub enum ParseError {
 /// suggestions on an unknown command (issue #29). Not exhaustive — just the
 /// common verbs plus a few known wrong-guesses mapped to the real command.
 const KNOWN_COMMANDS: &[&str] = &[
-    "open", "navigate", "click", "fill", "type", "press", "snapshot", "screenshot", "eval", "get",
-    "text", "html", "frames", "find", "wait", "scroll", "hover", "select", "check", "uncheck",
-    "tab", "tabs", "close", "back", "forward", "reload", "sessions", "status", "daemon", "doctor",
-    "upgrade", "connect", "cookies", "mouse", "keyboard", "stream", "frame", "profiles", "title",
-    "url", "is", "drag", "dialog", "upload",
+    "open",
+    "navigate",
+    "click",
+    "fill",
+    "type",
+    "press",
+    "snapshot",
+    "screenshot",
+    "eval",
+    "get",
+    "text",
+    "html",
+    "frames",
+    "find",
+    "wait",
+    "scroll",
+    "hover",
+    "select",
+    "check",
+    "uncheck",
+    "tab",
+    "tabs",
+    "close",
+    "back",
+    "forward",
+    "reload",
+    "sessions",
+    "status",
+    "daemon",
+    "doctor",
+    "upgrade",
+    "connect",
+    "cookies",
+    "mouse",
+    "keyboard",
+    "stream",
+    "frame",
+    "profiles",
+    "title",
+    "url",
+    "is",
+    "drag",
+    "dialog",
+    "upload",
 ];
 
 /// Levenshtein distance, capped — small inputs only (command names).
@@ -547,7 +586,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 context: "type".to_string(),
                 usage: "type <selector> <text>   (or: type --focused <text>) [--key-events]",
             })?;
-            Ok(json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" "), "keyEvents": key_events }))
+            Ok(
+                json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" "), "keyEvents": key_events }),
+            )
         }
         "pick" => {
             // pick <selector|@ref> --option "<text>"  — atomic combobox select:
@@ -761,7 +802,8 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                             _ => {
                                 return Err(ParseError::InvalidValue {
                                     message: format!("scroll --at: invalid coordinate `{}`", val),
-                                    usage: "scroll [direction] [amount] --at <x,y> (e.g. --at 640,400)",
+                                    usage:
+                                        "scroll [direction] [amount] --at <x,y> (e.g. --at 640,400)",
                                 })
                             }
                         }
@@ -970,17 +1012,21 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "--full" | "-f" => full_page = true,
                     // `--clip x,y,w,h` captures a pixel region (issue #34).
                     "--clip" => {
-                        let raw = rest.get(i + 1).ok_or_else(|| ParseError::MissingArguments {
-                            context: "screenshot --clip".to_string(),
-                            usage: "screenshot --clip <x,y,w,h> [path]",
-                        })?;
+                        let raw = rest
+                            .get(i + 1)
+                            .ok_or_else(|| ParseError::MissingArguments {
+                                context: "screenshot --clip".to_string(),
+                                usage: "screenshot --clip <x,y,w,h> [path]",
+                            })?;
                         let nums: Vec<f64> = raw
                             .split(',')
                             .filter_map(|n| n.trim().parse::<f64>().ok())
                             .collect();
                         if nums.len() != 4 {
                             return Err(ParseError::InvalidValue {
-                                message: format!("--clip expects 'x,y,w,h' (4 numbers), got '{raw}'"),
+                                message: format!(
+                                    "--clip expects 'x,y,w,h' (4 numbers), got '{raw}'"
+                                ),
                                 usage: "screenshot --clip <x,y,w,h> [path]",
                             });
                         }
@@ -4128,7 +4174,11 @@ mod tests {
     fn test_type_key_events() {
         // --key-events sends real keystrokes (for autocomplete/combobox) and must
         // not be swallowed into the typed text.
-        let cmd = parse_command(&args("type #postal 201-0001 --key-events"), &default_flags()).unwrap();
+        let cmd = parse_command(
+            &args("type #postal 201-0001 --key-events"),
+            &default_flags(),
+        )
+        .unwrap();
         assert_eq!(cmd["action"], "type");
         assert_eq!(cmd["selector"], "#postal");
         assert_eq!(cmd["text"], "201-0001");
@@ -4426,8 +4476,11 @@ mod tests {
     #[test]
     fn test_screenshot_clip() {
         // `--clip x,y,w,h` captures a pixel region (issue #34); the path still parses.
-        let cmd = parse_command(&args("screenshot --clip 10,20,200,40 out.png"), &default_flags())
-            .unwrap();
+        let cmd = parse_command(
+            &args("screenshot --clip 10,20,200,40 out.png"),
+            &default_flags(),
+        )
+        .unwrap();
         assert_eq!(cmd["action"], "screenshot");
         assert_eq!(cmd["clip"]["x"], 10.0);
         assert_eq!(cmd["clip"]["y"], 20.0);
@@ -5005,7 +5058,10 @@ mod tests {
         assert_eq!(nearest_command("sesions").as_deref(), Some("sessions"));
         assert_eq!(nearest_command("session").as_deref(), Some("sessions"));
         assert_eq!(nearest_command("clik").as_deref(), Some("click"));
-        assert_eq!(nearest_command("screenshits").as_deref(), Some("screenshot"));
+        assert_eq!(
+            nearest_command("screenshits").as_deref(),
+            Some("screenshot")
+        );
         // Nonsense with no close match stays silent.
         assert_eq!(nearest_command("xyzzy"), None);
         // The unknown-command error embeds the suggestion.

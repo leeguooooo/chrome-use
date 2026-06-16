@@ -228,13 +228,28 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         // because its response carries `url`/`title`, which later generic
         // renderers would otherwise swallow.
         if action == Some("cf_status") {
-            let challenged = data.get("challenged").and_then(|v| v.as_bool()).unwrap_or(false);
-            let rec = data.get("recommendation").and_then(|v| v.as_str()).unwrap_or("?");
+            let challenged = data
+                .get("challenged")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let rec = data
+                .get("recommendation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             let cl = data.get("clearance");
-            let present = cl.and_then(|c| c.get("present")).and_then(|v| v.as_bool()).unwrap_or(false);
-            let expired = cl.and_then(|c| c.get("expired")).and_then(|v| v.as_bool()).unwrap_or(false);
+            let present = cl
+                .and_then(|c| c.get("present"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let expired = cl
+                .and_then(|c| c.get("expired"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let expires_in = cl.and_then(|c| c.get("expiresIn")).and_then(|v| v.as_i64());
-            let device = data.get("deviceVerified").and_then(|v| v.as_bool()).unwrap_or(false);
+            let device = data
+                .get("deviceVerified")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let (icon, headline) = match rec {
                 "proceed" => (color::success_indicator().to_string(), "cleared — no challenge, proceed"),
@@ -243,7 +258,10 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 _ => (color::cyan("•").to_string(), "unknown"),
             };
             println!("{} {}", icon, headline);
-            println!("  challenged:     {}", if challenged { "yes" } else { "no" });
+            println!(
+                "  challenged:     {}",
+                if challenged { "yes" } else { "no" }
+            );
             let cl_desc = if !present {
                 "absent".to_string()
             } else if expired {
@@ -254,7 +272,14 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 "present (session)".to_string()
             };
             println!("  cf_clearance:   {}", cl_desc);
-            println!("  device trusted: {}", if device { "yes (CF_VERIFIED_DEVICE)" } else { "no" });
+            println!(
+                "  device trusted: {}",
+                if device {
+                    "yes (CF_VERIFIED_DEVICE)"
+                } else {
+                    "no"
+                }
+            );
             return;
         }
 
@@ -382,7 +407,11 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 let count = list.len();
                 println!(
                     "{}",
-                    color::bold(&format!("{} frame{}", count, if count == 1 { "" } else { "s" }))
+                    color::bold(&format!(
+                        "{} frame{}",
+                        count,
+                        if count == 1 { "" } else { "s" }
+                    ))
                 );
                 for f in list {
                     let idx = f.get("index").and_then(|v| v.as_i64()).unwrap_or(0);

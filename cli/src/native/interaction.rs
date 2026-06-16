@@ -65,7 +65,11 @@ pub async fn click(
     // the element's click in its own (frame) session, always hitting the right
     // element in the right tab. Double/right clicks still need true pointer
     // semantics, and `coord` mode is an explicit opt-out.
-    if mode != "coord" && button == "left" && click_count == 1 && prefer_dom_dispatch(ref_map, selector_or_ref) {
+    if mode != "coord"
+        && button == "left"
+        && click_count == 1
+        && prefer_dom_dispatch(ref_map, selector_or_ref)
+    {
         return dom_click(
             client,
             session_id,
@@ -319,7 +323,14 @@ pub async fn dblclick(
     if std::env::var("AGENT_BROWSER_CLICK_MODE").as_deref() != Ok("coord")
         && prefer_dom_dispatch(ref_map, selector_or_ref)
     {
-        return dom_dblclick(client, session_id, ref_map, selector_or_ref, iframe_sessions).await;
+        return dom_dblclick(
+            client,
+            session_id,
+            ref_map,
+            selector_or_ref,
+            iframe_sessions,
+        )
+        .await;
     }
     click(
         client,
@@ -387,7 +398,14 @@ pub async fn hover(
     // Coordinate `mouseMoved` drifts to the foreground tab over the relay and
     // can't reach an OOPIF — DOM-dispatch the hover there (issues #31/#36).
     if prefer_dom_dispatch(ref_map, selector_or_ref) {
-        return dom_hover(client, session_id, ref_map, selector_or_ref, iframe_sessions).await;
+        return dom_hover(
+            client,
+            session_id,
+            ref_map,
+            selector_or_ref,
+            iframe_sessions,
+        )
+        .await;
     }
     let (x, y, _w, _h, effective_session_id) = resolve_element_center(
         client,

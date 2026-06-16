@@ -3244,8 +3244,14 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or("Missing 'text' parameter")?;
-        interaction::type_text_into_active_context(&mgr.client, &session_id, text, None, key_events)
-            .await?;
+        interaction::type_text_into_active_context(
+            &mgr.client,
+            &session_id,
+            text,
+            None,
+            key_events,
+        )
+        .await?;
         return Ok(json!({ "typed": text, "focused": true }));
     }
 
@@ -3836,12 +3842,9 @@ async fn handle_gettext(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
 async fn handle_frames(_cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
-    let frames = super::element::collect_all_frames_text(
-        &mgr.client,
-        &session_id,
-        &state.iframe_sessions,
-    )
-    .await?;
+    let frames =
+        super::element::collect_all_frames_text(&mgr.client, &session_id, &state.iframe_sessions)
+            .await?;
     let list: Vec<Value> = frames
         .iter()
         .enumerate()
@@ -4337,7 +4340,10 @@ async fn handle_cf_status(_cmd: &Value, state: &mut DaemonState) -> Result<Value
     let url = mgr.get_url().await.unwrap_or_default();
 
     // 1. Is the page a Cloudflare challenge right now?
-    let probe_raw = mgr.evaluate(CF_CHALLENGE_JS, None).await.unwrap_or(Value::Null);
+    let probe_raw = mgr
+        .evaluate(CF_CHALLENGE_JS, None)
+        .await
+        .unwrap_or(Value::Null);
     let probe = parse_json_string(probe_raw, "cf challenge probe").unwrap_or(Value::Null);
     let challenged = probe
         .get("challenged")
