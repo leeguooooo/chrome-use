@@ -1202,15 +1202,23 @@ impl BrowserManager {
     pub async fn evaluate(&self, script: &str, _args: Option<Value>) -> Result<Value, String> {
         let session_id = self.active_session_id()?.to_string();
 
+        // `replMode: true` matches the DevTools console: top-level `let`/`const`
+        // can be re-declared across successive `eval`s instead of throwing
+        // "Identifier 'x' has already been declared" (issue #38 — independent
+        // `eval` steps in a test suite collided in the page's shared lexical
+        // scope), and top-level `await` is allowed. Completion-value and
+        // main-world semantics are unchanged. Built as raw params so the other
+        // ~28 EvaluateParams literals don't all need a new field.
         let result: EvaluateResult = self
             .client
             .send_command_typed(
                 "Runtime.evaluate",
-                &EvaluateParams {
-                    expression: script.to_string(),
-                    return_by_value: Some(true),
-                    await_promise: Some(true),
-                },
+                &json!({
+                    "expression": script,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                    "replMode": true,
+                }),
                 Some(&session_id),
             )
             .await?;

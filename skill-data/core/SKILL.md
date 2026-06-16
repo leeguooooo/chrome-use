@@ -36,6 +36,17 @@ Refs (`@e1`, `@e2`, ...) are assigned fresh on every snapshot. They become
 submits, dynamic re-renders, dialog opens. Always re-snapshot before your
 next ref interaction.
 
+> **Hard rule: snapshot-first, never screenshot-to-locate.** For form fields and
+> buttons, ALWAYS `snapshot -i` and act on refs/selectors. Do **not** reach for
+> `screenshot` + coordinate clicks to find or hit an element — `snapshot -i` now
+> pierces **cross-origin iframes** (embedded Google Payments / Stripe / checkout /
+> KYC forms) and lists their elements by `@ref`, including input values. Use
+> coordinates only for canvas/WebGL, or when `snapshot` genuinely returns nothing
+> for your target. Screenshots are for *visual verification you report*, never the
+> agent's own input — and a full-page `screenshot` of a real retina browser is
+> often too large for an image reader anyway. (If you ever feel you *need* a
+> screenshot to read state or locate something, that's a bug — please file it.)
+
 > **Snapshot-first, always. Never default to `screenshot` + coordinate clicking
 > for form fields or buttons.** Run `snapshot -i` and act on `@refs`. Use
 > coordinates only for canvas/WebGL, or when `snapshot` genuinely returns nothing
