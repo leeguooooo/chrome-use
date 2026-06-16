@@ -3467,17 +3467,169 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         }
     }
 
-    interaction::scroll(
-        &mgr.client,
-        &session_id,
-        &state.ref_map,
-        selector,
-        dx,
-        dy,
-        &state.iframe_sessions,
-    )
-    .await?;
-    Ok(json!({ "scrolled": true }))
+    // An explicit `--selector` keeps the precise element-scroll path (scrollBy on
+    // the resolved node, same-origin only).
+    if let Some(sel) = selector {
+        interaction::scroll(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            Some(sel),
+            dx,
+            dy,
+            &state.iframe_sessions,
+        )
+        .await?;
+        return Ok(json!({ "scrolled": true, "via": "selector" }));
+    }
+
+    // No selector: dispatch a real (isTrusted) wheel at a viewport coordinate.
+    // This hits the compositor and scrolls whatever scroll container is under the
+    // pointer — including cross-origin iframes that `window.scrollBy` on the top
+    // document silently no-ops on (issue #36). The coordinate is, in priority:
+    //   --at x,y  → that exact pixel
+    //   --frame n → the center of frame n from `chrome-use frames`
+    //   default   → the viewport center
+    let (x, y, via) = if let Some(at) = cmd.get("at").and_then(|v| v.as_array()) {
+        let x = at.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let y = at.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        (x, y, "at")
+    } else if let Some(n) = cmd.get("frame").and_then(|v| v.as_u64()) {
+        let (x, y) = frame_center(mgr, &session_id, &state.iframe_sessions, n as usize).await?;
+        (x, y, "frame")
+    } else {
+        let (x, y) = viewport_center(mgr, &session_id).await?;
+        (x, y, "center")
+    };
+
+    dispatch_wheel(&mgr.client, &session_id, x, y, dx, dy).await?;
+    Ok(json!({ "scrolled": true, "via": via, "at": [x, y] }))
+}
+
+/// Viewport center in CSS pixels, used as the default wheel landing point for
+/// `scroll` (issue #36). Falls back to a sane 640×400 center if the page can't
+/// be evaluated (e.g. a restricted document).
+async fn viewport_center(mgr: &BrowserManager, session_id: &str) -> Result<(f64, f64), String> {
+    let dims = mgr
+        .client
+        .send_command_typed::<_, Value>(
+            "Runtime.evaluate",
+            &super::cdp::types::EvaluateParams {
+                expression: "[window.innerWidth, window.innerHeight]".to_string(),
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+        .ok();
+    let arr = dims
+        .as_ref()
+        .and_then(|v| v.get("result"))
+        .and_then(|v| v.get("value"))
+        .and_then(|v| v.as_array());
+    let w = arr
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_f64())
+        .filter(|w| *w > 0.0)
+        .unwrap_or(1280.0);
+    let h = arr
+        .and_then(|a| a.get(1))
+        .and_then(|v| v.as_f64())
+        .filter(|h| *h > 0.0)
+        .unwrap_or(800.0);
+    Ok((w / 2.0, h / 2.0))
+}
+
+/// Center of the `n`-th frame (as listed by `chrome-use frames`) in top-viewport
+/// CSS pixels, so `scroll --frame n` lands its wheel inside a cross-origin iframe
+/// without needing a selector into it (issue #36). Resolves the frame's owning
+/// `<iframe>` element box via `DOM.getFrameOwner` + `DOM.getBoxModel` — exact for
+/// a frame nested directly under the top document; for a deeper nesting the box is
+/// relative to the intermediate frame, so prefer `--at x,y` from a screenshot.
+async fn frame_center(
+    mgr: &BrowserManager,
+    session_id: &str,
+    iframe_sessions: &HashMap<String, String>,
+    n: usize,
+) -> Result<(f64, f64), String> {
+    let frames =
+        super::element::collect_all_frames_text(&mgr.client, session_id, iframe_sessions).await?;
+    let frame = frames.get(n).ok_or_else(|| {
+        format!(
+            "frame index {} out of range (run `chrome-use frames`: {} frame(s))",
+            n,
+            frames.len()
+        )
+    })?;
+    if n == 0 {
+        // Frame 0 is the top document — there's no owner element; scroll its center.
+        return viewport_center(mgr, session_id).await;
+    }
+    let owner = mgr
+        .client
+        .send_command_typed::<_, Value>(
+            "DOM.getFrameOwner",
+            &json!({ "frameId": frame.frame_id }),
+            Some(session_id),
+        )
+        .await
+        .map_err(|e| format!("can't locate frame {}'s owner element: {}", n, e))?;
+    let backend_node_id = owner
+        .get("backendNodeId")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| format!("frame {} has no owner <iframe> element", n))?;
+    let box_model = mgr
+        .client
+        .send_command_typed::<_, Value>(
+            "DOM.getBoxModel",
+            &json!({ "backendNodeId": backend_node_id }),
+            Some(session_id),
+        )
+        .await
+        .map_err(|e| format!("can't measure frame {}'s box: {}", n, e))?;
+    let content = box_model
+        .get("model")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| format!("frame {} box model has no content quad", n))?;
+    let coord = |i: usize| content.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    // content quad is [x1,y1, x2,y2, x3,y3, x4,y4]; opposite corners are 0 and 2.
+    let cx = (coord(0) + coord(4)) / 2.0;
+    let cy = (coord(1) + coord(5)) / 2.0;
+    Ok((cx, cy))
+}
+
+/// Dispatch a trusted mouse wheel at `(x, y)`, humanized like `handle_wheel`.
+async fn dispatch_wheel(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    delta_x: f64,
+    delta_y: f64,
+) -> Result<(), String> {
+    let level = humanize::active_level();
+    let seed = humanize::next_seed();
+    for (dx, dy, delay) in humanize::scroll_segments(delta_x, delta_y, level, seed) {
+        client
+            .send_command(
+                "Input.dispatchMouseEvent",
+                Some(json!({
+                    "type": "mouseWheel",
+                    "x": x,
+                    "y": y,
+                    "deltaX": dx,
+                    "deltaY": dy,
+                })),
+                Some(session_id),
+            )
+            .await?;
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+    }
+    Ok(())
 }
 
 async fn handle_select(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {

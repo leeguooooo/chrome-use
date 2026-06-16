@@ -287,6 +287,10 @@ chrome-use upload @e5 file1.pdf        # upload file(s) — works over the exten
                                           # a File there (chunked under native-messaging's 1 MiB cap).
                                           # Works on file <input>s and drop/paste composers (e.g. X).
 chrome-use scroll down 500             # scroll page (up/down/left/right)
+chrome-use scroll down 700 --at 640,400 # wheel at a pixel — scrolls a cross-origin
+                                          # iframe (Payments/Stripe/checkout/KYC) that
+                                          # plain page scroll can't reach
+chrome-use scroll down 700 --frame 2    # scroll frame 2 from `chrome-use frames`
 chrome-use scrollintoview @e1          # scroll element into view
 chrome-use drag @e1 @e2                # drag and drop
 ```

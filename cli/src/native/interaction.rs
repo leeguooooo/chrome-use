@@ -45,6 +45,31 @@ pub async fn click(
         .await;
     }
 
+    // Over the extension relay we drive the user's real, in-use Chrome, where a
+    // coordinate `Input.dispatchMouseEvent` is NOT reliably confined to our target
+    // tab — it can be delivered to whatever tab is in the foreground, and an OOPIF
+    // element's box can't be mapped to a top-viewport point at all. This twice
+    // opened an unrelated tab on the user's busy Chrome (issues #31/#36). So on the
+    // relay, never use coordinates for a normal left click: DOM-dispatch invokes
+    // the element's click in its own (frame) session, always hitting the right
+    // element in the right tab. Double/right clicks still need true pointer
+    // semantics, and `coord` mode is an explicit opt-out.
+    if mode != "coord" && button == "left" && click_count == 1 {
+        let in_iframe = parse_ref(selector_or_ref)
+            .and_then(|r| ref_map.get(&r).map(|e| e.frame_id.is_some()))
+            .unwrap_or(false);
+        if in_iframe || crate::connect::relay_url().is_some() {
+            return dom_click(
+                client,
+                session_id,
+                ref_map,
+                selector_or_ref,
+                iframe_sessions,
+            )
+            .await;
+        }
+    }
+
     let resolved = resolve_element_center(
         client,
         session_id,

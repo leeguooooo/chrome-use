@@ -1735,12 +1735,23 @@ Usage: chrome-use scroll [direction] [amount] [options]
 
 Scrolls the page or a specific element in the specified direction.
 
+Without --selector, scroll dispatches a real (isTrusted) mouse wheel at a
+viewport coordinate, so it scrolls whatever container is under the pointer —
+including cross-origin iframes (Google Payments, Stripe, embedded checkout/KYC)
+that plain page scroll can't reach.
+
 Arguments:
   direction            up, down, left, right (default: down)
   amount               Pixels to scroll (default: 300)
 
 Options:
-  -s, --selector <sel> CSS selector for a scrollable container
+  -s, --selector <sel> CSS selector for a scrollable container (same-origin)
+  --at <x,y>           Dispatch the wheel at this viewport pixel (read it from a
+                       screenshot) — precise way into a cross-origin iframe
+  --frame <n>          Scroll the n-th frame from `chrome-use frames` (wheel at
+                       that frame's center)
+
+Without --selector/--at/--frame the wheel lands at the viewport center.
 
 Global Options:
   --json               Output as JSON
@@ -1752,6 +1763,8 @@ Examples:
   chrome-use scroll up 200
   chrome-use scroll left 100
   chrome-use scroll down 500 --selector "div.scroll-container"
+  chrome-use scroll down 700 --at 640,400      # wheel at a pixel over an iframe
+  chrome-use scroll down 700 --frame 2         # scroll frame 2 from `frames`
 "##
         }
         "scrollintoview" | "scrollinto" => {

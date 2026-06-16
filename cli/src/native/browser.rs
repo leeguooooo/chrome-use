@@ -254,6 +254,21 @@ fn active_index_is_owned(
         .unwrap_or(false)
 }
 
+/// Whether a CDP error means the bound relay target is gone — the tab was
+/// closed, navigated across processes (renderer swap), or lost after an
+/// extension/service-worker restart, and the relay could not re-attach. The
+/// ab-connect relay surfaces these as `stale sessionId … its tab is gone`,
+/// `unknown sessionId …`, or `no attached tab …`. `navigate` keys its
+/// auto-reattach recovery off this (issue #35) so a dead session rebinds to a
+/// fresh tab instead of erroring on every command until the user runs `tab new`.
+fn is_stale_target_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("its tab is gone")
+        || lower.contains("stale sessionid")
+        || lower.contains("unknown sessionid")
+        || lower.contains("no attached tab")
+}
+
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     let lower = error.to_lowercase();
@@ -915,6 +930,24 @@ impl BrowserManager {
         )
     }
 
+    /// Drop the page bound to `session_id` from the tracked list — used when the
+    /// relay reports its tab is gone (issue #35) so the stale entry can't keep
+    /// resolving as active. Forgets ownership, unpins it if it was pinned, and
+    /// keeps `active_page_index` in range.
+    fn drop_page_by_session(&mut self, session_id: &str) {
+        let Some(pos) = self.pages.iter().position(|p| p.session_id == session_id) else {
+            return;
+        };
+        let target_id = self.pages[pos].target_id.clone();
+        self.pages.remove(pos);
+        self.created_targets.remove(&target_id);
+        if self.active_target_id.as_deref() == Some(target_id.as_str()) {
+            self.active_target_id = None;
+        }
+        self.active_page_index =
+            active_page_index_after_removal(self.active_page_index, pos, self.pages.len());
+    }
+
     /// Pin the current active page by target_id so later commands stick to it.
     /// Call after any explicit open / tab new / tab switch.
     fn pin_active_target(&mut self) {
@@ -944,10 +977,10 @@ impl BrowserManager {
         if self.agent_group().is_some() && !self.active_is_session_owned() {
             self.tab_new(None, None).await?;
         }
-        let session_id = self.active_session_id()?.to_string();
+        let mut session_id = self.active_session_id()?.to_string();
         let mut lifecycle_rx = self.client.subscribe();
 
-        let nav_result: PageNavigateResult = self
+        let nav_result: PageNavigateResult = match self
             .client
             .send_command_typed(
                 "Page.navigate",
@@ -957,7 +990,38 @@ impl BrowserManager {
                 },
                 Some(&session_id),
             )
-            .await?;
+            .await
+        {
+            Ok(r) => r,
+            // Auto-reattach when the bound tab is gone (issue #35). On the shared
+            // real browser the human can close/swap the agent's tab, and a
+            // cross-process nav can destroy the target without a re-attachable
+            // tabId — both leave the cached `cb-tab-<id>` session stale, so every
+            // command (including `open`) failed on it and only `tab new`
+            // recovered. The relay error literally says "re-open your target URL
+            // to re-attach"; fulfil that here: drop the dead page, open a fresh
+            // owned tab in this session's group, and navigate THAT. Gated on the
+            // relay (`agent_group`) and on the explicit navigation intent — read
+            // commands deliberately still fail loudly rather than silently
+            // recover onto a blank tab and return wrong data (issue #8.1).
+            Err(e) if self.agent_group().is_some() && is_stale_target_error(&e) => {
+                self.drop_page_by_session(&session_id);
+                self.tab_new(None, None).await?;
+                session_id = self.active_session_id()?.to_string();
+                lifecycle_rx = self.client.subscribe();
+                self.client
+                    .send_command_typed(
+                        "Page.navigate",
+                        &PageNavigateParams {
+                            url: url.to_string(),
+                            referrer: None,
+                        },
+                        Some(&session_id),
+                    )
+                    .await?
+            }
+            Err(e) => return Err(e),
+        };
 
         if let Some(ref error_text) = nav_result.error_text {
             return Err(format!("Navigation failed: {}", error_text));
@@ -2691,6 +2755,27 @@ mod tests {
     #[test]
     fn test_active_page_index_after_removal_resets_when_last_page_disappears() {
         assert_eq!(active_page_index_after_removal(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn stale_target_error_matches_relay_signatures() {
+        // The exact relay error `open` must recover from (issue #35), as wrapped
+        // by send_command's `CDP error (Page.navigate): …` prefix.
+        assert!(is_stale_target_error(
+            "CDP error (Page.navigate): stale sessionId cb-tab-1655244623 for Page.navigate: \
+             its tab is gone (closed, navigated across processes, or lost after an extension \
+             restart). Re-attach by re-opening your target URL before retrying."
+        ));
+        assert!(is_stale_target_error("unknown sessionId cb-tab-7 for Page.navigate"));
+        assert!(is_stale_target_error("no attached tab for Page.navigate"));
+    }
+
+    #[test]
+    fn stale_target_error_ignores_unrelated_failures() {
+        // A genuine navigation failure (bad URL, DNS, blocked) must NOT trigger
+        // the open-a-fresh-tab recovery — that would mask the real error.
+        assert!(!is_stale_target_error("Navigation failed: net::ERR_NAME_NOT_RESOLVED"));
+        assert!(!is_stale_target_error("CDP command timed out: Page.navigate"));
     }
 
     fn page(target_id: &str) -> PageInfo {

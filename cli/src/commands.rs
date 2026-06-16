@@ -729,9 +729,55 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         } else {
                             return Err(ParseError::MissingArguments {
                                 context: "scroll --selector".to_string(),
-                                usage: "scroll [direction] [amount] [--selector <sel>]",
+                                usage: "scroll [direction] [amount] [--selector <sel>] [--at <x,y>] [--frame <n>]",
                             });
                         }
+                    }
+                    "--at" => {
+                        // `--at x,y`: dispatch the wheel at this viewport pixel, so it
+                        // scrolls whatever element/iframe is under the pointer — including
+                        // cross-origin iframes that `window.scrollBy` can't reach (#36).
+                        let val = rest.get(i + 1).ok_or(ParseError::MissingArguments {
+                            context: "scroll --at".to_string(),
+                            usage: "scroll [direction] [amount] --at <x,y>",
+                        })?;
+                        let mut parts = val.split(',');
+                        match (
+                            parts.next().and_then(|s| s.trim().parse::<f64>().ok()),
+                            parts.next().and_then(|s| s.trim().parse::<f64>().ok()),
+                        ) {
+                            (Some(x), Some(y)) => {
+                                obj.insert("at".to_string(), json!([x, y]));
+                            }
+                            _ => {
+                                return Err(ParseError::InvalidValue {
+                                    message: format!("scroll --at: invalid coordinate `{}`", val),
+                                    usage: "scroll [direction] [amount] --at <x,y> (e.g. --at 640,400)",
+                                })
+                            }
+                        }
+                        i += 1;
+                    }
+                    "--frame" => {
+                        // `--frame n`: scroll the n-th frame from `chrome-use frames` by
+                        // dispatching the wheel at that frame's center — reaches content in
+                        // a cross-origin iframe without needing a selector into it (#36).
+                        let val = rest.get(i + 1).ok_or(ParseError::MissingArguments {
+                            context: "scroll --frame".to_string(),
+                            usage: "scroll [direction] [amount] --frame <n>",
+                        })?;
+                        match val.trim().parse::<usize>() {
+                            Ok(n) => {
+                                obj.insert("frame".to_string(), json!(n));
+                            }
+                            Err(_) => {
+                                return Err(ParseError::InvalidValue {
+                                    message: format!("scroll --frame: invalid index `{}`", val),
+                                    usage: "scroll [direction] [amount] --frame <n> (index from `chrome-use frames`)",
+                                })
+                            }
+                        }
+                        i += 1;
                     }
                     arg if arg.starts_with('-') => {}
                     _ => {
@@ -5866,6 +5912,35 @@ mod tests {
         assert_eq!(cmd["direction"], "left");
         assert_eq!(cmd["amount"], 100);
         assert_eq!(cmd["selector"], ".sidebar");
+    }
+
+    #[test]
+    fn test_scroll_at_coordinate() {
+        // `--at x,y` carries a [x, y] array for a wheel dispatched at that pixel
+        // (issue #36: cross-origin iframe scroll).
+        let cmd = parse_command(&args("scroll down 700 --at 640,400"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "scroll");
+        assert_eq!(cmd["direction"], "down");
+        assert_eq!(cmd["amount"], 700);
+        assert_eq!(cmd["at"], json!([640.0, 400.0]));
+    }
+
+    #[test]
+    fn test_scroll_at_rejects_garbage() {
+        assert!(parse_command(&args("scroll --at nope"), &default_flags()).is_err());
+        assert!(parse_command(&args("scroll --at 1"), &default_flags()).is_err());
+    }
+
+    #[test]
+    fn test_scroll_frame_index() {
+        let cmd = parse_command(&args("scroll down 700 --frame 2"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "scroll");
+        assert_eq!(cmd["frame"], 2);
+    }
+
+    #[test]
+    fn test_scroll_frame_rejects_non_integer() {
+        assert!(parse_command(&args("scroll --frame two"), &default_flags()).is_err());
     }
 
     #[test]
