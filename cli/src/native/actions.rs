@@ -3499,27 +3499,40 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         return Ok(json!({ "scrolled": true, "via": "selector" }));
     }
 
-    // No selector: dispatch a real (isTrusted) wheel at a viewport coordinate.
-    // This hits the compositor and scrolls whatever scroll container is under the
-    // pointer — including cross-origin iframes that `window.scrollBy` on the top
-    // document silently no-ops on (issue #36). The coordinate is, in priority:
-    //   --at x,y  → that exact pixel
-    //   --frame n → the center of frame n from `chrome-use frames`
-    //   default   → the viewport center
-    let (x, y, via) = if let Some(at) = cmd.get("at").and_then(|v| v.as_array()) {
-        let x = at.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let y = at.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
-        (x, y, "at")
-    } else if let Some(n) = cmd.get("frame").and_then(|v| v.as_u64()) {
-        let (x, y) = frame_center(mgr, &session_id, &state.iframe_sessions, n as usize).await?;
-        (x, y, "frame")
-    } else {
-        let (x, y) = viewport_center(mgr, &session_id).await?;
-        (x, y, "center")
-    };
+    // `--at x,y` / `--frame n`: dispatch a real (isTrusted) wheel at a viewport
+    // coordinate. This hits the compositor and scrolls whatever scroll container
+    // is under the pointer — including cross-origin iframes that `window.scrollBy`
+    // on the top document silently no-ops on (issue #36).
+    if cmd.get("at").is_some() || cmd.get("frame").is_some() {
+        let (x, y, via) = if let Some(at) = cmd.get("at").and_then(|v| v.as_array()) {
+            let x = at.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let y = at.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            (x, y, "at")
+        } else {
+            let n = cmd.get("frame").and_then(|v| v.as_u64()).unwrap_or(0);
+            let (x, y) = frame_center(mgr, &session_id, &state.iframe_sessions, n as usize).await?;
+            (x, y, "frame")
+        };
+        dispatch_wheel(&mgr.client, &session_id, x, y, dx, dy).await?;
+        return Ok(json!({ "scrolled": true, "via": via, "at": [x, y] }));
+    }
 
-    dispatch_wheel(&mgr.client, &session_id, x, y, dx, dy).await?;
-    Ok(json!({ "scrolled": true, "via": via, "at": [x, y] }))
+    // Default (no selector/at/frame): scroll the page with `window.scrollBy`. This
+    // is the reliable path for ordinary page scrolling; a coordinate wheel at the
+    // viewport centre is NOT a dependable substitute (it no-ops on some pages,
+    // e.g. headless), so the wheel stays opt-in via `--at`/`--frame` for the
+    // cross-origin-iframe case (issue #36).
+    interaction::scroll(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        None,
+        dx,
+        dy,
+        &state.iframe_sessions,
+    )
+    .await?;
+    Ok(json!({ "scrolled": true, "via": "page" }))
 }
 
 /// Viewport center in CSS pixels, used as the default wheel landing point for
