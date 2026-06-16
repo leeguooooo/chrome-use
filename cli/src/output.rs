@@ -130,6 +130,44 @@ fn format_stream_status_text(action: Option<&str>, data: &serde_json::Value) -> 
     }
 }
 
+fn confirmation_data(data: &serde_json::Value) -> Option<&serde_json::Value> {
+    if data
+        .get("confirmation_required")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Some(data);
+    }
+
+    data.get("result")
+        .and_then(|v| v.get("data"))
+        .and_then(confirmation_data)
+}
+
+fn print_confirmation_required(data: &serde_json::Value) {
+    let action = data.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let category = data.get("category").and_then(|v| v.as_str()).unwrap_or("");
+    let description = data
+        .get("description")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(action);
+    let cid = data
+        .get("confirmation_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(action);
+
+    println!("Confirmation required:");
+    if category.is_empty() {
+        println!("  {}", description);
+    } else {
+        println!("  {}: {}", category, description);
+    }
+    println!("  Run: agent-browser confirm {}", cid);
+    println!("  Or:  agent-browser deny {}", cid);
+}
+
 fn format_metric_ms(value: Option<f64>) -> String {
     value
         .map(|v| format!("{}ms", format_compact_number(v)))
@@ -1104,24 +1142,8 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         }
 
         // Confirmation required (for orchestrator use)
-        if data
-            .get("confirmation_required")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            let category = data.get("category").and_then(|v| v.as_str()).unwrap_or("");
-            let description = data
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let cid = data
-                .get("confirmation_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            println!("Confirmation required:");
-            println!("  {}: {}", category, description);
-            println!("  Run: agent-browser confirm {}", cid);
-            println!("  Or:  agent-browser deny {}", cid);
+        if let Some(pending) = confirmation_data(data) {
+            print_confirmation_required(pending);
             return;
         }
         if data
@@ -2248,9 +2270,18 @@ Save Options:
   --password-selector <s>  Custom CSS selector for password field
   --submit-selector <s>    Custom CSS selector for submit button
 
+Plugin Login Options:
+  --credential-provider <p> Resolve credentials from configured plugin <p>
+  --item <ref>              Provider-specific vault item reference
+  --url <url>               Login URL override
+  --username-selector <s>   Username selector override for this login
+  --password-selector <s>   Password selector override for this login
+  --submit-selector <s>     Submit selector override for this login
+
 Login behavior:
   auth login waits for form selectors to appear before filling/clicking.
   Selector wait timeout follows the default action timeout.
+  Plugin credentials are resolved just-in-time and are not saved locally.
 
 Global Options:
   --json                   Output as JSON
@@ -2260,6 +2291,7 @@ Examples:
   echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin
   agent-browser auth save github --url https://github.com/login --username user --password pass
   agent-browser auth login github
+  agent-browser auth login my-app --credential-provider vault --item "My App"
   agent-browser auth list
   agent-browser auth show github
   agent-browser auth delete github
@@ -2999,6 +3031,69 @@ Environment:
 "##
         }
 
+        "plugin" | "plugins" => {
+            r##"
+agent-browser plugin - Manage configured plugins
+
+Usage: agent-browser plugin [subcommand]
+
+Subcommands:
+  add <ref>                Add a plugin from npm or GitHub
+  list                     List configured plugins (default)
+  show <name>              Show one configured plugin
+  run <name> <type>        Run a command.run or custom plugin request
+
+Plugins are configured in agent-browser.json. A plugin entry declares a name,
+an executable command, optional args, and capabilities. Plugins run as
+external processes over the agent-browser.plugin.v1 stdio JSON protocol.
+
+Add sources:
+  <name>                   npm package, e.g. agent-browser-plugin-captcha
+  @<scope>/<name>          scoped npm package
+  <owner>/<repo>           GitHub repository
+
+Add options:
+  --name <name>            Override the configured plugin name
+  --capability <name>      Declare a capability if the plugin has no manifest
+  --global                 Write ~/.agent-browser/config.json instead of ./agent-browser.json
+  --no-manifest            Skip plugin.manifest discovery
+
+plugin add asks the package for plugin.manifest to discover name and
+capabilities. Use --capability when adding older plugins without a manifest.
+
+Capabilities:
+  credential.read          Resolve credentials for auth login
+  browser.provider         Launch/connect an external browser provider
+  launch.mutate            Append local launch args, extensions, or init scripts
+  command.run              Accept arbitrary namespaced plugin requests
+
+Core capabilities and protocol request types use dedicated command paths.
+Use auth login for credential.read, --provider for browser.provider, and
+a local launch for launch.mutate.
+
+Example config:
+  {{
+    "plugins": [
+      {{
+        "name": "vault",
+        "command": "agent-browser-plugin-vault",
+        "capabilities": ["credential.read"]
+      }}
+    ]
+  }}
+
+Examples:
+  agent-browser plugin add agent-browser-plugin-captcha
+  agent-browser plugin add org/agent-browser-plugin-cloud-browser
+  agent-browser plugin add @company/agent-browser-plugin-vault --name vault
+  agent-browser plugin list
+  agent-browser plugin show vault
+  agent-browser plugin run captcha captcha.solve --payload '{{"siteKey":"...","url":"https://example.com"}}'
+  agent-browser auth login my-app --credential-provider vault --item "My App"
+  agent-browser --provider cloud-browser open https://example.com
+"##
+        }
+
         _ => return false,
     };
     println!("{}", help.trim());
@@ -3139,9 +3234,19 @@ Batch:
 Auth Vault:
   auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
   auth login <name>          Login using saved credentials (waits for form fields)
+  auth login <name> --credential-provider <plugin> [--item <ref>] [--url <url>]
+                             Resolve credentials from a configured plugin
+  auth login <name> --username-selector <s> --password-selector <s>
+                             Override selectors for one login
   auth list                  List saved auth profiles
   auth show <name>           Show auth profile metadata
   auth delete <name>         Delete auth profile
+
+Plugins:
+  plugin add <ref>           Add a plugin from npm or GitHub
+  plugin [list]              List configured plugins
+  plugin show <name>         Show one configured plugin
+  plugin run <name> <type>   Run a command.run or custom plugin request
 
 Confirmation:
   confirm <id>               Approve a pending action
@@ -3206,7 +3311,7 @@ Options:
   --allow-file-access        Allow file:// URLs to access local files (Chromium only)
   --hide-scrollbars <bool>   Hide native scrollbars in headless Chromium screenshots (default: true)
                              Use --hide-scrollbars false to keep scrollbars visible
-  -p, --provider <name>      Browser provider: ios, browserbase, kernel, browseruse, browserless, agentcore
+  -p, --provider <name>      Browser provider: ios, browserbase, kernel, browseruse, browserless, agentcore, or plugin name
   --device <name>            iOS device name (e.g., "iPhone 15 Pro")
   --json                     JSON output
   --annotate                 Annotated screenshot with numbered labels and legend
@@ -3252,6 +3357,9 @@ Configuration:
   Example agent-browser.json:
     {{"headed": true, "hideScrollbars": false, "proxy": "http://localhost:8080"}}
 
+  Plugin example:
+    {{"plugins":[{{"name":"vault","command":"agent-browser-plugin-vault","capabilities":["credential.read"]}},{{"name":"stealth","command":"agent-browser-plugin-stealth","capabilities":["launch.mutate"]}}]}}
+
 Environment:
   AGENT_BROWSER_CONFIG           Path to config file (or use --config)
   AGENT_BROWSER_SESSION          Session name (default: "default")
@@ -3267,7 +3375,7 @@ Environment:
   AGENT_BROWSER_ANNOTATE         Annotated screenshot with numbered labels and legend
   AGENT_BROWSER_DEBUG            Debug output
   AGENT_BROWSER_IGNORE_HTTPS_ERRORS Ignore HTTPS certificate errors
-  AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore)
+  AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore, or plugin name)
   AGENT_BROWSER_AUTO_CONNECT     Auto-discover and connect to running Chrome
   AGENT_BROWSER_ALLOW_FILE_ACCESS Allow file:// URLs to access local files
   AGENT_BROWSER_HIDE_SCROLLBARS  Hide scrollbars in headless Chromium screenshots (default: true)
@@ -3289,6 +3397,7 @@ Environment:
   AGENT_BROWSER_CONFIRM_INTERACTIVE Enable interactive confirmation prompts
   AGENT_BROWSER_NO_AUTO_DIALOG   Disable automatic dismissal of alert/beforeunload dialogs
   AGENT_BROWSER_ENGINE           Browser engine: chrome (default), lightpanda
+  AGENT_BROWSER_PLUGINS          JSON plugin registry override
   HTTP_PROXY / HTTPS_PROXY       Standard proxy env vars (fallback if AGENT_BROWSER_PROXY not set)
   ALL_PROXY                      SOCKS proxy (fallback for proxy)
   NO_PROXY                       Bypass proxy for hosts (fallback for proxy-bypass)

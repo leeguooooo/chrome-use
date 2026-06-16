@@ -312,9 +312,18 @@ See [Debugging](/debugging) for console, error, dialog, trace, highlight, and De
 ```bash
 agent-browser auth save <name> [opts]    # Save auth profile
 agent-browser auth login <name>          # Login using saved credentials
+agent-browser auth login <name> --credential-provider <plugin> [--item <ref>] [--url <url>]
+                                          # Resolve credentials from plugin
+agent-browser auth login <name> --username-selector <s> --password-selector <s> [--submit-selector <s>]
+                                          # Override selectors for one login
 agent-browser auth list                  # List saved profiles (names and URLs only)
 agent-browser auth show <name>           # Show profile metadata (no passwords)
 agent-browser auth delete <name>         # Delete a saved profile
+agent-browser plugin add <ref>           # Add a plugin from npm or GitHub
+agent-browser plugin list                # List configured plugins
+agent-browser plugin show <name>         # Show one configured plugin
+agent-browser plugin run <name> <type> --payload <json>
+                                          # Run an arbitrary plugin request
 ```
 
 Save options:
@@ -329,9 +338,32 @@ Save options:
 
 `auth login` navigates with `load` and then waits for the username/password/submit selectors to appear before interacting. This improves reliability on SPA login pages where fields render after initial page load.
 
+Plugin login options:
+
+- `--credential-provider <plugin>`: resolve credentials from a configured plugin
+- `--item <ref>`: provider-specific vault item reference
+- `--url <url>`: login URL override
+- `--username-selector <sel>`: selector override for this login
+- `--password-selector <sel>`: selector override for this login
+- `--submit-selector <sel>`: selector override for this login
+
+Credential provider plugins run out-of-process over the `agent-browser.plugin.v1` stdio JSON protocol. They return credentials to the daemon for a single login and agent-browser does not save those credentials locally.
+
+Other plugin capabilities use the same protocol:
+
+- `browser.provider`: use the plugin with `--provider <name>` to return a CDP WebSocket URL
+- `launch.mutate`: append local launch args, extensions, or init scripts before Chrome starts
+- `command.run`: run arbitrary namespaced requests through `agent-browser plugin run`
+
+`plugin run` is for `command.run` and custom capabilities. Core capabilities and protocol request types use their dedicated command paths.
+
 ```bash
 echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin
 agent-browser auth login github
+agent-browser plugin add agent-browser-plugin-vault --name vault
+agent-browser auth login my-app --credential-provider vault --item "My App"
+agent-browser --provider cloud-browser open https://example.com
+agent-browser plugin run captcha captcha.solve --payload '{"siteKey":"...","url":"https://example.com"}'
 agent-browser auth list
 ```
 
@@ -495,7 +527,7 @@ See [Init Scripts & Extensions](/init-scripts) for launch-time scripts, runtime 
 --ignore-https-errors    # Ignore HTTPS certificate errors
 --allow-file-access      # Allow file:// URLs to access local files (Chromium only)
 --hide-scrollbars <bool> # Hide native scrollbars in headless Chromium screenshots
--p, --provider <name>    # Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore)
+-p, --provider <name>    # Browser provider or configured provider plugin
 --device <name>          # iOS device name (e.g., "iPhone 15 Pro")
 --json                   # JSON output (for scripts)
 --annotate               # Annotated screenshot with numbered element labels

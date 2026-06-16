@@ -296,6 +296,36 @@ Array.from(links).map(a => a.href);
 EOF
 ```
 
+## Authentication and Plugins
+
+```bash
+agent-browser auth save <name> --url <url> --username <user> --password-stdin
+agent-browser auth login <name>          # Login using saved credentials
+agent-browser auth login <name> --credential-provider <plugin> [--item <ref>] [--url <url>]
+agent-browser auth login <name> --username-selector <s> --password-selector <s> [--submit-selector <s>]
+agent-browser auth list                  # List saved auth profiles
+agent-browser auth show <name>           # Show profile metadata, no passwords
+agent-browser auth delete <name>         # Delete a saved profile
+agent-browser plugin add <ref>           # Add a plugin from npm or GitHub
+agent-browser plugin list                # List configured plugins
+agent-browser plugin show <name>         # Show one configured plugin
+agent-browser plugin run <name> <type> --payload <json>
+                                          # Run an arbitrary plugin request
+```
+
+Credential provider plugins run out-of-process over the
+`agent-browser.plugin.v1` stdio JSON protocol and must declare
+`credential.read`. Use `--confirm-actions plugin:<name>:credential.read`
+to require explicit approval before a plugin resolves secrets.
+
+Other capabilities use the same protocol:
+- `browser.provider`: `agent-browser --provider <name> open <url>`
+- `launch.mutate`: append local launch args, extensions, or init scripts
+- `command.run`: `agent-browser plugin run <name> <type> --payload <json>`
+
+`plugin run` is for `command.run` and custom capabilities. Core capabilities
+and protocol request types use their dedicated command paths.
+
 ## State Management
 
 ```bash
@@ -310,7 +340,7 @@ agent-browser --session <name> ...    # Isolated browser session
 agent-browser --json ...              # JSON output for parsing
 agent-browser --headed ...            # Show browser window (not headless)
 agent-browser --cdp <port> ...        # Connect via Chrome DevTools Protocol
-agent-browser -p <provider> ...       # Cloud browser provider (--provider)
+agent-browser -p <provider> ...       # Browser provider or configured provider plugin
 agent-browser --proxy <url> ...       # Use proxy server
 agent-browser --proxy-bypass <hosts>  # Hosts to bypass proxy
 agent-browser --headers <json> ...    # HTTP headers scoped to URL's origin
@@ -396,8 +426,9 @@ AGENT_BROWSER_EXTENSIONS="/ext1,/ext2"       # Comma-separated extension paths
 AGENT_BROWSER_INIT_SCRIPTS="/a.js,/b.js"     # Comma-separated init script paths
 AGENT_BROWSER_ENABLE="react-devtools"        # Comma-separated built-in init script features
 AGENT_BROWSER_HIDE_SCROLLBARS="false"        # Keep native scrollbars visible in headless Chromium screenshots
-AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
+AGENT_BROWSER_PROVIDER="browserbase"         # Browser provider or configured provider plugin
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
 AGENT_BROWSER_CONFIG="./agent-browser.json"  # Custom config file
 AGENT_BROWSER_CDP="9222"                     # Connect daemon to CDP port or WebSocket URL
+AGENT_BROWSER_PLUGINS='[{"name":"vault","command":"agent-browser-plugin-vault","capabilities":["credential.read"]},{"name":"stealth","command":"agent-browser-plugin-stealth","capabilities":["launch.mutate"]}]'
 ```

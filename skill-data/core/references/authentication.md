@@ -10,6 +10,7 @@ Login flows, session persistence, OAuth, 2FA, and authenticated browsing.
 - [Persistent Profiles](#persistent-profiles)
 - [Session Persistence](#session-persistence)
 - [Basic Login Flow](#basic-login-flow)
+- [Plugins](#plugins)
 - [Saving Authentication State](#saving-authentication-state)
 - [Restoring Authentication](#restoring-authentication)
 - [OAuth / SSO Flows](#oauth--sso-flows)
@@ -139,6 +140,80 @@ agent-browser wait --load networkidle
 # Verify login succeeded
 agent-browser get url  # Should be dashboard, not login
 ```
+
+## Plugins
+
+Use credential provider plugins when credentials live in external vault software. Plugins are configured in `agent-browser.json` and run as external executables over the `agent-browser.plugin.v1` stdio JSON protocol.
+
+Add a plugin with `plugin add`. A plain `name` or `@scope/name` resolves from npm; `owner/repo` resolves from GitHub:
+
+```bash
+agent-browser plugin add agent-browser-plugin-vault --name vault
+agent-browser plugin add @company/agent-browser-plugin-vault --name vault
+agent-browser plugin add org/agent-browser-plugin-cloud-browser
+```
+
+```json
+{
+  "plugins": [
+    {
+      "name": "vault",
+      "command": "agent-browser-plugin-vault",
+      "capabilities": ["credential.read"]
+    },
+    {
+      "name": "cloud-browser",
+      "command": "agent-browser-plugin-cloud-browser",
+      "capabilities": ["browser.provider"]
+    },
+    {
+      "name": "stealth",
+      "command": "agent-browser-plugin-stealth",
+      "capabilities": ["launch.mutate"]
+    },
+    {
+      "name": "captcha",
+      "command": "agent-browser-plugin-captcha",
+      "capabilities": ["command.run", "captcha.solve"]
+    }
+  ]
+}
+```
+
+Inspect configured plugins before use:
+
+```bash
+agent-browser plugin list
+agent-browser plugin show vault
+```
+
+Resolve credentials just-in-time for one login:
+
+```bash
+agent-browser auth login my-app --credential-provider vault --item "My App"
+```
+
+Use a plugin as a browser provider or a generic domain command:
+
+```bash
+agent-browser --provider cloud-browser open https://example.com
+agent-browser plugin run captcha captcha.solve --payload '{"siteKey":"...","url":"https://example.com"}'
+```
+
+`plugin run` is for `command.run` and custom capabilities. Core capabilities
+and protocol request types use their dedicated command paths.
+
+Use `--url`, `--username-selector`, `--password-selector`, and `--submit-selector` on `auth login` to override plugin-provided metadata for the current login only.
+
+Gate plugin secret access separately from normal login automation:
+
+```bash
+agent-browser --confirm-actions plugin:vault:credential.read auth login my-app --credential-provider vault --item "My App"
+agent-browser --confirm-actions plugin:cloud-browser:browser.provider --provider cloud-browser open https://example.com
+agent-browser --confirm-actions plugin:stealth:launch.mutate open https://example.com
+```
+
+Do not put vault tokens or passwords in plugin command args. Use the vault vendor's own login/session mechanism or environment outside agent-browser config.
 
 ## Saving Authentication State
 

@@ -192,6 +192,27 @@ agent-browser auth save my-app --url https://app.example.com/login \
 agent-browser auth login my-app    # fills + clicks, waits for form
 ```
 
+If credentials live in an external vault, use a configured credential provider
+plugin instead of putting secrets in the command line:
+
+```bash
+agent-browser plugin add agent-browser-plugin-vault --name vault
+agent-browser plugin list
+agent-browser auth login my-app --credential-provider vault --item "My App"
+agent-browser auth login my-app --credential-provider vault --item "My App" --url https://app.example.com/login --username-selector "#email" --password-selector "#password"
+```
+
+Plugins can also provide browser providers, launch mutators such as stealth
+setup, and arbitrary namespaced commands:
+
+```bash
+agent-browser --provider cloud-browser open https://example.com
+agent-browser plugin run captcha captcha.solve --payload '{"siteKey":"...","url":"https://example.com"}'
+```
+
+`plugin run` is for `command.run` and custom capabilities. Core capabilities
+and protocol request types use their dedicated command paths.
+
 ### Persist session across runs
 
 ```bash
@@ -470,7 +491,7 @@ That pulls in:
 
 - `references/commands.md` — every command, flag, alias
 - `references/snapshot-refs.md` — deep dive on the snapshot + ref model
-- `references/authentication.md` — auth vault, credential handling
+- `references/authentication.md` — auth vault, credential plugins, credential handling
 - `references/trust-boundaries.md` — safety rules for driving a real browser
 - `references/session-management.md` — persistence, multi-session workflows
 - `references/profiling.md` — Chrome DevTools tracing and profiling

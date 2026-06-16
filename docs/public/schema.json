@@ -164,6 +164,43 @@
     "headers": {
       "type": "string",
       "description": "Custom HTTP headers supplied as a JSON-formatted string."
+    },
+    "plugins": {
+      "type": "array",
+      "description": "External plugin registry. Project-level entries are appended after user-level entries, and duplicate names resolve to the later entry.",
+      "items": {
+        "type": "object",
+        "required": ["name", "command"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Plugin name used by commands such as auth login --credential-provider."
+          },
+          "command": {
+            "type": "string",
+            "description": "Executable path or command name for the plugin process."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional arguments passed to the plugin process. Do not store secrets here."
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Capabilities declared by the plugin. Built-in capability names include credential.read, browser.provider, launch.mutate, and command.run; plugins may also declare custom names such as captcha.solve."
+          },
+          "source": {
+            "type": "string",
+            "description": "Optional source recorded by agent-browser plugin add, such as npm:agent-browser-plugin-example or github:owner/repo."
+          }
+        },
+        "additionalProperties": true
+      }
     }
   },
   "additionalProperties": true

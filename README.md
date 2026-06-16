@@ -641,6 +641,7 @@ agent-browser --session-name secure open example.com
 agent-browser includes security features for safe AI agent deployments. All features are opt-in, and existing workflows are unaffected until you explicitly enable a feature:
 
 - **Authentication Vault**: Store credentials locally (always encrypted), reference by name. The LLM never sees passwords. `auth login` navigates with `load` and then waits for login form selectors to appear (SPA-friendly, timeout follows the default action timeout). A key is auto-generated at `~/.agent-browser/.encryption-key` if `AGENT_BROWSER_ENCRYPTION_KEY` is not set: `echo "pass" | agent-browser auth save github --url https://github.com/login --username user --password-stdin` then `agent-browser auth login github`
+- **Plugin System**: Extend agent-browser with external executable plugins. Plugins run out-of-process over the `agent-browser.plugin.v1` stdio JSON protocol and declare capabilities such as `credential.read`, `browser.provider`, `launch.mutate`, or `command.run`.
 - **Content Boundary Markers**: Wrap page output in delimiters so LLMs can distinguish tool output from untrusted content: `--content-boundaries`
 - **Domain Allowlist**: Restrict navigation to trusted domains (wildcards like `*.example.com` also match the bare domain): `--allowed-domains "example.com,*.example.com"`. Sub-resource requests (scripts, images, fetch) and WebSocket/EventSource connections to non-allowed domains are also blocked. Include any CDN domains your target pages depend on (e.g., `*.cdn.example.com`).
 - **Action Policy**: Gate destructive actions with a static policy file: `--action-policy ./policy.json`
@@ -655,8 +656,96 @@ agent-browser includes security features for safe AI agent deployments. All feat
 | `AGENT_BROWSER_ACTION_POLICY`       | Path to action policy JSON file          |
 | `AGENT_BROWSER_CONFIRM_ACTIONS`     | Action categories requiring confirmation |
 | `AGENT_BROWSER_CONFIRM_INTERACTIVE` | Enable interactive confirmation prompts  |
+| `AGENT_BROWSER_PLUGINS`             | JSON plugin registry override            |
 
 See [Security documentation](https://agent-browser.dev/security) for details.
+
+### Plugin System
+
+Plugins let third-party tools integrate without becoming built-in agent-browser dependencies. Add a plugin from npm or GitHub:
+
+```bash
+agent-browser plugin add agent-browser-plugin-captcha
+agent-browser plugin add @company/agent-browser-plugin-vault --name vault
+agent-browser plugin add org/agent-browser-plugin-cloud-browser
+```
+
+References are resolved by shape: `name` uses npm, `@scope/name` uses npm, and `owner/repo` uses GitHub. `plugin add` writes `./agent-browser.json` by default; use `--global` for `~/.agent-browser/config.json`.
+
+Plugin packages should support `plugin.manifest` so `plugin add` can discover their name and capabilities automatically. If a plugin does not support manifests, pass `--capability <name>` during add.
+
+Plugins can also be configured manually in `agent-browser.json`:
+
+```json
+{
+  "plugins": [
+    {
+      "name": "vault",
+      "command": "agent-browser-plugin-vault",
+      "capabilities": ["credential.read"]
+    },
+    {
+      "name": "cloud-browser",
+      "command": "agent-browser-plugin-cloud-browser",
+      "capabilities": ["browser.provider"]
+    },
+    {
+      "name": "stealth",
+      "command": "agent-browser-plugin-stealth",
+      "capabilities": ["launch.mutate"]
+    },
+    {
+      "name": "captcha",
+      "command": "agent-browser-plugin-captcha",
+      "capabilities": ["command.run", "captcha.solve"]
+    }
+  ]
+}
+```
+
+Inspect configured plugins:
+
+```bash
+agent-browser plugin list
+agent-browser plugin show vault
+```
+
+Use a credential provider plugin for one login:
+
+```bash
+agent-browser auth login my-app --credential-provider vault --item "My App"
+agent-browser auth login my-app --credential-provider vault --item "My App" --url https://app.example.com/login --username-selector "#email" --password-selector "#password" --submit-selector "button[type=submit]"
+```
+
+Use a browser provider plugin:
+
+```bash
+agent-browser --provider cloud-browser open https://example.com
+```
+
+Use a launch mutator plugin for stealth or local launch customization. The plugin can append Chrome args, extensions, and init scripts before the browser starts:
+
+```bash
+agent-browser open https://example.com
+```
+
+Use a generic plugin command for domain-specific tools such as CAPTCHA solvers:
+
+```bash
+agent-browser plugin run captcha captcha.solve --payload '{"siteKey":"...","url":"https://example.com"}'
+```
+
+The protocol request always includes `protocol`, `type`, `capability`, and `request`. A credential plugin receives `credential.resolve`, a browser provider receives `browser.launch`, a launch mutator receives `launch.mutate`, and generic commands receive the supplied request type. `plugin run` is for `command.run` and custom capabilities; core capabilities and protocol request types use their dedicated command paths. agent-browser keeps browser automation, redaction-sensitive output, and policy enforcement in core.
+
+Gate plugin access by capability action:
+
+```bash
+agent-browser --confirm-actions plugin:vault:credential.read auth login my-app --credential-provider vault --item "My App"
+agent-browser --confirm-actions plugin:cloud-browser:browser.provider --provider cloud-browser open https://example.com
+agent-browser --confirm-actions plugin:stealth:launch.mutate open https://example.com
+```
+
+Do not put vault tokens or passwords in plugin command args. Use the vault vendor's own login/session mechanism or environment outside agent-browser config.
 
 ## Snapshot Options
 
@@ -723,7 +812,7 @@ This is useful for multimodal AI models that can reason about visual layout, unl
 | `--ignore-https-errors` | Ignore HTTPS certificate errors (useful for self-signed certs) |
 | `--allow-file-access` | Allow file:// URLs to access local files (Chromium only) |
 | `--hide-scrollbars <bool>` | Hide native scrollbars in headless Chromium screenshots, enabled by default (or `AGENT_BROWSER_HIDE_SCROLLBARS` env) |
-| `-p, --provider <name>` | Cloud browser provider (or `AGENT_BROWSER_PROVIDER` env) |
+| `-p, --provider <name>` | Browser provider, including configured `browser.provider` plugins (or `AGENT_BROWSER_PROVIDER` env) |
 | `--device <name>` | iOS device name, e.g. "iPhone 15 Pro" (or `AGENT_BROWSER_IOS_DEVICE` env) |
 | `--json` | JSON output (for agents) |
 | `--annotate` | Annotated screenshot with numbered element labels (or `AGENT_BROWSER_ANNOTATE` env) |
@@ -820,7 +909,14 @@ Create an `agent-browser.json` file to set persistent defaults instead of repeat
   "profile": "./browser-data",
   "userAgent": "my-agent/1.0",
   "hideScrollbars": false,
-  "ignoreHttpsErrors": true
+  "ignoreHttpsErrors": true,
+  "plugins": [
+    {
+      "name": "vault",
+      "command": "agent-browser-plugin-vault",
+      "capabilities": ["credential.read"]
+    }
+  ]
 }
 ```
 
@@ -831,7 +927,7 @@ agent-browser --config ./ci-config.json open example.com
 AGENT_BROWSER_CONFIG=./ci-config.json agent-browser open example.com
 ```
 
-All options from the table above can be set in the config file using camelCase keys (e.g., `--executable-path` becomes `"executablePath"`, `--proxy-bypass` becomes `"proxyBypass"`). Unknown keys are ignored for forward compatibility.
+All options from the table above can be set in the config file using camelCase keys (e.g., `--executable-path` becomes `"executablePath"`, `--proxy-bypass` becomes `"proxyBypass"`). Plugins are configured with the `"plugins"` array shown above. Unknown keys are ignored for forward compatibility.
 
 A [JSON Schema](agent-browser.schema.json) is available for IDE autocomplete and validation. Add a `$schema` key to your config file to enable it:
 
