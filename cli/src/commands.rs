@@ -1078,6 +1078,14 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             Ok(json!({ "id": id, "action": "stealth_status" }))
         }
 
+        // `cf-status` — Cloudflare challenge/clearance preflight: is the page
+        // currently a CF challenge, and is there a still-valid cf_clearance (the
+        // HttpOnly persistence cookie)? Lets an agent SKIP re-solving when already
+        // cleared, and know when it must solve. Persistence optimization.
+        "cf-status" | "cf" | "cloudflare-status" | "clearance" => {
+            Ok(json!({ "id": id, "action": "cf_status" }))
+        }
+
         // === Close ===
         "close" | "quit" | "exit" => {
             // `close <tab>` closes only that tab (and the output says "Tab

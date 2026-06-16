@@ -1341,6 +1341,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "forward" => handle_forward(state).await,
         "reload" => handle_reload(state).await,
         "cookies_get" => handle_cookies_get(cmd, state).await,
+        "cf_status" => handle_cf_status(cmd, state).await,
         "cookies_set" => handle_cookies_set(cmd, state).await,
         "cookies_clear" => handle_cookies_clear(state).await,
         "storage_get" => handle_storage_get(cmd, state).await,
@@ -4120,6 +4121,108 @@ async fn handle_cookies_clear(state: &DaemonState) -> Result<Value, String> {
     let session_id = mgr.active_session_id()?.to_string();
     cookies::clear_cookies(&mgr.client, &session_id).await?;
     Ok(json!({ "cleared": true }))
+}
+
+// Detect whether the active page is *currently* a Cloudflare challenge
+// (the full-page "Just a moment…" / "正在进行安全验证" interstitial), so an agent
+// knows whether it must solve or can proceed. Runs in the top frame main world.
+const CF_CHALLENGE_JS: &str = r#"(function(){
+  var t = document.title || '';
+  var challenged =
+    /just a moment|attention required|checking (your|if)|verify you are human|正在进行安全验证|安全验证|请稍候|请完成|人机验证/i.test(t) ||
+    !!document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running, [id^="cf-chl"], script[src*="/cdn-cgi/challenge-platform/"]');
+  var turnstile = !!document.querySelector('.cf-turnstile, [data-sitekey]');
+  return JSON.stringify({ title: t, challenged: challenged, turnstile: turnstile, readyState: document.readyState });
+})()"#;
+
+/// Recommendation for a Cloudflare-gated page, from the current challenge state
+/// and whether a still-valid `cf_clearance` exists. Pure so it's unit-testable.
+/// - not challenged            → "proceed" (the page is cleared/loaded)
+/// - challenged, valid cookie  → "reissue" (clearance present but page still
+///   blocks → it's stale or the IP/UA no longer matches what it was issued for)
+/// - challenged, no cookie     → "solve"
+fn cf_recommendation(challenged: bool, clearance_valid: bool) -> &'static str {
+    if !challenged {
+        "proceed"
+    } else if clearance_valid {
+        "reissue"
+    } else {
+        "solve"
+    }
+}
+
+/// `cf_clearance` validity for a cookie's expiry (epoch seconds; <=0 = session
+/// cookie, treated as non-expiring). Returns (present, expired). Pure.
+fn clearance_state(expires: Option<f64>, now: f64) -> (bool, bool) {
+    match expires {
+        None => (false, false),
+        Some(e) if e <= 0.0 => (true, false), // session cookie: no expiry
+        Some(e) => (true, e < now),
+    }
+}
+
+async fn handle_cf_status(_cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let url = mgr.get_url().await.unwrap_or_default();
+
+    // 1. Is the page a Cloudflare challenge right now?
+    let probe_raw = mgr.evaluate(CF_CHALLENGE_JS, None).await.unwrap_or(Value::Null);
+    let probe = parse_json_string(probe_raw, "cf challenge probe").unwrap_or(Value::Null);
+    let challenged = probe
+        .get("challenged")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let turnstile = probe
+        .get("turnstile")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let title = probe
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // 2. Persistence artifacts: cf_clearance (HttpOnly → must read via CDP, not
+    //    document.cookie) + CF_VERIFIED_DEVICE. Scope to the current URL.
+    let urls = if url.is_empty() {
+        None
+    } else {
+        Some(vec![url.clone()])
+    };
+    let cookies = super::cookies::get_cookies(&mgr.client, &session_id, urls)
+        .await
+        .unwrap_or_default();
+    let clearance = cookies.iter().find(|c| c.name == "cf_clearance");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let (present, expired) = clearance_state(clearance.map(|c| c.expires), now);
+    let expires_in = clearance
+        .filter(|_| present && !expired)
+        .map(|c| (c.expires - now).max(0.0) as i64);
+    let device_verified = cookies
+        .iter()
+        .any(|c| c.name.starts_with("CF_VERIFIED_DEVICE"));
+
+    let clearance_valid = present && !expired;
+    let recommendation = cf_recommendation(challenged, clearance_valid);
+
+    Ok(json!({
+        "url": url,
+        "title": title,
+        "challenged": challenged,
+        "turnstile": turnstile,
+        "clearance": {
+            "present": present,
+            "expired": expired,
+            "expiresIn": expires_in,
+            "httpOnly": clearance.map(|c| c.http_only).unwrap_or(false),
+        },
+        "deviceVerified": device_verified,
+        "recommendation": recommendation,
+    }))
 }
 
 async fn handle_storage_get(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
@@ -9068,6 +9171,26 @@ mod tests {
     use super::*;
     use crate::test_utils::EnvGuard;
     use std::fs;
+
+    #[test]
+    fn test_cf_recommendation() {
+        assert_eq!(cf_recommendation(false, false), "proceed");
+        assert_eq!(cf_recommendation(false, true), "proceed");
+        assert_eq!(cf_recommendation(true, false), "solve");
+        assert_eq!(cf_recommendation(true, true), "reissue");
+    }
+
+    #[test]
+    fn test_clearance_state() {
+        // no cookie
+        assert_eq!(clearance_state(None, 1000.0), (false, false));
+        // session cookie (expires <= 0) → present, never expired
+        assert_eq!(clearance_state(Some(-1.0), 1000.0), (true, false));
+        // valid: expiry in the future
+        assert_eq!(clearance_state(Some(2000.0), 1000.0), (true, false));
+        // expired: expiry in the past
+        assert_eq!(clearance_state(Some(500.0), 1000.0), (true, true));
+    }
 
     #[test]
     fn test_url_glob_to_regex() {

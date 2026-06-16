@@ -127,6 +127,19 @@ cadence, and scroll/drag ease. Default `off`; a per-navigation detector
 auto-escalates pages guarded by Akamai/PerimeterX/DataDome to `human`. Leave it
 on auto; force `human` only when you already know the target scores behaviour.
 
+**Cloudflare clearance — solve once, reuse.** Passing a Cloudflare challenge
+mints a `cf_clearance` cookie (HttpOnly — invisible to `eval`/`document.cookie`;
+read it via `chrome-use cookies`). It's bound to your **IP + User-Agent**: reuse
+the same exit IP and UA and you skip the challenge until it expires. Driving the
+user's real Chrome (relay) persists it natively; for isolated sessions,
+`--session-name <name>` save/restores it. Before spending effort solving, run
+`chrome-use cf-status` (aliases `cf`, `clearance`): it reports whether the page
+is *currently* a Cloudflare challenge and whether a still-valid `cf_clearance`
+exists, with a recommendation — `proceed` (already cleared, don't re-solve),
+`solve` (challenge up, no clearance), or `reissue` (clearance present but page
+still blocks → IP/UA drifted, re-solve). Use it as a preflight to avoid
+re-solving what you already cleared.
+
 ## Two ways to drive a page — and when to drop to `eval`
 
 You have a **real Chrome with the user's DOM**. Two layers, mix them freely:

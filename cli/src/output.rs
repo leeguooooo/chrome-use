@@ -224,6 +224,40 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
 
+        // Cloudflare challenge/clearance preflight (`cf-status`). Checked early
+        // because its response carries `url`/`title`, which later generic
+        // renderers would otherwise swallow.
+        if action == Some("cf_status") {
+            let challenged = data.get("challenged").and_then(|v| v.as_bool()).unwrap_or(false);
+            let rec = data.get("recommendation").and_then(|v| v.as_str()).unwrap_or("?");
+            let cl = data.get("clearance");
+            let present = cl.and_then(|c| c.get("present")).and_then(|v| v.as_bool()).unwrap_or(false);
+            let expired = cl.and_then(|c| c.get("expired")).and_then(|v| v.as_bool()).unwrap_or(false);
+            let expires_in = cl.and_then(|c| c.get("expiresIn")).and_then(|v| v.as_i64());
+            let device = data.get("deviceVerified").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let (icon, headline) = match rec {
+                "proceed" => (color::success_indicator().to_string(), "cleared — no challenge, proceed"),
+                "solve" => (color::warning_indicator().to_string(), "Cloudflare challenge active, no valid clearance — solve it"),
+                "reissue" => (color::warning_indicator().to_string(), "challenge active but a clearance cookie exists — stale (IP/UA changed?), re-solve"),
+                _ => (color::cyan("•").to_string(), "unknown"),
+            };
+            println!("{} {}", icon, headline);
+            println!("  challenged:     {}", if challenged { "yes" } else { "no" });
+            let cl_desc = if !present {
+                "absent".to_string()
+            } else if expired {
+                "present but EXPIRED".to_string()
+            } else if let Some(s) = expires_in {
+                format!("valid, expires in {}m {}s", s / 60, s % 60)
+            } else {
+                "present (session)".to_string()
+            };
+            println!("  cf_clearance:   {}", cl_desc);
+            println!("  device trusted: {}", if device { "yes (CF_VERIFIED_DEVICE)" } else { "no" });
+            return;
+        }
+
         // Dialog status response
         if action == Some("dialog") {
             if let Some(has_dialog) = data.get("hasDialog").and_then(|v| v.as_bool()) {
@@ -3194,6 +3228,10 @@ Get Info:  chrome-use get <what> [selector]
 
 Check State:  chrome-use is <what> <selector>
   visible, enabled, checked
+
+Anti-bot:  chrome-use stealth | cf-status
+  stealth         stealth self-check (webdriver/UA/plugins + overrides)
+  cf-status       Cloudflare challenge + cf_clearance preflight (skip re-solving)
 
 Find Elements:  chrome-use find <locator> <value> <action> [text]
   role, text, label, placeholder, alt, title, testid, first, last, nth
