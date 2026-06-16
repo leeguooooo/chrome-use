@@ -1369,6 +1369,20 @@ fn main() {
         && flags.provider.is_none()
         && (flags.force_launch || !flags.auto_connect)
     {
+        // Launching a debug-port Chrome pops Chrome's "Allow remote debugging?"
+        // consent modal (Chrome 136+). When the ab-connect relay is already up,
+        // this is almost always unintended — the relay drives the user's real
+        // Chrome with NO modal. Warn so the modal is self-explained and the
+        // caller (often a stray --launch / --no-auto-connect) is fixable (#32).
+        if !flags.json && connect::relay_url().is_some() {
+            eprintln!(
+                "{} launching a new Chrome with a debug port — this pops Chrome's \
+                 \"Allow remote debugging?\" modal.\n  The ab-connect relay is up; \
+                 drop --launch/--new (and don't pass --no-auto-connect) to drive your \
+                 real Chrome with no modal.",
+                color::warning_indicator()
+            );
+        }
         let mut launch_cmd = json!({
             "id": gen_id(),
             "action": "launch",
