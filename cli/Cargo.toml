@@ -1,6 +1,6 @@
 [package]
 name = "chrome-use"
-version = "1.5.13"
+version = "1.5.14"
 edition = "2021"
 description = "Fast browser automation CLI for AI agents"
 license = "Apache-2.0"
