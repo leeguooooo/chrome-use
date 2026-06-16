@@ -330,6 +330,13 @@ impl RoleNameTracker {
     }
 }
 
+/// Max iframe nesting depth `take_snapshot` expands. Embedded payment/checkout
+/// widgets nest a few frames deep (e.g. AdSense → payments.google.com → an inner
+/// form frame); expanding past the first level is what gives those inner refs a
+/// `frame_id` so clicks resolve into the right frame (issue #36). Capped to keep
+/// a pathological frame tree from blowing up the snapshot.
+const MAX_IFRAME_DEPTH: usize = 3;
+
 pub async fn take_snapshot(
     client: &CdpClient,
     session_id: &str,
@@ -337,6 +344,19 @@ pub async fn take_snapshot(
     ref_map: &mut RefMap,
     frame_id: Option<&str>,
     iframe_sessions: &HashMap<String, String>,
+) -> Result<String, String> {
+    take_snapshot_at_depth(client, session_id, options, ref_map, frame_id, iframe_sessions, 0).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn take_snapshot_at_depth(
+    client: &CdpClient,
+    session_id: &str,
+    options: &SnapshotOptions,
+    ref_map: &mut RefMap,
+    frame_id: Option<&str>,
+    iframe_sessions: &HashMap<String, String>,
+    depth: usize,
 ) -> Result<String, String> {
     client
         .send_command_no_params("DOM.enable", Some(session_id))
@@ -606,10 +626,11 @@ pub async fn take_snapshot(
     }
 
     // Recurse into child iframes: for each Iframe node with a backend_node_id,
-    // resolve the child frame ID and take a snapshot of its content.
-    // We only recurse from the main frame (frame_id == None) to avoid
-    // unbounded depth; nested iframes within iframes are not expanded.
-    if frame_id.is_none() {
+    // resolve the child frame ID and snapshot its content. Recurse to
+    // MAX_IFRAME_DEPTH (not just the main frame) so refs inside nested
+    // payment/checkout widgets get a `frame_id` and clicks resolve into the right
+    // frame (issue #36); the cap bounds a pathological frame tree.
+    if depth < MAX_IFRAME_DEPTH {
         let mut iframe_snapshots: Vec<(String, String)> = Vec::new(); // (ref_id, child_snapshot)
         for node in tree_nodes.iter() {
             if node.role != "Iframe" || !node.has_ref {
@@ -622,13 +643,14 @@ pub async fn take_snapshot(
             if let Ok(child_fid) = resolve_iframe_frame_id(client, session_id, bid).await {
                 // Snapshot the child frame; errors are silently ignored
                 // (e.g. cross-origin iframes)
-                if let Ok(child_text) = Box::pin(take_snapshot(
+                if let Ok(child_text) = Box::pin(take_snapshot_at_depth(
                     client,
                     session_id,
                     options,
                     ref_map,
                     Some(&child_fid),
                     iframe_sessions,
+                    depth + 1,
                 ))
                 .await
                 {

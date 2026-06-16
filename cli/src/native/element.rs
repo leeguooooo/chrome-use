@@ -100,6 +100,15 @@ impl RefMap {
         self.map.get(ref_id)
     }
 
+    /// Whether `selector_or_ref` is a `@ref` whose snapshot entry lives inside an
+    /// iframe (has a `frame_id`). Pointer interactions use this to choose
+    /// DOM-dispatch over coordinates for OOPIF elements (issue #36).
+    pub fn ref_is_in_iframe(&self, selector_or_ref: &str) -> bool {
+        parse_ref(selector_or_ref)
+            .and_then(|r| self.map.get(&r).map(|e| e.frame_id.is_some()))
+            .unwrap_or(false)
+    }
+
     pub fn entries_sorted(&self) -> Vec<(String, RefEntry)> {
         let mut entries = self
             .map

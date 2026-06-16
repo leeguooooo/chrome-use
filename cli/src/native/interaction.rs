@@ -7,6 +7,17 @@ use super::cdp::types::*;
 use super::element::{parse_ref, resolve_element_center, resolve_element_object_id, RefMap};
 use super::humanize;
 
+/// Whether a pointer interaction should be DOM-dispatched (invoke the event on
+/// the element in its own session) rather than dispatched at a viewport
+/// coordinate via `Input.dispatchMouseEvent`. True when the target is inside an
+/// iframe (an OOPIF element's box can't be mapped to a top-viewport point) or we
+/// drive over the extension relay (a coordinate Input event isn't confined to the
+/// target tab on a busy real Chrome — it drifts onto the foreground tab; issues
+/// #31/#36). DOM-dispatch always hits the right element in the right tab.
+fn prefer_dom_dispatch(ref_map: &RefMap, selector_or_ref: &str) -> bool {
+    ref_map.ref_is_in_iframe(selector_or_ref) || crate::connect::relay_url().is_some()
+}
+
 pub async fn click(
     client: &CdpClient,
     session_id: &str,
@@ -54,20 +65,15 @@ pub async fn click(
     // the element's click in its own (frame) session, always hitting the right
     // element in the right tab. Double/right clicks still need true pointer
     // semantics, and `coord` mode is an explicit opt-out.
-    if mode != "coord" && button == "left" && click_count == 1 {
-        let in_iframe = parse_ref(selector_or_ref)
-            .and_then(|r| ref_map.get(&r).map(|e| e.frame_id.is_some()))
-            .unwrap_or(false);
-        if in_iframe || crate::connect::relay_url().is_some() {
-            return dom_click(
-                client,
-                session_id,
-                ref_map,
-                selector_or_ref,
-                iframe_sessions,
-            )
-            .await;
-        }
+    if mode != "coord" && button == "left" && click_count == 1 && prefer_dom_dispatch(ref_map, selector_or_ref) {
+        return dom_click(
+            client,
+            session_id,
+            ref_map,
+            selector_or_ref,
+            iframe_sessions,
+        )
+        .await;
     }
 
     let resolved = resolve_element_center(
@@ -260,6 +266,47 @@ async fn dom_click(
     Ok(())
 }
 
+/// DOM-dispatch a double-click on the element in its own session (no coordinates)
+/// — the relay/iframe-safe counterpart to a coordinate dblclick. Fires the full
+/// click,click,dblclick sequence so handlers bound to any of them respond.
+async fn dom_dblclick(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<(), String> {
+    let (object_id, effective_session_id) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await?;
+    client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: r#"function() {
+                    const opts = { bubbles: true, cancelable: true, view: window };
+                    this.dispatchEvent(new MouseEvent('click', opts));
+                    this.dispatchEvent(new MouseEvent('click', { ...opts, detail: 2 }));
+                    this.dispatchEvent(new MouseEvent('dblclick', opts));
+                }"#
+                .to_string(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+    wait_for_paint_settled(client, &effective_session_id).await;
+    Ok(())
+}
+
 pub async fn dblclick(
     client: &CdpClient,
     session_id: &str,
@@ -267,6 +314,13 @@ pub async fn dblclick(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(), String> {
+    // Same relay/iframe drift hazard as a single click — DOM-dispatch the
+    // double-click there instead of a coordinate one (issues #31/#36).
+    if std::env::var("AGENT_BROWSER_CLICK_MODE").as_deref() != Ok("coord")
+        && prefer_dom_dispatch(ref_map, selector_or_ref)
+    {
+        return dom_dblclick(client, session_id, ref_map, selector_or_ref, iframe_sessions).await;
+    }
     click(
         client,
         session_id,
@@ -279,6 +333,50 @@ pub async fn dblclick(
     .await
 }
 
+/// DOM-dispatch a hover (pointer/mouse enter+move) on the element in its own
+/// session — reaches OOPIF elements and never drifts to the foreground tab over
+/// the relay, unlike a coordinate `mouseMoved` (issues #31/#36).
+async fn dom_hover(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<(), String> {
+    let (object_id, effective_session_id) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await?;
+    client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: r#"function() {
+                    const r = this.getBoundingClientRect();
+                    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                    const base = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+                    this.dispatchEvent(new PointerEvent('pointerover', base));
+                    this.dispatchEvent(new PointerEvent('pointerenter', { ...base, bubbles: false }));
+                    this.dispatchEvent(new MouseEvent('mouseover', base));
+                    this.dispatchEvent(new MouseEvent('mouseenter', { ...base, bubbles: false }));
+                    this.dispatchEvent(new MouseEvent('mousemove', base));
+                }"#
+                .to_string(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+    Ok(())
+}
+
 pub async fn hover(
     client: &CdpClient,
     session_id: &str,
@@ -286,6 +384,11 @@ pub async fn hover(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(), String> {
+    // Coordinate `mouseMoved` drifts to the foreground tab over the relay and
+    // can't reach an OOPIF — DOM-dispatch the hover there (issues #31/#36).
+    if prefer_dom_dispatch(ref_map, selector_or_ref) {
+        return dom_hover(client, session_id, ref_map, selector_or_ref, iframe_sessions).await;
+    }
     let (x, y, _w, _h, effective_session_id) = resolve_element_center(
         client,
         session_id,
@@ -311,6 +414,63 @@ pub async fn hover(
             Some(&effective_session_id),
         )
         .await?;
+    Ok(())
+}
+
+/// DOM-dispatch an HTML5 drag-and-drop from `source` to `target` in their shared
+/// session — the relay/iframe-safe counterpart to the coordinate drag, which
+/// drifts to the foreground tab over the relay and can't reach an OOPIF (issues
+/// #31/#36). Covers HTML5 DnD (sortable lists, file/card boards); pointer-driven
+/// drag (canvas, sliders) still needs the coordinate path. Errors if source and
+/// target live in different frames — a synthetic cross-frame DnD isn't reliable.
+pub async fn dom_drag(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    source: &str,
+    target: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<(), String> {
+    let (src_obj, src_session) =
+        resolve_element_object_id(client, session_id, ref_map, source, iframe_sessions).await?;
+    let (tgt_obj, tgt_session) =
+        resolve_element_object_id(client, session_id, ref_map, target, iframe_sessions).await?;
+    if src_session != tgt_session {
+        return Err(
+            "drag source and target are in different frames; cross-frame drag-and-drop over the \
+             relay isn't supported — drag within a single frame, or use a launched browser with \
+             AGENT_BROWSER_CLICK_MODE=coord"
+                .to_string(),
+        );
+    }
+    client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: r#"function(target) {
+                    const dt = new DataTransfer();
+                    const ev = (type, el) => el.dispatchEvent(
+                        new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+                    ev('dragstart', this);
+                    ev('drag', this);
+                    ev('dragenter', target);
+                    ev('dragover', target);
+                    ev('drop', target);
+                    ev('dragend', this);
+                }"#
+                .to_string(),
+                object_id: Some(src_obj),
+                arguments: Some(vec![CallArgument {
+                    value: None,
+                    object_id: Some(tgt_obj),
+                }]),
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&src_session),
+        )
+        .await?;
+    wait_for_paint_settled(client, &src_session).await;
     Ok(())
 }
 
@@ -397,6 +557,7 @@ pub async fn type_text(
     clear: bool,
     delay_ms: Option<u64>,
     iframe_sessions: &HashMap<String, String>,
+    key_events: bool,
 ) -> Result<(), String> {
     let (object_id, effective_session_id) = resolve_element_object_id(
         client,
@@ -443,7 +604,7 @@ pub async fn type_text(
             .await?;
     }
 
-    type_text_into_active_context(client, session_id, text, delay_ms).await
+    type_text_into_active_context(client, session_id, text, delay_ms, key_events).await
 }
 
 pub async fn type_text_into_active_context(
@@ -451,6 +612,7 @@ pub async fn type_text_into_active_context(
     session_id: &str,
     text: &str,
     delay_ms: Option<u64>,
+    key_events: bool,
 ) -> Result<(), String> {
     // Per-character timing: an explicit `delay_ms` wins (caller asked for a
     // fixed cadence); otherwise fall back to humanize — variable, human-like
@@ -484,6 +646,46 @@ pub async fn type_text_into_active_context(
                 )
                 .await?;
 
+            client
+                .send_command_typed::<_, Value>(
+                    "Input.dispatchKeyEvent",
+                    &DispatchKeyEventParams {
+                        event_type: "keyUp".to_string(),
+                        key: Some(key),
+                        code: Some(code),
+                        text: None,
+                        unmodified_text: None,
+                        windows_virtual_key_code: Some(key_code),
+                        native_virtual_key_code: Some(key_code),
+                        modifiers: None,
+                    },
+                    Some(session_id),
+                )
+                .await?;
+        } else if key_events {
+            // Real keystrokes (keyDown+keyUp carrying `text`) for autocomplete /
+            // combobox widgets that only react to key events and ignore the
+            // `input` that `Input.insertText` fires — e.g. Google's address
+            // postal-code → city/prefecture lookup (issue #36 / #4). The keyDown's
+            // `text` still inserts the character, so the field also fills.
+            let (key, code, key_code) = char_to_key_info(ch);
+            let s = ch.to_string();
+            client
+                .send_command_typed::<_, Value>(
+                    "Input.dispatchKeyEvent",
+                    &DispatchKeyEventParams {
+                        event_type: "keyDown".to_string(),
+                        key: Some(key.clone()),
+                        code: Some(code.clone()),
+                        text: Some(s.clone()),
+                        unmodified_text: Some(s),
+                        windows_virtual_key_code: Some(key_code),
+                        native_virtual_key_code: Some(key_code),
+                        modifiers: None,
+                    },
+                    Some(session_id),
+                )
+                .await?;
             client
                 .send_command_typed::<_, Value>(
                     "Input.dispatchKeyEvent",

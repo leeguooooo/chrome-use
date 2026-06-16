@@ -36,6 +36,18 @@ Refs (`@e1`, `@e2`, ...) are assigned fresh on every snapshot. They become
 submits, dynamic re-renders, dialog opens. Always re-snapshot before your
 next ref interaction.
 
+> **Snapshot-first, always. Never default to `screenshot` + coordinate clicking
+> for form fields or buttons.** Run `snapshot -i` and act on `@refs`. Use
+> coordinates only for canvas/WebGL, or when `snapshot` genuinely returns nothing
+> for your target. This holds **even inside cross-origin embedded iframes** —
+> since v1.5.12 `snapshot -i` pierces out-of-process iframes (Google Payments,
+> Stripe, embedded checkout/KYC) and lists their elements with refs, so
+> `click @e` / `type @e` / `fill @e` work directly. A screenshot is for a genuine
+> *visual* check you report to the user — not your own input. (Full-page
+> screenshots of a real retina Chrome are often too large for the image reader
+> anyway.) Driving off pixels on the relay also risks a coordinate event drifting
+> onto the user's foreground tab — refs never do. See issue #37.
+
 ## Before you automate: pick the cheapest tool
 
 Driving a browser is the heavy option. chrome-use earns its keep when you
@@ -264,6 +276,10 @@ chrome-use hover @e1                   # hover
 chrome-use focus @e1                   # focus (useful before keyboard input)
 chrome-use fill @e2 "hello"            # clear then type
 chrome-use type @e2 " world"           # type without clearing
+chrome-use type @e5 "201-0001" --key-events  # real keystrokes (not insertText) —
+                                          # use for autocomplete/combobox fields that
+                                          # only react to key events (e.g. a postal box
+                                          # that auto-fills city/prefecture, Google Places)
 chrome-use press Enter                 # press a key at current focus (down+up)
 chrome-use press Control+a             # key combination
 chrome-use keydown d                   # HOLD a key down (no auto-release)
@@ -294,6 +310,18 @@ chrome-use scroll down 700 --frame 2    # scroll frame 2 from `chrome-use frames
 chrome-use scrollintoview @e1          # scroll element into view
 chrome-use drag @e1 @e2                # drag and drop
 ```
+
+**Cross-origin iframes (embedded payment / checkout / KYC widgets — Google
+Payments, Stripe, etc.) — drive them by ref, never by screenshot.** `snapshot -i`
+pierces these out-of-process iframes and lists their elements by `@ref`
+(including input values); `get text --all-frames` reads their text. Then just act
+on the refs: `click @e`, `type @e`, `hover @e`, `dblclick @e`, `drag @a @b` all
+work into the iframe. Over the extension relay these are dispatched through the
+DOM (in the element's own frame), so they hit the right element in the right tab
+— a coordinate click/scroll there can drift onto whatever tab is in the
+foreground, so prefer refs. For below-the-fold content in such a frame, scroll it
+with `scroll down N --at x,y` (a pixel over the frame) or `--frame n`. For a
+postal/autocomplete box inside the frame, `type @e "…" --key-events`.
 
 ### When refs don't work or you don't want to snapshot
 

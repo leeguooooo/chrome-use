@@ -3225,6 +3225,14 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
+    // `--key-events`: dispatch real per-character keyDown/keyUp instead of
+    // Input.insertText, so autocomplete/combobox widgets that only react to key
+    // events fire (e.g. Google's address postal-code lookup) (issue #4/#36).
+    let key_events = cmd
+        .get("keyEvents")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     // `type --focused <text>`: type into the currently-focused element without a
     // selector (custom widgets that move focus to a hidden input on open).
     if cmd
@@ -3236,7 +3244,8 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or("Missing 'text' parameter")?;
-        interaction::type_text_into_active_context(&mgr.client, &session_id, text, None).await?;
+        interaction::type_text_into_active_context(&mgr.client, &session_id, text, None, key_events)
+            .await?;
         return Ok(json!({ "typed": text, "focused": true }));
     }
 
@@ -3260,6 +3269,7 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         clear,
         delay,
         &state.iframe_sessions,
+        key_events,
     )
     .await?;
     Ok(json!({ "typed": text }))
@@ -4722,8 +4732,18 @@ async fn handle_keyboard(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
                 .get("text")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'text' parameter")?;
-            interaction::type_text_into_active_context(&mgr.client, &session_id, text, None)
-                .await?;
+            let key_events = cmd
+                .get("keyEvents")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            interaction::type_text_into_active_context(
+                &mgr.client,
+                &session_id,
+                text,
+                None,
+                key_events,
+            )
+            .await?;
             return Ok(json!({ "typed": text }));
         }
         Some("insertText") => {
@@ -7251,6 +7271,28 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .get("target")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'target' parameter")?;
+
+    // Over the relay (or into an iframe) a coordinate drag drifts to the
+    // foreground tab and can't reach an OOPIF — DOM-dispatch an HTML5 drag in the
+    // element's own session instead (issues #31/#36). `coord` mode forces the
+    // coordinate path for pointer-driven drags (canvas/sliders) on a launched
+    // browser.
+    if std::env::var("AGENT_BROWSER_CLICK_MODE").as_deref() != Ok("coord")
+        && (crate::connect::relay_url().is_some()
+            || state.ref_map.ref_is_in_iframe(source)
+            || state.ref_map.ref_is_in_iframe(target))
+    {
+        super::interaction::dom_drag(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            source,
+            target,
+            &state.iframe_sessions,
+        )
+        .await?;
+        return Ok(json!({ "dragged": { "source": source, "target": target }, "via": "dom" }));
+    }
 
     let (sx, sy, _, _, source_session_id) = super::element::resolve_element_center(
         &mgr.client,

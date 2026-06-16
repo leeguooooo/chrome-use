@@ -525,20 +525,29 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             Ok(json!({ "id": id, "action": "fill", "selector": sel, "value": rest[1..].join(" ") }))
         }
         "type" => {
+            // `--key-events` (alias `--keys`): send real per-character keystrokes
+            // instead of Input.insertText, so autocomplete/combobox widgets that
+            // only react to key events fire (e.g. Google address postal lookup).
+            let key_events = rest.iter().any(|a| *a == "--key-events" || *a == "--keys");
+            let rest: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|a| *a != "--key-events" && *a != "--keys")
+                .collect();
             // `type --focused <text>` types into whatever element currently has
             // focus (no selector) — for custom widgets that move focus to a hidden
             // input after you open them.
             if rest.first() == Some(&"--focused") {
                 return Ok(json!({
                     "id": id, "action": "type", "focused": true,
-                    "text": rest[1..].join(" "),
+                    "text": rest[1..].join(" "), "keyEvents": key_events,
                 }));
             }
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "type".to_string(),
-                usage: "type <selector> <text>   (or: type --focused <text>)",
+                usage: "type <selector> <text>   (or: type --focused <text>) [--key-events]",
             })?;
-            Ok(json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" ") }))
+            Ok(json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" "), "keyEvents": key_events }))
         }
         "pick" => {
             // pick <selector|@ref> --option "<text>"  — atomic combobox select:
@@ -4112,6 +4121,24 @@ mod tests {
         assert_eq!(cmd["action"], "type");
         assert_eq!(cmd["selector"], "#input");
         assert_eq!(cmd["text"], "some text");
+        assert_eq!(cmd["keyEvents"], false);
+    }
+
+    #[test]
+    fn test_type_key_events() {
+        // --key-events sends real keystrokes (for autocomplete/combobox) and must
+        // not be swallowed into the typed text.
+        let cmd = parse_command(&args("type #postal 201-0001 --key-events"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "type");
+        assert_eq!(cmd["selector"], "#postal");
+        assert_eq!(cmd["text"], "201-0001");
+        assert_eq!(cmd["keyEvents"], true);
+
+        let focused =
+            parse_command(&args("type --focused 201-0001 --keys"), &default_flags()).unwrap();
+        assert_eq!(focused["focused"], true);
+        assert_eq!(focused["text"], "201-0001");
+        assert_eq!(focused["keyEvents"], true);
     }
 
     #[test]

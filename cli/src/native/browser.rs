@@ -725,6 +725,43 @@ impl BrowserManager {
         Self::connect_cdp(&ws_url).await
     }
 
+    /// Page targets to adopt, merging several `Target.getTargets` snapshots over
+    /// the extension relay. A single relay snapshot is flaky on a busy real Chrome
+    /// — it can omit live tabs (a different window's set, or a partial list; issue
+    /// #31) — so a tab the daemon should adopt would silently vanish (e.g. after a
+    /// daemon restart the page being driven disappeared from the tab list). Taking
+    /// the union of a few snapshots makes adoption resilient to a transient miss.
+    /// Off the relay (a browser we launched) one snapshot is authoritative.
+    async fn collect_page_targets(&self) -> Result<Vec<TargetInfo>, String> {
+        let rounds = if crate::connect::relay_url().is_some() {
+            3
+        } else {
+            1
+        };
+        let mut by_id: HashMap<String, TargetInfo> = HashMap::new();
+        let mut any_ok = false;
+        for i in 0..rounds {
+            if i > 0 {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            match self
+                .client
+                .send_command_typed::<_, GetTargetsResult>("Target.getTargets", &json!({}), None)
+                .await
+            {
+                Ok(result) => {
+                    any_ok = true;
+                    for t in result.target_infos.into_iter().filter(should_track_target) {
+                        by_id.entry(t.target_id.clone()).or_insert(t);
+                    }
+                }
+                Err(e) if i == rounds - 1 && !any_ok => return Err(e),
+                Err(_) => {}
+            }
+        }
+        Ok(by_id.into_values().collect())
+    }
+
     async fn discover_and_attach_targets(&mut self) -> Result<(), String> {
         self.client
             .send_command_typed::<_, Value>(
@@ -734,16 +771,7 @@ impl BrowserManager {
             )
             .await?;
 
-        let result: GetTargetsResult = self
-            .client
-            .send_command_typed("Target.getTargets", &json!({}), None)
-            .await?;
-
-        let page_targets: Vec<TargetInfo> = result
-            .target_infos
-            .into_iter()
-            .filter(should_track_target)
-            .collect();
+        let page_targets: Vec<TargetInfo> = self.collect_page_targets().await?;
 
         if page_targets.is_empty() {
             // Create a new tab
@@ -816,10 +844,23 @@ impl BrowserManager {
                 });
             }
 
-            self.active_page_index = 0;
-            self.pin_active_target();
-            let session_id = self.pages[0].session_id.clone();
-            self.enable_domains(&session_id).await?;
+            if self.agent_group().is_some() {
+                // Relay: the adopted tabs above are the USER's, in their real
+                // Chrome. NEVER make one of them the agent's working tab — that is
+                // how commands drifted onto whatever page the user was viewing
+                // between steps (eval/click/get landed on the user's foreground
+                // tab; #35). Open our own dedicated background tab in the session's
+                // group and pin THAT as active. The user's tabs stay adopted (so
+                // `tab list` / explicit `tab switch` can reach them) but are never
+                // auto-selected — the agent only ever drives a tab it owns.
+                self.tab_new(None, None).await?;
+            } else {
+                // A browser we launched: every tab is ours, so the first is fine.
+                self.active_page_index = 0;
+                self.pin_active_target();
+                let session_id = self.pages[0].session_id.clone();
+                self.enable_domains(&session_id).await?;
+            }
         }
 
         Ok(())

@@ -1464,6 +1464,12 @@ Usage: chrome-use type <selector> <text>
 Types text into the specified element character by character.
 Unlike fill, this does not clear existing content first.
 
+Options:
+  --key-events         Send real per-character keyDown/keyUp instead of
+  (alias --keys)       Input.insertText. Use for autocomplete / combobox fields
+                       that only react to key events — e.g. a postal-code box
+                       that auto-fills city/prefecture, or Google Places.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
@@ -1471,6 +1477,7 @@ Global Options:
 Examples:
   chrome-use type "#search" "hello"
   chrome-use type @e2 "additional text"
+  chrome-use type @e5 "201-0001" --key-events   # trigger the address autocomplete
 
 See Also:
   For typing into contenteditable editors (Lexical, ProseMirror, etc.)
