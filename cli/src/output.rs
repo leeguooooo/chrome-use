@@ -1832,6 +1832,8 @@ Pass --hide-scrollbars false when launching to keep native scrollbars visible.
 
 Options:
   --full, -f           Capture full page (not just viewport)
+  [selector]           Capture just an element (CSS or @ref), e.g. `screenshot ".header" h.png`
+  --clip <x,y,w,h>     Capture a pixel region, e.g. `screenshot --clip 0,0,200,40 corner.png`
   --annotate           Overlay numbered labels on interactive elements.
                        Each label [N] corresponds to ref @eN from snapshot.
                        Prints a legend mapping labels to element roles/names.
@@ -1852,6 +1854,8 @@ Examples:
   chrome-use screenshot
   chrome-use screenshot ./screenshot.png
   chrome-use screenshot --full ./full-page.png
+  chrome-use screenshot ".header .indicator" corner.png  # just one element
+  chrome-use screenshot --clip 1600,0,200,40 corner.png  # a pixel region
   chrome-use screenshot --annotate              # Labeled screenshot + legend
   chrome-use screenshot --annotate ./page.png   # Save annotated screenshot
   chrome-use screenshot --annotate --json       # JSON output with annotations

@@ -3000,6 +3000,14 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
             .get("screenshotDir")
             .and_then(|v| v.as_str())
             .map(String::from),
+        clip: cmd.get("clip").and_then(|c| {
+            Some((
+                c.get("x")?.as_f64()?,
+                c.get("y")?.as_f64()?,
+                c.get("width")?.as_f64()?,
+                c.get("height")?.as_f64()?,
+            ))
+        }),
     };
 
     if annotate {
@@ -7446,6 +7454,7 @@ async fn handle_diff_screenshot(cmd: &Value, state: &DaemonState) -> Result<Valu
         quality: None,
         annotate: false,
         output_dir: None,
+        clip: None,
     };
 
     let result = screenshot::take_screenshot(

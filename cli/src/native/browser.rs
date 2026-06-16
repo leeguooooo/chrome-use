@@ -121,7 +121,7 @@ fn normalize_url_for_match(url: &str) -> String {
 fn update_page_target_info_in_pages(pages: &mut [PageInfo], target: &TargetInfo) -> bool {
     if let Some(page) = pages.iter_mut().find(|p| p.target_id == target.target_id) {
         page.url = target.url.clone();
-        page.title = target.title.clone();
+        page.title = sanitize_title(&target.title);
         page.target_type = target.target_type.clone();
         return true;
     }
@@ -164,6 +164,29 @@ fn resolve_active_index(
         }
     }
     active_page_index
+}
+
+/// Strip zero-width / invisible / bidi-format Unicode from a page title before
+/// we store it. Some sites prepend runs of ZWJ / word-joiner / invisible-times /
+/// BOM to `document.title` (badging, watermarking, anti-scrape); left in, they
+/// pollute `tab list`, break text matching, and wreck column alignment (#33).
+fn sanitize_title(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            !matches!(c as u32,
+                0x00AD            // soft hyphen
+                | 0x200B..=0x200F // ZWSP, ZWNJ, ZWJ, LRM, RLM
+                | 0x2028 | 0x2029 // line / paragraph separators
+                | 0x202A..=0x202E // bidi embedding/override
+                | 0x2060..=0x2064 // word joiner, invisible operators
+                | 0x2066..=0x2069 // bidi isolates
+                | 0x180E          // Mongolian vowel separator
+                | 0xFEFF          // BOM / ZW no-break space
+            )
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 /// Best-effort MIME type from a filename extension, for the relay file-upload
@@ -773,7 +796,7 @@ impl BrowserManager {
                     target_id: target.target_id.clone(),
                     session_id: attach_result.session_id.clone(),
                     url: target.url.clone(),
-                    title: target.title.clone(),
+                    title: sanitize_title(&target.title),
                     target_type: target.target_type.clone(),
                 });
             }
@@ -999,7 +1022,7 @@ impl BrowserManager {
         self.active_page_index = self.resolved_active_index();
         if let Some(page) = self.pages.get_mut(self.active_page_index) {
             page.url = page_url.clone();
-            page.title = title.clone();
+            page.title = sanitize_title(&title);
         }
         self.pin_active_target();
 
@@ -1061,7 +1084,7 @@ impl BrowserManager {
 
     pub async fn get_title(&self) -> Result<String, String> {
         let result = self.evaluate_simple("document.title").await?;
-        Ok(result.as_str().unwrap_or("").to_string())
+        Ok(sanitize_title(result.as_str().unwrap_or("")))
     }
 
     pub async fn get_content(&self) -> Result<String, String> {
@@ -1404,7 +1427,7 @@ impl BrowserManager {
                 target_id: target.target_id.clone(),
                 session_id: attach.session_id.clone(),
                 url: target.url.clone(),
-                title: target.title.clone(),
+                title: sanitize_title(&target.title),
                 target_type: target.target_type.clone(),
             };
             self.add_background_page(page.clone());
@@ -1465,7 +1488,7 @@ impl BrowserManager {
                 target_id: target.target_id.clone(),
                 session_id: attach_result.session_id.clone(),
                 url: target.url.clone(),
-                title: target.title.clone(),
+                title: sanitize_title(&target.title),
                 target_type: target.target_type.clone(),
             });
             let _ = self.enable_domains(&attach_result.session_id).await;
@@ -1508,7 +1531,7 @@ impl BrowserManager {
                             }
                         }
                         if let Some(t) = ti.get("title").and_then(|v| v.as_str()) {
-                            page.title = t.to_string();
+                            page.title = sanitize_title(t);
                         }
                     }
                 }
@@ -1696,7 +1719,7 @@ impl BrowserManager {
 
         if let Some(page) = self.pages.get_mut(index) {
             page.url = url.clone();
-            page.title = title.clone();
+            page.title = sanitize_title(&title);
         }
 
         let page = &self.pages[index];
@@ -2765,6 +2788,19 @@ mod tests {
     fn active_not_owned_when_no_pages() {
         let created = HashSet::new();
         assert!(!active_index_is_owned(&[], None, 0, &created));
+    }
+
+    #[test]
+    fn test_sanitize_title() {
+        // The exact pollution from #33: ZWJ / word-joiner / invisible-times / BOM
+        // prepended to "GitHub".
+        let dirty = "\u{200d}\u{2061}\u{200d}\u{2063}\u{200b}\u{2062}\u{feff}GitHub";
+        assert_eq!(sanitize_title(dirty), "GitHub");
+        // Clean titles (incl. CJK + normal punctuation) pass through untouched.
+        assert_eq!(sanitize_title("購入手続きへ - メルカリ"), "購入手続きへ - メルカリ");
+        assert_eq!(sanitize_title("  Hello World  "), "Hello World");
+        // Emoji and real content survive; only the invisibles are dropped.
+        assert_eq!(sanitize_title("✓ Done\u{200b}"), "✓ Done");
     }
 
     #[test]

@@ -60,6 +60,9 @@ pub struct ScreenshotOptions {
     pub quality: Option<i32>,
     pub annotate: bool,
     pub output_dir: Option<String>,
+    /// Explicit pixel region (x, y, width, height) — `--clip` (issue #34). Takes
+    /// precedence over selector/full_page.
+    pub clip: Option<(f64, f64, f64, f64)>,
 }
 
 impl Default for ScreenshotOptions {
@@ -72,6 +75,7 @@ impl Default for ScreenshotOptions {
             quality: None,
             annotate: false,
             output_dir: None,
+            clip: None,
         }
     }
 }
@@ -187,7 +191,16 @@ async fn capture_screenshot_base64(
         capture_beyond_viewport: if options.full_page { Some(true) } else { None },
     };
 
-    if options.full_page {
+    if let Some((x, y, width, height)) = options.clip {
+        // Explicit pixel region wins over selector/full_page (issue #34).
+        params.clip = Some(Viewport {
+            x,
+            y,
+            width,
+            height,
+            scale: 1.0,
+        });
+    } else if options.full_page {
         let metrics: Value = client
             .send_command_no_params("Page.getLayoutMetrics", Some(session_id))
             .await?;

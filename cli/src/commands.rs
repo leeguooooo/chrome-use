@@ -907,17 +907,37 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // selector: @ref or CSS selector
             // path: file path (contains / or . or ends with known extension)
             let mut full_page = false;
-            let positional: Vec<&str> = rest
-                .iter()
-                .filter(|arg| match **arg {
-                    "--full" | "-f" => {
-                        full_page = true;
-                        false
+            let mut clip: Option<Value> = None;
+            let mut positional: Vec<&str> = Vec::new();
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i] {
+                    "--full" | "-f" => full_page = true,
+                    // `--clip x,y,w,h` captures a pixel region (issue #34).
+                    "--clip" => {
+                        let raw = rest.get(i + 1).ok_or_else(|| ParseError::MissingArguments {
+                            context: "screenshot --clip".to_string(),
+                            usage: "screenshot --clip <x,y,w,h> [path]",
+                        })?;
+                        let nums: Vec<f64> = raw
+                            .split(',')
+                            .filter_map(|n| n.trim().parse::<f64>().ok())
+                            .collect();
+                        if nums.len() != 4 {
+                            return Err(ParseError::InvalidValue {
+                                message: format!("--clip expects 'x,y,w,h' (4 numbers), got '{raw}'"),
+                                usage: "screenshot --clip <x,y,w,h> [path]",
+                            });
+                        }
+                        clip = Some(json!({
+                            "x": nums[0], "y": nums[1], "width": nums[2], "height": nums[3]
+                        }));
+                        i += 1;
                     }
-                    _ => true,
-                })
-                .copied()
-                .collect();
+                    other => positional.push(other),
+                }
+                i += 1;
+            }
             let (selector, path) = match (positional.first(), positional.get(1)) {
                 (Some(first), Some(second)) => {
                     // Two args: first is selector, second is path
@@ -948,6 +968,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 "path": path, "selector": selector,
                 "fullPage": full_page, "annotate": flags.annotate
             });
+            if let Some(c) = clip {
+                cmd["clip"] = c;
+            }
             if let Some(ref fmt) = flags.screenshot_format {
                 cmd["format"] = json!(fmt);
             }
@@ -4325,6 +4348,21 @@ mod tests {
         let cmd = parse_command(&args("screenshot -f"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "screenshot");
         assert_eq!(cmd["fullPage"], true);
+    }
+
+    #[test]
+    fn test_screenshot_clip() {
+        // `--clip x,y,w,h` captures a pixel region (issue #34); the path still parses.
+        let cmd = parse_command(&args("screenshot --clip 10,20,200,40 out.png"), &default_flags())
+            .unwrap();
+        assert_eq!(cmd["action"], "screenshot");
+        assert_eq!(cmd["clip"]["x"], 10.0);
+        assert_eq!(cmd["clip"]["y"], 20.0);
+        assert_eq!(cmd["clip"]["width"], 200.0);
+        assert_eq!(cmd["clip"]["height"], 40.0);
+        assert_eq!(cmd["path"], "out.png");
+        // Bad clip is a clear error, not silent.
+        assert!(parse_command(&args("screenshot --clip 1,2,3"), &default_flags()).is_err());
     }
 
     #[test]
