@@ -333,6 +333,56 @@ agent-browser state save auth.json    # Save cookies, storage, auth state
 agent-browser state load auth.json    # Restore saved state
 ```
 
+## MCP Server
+
+```bash
+agent-browser mcp
+agent-browser mcp --tools all
+agent-browser mcp --tools core,network,react
+```
+
+Starts a stdio Model Context Protocol server. MCP clients should configure the
+server command as `agent-browser` with args `["mcp"]`. The server defaults to
+MCP protocol 2025-11-25 and accepts older supported client protocol versions
+during initialization.
+
+The default tools profile is `core`, which keeps MCP context small for everyday
+browser automation. Use `--tools all` for the full typed CLI parity surface, or
+combine profiles with commas, such as `--tools core,network,react`.
+
+Profiles:
+
+- `core` - Default. Navigation, snapshots, interaction, waits, reads, screenshots, JavaScript eval, close, tab basics, and profile discovery
+- `network` - Network routes, request inspection, HAR, headers, credentials, offline
+- `state` - Cookies, storage, auth, saved state, sessions, profiles, skills
+- `debug` - Console/errors, tracing, profiling, recording, clipboard, plugins, doctor, dashboard, install, upgrade, chat, diff, batch, confirm/deny
+- `tabs` - Back/forward/reload, tabs, windows, frames, dialogs
+- `react` - React tree/inspect/renders/suspense, vitals, pushstate
+- `mobile` - Viewport/device/geolocation/media, touch, swipe, mouse, keyboard
+- `all` - Every MCP tool, including the full typed CLI parity surface
+
+Common tools include:
+
+- `agent_browser_tools_profiles`
+- `agent_browser_open`
+- `agent_browser_snapshot`
+- `agent_browser_click`
+- `agent_browser_fill`
+- `agent_browser_type`
+- `agent_browser_press`
+- `agent_browser_wait_for_selector`
+- `agent_browser_screenshot`
+- `agent_browser_get_url`
+- `agent_browser_eval`
+- `agent_browser_close`
+
+Tool calls use the same config files and environment variables as the CLI. Each
+tool accepts typed arguments plus `extraArgs` for advanced CLI flags and exact
+CLI parity. Tool discovery is paginated and includes read-only/open-world
+annotations so modern MCP clients can load the large typed surface
+incrementally. Use the `session` tool argument or `AGENT_BROWSER_SESSION` to
+isolate browser state.
+
 ## Global Options
 
 ```bash

@@ -5,6 +5,7 @@ mod connection;
 mod doctor;
 mod flags;
 mod install;
+mod mcp;
 mod native;
 mod output;
 mod plugins;
@@ -734,6 +735,16 @@ fn main() {
         Some("plugin") | Some("plugins")
     ) {
         plugins::run_plugin_command(&clean, &flags.plugins, flags.json);
+        return;
+    }
+
+    // Handle MCP stdio server mode. This must never share stdout with normal
+    // CLI output because stdout is reserved for JSON-RPC protocol messages.
+    if clean.first().map(|s| s.as_str()) == Some("mcp") {
+        if let Err(err) = mcp::run_mcp(&clean[1..]) {
+            eprintln!("{} {}", color::error_indicator(), err);
+            exit(1);
+        }
         return;
     }
 

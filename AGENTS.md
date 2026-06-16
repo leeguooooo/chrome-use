@@ -25,6 +25,10 @@ When adding or changing user-facing features (new flags, commands, behaviors, en
 
 This applies to changes that either human users or AI agents would need to know about. Do not skip any of these locations.
 
+## CLI/MCP Parity
+
+When adding or changing any CLI command, flag, behavior, output, environment variable, or parser semantics, update the MCP server in `cli/src/mcp.rs` in the same change. MCP tools should stay in sync with canonical CLI behavior by delegating through the normal CLI parser where possible. If a CLI command has no dedicated MCP tool, add one or document why it is intentionally omitted. Add or update tests that prove the CLI and MCP surfaces remain aligned.
+
 In the `docs/src/app/` MDX files, always use HTML `<table>` syntax for tables (not markdown pipe tables). This matches the existing convention across the docs site.
 
 ## Dashboard (packages/dashboard)

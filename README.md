@@ -463,6 +463,7 @@ agent-browser upgrade                 # Upgrade agent-browser to the latest vers
 agent-browser doctor                  # Diagnose the install and auto-clean stale daemon files
 agent-browser doctor --fix            # Also run destructive repairs (reinstall Chrome, purge old state, ...)
 agent-browser doctor --offline --quick  # Skip network probes and the live launch test
+agent-browser mcp                     # Start an MCP stdio server
 ```
 
 `doctor` checks your environment, Chrome install, daemon state, config files,
@@ -482,6 +483,74 @@ agent-browser skills path [name]      # Print skill directory path
 ```
 
 Serves bundled skill content that always matches the installed CLI version. AI agents use this to get current instructions rather than relying on cached copies. Set `AGENT_BROWSER_SKILLS_DIR` to override the skills directory path.
+
+### MCP Server
+
+```bash
+agent-browser mcp
+agent-browser mcp --tools all
+agent-browser mcp --tools core,network,react
+```
+
+Starts a Model Context Protocol server over stdio. MCP clients launch this command as a subprocess and exchange newline-delimited JSON-RPC on stdin and stdout. The server defaults to MCP protocol 2025-11-25 and accepts older supported client protocol versions during initialization.
+
+The default tools profile is `core`, which keeps MCP context small for everyday browser automation. Use `--tools all` for the full typed CLI parity surface, or combine profiles with commas, such as `--tools core,network,react`.
+
+Profiles:
+
+- `core` — Default. Navigation, snapshots, interaction, waits, reads, screenshots, JavaScript eval, close, tab basics, and profile discovery
+- `network` — Network routes, request inspection, HAR, headers, credentials, offline
+- `state` — Cookies, storage, auth, saved state, sessions, profiles, skills
+- `debug` — Console/errors, tracing, profiling, recording, clipboard, plugins, doctor, dashboard, install, upgrade, chat, diff, batch, confirm/deny
+- `tabs` — Back/forward/reload, tabs, windows, frames, dialogs
+- `react` — React tree/inspect/renders/suspense, vitals, pushstate
+- `mobile` — Viewport/device/geolocation/media, touch, swipe, mouse, keyboard
+- `all` — Every MCP tool, including the full typed CLI parity surface
+
+Common tools include:
+
+- `agent_browser_tools_profiles`
+- `agent_browser_open`
+- `agent_browser_snapshot`
+- `agent_browser_click`
+- `agent_browser_fill`
+- `agent_browser_type`
+- `agent_browser_press`
+- `agent_browser_wait_for_selector`
+- `agent_browser_screenshot`
+- `agent_browser_get_url`
+- `agent_browser_eval`
+- `agent_browser_close`
+
+Each tool has typed fields such as `url`, `selector`, `text`, `key`, and `session`, so MCP clients show meaningful approval prompts instead of raw command arrays. Each tool also accepts `extraArgs` for advanced CLI flags and exact CLI parity. Tool discovery is paginated and includes read-only/open-world annotations so modern MCP clients can load the large typed surface incrementally.
+
+Example MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "agent-browser": {
+      "command": "agent-browser",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Full parity MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "agent-browser": {
+      "command": "agent-browser",
+      "args": ["mcp", "--tools", "all"]
+    }
+  }
+}
+```
+
+Tool invocations use the same config files and environment variables as the CLI. Use `session` in the tool arguments, or set `AGENT_BROWSER_SESSION`, to isolate browser state.
 
 ## Authentication
 

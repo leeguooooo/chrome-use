@@ -54,6 +54,29 @@ agent-browser screenshot result.png
 The browser stays running across commands so these feel like a single
 session. Use `agent-browser close` (or `close --all`) when you're done.
 
+## MCP integration
+
+For tools that support Model Context Protocol servers, start the stdio server:
+
+```bash
+agent-browser mcp
+agent-browser mcp --tools all
+agent-browser mcp --tools core,network,react
+```
+
+Configure the MCP client to launch `agent-browser` with `["mcp"]`. The server
+defaults to MCP protocol 2025-11-25 and accepts older supported client protocol
+versions during initialization. The default tools profile is `core`, which
+keeps MCP context small for everyday browser automation. Use `--tools all` for
+the full typed CLI parity surface, or combine profiles with commas, such as
+`--tools core,network,react`. Profiles are `core`, `network`, `state`, `debug`,
+`tabs`, `react`, `mobile`, and `all`; the `debug` profile includes plugin
+registry and command.run tools. Each tool accepts typed arguments plus
+`extraArgs` for advanced CLI flags and exact CLI parity. Tool discovery is
+paginated and includes read-only/open-world annotations so modern MCP clients
+can load the large typed surface incrementally. Use the tool `session` argument
+or `AGENT_BROWSER_SESSION` to isolate browser sessions.
+
 ## Reading a page
 
 ```bash
