@@ -1208,13 +1208,21 @@ impl BrowserManager {
     pub async fn evaluate(&self, script: &str, _args: Option<Value>) -> Result<Value, String> {
         let session_id = self.active_session_id()?.to_string();
 
-        // `replMode: true` matches the DevTools console: top-level `let`/`const`
-        // can be re-declared across successive `eval`s instead of throwing
-        // "Identifier 'x' has already been declared" (issue #38 — independent
-        // `eval` steps in a test suite collided in the page's shared lexical
-        // scope), and top-level `await` is allowed. Completion-value and
-        // main-world semantics are unchanged. Built as raw params so the other
-        // ~28 EvaluateParams literals don't all need a new field.
+        // `replMode: true` lets successive `eval`s re-declare top-level
+        // `let`/`const` instead of throwing "Identifier 'x' has already been
+        // declared" (issue #38 — independent `eval` steps in a test suite collided
+        // in the page's shared lexical scope). BUT replMode and `awaitPromise` are
+        // mutually exclusive in Chrome: under replMode a returned promise is NOT
+        // awaited (it serialises to `{}`), which breaks `fetch(...).then(...)` and
+        // every other async eval. So enable replMode ONLY for synchronous scripts
+        // that declare a top-level `let`/`const`; promise-returning scripts keep
+        // `awaitPromise` (no replMode) — exactly the pre-#38 behaviour.
+        let mentions_async = script.contains("await")
+            || script.contains(".then(")
+            || script.contains("fetch(")
+            || script.contains("Promise");
+        let declares = script.contains("let ") || script.contains("const ");
+        let repl_mode = declares && !mentions_async;
         let result: EvaluateResult = self
             .client
             .send_command_typed(
@@ -1222,8 +1230,8 @@ impl BrowserManager {
                 &json!({
                     "expression": script,
                     "returnByValue": true,
-                    "awaitPromise": true,
-                    "replMode": true,
+                    "awaitPromise": !repl_mode,
+                    "replMode": repl_mode,
                 }),
                 Some(&session_id),
             )
