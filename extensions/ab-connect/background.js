@@ -471,8 +471,19 @@ async function reannounceAttachedTabs() {
   for (const [tabId, entry] of tabs.entries()) {
     // Re-send the group hint too (issue #40) so the relay can rebuild its
     // targetId→group map after its own restart (createTarget tagging won't
-    // re-run for tabs that are already open).
+    // re-run for tabs that are already open). Include the live url/title so the
+    // relay's target list stays matchable by URL after a reconnect (otherwise a
+    // reannounced tab shows a blank url and `adopt <url>` can't find it).
     const { openerTargetId, abGroup } = await tabScopeHints(tabId)
+    let url = ''
+    let title = ''
+    try {
+      const t = await chrome.tabs.get(tabId)
+      if (t) {
+        url = t.url || t.pendingUrl || ''
+        title = t.title || ''
+      }
+    } catch {}
     postToHost({
       method: 'forwardCDPEvent',
       params: {
@@ -480,7 +491,7 @@ async function reannounceAttachedTabs() {
         method: 'Target.attachedToTarget',
         params: {
           sessionId: entry.sessionId,
-          targetInfo: { targetId: entry.targetId, type: 'page', attached: true, openerTargetId, abGroup },
+          targetInfo: { targetId: entry.targetId, type: 'page', url, title, attached: true, openerTargetId, abGroup },
         },
       },
     })

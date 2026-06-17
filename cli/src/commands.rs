@@ -80,6 +80,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "upload",
     "site",
     "box",
+    "adopt",
 ];
 
 /// Levenshtein distance, capped — small inputs only (command names).
@@ -1316,6 +1317,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let script = crate::site::build_eval(&adapter, &mapped);
             Ok(json!({ "id": id, "action": "site", "domain": domain, "script": script }))
         }
+
+        // `adopt <url|targetId>`: the adoption happens at daemon connect (driven by
+        // the AGENT_BROWSER_ADOPT env main.rs set + a forced-fresh daemon), so by
+        // the time this command runs the tab is already attached. Resolve to a
+        // `url` read so the response confirms which tab got adopted.
+        "adopt" => Ok(json!({ "id": id, "action": "url" })),
 
         // === Stealth self-check ===
         "stealth" => {

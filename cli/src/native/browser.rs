@@ -824,6 +824,106 @@ impl BrowserManager {
         Ok(by_id.into_values().collect())
     }
 
+    /// Every tab the relay knows, UNSCOPED (ignores group scoping) — for explicit
+    /// cross-group adoption (`chrome-use adopt`). Falls back to the scoped
+    /// `collect_page_targets` on a relay/browser that doesn't support the
+    /// unscoped query. Retries a few times over the relay (discovery is eventual).
+    async fn collect_all_targets(&self) -> Result<Vec<TargetInfo>, String> {
+        let rounds = if crate::connect::relay_url().is_some() {
+            3
+        } else {
+            1
+        };
+        let mut by_id: HashMap<String, TargetInfo> = HashMap::new();
+        let mut any_ok = false;
+        for i in 0..rounds {
+            if i > 0 {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            if let Ok(result) = self
+                .client
+                .send_command_typed::<_, GetTargetsResult>(
+                    "ABRelay.getAllTargets",
+                    &json!({}),
+                    None,
+                )
+                .await
+            {
+                any_ok = true;
+                for t in result.target_infos.into_iter().filter(should_track_target) {
+                    by_id.entry(t.target_id.clone()).or_insert(t);
+                }
+            }
+        }
+        if any_ok {
+            Ok(by_id.into_values().collect())
+        } else {
+            // Older relay without ABRelay.getAllTargets → best-effort scoped list.
+            self.collect_page_targets().await
+        }
+    }
+
+    /// Adopt a specific pre-existing tab matched by `spec` (an exact CDP
+    /// `targetId`, or a case-insensitive substring of the tab URL) WITHOUT opening
+    /// a new tab — for `chrome-use adopt`. Attaches it (the relay tags it into our
+    /// group), tracks + pins it. Errors if nothing matches (never creates a tab).
+    async fn adopt_existing_target(&mut self, spec: &str) -> Result<(), String> {
+        let all = self.collect_all_targets().await?;
+        let spec_l = spec.to_lowercase();
+        let target = all
+            .iter()
+            .find(|t| t.target_id == spec)
+            .or_else(|| all.iter().find(|t| t.url.to_lowercase().contains(&spec_l)))
+            .ok_or_else(|| {
+                let mut open: Vec<String> = all
+                    .iter()
+                    .map(|t| {
+                        let u = if t.url.len() > 80 {
+                            &t.url[..80]
+                        } else {
+                            &t.url
+                        };
+                        u.to_string()
+                    })
+                    .collect();
+                open.sort();
+                open.dedup();
+                format!(
+                    "adopt: no open tab matching `{spec}` (by targetId or URL substring).\n\
+                     {} tab(s) the extension can see:\n  {}",
+                    open.len(),
+                    open.join("\n  ")
+                )
+            })?
+            .clone();
+
+        let attach: AttachToTargetResult = self
+            .client
+            .send_command_typed(
+                "Target.attachToTarget",
+                &AttachToTargetParams {
+                    target_id: target.target_id.clone(),
+                    flatten: true,
+                },
+                None,
+            )
+            .await?;
+        let tab_id = self.assign_tab_id();
+        self.pages.push(PageInfo {
+            tab_id,
+            label: None,
+            target_id: target.target_id.clone(),
+            session_id: attach.session_id.clone(),
+            url: target.url.clone(),
+            title: sanitize_title(&target.title),
+            target_type: target.target_type.clone(),
+        });
+        self.active_page_index = self.pages.len() - 1;
+        self.pin_active_target();
+        self.enable_domains(&attach.session_id).await?;
+        Ok(())
+    }
+
     async fn discover_and_attach_targets(&mut self) -> Result<(), String> {
         self.client
             .send_command_typed::<_, Value>(
@@ -836,6 +936,17 @@ impl BrowserManager {
         // Announce our group FIRST so the relay scopes the getTargets below to our
         // own tab group (issue #40). On a launched browser this is a no-op.
         let scoped = self.announce_group().await;
+
+        // `chrome-use adopt <spec>`: adopt a specific PRE-EXISTING tab instead of
+        // creating one — true zero-new-tab reading of the user's own tab. The
+        // directive rides in via env so it takes effect at first connect (before
+        // any about:blank would be made). If nothing matches, error out rather
+        // than fall back to creating a tab.
+        if let Ok(spec) = std::env::var("AGENT_BROWSER_ADOPT") {
+            if !spec.trim().is_empty() {
+                return self.adopt_existing_target(spec.trim()).await;
+            }
+        }
 
         let page_targets: Vec<TargetInfo> = self.collect_page_targets().await?;
 

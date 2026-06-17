@@ -3375,6 +3375,10 @@ Tabs:
                              stable targetId, no reload — preserves in-page state
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning
                              a duplicate (matches origin+path; preserves state)
+  adopt <url|targetId>       Read a PRE-EXISTING tab (the user's own, or another
+                             session's) WITHOUT opening a new one — matches by URL
+                             substring or stable targetId, then drives it. e.g.
+                             `adopt "github.com/owner/repo"`
 
 Diff:
   diff snapshot              Compare current vs last snapshot

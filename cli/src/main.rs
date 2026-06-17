@@ -981,6 +981,43 @@ fn main() {
         }
     }
 
+    // `adopt <url|targetId>`: read a PRE-EXISTING tab (the user's own, or another
+    // session's) WITHOUT opening a new one. Forces a fresh daemon and points it at
+    // the relay (like `extension connect`); the AGENT_BROWSER_ADOPT env makes the
+    // daemon's first connect ADOPT the matching tab instead of creating an
+    // about:blank. Rewrites into `connect <relay-url>` BEFORE parse_command so the
+    // daemon attaches to the user's real Chrome. Must run before parse_command.
+    if clean.first().map(|s| s.as_str()) == Some("adopt") {
+        match clean.get(1) {
+            Some(spec) if !spec.trim().is_empty() => {
+                std::env::set_var("AGENT_BROWSER_ADOPT", spec.trim());
+                connection::kill_stale_daemon(&flags.session);
+                match connect::relay_url() {
+                    Some(url) => {
+                        flags.cdp = Some(url.clone());
+                        flags.auto_connect = false;
+                        clean = vec!["connect".to_string(), url];
+                    }
+                    None => {
+                        eprintln!(
+                            "{} extension relay not connected — open Chrome with the ab-connect \
+                             extension first (this command reads an EXISTING tab, it won't launch one).",
+                            color::error_indicator()
+                        );
+                        exit(1);
+                    }
+                }
+            }
+            _ => {
+                eprintln!(
+                    "{} usage: chrome-use adopt <url-substring|targetId>  (reads an existing tab, no new tab)",
+                    color::error_indicator()
+                );
+                exit(2);
+            }
+        }
+    }
+
     // Handle session separately (doesn't need daemon)
     if clean.first().map(|s| s.as_str()) == Some("session") {
         run_session(&clean, &flags.session, flags.json);

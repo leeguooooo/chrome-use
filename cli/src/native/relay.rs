@@ -155,6 +155,20 @@ impl RelayState {
             "Target.setDiscoverTargets" | "Target.setAutoAttach" => {
                 ClientRoute::Local(json!({ "id": id, "result": {} }))
             }
+            // Unscoped discovery for EXPLICIT cross-group adoption (`chrome-use
+            // adopt`): returns every target the extension has attached, ignoring
+            // group scoping, so an agent can find a specific pre-existing tab (the
+            // user's, another session's) by URL/targetId and adopt it. Isolation
+            // is preserved because the daemon only acts on the one tab it then
+            // attaches (which the relay re-tags into the adopter's group).
+            "ABRelay.getAllTargets" => {
+                let infos: Vec<Value> = self
+                    .targets
+                    .values()
+                    .map(|t| t.target_info.clone())
+                    .collect();
+                ClientRoute::Local(json!({ "id": id, "result": { "targetInfos": infos } }))
+            }
             "Target.getTargets" => {
                 // Scope to the client's own group when it announced one; an
                 // un-announced (legacy) client gets the full list (back-compat).
@@ -770,6 +784,33 @@ mod tests {
             &json!({ "id": 1, "method": "ABRelay.setGroup", "params": { "group": "agent-b" } }),
         );
         assert!(get_target_ids(&mut s, 2).is_empty());
+    }
+
+    #[test]
+    fn get_all_targets_is_unscoped() {
+        let mut s = RelayState::new();
+        create_in_group(&mut s, 1, "agent-a", "ta", "sa");
+        create_in_group(&mut s, 2, "agent-b", "tb", "sb");
+        // Client 1's scoped getTargets sees only its own group...
+        assert_eq!(get_target_ids(&mut s, 1), vec!["ta"]);
+        // ...but ABRelay.getAllTargets returns EVERY target regardless of group
+        // (for explicit cross-group adoption).
+        let all = match s
+            .route_client_command(1, &json!({ "id": 1, "method": "ABRelay.getAllTargets" }))
+        {
+            ClientRoute::Local(v) => {
+                let mut ids: Vec<String> = v["result"]["targetInfos"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|t| t["targetId"].as_str().unwrap().to_string())
+                    .collect();
+                ids.sort();
+                ids
+            }
+            _ => panic!("getAllTargets must be local"),
+        };
+        assert_eq!(all, vec!["ta", "tb"]);
     }
 
     #[test]
