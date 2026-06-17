@@ -10,6 +10,7 @@ mod flags;
 mod install;
 mod native;
 mod output;
+mod site;
 mod skills;
 mod test_runner;
 #[cfg(test)]
@@ -832,6 +833,84 @@ fn main() {
             exit(2);
         };
         exit(test_runner::run_test(suite, &flags));
+    }
+
+    // Handle `site`: site adapters — turn a website into a structured-data CLI by
+    // running a per-command JS adapter inside your logged-in tab. `update`/`list`/
+    // `info` are CLI-side (download/filesystem); `site <name>/<cmd> [args]` falls
+    // through to the daemon dispatch below (navigate to the adapter's domain + eval).
+    if clean.first().map(|s| s.as_str()) == Some("site") {
+        match clean.get(1).map(|s| s.as_str()) {
+            Some("update") => {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                match rt.block_on(site::update()) {
+                    Ok(n) if flags.json => {
+                        println!("{}", json!({ "success": true, "adapters": n }))
+                    }
+                    Ok(n) => println!(
+                        "{} synced {} site adapters → ~/.chrome-use/sites (run `chrome-use site list`)",
+                        color::success_indicator(),
+                        n
+                    ),
+                    Err(e) => {
+                        eprintln!("{} {}", color::error_indicator(), e);
+                        exit(1);
+                    }
+                }
+                return;
+            }
+            Some("list") => {
+                match site::list_adapters() {
+                    Ok(list) if flags.json => {
+                        println!("{}", json!({ "success": true, "adapters": list }))
+                    }
+                    Ok(list) if list.is_empty() => {
+                        println!("no site adapters installed — run `chrome-use site update`")
+                    }
+                    Ok(list) => {
+                        for a in &list {
+                            println!("{a}");
+                        }
+                        eprintln!(
+                            "{}",
+                            color::dim(&format!(
+                                "{} adapters · run: chrome-use site <name>/<cmd> [args]",
+                                list.len()
+                            ))
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("{} {}", color::error_indicator(), e);
+                        exit(1);
+                    }
+                }
+                return;
+            }
+            Some("info") => {
+                let spec = clean.get(2).cloned().unwrap_or_default();
+                match site::load_adapter(&spec) {
+                    Ok(a) => println!(
+                        "{}",
+                        serde_json::to_string_pretty(&a.meta).unwrap_or_default()
+                    ),
+                    Err(e) => {
+                        eprintln!("{} {}", color::error_indicator(), e);
+                        exit(1);
+                    }
+                }
+                return;
+            }
+            // `site <name>/<cmd> [args]` → fall through to the daemon dispatch.
+            Some(spec) if spec.contains('/') => {}
+            _ => {
+                eprintln!(
+                    "{} usage: chrome-use site <name>/<cmd> [args] | site update | site list | \
+                     site info <name>/<cmd>",
+                    color::error_indicator()
+                );
+                exit(2);
+            }
+        }
     }
 
     // Handle skills command (doesn't need daemon)

@@ -1315,6 +1315,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "title" => handle_title(state).await,
         "content" => handle_content(state).await,
         "evaluate" => handle_evaluate(cmd, state).await,
+        "site" => handle_site(cmd, state).await,
         "close" => handle_close(state).await,
         "stealth_status" => handle_stealth_status(state).await,
         "snapshot" => handle_snapshot(cmd, state).await,
@@ -2696,6 +2697,47 @@ async fn handle_evaluate(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
     let result = mgr.evaluate(script, None).await?;
     let url = mgr.get_url().await.unwrap_or_default();
     Ok(json!({ "result": result, "origin": url }))
+}
+
+/// Run a site adapter: navigate to its `@meta.domain` (only if we're not already
+/// there — the point is to run as you, in the page that's already open) and eval
+/// the adapter function in the site's own logged-in page. The CLI/commands.rs has
+/// already loaded the adapter and built the `script`; here we just place the page
+/// and evaluate. Never disrupts the user's foreground tab — navigation happens on
+/// the daemon's own tab (same as every other command on the relay).
+async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let domain = cmd
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .ok_or("site: missing 'domain'")?
+        .to_string();
+    let script = cmd
+        .get("script")
+        .and_then(|v| v.as_str())
+        .ok_or("site: missing 'script'")?
+        .to_string();
+
+    let current = match state.browser.as_ref() {
+        Some(mgr) => mgr.get_url().await.unwrap_or_default(),
+        None => String::new(),
+    };
+    let on_domain = url::Url::parse(&current)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .map(|h| h == domain || h.ends_with(&format!(".{domain}")))
+        .unwrap_or(false);
+    if !on_domain {
+        let nav = json!({ "url": format!("https://{domain}/") });
+        handle_navigate(&nav, state).await?;
+    }
+
+    let eval_cmd = json!({ "script": script });
+    let out = handle_evaluate(&eval_cmd, state).await?;
+    Ok(json!({
+        "result": out.get("result").cloned().unwrap_or(Value::Null),
+        "origin": out.get("origin").cloned().unwrap_or(Value::Null),
+        "domain": domain,
+    }))
 }
 
 /// Local stealth self-check: reports the active mode, live fingerprint probes,

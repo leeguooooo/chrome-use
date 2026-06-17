@@ -68,6 +68,7 @@ need a **real, logged-in browser** — not for reading text off a public page.
 |---|---|
 | Discover what exists / find sources | `WebSearch` |
 | Specific facts from a static or public page | `WebFetch` or `curl` (no browser) |
+| **Structured data from a known site** (GitHub issues, Reddit/HN search, Bilibili/Twitter feed, …) — esp. behind login | `chrome-use site <name>/<cmd>` (see below) — skip snapshot+click entirely |
 | Login state, interaction, JS-rendered or anti-bot pages | **chrome-use** (this skill) |
 | A page the user saved before / an internal system | `chrome-use find-url <keywords>` (their bookmarks), then open it |
 | The user's **own already-open, logged-in** Chrome window | the **extension connect** flow (below) |
@@ -195,6 +196,27 @@ chrome-use eval "document.querySelector('[name=point_choice]')?.value"
 chrome-use eval "[...document.forms[0].elements].filter(e=>!e.validity.valid).map(e=>e.name+': '+e.validationMessage)"
 chrome-use eval "document.querySelector('#stubborn').click()"   # direct DOM click, bypasses overlays
 ```
+
+## Site adapters — the cheapest path for "read structured data from site X"
+
+Before you `open` + `snapshot` + click your way through GitHub/Reddit/Bilibili/etc.,
+check whether a **site adapter** already exists. An adapter is a community-written JS
+function that hits the site's own JSON API *from inside your logged-in tab* and returns
+clean structured data — no clicking, no scraping, no screenshots. It's the same idea as
+`eval`, packaged per-site.
+
+```bash
+chrome-use site update                       # one-time: fetch the adapter pack (~145 cmds)
+chrome-use site list                         # what's installed (github/issues, reddit/search, …)
+chrome-use site info github/issues           # an adapter's args + which domain it runs on
+chrome-use site github/issues owner/repo --json   # run it → JSON (navigates there for you)
+```
+
+- Positional args fill the adapter's declared args **in order**; `--key value` overrides by name.
+- It navigates to the adapter's domain (reusing the current tab if you're already on it), so
+  login-gated feeds (`bilibili/feed`, `twitter/...`) work because they run as *you*.
+- If no adapter fits, fall back to the normal `snapshot`/`eval` loop. Adapters come from the
+  [bb-sites](https://github.com/epiral/bb-sites) community pack; chrome-use fetches & runs them.
 
 ## Quickstart
 

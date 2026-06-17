@@ -3366,6 +3366,14 @@ Batch:
   batch [--bail] ["cmd" ...]  Execute multiple commands sequentially (args or stdin)
                               --bail stops on first error (default: continue all)
 
+Site adapters:  turn a website into a structured-data CLI (runs as you, in your tab)
+  site update                Fetch the community adapter pack into ~/.chrome-use/sites
+  site list                  List installed adapters (name/cmd)
+  site info <name>/<cmd>     Show an adapter's @meta (args, domain, capabilities)
+  site <name>/<cmd> [args]   Run an adapter: navigate to its site + return JSON
+                             e.g. site github/issues epiral/repo, site reddit/search rust
+                             Positional args fill declared args in order; --key value overrides
+
 Auth Vault:
   auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
   auth login <name>          Login using saved credentials (waits for form fields)

@@ -205,6 +205,34 @@ chrome-use --launch --profile auto open https://x.com/home
 
 In CI environments, standalone mode is used automatically.
 
+## Site adapters — turn a website into a structured-data CLI
+
+Most "read GitHub issues" / "search Reddit" / "get my Bilibili feed" tasks don't
+need clicking and screenshotting at all — the site already has a JSON API behind
+its own login. A **site adapter** is a tiny JS function that calls that API *from
+inside your logged-in tab* (your cookies, same-origin `fetch`, the site's own
+modules) and returns clean JSON. The site can't tell it apart from you, because it
+*is* you.
+
+chrome-use ships none of these adapters — `site update` fetches the community
+[**bb-sites**](https://github.com/epiral/bb-sites) pack at runtime (like a package
+manager pulling a dependency), then runs them over chrome-use's stealth transport:
+
+```bash
+chrome-use site update                          # fetch the adapter pack (~145 commands)
+chrome-use site list                            # github/issues, reddit/search, bilibili/feed, …
+chrome-use site info github/issues              # see an adapter's args + domain
+
+# Run one — navigates to the site (reusing the tab if you're already there) and returns JSON
+chrome-use site github/issues epiral/bb-browser --json
+chrome-use site reddit/search "rust async" --json
+chrome-use site bilibili/feed --json            # works because it's your logged-in session
+```
+
+Positional args fill the adapter's declared args in order; `--key value` overrides
+by name. Adapters are authored by the bb-sites community and remain their authors'
+property — chrome-use just runs them.
+
 ## Automated testing (`chrome-use test`)
 
 Turn the repetitive "open it, click around, check it's right" work into a

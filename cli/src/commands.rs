@@ -78,6 +78,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "drag",
     "dialog",
     "upload",
+    "site",
 ];
 
 /// Levenshtein distance, capped — small inputs only (command names).
@@ -1191,6 +1192,47 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 }
             };
             Ok(json!({ "id": id, "action": "evaluate", "script": script }))
+        }
+
+        "site" => {
+            // `site <name>/<command> [positional...] [--key value]`. The
+            // `update`/`list`/`info` subcommands are handled CLI-side (main.rs)
+            // and never reach here — by this point `rest[0]` is a `name/cmd`
+            // adapter spec. Load it, map the args onto the adapter's declared
+            // `args`, and emit a `site` action: the daemon navigates to the
+            // adapter's @meta.domain (reusing the tab if already there) and evals
+            // the adapter function in the site's own logged-in page.
+            let spec = rest.first().ok_or(ParseError::InvalidValue {
+                message: "site requires <name>/<command> (run `chrome-use site list`)".to_string(),
+                usage: "site <name>/<command> [args]",
+            })?;
+            let adapter =
+                crate::site::load_adapter(spec).map_err(|e| ParseError::InvalidValue {
+                    message: e,
+                    usage: "site <name>/<command> [args]",
+                })?;
+            let domain = adapter
+                .domain()
+                .ok_or(ParseError::InvalidValue {
+                    message: format!("site: adapter `{spec}` @meta is missing a \"domain\""),
+                    usage: "site <name>/<command>",
+                })?
+                .to_string();
+            // Split remaining args: `--key value` → named, everything else → positional.
+            let mut positional: Vec<String> = Vec::new();
+            let mut named: Vec<(String, String)> = Vec::new();
+            let mut it = rest[1..].iter();
+            while let Some(a) = it.next() {
+                if let Some(key) = a.strip_prefix("--") {
+                    let val = it.next().map(|s| s.to_string()).unwrap_or_default();
+                    named.push((key.to_string(), val));
+                } else {
+                    positional.push(a.to_string());
+                }
+            }
+            let mapped = crate::site::map_args(&adapter, &positional, &named);
+            let script = crate::site::build_eval(&adapter, &mapped);
+            Ok(json!({ "id": id, "action": "site", "domain": domain, "script": script }))
         }
 
         // === Stealth self-check ===

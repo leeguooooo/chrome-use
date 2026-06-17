@@ -163,6 +163,31 @@ chrome-use --launch --profile auto open https://x.com/home
 # 或显式指定：--profile Default / --profile "Profile 1"
 ```
 
+## 站点适配器 —— 把一个网站变成「结构化数据 CLI」
+
+大多数「读 GitHub issue」「搜 Reddit」「拉我的 B 站动态」这类任务，根本不需要点击 +
+截图 —— 网站登录态背后本来就有 JSON 接口。**站点适配器**就是一小段 JS 函数，它在你
+**已登录的标签页内**调用那个接口（用你的 cookie、同源 `fetch`、网站自己的模块），返回
+干净的 JSON。网站分辨不出它和你的区别，因为它**就是你**。
+
+chrome-use 本身不附带任何适配器 —— `site update` 会在运行时拉取社区的
+[**bb-sites**](https://github.com/epiral/bb-sites) 适配器包（就像包管理器拉依赖），
+然后在 chrome-use 的隐身通道上运行它们：
+
+```bash
+chrome-use site update                          # 拉取适配器包（约 145 条命令）
+chrome-use site list                            # github/issues、reddit/search、bilibili/feed…
+chrome-use site info github/issues              # 查看某个适配器的参数 + 域名
+
+# 运行一个 —— 会导航到对应站点（已在该站点则复用当前标签页）并返回 JSON
+chrome-use site github/issues epiral/bb-browser --json
+chrome-use site reddit/search "rust async" --json
+chrome-use site bilibili/feed --json            # 能用，因为走的是你的登录态
+```
+
+位置参数按适配器声明的参数顺序填入；`--key value` 按名覆盖。适配器由 bb-sites 社区编写、
+版权归各自作者所有 —— chrome-use 只负责运行它们。
+
 ## 自动化测试（`chrome-use test`）
 
 把反复的「打开它、点一圈、看对不对」变成**可重跑的测试套件** —— 前端的单元测试。用 YAML 写用例；步骤复用 chrome-use 自己的命令，断言编译成一次检查：
