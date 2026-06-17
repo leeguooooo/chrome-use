@@ -56,19 +56,34 @@ pub async fn click(
         .await;
     }
 
-    // Over the extension relay we drive the user's real, in-use Chrome, where a
-    // coordinate `Input.dispatchMouseEvent` is NOT reliably confined to our target
-    // tab — it can be delivered to whatever tab is in the foreground, and an OOPIF
-    // element's box can't be mapped to a top-viewport point at all. This twice
-    // opened an unrelated tab on the user's busy Chrome (issues #31/#36). So on the
-    // relay, never use coordinates for a normal left click: DOM-dispatch invokes
-    // the element's click in its own (frame) session, always hitting the right
-    // element in the right tab. Double/right clicks still need true pointer
-    // semantics, and `coord` mode is an explicit opt-out.
+    // An element INSIDE an iframe needs a TRUSTED activation: a DOM `.click()` is
+    // `isTrusted:false`, which security-sensitive embedded forms reject — Google
+    // Payments' enabled `保存` button silently no-ops on a synthetic click (issue
+    // #39). A coordinate `Input.dispatchMouseEvent` can't help either: `getBoxModel`
+    // for a sub-frame node returns frame-local coordinates that don't compose the
+    // iframe's offset, so the click lands in the wrong place. The frame-agnostic
+    // trusted path is keyboard activation — focus the element in its own frame, then
+    // dispatch a real Enter on the page session; Chrome routes the key to the
+    // focused element regardless of frame (same as `type --focused`), and Enter on a
+    // focused button/link fires a trusted `click`. `coord` mode opts out.
+    let in_iframe = ref_map.ref_is_in_iframe(selector_or_ref);
+    if mode != "coord" && button == "left" && click_count == 1 && in_iframe {
+        return dom_activate(
+            client,
+            session_id,
+            ref_map,
+            selector_or_ref,
+            iframe_sessions,
+        )
+        .await;
+    }
+    // On the relay (the user's real Chrome) a TOP-document coordinate click used to
+    // drift onto the foreground tab; that root cause is fixed (#5: the agent drives
+    // its own pinned tab), but DOM-dispatch stays the conservative default here.
     if mode != "coord"
         && button == "left"
         && click_count == 1
-        && prefer_dom_dispatch(ref_map, selector_or_ref)
+        && crate::connect::relay_url().is_some()
     {
         return dom_click(
             client,
@@ -266,6 +281,71 @@ async fn dom_click(
             Some(&effective_session_id),
         )
         .await?;
+    wait_for_paint_settled(client, &effective_session_id).await;
+    Ok(())
+}
+
+/// Trusted activation of an element inside an iframe (issue #39). Focuses the
+/// element in its own frame session, then dispatches a real Enter/Space on the
+/// page session — Chrome routes the key to the focused element across frames, and
+/// Enter/Space on a focused button/link/checkbox fires a `click` with
+/// `isTrusted: true`, which security-sensitive embedded forms (Google Payments
+/// `保存`) require. Non-activatable roles (a `div[onclick]`) can't be keyboard-
+/// activated, so they fall back to a DOM `.click()`.
+async fn dom_activate(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<(), String> {
+    let role = parse_ref(selector_or_ref)
+        .and_then(|r| ref_map.get(&r).map(|e| e.role.clone()))
+        .unwrap_or_default();
+    // Space toggles checkbox-like controls; Enter activates buttons/links/menus.
+    let key = match role.as_str() {
+        "checkbox" | "radio" | "switch" | "option" | "menuitemcheckbox" | "menuitemradio" => {
+            Some("space")
+        }
+        "button" | "link" | "menuitem" | "tab" | "treeitem" => Some("enter"),
+        _ => None,
+    };
+    let Some(key) = key else {
+        // Not keyboard-activatable — best effort via DOM .click() (untrusted).
+        return dom_click(
+            client,
+            session_id,
+            ref_map,
+            selector_or_ref,
+            iframe_sessions,
+        )
+        .await;
+    };
+
+    let (object_id, effective_session_id) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await?;
+    // Focus the element in its OWN frame session so the keystroke lands on it.
+    client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: "function() { this.focus(); }".to_string(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+    // Trusted key on the page session — routed to the focused (in-frame) element.
+    press_key(client, session_id, key).await?;
     wait_for_paint_settled(client, &effective_session_id).await;
     Ok(())
 }

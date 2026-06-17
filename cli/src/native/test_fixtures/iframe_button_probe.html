@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>iframe button probe</title>
+  </head>
+  <body>
+    <h1>iframe button probe</h1>
+    <iframe
+      id="frame"
+      width="320"
+      height="140"
+      srcdoc="
+        <!doctype html>
+        <html>
+          <body style='margin:24px'>
+            <button id='b' style='padding:24px;font-size:22px'>save</button>
+            <script>
+              document.getElementById('b').addEventListener('click', function (e) {
+                this.textContent = 'clicked:' + e.isTrusted;
+              });
+            </script>
+          </body>
+        </html>
+      "
+    ></iframe>
+  </body>
+</html>

@@ -35,6 +35,7 @@ fn native_test_fixture_html(name: &str) -> &'static str {
         "html5_drag_probe" => include_str!("test_fixtures/html5_drag_probe.html"),
         "pointer_capture_probe" => include_str!("test_fixtures/pointer_capture_probe.html"),
         "upload_probe" => include_str!("test_fixtures/upload_probe.html"),
+        "iframe_button_probe" => include_str!("test_fixtures/iframe_button_probe.html"),
         _ => panic!("Unknown native test fixture: {}", name),
     }
 }
@@ -567,6 +568,76 @@ async fn e2e_snapshot_and_click_ref() {
         url.contains("iana.org"),
         "Should have navigated to iana.org, got: {}",
         url
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Clicking a button INSIDE an iframe by `@ref` must deliver a TRUSTED activation
+/// (`event.isTrusted === true`), not a synthetic DOM `.click()`. Security-sensitive
+/// embedded forms (Google Payments' `保存`) reject `isTrusted:false` clicks, so an
+/// enabled submit button silently no-op'd (issue #39). The fix routes iframe-ref
+/// clicks to a real `Input.dispatchMouseEvent` on the element's own frame session.
+/// The fixture's iframe button writes `clicked:<isTrusted>` into its own text on
+/// click, which the cross-frame snapshot reads back.
+#[tokio::test]
+#[ignore]
+async fn e2e_iframe_button_click_is_trusted() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": native_test_fixture_url("iframe_button_probe") }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // Snapshot (interactive) — the button lives in the iframe and must appear with
+    // a ref; that ref carries the frame_id so the click resolves into the frame.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let snapshot = get_data(&resp)["snapshot"].as_str().unwrap_or("");
+    let ref_id = snapshot
+        .lines()
+        .find(|l| l.contains("button \"save\""))
+        .and_then(|l| l.split("ref=").nth(1))
+        .map(|r| r.trim_end_matches(']').trim())
+        .unwrap_or_else(|| panic!("iframe button not found in snapshot:\n{snapshot}"));
+
+    // Click it by ref.
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "click", "selector": ref_id }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+    // The button rewrote its own text with the click's isTrusted flag; read it
+    // back across frames.
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let after = get_data(&resp)["snapshot"].as_str().unwrap_or("");
+    assert!(
+        after.contains("clicked:true"),
+        "iframe button click must be trusted (isTrusted:true); snapshot:\n{after}"
     );
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
