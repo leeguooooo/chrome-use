@@ -1116,6 +1116,17 @@ impl BrowserManager {
         };
 
         if let Some(ref error_text) = nav_result.error_text {
+            // `data:` URLs abort over the extension relay: chrome.debugger /
+            // chrome.tabs can't drive a top-frame data: navigation, so it comes
+            // back net::ERR_ABORTED on an about:blank tab. Explain it instead of
+            // leaking the cryptic code (data: works fine under `--launch`).
+            if url.starts_with("data:") && error_text.contains("ERR_ABORTED") {
+                return Err(format!(
+                    "Navigation failed: {error_text}. Chrome blocks top-frame `data:` URLs over \
+                     the extension relay — use a real http(s):// or file:// URL, or run with \
+                     `--launch` (where data: URLs work)."
+                ));
+            }
             return Err(format!("Navigation failed: {}", error_text));
         }
 

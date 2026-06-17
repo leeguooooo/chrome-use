@@ -3577,6 +3577,9 @@ iOS Simulator (requires Xcode and Appium):
   chrome-use -p ios device list                         # List simulators
   chrome-use -p ios swipe up                            # Swipe gesture
   chrome-use -p ios tap @e1                             # Touch element
+
+Hit a bug or rough edge? A 30-second issue genuinely sharpens this tool:
+  https://github.com/leeguooooo/chrome-use/issues
 "#
     );
 }
@@ -3659,6 +3662,7 @@ fn print_screenshot_diff(data: &serde_json::Map<String, serde_json::Value>) {
 
 pub fn print_version() {
     println!("chrome-use {}", env!("CARGO_PKG_VERSION"));
+    println!("report bugs / rough edges: https://github.com/leeguooooo/chrome-use/issues");
 }
 
 #[cfg(test)]
