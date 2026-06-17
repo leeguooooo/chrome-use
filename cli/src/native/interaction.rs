@@ -579,7 +579,7 @@ pub async fn fill(
     selector_or_ref: &str,
     value: &str,
     iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let (object_id, effective_session_id) = resolve_element_object_id(
         client,
         session_id,
@@ -590,14 +590,15 @@ pub async fn fill(
     .await?;
 
     // Emulate a real edit so framework-controlled inputs (React/Vue) and
-    // site-side listeners actually see the change (issue #25): the old path set
-    // `this.value` directly and used Input.insertText, which left React's
-    // internal value-tracker out of sync and never fired change/blur — so
-    // dependent logic (e.g. Mercari's postal-code → 都道府県 autocomplete) never
-    // ran even though the value was visible. Set the value through the element's
-    // PROTOTYPE setter (which React's _valueTracker hooks), then dispatch
-    // input → change → blur/focusout. `type <sel> <text>` remains for sites that
-    // need per-keystroke events.
+    // site-side listeners actually see the change (issue #25): set the value
+    // through the element's PROTOTYPE setter (which React's _valueTracker hooks),
+    // then dispatch input → change → blur/focusout. Beyond plain inputs, detect
+    // rich editors and use their own API/events (issue #41): CodeMirror 5 and
+    // Monaco have a model that `.value`/`textContent` can't touch; ProseMirror /
+    // contenteditable need `execCommand('insertText')` so beforeinput/input fire
+    // (a raw `textContent =` corrupts PM's doc and skips React composers).
+    // Returns the engine used so the caller can report it. `type <sel> <text>`
+    // remains for sites that need per-keystroke events.
     let fill_js = format!(
         r#"function() {{
             const el = this;
@@ -605,13 +606,43 @@ pub async fn fill(
             try {{ el.focus(); }} catch (e) {{}}
             const tag = el.tagName;
             const fire = (type, ctor) => el.dispatchEvent(new (ctor || Event)(type, {{ bubbles: true }}));
-            if (tag === 'SELECT') {{
-                el.value = v; fire('input'); fire('change'); return true;
+
+            // CodeMirror 5: a hidden <textarea> inside .CodeMirror with a live instance.
+            const cm5 = el.closest && el.closest('.CodeMirror');
+            if (cm5 && cm5.CodeMirror) {{ cm5.CodeMirror.setValue(v); return 'codemirror5'; }}
+
+            // Monaco: global `monaco`; prefer the editor whose DOM contains el.
+            if (window.monaco && monaco.editor) {{
+                try {{
+                    const eds = monaco.editor.getEditors ? monaco.editor.getEditors() : [];
+                    const ed = eds.find(e => e.getDomNode && e.getDomNode().contains(el)) || eds[0];
+                    if (ed) {{ ed.setValue(v); return 'monaco'; }}
+                    const models = monaco.editor.getModels ? monaco.editor.getModels() : [];
+                    if (models[0]) {{ models[0].setValue(v); return 'monaco'; }}
+                }} catch (e) {{}}
             }}
+
+            if (tag === 'SELECT') {{ el.value = v; fire('input'); fire('change'); return 'select'; }}
+
             if (el.isContentEditable) {{
-                el.textContent = v; fire('input', window.InputEvent || Event); fire('change');
-                try {{ el.blur(); }} catch (e) {{}} fire('focusout'); return true;
+                // ProseMirror / contenteditable: select-all then insertText fires
+                // beforeinput/input that PM and React composers listen for.
+                let ok = false;
+                try {{
+                    const sel = window.getSelection();
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                    ok = document.execCommand('insertText', false, v);
+                }} catch (e) {{}}
+                if (!ok) {{ el.textContent = v; fire('input', window.InputEvent || Event); }}
+                fire('change');
+                try {{ el.blur(); }} catch (e) {{}}
+                fire('focusout');
+                return ok ? 'contenteditable' : 'contenteditable-fallback';
             }}
+
             const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
                                              : window.HTMLInputElement.prototype;
             const desc = Object.getOwnPropertyDescriptor(proto, 'value');
@@ -623,13 +654,13 @@ pub async fn fill(
             fire('change');
             try {{ el.blur(); }} catch (e) {{}}
             fire('focusout');                          // blur-triggered lookups/validation
-            return true;
+            return 'input';
         }}"#,
         val = serde_json::to_string(value).unwrap_or_default()
     );
 
-    client
-        .send_command_typed::<_, Value>(
+    let result: EvaluateResult = client
+        .send_command_typed(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
                 function_declaration: fill_js,
@@ -642,7 +673,11 @@ pub async fn fill(
         )
         .await?;
 
-    Ok(())
+    Ok(result
+        .result
+        .value
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "input".to_string()))
 }
 
 #[allow(clippy::too_many_arguments)]

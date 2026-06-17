@@ -79,6 +79,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "dialog",
     "upload",
     "site",
+    "box",
 ];
 
 /// Levenshtein distance, capped — small inputs only (command names).
@@ -560,9 +561,37 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "fill" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "fill".to_string(),
-                usage: "fill <selector> <text>",
+                usage: "fill <selector> <text> | fill <selector> --file <path> | fill <selector> --stdin",
             })?;
-            Ok(json!({ "id": id, "action": "fill", "selector": sel, "value": rest[1..].join(" ") }))
+            // Large/multiline content without shell-escaping hell (issue #41):
+            // `fill <sel> --file <path>` reads the value from a UTF-8 file, and
+            // `fill <sel> --stdin` reads it from stdin — sent verbatim, so backticks,
+            // quotes, newlines and non-ASCII pass through untouched.
+            let value = match rest.get(1).copied() {
+                Some("--file") => {
+                    let path = rest.get(2).ok_or(ParseError::InvalidValue {
+                        message: "fill --file requires a path".to_string(),
+                        usage: "fill <selector> --file <path>",
+                    })?;
+                    std::fs::read_to_string(path).map_err(|e| ParseError::InvalidValue {
+                        message: format!("fill --file: cannot read {path}: {e}"),
+                        usage: "fill <selector> --file <path>",
+                    })?
+                }
+                Some("--stdin") => {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    io::stdin()
+                        .read_to_string(&mut buf)
+                        .map_err(|e| ParseError::InvalidValue {
+                            message: format!("fill --stdin: {e}"),
+                            usage: "fill <selector> --stdin",
+                        })?;
+                    buf
+                }
+                _ => rest[1..].join(" "),
+            };
+            Ok(json!({ "id": id, "action": "fill", "selector": sel, "value": value }))
         }
         "type" => {
             // `--key-events` (alias `--keys`): send real per-character keystrokes
@@ -1006,11 +1035,55 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // path: file path (contains / or . or ends with known extension)
             let mut full_page = false;
             let mut clip: Option<Value> = None;
+            let mut max_width: Option<u32> = None;
+            let mut max_height: Option<u32> = None;
+            let mut scale: Option<f64> = None;
             let mut positional: Vec<&str> = Vec::new();
             let mut i = 0;
+            // Parse a numeric value for a downscale flag (issue #42).
+            let parse_num = |i: &mut usize, flag: &str| -> Result<String, ParseError> {
+                let v = rest
+                    .get(*i + 1)
+                    .ok_or_else(|| ParseError::MissingArguments {
+                        context: format!("screenshot {flag}"),
+                        usage: "screenshot [--max-width <px>] [--max-height <px>] [--scale <0..1>]",
+                    })?;
+                *i += 1;
+                Ok(v.to_string())
+            };
             while i < rest.len() {
                 match rest[i] {
                     "--full" | "-f" => full_page = true,
+                    // Downscale the saved image so retina/full-page shots fit an
+                    // agent's image reader and screenshot px line up with click px (#42).
+                    "--max-width" => {
+                        let v = parse_num(&mut i, "--max-width")?;
+                        max_width = Some(v.parse().map_err(|_| ParseError::InvalidValue {
+                            message: format!("--max-width expects a number, got '{v}'"),
+                            usage: "screenshot --max-width <px>",
+                        })?);
+                    }
+                    "--max-height" => {
+                        let v = parse_num(&mut i, "--max-height")?;
+                        max_height = Some(v.parse().map_err(|_| ParseError::InvalidValue {
+                            message: format!("--max-height expects a number, got '{v}'"),
+                            usage: "screenshot --max-height <px>",
+                        })?);
+                    }
+                    "--scale" => {
+                        let v = parse_num(&mut i, "--scale")?;
+                        let s: f64 = v.parse().map_err(|_| ParseError::InvalidValue {
+                            message: format!("--scale expects a number like 0.5, got '{v}'"),
+                            usage: "screenshot --scale <0..1>",
+                        })?;
+                        if s <= 0.0 || s > 1.0 {
+                            return Err(ParseError::InvalidValue {
+                                message: format!("--scale must be in (0, 1], got '{v}'"),
+                                usage: "screenshot --scale <0..1>",
+                            });
+                        }
+                        scale = Some(s);
+                    }
                     // `--clip x,y,w,h` captures a pixel region (issue #34).
                     "--clip" => {
                         let raw = rest
@@ -1072,6 +1145,15 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             });
             if let Some(c) = clip {
                 cmd["clip"] = c;
+            }
+            if let Some(w) = max_width {
+                cmd["maxWidth"] = json!(w);
+            }
+            if let Some(h) = max_height {
+                cmd["maxHeight"] = json!(h);
+            }
+            if let Some(s) = scale {
+                cmd["scale"] = json!(s);
             }
             if let Some(ref fmt) = flags.screenshot_format {
                 cmd["format"] = json!(fmt);

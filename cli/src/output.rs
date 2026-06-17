@@ -489,6 +489,17 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 println!("y:      {}", y);
                 println!("width:  {}", w);
                 println!("height: {}", h);
+                if let (Some(cx), Some(cy)) = (
+                    obj.get("centerX").and_then(|v| v.as_i64()),
+                    obj.get("centerY").and_then(|v| v.as_i64()),
+                ) {
+                    // Echoed in click-ready CSS px so the agent can paste straight
+                    // into `click <centerX> <centerY>` (issue #43).
+                    println!("center: {} {}", cx, cy);
+                }
+                if let Some(iv) = obj.get("inViewport").and_then(|v| v.as_bool()) {
+                    println!("inViewport: {}", iv);
+                }
             }
             return;
         }
@@ -1490,9 +1501,20 @@ Examples:
 chrome-use fill - Clear and fill an input field
 
 Usage: chrome-use fill <selector> <text>
+       chrome-use fill <selector> --file <path>
+       chrome-use fill <selector> --stdin
 
-Clears the input field and fills it with the specified text.
-This replaces any existing content in the field.
+Clears the field and fills it with the text, replacing existing content.
+Works on rich editors too (issue #41): CodeMirror 5, Monaco, ProseMirror and
+plain contenteditable are detected and set via their own API / input events,
+not a raw `.value` write — and the response echoes which `engine` was used.
+For framework inputs (React/Vue/Angular) the value goes through the native
+setter so the form registers it (no more "pristine" Save no-ops).
+
+Options:
+  --file <path>        Read the value from a UTF-8 file (large/multiline text,
+                       backticks/quotes/newlines/non-ASCII — no shell escaping)
+  --stdin              Read the value from stdin
 
 Global Options:
   --json               Output as JSON
@@ -1501,7 +1523,8 @@ Global Options:
 Examples:
   chrome-use fill "#email" "user@example.com"
   chrome-use fill @e3 "Hello World"
-  chrome-use fill "input[name='search']" "query"
+  chrome-use fill ".CodeMirror" --file ./article.md     # set a CodeMirror editor
+  cat post.md | chrome-use fill @e7 --stdin
 "##
         }
         "type" => {
@@ -1903,6 +1926,13 @@ Options:
   --full, -f           Capture full page (not just viewport)
   [selector]           Capture just an element (CSS or @ref), e.g. `screenshot ".header" h.png`
   --clip <x,y,w,h>     Capture a pixel region, e.g. `screenshot --clip 0,0,200,40 corner.png`
+  --max-width <px>     Downscale so the image's width ≤ px (preserves aspect)
+  --max-height <px>    Downscale so the image's height ≤ px
+  --scale <0..1>       Downscale by a factor, e.g. 0.5 (DPR-1, so screenshot px
+                       line up 1:1 with `click x y`)
+                       Default: capped at 2000px longest edge unless overridden
+                       (AGENT_BROWSER_SCREENSHOT_MAX_EDGE; 0 disables). Annotated
+                       shots are never downscaled, so ref overlays stay aligned.
   --annotate           Overlay numbered labels on interactive elements.
                        Each label [N] corresponds to ref @eN from snapshot.
                        Prints a legend mapping labels to element roles/names.
@@ -1925,6 +1955,8 @@ Examples:
   chrome-use screenshot --full ./full-page.png
   chrome-use screenshot ".header .indicator" corner.png  # just one element
   chrome-use screenshot --clip 1600,0,200,40 corner.png  # a pixel region
+  chrome-use screenshot --scale 0.5 ./half.png   # DPR-1: screenshot px == click px
+  chrome-use screenshot --max-width 1400 ./shot.png  # cap width for image readers
   chrome-use screenshot --annotate              # Labeled screenshot + legend
   chrome-use screenshot --annotate ./page.png   # Save annotated screenshot
   chrome-use screenshot --annotate --json       # JSON output with annotations
@@ -3263,7 +3295,8 @@ Core Commands:
   click <sel|x y>            Click element/@ref, or a viewport coordinate
   dblclick <sel>             Double-click element
   type <sel> <text>          Type into element
-  fill <sel> <text>          Clear and fill
+  fill <sel> <text>          Clear and fill (handles CodeMirror/Monaco/ProseMirror/
+                             contenteditable; `--file <path>`/`--stdin` for large text)
   press <key> [--hold <ms>]  Press key (Enter, Tab, Control+a). --hold keeps it
                              down <ms> then releases — precise (in-daemon), for
                              games/charge: `press d --hold 800`
@@ -3283,7 +3316,8 @@ Core Commands:
   scroll <dir> [px]          Scroll (up/down/left/right)
   scrollintoview <sel>       Scroll element into view
   wait <sel|ms>              Wait for element or time
-  screenshot [path]          Take screenshot
+  screenshot [path]          Take screenshot (auto-downscaled to ≤2000px long edge;
+                             --max-width/--max-height/--scale to override)
   pdf <path>                 Save as PDF
   snapshot                   Accessibility tree with refs (for AI)
   eval <js>                  Run JavaScript
@@ -3297,6 +3331,8 @@ Navigation:
 
 Get Info:  chrome-use get <what> [selector]
   text, html, value, attr <name>, title, url, count, box, styles, cdp-url
+  box <sel>  →  x,y,width,height,centerX,centerY,inViewport in CSS px (feed
+               centerX/centerY into `click x y`); value reads CodeMirror/Monaco too
   text (no selector = whole page, all frames), text --main, frames (list)
 
 Check State:  chrome-use is <what> <selector>

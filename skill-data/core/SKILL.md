@@ -59,6 +59,18 @@ next ref interaction.
 > anyway.) Driving off pixels on the relay also risks a coordinate event drifting
 > onto the user's foreground tab — refs never do. See issue #37.
 
+> **Two different intents — only one is discouraged.** The rule above is about
+> *screenshot-to-locate* (using a picture to find/hit an element) — that's the bug.
+> *screenshot-to-capture* — saving a region or element to a file as a **reusable
+> image asset** (maps, charts, og-images, visual-diff baselines, report figures) —
+> is fully supported and encouraged: `screenshot [selector] [--clip x,y,w,h] <file>`.
+> Capturing a rendered map region to a PNG for a blog post is the right tool, not a
+> smell. Screenshots are auto-downscaled to ≤2000px (longest edge) so they fit an
+> image reader and their pixels line up with `click x y`; override with
+> `--max-width`/`--max-height`/`--scale`. To click something you couldn't hit by
+> ref, `box @ref` gives the element's CSS-px box + `centerX/centerY` to feed
+> straight into `click <centerX> <centerY>` — no screenshot needed.
+
 ## Before you automate: pick the cheapest tool
 
 Driving a browser is the heavy option. chrome-use earns its keep when you
@@ -372,6 +384,12 @@ DOM (in the element's own frame), so they hit the right element in the right tab
 foreground, so prefer refs. For below-the-fold content in such a frame, scroll it
 with `scroll down N --at x,y` (a pixel over the frame) or `--frame n`. For a
 postal/autocomplete box inside the frame, `type @e "…" --key-events`.
+
+> **Caveat: `find text "…"` can't reach into a cross-origin iframe** — it errors
+> "Element not found" even though `snapshot -i` lists those nodes and
+> `get text` reads them. Inside cross-origin iframes, target elements by their
+> **snapshot `@ref`**, not by `find`. (`box @ref` also works on iframe refs when
+> you need a coordinate fallback.)
 
 ### When refs don't work or you don't want to snapshot
 

@@ -1529,9 +1529,27 @@ pub async fn get_element_input_value(
         .send_command_typed(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
-                function_declaration:
-                    "function() { return typeof this.value === 'string' ? this.value : ''; }"
-                        .to_string(),
+                // Read rich-editor content too (issue #41): CodeMirror 5 / Monaco
+                // keep their text in a model, not `.value`; contenteditable keeps
+                // it as innerText. Falls back to `.value` for plain inputs.
+                function_declaration: r#"function() {
+                    const el = this;
+                    const cm5 = el.closest && el.closest('.CodeMirror');
+                    if (cm5 && cm5.CodeMirror) return cm5.CodeMirror.getValue();
+                    if (window.monaco && monaco.editor) {
+                        try {
+                            const eds = monaco.editor.getEditors ? monaco.editor.getEditors() : [];
+                            const ed = eds.find(e => e.getDomNode && e.getDomNode().contains(el)) || eds[0];
+                            if (ed) return ed.getValue();
+                            const m = monaco.editor.getModels ? monaco.editor.getModels() : [];
+                            if (m[0]) return m[0].getValue();
+                        } catch (e) {}
+                    }
+                    if (typeof el.value === 'string') return el.value;
+                    if (el.isContentEditable) return el.innerText;
+                    return '';
+                }"#
+                .to_string(),
                 object_id: Some(object_id),
                 arguments: None,
                 return_by_value: Some(true),
@@ -1609,7 +1627,15 @@ pub async fn get_element_bounding_box(
             &CallFunctionOnParams {
                 function_declaration: r#"function() {
                     const r = this.getBoundingClientRect();
-                    return { x: r.x, y: r.y, width: r.width, height: r.height };
+                    const inViewport = r.bottom > 0 && r.right > 0
+                        && r.top < (innerHeight || document.documentElement.clientHeight)
+                        && r.left < (innerWidth || document.documentElement.clientWidth);
+                    return {
+                        x: r.x, y: r.y, width: r.width, height: r.height,
+                        centerX: Math.round(r.x + r.width / 2),
+                        centerY: Math.round(r.y + r.height / 2),
+                        inViewport,
+                    };
                 }"#
                 .to_string(),
                 object_id: Some(object_id),

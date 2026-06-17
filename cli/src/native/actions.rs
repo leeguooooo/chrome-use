@@ -3114,7 +3114,40 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     )
     .await?;
 
+    // Downscale the saved image so retina/full-page shots fit an agent's image
+    // reader and screenshot pixels line up with `click x y` CSS px (issue #42).
+    // Explicit --scale / --max-width / --max-height win; otherwise a default cap
+    // (2000px longest edge, AGENT_BROWSER_SCREENSHOT_MAX_EDGE overrides, 0 = off)
+    // applies. Annotated shots are left untouched so ref overlays stay aligned.
+    let mut resized: Option<(u32, u32)> = None;
+    if !annotate {
+        let scale = cmd.get("scale").and_then(|v| v.as_f64());
+        let max_w = cmd
+            .get("maxWidth")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let max_h = cmd
+            .get("maxHeight")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let default_edge = if scale.is_none() && max_w.is_none() && max_h.is_none() {
+            std::env::var("AGENT_BROWSER_SCREENSHOT_MAX_EDGE")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .or(Some(2000))
+                .filter(|&e| e > 0)
+        } else {
+            None
+        };
+        resized = downscale_screenshot(&result.path, scale, max_w, max_h, default_edge);
+    }
+
     let mut response = json!({ "path": absolutize_saved_path(&result.path) });
+    if let Some((w, h)) = resized {
+        response["width"] = json!(w);
+        response["height"] = json!(h);
+        response["resized"] = json!(true);
+    }
     if !result.annotations.is_empty() {
         response["annotations"] = serde_json::to_value(&result.annotations)
             .map_err(|e| format!("Failed to serialize annotations: {}", e))?;
@@ -3128,6 +3161,56 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     Ok(response)
+}
+
+/// Downscale a saved screenshot in place (issue #42). Resolves the target longest
+/// edge from `scale` (fraction of current), explicit `max_w`/`max_h` caps, or a
+/// `default_edge` cap — whichever yields the smaller image. Only ever shrinks;
+/// no-op (returns None) if the image is already within bounds or can't be read.
+/// Returns the new (width, height) when it actually resized.
+fn downscale_screenshot(
+    path: &str,
+    scale: Option<f64>,
+    max_w: Option<u32>,
+    max_h: Option<u32>,
+    default_edge: Option<u32>,
+) -> Option<(u32, u32)> {
+    let img = image::open(path).ok()?;
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    // Collect candidate scale factors (≤ 1.0); the smallest wins.
+    let mut factor = 1.0f64;
+    if let Some(s) = scale {
+        factor = factor.min(s);
+    }
+    if let Some(mw) = max_w {
+        if w > mw {
+            factor = factor.min(mw as f64 / w as f64);
+        }
+    }
+    if let Some(mh) = max_h {
+        if h > mh {
+            factor = factor.min(mh as f64 / h as f64);
+        }
+    }
+    if let Some(edge) = default_edge {
+        let longest = w.max(h);
+        if longest > edge {
+            factor = factor.min(edge as f64 / longest as f64);
+        }
+    }
+
+    if factor >= 1.0 {
+        return None; // already within bounds — never upscale
+    }
+    let nw = ((w as f64 * factor).round() as u32).max(1);
+    let nh = ((h as f64 * factor).round() as u32).max(1);
+    let resized = img.resize(nw, nh, image::imageops::FilterType::Lanczos3);
+    resized.save(path).ok()?;
+    Some((resized.width(), resized.height()))
 }
 
 async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -3288,7 +3371,7 @@ async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
-    interaction::fill(
+    let engine = interaction::fill(
         &mgr.client,
         &session_id,
         &state.ref_map,
@@ -3297,7 +3380,9 @@ async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         &state.iframe_sessions,
     )
     .await?;
-    Ok(json!({ "filled": selector }))
+    // Echo the input path used (input/contenteditable/codemirror5/monaco/select)
+    // so the agent can confirm a rich editor was handled, not silently no-op'd (#41).
+    Ok(json!({ "filled": selector, "engine": engine }))
 }
 
 async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
