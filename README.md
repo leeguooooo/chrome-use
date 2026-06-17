@@ -326,3 +326,6 @@ We deliberately **don't ship our own bot detector** — the strongest, most hone
 ## License
 
 Apache-2.0
+---
+
+> Built by **leeguooooo** — field notes on AI agents, reverse engineering & Cloudflare Workers at **[blog.misonote.com](https://blog.misonote.com)** · follow on **[X @leeguooooo](https://x.com/leeguooooo)**
