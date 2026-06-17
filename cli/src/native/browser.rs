@@ -509,6 +509,13 @@ pub struct BrowserManager {
     /// for `RELAY_PRUNE_MISSES` consecutive snapshots; any snapshot that includes
     /// it resets the counter. Keyed by stable target_id.
     relay_target_misses: HashMap<String, u32>,
+    /// Whether the relay accepted this session's group announcement and is
+    /// therefore scoping `Target.getTargets` to our own tab group (issue #40).
+    /// When true the daemon can safely adopt new targets again (follow-popup,
+    /// cross-session adopt) — the relay has already filtered out foreign tabs.
+    /// When false (launch-on-real-CDP, or an older relay that didn't answer the
+    /// announce) the daemon keeps strict daemon-side isolation.
+    relay_scoped: bool,
     next_tab_id: u32,
     /// Whether to enable the CDP `Runtime` domain (console / error / exception capture).
     /// OFF by default for stealth: a live `Runtime.enable` is a detectable CDP signal
@@ -646,6 +653,7 @@ impl BrowserManager {
                 created_targets: HashSet::new(),
                 active_target_id: None,
                 relay_target_misses: HashMap::new(),
+                relay_scoped: false,
                 next_tab_id: 1,
                 capture_console: console_capture_enabled(),
             };
@@ -749,6 +757,7 @@ impl BrowserManager {
             created_targets: HashSet::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
+            relay_scoped: false,
             next_tab_id: 1,
             capture_console: console_capture_enabled(),
         };
@@ -824,6 +833,10 @@ impl BrowserManager {
             )
             .await?;
 
+        // Announce our group FIRST so the relay scopes the getTargets below to our
+        // own tab group (issue #40). On a launched browser this is a no-op.
+        let scoped = self.announce_group().await;
+
         let page_targets: Vec<TargetInfo> = self.collect_page_targets().await?;
 
         if page_targets.is_empty() {
@@ -870,19 +883,19 @@ impl BrowserManager {
             self.active_page_index = 0;
             self.pin_active_target();
             self.enable_domains(&attach_result.session_id).await?;
-        } else if self.agent_group().is_some() {
-            // STRICT MULTI-AGENT ISOLATION (relay / the user's real Chrome).
-            // `page_targets` here are the USER's and OTHER agents' tabs. A tab
-            // group belongs to exactly ONE agent, so this session must NOT adopt
-            // any of them — it tracks ONLY tabs it creates (its own colored group)
-            // plus popups it opens. Adopting foreign tabs is precisely what let
-            // another concurrent agent's tab churn drop the tab we were driving and
-            // drift eval/click onto the wrong page (multi-agent failure). Open our
-            // own dedicated background tab in the session's group and pin it; the
-            // user's / other agents' tabs stay invisible to us.
+        } else if self.agent_group().is_some() && !scoped {
+            // STRICT MULTI-AGENT ISOLATION fallback (relay, but the group announce
+            // didn't take — e.g. an older relay). Without relay-side scoping,
+            // `page_targets` could be the USER's and OTHER agents' tabs, so this
+            // session must NOT adopt any of them — adopting foreign tabs is what let
+            // another agent's tab churn drop the tab we were driving (multi-agent
+            // failure). Open our own dedicated background tab and pin it instead.
             self.tab_new(None, None).await?;
         } else {
-            // A browser WE launched: every tab is ours, so adopt them all.
+            // Either a browser WE launched (every tab is ours) or the relay has
+            // scoped getTargets to our own tab group (#40) — so `page_targets` are
+            // all ours: adopt them (this restores follow-popup + cross-session
+            // adopt under isolation, since foreign tabs were already filtered out).
             for target in &page_targets {
                 let attach_result: AttachToTargetResult = self
                     .client
@@ -1580,7 +1593,11 @@ impl BrowserManager {
         // in the synthesized targetInfo), so don't adopt anything: the agent drives
         // only tabs it explicitly created, and pop-ups (e.g. an OAuth/login window)
         // are the user's. A launched browser (every tab ours) still follows pop-ups.
-        if self.agent_group().is_some() {
+        // Strict isolation only when on the relay WITHOUT group scoping: there a
+        // pop-up can't be told apart from a foreign tab, so adopt nothing. When the
+        // relay IS scoping (#40), getTargets returns only our group, so a tab that
+        // appeared after our own action is genuinely ours (a pop-up) — adopt it.
+        if self.agent_group().is_some() && !self.relay_scoped {
             return None;
         }
         let result: GetTargetsResult = self
@@ -1658,16 +1675,17 @@ impl BrowserManager {
             .collect();
         let live_ids: HashSet<String> = live.iter().map(|t| t.target_id.clone()).collect();
         let on_relay = self.agent_group().is_some();
+        // When the relay scopes getTargets to our group (#40), `live` is already
+        // only our own tabs, so adopting unknown ones is safe (a freshly-opened
+        // pop-up). Without scoping, keep strict isolation: never adopt a tab we
+        // didn't create — it belongs to the user or another agent.
+        let strict_isolation = on_relay && !self.relay_scoped;
 
         for target in &live {
             if self.update_page_target_info(target) {
                 continue;
             }
-            // STRICT MULTI-AGENT ISOLATION: on the relay (the user's real Chrome,
-            // shared with other agents), NEVER adopt a tab this session didn't
-            // create — it belongs to the user or another agent's group. Only a
-            // browser we launched (every tab ours) adopts unknown targets.
-            if on_relay {
+            if strict_isolation {
                 continue;
             }
             let attach_result: AttachToTargetResult = match self
@@ -1835,6 +1853,25 @@ impl BrowserManager {
         } else {
             Some(name.to_string())
         }
+    }
+
+    /// Tell the relay which tab group this session owns so it can scope
+    /// `Target.getTargets` to us (issue #40). Only meaningful on the relay; a
+    /// no-op (returns false) on a launched/real-CDP connection. Sets and returns
+    /// `relay_scoped`: when true, the daemon can trust getTargets to contain only
+    /// our group and re-enable adopting new tabs (pop-ups, cross-session adopt).
+    async fn announce_group(&mut self) -> bool {
+        let Some(group) = self.agent_group() else {
+            self.relay_scoped = false;
+            return false;
+        };
+        let ok = self
+            .client
+            .send_command_typed::<_, Value>("ABRelay.setGroup", &json!({ "group": group }), None)
+            .await
+            .is_ok();
+        self.relay_scoped = ok;
+        ok
     }
 
     pub async fn tab_new(
@@ -2630,6 +2667,7 @@ async fn initialize_lightpanda_manager(
             created_targets: HashSet::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
+            relay_scoped: false,
             next_tab_id: 1,
             capture_console: console_capture_enabled(),
         };

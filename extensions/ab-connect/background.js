@@ -81,6 +81,35 @@ async function groupTabInto(tabId, name) {
   groupIdByName.set(name, gid)
 }
 
+// Group-scoped relay isolation hints (issue #40). The relay scopes
+// Target.getTargets per agent by tab group; report two things in the synthesized
+// targetInfo so it can attribute each tab:
+//   - abGroup: the tab's Chrome tab-group TITLE (= the owning session name), so
+//     the relay can re-attribute existing tabs after a restart (createTarget
+//     tagging won't re-run for already-open tabs).
+//   - openerTargetId: the targetId of the tab that opened this one, so a pop-up
+//     (window.open / target=_blank / OAuth result) inherits its opener's group
+//     and the agent that opened it can follow it — without foreign tabs leaking.
+// Best-effort: any failure yields empty strings, which the relay ignores.
+async function tabScopeHints(tabId) {
+  let openerTargetId = ''
+  let abGroup = ''
+  try {
+    const t = await chrome.tabs.get(tabId)
+    if (t) {
+      if (typeof t.openerTabId === 'number') {
+        const op = tabs.get(t.openerTabId)
+        if (op) openerTargetId = op.targetId
+      }
+      if (t.groupId != null && t.groupId >= 0 && chrome.tabGroups) {
+        const g = await chrome.tabGroups.get(t.groupId).catch(() => null)
+        if (g && g.title) abGroup = g.title
+      }
+    }
+  } catch {}
+  return { openerTargetId, abGroup }
+}
+
 function postToHost(msg) {
   try {
     if (port) port.postMessage(msg)
@@ -126,7 +155,7 @@ function connectHost() {
   } catch {}
   // Tell the daemon about everything we already have attached, then attach
   // anything new.
-  reannounceAttachedTabs()
+  void reannounceAttachedTabs()
   void attachAllTabs()
 }
 
@@ -140,7 +169,7 @@ async function onHostMessage(msg) {
   // Daemon (re)connected — (re)attach and announce every tab so it discovers
   // the user's existing tabs rather than racing an empty target list.
   if (msg.method === 'attachAll') {
-    reannounceAttachedTabs()
+    void reannounceAttachedTabs()
     await attachAllTabs()
     return
   }
@@ -387,12 +416,16 @@ async function attachTab(tabId) {
   sessionToTab.set(sessionId, tabId)
   rememberSessionTarget(sessionId, targetId)
   setBadge(tabId, port ? 'on' : 'connecting')
+  const { openerTargetId, abGroup } = await tabScopeHints(tabId)
   postToHost({
     method: 'forwardCDPEvent',
     params: {
       sessionId,
       method: 'Target.attachedToTarget',
-      params: { sessionId, targetInfo: { ...targetInfo, attached: true } },
+      params: {
+        sessionId,
+        targetInfo: { ...targetInfo, attached: true, openerTargetId, abGroup },
+      },
     },
   })
   return entry
@@ -434,14 +467,21 @@ async function attachAllTabs() {
   }
 }
 
-function reannounceAttachedTabs() {
-  for (const [, entry] of tabs.entries()) {
+async function reannounceAttachedTabs() {
+  for (const [tabId, entry] of tabs.entries()) {
+    // Re-send the group hint too (issue #40) so the relay can rebuild its
+    // targetId→group map after its own restart (createTarget tagging won't
+    // re-run for tabs that are already open).
+    const { openerTargetId, abGroup } = await tabScopeHints(tabId)
     postToHost({
       method: 'forwardCDPEvent',
       params: {
         sessionId: entry.sessionId,
         method: 'Target.attachedToTarget',
-        params: { sessionId: entry.sessionId, targetInfo: { targetId: entry.targetId, type: 'page', attached: true } },
+        params: {
+          sessionId: entry.sessionId,
+          targetInfo: { targetId: entry.targetId, type: 'page', attached: true, openerTargetId, abGroup },
+        },
       },
     })
   }

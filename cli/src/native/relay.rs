@@ -52,6 +52,22 @@ pub struct RelayState {
     pending: HashMap<i64, (ClientId, Value)>,
     /// monotonic source of relay-global command ids
     next_global_id: i64,
+    /// Group-scoped isolation (issue #40). A tab group belongs to exactly one
+    /// agent/session; the relay scopes `Target.getTargets` per client to its own
+    /// group so the daemon can safely adopt new tabs (follow-popup, cross-session
+    /// adopt) without ever seeing the user's or another agent's tabs.
+    ///
+    /// clientId -> group name. A client that never announced a group (older
+    /// daemon) is absent here and gets the full, UNSCOPED target list — so this
+    /// is fully backward-compatible.
+    client_groups: HashMap<ClientId, String>,
+    /// targetId -> group name. Created tabs are tagged from `Target.createTarget`'s
+    /// `agentGroup`; an explicitly adopted tab is tagged to the adopter; a pop-up
+    /// inherits its opener's group (needs the extension to report `openerTargetId`).
+    target_group: HashMap<String, String>,
+    /// relay-global id of an in-flight `Target.createTarget` -> the `agentGroup`
+    /// it carried, so the reply's `targetId` can be tagged with that group.
+    pending_create: HashMap<i64, String>,
 }
 
 /// What to do with a raw CDP command received from a `CdpClient`.
@@ -95,6 +111,7 @@ impl RelayState {
     /// `pending` entries don't leak.
     pub fn drop_client(&mut self, client_id: ClientId) {
         self.pending.retain(|_, (cid, _)| *cid != client_id);
+        self.client_groups.remove(&client_id);
     }
 
     /// Route a raw CDP command `{id, method, params?, sessionId?}` from a
@@ -123,16 +140,37 @@ impl RelayState {
                     "jsVersion": ""
                 }
             })),
+            // Non-CDP control message: a daemon announces which tab group
+            // (session) it owns, so getTargets can be scoped to it (issue #40).
+            "ABRelay.setGroup" => {
+                if let Some(g) = params.get("group").and_then(|g| g.as_str()) {
+                    if !g.is_empty() {
+                        self.client_groups.insert(client_id, g.to_string());
+                    }
+                }
+                ClientRoute::Local(json!({ "id": id, "result": {} }))
+            }
             // Discovery is best-effort and event-driven in real CDP; abs only
             // reads the getTargets result, so an empty ack is enough here.
             "Target.setDiscoverTargets" | "Target.setAutoAttach" => {
                 ClientRoute::Local(json!({ "id": id, "result": {} }))
             }
             "Target.getTargets" => {
+                // Scope to the client's own group when it announced one; an
+                // un-announced (legacy) client gets the full list (back-compat).
+                let scoped = self.client_groups.get(&client_id).cloned();
                 let infos: Vec<Value> = self
                     .targets
-                    .values()
-                    .map(|t| t.target_info.clone())
+                    .iter()
+                    .filter(|(tid, _)| match &scoped {
+                        Some(g) => self
+                            .target_group
+                            .get(*tid)
+                            .map(|tg| tg == g)
+                            .unwrap_or(false),
+                        None => true,
+                    })
+                    .map(|(_, t)| t.target_info.clone())
                     .collect();
                 ClientRoute::Local(json!({ "id": id, "result": { "targetInfos": infos } }))
             }
@@ -142,9 +180,19 @@ impl RelayState {
                     .and_then(|t| t.as_str())
                     .unwrap_or("");
                 match self.targets.get(target_id) {
-                    Some(entry) => ClientRoute::Local(
-                        json!({ "id": id, "result": { "sessionId": entry.session_id } }),
-                    ),
+                    Some(entry) => {
+                        let session_id = entry.session_id.clone();
+                        // Explicitly adopting a target makes it this client's
+                        // (cross-session adopt, #21) — tag it into the adopter's
+                        // group so it stays in that client's scoped getTargets and
+                        // isn't churn-pruned.
+                        if let Some(g) = self.client_groups.get(&client_id).cloned() {
+                            self.target_group.insert(target_id.to_string(), g);
+                        }
+                        ClientRoute::Local(
+                            json!({ "id": id, "result": { "sessionId": session_id } }),
+                        )
+                    }
                     None => ClientRoute::Local(json!({
                         "id": id,
                         "error": { "code": -32602, "message": format!("No such target {target_id}") }
@@ -157,6 +205,18 @@ impl RelayState {
                 self.next_global_id += 1;
                 let gid = self.next_global_id;
                 self.pending.insert(gid, (client_id, id));
+                // Remember the group a createTarget carries so the reply's
+                // targetId can be tagged to the creating session (issue #40).
+                if method == "Target.createTarget" {
+                    if let Some(g) = params.get("agentGroup").and_then(|g| g.as_str()) {
+                        if !g.is_empty() {
+                            self.pending_create.insert(gid, g.to_string());
+                            self.client_groups
+                                .entry(client_id)
+                                .or_insert_with(|| g.to_string());
+                        }
+                    }
+                }
                 ClientRoute::Forward(json!({
                     "id": gid,
                     "method": "forwardCDPCommand",
@@ -201,6 +261,17 @@ impl RelayState {
             && msg.get("method").is_none()
         {
             let gid = msg.get("id").and_then(|i| i.as_i64());
+            // A createTarget reply: tag the new tab's targetId with the group the
+            // command carried, so it lands in the creating session's scope (#40).
+            if let Some(g) = gid.and_then(|g| self.pending_create.remove(&g)) {
+                if let Some(tid) = msg
+                    .get("result")
+                    .and_then(|r| r.get("targetId"))
+                    .and_then(|t| t.as_str())
+                {
+                    self.target_group.insert(tid.to_string(), g);
+                }
+            }
             let (to, orig_id) = match gid.and_then(|g| self.pending.remove(&g)) {
                 Some((client_id, orig)) => (Some(client_id), orig),
                 // No mapping (stale/unknown id) — fall back to broadcasting with
@@ -241,6 +312,27 @@ impl RelayState {
                                 .and_then(|s| s.as_str())
                                 .unwrap_or("")
                                 .to_string();
+                            // Attribute the tab to a group for scoping (issue #40),
+                            // unless we already know it (createTarget tag). An
+                            // explicit `abGroup` from the extension wins; otherwise a
+                            // pop-up inherits its opener's group via `openerTargetId`.
+                            if !self.target_group.contains_key(tid) {
+                                if let Some(g) = info
+                                    .get("abGroup")
+                                    .and_then(|g| g.as_str())
+                                    .filter(|g| !g.is_empty())
+                                {
+                                    self.target_group.insert(tid.to_string(), g.to_string());
+                                } else if let Some(opener) = info
+                                    .get("openerTargetId")
+                                    .and_then(|o| o.as_str())
+                                    .filter(|o| !o.is_empty())
+                                {
+                                    if let Some(g) = self.target_group.get(opener).cloned() {
+                                        self.target_group.insert(tid.to_string(), g);
+                                    }
+                                }
+                            }
                             self.targets.insert(
                                 tid.to_string(),
                                 TargetEntry {
@@ -255,6 +347,15 @@ impl RelayState {
                 "Target.detachedFromTarget" => {
                     let gone = inner_params.get("sessionId").and_then(|s| s.as_str());
                     if let Some(gone) = gone {
+                        let gone_tids: Vec<String> = self
+                            .targets
+                            .iter()
+                            .filter(|(_, e)| e.session_id == gone)
+                            .map(|(tid, _)| tid.clone())
+                            .collect();
+                        for tid in gone_tids {
+                            self.target_group.remove(&tid);
+                        }
                         self.targets.retain(|_, e| e.session_id != gone);
                     }
                     return vec![];
@@ -556,5 +657,132 @@ mod tests {
             }
             _ => panic!("expected ToExt"),
         }
+    }
+
+    // === Group-scoped isolation (issue #40) ===
+
+    /// Drive the real create path: announce group, createTarget(agentGroup), feed
+    /// the ext reply (tags target→group) + the attachedToTarget event (creates the
+    /// entry). Returns nothing; mutates `s`.
+    fn create_in_group(s: &mut RelayState, client: ClientId, group: &str, tid: &str, sid: &str) {
+        s.route_client_command(
+            client,
+            &json!({ "id": 1, "method": "ABRelay.setGroup", "params": { "group": group } }),
+        );
+        let route = s.route_client_command(
+            client,
+            &json!({ "id": 2, "method": "Target.createTarget",
+                     "params": { "url": "about:blank", "agentGroup": group } }),
+        );
+        let gid = match route {
+            ClientRoute::Forward(env) => env["id"].as_i64().unwrap(),
+            _ => panic!("createTarget must forward"),
+        };
+        s.handle_ext_message(&json!({ "id": gid, "result": { "targetId": tid } }), "");
+        s.handle_ext_message(
+            &json!({ "method": "forwardCDPEvent", "params": {
+                "method": "Target.attachedToTarget",
+                "params": { "sessionId": sid, "targetInfo": {
+                    "targetId": tid, "type": "page", "url": "about:blank", "attached": true } } } }),
+            "",
+        );
+    }
+
+    fn get_target_ids(s: &mut RelayState, client: ClientId) -> Vec<String> {
+        match s.route_client_command(client, &json!({ "id": 9, "method": "Target.getTargets" })) {
+            ClientRoute::Local(v) => v["result"]["targetInfos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["targetId"].as_str().unwrap().to_string())
+                .collect(),
+            _ => panic!("getTargets must be local"),
+        }
+    }
+
+    #[test]
+    fn get_targets_is_scoped_to_each_clients_group() {
+        let mut s = RelayState::new();
+        create_in_group(&mut s, 1, "agent-a", "ta", "sa");
+        create_in_group(&mut s, 2, "agent-b", "tb", "sb");
+        // Each client sees ONLY its own group's tab — never the other agent's.
+        assert_eq!(get_target_ids(&mut s, 1), vec!["ta"]);
+        assert_eq!(get_target_ids(&mut s, 2), vec!["tb"]);
+    }
+
+    #[test]
+    fn legacy_client_without_group_sees_all_targets() {
+        let mut s = RelayState::new();
+        create_in_group(&mut s, 1, "agent-a", "ta", "sa");
+        create_in_group(&mut s, 2, "agent-b", "tb", "sb");
+        // Client 3 never announced a group → full, unscoped list (back-compat).
+        let mut all = get_target_ids(&mut s, 3);
+        all.sort();
+        assert_eq!(all, vec!["ta", "tb"]);
+    }
+
+    #[test]
+    fn popup_inherits_opener_group_and_is_visible_to_that_client_only() {
+        let mut s = RelayState::new();
+        create_in_group(&mut s, 1, "agent-a", "ta", "sa");
+        create_in_group(&mut s, 2, "agent-b", "tb", "sb");
+        // A pop-up that agent-a's tab opened: extension reports openerTargetId=ta.
+        s.handle_ext_message(
+            &json!({ "method": "forwardCDPEvent", "params": {
+                "method": "Target.attachedToTarget",
+                "params": { "sessionId": "sp", "targetInfo": {
+                    "targetId": "tp", "type": "page", "url": "https://oauth.example/",
+                    "attached": true, "openerTargetId": "ta" } } } }),
+            "",
+        );
+        // Only agent-a sees the pop-up; agent-b never does.
+        let mut a = get_target_ids(&mut s, 1);
+        a.sort();
+        assert_eq!(a, vec!["ta", "tp"]);
+        assert_eq!(get_target_ids(&mut s, 2), vec!["tb"]);
+    }
+
+    #[test]
+    fn explicit_attach_tags_target_into_adopter_group() {
+        let mut s = RelayState::new();
+        // A pre-existing, ungrouped tab the extension reported (e.g. user's tab).
+        s.handle_ext_message(
+            &json!({ "method": "forwardCDPEvent", "params": {
+                "method": "Target.attachedToTarget",
+                "params": { "sessionId": "su", "targetInfo": {
+                    "targetId": "tu", "type": "page", "url": "https://user.example/", "attached": true } } } }),
+            "",
+        );
+        // Client 1 (group agent-a) explicitly adopts it by targetId (#21).
+        s.route_client_command(
+            1,
+            &json!({ "id": 1, "method": "ABRelay.setGroup", "params": { "group": "agent-a" } }),
+        );
+        s.route_client_command(
+            1,
+            &json!({ "id": 2, "method": "Target.attachToTarget", "params": { "targetId": "tu" } }),
+        );
+        // Now it's in agent-a's scope and survives the scoped getTargets.
+        assert_eq!(get_target_ids(&mut s, 1), vec!["tu"]);
+        // A different agent still doesn't see it.
+        s.route_client_command(
+            2,
+            &json!({ "id": 1, "method": "ABRelay.setGroup", "params": { "group": "agent-b" } }),
+        );
+        assert!(get_target_ids(&mut s, 2).is_empty());
+    }
+
+    #[test]
+    fn detach_clears_target_group() {
+        let mut s = RelayState::new();
+        create_in_group(&mut s, 1, "agent-a", "ta", "sa");
+        assert_eq!(get_target_ids(&mut s, 1), vec!["ta"]);
+        s.handle_ext_message(
+            &json!({ "method": "forwardCDPEvent", "params": {
+                "method": "Target.detachedFromTarget", "params": { "sessionId": "sa" } } }),
+            "",
+        );
+        assert!(get_target_ids(&mut s, 1).is_empty());
+        assert!(!s.target_group.contains_key("ta"));
     }
 }
