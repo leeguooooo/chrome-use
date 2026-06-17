@@ -235,6 +235,43 @@ fn prunable_target_ids(
         .collect()
 }
 
+/// Consecutive missing `getTargets` snapshots before an owned relay tab is
+/// pruned. >1 so a single churning/partial snapshot (other agents opening/closing
+/// tabs) or a brief cross-process-nav gap can't drop the tab the agent is driving.
+const RELAY_PRUNE_MISSES: u32 = 3;
+
+/// Debounced prune for the relay: target ids to drop, mutating per-target miss
+/// counters. A tab in `live_ids` resets to 0; an absent (non-pinned) tab
+/// increments and is pruned only at `RELAY_PRUNE_MISSES`. Counters for
+/// no-longer-tracked targets are forgotten. Pure, so the multi-agent churn
+/// tolerance is unit-testable without a live browser.
+fn debounced_prune_ids(
+    pages: &[PageInfo],
+    live_ids: &HashSet<String>,
+    pinned: Option<&str>,
+    misses: &mut HashMap<String, u32>,
+) -> Vec<String> {
+    let tracked: HashSet<&str> = pages.iter().map(|p| p.target_id.as_str()).collect();
+    misses.retain(|tid, _| tracked.contains(tid.as_str()));
+    let mut prune = Vec::new();
+    for p in pages {
+        let tid = p.target_id.as_str();
+        if live_ids.contains(tid) {
+            misses.remove(tid);
+            continue;
+        }
+        if pinned == Some(tid) {
+            continue;
+        }
+        let c = misses.entry(p.target_id.clone()).or_insert(0);
+        *c += 1;
+        if *c >= RELAY_PRUNE_MISSES {
+            prune.push(p.target_id.clone());
+        }
+    }
+    prune
+}
+
 /// Whether the resolved active page is a tab the session created (its target_id
 /// is in `created_targets`). Pure core of [`BrowserManager::active_is_session_owned`]
 /// so the relay no-hijack rule is unit-testable without a live browser.
@@ -464,6 +501,14 @@ pub struct BrowserManager {
     /// the session's commands onto the wrong page — the wrong-origin-fetch hazard
     /// in the dogfood reports. Falls back to the index if the pinned tab is gone.
     active_target_id: Option<String>,
+    /// Per-target count of CONSECUTIVE `resync_targets` snapshots in which an
+    /// owned tab was missing from `Target.getTargets`. Over the relay a single
+    /// snapshot routinely omits live tabs (multi-agent churn, a cross-process nav
+    /// briefly dropping the target), so we must not prune on one miss — that lost
+    /// the tab the agent was driving. A tab is removed only after it's been absent
+    /// for `RELAY_PRUNE_MISSES` consecutive snapshots; any snapshot that includes
+    /// it resets the counter. Keyed by stable target_id.
+    relay_target_misses: HashMap<String, u32>,
     next_tab_id: u32,
     /// Whether to enable the CDP `Runtime` domain (console / error / exception capture).
     /// OFF by default for stealth: a live `Runtime.enable` is a detectable CDP signal
@@ -600,6 +645,7 @@ impl BrowserManager {
                 visited_origins: HashSet::new(),
                 created_targets: HashSet::new(),
                 active_target_id: None,
+                relay_target_misses: HashMap::new(),
                 next_tab_id: 1,
                 capture_console: console_capture_enabled(),
             };
@@ -702,6 +748,7 @@ impl BrowserManager {
             visited_origins: HashSet::new(),
             created_targets: HashSet::new(),
             active_target_id: None,
+            relay_target_misses: HashMap::new(),
             next_tab_id: 1,
             capture_console: console_capture_enabled(),
         };
@@ -823,7 +870,19 @@ impl BrowserManager {
             self.active_page_index = 0;
             self.pin_active_target();
             self.enable_domains(&attach_result.session_id).await?;
+        } else if self.agent_group().is_some() {
+            // STRICT MULTI-AGENT ISOLATION (relay / the user's real Chrome).
+            // `page_targets` here are the USER's and OTHER agents' tabs. A tab
+            // group belongs to exactly ONE agent, so this session must NOT adopt
+            // any of them — it tracks ONLY tabs it creates (its own colored group)
+            // plus popups it opens. Adopting foreign tabs is precisely what let
+            // another concurrent agent's tab churn drop the tab we were driving and
+            // drift eval/click onto the wrong page (multi-agent failure). Open our
+            // own dedicated background tab in the session's group and pin it; the
+            // user's / other agents' tabs stay invisible to us.
+            self.tab_new(None, None).await?;
         } else {
+            // A browser WE launched: every tab is ours, so adopt them all.
             for target in &page_targets {
                 let attach_result: AttachToTargetResult = self
                     .client
@@ -849,24 +908,10 @@ impl BrowserManager {
                     target_type: target.target_type.clone(),
                 });
             }
-
-            if self.agent_group().is_some() {
-                // Relay: the adopted tabs above are the USER's, in their real
-                // Chrome. NEVER make one of them the agent's working tab — that is
-                // how commands drifted onto whatever page the user was viewing
-                // between steps (eval/click/get landed on the user's foreground
-                // tab; #35). Open our own dedicated background tab in the session's
-                // group and pin THAT as active. The user's tabs stay adopted (so
-                // `tab list` / explicit `tab switch` can reach them) but are never
-                // auto-selected — the agent only ever drives a tab it owns.
-                self.tab_new(None, None).await?;
-            } else {
-                // A browser we launched: every tab is ours, so the first is fine.
-                self.active_page_index = 0;
-                self.pin_active_target();
-                let session_id = self.pages[0].session_id.clone();
-                self.enable_domains(&session_id).await?;
-            }
+            self.active_page_index = 0;
+            self.pin_active_target();
+            let session_id = self.pages[0].session_id.clone();
+            self.enable_domains(&session_id).await?;
         }
 
         Ok(())
@@ -1557,6 +1602,11 @@ impl BrowserManager {
                 title: sanitize_title(&target.title),
                 target_type: target.target_type.clone(),
             };
+            // A tab that appeared right after THIS session's action (a click that
+            // opened a popup/new tab) is ours — record it as owned so it's tracked,
+            // protected from churn-pruning, and cleaned up on close, consistent with
+            // strict multi-agent isolation (we only ever own tabs we created/opened).
+            self.created_targets.insert(target.target_id.clone());
             self.add_background_page(page.clone());
             let _ = self.enable_domains(&attach.session_id).await;
             if opened.is_none() {
@@ -1584,13 +1634,19 @@ impl BrowserManager {
             .filter(should_track_target)
             .collect();
         let live_ids: HashSet<String> = live.iter().map(|t| t.target_id.clone()).collect();
+        let on_relay = self.agent_group().is_some();
 
         for target in &live {
             if self.update_page_target_info(target) {
                 continue;
             }
-            // A target this session hasn't tracked yet — attach and add it in the
-            // background so it's listable/adoptable without stealing the active tab.
+            // STRICT MULTI-AGENT ISOLATION: on the relay (the user's real Chrome,
+            // shared with other agents), NEVER adopt a tab this session didn't
+            // create — it belongs to the user or another agent's group. Only a
+            // browser we launched (every tab ours) adopts unknown targets.
+            if on_relay {
+                continue;
+            }
             let attach_result: AttachToTargetResult = match self
                 .client
                 .send_command_typed(
@@ -1621,12 +1677,26 @@ impl BrowserManager {
             let _ = self.enable_domains(&attach_result.session_id).await;
         }
 
-        // Drop tabs that no longer exist so `tab list` doesn't show phantom rows —
-        // but never prune the explicitly-pinned active target on a transient
-        // getTargets snapshot (issue #31; see `prunable_target_ids`).
-        let gone = prunable_target_ids(&self.pages, &live_ids, self.active_target_id.as_deref());
-        for tid in gone {
-            self.remove_page_by_target_id(&tid);
+        // Prune tabs that are gone. On a LAUNCHED browser a missing target really
+        // is closed, so prune immediately. On the RELAY a single `getTargets`
+        // snapshot routinely omits live tabs (multi-agent churn, a brief
+        // cross-process-nav gap) — dropping the tab we're driving on one bad
+        // snapshot is the failure we're fixing — so prune only after the tab has
+        // been absent for several CONSECUTIVE snapshots (debounced). The pinned
+        // active target is protected either way (issue #31).
+        let gone = if on_relay {
+            debounced_prune_ids(
+                &self.pages,
+                &live_ids,
+                self.active_target_id.as_deref(),
+                &mut self.relay_target_misses,
+            )
+        } else {
+            prunable_target_ids(&self.pages, &live_ids, self.active_target_id.as_deref())
+        };
+        for tid in &gone {
+            self.relay_target_misses.remove(tid);
+            self.remove_page_by_target_id(tid);
         }
 
         // Refresh url/title from each live tab. The relay only stamps target_info
@@ -2536,6 +2606,7 @@ async fn initialize_lightpanda_manager(
             visited_origins: HashSet::new(),
             created_targets: HashSet::new(),
             active_target_id: None,
+            relay_target_misses: HashMap::new(),
             next_tab_id: 1,
             capture_console: console_capture_enabled(),
         };
@@ -2990,6 +3061,43 @@ mod tests {
             prunable_target_ids(&pages, &live2, Some("A")),
             vec!["B".to_string()]
         );
+    }
+
+    #[test]
+    fn debounced_prune_tolerates_transient_churn() {
+        // Multi-agent churn: a single getTargets snapshot omits our owned tab "B"
+        // (another agent opened/closed tabs). It must NOT be pruned on one miss.
+        let pages = vec![page("A"), page("B")];
+        let mut misses = HashMap::new();
+        let empty: HashSet<String> = HashSet::new();
+        // Misses 1 and 2: B absent but under threshold → not pruned.
+        assert!(debounced_prune_ids(&pages, &empty, Some("A"), &mut misses).is_empty());
+        assert!(debounced_prune_ids(&pages, &empty, Some("A"), &mut misses).is_empty());
+        // Miss 3 (== RELAY_PRUNE_MISSES): genuinely gone → pruned.
+        assert_eq!(
+            debounced_prune_ids(&pages, &empty, Some("A"), &mut misses),
+            vec!["B".to_string()]
+        );
+    }
+
+    #[test]
+    fn debounced_prune_resets_on_reappearance_and_protects_pin() {
+        let pages = vec![page("A"), page("B")];
+        let mut misses = HashMap::new();
+        let empty: HashSet<String> = HashSet::new();
+        let mut live_b: HashSet<String> = HashSet::new();
+        live_b.insert("B".to_string());
+        // Two misses for B, then it reappears → counter resets, so it survives
+        // indefinitely under intermittent churn.
+        debounced_prune_ids(&pages, &empty, Some("A"), &mut misses);
+        debounced_prune_ids(&pages, &empty, Some("A"), &mut misses);
+        assert!(debounced_prune_ids(&pages, &live_b, Some("A"), &mut misses).is_empty());
+        assert!(debounced_prune_ids(&pages, &empty, Some("A"), &mut misses).is_empty()); // back to miss 1
+                                                                                         // The pinned active "A" is never pruned no matter how many misses.
+        for _ in 0..5 {
+            let gone = debounced_prune_ids(&pages, &empty, Some("A"), &mut misses);
+            assert!(!gone.contains(&"A".to_string()));
+        }
     }
 
     #[test]

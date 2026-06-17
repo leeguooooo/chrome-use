@@ -131,7 +131,17 @@ Each `--session` that connects gets its **own colored Chrome tab group** (named
 after the session) and drives only its own tabs — multiple agents share the one
 real browser without cross-talk, and the user's own tabs are never grouped. CDP
 drives the page without moving the user's mouse/keyboard, so it doesn't fight
-them for control. **Anti-detection ranking: this real logged-in Chrome (extension
+them for control.
+
+**Strict multi-agent isolation.** A session over the relay tracks and drives
+**only the tabs it created** (its own group) plus pop-ups its own clicks open. It
+does **not** adopt the user's existing tabs or other agents' tabs, so several
+agents (and other tools opening tabs) can work in the same real Chrome
+concurrently without ever dropping or stealing each other's tabs — another
+agent's tab churn can't make your bound tab vanish or drift your commands onto the
+wrong page. Consequence: `tab list` shows only *your* session's tabs; to drive a
+specific pre-existing tab, navigate to it in your own tab instead of expecting it
+in the list. **Anti-detection ranking: this real logged-in Chrome (extension
 connect) > a headed launched browser > headless (forbidden).** A genuine human
 browser has no headless/automation tells at all, so prefer it for anything
 anti-bot-sensitive.
