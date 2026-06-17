@@ -134,14 +134,14 @@ drives the page without moving the user's mouse/keyboard, so it doesn't fight
 them for control.
 
 **Strict multi-agent isolation.** A session over the relay tracks and drives
-**only the tabs it created** (its own group) plus pop-ups its own clicks open. It
-does **not** adopt the user's existing tabs or other agents' tabs, so several
-agents (and other tools opening tabs) can work in the same real Chrome
-concurrently without ever dropping or stealing each other's tabs — another
-agent's tab churn can't make your bound tab vanish or drift your commands onto the
-wrong page. Consequence: `tab list` shows only *your* session's tabs; to drive a
-specific pre-existing tab, navigate to it in your own tab instead of expecting it
-in the list. **Anti-detection ranking: this real logged-in Chrome (extension
+**only the tabs it created** (its own group). It does **not** adopt the user's
+existing tabs, other agents' tabs, or pop-ups (e.g. an OAuth/login window — that's
+the user's), so several agents (and other tools opening tabs) can work in the same
+real Chrome concurrently without ever dropping or stealing each other's tabs —
+another agent's tab churn can't make your bound tab vanish or drift your commands
+onto the wrong page. Consequence: `tab list` shows only *your* session's tabs; to
+drive a specific page, navigate to it in your own tab instead of expecting a
+pre-existing or popped-up tab to appear in the list. **Anti-detection ranking: this real logged-in Chrome (extension
 connect) > a headed launched browser > headless (forbidden).** A genuine human
 browser has no headless/automation tells at all, so prefer it for anything
 anti-bot-sensitive.

@@ -1560,6 +1560,18 @@ impl BrowserManager {
     /// the active tab, per #7/#8.1); the caller surfaces it so the agent knows a
     /// tab opened instead of seeing the old page (issue #24-A).
     pub async fn adopt_newly_opened(&mut self, before: &HashSet<String>) -> Option<PageInfo> {
+        // STRICT MULTI-AGENT ISOLATION: on the relay this session's `before` set is
+        // only its OWN tabs, so EVERY foreign tab (the user's, other agents') looks
+        // "new" relative to it and would be adopted here — exactly the leak where a
+        // concurrent agent's tabs (github/Lark/iphone-use) showed up in this
+        // session mid-flow. A tab the agent itself opened (a pop-up) can't be
+        // distinguished from a foreign tab over the relay (no opener/window/group
+        // in the synthesized targetInfo), so don't adopt anything: the agent drives
+        // only tabs it explicitly created, and pop-ups (e.g. an OAuth/login window)
+        // are the user's. A launched browser (every tab ours) still follows pop-ups.
+        if self.agent_group().is_some() {
+            return None;
+        }
         let result: GetTargetsResult = self
             .client
             .send_command_typed("Target.getTargets", &json!({}), None)
