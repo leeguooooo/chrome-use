@@ -233,6 +233,22 @@ Positional args fill the adapter's declared args in order; `--key value` overrid
 by name. Adapters are authored by the bb-sites community and remain their authors'
 property — chrome-use just runs them.
 
+**Auto-sync + auto-suggest.** You rarely type `site update` yourself: chrome-use
+syncs the pack on first use and refreshes it weekly in the background (tune with
+`AGENT_BROWSER_SITES_TTL_DAYS`, disable with `AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`).
+And when you `open`/`snapshot` a page whose domain has adapters, chrome-use surfaces
+them right in the output — a `💡 site adapters for <domain>` line, plus a
+`siteAdapters` field under `--json` — so an agent reaches for the structured-data
+adapter instead of scraping the DOM:
+
+```text
+$ chrome-use open https://github.com
+💡 site adapters for github.com — prefer these for structured data:
+   github/issues, github/me, github/repo, …
+   e.g. chrome-use site github/issues --json
+✓ GitHub
+```
+
 ## Automated testing (`chrome-use test`)
 
 Turn the repetitive "open it, click around, check it's right" work into a

@@ -2478,7 +2478,10 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
             wb.navigate(url).await?;
             let new_url = wb.get_url().await.unwrap_or_else(|_| url.to_string());
             let title = wb.get_title().await.unwrap_or_default();
-            return Ok(json!({ "url": new_url, "title": title }));
+            return Ok(with_site_hint(
+                json!({ "url": new_url, "title": title }),
+                url,
+            ));
         }
     }
 
@@ -2545,7 +2548,7 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         .unwrap_or(false)
     {
         if let Ok(Some(switched)) = mgr.reuse_tab_for_url(url).await {
-            return Ok(switched);
+            return Ok(with_site_hint(switched, url));
         }
     }
 
@@ -2553,7 +2556,34 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     // Adaptive humanize: sample the freshly loaded page for known behavioural
     // anti-bot vendors and escalate this session to Human if any are present.
     detect_and_set_humanize(mgr).await;
-    Ok(result)
+    Ok(with_site_hint(result, url))
+}
+
+/// Annotate a navigation/snapshot result with the `site` adapters available for
+/// the page's domain (auto-trigger): when you land on e.g. github.com, the
+/// response carries `siteAdapters: { domain, commands: ["github/issues", …] }` so
+/// the agent reaches for a structured-data adapter instead of scraping. No-op
+/// when nothing matches or the pack isn't synced yet.
+fn with_site_hint(mut result: Value, fallback_url: &str) -> Value {
+    let url = result
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(fallback_url);
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(String::from));
+    if let Some(host) = host {
+        let adapters = crate::site::adapters_for_domain(&host);
+        if !adapters.is_empty() {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "siteAdapters".to_string(),
+                    json!({ "domain": host, "commands": adapters }),
+                );
+            }
+        }
+    }
+    result
 }
 
 /// After navigation, probe the page for known anti-bot vendor fingerprints
@@ -2935,6 +2965,13 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     let ref_count = refs.len();
     let mut out = json!({ "snapshot": tree, "origin": url, "refs": refs });
+
+    // Auto-trigger: if this domain has site adapters, surface them so the agent
+    // pulls structured data instead of walking the tree. `with_site_hint` reads
+    // the `url` field, so pass it under that key.
+    if let Some(hint) = with_site_hint(json!({ "url": url }), &url).get("siteAdapters") {
+        out["siteAdapters"] = hint.clone();
+    }
 
     // Canvas/WebGL apps (games, map/3D viewers, drawing tools) paint to a
     // <canvas> and expose almost no accessibility tree, so `snapshot` comes back

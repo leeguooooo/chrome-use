@@ -186,6 +186,26 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
     }
 
     if let Some(data) = &resp.data {
+        // Auto-trigger: when you land on / read a page whose domain has site
+        // adapters, surface them so the agent pulls structured data via
+        // `chrome-use site <name>/<cmd>` instead of scraping the DOM. (In --json
+        // mode this same info rides along in the `siteAdapters` field above.)
+        if let Some(hint) = data.get("siteAdapters") {
+            let domain = hint.get("domain").and_then(|v| v.as_str()).unwrap_or("");
+            let cmds: Vec<&str> = hint
+                .get("commands")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            if !cmds.is_empty() {
+                eprintln!("💡 site adapters for {domain} — prefer these for structured data:");
+                eprintln!("   {}", color::dim(&cmds.join(", ")));
+                eprintln!(
+                    "   {}",
+                    color::dim(&format!("e.g. chrome-use site {} --json", cmds[0]))
+                );
+            }
+        }
         // A click that opened a new tab: surface it so the agent doesn't read the
         // unchanged old page as a failed click (issue #24-A).
         if let Some(opened) = data.get("openedTab") {

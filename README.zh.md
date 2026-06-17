@@ -188,6 +188,20 @@ chrome-use site bilibili/feed --json            # 能用，因为走的是你的
 位置参数按适配器声明的参数顺序填入；`--key value` 按名覆盖。适配器由 bb-sites 社区编写、
 版权归各自作者所有 —— chrome-use 只负责运行它们。
 
+**自动同步 + 自动提示。** 你基本不用手动 `site update`:chrome-use 首次使用时自动拉取,
+之后每周后台刷新一次(`AGENT_BROWSER_SITES_TTL_DAYS` 调周期,`AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`
+关闭)。而当你 `open`/`snapshot` 一个有适配器的域名时,chrome-use 会在输出里直接把可用命令
+亮出来 —— 一行 `💡 site adapters for <域名>`,`--json` 下则是 `siteAdapters` 字段 —— 这样
+agent 会直接改用结构化适配器,而不是去扒 DOM:
+
+```text
+$ chrome-use open https://github.com
+💡 site adapters for github.com — prefer these for structured data:
+   github/issues, github/me, github/repo, …
+   e.g. chrome-use site github/issues --json
+✓ GitHub
+```
+
 ## 自动化测试（`chrome-use test`）
 
 把反复的「打开它、点一圈、看对不对」变成**可重跑的测试套件** —— 前端的单元测试。用 YAML 写用例；步骤复用 chrome-use 自己的命令，断言编译成一次检查：

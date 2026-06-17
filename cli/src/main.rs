@@ -840,6 +840,27 @@ fn main() {
     // `info` are CLI-side (download/filesystem); `site <name>/<cmd> [args]` falls
     // through to the daemon dispatch below (navigate to the adapter's domain + eval).
     if clean.first().map(|s| s.as_str()) == Some("site") {
+        // Auto-sync the adapter pack on first use and periodically (TTL, default
+        // 7d) so adapters stay fresh without a manual `site update`. Skipped for an
+        // explicit `update` (full sync below). Best-effort: offline → cached pack.
+        // Disable with AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1.
+        if clean.get(1).map(|s| s.as_str()) != Some("update") && site::needs_refresh() {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            match rt.block_on(site::update()) {
+                Ok(n) => {
+                    eprintln!(
+                        "{}",
+                        color::dim(&format!("site: synced {n} adapters (auto)"))
+                    )
+                }
+                Err(e) => eprintln!(
+                    "{}",
+                    color::dim(&format!(
+                        "site: auto-sync skipped ({e}); using cached adapters"
+                    ))
+                ),
+            }
+        }
         match clean.get(1).map(|s| s.as_str()) {
             Some("update") => {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");

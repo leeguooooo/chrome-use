@@ -21,6 +21,16 @@ pub async fn run_daemon(session: &str) {
     // (via the ab-connect extension) land in a per-session Chrome tab group.
     let _ = super::browser::DAEMON_SESSION.set(session.to_string());
 
+    // Bootstrap / refresh the site-adapter pack in the background (first-run +
+    // periodic TTL). This populates ~/.chrome-use/sites/.index.json so navigation
+    // can auto-suggest `site` commands for the page you land on, with zero added
+    // latency to any command. Best-effort; offline is a no-op.
+    if crate::site::needs_refresh() {
+        tokio::spawn(async {
+            let _ = crate::site::update().await;
+        });
+    }
+
     let socket_dir = get_daemon_socket_dir();
     if !socket_dir.exists() {
         let _ = fs::create_dir_all(&socket_dir);

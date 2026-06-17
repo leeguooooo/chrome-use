@@ -199,7 +199,125 @@ pub async fn update() -> Result<usize, String> {
             count += 1;
         }
     }
+    // Build the domain→adapters index and stamp the sync time so navigation can
+    // suggest adapters (auto-trigger) and `needs_refresh` can pace re-syncs.
+    write_domain_index(&dir);
+    if let Some(p) = last_update_path() {
+        let _ = std::fs::write(p, now_secs().to_string());
+    }
     Ok(count)
+}
+
+/// `~/.chrome-use/sites/.last_update` — unix-seconds marker of the last sync.
+fn last_update_path() -> Option<PathBuf> {
+    sites_dir().map(|d| d.join(".last_update"))
+}
+
+/// `~/.chrome-use/sites/.index.json` — `{ "github.com": ["github/issues", …], … }`,
+/// built on `update` so navigation can look up adapters by domain without parsing
+/// all ~145 adapter files on every command.
+fn index_path() -> Option<PathBuf> {
+    sites_dir().map(|d| d.join(".index.json"))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Parse every installed adapter and write the domain→adapters index. Within a
+/// domain, read-only adapters are listed first (then alphabetical) so the
+/// auto-suggested example leads with a safe read, not a write action.
+fn write_domain_index(dir: &std::path::Path) {
+    let mut by_domain: std::collections::BTreeMap<String, Vec<(bool, String)>> = Default::default();
+    for spec in list_adapters().unwrap_or_default() {
+        if let Ok(a) = load_adapter(&spec) {
+            if let Some(d) = a.domain() {
+                let read_only = a
+                    .meta
+                    .get("readOnly")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                by_domain
+                    .entry(d.to_string())
+                    .or_default()
+                    .push((read_only, spec));
+            }
+        }
+    }
+    let ordered: std::collections::BTreeMap<String, Vec<String>> = by_domain
+        .into_iter()
+        .map(|(domain, mut v)| {
+            // read-only (true) first, then by spec name
+            v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            (domain, v.into_iter().map(|(_, s)| s).collect())
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&ordered) {
+        let _ = std::fs::write(dir.join(".index.json"), json);
+    }
+}
+
+const DEFAULT_TTL_DAYS: u64 = 7;
+
+/// Whether the adapter pack should be (re)synced: true on first use (nothing
+/// installed) or when the last sync is older than the TTL. Disabled by
+/// `AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`; TTL overridable via
+/// `AGENT_BROWSER_SITES_TTL_DAYS` (0 = always).
+pub fn needs_refresh() -> bool {
+    if std::env::var_os("AGENT_BROWSER_SITES_NO_AUTO_UPDATE").is_some() {
+        return false;
+    }
+    let Some(dir) = sites_dir() else {
+        return false;
+    };
+    // First use: no adapters installed yet.
+    if list_adapters().map(|l| l.is_empty()).unwrap_or(true) {
+        let _ = &dir;
+        return true;
+    }
+    let ttl_days = std::env::var("AGENT_BROWSER_SITES_TTL_DAYS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_TTL_DAYS);
+    let ttl = ttl_days.saturating_mul(86_400);
+    match last_update_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+        Some(s) => match s.trim().parse::<u64>() {
+            Ok(ts) => now_secs().saturating_sub(ts) >= ttl,
+            Err(_) => true,
+        },
+        None => true, // no marker → treat as stale
+    }
+}
+
+/// Adapters whose `@meta.domain` matches `host` (exact, or `host` is a subdomain
+/// of it) — for auto-suggesting `site` commands when you land on a known site.
+/// Reads the prebuilt `.index.json`; empty if the pack isn't synced yet.
+pub fn adapters_for_domain(host: &str) -> Vec<String> {
+    let host = host.trim_start_matches("www.");
+    let Some(raw) = index_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Vec::new();
+    };
+    let Ok(idx) = serde_json::from_str::<std::collections::BTreeMap<String, Vec<String>>>(&raw)
+    else {
+        return Vec::new();
+    };
+    // Preserve the index's per-domain ordering (read-only adapters first); just
+    // dedup if a host somehow matches multiple domain keys.
+    let mut out: Vec<String> = Vec::new();
+    for (domain, specs) in idx {
+        let d = domain.trim_start_matches("www.");
+        if host == d || host.ends_with(&format!(".{d}")) {
+            for s in specs {
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Map CLI args to the adapter's `args` object. Positional args fill the adapter's

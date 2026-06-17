@@ -218,6 +218,13 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
 - If no adapter fits, fall back to the normal `snapshot`/`eval` loop. Adapters come from the
   [bb-sites](https://github.com/epiral/bb-sites) community pack; chrome-use fetches & runs them.
 
+> **Auto-trigger — act on it.** chrome-use keeps the pack synced automatically (first use +
+> weekly), and when you `open`/`navigate`/`snapshot` a page whose domain has adapters it tells
+> you: a `💡 site adapters for <domain>` line on stderr, and a `siteAdapters: {domain, commands}`
+> field in `--json`. **When you see that, prefer the listed `site <name>/<cmd>` over snapshot+click
+> for reading data** — it's the cheaper, more reliable path and it's already installed. You don't
+> need to run `site update` yourself; just use the command it names.
+
 ## Quickstart
 
 ```bash
