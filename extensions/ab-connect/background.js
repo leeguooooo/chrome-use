@@ -288,6 +288,19 @@ async function handleForwardCdpCommand(msg) {
   const params = msg?.params?.params || undefined
   const sessionId = typeof msg?.params?.sessionId === 'string' ? msg.params.sessionId : undefined
 
+  // Non-CDP extension commands (ABExt.*) the daemon sends. `ungroupTab` removes a
+  // tab from its per-session tab group so a `keep`-marked tab is left for the user
+  // as a normal, ungrouped tab (the group can then be cleaned up). Best-effort.
+  if (method === 'ABExt.ungroupTab') {
+    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    if (tabId != null && chrome.tabs.ungroup) {
+      try {
+        await chrome.tabs.ungroup(tabId)
+      } catch {}
+    }
+    return { ungrouped: tabId ?? null }
+  }
+
   // Browser-level Target methods that map onto chrome.tabs.
   if (method === 'Target.createTarget') {
     const url = typeof params?.url === 'string' && params.url ? params.url : 'about:blank'

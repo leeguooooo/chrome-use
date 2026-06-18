@@ -1317,6 +1317,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "evaluate" => handle_evaluate(cmd, state).await,
         "site" => handle_site(cmd, state).await,
         "close" => handle_close(state).await,
+        "keep" => handle_keep(state).await,
         "stealth_status" => handle_stealth_status(state).await,
         "snapshot" => handle_snapshot(cmd, state).await,
         "screenshot" => handle_screenshot(cmd, state).await,
@@ -2852,6 +2853,34 @@ async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
             "overrides": overrides,
             "probe": p,
         }
+    }))
+}
+
+/// `keep` — leave the ACTIVE tab for the user: stop owning it (so the daemon's
+/// `close()`/idle-shutdown won't close it) and best-effort remove it from this
+/// session's tab group so it looks like a normal user tab. The "leave for the
+/// user" half of the auto-close-on-idle cleanup: scratch tabs get closed, tabs
+/// the agent explicitly `keep`s stay. (Adopted user tabs are never owned, so
+/// they're already safe.)
+async fn handle_keep(state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    let target_id = mgr.active_target_id()?.to_string();
+    let session_id = mgr.active_session_id()?.to_string();
+    let was_owned = mgr.unown_target(&target_id);
+    // Best-effort: ask the extension to ungroup the tab (relay only; no-ops on a
+    // launched browser or an older extension that doesn't know ABExt.ungroupTab).
+    let _ = mgr
+        .client
+        .send_command_typed::<_, Value>(
+            "ABExt.ungroupTab",
+            &json!({ "sessionId": session_id, "targetId": target_id }),
+            None,
+        )
+        .await;
+    Ok(json!({
+        "kept": target_id,
+        "wasOwned": was_owned,
+        "note": "tab left for the user — exempt from auto-close, removed from the session tab group",
     }))
 }
 

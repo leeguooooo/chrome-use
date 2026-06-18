@@ -130,12 +130,21 @@ pub async fn run_daemon(session: &str) {
         }
     }
 
-    // Auto-shutdown the daemon after this many ms of inactivity (no commands received).
-    // Disabled when unset or 0.
-    let idle_timeout_ms = env::var("AGENT_BROWSER_IDLE_TIMEOUT_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .filter(|&ms| ms > 0);
+    // Auto-shutdown the daemon after this many ms of inactivity (no commands
+    // received). On shutdown the daemon closes the tabs IT created (its per-session
+    // tab group), so an agent that finishes a task and just stops — without ever
+    // calling `close` — no longer leaves a pile of scratch tabs and a lingering
+    // tab group in the user's Chrome. The timer resets on every command, so active
+    // sessions are never interrupted; only genuinely-idle ones clean up.
+    //
+    // Defaults to 10 minutes. Set AGENT_BROWSER_IDLE_TIMEOUT_MS to override, or 0
+    // to disable (keep the daemon alive forever — the old behaviour). Adopted
+    // tabs (the user's own, via `adopt`) are never closed: only `created_targets`.
+    const DEFAULT_IDLE_TIMEOUT_MS: u64 = 600_000;
+    let idle_timeout_ms = match env::var("AGENT_BROWSER_IDLE_TIMEOUT_MS") {
+        Ok(s) => s.trim().parse::<u64>().ok().filter(|&ms| ms > 0),
+        Err(_) => Some(DEFAULT_IDLE_TIMEOUT_MS),
+    };
 
     let result = run_socket_server(
         &socket_path,

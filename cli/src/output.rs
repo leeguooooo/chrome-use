@@ -3326,6 +3326,9 @@ Core Commands:
   snapshot                   Accessibility tree with refs (for AI)
   eval <js>                  Run JavaScript
   connect <port|url>         Connect to browser via CDP
+  keep                       Leave the active tab for the user — exempt it from
+                             auto-close/idle cleanup + remove it from the session
+                             tab group (so scratch tabs get cleaned, this one stays)
   close [--all]              Close browser (--all closes every session)
 
 Navigation:

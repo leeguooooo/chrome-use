@@ -84,6 +84,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "canvas",
     "viewport",
     "resize",
+    "keep",
 ];
 
 /// Levenshtein distance, capped — small inputs only (command names).
@@ -1374,6 +1375,10 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         // the time this command runs the tab is already attached. Resolve to a
         // `url` read so the response confirms which tab got adopted.
         "adopt" => Ok(json!({ "id": id, "action": "url" })),
+
+        // `keep`: leave the active tab for the user — exempt it from the daemon's
+        // auto-close/idle cleanup and remove it from the session's tab group.
+        "keep" => Ok(json!({ "id": id, "action": "keep" })),
 
         // === Stealth self-check ===
         "stealth" => {
@@ -3180,7 +3185,7 @@ fn parse_viewport(rest: &[&str], id: &str) -> Result<Value, ParseError> {
 
     let (w, h, scale_tok): (i32, i32, Option<&str>) = match positionals.first() {
         Some(first) if first.contains('x') || first.contains('X') => {
-            let mut parts = first.split(|c| c == 'x' || c == 'X');
+            let mut parts = first.split(['x', 'X']);
             let w = parts.next().and_then(|s| s.parse::<i32>().ok());
             let h = parts.next().and_then(|s| s.parse::<i32>().ok());
             match (w, h) {
@@ -3238,7 +3243,7 @@ fn parse_viewport(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     if let Some(s) = scale {
         cmd["deviceScaleFactor"] = json!(s);
     }
-    if rest.iter().any(|a| *a == "--mobile") {
+    if rest.contains(&"--mobile") {
         cmd["mobile"] = json!(true);
     }
     Ok(cmd)

@@ -1546,6 +1546,13 @@ impl BrowserManager {
             .ok_or_else(|| "No active page".to_string())
     }
 
+    /// Stop owning a tab — drop it from `created_targets` so it survives `close()`
+    /// and idle-shutdown (the agent is leaving it for the user). Returns true if it
+    /// was owned. Used by `keep`.
+    pub fn unown_target(&mut self, target_id: &str) -> bool {
+        self.created_targets.remove(target_id)
+    }
+
     /// Returns true if this manager was connected via CDP (as opposed to local launch).
     pub fn is_cdp_connection(&self) -> bool {
         self.browser_process.is_none()
