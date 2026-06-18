@@ -3162,15 +3162,21 @@ fn parse_mouse(rest: &[&str], id: &str) -> Result<Value, ParseError> {
 ///   viewport <width>x<height>        (e.g. 1280x800)
 ///   viewport reset | clear           (drop the override, restore real size)
 fn parse_viewport(rest: &[&str], id: &str) -> Result<Value, ParseError> {
-    const USAGE: &str =
-        "viewport <width> <height> [scale] [--dpr N] [--mobile] | viewport reset";
+    const USAGE: &str = "viewport <width> <height> [scale] [--dpr N] [--mobile] | viewport reset";
 
-    if matches!(rest.first().copied(), Some("reset") | Some("clear") | Some("off")) {
+    if matches!(
+        rest.first().copied(),
+        Some("reset") | Some("clear") | Some("off")
+    ) {
         return Ok(json!({ "id": id, "action": "viewport", "reset": true }));
     }
 
     // Positional (non-flag) tokens. A `WxH` token counts as one positional.
-    let positionals: Vec<&str> = rest.iter().copied().filter(|a| !a.starts_with("--")).collect();
+    let positionals: Vec<&str> = rest
+        .iter()
+        .copied()
+        .filter(|a| !a.starts_with("--"))
+        .collect();
 
     let (w, h, scale_tok): (i32, i32, Option<&str>) = match positionals.first() {
         Some(first) if first.contains('x') || first.contains('X') => {
@@ -3188,9 +3194,10 @@ fn parse_viewport(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             }
         }
         Some(w_str) => {
-            let h_str = positionals
-                .get(1)
-                .ok_or(ParseError::MissingArguments { context: "viewport".to_string(), usage: USAGE })?;
+            let h_str = positionals.get(1).ok_or(ParseError::MissingArguments {
+                context: "viewport".to_string(),
+                usage: USAGE,
+            })?;
             let w = w_str.parse::<i32>().map_err(|_| ParseError::InvalidValue {
                 message: format!("Invalid width: {}", w_str),
                 usage: USAGE,
@@ -3220,13 +3227,12 @@ fn parse_viewport(rest: &[&str], id: &str) -> Result<Value, ParseError> {
         None => None,
     };
     if let Some(i) = rest.iter().position(|a| *a == "--dpr" || *a == "--scale") {
-        let v = rest
-            .get(i + 1)
-            .and_then(|s| s.parse::<f64>().ok())
-            .ok_or(ParseError::InvalidValue {
+        let v = rest.get(i + 1).and_then(|s| s.parse::<f64>().ok()).ok_or(
+            ParseError::InvalidValue {
                 message: "--dpr/--scale needs a number".to_string(),
                 usage: USAGE,
-            })?;
+            },
+        )?;
         scale = Some(v);
     }
     if let Some(s) = scale {
@@ -5442,7 +5448,8 @@ mod tests {
 
     #[test]
     fn test_viewport_dpr_and_mobile_flags() {
-        let cmd = parse_command(&args("viewport 375 812 --dpr 3 --mobile"), &default_flags()).unwrap();
+        let cmd =
+            parse_command(&args("viewport 375 812 --dpr 3 --mobile"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "viewport");
         assert_eq!(cmd["width"], 375);
         assert_eq!(cmd["height"], 812);

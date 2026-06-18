@@ -1950,9 +1950,17 @@ impl BrowserManager {
     /// CDP browser the endpoint is strict, so we must NOT send the custom param —
     /// hence `None` there. We detect the relay by matching our `ws_url` against
     /// the live relay URL the native-messaging host published.
+    /// Whether this manager is driving the user's real Chrome through the
+    /// `ab-connect` extension relay (vs. a browser we launched or a direct CDP
+    /// endpoint). Detected by matching our `ws_url` against the live relay URL
+    /// the native-messaging host published. Used to avoid relay-unsafe CDP that
+    /// would disturb the user's window (e.g. Browser.setContentsSize, issue #47).
+    fn via_relay(&self) -> bool {
+        crate::connect::relay_url().as_deref() == Some(self.ws_url.as_str())
+    }
+
     fn agent_group(&self) -> Option<String> {
-        let via_relay = crate::connect::relay_url().as_deref() == Some(self.ws_url.as_str());
-        if !via_relay {
+        if !self.via_relay() {
             return None;
         }
         let name = DAEMON_SESSION
@@ -2161,37 +2169,60 @@ impl BrowserManager {
             .await?;
 
         // Screencast captures the actual content area, not the emulated CSS
-        // viewport, so resize the content area to match.
-        if let Ok(target_id) = self.active_target_id() {
-            if let Ok(window_info) = self
-                .client
-                .send_command(
-                    "Browser.getWindowForTarget",
-                    Some(json!({ "targetId": target_id })),
-                    None,
-                )
-                .await
-            {
-                if let Some(window_id) = window_info.get("windowId").and_then(|v| v.as_i64()) {
-                    if let Err(e) = self
-                        .client
-                        .send_command(
-                            "Browser.setContentsSize",
-                            Some(json!({
-                                "windowId": window_id,
-                                "width": width,
-                                "height": height,
-                            })),
-                            None,
-                        )
-                        .await
-                    {
-                        eprintln!("Browser.setContentsSize failed (experimental CDP): {e}");
+        // viewport, so resize the content area to match — but ONLY for a browser
+        // we launched. Over the ab-connect relay the "window" is the user's real
+        // Chrome window, and Browser.setContentsSize would physically resize it
+        // (issue #47) — the exact thing the CDP device-metrics override exists to
+        // avoid. The Emulation override above already gives the tab the requested
+        // CSS viewport without touching the OS window, so skip the resize there.
+        if !self.via_relay() {
+            if let Ok(target_id) = self.active_target_id() {
+                if let Ok(window_info) = self
+                    .client
+                    .send_command(
+                        "Browser.getWindowForTarget",
+                        Some(json!({ "targetId": target_id })),
+                        None,
+                    )
+                    .await
+                {
+                    if let Some(window_id) = window_info.get("windowId").and_then(|v| v.as_i64()) {
+                        if let Err(e) = self
+                            .client
+                            .send_command(
+                                "Browser.setContentsSize",
+                                Some(json!({
+                                    "windowId": window_id,
+                                    "width": width,
+                                    "height": height,
+                                })),
+                                None,
+                            )
+                            .await
+                        {
+                            eprintln!("Browser.setContentsSize failed (experimental CDP): {e}");
+                        }
                     }
                 }
             }
         }
 
+        Ok(())
+    }
+
+    /// Clear the CDP device-metrics override (`viewport reset`), restoring the
+    /// tab's real layout viewport. Never touches the OS window, so it is safe on
+    /// the relay (we never physically resized the user's window — see
+    /// `set_viewport`).
+    pub async fn clear_viewport(&self) -> Result<(), String> {
+        let session_id = self.active_session_id()?;
+        self.client
+            .send_command(
+                "Emulation.clearDeviceMetricsOverride",
+                Some(json!({})),
+                Some(session_id),
+            )
+            .await?;
         Ok(())
     }
 
