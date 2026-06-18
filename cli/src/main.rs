@@ -305,6 +305,49 @@ fn run_session(args: &[String], session: &str, json_mode: bool) {
                 }
             }
         }
+        // Stop a specific session daemon (issue #48). Graceful: kill_stale_daemon
+        // sends SIGTERM first, so the daemon's shutdown handler runs `close()` and
+        // tidies the tabs IT created (its tab group) before exiting.
+        Some("stop") => {
+            let target = args.get(2).map(|s| s.as_str()).unwrap_or(session);
+            connection::kill_stale_daemon(target);
+            if json_mode {
+                print_json_value(json!({ "success": true, "data": { "stopped": target } }));
+            } else {
+                println!(
+                    "{} stopped session daemon: {}",
+                    color::success_indicator(),
+                    target
+                );
+            }
+        }
+        // Reclaim ALL session daemons now (issue #48) — for clearing the pile of
+        // idle daemons left after a round of automation/debugging without waiting
+        // for the idle timeout. Each is stopped gracefully (closes its own tabs);
+        // they respawn clean on next use. The `__nm-host` relay is not a tracked
+        // session daemon, so the extension/live-Chrome connection survives.
+        Some("prune") => {
+            let sessions: Vec<String> = walk_daemons()
+                .sessions
+                .into_iter()
+                .map(|s| s.name)
+                .collect();
+            for s in &sessions {
+                connection::kill_stale_daemon(s);
+            }
+            if json_mode {
+                print_json_value(json!({ "success": true, "data": { "pruned": sessions } }));
+            } else if sessions.is_empty() {
+                println!("No session daemons to prune");
+            } else {
+                println!(
+                    "{} pruned {} session daemon(s): {}",
+                    color::success_indicator(),
+                    sessions.len(),
+                    sessions.join(", ")
+                );
+            }
+        }
         None | Some(_) => {
             // Just show current session
             if json_mode {

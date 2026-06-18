@@ -3455,10 +3455,20 @@ Confirmation:
 Sessions:
   session                    Show current session name
   session list               List active sessions
+  session stop [name]        Stop one session daemon (default: current) — graceful,
+                             closes the tabs it created
+  session prune              Stop ALL session daemons now (closes their tabs; they
+                             respawn clean on next use). For clearing idle daemons.
   sessions                   List running session daemons (alias of daemon status)
   daemon status              List running session daemons (+ relay state)
   daemon restart             Kill all session daemons; keeps the extension relay
                              up. Clears stale/cross-leaked state after an upgrade.
+
+  Lifecycle: each --session <name> spawns a background daemon that drives that
+  session's tabs. A daemon auto-shuts-down after 10 min idle (no commands) —
+  AGENT_BROWSER_IDLE_TIMEOUT_MS overrides, 0 disables — and on shutdown closes
+  the scratch tabs IT created (its tab group). Use `keep` to leave a tab for the
+  user (exempt from auto-close), `session stop/prune` to reclaim now.
 
 Chat (AI):
   chat <message>             Send a natural language instruction (single-shot)
