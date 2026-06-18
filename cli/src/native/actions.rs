@@ -1320,6 +1320,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "stealth_status" => handle_stealth_status(state).await,
         "snapshot" => handle_snapshot(cmd, state).await,
         "screenshot" => handle_screenshot(cmd, state).await,
+        "canvas_list" => handle_canvas_list(state).await,
+        "canvas_capture" => handle_canvas_capture(cmd, state).await,
         "click" => handle_click(cmd, state).await,
         "dblclick" => handle_dblclick(cmd, state).await,
         "fill" => handle_fill(cmd, state).await,
@@ -3213,6 +3215,154 @@ fn downscale_screenshot(
     Some((resized.width(), resized.height()))
 }
 
+/// `canvas list` — enumerate <canvas> elements (size, visibility, whether
+/// toDataURL is usable) so an agent can pick one to capture on a canvas/WebGL app
+/// where snapshot/DOM reads see nothing.
+async fn handle_canvas_list(state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let js = r#"(() => [...document.querySelectorAll('canvas')].map((c, i) => {
+        const r = c.getBoundingClientRect();
+        let toDataUrl = true, tainted = false;
+        try { c.toDataURL('image/png'); } catch (e) { toDataUrl = false; tainted = true; }
+        return {
+            index: i,
+            backingWidth: c.width, backingHeight: c.height,
+            cssWidth: Math.round(r.width), cssHeight: Math.round(r.height),
+            visible: r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight,
+            id: c.id || null, className: c.className || null,
+            toDataUrl, tainted,
+        };
+    }))()"#;
+    let canvases = mgr.evaluate(js, None).await?;
+    Ok(json!({ "canvases": canvases }))
+}
+
+/// `canvas capture [selector] [path]` — save a canvas's rendered pixels to PNG.
+/// Prefers `toDataURL` (full backing-store resolution); falls back to a CDP
+/// screenshot of the canvas element when toDataURL is blank (WebGL without
+/// preserveDrawingBuffer, e.g. Figma) or throws (cross-origin tainted). This is
+/// how chrome-use "sees" canvas/WebGL apps that expose no DOM or refs.
+async fn handle_canvas_capture(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let selector = cmd
+        .get("selector")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let force_screenshot = cmd
+        .get("forceScreenshot")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let out_path = cmd.get("path").and_then(|v| v.as_str()).map(String::from);
+    let id = cmd.get("id").and_then(|v| v.as_str()).unwrap_or("0");
+
+    // Probe: locate the canvas, get its bbox, and try toDataURL (unless forced).
+    let probe = {
+        let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+        let sel_lit = match &selector {
+            Some(s) => serde_json::to_string(s).unwrap_or_else(|_| "null".to_string()),
+            None => "null".to_string(),
+        };
+        let js = format!(
+            r#"(() => {{
+                const sel = {sel_lit};
+                const c = sel ? document.querySelector(sel)
+                    : [...document.querySelectorAll('canvas')].sort((a,b)=>(b.width*b.height)-(a.width*a.height))[0];
+                if (!c) return {{ found: false, count: document.querySelectorAll('canvas').length }};
+                const r = c.getBoundingClientRect();
+                let dataUrl = null, err = null;
+                if ({try_data}) {{ try {{ dataUrl = c.toDataURL('image/png'); }} catch (e) {{ err = String(e && e.message || e); }} }}
+                return {{ found: true, w: c.width, h: c.height, x: r.x, y: r.y, cw: r.width, ch: r.height, dataUrl, err }};
+            }})()"#,
+            try_data = !force_screenshot
+        );
+        mgr.evaluate(&js, None).await?
+    };
+
+    if !probe
+        .get("found")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let count = probe.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+        return Err(format!(
+            "canvas: no canvas matched{} ({count} canvas element(s) on the page — try `canvas list`)",
+            selector
+                .as_deref()
+                .map(|s| format!(" `{s}`"))
+                .unwrap_or_default()
+        ));
+    }
+    let backing_w = probe.get("w").and_then(|v| v.as_u64()).unwrap_or(0);
+    let backing_h = probe.get("h").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    // Decode toDataURL if present; a WebGL canvas without preserveDrawingBuffer
+    // returns a blank PNG (tiny when compressed), so reject suspiciously small
+    // results and fall back to the screenshot path.
+    let decoded: Option<Vec<u8>> = probe
+        .get("dataUrl")
+        .and_then(|v| v.as_str())
+        .and_then(|u| u.split_once(",").map(|(_, b)| b.to_string()))
+        .and_then(|b64| {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64.as_bytes()).ok()
+        });
+    let use_data = !force_screenshot && decoded.as_ref().map(|d| d.len() > 1024).unwrap_or(false);
+
+    if use_data {
+        let bytes = decoded.unwrap();
+        let path = out_path.unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join(format!("canvas-{id}.png"))
+                .to_string_lossy()
+                .into_owned()
+        });
+        std::fs::write(&path, &bytes).map_err(|e| format!("canvas: write {path}: {e}"))?;
+        Ok(json!({
+            "path": absolutize_saved_path(&path),
+            "method": "toDataURL",
+            "width": backing_w,
+            "height": backing_h,
+        }))
+    } else {
+        // Fallback: screenshot the canvas element (or its bbox clip).
+        let clip = if selector.is_none() {
+            let x = probe.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let y = probe.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let cw = probe.get("cw").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let ch = probe.get("ch").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            Some((x, y, cw, ch))
+        } else {
+            None
+        };
+        let options = ScreenshotOptions {
+            selector: selector.clone(),
+            path: out_path,
+            clip,
+            ..ScreenshotOptions::default()
+        };
+        let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+        let session_id = mgr.active_session_id()?.to_string();
+        let result = screenshot::take_screenshot(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            &options,
+            &state.iframe_sessions,
+        )
+        .await?;
+        let why = probe
+            .get("err")
+            .and_then(|v| v.as_str())
+            .map(|e| format!("toDataURL failed ({e})"))
+            .unwrap_or_else(|| {
+                "toDataURL blank/unavailable (WebGL no preserveDrawingBuffer)".into()
+            });
+        Ok(json!({
+            "path": absolutize_saved_path(&result.path),
+            "method": "screenshot",
+            "note": format!("captured rendered pixels via screenshot — {why}"),
+        }))
+    }
+}
+
 async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     // First-class coordinate click (issue #8.4): click a raw viewport point with
     // no element resolution. Parsed from `click <x> <y>` / `click --coords x,y`.
@@ -5102,6 +5252,19 @@ async fn handle_tab_close(cmd: &Value, state: &mut DaemonState) -> Result<Value,
 
 async fn handle_viewport(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+
+    // `viewport reset` clears the device-metrics override and restores the real
+    // layout viewport (the launched window's size, or — over the relay — the
+    // user's actual Chrome window).
+    if cmd.get("reset").and_then(|v| v.as_bool()).unwrap_or(false) {
+        mgr.clear_viewport().await?;
+        state.viewport = None;
+        if let Some(ref server) = state.stream_server {
+            server.set_viewport(1280, 720).await;
+        }
+        return Ok(json!({ "reset": true }));
+    }
+
     let width = cmd.get("width").and_then(|v| v.as_i64()).unwrap_or(1280) as i32;
     let height = cmd.get("height").and_then(|v| v.as_i64()).unwrap_or(720) as i32;
     let scale = cmd

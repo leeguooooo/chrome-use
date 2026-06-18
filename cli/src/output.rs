@@ -3319,6 +3319,10 @@ Core Commands:
   screenshot [path]          Take screenshot (auto-downscaled to ≤2000px long edge;
                              --max-width/--max-height/--scale to override)
   pdf <path>                 Save as PDF
+  canvas list                List <canvas> elements (size, type) on the page
+  canvas capture [sel] [path]  Save a canvas's rendered pixels to PNG — for
+                             WebGL/canvas apps (Figma, games, maps, charts) that
+                             expose no DOM. toDataURL, with a screenshot fallback.
   snapshot                   Accessibility tree with refs (for AI)
   eval <js>                  Run JavaScript
   connect <port|url>         Connect to browser via CDP

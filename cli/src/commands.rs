@@ -81,6 +81,9 @@ const KNOWN_COMMANDS: &[&str] = &[
     "site",
     "box",
     "adopt",
+    "canvas",
+    "viewport",
+    "resize",
 ];
 
 /// Levenshtein distance, capped — small inputs only (command names).
@@ -1173,6 +1176,54 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             }
             Ok(cmd)
         }
+        // Canvas/WebGL apps (Figma, games, maps, charts, drawing tools) render to a
+        // <canvas> with no DOM/refs to read. `canvas` extracts what's actually
+        // rendered: `list` enumerates canvases; `capture` saves a canvas to PNG via
+        // toDataURL (full backing-store resolution) with a CDP-screenshot fallback
+        // for WebGL contexts (no preserveDrawingBuffer) or cross-origin-tainted ones.
+        "canvas" => {
+            match rest.first().copied() {
+                Some("list") => Ok(json!({ "id": id, "action": "canvas_list" })),
+                Some("capture") => {
+                    let force_screenshot = rest.contains(&"--screenshot");
+                    let pos: Vec<&str> = rest[1..]
+                        .iter()
+                        .copied()
+                        .filter(|a| !a.starts_with("--"))
+                        .collect();
+                    // `capture [selector] [path]`: a selector starts with . # @ or is
+                    // a tag; a path contains / or ends in an image extension.
+                    let is_path = |s: &str| {
+                        s.contains('/')
+                            || s.ends_with(".png")
+                            || s.ends_with(".jpg")
+                            || s.ends_with(".jpeg")
+                            || s.ends_with(".webp")
+                    };
+                    let (selector, path) = match (pos.first(), pos.get(1)) {
+                        (Some(a), Some(b)) => (Some(*a), Some(*b)),
+                        (Some(a), None) if is_path(a) => (None, Some(*a)),
+                        (Some(a), None) => (Some(*a), None),
+                        _ => (None, None),
+                    };
+                    let mut cmd = json!({ "id": id, "action": "canvas_capture" });
+                    if let Some(s) = selector {
+                        cmd["selector"] = json!(s);
+                    }
+                    if let Some(p) = path {
+                        cmd["path"] = json!(p);
+                    }
+                    if force_screenshot {
+                        cmd["forceScreenshot"] = json!(true);
+                    }
+                    Ok(cmd)
+                }
+                _ => Err(ParseError::InvalidValue {
+                    message: "canvas needs a subcommand".to_string(),
+                    usage: "canvas list | canvas capture [selector] [path] [--screenshot]",
+                }),
+            }
+        }
         "pdf" => {
             let path = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "pdf".to_string(),
@@ -1646,6 +1697,13 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
         // === Mouse ===
         "mouse" => parse_mouse(&rest, &id),
+
+        // === Viewport / window size ===
+        // Top-level shortcut for `set viewport` — agents (and the author, in
+        // issue #47) reach for `viewport`/`resize` first. Uses a CDP virtual
+        // viewport, so it also works on the extension relay without yanking the
+        // user's real window around.
+        "viewport" | "resize" => parse_viewport(&rest, &id),
 
         // === Set (browser settings) ===
         "set" => parse_set(&rest, &id),
@@ -3095,6 +3153,91 @@ fn parse_mouse(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     }
 }
 
+/// Parse a viewport / resize spec, shared by the top-level `viewport` / `resize`
+/// commands and `set viewport`. Sets a CDP device-metrics override
+/// (`Emulation.setDeviceMetricsOverride`) — a *virtual* viewport for the tab, so
+/// it works headless AND on the extension relay without physically resizing the
+/// user's real Chrome window (issue #47). Forms:
+///   viewport <width> <height> [scale] [--dpr N] [--mobile]
+///   viewport <width>x<height>        (e.g. 1280x800)
+///   viewport reset | clear           (drop the override, restore real size)
+fn parse_viewport(rest: &[&str], id: &str) -> Result<Value, ParseError> {
+    const USAGE: &str =
+        "viewport <width> <height> [scale] [--dpr N] [--mobile] | viewport reset";
+
+    if matches!(rest.first().copied(), Some("reset") | Some("clear") | Some("off")) {
+        return Ok(json!({ "id": id, "action": "viewport", "reset": true }));
+    }
+
+    // Positional (non-flag) tokens. A `WxH` token counts as one positional.
+    let positionals: Vec<&str> = rest.iter().copied().filter(|a| !a.starts_with("--")).collect();
+
+    let (w, h, scale_tok): (i32, i32, Option<&str>) = match positionals.first() {
+        Some(first) if first.contains('x') || first.contains('X') => {
+            let mut parts = first.split(|c| c == 'x' || c == 'X');
+            let w = parts.next().and_then(|s| s.parse::<i32>().ok());
+            let h = parts.next().and_then(|s| s.parse::<i32>().ok());
+            match (w, h) {
+                (Some(w), Some(h)) => (w, h, positionals.get(1).copied()),
+                _ => {
+                    return Err(ParseError::InvalidValue {
+                        message: format!("Invalid viewport size: {}", first),
+                        usage: USAGE,
+                    })
+                }
+            }
+        }
+        Some(w_str) => {
+            let h_str = positionals
+                .get(1)
+                .ok_or(ParseError::MissingArguments { context: "viewport".to_string(), usage: USAGE })?;
+            let w = w_str.parse::<i32>().map_err(|_| ParseError::InvalidValue {
+                message: format!("Invalid width: {}", w_str),
+                usage: USAGE,
+            })?;
+            let h = h_str.parse::<i32>().map_err(|_| ParseError::InvalidValue {
+                message: format!("Invalid height: {}", h_str),
+                usage: USAGE,
+            })?;
+            (w, h, positionals.get(2).copied())
+        }
+        None => {
+            return Err(ParseError::MissingArguments {
+                context: "viewport".to_string(),
+                usage: USAGE,
+            })
+        }
+    };
+
+    let mut cmd = json!({ "id": id, "action": "viewport", "width": w, "height": h });
+
+    // Device-scale-factor: positional, overridden by --dpr / --scale.
+    let mut scale: Option<f64> = match scale_tok {
+        Some(s) => Some(s.parse::<f64>().map_err(|_| ParseError::InvalidValue {
+            message: format!("Invalid scale: {}", s),
+            usage: USAGE,
+        })?),
+        None => None,
+    };
+    if let Some(i) = rest.iter().position(|a| *a == "--dpr" || *a == "--scale") {
+        let v = rest
+            .get(i + 1)
+            .and_then(|s| s.parse::<f64>().ok())
+            .ok_or(ParseError::InvalidValue {
+                message: "--dpr/--scale needs a number".to_string(),
+                usage: USAGE,
+            })?;
+        scale = Some(v);
+    }
+    if let Some(s) = scale {
+        cmd["deviceScaleFactor"] = json!(s);
+    }
+    if rest.iter().any(|a| *a == "--mobile") {
+        cmd["mobile"] = json!(true);
+    }
+    Ok(cmd)
+}
+
 fn parse_set(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     const VALID: &[&str] = &[
         "viewport",
@@ -3109,39 +3252,8 @@ fn parse_set(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     ];
 
     match rest.first().copied() {
-        Some("viewport") => {
-            let w_str = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
-                context: "set viewport".to_string(),
-                usage: "set viewport <width> <height> [scale]",
-            })?;
-            let h_str = rest.get(2).ok_or_else(|| ParseError::MissingArguments {
-                context: "set viewport".to_string(),
-                usage: "set viewport <width> <height> [scale]",
-            })?;
-            let w = w_str
-                .parse::<i32>()
-                .map_err(|_| ParseError::MissingArguments {
-                    context: "set viewport".to_string(),
-                    usage: "set viewport <width> <height> [scale]",
-                })?;
-            let h = h_str
-                .parse::<i32>()
-                .map_err(|_| ParseError::MissingArguments {
-                    context: "set viewport".to_string(),
-                    usage: "set viewport <width> <height> [scale]",
-                })?;
-            let mut cmd = json!({ "id": id, "action": "viewport", "width": w, "height": h });
-            if let Some(scale_str) = rest.get(3) {
-                let scale = scale_str
-                    .parse::<f64>()
-                    .map_err(|_| ParseError::MissingArguments {
-                        context: "set viewport".to_string(),
-                        usage: "set viewport <width> <height> [scale]",
-                    })?;
-                cmd["deviceScaleFactor"] = json!(scale);
-            }
-            Ok(cmd)
-        }
+        // `set viewport ...` is an alias for the top-level `viewport` command.
+        Some("viewport") => parse_viewport(&rest[1..], id),
         Some("device") => {
             let dev = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                 context: "set device".to_string(),
@@ -5300,6 +5412,61 @@ mod tests {
     fn test_set_viewport_invalid_scale() {
         let result = parse_command(&args("set viewport 1920 1080 abc"), &default_flags());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_viewport_toplevel() {
+        let cmd = parse_command(&args("viewport 1280 800"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "viewport");
+        assert_eq!(cmd["width"], 1280);
+        assert_eq!(cmd["height"], 800);
+        assert!(cmd.get("deviceScaleFactor").is_none());
+        assert!(cmd.get("mobile").is_none());
+    }
+
+    #[test]
+    fn test_resize_alias() {
+        let cmd = parse_command(&args("resize 700 800"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "viewport");
+        assert_eq!(cmd["width"], 700);
+        assert_eq!(cmd["height"], 800);
+    }
+
+    #[test]
+    fn test_viewport_wxh_form() {
+        let cmd = parse_command(&args("viewport 375x812"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "viewport");
+        assert_eq!(cmd["width"], 375);
+        assert_eq!(cmd["height"], 812);
+    }
+
+    #[test]
+    fn test_viewport_dpr_and_mobile_flags() {
+        let cmd = parse_command(&args("viewport 375 812 --dpr 3 --mobile"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "viewport");
+        assert_eq!(cmd["width"], 375);
+        assert_eq!(cmd["height"], 812);
+        assert_eq!(cmd["deviceScaleFactor"], 3.0);
+        assert_eq!(cmd["mobile"], true);
+    }
+
+    #[test]
+    fn test_viewport_reset() {
+        for spec in ["viewport reset", "viewport clear", "resize reset"] {
+            let cmd = parse_command(&args(spec), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "viewport", "{spec}");
+            assert_eq!(cmd["reset"], true, "{spec}");
+        }
+    }
+
+    #[test]
+    fn test_viewport_missing_height() {
+        assert!(parse_command(&args("viewport 1280"), &default_flags()).is_err());
+    }
+
+    #[test]
+    fn test_viewport_invalid_width() {
+        assert!(parse_command(&args("viewport abc 800"), &default_flags()).is_err());
     }
 
     #[test]

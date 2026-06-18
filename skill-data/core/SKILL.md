@@ -154,7 +154,17 @@ real Chrome concurrently without ever dropping or stealing each other's tabs —
 another agent's tab churn can't make your bound tab vanish or drift your commands
 onto the wrong page. Consequence: `tab list` shows only *your* session's tabs; to
 drive a specific page, navigate to it in your own tab instead of expecting a
-pre-existing or popped-up tab to appear in the list. **Anti-detection ranking: this real logged-in Chrome (extension
+pre-existing or popped-up tab to appear in the list.
+
+> **Need to read a tab the user already has open?** Use `chrome-use adopt
+> <url-substring|targetId>` — it finds that pre-existing tab (the user's own, or
+> another session's) across groups and drives it **without opening a new tab**.
+> e.g. `adopt "claude.ai/design"` then `snapshot`/`eval`/`get text` on it. On no
+> match it errors and lists the tabs it can see. This is the explicit, opt-in way
+> through the isolation above (it tags the adopted tab into your group). Great for
+> "read/extract from the page I'm looking at" without disturbing it.
+
+**Anti-detection ranking: this real logged-in Chrome (extension
 connect) > a headed launched browser > headless (forbidden).** A genuine human
 browser has no headless/automation tells at all, so prefer it for anything
 anti-bot-sensitive.
@@ -444,6 +454,13 @@ tree**, so `snapshot` comes back near-empty and refs are a dead end. `snapshot`
 detects this and prints a one-line hint. Drive them the screenshot way:
 
 ```bash
+chrome-use canvas list                 # enumerate <canvas> elements (size, type)
+chrome-use canvas capture out.png      # save the canvas's RENDERED pixels to PNG —
+                                          # toDataURL (full backing-store res, e.g.
+                                          # Figma 2522x1904), screenshot fallback for
+                                          # WebGL w/o preserveDrawingBuffer / tainted.
+                                          # Gets the RENDER, not hidden source data
+                                          # (those live in the app's binary store/API).
 chrome-use screenshot /tmp/s.png       # SEE the state (your only read path —
                                           # eval/get text return nothing useful)
 chrome-use click 640 360               # interact by viewport coordinate

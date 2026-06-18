@@ -31,6 +31,10 @@ fn dirs_home() -> Option<PathBuf> {
 pub struct Adapter {
     pub meta: Value,
     pub func_src: String,
+    /// The adapter's declared `args` keys in DECLARATION order. Parsed from the
+    /// raw @meta text because `serde_json` sorts object keys alphabetically, which
+    /// would otherwise scramble positional-arg mapping for multi-arg adapters.
+    pub arg_order: Vec<String>,
 }
 
 impl Adapter {
@@ -111,7 +115,66 @@ pub fn parse_adapter(raw: &str, spec: &str) -> Result<Adapter, String> {
     if func_src.is_empty() {
         return Err(format!("site: {spec} has no function body after @meta"));
     }
-    Ok(Adapter { meta, func_src })
+    let arg_order = arg_order_from_meta(&raw[start..end]);
+    Ok(Adapter {
+        meta,
+        func_src,
+        arg_order,
+    })
+}
+
+/// Extract the `args` object's keys in DECLARATION order from the raw @meta JSON
+/// text (serde sorts them, losing order). Brace/string-aware: finds the `"args"`
+/// value object and collects only its top-level keys.
+fn arg_order_from_meta(meta_json: &str) -> Vec<String> {
+    let bytes = meta_json.as_bytes();
+    // Locate the `"args"` key, then the `{` that opens its value object.
+    let Some(args_pos) = meta_json.find("\"args\"") else {
+        return Vec::new();
+    };
+    let Some(brace_off) = meta_json[args_pos..].find('{') else {
+        return Vec::new();
+    };
+    let open = args_pos + brace_off;
+    let mut keys = Vec::new();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut esc = false;
+    let mut cur = String::new();
+    let mut last_str: Option<String> = None;
+    for &b in bytes.iter().skip(open) {
+        if in_str {
+            if esc {
+                esc = false;
+            } else if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+                last_str = Some(std::mem::take(&mut cur));
+            } else {
+                cur.push(b as char);
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    break; // end of the args object
+                }
+            }
+            // A `:` at depth 1 means the preceding string was a key of `args`.
+            b':' if depth == 1 => {
+                if let Some(k) = last_str.take() {
+                    keys.push(k);
+                }
+            }
+            _ => {}
+        }
+    }
+    keys
 }
 
 /// Build the JS to eval: `(<adapter function>)(<args JSON>)`. The adapter's
@@ -325,14 +388,11 @@ pub fn adapters_for_domain(host: &str) -> Vec<String> {
 /// validates required args itself.
 pub fn map_args(adapter: &Adapter, positional: &[String], named: &[(String, String)]) -> Value {
     let mut obj = serde_json::Map::new();
-    let keys: Vec<String> = adapter
-        .meta
-        .get("args")
-        .and_then(|a| a.as_object())
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
+    // Positional args fill the adapter's declared args in DECLARATION order
+    // (`arg_order`), not serde's alphabetized key order — otherwise a 2-arg
+    // adapter like `{projectId, path}` would map positionals to `{path, projectId}`.
     for (i, val) in positional.iter().enumerate() {
-        if let Some(k) = keys.get(i) {
+        if let Some(k) = adapter.arg_order.get(i) {
             obj.insert(k.clone(), Value::String(val.clone()));
         }
     }
@@ -381,5 +441,25 @@ async function(args) { return { repo: args.repo }; }"#;
     fn rejects_bad_spec() {
         assert!(load_adapter("noslash").is_err());
         assert!(load_adapter("../etc/passwd").is_err());
+    }
+
+    // Regression: positional args must follow DECLARATION order, not serde's
+    // alphabetical key order. With `{projectId, path}` (not alphabetical),
+    // `<uuid> <file>` must map projectId←uuid, path←file — not swapped.
+    #[test]
+    fn positional_args_follow_declaration_order_not_alphabetical() {
+        let raw = r#"/* @meta
+{
+  "name": "claude-design/get-file",
+  "domain": "claude.ai",
+  "args": { "projectId": {"required": true}, "path": {"required": true} }
+}
+*/
+async function(args){ return args; }"#;
+        let a = parse_adapter(raw, "claude-design/get-file").unwrap();
+        assert_eq!(a.arg_order, vec!["projectId", "path"]);
+        let args = map_args(&a, &["the-uuid".into(), "misonote.dc.html".into()], &[]);
+        assert_eq!(args["projectId"], "the-uuid");
+        assert_eq!(args["path"], "misonote.dc.html");
     }
 }
