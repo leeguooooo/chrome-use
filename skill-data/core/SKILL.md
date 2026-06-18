@@ -791,6 +791,29 @@ chrome-use snapshot -i
 chrome-use frame main     # back to main frame
 ```
 
+### Viewport / window size (responsive & overflow debugging)
+
+To reproduce width-dependent bugs (responsive breakpoints, horizontal-overflow
+hunts, mobile layouts) set the viewport. This is a **CDP virtual viewport**
+(`Emulation.setDeviceMetricsOverride`) — it changes the layout viewport *for the
+tab* without physically resizing the OS window, so it works headless **and** over
+the extension relay without yanking the user's real Chrome window around.
+
+```bash
+chrome-use viewport 1280 800        # set width x height (alias: resize)
+chrome-use viewport 375x812         # WxH shorthand
+chrome-use viewport 375 812 --dpr 3 --mobile   # retina + mobile emulation
+chrome-use viewport reset           # clear the override, restore real size
+```
+
+```bash
+# Find what's overflowing at a narrow width:
+chrome-use viewport 375 812
+chrome-use eval 'document.documentElement.scrollWidth + " vs " + innerWidth'
+```
+
+`set viewport <w> <h> [scale]` is an equivalent alias.
+
 ### Dialogs
 
 `alert` and `beforeunload` are auto-accepted so agents never block. For
