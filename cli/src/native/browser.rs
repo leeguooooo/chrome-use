@@ -2073,8 +2073,10 @@ impl BrowserManager {
         // Close the daemon's leftover initial `about:blank` scratch tab once this
         // real tab exists, so the session's tab group isn't left showing a stray
         // blank page beside the work tab (every group otherwise carried one). Only
-        // when opening a real url, and only OWNED, still-blank tabs.
-        if target_url != "about:blank" {
+        // on the RELAY — there the about:blank is a tab WE created as scratch; on a
+        // launched browser the initial about:blank is the browser's own first tab,
+        // which we must not close. Only when opening a real url, OWNED, still-blank.
+        if target_url != "about:blank" && self.agent_group().is_some() {
             if let Some(new_tid) = self.pages.get(index).map(|p| p.target_id.clone()) {
                 let blanks: Vec<String> = self
                     .pages
