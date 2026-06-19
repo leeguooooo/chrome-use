@@ -2070,6 +2070,44 @@ impl BrowserManager {
         self.active_page_index = index;
         self.pin_active_target();
 
+        // Close the daemon's leftover initial `about:blank` scratch tab once this
+        // real tab exists, so the session's tab group isn't left showing a stray
+        // blank page beside the work tab (every group otherwise carried one). Only
+        // when opening a real url, and only OWNED, still-blank tabs.
+        if target_url != "about:blank" {
+            if let Some(new_tid) = self.pages.get(index).map(|p| p.target_id.clone()) {
+                let blanks: Vec<String> = self
+                    .pages
+                    .iter()
+                    .filter(|p| {
+                        p.target_id != new_tid
+                            && self.created_targets.contains(&p.target_id)
+                            && (p.url == "about:blank" || p.url.is_empty())
+                    })
+                    .map(|p| p.target_id.clone())
+                    .collect();
+                for tid in blanks {
+                    let _ = self
+                        .client
+                        .send_command_typed::<_, Value>(
+                            "Target.closeTarget",
+                            &CloseTargetParams {
+                                target_id: tid.clone(),
+                            },
+                            None,
+                        )
+                        .await;
+                    self.created_targets.remove(&tid);
+                    self.remove_page_by_target_id(&tid);
+                }
+                // Removing earlier pages shifts indices — re-pin the new tab.
+                if let Some(i) = self.pages.iter().position(|p| p.target_id == new_tid) {
+                    self.active_page_index = i;
+                    self.pin_active_target();
+                }
+            }
+        }
+
         Ok(json!({
             "tabId": format_tab_id(tab_id),
             "label": label,
