@@ -2616,7 +2616,7 @@ Usage: agent-browser install [--with-deps]
 Downloads and installs browser binaries required for automation.
 
 Options:
-  -d, --with-deps      Also install system dependencies (Linux only)
+  -d, --with-deps      Also install system dependencies (Linux only; fails if deps fail)
 
 Examples:
   agent-browser install

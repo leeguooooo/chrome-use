@@ -35,6 +35,9 @@ next ref interaction.
 # Install once
 npm i -g agent-browser && agent-browser install
 
+# Linux hosts can install required browser libraries too
+agent-browser install --with-deps
+
 # Take a screenshot of a page
 agent-browser open https://example.com
 agent-browser screenshot home.png

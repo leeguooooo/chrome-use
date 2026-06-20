@@ -62,6 +62,9 @@ On Linux, install system dependencies:
 agent-browser install --with-deps
 ```
 
+This exits nonzero if the package manager cannot install every required
+browser library.
+
 ### Updating
 
 Upgrade to the latest version:
@@ -1200,15 +1203,17 @@ AGENT_BROWSER_EXECUTABLE_PATH=/path/to/chromium agent-browser open example.com
 Run agent-browser + Chrome in an ephemeral Vercel Sandbox microVM. No external server needed:
 
 ```typescript
-import { Sandbox } from "@vercel/sandbox";
+import { runAgentBrowserCommand, withAgentBrowserSandbox } from "@agent-browser/sandbox/vercel";
 
-const sandbox = await Sandbox.create({ runtime: "node24" });
-await sandbox.runCommand("agent-browser", ["open", "https://example.com"]);
-const result = await sandbox.runCommand("agent-browser", ["screenshot", "--json"]);
-await sandbox.stop();
+const result = await withAgentBrowserSandbox(async (sandbox) => {
+  await runAgentBrowserCommand(sandbox, ["open", "https://example.com"]);
+  return runAgentBrowserCommand(sandbox, ["screenshot"]);
+});
 ```
 
-See the [environments example](examples/environments/) for a working demo with a UI and deploy-to-Vercel button.
+Install `@agent-browser/sandbox` and `@vercel/sandbox` in the consuming app.
+See the [sandbox helper example](examples/sandbox/) for minimal Eve and Vercel Sandbox usage,
+or the [environments example](examples/environments/) for a full UI demo with a deploy-to-Vercel button.
 
 ### Serverless (AWS Lambda)
 
