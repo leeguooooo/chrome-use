@@ -2,8 +2,7 @@
 
 Helpers for installing and running `agent-browser` inside sandbox runtimes.
 
-This package does not define model tools. Use it from framework-specific tools,
-agents, route handlers, or jobs that already decide what the browser should do.
+This package does not define model tools. Use it from framework-specific tools, agents, route handlers, or jobs that already decide what the browser should do.
 
 ## Eve
 
@@ -30,9 +29,7 @@ import { runAgentBrowser } from "@agent-browser/sandbox/eve";
 const result = await runAgentBrowser(ctx, ["open", "https://example.com"]);
 ```
 
-The Eve helper derives a short, stable `agent-browser` session name from the
-Eve sandbox id. Pass `session` to `runAgentBrowser` when multiple independent
-browser sessions should share one sandbox.
+The Eve helper derives a short, stable `agent-browser` session name from the Eve sandbox id. Pass `session` to `runAgentBrowser` when multiple independent browser sessions should share one sandbox.
 
 ## Vercel Sandbox
 
@@ -56,9 +53,7 @@ const snapshot = await withAgentBrowserSandbox(async (sandbox) => {
 });
 ```
 
-Set `AGENT_BROWSER_SNAPSHOT_ID` to boot from a prebuilt Vercel Sandbox snapshot.
-Without a snapshot, the helper installs system dependencies, `agent-browser`,
-and Chrome on first boot.
+Set `AGENT_BROWSER_SNAPSHOT_ID` to boot from a prebuilt Vercel Sandbox snapshot. Without a snapshot, the helper installs system dependencies, `agent-browser`, and Chrome on first boot.
 
 ## Version Pinning
 

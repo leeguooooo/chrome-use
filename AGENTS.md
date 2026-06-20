@@ -15,6 +15,8 @@ This project uses **pnpm**. Always use `pnpm` instead of `npm` or `yarn` for ins
 
 ## Documentation
 
+Do not hard-wrap prose in documentation files such as Markdown, MDX, and READMEs; let the editor or renderer wrap text naturally.
+
 When adding or changing user-facing features (new flags, commands, behaviors, environment variables, etc.), update **all** of the following:
 
 1. `cli/src/output.rs` — `--help` output (flags list, examples, environment variables)

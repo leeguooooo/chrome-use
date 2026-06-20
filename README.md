@@ -62,8 +62,7 @@ On Linux, install system dependencies:
 agent-browser install --with-deps
 ```
 
-This exits nonzero if the package manager cannot install every required
-browser library.
+This exits nonzero if the package manager cannot install every required browser library.
 
 ### Updating
 
@@ -93,12 +92,9 @@ agent-browser screenshot page.png
 agent-browser close
 ```
 
-Clicks fail early when another element covers the target's click point,
-for example a consent banner or modal. Dismiss or interact with the reported
-covering element, then take a fresh snapshot before retrying the original ref.
+Clicks fail early when another element covers the target's click point, for example a consent banner or modal. Dismiss or interact with the reported covering element, then take a fresh snapshot before retrying the original ref.
 
-Headless Chromium screenshots hide native scrollbars for consistent image output.
-Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
+Headless Chromium screenshots hide native scrollbars for consistent image output. Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
 
 ### Traditional Selectors (also supported)
 
@@ -221,9 +217,7 @@ agent-browser wait "#spinner" --state hidden
 
 ### Batch Execution
 
-Execute multiple commands in a single invocation. Commands can be passed as
-quoted arguments or piped as JSON via stdin. This avoids per-command process
-startup overhead when running multi-step workflows.
+Execute multiple commands in a single invocation. Commands can be passed as quoted arguments or piped as JSON via stdin. This avoids per-command process startup overhead when running multi-step workflows.
 
 ```bash
 # Argument mode: each quoted argument is a full command
@@ -317,15 +311,9 @@ agent-browser tab close [t<N>|label]           # Close a tab (defaults to active
 agent-browser window new                       # New window
 ```
 
-Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused
-within a session, so scripts and agents can keep referring to the same tab
-even after other tabs are opened or closed. Positional integers like `tab 2`
-are **not** accepted; the `t` prefix disambiguates handles from indices and
-mirrors the `@e1` convention used for element refs.
+Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused within a session, so scripts and agents can keep referring to the same tab even after other tabs are opened or closed. Positional integers like `tab 2` are **not** accepted; the `t` prefix disambiguates handles from indices and mirrors the `@e1` convention used for element refs.
 
-You can also assign a memorable label (`docs`, `app`, `admin`) and use it
-interchangeably with the id. Labels are never auto-generated and never
-rewritten on navigation — they're yours to name and keep:
+You can also assign a memorable label (`docs`, `app`, `admin`) and use it interchangeably with the id. Labels are never auto-generated and never rewritten on navigation — they're yours to name and keep:
 
 ```bash
 agent-browser tab new --label docs https://docs.example.com
@@ -405,10 +393,7 @@ agent-browser pushstate <url>         # SPA client-side nav; auto-detects window
 
 ### Pre-navigation setup
 
-Some flows (SSR debug, auth cookies for protected origins, init scripts)
-need state set up *before* the first navigation. Use `open` with no URL
-to launch the browser, then stage cookies / routes / init scripts, then
-navigate. `batch` sends it all in one CLI call:
+Some flows (SSR debug, auth cookies for protected origins, init scripts) need state set up *before* the first navigation. Use `open` with no URL to launch the browser, then stage cookies / routes / init scripts, then navigate. `batch` sends it all in one CLI call:
 
 ```bash
 agent-browser batch \
@@ -418,14 +403,11 @@ agent-browser batch \
   '["navigate","http://localhost:3000/target"]'
 ```
 
-Without `batch` the same sequence is three commands that all reuse the
-same daemon (fast, but not one turn).
+Without `batch` the same sequence is three commands that all reuse the same daemon (fast, but not one turn).
 
 ### React / Web Vitals
 
-Agent-browser ships with first-class React introspection and universal Web
-Vitals metrics. The React commands need the React DevTools hook installed at
-launch; Web Vitals and pushstate are framework-agnostic.
+Agent-browser ships with first-class React introspection and universal Web Vitals metrics. The React commands need the React DevTools hook installed at launch; Web Vitals and pushstate are framework-agnostic.
 
 ```bash
 agent-browser open --enable react-devtools <url>   # Launch with React hook installed
@@ -438,15 +420,10 @@ agent-browser react suspense [--only-dynamic] [--json]  # Suspense boundaries + 
 agent-browser vitals [url] [--json]                # LCP/CLS/TTFB/FCP/INP + hydration summary
 ```
 
-Each `react ...` subcommand requires `--enable react-devtools` to have been
-passed at launch (the React DevTools `installHook.js` is embedded in the
-binary). Without it the commands error with `React DevTools hook not installed
+Each `react ...` subcommand requires `--enable react-devtools` to have been passed at launch (the React DevTools `installHook.js` is embedded in the binary). Without it the commands error with `React DevTools hook not installed
 - relaunch with --enable react-devtools`.
 
-Works on any React app — Next.js, Remix, Vite+React, CRA, TanStack Start,
-React Native Web, etc. `vitals` and `pushstate` are framework-agnostic.
-`vitals` prints a summary by default; pass `--json` for the full structured
-payload.
+Works on any React app — Next.js, Remix, Vite+React, CRA, TanStack Start, React Native Web, etc. `vitals` and `pushstate` are framework-agnostic. `vitals` prints a summary by default; pass `--json` for the full structured payload.
 
 ### Init scripts
 
@@ -469,10 +446,7 @@ agent-browser doctor --offline --quick  # Skip network probes and the live launc
 agent-browser mcp                     # Start an MCP stdio server
 ```
 
-`doctor` checks your environment, Chrome install, daemon state, config files,
-encryption key, providers, network reachability, and runs a live headless
-browser launch test. Stale socket/pid sidecar files are auto-cleaned. Output
-is also available as `--json` for agents.
+`doctor` checks your environment, Chrome install, daemon state, config files, encryption key, providers, network reachability, and runs a live headless browser launch test. Stale socket/pid sidecar files are auto-cleaned. Output is also available as `--json` for agents.
 
 ### Skills
 
@@ -1055,9 +1029,7 @@ agent-browser get text @e1                # Get heading text
 agent-browser hover @e4                   # Hover the link
 ```
 
-When a ref click is blocked by an overlay, the error includes the covering
-element, such as `covered by <div#consent-banner>`. Click the banner or dialog
-control first, then run `snapshot` again before reusing refs.
+When a ref click is blocked by an overlay, the error includes the covering element, such as `covered by <div#consent-banner>`. Click the banner or dialog control first, then run `snapshot` again before reusing refs.
 
 **Why use refs?**
 
@@ -1211,9 +1183,7 @@ const result = await withAgentBrowserSandbox(async (sandbox) => {
 });
 ```
 
-Install `@agent-browser/sandbox` and `@vercel/sandbox` in the consuming app.
-See the [sandbox helper example](examples/sandbox/) for minimal Eve and Vercel Sandbox usage,
-or the [environments example](examples/environments/) for a full UI demo with a deploy-to-Vercel button.
+Install `@agent-browser/sandbox` and `@vercel/sandbox` in the consuming app. See the [sandbox helper example](examples/sandbox/) for minimal Eve and Vercel Sandbox usage, or the [environments example](examples/environments/) for a full UI demo with a deploy-to-Vercel button.
 
 ### Serverless (AWS Lambda)
 

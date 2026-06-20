@@ -1,8 +1,6 @@
 # Next.js + Vercel
 
-Run agent-browser from a Next.js app on Vercel using Vercel Sandbox.
-A Linux microVM spins up on demand, runs agent-browser + Chrome, and
-shuts down. No binary size limits, no Chromium bundling complexity.
+Run agent-browser from a Next.js app on Vercel using Vercel Sandbox. A Linux microVM spins up on demand, runs agent-browser + Chrome, and shuts down. No binary size limits, no Chromium bundling complexity.
 
 ## Setup
 
@@ -12,11 +10,7 @@ pnpm add @agent-browser/sandbox @vercel/sandbox
 
 ## Server action
 
-The Vercel Sandbox runs Amazon Linux. Chromium requires system libraries
-that are not installed by default, so fresh sandboxes need a `dnf install`
-step before agent-browser can launch Chrome. Use a sandbox snapshot
-(below) to skip this entirely in production. The `@agent-browser/sandbox`
-helper handles the bootstrap and command execution.
+The Vercel Sandbox runs Amazon Linux. Chromium requires system libraries that are not installed by default, so fresh sandboxes need a `dnf install` step before agent-browser can launch Chrome. Use a sandbox snapshot (below) to skip this entirely in production. The `@agent-browser/sandbox` helper handles the bootstrap and command execution.
 
 ```ts
 "use server";
@@ -55,16 +49,9 @@ export async function snapshotUrl(url: string) {
 
 ## Sandbox snapshots
 
-Without optimization, each Sandbox run installs system dependencies +
-agent-browser + Chromium from scratch (~30 seconds). A **sandbox snapshot**
-is a saved VM image with everything pre-installed, similar to a Docker image
-for Vercel Sandbox. When `AGENT_BROWSER_SNAPSHOT_ID` is set, the sandbox
-boots from that image instead of installing, bringing startup down to
-sub-second.
+Without optimization, each Sandbox run installs system dependencies + agent-browser + Chromium from scratch (~30 seconds). A **sandbox snapshot** is a saved VM image with everything pre-installed, similar to a Docker image for Vercel Sandbox. When `AGENT_BROWSER_SNAPSHOT_ID` is set, the sandbox boots from that image instead of installing, bringing startup down to sub-second.
 
-This is different from an agent-browser *accessibility snapshot* (which
-dumps a page's accessibility tree). A sandbox snapshot is a Vercel
-infrastructure concept.
+This is different from an agent-browser *accessibility snapshot* (which dumps a page's accessibility tree). A sandbox snapshot is a Vercel infrastructure concept.
 
 Create a sandbox snapshot by running the helper script once:
 
@@ -72,20 +59,17 @@ Create a sandbox snapshot by running the helper script once:
 npx tsx scripts/create-snapshot.ts
 ```
 
-The script spins up a fresh sandbox, installs system dependencies +
-agent-browser + Chromium, saves the VM state, and prints the snapshot ID:
+The script spins up a fresh sandbox, installs system dependencies + agent-browser + Chromium, saves the VM state, and prints the snapshot ID:
 
 ```
 AGENT_BROWSER_SNAPSHOT_ID=snap_xxxxxxxxxxxx
 ```
 
-Add this to your Vercel project environment variables (or `.env.local`
-for local development). Recommended for any production deployment.
+Add this to your Vercel project environment variables (or `.env.local` for local development). Recommended for any production deployment.
 
 ## Authentication
 
-On Vercel deployments, the Sandbox SDK authenticates automatically via
-OIDC. For local development, provide explicit credentials:
+On Vercel deployments, the Sandbox SDK authenticates automatically via OIDC. For local development, provide explicit credentials:
 
 <table>
   <thead>
@@ -98,8 +82,7 @@ OIDC. For local development, provide explicit credentials:
   </tbody>
 </table>
 
-When all three are set, they are passed to `Sandbox.create()`. When
-absent, the SDK falls back to `VERCEL_OIDC_TOKEN` (automatic on Vercel).
+When all three are set, they are passed to `Sandbox.create()`. When absent, the SDK falls back to `VERCEL_OIDC_TOKEN` (automatic on Vercel).
 
 ## Scheduled workflows (cron)
 
@@ -151,6 +134,4 @@ export async function GET() {
 
 ## Demo app
 
-A working demo with streaming progress UI, rate limiting, and a
-deploy-to-Vercel button is at
-[`examples/environments/`](https://github.com/vercel-labs/agent-browser/tree/main/examples/environments).
+A working demo with streaming progress UI, rate limiting, and a deploy-to-Vercel button is at [`examples/environments/`](https://github.com/vercel-labs/agent-browser/tree/main/examples/environments).
