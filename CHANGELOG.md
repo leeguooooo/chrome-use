@@ -1,8 +1,24 @@
 # agent-browser
 
-## 0.28.0
+## 0.29.0
 
 <!-- release:start -->
+### New Features
+
+- **Sandbox package** - Added `@agent-browser/sandbox` with shared, Eve, and Vercel Sandbox helpers, example projects, and docs for running agent-browser in hosted sandbox environments (#1465)
+
+### Improvements
+
+- Updated **sandbox release flow** so the new package stays version-synced with the CLI release and publishes from the correct workspace path (#1465)
+- Reflowed **documentation prose** across the README, docs site, examples, and skills so Markdown and MDX wrap naturally in editors and renderers (#1466)
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.28.0
+
 ### New Features
 
 - **MCP server** - Added `agent-browser mcp`, a stdio Model Context Protocol server with typed tools, paginated discovery, protocol negotiation, and startup tool profiles. The default `core` profile keeps context small, while `--tools all` exposes full CLI parity and composed profiles such as `core,network,react` are supported (#1454)
@@ -15,7 +31,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.27.3
 
