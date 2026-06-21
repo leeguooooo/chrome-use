@@ -1,8 +1,19 @@
 # agent-browser
 
-## 0.29.0
+## 0.29.1
 
 <!-- release:start -->
+### Improvements
+
+- Defaulted **sandbox system dependency installs** so the Eve and Vercel sandbox helpers install Chromium's required libraries unless explicitly disabled, making first-run sandbox setup simpler (#1469)
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.29.0
+
 ### New Features
 
 - **Sandbox package** - Added `@agent-browser/sandbox` with shared, Eve, and Vercel Sandbox helpers, example projects, and docs for running agent-browser in hosted sandbox environments (#1465)
@@ -15,7 +26,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.28.0
 
