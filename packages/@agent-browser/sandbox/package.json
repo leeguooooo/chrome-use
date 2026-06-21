@@ -35,6 +35,18 @@
     "browser-automation"
   ],
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vercel-labs/agent-browser",
+    "directory": "packages/@agent-browser/sandbox"
+  },
+  "bugs": {
+    "url": "https://github.com/vercel-labs/agent-browser/issues"
+  },
+  "homepage": "https://agent-browser.dev",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "@vercel/sandbox": ">=1.0.0"
   },
