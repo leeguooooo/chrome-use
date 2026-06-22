@@ -3576,6 +3576,15 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // `--enter`: after typing, press Enter to commit the highlighted candidate in
+    // an async-autocomplete widget (juejin tag input — issue #50). The parser
+    // already forces key_events on when this is set, so the dropdown the Enter
+    // commits has actually been triggered by the per-character key events.
+    let commit_enter = cmd
+        .get("commitEnter")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     // `type --focused <text>`: type into the currently-focused element without a
     // selector (custom widgets that move focus to a hidden input on open).
     if cmd
@@ -3595,7 +3604,10 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             key_events,
         )
         .await?;
-        return Ok(json!({ "typed": text, "focused": true }));
+        if commit_enter {
+            interaction::commit_with_enter(&mgr.client, &session_id).await?;
+        }
+        return Ok(json!({ "typed": text, "focused": true, "committed": commit_enter }));
     }
 
     let selector = cmd
@@ -3621,7 +3633,10 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         key_events,
     )
     .await?;
-    Ok(json!({ "typed": text }))
+    if commit_enter {
+        interaction::commit_with_enter(&mgr.client, &session_id).await?;
+    }
+    Ok(json!({ "typed": text, "committed": commit_enter }))
 }
 
 /// Atomic combobox select: `pick <selector> --option "<text>"`. Opens the control

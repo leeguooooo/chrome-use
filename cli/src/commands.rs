@@ -602,11 +602,27 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // `--key-events` (alias `--keys`): send real per-character keystrokes
             // instead of Input.insertText, so autocomplete/combobox widgets that
             // only react to key events fire (e.g. Google address postal lookup).
-            let key_events = rest.iter().any(|a| *a == "--key-events" || *a == "--keys");
+            let mut key_events = rest.iter().any(|a| *a == "--key-events" || *a == "--keys");
+            // `--enter` (alias `--commit-enter`): press Enter after typing to commit
+            // the highlighted candidate in an async-autocomplete widget (e.g.
+            // juejin's tag input — issue #50). Implies `--key-events`: a bulk
+            // Input.insertText never fires the keydown/input the dropdown queries
+            // off, so the candidate Enter would commit never appears.
+            let commit_enter = rest
+                .iter()
+                .any(|a| *a == "--enter" || *a == "--commit-enter");
+            if commit_enter {
+                key_events = true;
+            }
             let rest: Vec<&str> = rest
                 .iter()
                 .copied()
-                .filter(|a| *a != "--key-events" && *a != "--keys")
+                .filter(|a| {
+                    *a != "--key-events"
+                        && *a != "--keys"
+                        && *a != "--enter"
+                        && *a != "--commit-enter"
+                })
                 .collect();
             // `type --focused <text>` types into whatever element currently has
             // focus (no selector) — for custom widgets that move focus to a hidden
@@ -615,14 +631,16 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 return Ok(json!({
                     "id": id, "action": "type", "focused": true,
                     "text": rest[1..].join(" "), "keyEvents": key_events,
+                    "commitEnter": commit_enter,
                 }));
             }
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "type".to_string(),
-                usage: "type <selector> <text>   (or: type --focused <text>) [--key-events]",
+                usage:
+                    "type <selector> <text>   (or: type --focused <text>) [--key-events] [--enter]",
             })?;
             Ok(
-                json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" "), "keyEvents": key_events }),
+                json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" "), "keyEvents": key_events, "commitEnter": commit_enter }),
             )
         }
         "pick" => {
@@ -4422,6 +4440,7 @@ mod tests {
         assert_eq!(cmd["selector"], "#input");
         assert_eq!(cmd["text"], "some text");
         assert_eq!(cmd["keyEvents"], false);
+        assert_eq!(cmd["commitEnter"], false);
     }
 
     #[test]
@@ -4442,6 +4461,30 @@ mod tests {
             parse_command(&args("type --focused 201-0001 --keys"), &default_flags()).unwrap();
         assert_eq!(focused["focused"], true);
         assert_eq!(focused["text"], "201-0001");
+        assert_eq!(focused["keyEvents"], true);
+    }
+
+    #[test]
+    fn test_type_commit_enter() {
+        // --enter commits the typed value with a trailing Enter (async-autocomplete
+        // tag widgets, issue #50) and must imply --key-events so the dropdown the
+        // Enter commits has actually been triggered.
+        let cmd = parse_command(&args("type #tag ChatGPT --enter"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "type");
+        assert_eq!(cmd["selector"], "#tag");
+        assert_eq!(cmd["text"], "ChatGPT");
+        assert_eq!(cmd["commitEnter"], true);
+        assert_eq!(cmd["keyEvents"], true);
+
+        // Alias --commit-enter behaves identically, on the --focused path too.
+        let focused = parse_command(
+            &args("type --focused ChatGPT --commit-enter"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(focused["focused"], true);
+        assert_eq!(focused["text"], "ChatGPT");
+        assert_eq!(focused["commitEnter"], true);
         assert_eq!(focused["keyEvents"], true);
     }
 
