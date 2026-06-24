@@ -89,6 +89,11 @@ URL: https://example.com/login
 For unstructured reading (no refs needed):
 
 ```bash
+agent-browser read                         # read rendered active-tab DOM
+agent-browser read https://docs.example.com/guide  # docs-friendly fetch, prefers markdown
+agent-browser read https://docs.example.com/guide --filter auth  # one matching section
+agent-browser read https://docs.example.com/guide --outline  # compact page headings
+agent-browser read https://docs.example.com --llms index --filter auth  # compact llms.txt discovery
 agent-browser get text @e1                # visible text of an element
 agent-browser get html @e1                # innerHTML
 agent-browser get attr @e1 href           # any attribute
@@ -97,6 +102,8 @@ agent-browser get title                   # page title
 agent-browser get url                     # current URL
 agent-browser get count ".item"           # count matching elements
 ```
+
+Use `read [url]` when you need to consume documentation or other text pages rather than interact with a rendered UI. Omit the URL to read the rendered DOM of the active tab in the current browser session, including browser auth state and client-side updates. Explicit URL reads send `Accept: text/markdown`, try the same URL with `.md` appended when the first response is not markdown, walk ancestor paths toward `/` to find the nearest `llms.txt` for a matching docs link, print markdown/plain text when available, and fall back to readable text extracted from HTML without launching Chrome. Add `--filter <text>` to narrow a page to matching heading sections, `--outline` for compact headings on one page, `--llms index` for a compact nearest-ancestor `llms.txt` link list, and `--llms full` only when you explicitly need `llms-full.txt`. With `--llms` or `--require-md`, omitting the URL uses the active tab URL because those modes depend on HTTP resources. With `--llms` or `--outline`, `--filter <text>` narrows links, sections, or headings. Add `--require-md` when you specifically want to verify markdown negotiation, `--raw` when you need the response body unchanged, and `--json` when you need metadata such as `source` and `contentType`. Global safeguards such as `--allowed-domains`, `--content-boundaries`, and `--max-output` also apply to read fetches and output.
 
 ## Interacting
 

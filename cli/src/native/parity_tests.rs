@@ -45,6 +45,7 @@ impl Drop for TestKeyGuard {
 const DOCUMENTED_ACTIONS: &[&str] = &[
     "launch",
     "navigate",
+    "read",
     "url",
     "title",
     "content",

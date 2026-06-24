@@ -19,6 +19,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
     &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const TOOL_LIST_PAGE_SIZE: usize = 64;
 const TOOL_OPEN: &str = "agent_browser_open";
+const TOOL_READ: &str = "agent_browser_read";
 const TOOL_BACK: &str = "agent_browser_back";
 const TOOL_FORWARD: &str = "agent_browser_forward";
 const TOOL_RELOAD: &str = "agent_browser_reload";
@@ -322,6 +323,7 @@ impl Default for McpConfig {
 const CORE_PROFILE_TOOLS: &[&str] = &[
     TOOL_TOOLS_PROFILES,
     TOOL_OPEN,
+    TOOL_READ,
     TOOL_SNAPSHOT,
     TOOL_BACK,
     TOOL_FORWARD,
@@ -744,6 +746,21 @@ fn tools() -> Vec<Value> {
             json!({
                 "url": { "type": "string", "description": "URL to open. Omit to launch about:blank." },
                 "headed": { "type": "boolean", "default": false, "description": "Show the browser window." }
+            }),
+            &[],
+        ),
+        tool(
+            TOOL_READ,
+            "Read URL",
+            "Fetch a URL as agent-readable text, preferring text/markdown. Omit url to read the active tab.",
+            json!({
+                "url": { "type": "string", "description": "URL to read. Bare hosts are normalized to https. Omit to read the active tab." },
+                "raw": { "type": "boolean", "description": "Return the response body without HTML extraction." },
+                "requireMd": { "type": "boolean", "description": "Fail unless the response is Content-Type: text/markdown." },
+                "llms": { "type": "string", "enum": ["index", "full"], "description": "Return nearest-ancestor llms data: index for compact llms.txt links, full for llms-full.txt." },
+                "outline": { "type": "boolean", "description": "Return a heading outline for the selected page instead of the full page text." },
+                "filter": { "type": "string", "description": "Filter page sections, --llms links/sections, or --outline headings." },
+                "readTimeoutMs": { "type": "integer", "description": "Request timeout in milliseconds." }
             }),
             &[],
         ),
@@ -1834,6 +1851,7 @@ fn is_read_only_tool(name: &str) -> bool {
     matches!(
         name,
         TOOL_SNAPSHOT
+            | TOOL_READ
             | TOOL_WAIT_MS
             | TOOL_WAIT_FOR_SELECTOR
             | TOOL_WAIT_FOR_TEXT
@@ -1953,6 +1971,7 @@ fn call_tool(params: Option<&Value>, config: &McpConfig) -> Result<Value, Protoc
     match name {
         TOOL_TOOLS_PROFILES => call_tools_profiles(config),
         TOOL_OPEN => call_open(arguments),
+        TOOL_READ => call_read(arguments),
         TOOL_SNAPSHOT => call_snapshot(arguments),
         TOOL_CLICK => call_click(arguments),
         TOOL_BACK => call_literal(arguments, &["back"]),
@@ -2224,6 +2243,35 @@ fn call_open(arguments: &Value) -> Result<Value, ProtocolError> {
         if !url.is_empty() {
             args.push(url);
         }
+    }
+    call_cli_tool(arguments, args, None)
+}
+
+fn call_read(arguments: &Value) -> Result<Value, ProtocolError> {
+    let mut args = vec!["read".to_string()];
+    if optional_bool(arguments, "raw")?.unwrap_or(false) {
+        args.push("--raw".to_string());
+    }
+    if optional_bool(arguments, "requireMd")?.unwrap_or(false) {
+        args.push("--require-md".to_string());
+    }
+    if let Some(llms) = optional_string(arguments, "llms")? {
+        args.push("--llms".to_string());
+        args.push(llms);
+    }
+    if optional_bool(arguments, "outline")?.unwrap_or(false) {
+        args.push("--outline".to_string());
+    }
+    if let Some(filter) = optional_string(arguments, "filter")? {
+        args.push("--filter".to_string());
+        args.push(filter);
+    }
+    if let Some(timeout) = optional_u64(arguments, "readTimeoutMs")? {
+        args.push("--timeout".to_string());
+        args.push(timeout.to_string());
+    }
+    if let Some(url) = optional_string(arguments, "url")? {
+        args.push(url);
     }
     call_cli_tool(arguments, args, None)
 }
@@ -3438,7 +3486,7 @@ fn response_text(value: &Value) -> Option<String> {
 
         if let Some(data) = obj.get("data") {
             for key in [
-                "snapshot", "text", "html", "report", "value", "title", "url", "path",
+                "snapshot", "text", "html", "report", "value", "content", "title", "url", "path",
             ] {
                 if let Some(s) = data.get(key).and_then(|v| v.as_str()) {
                     return Some(s.to_string());
@@ -3509,6 +3557,7 @@ mod tests {
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&TOOL_TOOLS_PROFILES));
         assert!(names.contains(&TOOL_OPEN));
+        assert!(names.contains(&TOOL_READ));
         assert!(names.contains(&TOOL_SNAPSHOT));
         assert!(names.contains(&TOOL_CLICK));
         assert!(names.contains(&TOOL_SCREENSHOT));
@@ -3569,6 +3618,7 @@ mod tests {
 
         assert!(names.contains(&TOOL_TOOLS_PROFILES));
         assert!(names.contains(&TOOL_OPEN));
+        assert!(names.contains(&TOOL_READ));
         assert!(names.contains(&TOOL_SNAPSHOT));
         assert!(names.contains(&TOOL_CLICK));
         assert!(names.contains(&TOOL_SCREENSHOT));
@@ -3599,6 +3649,7 @@ mod tests {
     fn parse_mcp_config_accepts_tools_profiles() {
         let config = parse_mcp_config(&["--tools".into(), "core,network".into()]).unwrap();
         assert!(config.allows(TOOL_OPEN));
+        assert!(config.allows(TOOL_READ));
         assert!(config.allows(TOOL_NETWORK_REQUESTS));
         assert!(!config.allows(TOOL_REACT_TREE));
     }
@@ -3607,6 +3658,7 @@ mod tests {
     fn parse_mcp_config_accepts_all_profile() {
         let config = parse_mcp_config(&["--tools=all".into()]).unwrap();
         assert!(config.allows(TOOL_OPEN));
+        assert!(config.allows(TOOL_READ));
         assert!(config.allows(TOOL_NETWORK_HAR_START));
         assert!(config.allows(TOOL_REACT_TREE));
     }
@@ -3647,6 +3699,20 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("agent-browser mcp --tools all"));
+    }
+
+    #[test]
+    fn response_text_uses_read_content_before_url_metadata() {
+        let text = response_text(&json!({
+            "success": true,
+            "data": {
+                "url": "https://example.com/docs",
+                "content": "# Docs\n\nReadable content."
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(text, "# Docs\n\nReadable content.");
     }
 
     #[test]
@@ -3751,6 +3817,10 @@ mod tests {
             .iter()
             .find(|t| t["name"].as_str() == Some(TOOL_GET_URL))
             .unwrap();
+        let read = tools
+            .iter()
+            .find(|t| t["name"].as_str() == Some(TOOL_READ))
+            .unwrap();
         let skills_get = tools
             .iter()
             .find(|t| t["name"].as_str() == Some(TOOL_SKILLS_GET))
@@ -3758,6 +3828,8 @@ mod tests {
 
         assert_eq!(open["annotations"]["readOnlyHint"], false);
         assert_eq!(open["annotations"]["openWorldHint"], true);
+        assert_eq!(read["annotations"]["readOnlyHint"], true);
+        assert_eq!(read["annotations"]["openWorldHint"], true);
         assert_eq!(get_url["annotations"]["readOnlyHint"], true);
         assert_eq!(get_url["annotations"]["openWorldHint"], true);
         assert_eq!(skills_get["annotations"]["openWorldHint"], false);

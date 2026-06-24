@@ -9,6 +9,7 @@ mod mcp;
 mod native;
 mod output;
 mod plugins;
+mod read;
 mod skills;
 #[cfg(test)]
 mod test_utils;

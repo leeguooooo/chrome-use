@@ -316,6 +316,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "back" => Ok(json!({ "id": id, "action": "back" })),
         "forward" => Ok(json!({ "id": id, "action": "forward" })),
         "reload" => Ok(json!({ "id": id, "action": "reload" })),
+        "read" => parse_read(&rest, &id, flags),
 
         // === Core Actions ===
         "click" => {
@@ -1864,6 +1865,133 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
     }
 }
 
+fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseError> {
+    const READ_USAGE: &str =
+        "read [url] [--raw] [--require-md] [--llms <index|full>] [--outline] [--filter <text>] [--timeout <ms>]";
+    let mut cmd = json!({
+        "id": id,
+        "action": "read",
+        "timeout": crate::read::default_timeout_ms(),
+    });
+    let mut url: Option<&str> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--raw" => {
+                cmd["raw"] = json!(true);
+            }
+            "--require-md" => {
+                cmd["requireMd"] = json!(true);
+            }
+            "--llms" => {
+                let value = rest
+                    .get(i + 1)
+                    .ok_or_else(|| ParseError::MissingArguments {
+                        context: "read --llms".to_string(),
+                        usage: READ_USAGE,
+                    })?;
+                crate::read::parse_llms_mode(value).map_err(|message| {
+                    ParseError::InvalidValue {
+                        message,
+                        usage: READ_USAGE,
+                    }
+                })?;
+                cmd["llms"] = json!(value);
+                i += 1;
+            }
+            "--outline" => {
+                cmd["outline"] = json!(true);
+            }
+            "--filter" => {
+                let value = rest
+                    .get(i + 1)
+                    .ok_or_else(|| ParseError::MissingArguments {
+                        context: "read --filter".to_string(),
+                        usage: READ_USAGE,
+                    })?;
+                cmd["filter"] = json!(value);
+                i += 1;
+            }
+            "--timeout" => {
+                let value = rest
+                    .get(i + 1)
+                    .ok_or_else(|| ParseError::MissingArguments {
+                        context: "read --timeout".to_string(),
+                        usage: READ_USAGE,
+                    })?;
+                let timeout = crate::read::parse_timeout_ms(value).map_err(|message| {
+                    ParseError::InvalidValue {
+                        message,
+                        usage: READ_USAGE,
+                    }
+                })?;
+                cmd["timeout"] = json!(timeout);
+                i += 1;
+            }
+            "--json" => {
+                cmd["json"] = json!(true);
+            }
+            arg if arg.starts_with("--") => {
+                return Err(ParseError::UnknownSubcommand {
+                    subcommand: arg.to_string(),
+                    valid_options: &[
+                        "--raw",
+                        "--require-md",
+                        "--llms",
+                        "--outline",
+                        "--filter",
+                        "--timeout",
+                        "--json",
+                    ],
+                });
+            }
+            arg => {
+                if url.is_some() {
+                    return Err(ParseError::InvalidValue {
+                        message: format!("Unexpected read argument: {}", arg),
+                        usage: READ_USAGE,
+                    });
+                }
+                url = Some(arg);
+            }
+        }
+        i += 1;
+    }
+    if cmd.get("llms").is_some()
+        && cmd
+            .get("outline")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        return Err(ParseError::InvalidValue {
+            message: "read --llms and --outline cannot be used together".to_string(),
+            usage: READ_USAGE,
+        });
+    }
+    if let Some(url) = url {
+        cmd["url"] = json!(url);
+    }
+    if let Some(ref headers_json) = flags.headers {
+        let headers = serde_json::from_str::<serde_json::Value>(headers_json).map_err(|_| {
+            ParseError::InvalidValue {
+                message: format!("Invalid JSON for --headers: {}", headers_json),
+                usage: READ_USAGE,
+            }
+        })?;
+        if !headers.is_object() {
+            return Err(ParseError::InvalidValue {
+                message: format!("Invalid JSON object for --headers: {}", headers_json),
+                usage: READ_USAGE,
+            });
+        }
+        cmd["headers"] = headers;
+    }
+    if let Some(ref allowed_domains) = flags.allowed_domains {
+        cmd["allowedDomains"] = json!(allowed_domains);
+    }
+    Ok(cmd)
+}
+
 fn parse_react(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     const VALID: &[&str] = &["tree", "inspect", "renders", "suspense"];
     let sub = rest.first().copied().ok_or(ParseError::MissingArguments {
@@ -3407,6 +3535,137 @@ mod tests {
         let cmd = parse_command(&args("open example.com"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "navigate");
         assert_eq!(cmd["url"], "https://example.com");
+    }
+
+    #[test]
+    fn test_read_command() {
+        let cmd = parse_command(&args("read example.com/docs"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["url"], "example.com/docs");
+        assert_eq!(cmd["timeout"], crate::read::default_timeout_ms());
+    }
+
+    #[test]
+    fn test_read_without_url_uses_active_tab() {
+        let cmd = parse_command(&args("read"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "read");
+        assert!(cmd.get("url").is_none());
+    }
+
+    #[test]
+    fn test_read_flags() {
+        let cmd = parse_command(
+            &args("read https://example.com --raw --require-md --timeout 2500"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["url"], "https://example.com");
+        assert_eq!(cmd["raw"], true);
+        assert_eq!(cmd["requireMd"], true);
+        assert_eq!(cmd["timeout"], 2500);
+    }
+
+    #[test]
+    fn test_read_includes_global_headers_and_allowed_domains() {
+        let mut flags = default_flags();
+        flags.headers = Some(r#"{"Authorization":"Bearer token","X-Trace":"abc"}"#.to_string());
+        flags.allowed_domains = Some(vec!["example.com".to_string(), "*.example.org".to_string()]);
+
+        let cmd = parse_command(&args("read https://example.com/docs"), &flags).unwrap();
+
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["headers"]["Authorization"], "Bearer token");
+        assert_eq!(cmd["headers"]["X-Trace"], "abc");
+        assert_eq!(
+            cmd["allowedDomains"],
+            json!(["example.com", "*.example.org"])
+        );
+    }
+
+    #[test]
+    fn test_read_rejects_invalid_headers_json() {
+        let mut flags = default_flags();
+        flags.headers = Some("not json".to_string());
+
+        let result = parse_command(&args("read https://example.com/docs"), &flags);
+
+        assert!(matches!(result, Err(ParseError::InvalidValue { .. })));
+    }
+
+    #[test]
+    fn test_read_llms_index_filter_flags() {
+        let cmd = parse_command(
+            &args("read https://example.com/docs --llms index --filter auth"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["url"], "https://example.com/docs");
+        assert_eq!(cmd["llms"], "index");
+        assert_eq!(cmd["filter"], "auth");
+    }
+
+    #[test]
+    fn test_read_llms_full_filter_flags() {
+        let cmd = parse_command(
+            &args("read https://example.com/docs --llms full --filter auth"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["url"], "https://example.com/docs");
+        assert_eq!(cmd["llms"], "full");
+        assert_eq!(cmd["filter"], "auth");
+    }
+
+    #[test]
+    fn test_read_outline_filter_flags() {
+        let cmd = parse_command(
+            &args("read https://example.com/docs --outline --filter auth"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["url"], "https://example.com/docs");
+        assert_eq!(cmd["outline"], true);
+        assert_eq!(cmd["filter"], "auth");
+    }
+
+    #[test]
+    fn test_read_rejects_llms_with_outline() {
+        let result = parse_command(
+            &args("read https://example.com --llms index --outline"),
+            &default_flags(),
+        );
+        assert!(matches!(result, Err(ParseError::InvalidValue { .. })));
+    }
+
+    #[test]
+    fn test_read_rejects_invalid_llms_mode() {
+        let result = parse_command(
+            &args("read https://example.com --llms toc"),
+            &default_flags(),
+        );
+        assert!(matches!(result, Err(ParseError::InvalidValue { .. })));
+    }
+
+    #[test]
+    fn test_read_filter_without_llms_or_outline_filters_page_sections() {
+        let cmd = parse_command(
+            &args("read https://example.com --filter auth"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["url"], "https://example.com");
+        assert_eq!(cmd["filter"], "auth");
+    }
+
+    #[test]
+    fn test_read_rejects_invalid_timeout() {
+        let result = parse_command(&args("read example.com --timeout nope"), &default_flags());
+        assert!(matches!(result, Err(ParseError::InvalidValue { .. })));
     }
 
     #[test]

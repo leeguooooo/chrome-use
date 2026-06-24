@@ -1284,6 +1284,7 @@ fn skip_launch_action(action: &str) -> bool {
         action,
         "" | "launch"
             | "close"
+            | "read"
             | "har_stop"
             | "credentials_set"
             | "credentials_get"
@@ -1511,7 +1512,14 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         };
         // Tab and session management must stay usable: switching or closing
         // tabs is exactly how an agent escapes a tab blocked by a dialog.
-        let safe_during_dialog = skip_launch
+        let read_touches_active_tab = action == "read"
+            && cmd.get("url").is_none()
+            && cmd.get("llms").is_none()
+            && !cmd
+                .get("requireMd")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+        let safe_during_dialog = (skip_launch && !read_touches_active_tab)
             || matches!(
                 action,
                 "dialog"
@@ -1537,6 +1545,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     let result = match action {
         "launch" => handle_launch(cmd, state).await,
         "navigate" => handle_navigate(cmd, state).await,
+        "read" => handle_read(cmd, state).await,
         "url" => handle_url(state).await,
         "cdp_url" => handle_cdp_url(state),
         "inspect" => handle_inspect(state).await,
@@ -2627,6 +2636,50 @@ async fn handle_url(state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let url = mgr.get_url().await?;
     Ok(json!({ "url": url }))
+}
+
+async fn handle_read(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+    let mut options = crate::read::options_from_command(cmd)?;
+    if let Some(allowed_domains) = {
+        let df = state.domain_filter.read().await;
+        df.as_ref().map(|filter| filter.allowed_domains.clone())
+    } {
+        if !allowed_domains.is_empty() {
+            options.enforced_allowed_domains.push(allowed_domains);
+        }
+    }
+
+    if let Some(url) = cmd.get("url").and_then(|v| v.as_str()) {
+        return crate::read::run_read(url, options).await;
+    }
+
+    let url_data = handle_url(state).await?;
+    let active_url = url_data
+        .get("url")
+        .and_then(|v| v.as_str())
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| "Active tab has no URL".to_string())?;
+    crate::read::check_allowed_active_url_for_options(active_url, &options)?;
+
+    if options.llms.is_some() || options.require_md {
+        return crate::read::run_read(active_url, options).await;
+    }
+
+    let content_data = handle_content(state).await?;
+    let html = content_data
+        .get("html")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Active tab content is unavailable".to_string())?;
+    let origin = content_data
+        .get("origin")
+        .and_then(|v| v.as_str())
+        .filter(|origin| !origin.is_empty())
+        .unwrap_or(active_url);
+    Ok(crate::read::read_json_from_active_html(
+        origin,
+        html.to_string(),
+        &options,
+    ))
 }
 
 fn handle_cdp_url(state: &DaemonState) -> Result<Value, String> {
@@ -8725,6 +8778,39 @@ mod tests {
     use super::*;
     use crate::test_utils::EnvGuard;
     use std::fs;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn start_webdriver_response_server(
+        responses: Vec<(&'static str, Value)>,
+    ) -> (u16, tokio::task::JoinHandle<usize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            let mut handled = 0;
+            for (expected_path, body) in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0_u8; 2048];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]);
+                assert!(
+                    request.starts_with(&format!("GET {} ", expected_path)),
+                    "unexpected webdriver request: {}",
+                    request.lines().next().unwrap_or("")
+                );
+                let body = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+                handled += 1;
+            }
+            handled
+        });
+        (port, handle)
+    }
 
     fn unique_socket_dir(label: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -8898,6 +8984,187 @@ mod tests {
             .unwrap()
             .contains("plugin:stealth:launch.mutate"));
         assert!(state.pending_confirmation.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_policy_denies_read_before_fetch() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join("policy.json");
+        fs::write(&policy_path, r#"{"deny":["read"]}"#).unwrap();
+
+        let mut state = DaemonState::new();
+        state.policy = Some(ActionPolicy::load(policy_path.to_str().unwrap()).unwrap());
+        let cmd = json!({
+            "action": "read",
+            "id": "read-denied",
+            "url": "https://example.com/docs"
+        });
+
+        let resp = execute_command(&cmd, &mut state).await;
+
+        assert_eq!(resp["success"], false);
+        assert!(resp["error"].as_str().unwrap().contains("read"));
+        assert!(state.browser.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_with_url_uses_session_domain_filter_before_fetch() {
+        let mut state = DaemonState::new();
+        {
+            let mut df = state.domain_filter.write().await;
+            *df = Some(DomainFilter::new("example.com"));
+        }
+        let cmd = json!({
+            "action": "read",
+            "id": "read-url-denied",
+            "url": "https://evil.example/private"
+        });
+
+        let resp = execute_command(&cmd, &mut state).await;
+
+        assert_eq!(resp["success"], false);
+        let error = resp["error"].as_str().unwrap();
+        assert!(error.contains("evil.example"));
+        assert!(error.contains("allowed domains"));
+        assert!(state.browser.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_with_url_cannot_broaden_session_domain_filter() {
+        let mut state = DaemonState::new();
+        {
+            let mut df = state.domain_filter.write().await;
+            *df = Some(DomainFilter::new("example.com"));
+        }
+        let cmd = json!({
+            "action": "read",
+            "id": "read-url-denied",
+            "url": "https://evil.example/private",
+            "allowedDomains": ["evil.example"]
+        });
+
+        let resp = execute_command(&cmd, &mut state).await;
+
+        assert_eq!(resp["success"], false);
+        let error = resp["error"].as_str().unwrap();
+        assert!(error.contains("evil.example"));
+        assert!(error.contains("allowed domains"));
+        assert!(state.browser.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_without_url_does_not_auto_launch() {
+        let mut state = DaemonState::new();
+        let cmd = json!({ "action": "read", "id": "read-active-tab" });
+
+        let resp = execute_command(&cmd, &mut state).await;
+
+        assert_eq!(resp["success"], false);
+        assert!(resp["error"]
+            .as_str()
+            .unwrap()
+            .contains("Browser not launched"));
+        assert!(state.browser.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_without_url_blocks_disallowed_active_tab_before_content() {
+        let (port, server) = start_webdriver_response_server(vec![(
+            "/session/test-session/url",
+            json!({ "value": "https://evil.example/private" }),
+        )])
+        .await;
+        let mut state = DaemonState::new();
+        state.backend_type = BackendType::WebDriver;
+        state.webdriver_backend = Some(WebDriverBackend::new(
+            crate::native::webdriver::client::WebDriverClient::new_with_session(
+                port,
+                "test-session".to_string(),
+            ),
+        ));
+        let cmd = json!({
+            "action": "read",
+            "id": "read-active-tab-denied",
+            "allowedDomains": ["example.com"]
+        });
+
+        let resp = execute_command(&cmd, &mut state).await;
+
+        assert_eq!(resp["success"], false);
+        let error = resp["error"].as_str().unwrap();
+        assert!(error.contains("evil.example"));
+        assert!(error.contains("allowed domains"));
+        assert_eq!(server.await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_read_without_url_uses_session_domain_filter_before_content() {
+        let (port, server) = start_webdriver_response_server(vec![(
+            "/session/test-session/url",
+            json!({ "value": "https://evil.example/private" }),
+        )])
+        .await;
+        let mut state = DaemonState::new();
+        {
+            let mut df = state.domain_filter.write().await;
+            *df = Some(DomainFilter::new("example.com"));
+        }
+        state.backend_type = BackendType::WebDriver;
+        state.webdriver_backend = Some(WebDriverBackend::new(
+            crate::native::webdriver::client::WebDriverClient::new_with_session(
+                port,
+                "test-session".to_string(),
+            ),
+        ));
+        let cmd = json!({
+            "action": "read",
+            "id": "read-active-tab-denied"
+        });
+
+        let resp = execute_command(&cmd, &mut state).await;
+
+        assert_eq!(resp["success"], false);
+        let error = resp["error"].as_str().unwrap();
+        assert!(error.contains("evil.example"));
+        assert!(error.contains("allowed domains"));
+        assert_eq!(server.await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_read_without_url_allows_matching_active_tab() {
+        let (port, server) = start_webdriver_response_server(vec![
+            (
+                "/session/test-session/url",
+                json!({ "value": "https://example.com/app" }),
+            ),
+            (
+                "/session/test-session/source",
+                json!({ "value": "<html><body><h1>Account</h1><p>Signed in.</p></body></html>" }),
+            ),
+        ])
+        .await;
+        let mut state = DaemonState::new();
+        state.backend_type = BackendType::WebDriver;
+        state.webdriver_backend = Some(WebDriverBackend::new(
+            crate::native::webdriver::client::WebDriverClient::new_with_session(
+                port,
+                "test-session".to_string(),
+            ),
+        ));
+        let cmd = json!({
+            "action": "read",
+            "id": "read-active-tab-allowed",
+            "allowedDomains": ["example.com"]
+        });
+
+        let resp = execute_command(&cmd, &mut state).await;
+
+        assert_eq!(resp["success"], true);
+        assert_eq!(resp["data"]["source"], "active-tab-html");
+        let content = resp["data"]["content"].as_str().unwrap();
+        assert!(content.contains("# Account"));
+        assert!(content.contains("Signed in."));
+        assert_eq!(server.await.unwrap(), 2);
     }
 
     #[tokio::test]

@@ -11,6 +11,13 @@ agent-browser open            # Launch browser (no navigation); stays on about:b
 agent-browser open <url>      # Launch + navigate (aliases: goto, navigate)
                               # Supports: https://, http://, file://, about:, data://
                               # Auto-prepends https:// if no protocol given
+agent-browser read [url]      # Fetch agent-readable text, or read rendered active-tab DOM
+                              # Explicit URLs send Accept: text/markdown, then try .md if needed
+                              # Walks ancestor paths for llms.txt before HTML fallback
+                              # --llms and --require-md without URL use the active tab URL
+                              # --filter narrows page content to matching heading sections
+                              # Honors --allowed-domains, --content-boundaries, and --max-output
+                              # Options: --raw, --require-md, --outline, --llms <index|full>, --filter, --timeout <ms>
 agent-browser back            # Go back
 agent-browser forward         # Go forward
 agent-browser reload          # Reload page
