@@ -166,6 +166,45 @@ fn resolve_active_index(
     active_page_index
 }
 
+/// Message when a relay session's pinned tab can no longer be resolved.
+const BOUND_TAB_GONE: &str =
+    "the tab this session was driving can no longer be resolved (it was closed, or a flaky \
+     relay snapshot dropped it). Refusing to silently retarget — that could read/click the \
+     wrong tab. Re-open your target URL (`open <url>`) or `adopt <url>` the tab you want.";
+
+/// Strict session-index resolution for routing READ/CLICK commands.
+///
+/// On the relay (shared real browser) the lenient [`resolve_active_index`] falls
+/// back to `active_page_index` when the pinned target isn't found — and after
+/// foreign-tab churn that index can point at an unrelated tab, so an
+/// `eval`/`snapshot`/`click` would land on it (issue #52, a safety risk).
+///
+/// The relay keeps a STABLE `target_id` across navigations (verified live), so a
+/// present pin resolves on every normal command — a pin that genuinely can't be
+/// found means the bound tab is gone, which we surface as a loud error instead of
+/// drifting. With no pin set (e.g. before the first `open`), or off the relay
+/// (a browser we launched, no foreign tabs), behave leniently — unchanged.
+fn strict_session_index(
+    pages: &[PageInfo],
+    active_target_id: Option<&str>,
+    active_page_index: usize,
+    on_relay: bool,
+) -> Result<usize, String> {
+    if on_relay {
+        if let Some(tid) = active_target_id {
+            return pages
+                .iter()
+                .position(|p| p.target_id == tid)
+                .ok_or_else(|| BOUND_TAB_GONE.to_string());
+        }
+    }
+    Ok(resolve_active_index(
+        pages,
+        active_target_id,
+        active_page_index,
+    ))
+}
+
 /// Strip zero-width / invisible / bidi-format Unicode from a page title before
 /// we store it. Some sites prepend runs of ZWJ / word-joiner / invisible-times /
 /// BOM to `document.title` (badging, watermarking, anti-scrape); left in, they
@@ -1174,8 +1213,14 @@ impl BrowserManager {
     }
 
     pub fn active_session_id(&self) -> Result<&str, String> {
+        let idx = strict_session_index(
+            &self.pages,
+            self.active_target_id.as_deref(),
+            self.active_page_index,
+            self.agent_group().is_some(),
+        )?;
         self.pages
-            .get(self.resolved_active_index())
+            .get(idx)
             .map(|p| p.session_id.as_str())
             .ok_or_else(|| "No active page".to_string())
     }
@@ -3387,6 +3432,40 @@ mod tests {
         // regardless of what `active_page_index` happens to be.
         let pages = vec![page("A"), page("B"), page("Z")];
         assert_eq!(resolve_active_index(&pages, Some("A"), 2), 0);
+    }
+
+    // issue #52: read/click resolution on the relay must NOT silently fall back
+    // to active_page_index when the pin can't be resolved — that's how a command
+    // drifts onto a foreign tab. The relay keeps a stable target_id across navs,
+    // so a present pin resolves normally; only a genuinely-gone tab errors.
+    #[test]
+    fn strict_session_index_relay_pin_found_resolves() {
+        let pages = vec![page("A"), page("B")];
+        assert_eq!(strict_session_index(&pages, Some("A"), 1, true).unwrap(), 0);
+    }
+
+    #[test]
+    fn strict_session_index_relay_dangling_pin_errors() {
+        let pages = vec![page("A"), page("Z")];
+        // active_page_index points at the foreign "Z"; lenient would drift there.
+        assert!(strict_session_index(&pages, Some("gone"), 1, true).is_err());
+    }
+
+    #[test]
+    fn strict_session_index_relay_no_pin_is_lenient() {
+        // Before the first open (no pin yet) we keep the lenient behavior.
+        let pages = vec![page("A"), page("B")];
+        assert_eq!(strict_session_index(&pages, None, 1, true).unwrap(), 1);
+    }
+
+    #[test]
+    fn strict_session_index_off_relay_dangling_pin_stays_lenient() {
+        // Off the relay (launched browser, no foreign tabs) behavior is unchanged.
+        let pages = vec![page("A"), page("B")];
+        assert_eq!(
+            strict_session_index(&pages, Some("gone"), 1, false).unwrap(),
+            1
+        );
     }
 
     // issue #7: removing the pinned active target must re-anchor the pin to a
