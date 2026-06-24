@@ -62,7 +62,7 @@ Set `AGENT_BROWSER_SNAPSHOT_ID` to boot from a prebuilt Vercel Sandbox snapshot.
 By default, this package installs the matching `agent-browser` version:
 
 ```ts
-agent-browser@0.29.1
+agent-browser@0.30.0
 ```
 
 Pass `installSpec: "latest"` or another npm spec to override that default.

@@ -1,8 +1,19 @@
 # agent-browser
 
-## 0.29.1
+## 0.30.0
 
 <!-- release:start -->
+### New Features
+
+- **Read command** - Added `agent-browser read [url]` and the matching MCP tool for agent-readable text extraction. URL reads prefer Markdown, try `.md` and nearby `llms.txt` docs, support outlines, filters, raw and JSON output, headers, and domain/output safeguards; omitting the URL reads the rendered active tab DOM with current browser state (#1480)
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.29.1
+
 ### Improvements
 
 - Defaulted **sandbox system dependency installs** so the Eve and Vercel sandbox helpers install Chromium's required libraries unless explicitly disabled, making first-run sandbox setup simpler (#1469)
@@ -10,7 +21,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.29.0
 
