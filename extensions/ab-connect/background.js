@@ -127,6 +127,88 @@ function setBadge(tabId, kind) {
   } catch {}
 }
 
+// ---- settings + UX (cursor overlay, connection notifications) -------------
+
+let cursorEnabled = false
+let notifyEnabled = false
+let lastConnected = null
+
+function loadUxSettings() {
+  try {
+    chrome.storage.sync.get({ ab_cursor: false, ab_notify: false }, (s) => {
+      cursorEnabled = !!s.ab_cursor
+      notifyEnabled = !!s.ab_notify
+    })
+  } catch {}
+}
+loadUxSettings()
+try {
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area !== 'sync') return
+    if ('ab_cursor' in ch) cursorEnabled = !!ch.ab_cursor.newValue
+    if ('ab_notify' in ch) notifyEnabled = !!ch.ab_notify.newValue
+  })
+} catch {}
+
+// Fire a (silent) desktop notification when the bridge connects/disconnects —
+// only on an actual transition, and only if the user opted in (options page).
+function notifyConnChange(connected) {
+  if (connected === lastConnected) return
+  lastConnected = connected
+  if (!notifyEnabled) return
+  try {
+    chrome.notifications.create('ab-conn-' + Date.now(), {
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: connected ? 'chrome-use connected' : 'chrome-use disconnected',
+      message: connected
+        ? 'Bridged to your local CLI — ready to drive your tabs.'
+        : 'The bridge to your local CLI dropped.',
+      silent: true,
+    })
+  } catch {}
+}
+
+// Mirror agent mouse activity to a friendly on-page cursor, drawn IN the page via
+// the EXISTING chrome.debugger session (no extra permissions). Opt-in (off by
+// default) because the overlay is a visible DOM node — leaving it off keeps
+// automation invisible to the page. Best-effort; never blocks the real command.
+function maybeDriveCursor(tabId, method, params) {
+  if (!cursorEnabled || method !== 'Input.dispatchMouseEvent') return
+  const x = params && params.x
+  const y = params && params.y
+  if (typeof x !== 'number' || typeof y !== 'number') return
+  const click = params.type === 'mousePressed'
+  const expr = cursorOverlayExpression(x, y, click)
+  sendCdpToTab(tabId, 'Runtime.evaluate', {
+    expression: expr,
+    returnByValue: false,
+    awaitPromise: false,
+  }).catch(() => {})
+}
+
+function cursorOverlayExpression(x, y, click) {
+  return (
+    '(function(){try{' +
+    'var X=' + x + ',Y=' + y + ',CLICK=' + (click ? 'true' : 'false') + ';' +
+    'var d=document,w=window,c=w.__abCursor;' +
+    'if(!c||!c.host||!c.host.isConnected){' +
+    'var host=d.createElement("div");host.style.cssText="position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none";' +
+    '(d.documentElement||d.body).appendChild(host);' +
+    'var sr=host.attachShadow?host.attachShadow({mode:"open"}):host;' +
+    'var glow=d.createElement("div");glow.style.cssText="position:fixed;left:0;top:0;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;pointer-events:none;opacity:0;background:radial-gradient(circle,rgba(247,168,35,.55),rgba(247,168,35,0) 70%);transition:transform .13s cubic-bezier(.2,.7,.3,1),opacity .3s";' +
+    'var cur=d.createElement("div");cur.style.cssText="position:fixed;left:0;top:0;width:24px;height:24px;margin:-2px 0 0 -2px;pointer-events:none;opacity:0;transition:transform .13s cubic-bezier(.2,.7,.3,1),opacity .3s";' +
+    'cur.innerHTML=\'<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 2 L4 19 L9 14.5 L12 21 L14.6 19.8 L11.6 13.4 L18 13 Z" fill="#fff" stroke="#1bb6c9" stroke-width="1.6" stroke-linejoin="round"/></svg>\';' +
+    'sr.appendChild(glow);sr.appendChild(cur);c=w.__abCursor={host:host,sr:sr,cur:cur,glow:glow,t:0};' +
+    '}' +
+    'var el=c.cur,gl=c.glow;el.style.opacity="1";gl.style.opacity="1";' +
+    'el.style.transform="translate("+X+"px,"+Y+"px)";gl.style.transform="translate("+X+"px,"+Y+"px)";' +
+    'if(CLICK){var r=d.createElement("div");r.style.cssText="position:fixed;left:"+X+"px;top:"+Y+"px;width:10px;height:10px;margin:-5px 0 0 -5px;border:2px solid #f7a823;border-radius:50%;pointer-events:none;opacity:.9;transition:transform .5s ease-out,opacity .5s ease-out";c.sr.appendChild(r);requestAnimationFrame(function(){r.style.transform="scale(4)";r.style.opacity="0"});setTimeout(function(){r.remove()},520);}' +
+    'clearTimeout(c.t);c.t=setTimeout(function(){el.style.opacity="0";gl.style.opacity="0"},2200);' +
+    '}catch(e){}})()'
+  )
+}
+
 // ---- native messaging transport ------------------------------------------
 
 function connectHost() {
@@ -143,6 +225,7 @@ function connectHost() {
   port.onDisconnect.addListener(() => {
     port = null
     hostConnected = false
+    notifyConnChange(false)
     // Sessions are stale once the host is gone; the daemon re-discovers on
     // reconnect. Keep chrome.debugger attached so reconnect is cheap.
     for (const tabId of tabs.keys()) setBadge(tabId, 'connecting')
@@ -157,6 +240,7 @@ function connectHost() {
   // anything new.
   void reannounceAttachedTabs()
   void attachAllTabs()
+  notifyConnChange(true)
 }
 
 async function onHostMessage(msg) {
@@ -388,6 +472,8 @@ async function handleForwardCdpCommand(msg) {
     } catch {}
     return await sendCdpToTab(tabId, 'Runtime.enable', params)
   }
+  // Mirror agent mouse activity to the friendly on-page cursor (opt-in; best-effort).
+  maybeDriveCursor(tabId, method, params)
   return await sendCdpToTab(tabId, method, params)
 }
 

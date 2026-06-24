@@ -5,6 +5,7 @@
 const dot = document.getElementById('dot')
 const label = document.getElementById('statusLabel')
 const sub = document.getElementById('statusSub')
+const tabPill = document.getElementById('tabPill')
 const hint = document.getElementById('hint')
 
 let resolved = false
@@ -17,20 +18,30 @@ function render(state) {
     dot.classList.add('on')
     label.textContent = 'Connected'
     const n = state.tabCount | 0
-    sub.textContent =
-      n > 0
-        ? `bridged to the local CLI · ${n} tab${n === 1 ? '' : 's'} attached`
-        : 'bridged to the local CLI · ready'
+    sub.textContent = 'bridged to your local CLI · ready'
+    if (n > 0) {
+      tabPill.textContent = `${n} tab${n === 1 ? '' : 's'}`
+      tabPill.classList.remove('hidden')
+    } else {
+      tabPill.classList.add('hidden')
+    }
     hint.style.display = 'none'
   } else {
     dot.classList.add('off')
     label.textContent = 'Not paired'
     sub.textContent = 'no local chrome-use CLI linked'
+    tabPill.classList.add('hidden')
     hint.style.display = 'block'
   }
 }
 
 function queryStatus() {
+  // Standalone (opened as a plain file, no extension context) → show a friendly
+  // demo state so the design is viewable without the service worker.
+  if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
+    render({ connected: true, tabCount: 13 })
+    return
+  }
   try {
     chrome.runtime.sendMessage({ type: 'ab-status' }, (resp) => {
       // lastError fires if the service worker can't be reached.
@@ -49,7 +60,11 @@ function queryStatus() {
 const repo = document.getElementById('repo')
 if (repo) {
   repo.addEventListener('click', () => {
-    chrome.tabs.create({ url: repo.dataset.href })
+    if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+      chrome.tabs.create({ url: repo.dataset.href })
+    } else {
+      window.open(repo.dataset.href, '_blank')
+    }
   })
 }
 

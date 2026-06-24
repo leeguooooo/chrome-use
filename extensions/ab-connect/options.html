@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>chrome-use settings</title>
+<style>
+  :root {
+    --cream: #fff7e6;
+    --cream-2: #fffdf8;
+    --ink: #3b2f1c;
+    --muted: #9a8c72;
+    --gold: #f7a823;
+    --gold-deep: #e8890b;
+    --gold-soft: #ffe7b0;
+    --cyan: #1bb6c9;
+    --cyan-deep: #0e7e8c;
+    --cyan-soft: #d6f3f7;
+    --green: #34b364;
+    --amber: #e8890b;
+    --card: #ffffff;
+    --border: #f0e2c6;
+    --shadow: 0 10px 30px -14px rgba(180, 130, 30, 0.4);
+    --radius: 18px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    color: var(--ink);
+    font-family: "SF Pro Rounded", ui-rounded, "Hiragino Maru Gothic ProN",
+                 "Quicksand", "Segoe UI", system-ui, sans-serif;
+    font-size: 14px; line-height: 1.55;
+    min-height: 100vh;
+    background:
+      radial-gradient(80% 60% at 100% -5%, #ffe9b8 0%, rgba(255,233,184,0) 50%),
+      radial-gradient(60% 50% at -10% 8%, #fff0cf 0%, rgba(255,240,207,0) 45%),
+      linear-gradient(180deg, var(--cream) 0%, var(--cream-2) 40%);
+  }
+  .page { max-width: 720px; margin: 0 auto; padding: 40px 28px 64px; }
+
+  header.top { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+  .logo {
+    width: 54px; height: 54px; border-radius: 15px; flex: none; overflow: hidden;
+    box-shadow: 0 6px 16px -6px rgba(180,130,30,.45);
+  }
+  .logo img { width: 100%; height: 100%; display: block; }
+  header.top h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+  header.top .tag { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+  header.top .ver { margin-left: auto; color: var(--gold-deep); font-weight: 700;
+    font-size: 12px; background: var(--gold-soft); padding: 5px 11px; border-radius: 999px; }
+
+  .card {
+    background: var(--card); border: 1.5px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 20px 22px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 15px; font-weight: 800; margin: 0 0 3px; letter-spacing: -0.01em; }
+  .card .lead { color: var(--muted); font-size: 12.5px; margin: 0 0 4px; }
+
+  .row { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid #f6eed9; }
+  .row:first-of-type { border-top: 0; }
+  .row .grow { flex: 1; min-width: 0; }
+  .row .name { font-weight: 700; }
+  .row .hint { color: var(--muted); font-size: 12px; }
+
+  /* status */
+  .statline { display: flex; align-items: center; gap: 11px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--muted); position: relative; flex: none; }
+  .dot.on { background: var(--green); }
+  .dot.on::after { content:""; position:absolute; inset:-5px; border-radius:50%;
+    border:2px solid var(--green); opacity:.5; animation: ping 1.8s ease-out infinite; }
+  .dot.off { background: var(--amber); }
+  @keyframes ping { 0%{transform:scale(.7);opacity:.6} 100%{transform:scale(1.7);opacity:0} }
+  .pill { font-size: 11.5px; font-weight: 700; padding: 4px 11px; border-radius: 999px;
+    background: var(--cyan-soft); color: var(--cyan-deep); white-space: nowrap; }
+
+  /* toggle */
+  .toggle { position: relative; width: 46px; height: 27px; flex: none; cursor: pointer; }
+  .toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .track { position: absolute; inset: 0; background: #e7dcc4; border-radius: 999px; transition: background .2s; }
+  .knob { position: absolute; top: 3px; left: 3px; width: 21px; height: 21px; border-radius: 50%;
+    background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,.2); transition: transform .2s; }
+  .toggle input:checked ~ .track { background: var(--green); }
+  .toggle input:checked ~ .knob { transform: translateX(19px); }
+
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .cmd { display: flex; align-items: center; gap: 10px; margin-top: 12px;
+    background: #fffaf0; border: 1.5px solid var(--gold-soft); border-radius: 12px; padding: 10px 12px; }
+  .cmd code { flex: 1; color: var(--gold-deep); font-size: 12.5px; user-select: all; }
+  .btn { font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+    border: 0; border-radius: 9px; padding: 7px 13px; background: var(--gold); color: #fff;
+    box-shadow: 0 3px 8px -3px rgba(232,137,11,.6); transition: transform .08s, background .15s; }
+  .btn:hover { background: var(--gold-deep); }
+  .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: #fff; color: var(--gold-deep); border: 1.5px solid var(--gold-soft); box-shadow: none; }
+
+  /* approved sites */
+  .sites { margin-top: 6px; }
+  .site { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 11px;
+    background: #fffaf0; border: 1px solid #f3e7c9; margin-top: 8px; }
+  .site .host { flex: 1; font-weight: 600; font-size: 13px; }
+  .site .x { cursor: pointer; color: var(--muted); font-weight: 700; padding: 2px 6px; border-radius: 6px; }
+  .site .x:hover { color: #c0392b; background: #fdecea; }
+  .addrow { display: flex; gap: 9px; margin-top: 12px; }
+  .addrow input { flex: 1; font: inherit; font-size: 13px; padding: 9px 12px;
+    border: 1.5px solid var(--border); border-radius: 11px; background: #fff; outline: none; }
+  .addrow input:focus { border-color: var(--gold); }
+  .empty { color: var(--muted); font-size: 12.5px; padding: 6px 2px; }
+
+  footer { display: flex; justify-content: space-between; align-items: center;
+    margin-top: 26px; padding-top: 16px; border-top: 1.5px solid var(--border); }
+  footer .privacy { color: var(--muted); font-size: 12px; font-weight: 600; }
+  footer a { color: var(--gold-deep); font-weight: 700; text-decoration: none; font-size: 12.5px; }
+  footer a:hover { color: var(--gold); }
+  .saved { color: var(--green); font-size: 12px; font-weight: 700; opacity: 0; transition: opacity .2s; }
+  .saved.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <div class="logo"><img src="icons/icon128.png" alt="" /></div>
+    <div>
+      <h1>chrome-use settings</h1>
+      <div class="tag">local automation bridge · your machine, your rules</div>
+    </div>
+    <span class="ver" id="ver">v—</span>
+  </header>
+
+  <!-- Connection -->
+  <section class="card">
+    <h2>Connection</h2>
+    <p class="lead">Status of the bridge to your local chrome-use CLI.</p>
+    <div class="row">
+      <div class="statline grow">
+        <span class="dot" id="dot"></span>
+        <div>
+          <div class="name" id="statusLabel">Checking…</div>
+          <div class="hint" id="statusSub">saying hi to your local CLI</div>
+        </div>
+      </div>
+      <span class="pill" id="tabPill" style="display:none"></span>
+    </div>
+  </section>
+
+  <!-- Notifications -->
+  <section class="card">
+    <h2>Notifications</h2>
+    <p class="lead">A gentle heads-up when the bridge connects or drops.</p>
+    <div class="row">
+      <div class="grow">
+        <div class="name">Connection notifications</div>
+        <div class="hint">Notify me when chrome-use links to or unlinks from Chrome.</div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="optNotify" /><span class="track"></span><span class="knob"></span></label>
+    </div>
+  </section>
+
+  <!-- Agent cursor -->
+  <section class="card">
+    <h2>Agent cursor</h2>
+    <p class="lead">Watch a friendly cursor glide where the agent clicks.</p>
+    <div class="row">
+      <div class="grow">
+        <div class="name">Show the agent cursor</div>
+        <div class="hint">A soft cursor + click ripple while chrome-use drives a tab.
+          Off by default — the cursor is a visible DOM overlay, so leaving it off
+          keeps automation invisible to the page (stealth).</div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="optCursor" /><span class="track"></span><span class="knob"></span></label>
+    </div>
+  </section>
+
+  <!-- Debugger banner -->
+  <section class="card">
+    <h2>The “started debugging this browser” bar</h2>
+    <p class="lead">chrome-use drives Chrome via the DevTools protocol, so Chrome shows
+      that bar. It can’t be hidden at runtime — but a one-time restart with a startup
+      flag removes it (your tabs &amp; logins are restored automatically).</p>
+    <div class="cmd">
+      <code id="silentCmd">chrome-use extension connect --silent</code>
+      <button class="btn" id="copyCmd">Copy</button>
+    </div>
+  </section>
+
+  <!-- Approved sites -->
+  <section class="card">
+    <h2>Approved sites</h2>
+    <p class="lead">An optional allowlist of hosts chrome-use may drive. Empty = no
+      restriction (the CLI drives whatever you point it at).</p>
+    <div class="sites" id="sites"></div>
+    <div class="addrow">
+      <input type="text" id="siteInput" placeholder="example.com" />
+      <button class="btn ghost" id="addSite">Add</button>
+    </div>
+  </section>
+
+  <footer>
+    <span class="privacy">🔒 local only · no tracking · no cloud</span>
+    <span style="display:flex;align-items:center;gap:14px">
+      <span class="saved" id="saved">Saved ✓</span>
+      <a id="repo" data-href="https://github.com/leeguooooo/chrome-use">GitHub ↗</a>
+    </span>
+  </footer>
+</div>
+<script src="options.js"></script>
+</body>
+</html>
