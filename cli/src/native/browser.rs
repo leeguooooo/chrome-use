@@ -1317,6 +1317,20 @@ impl BrowserManager {
         }
         self.pin_active_target();
 
+        // `navigate` (unlike `tab new`) reaches here after opening a fresh owned
+        // tab when the active tab wasn't session-owned — which strands the
+        // daemon's about:blank scratch. Sweep it now that a real page is open,
+        // keeping the tab we just navigated. (relay-only; gated inside helper)
+        if page_url != "about:blank" {
+            if let Some(keep) = self
+                .pages
+                .get(self.active_page_index)
+                .map(|p| p.target_id.clone())
+            {
+                self.close_leftover_blank_scratch(&keep).await;
+            }
+        }
+
         let mut out = json!({ "url": page_url, "title": title });
         if let Some(w) = nav_warning {
             out["warning"] = json!(w);
@@ -2000,6 +2014,53 @@ impl BrowserManager {
         ok
     }
 
+    /// On the relay, close any OWNED tabs still sitting at about:blank except
+    /// `keep` (the tab we just opened or navigated to a real page). The daemon
+    /// creates an about:blank scratch tab on connect; once a real page exists
+    /// that scratch is just clutter, and `navigate`/`tab new` could otherwise
+    /// strand it (e.g. `eval` then `navigate <url>` left a stray about:blank).
+    /// Re-pins `keep` afterwards since removing pages shifts indices.
+    ///
+    /// Relay-only: off the relay the initial about:blank is the browser's own
+    /// first tab (not our scratch), so we must never close it.
+    async fn close_leftover_blank_scratch(&mut self, keep: &str) {
+        if self.agent_group().is_none() {
+            return;
+        }
+        let blanks: Vec<String> = self
+            .pages
+            .iter()
+            .filter(|p| {
+                p.target_id != keep
+                    && self.created_targets.contains(&p.target_id)
+                    && (p.url == "about:blank" || p.url.is_empty())
+            })
+            .map(|p| p.target_id.clone())
+            .collect();
+        if blanks.is_empty() {
+            return;
+        }
+        for tid in blanks {
+            let _ = self
+                .client
+                .send_command_typed::<_, Value>(
+                    "Target.closeTarget",
+                    &CloseTargetParams {
+                        target_id: tid.clone(),
+                    },
+                    None,
+                )
+                .await;
+            self.created_targets.remove(&tid);
+            self.remove_page_by_target_id(&tid);
+        }
+        // Removing earlier pages shifts indices — re-pin the kept tab.
+        if let Some(i) = self.pages.iter().position(|p| p.target_id == keep) {
+            self.active_page_index = i;
+            self.pin_active_target();
+        }
+    }
+
     pub async fn tab_new(
         &mut self,
         url: Option<&str>,
@@ -2070,43 +2131,12 @@ impl BrowserManager {
         self.active_page_index = index;
         self.pin_active_target();
 
-        // Close the daemon's leftover initial `about:blank` scratch tab once this
-        // real tab exists, so the session's tab group isn't left showing a stray
-        // blank page beside the work tab (every group otherwise carried one). Only
-        // on the RELAY — there the about:blank is a tab WE created as scratch; on a
-        // launched browser the initial about:blank is the browser's own first tab,
-        // which we must not close. Only when opening a real url, OWNED, still-blank.
-        if target_url != "about:blank" && self.agent_group().is_some() {
+        // Once this real tab exists, close the daemon's leftover about:blank
+        // scratch so the session's tab group isn't left showing a stray blank
+        // page beside the work tab (every group otherwise carried one).
+        if target_url != "about:blank" {
             if let Some(new_tid) = self.pages.get(index).map(|p| p.target_id.clone()) {
-                let blanks: Vec<String> = self
-                    .pages
-                    .iter()
-                    .filter(|p| {
-                        p.target_id != new_tid
-                            && self.created_targets.contains(&p.target_id)
-                            && (p.url == "about:blank" || p.url.is_empty())
-                    })
-                    .map(|p| p.target_id.clone())
-                    .collect();
-                for tid in blanks {
-                    let _ = self
-                        .client
-                        .send_command_typed::<_, Value>(
-                            "Target.closeTarget",
-                            &CloseTargetParams {
-                                target_id: tid.clone(),
-                            },
-                            None,
-                        )
-                        .await;
-                    self.created_targets.remove(&tid);
-                    self.remove_page_by_target_id(&tid);
-                }
-                // Removing earlier pages shifts indices — re-pin the new tab.
-                if let Some(i) = self.pages.iter().position(|p| p.target_id == new_tid) {
-                    self.active_page_index = i;
-                    self.pin_active_target();
-                }
+                self.close_leftover_blank_scratch(&new_tid).await;
             }
         }
 
