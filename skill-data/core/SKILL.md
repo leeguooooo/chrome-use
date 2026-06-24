@@ -470,6 +470,26 @@ chrome-use press d --hold 800          # hold-to-move, precise (timed in-daemon 
 chrome-use press Space                 # discrete actions (jump/attack/confirm)
 ```
 
+**Symptom: the label shows in `get text` but has no `@ref`.** Voice-room mic-seats
+(Zego/Agora), prototype canvases (mockitt/modao), game HUDs, and some web
+components paint their controls, so the text appears in `get text`/`read_page`
+("Add Add Add…") yet `snapshot -i` lists nothing and `querySelectorAll` returns 0
+— there is no addressable node, so `@ref`/`find` can't reach it. Drive by position:
+
+```bash
+chrome-use get text --pierce        # FIRST: if it's a CLOSED shadow root (not
+                                    #   canvas), this reads through it — cheap to try
+chrome-use screenshot /tmp/s.png    # else SEE where the control sits
+chrome-use click <x> <y>            # click the pixel (bare numbers = coordinate)
+```
+
+Why there's no ref: `<canvas>`/WebGL hit-regions and **closed** shadow roots expose
+no DOM/AX node for the painted control, so no amount of snapshot work can mint a
+ref — coordinates are the only handle. (Open shadow roots and same-origin /
+cross-origin iframes ARE surfaced by `snapshot -i`; only canvas + closed-shadow are
+coordinate-only.) On the relay, foreground the agent's own tab first so the
+coordinate click can't drift onto the user's other tab.
+
 **Don't drive frame-by-frame with one CLI call per action** — that's the slowest,
 lowest-fidelity way (each call is a process spawn + round-trip). Script a *timed
 sequence in a single round-trip* with `batch` (it sends each step to the running
