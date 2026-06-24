@@ -1635,24 +1635,12 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
                 try_restore_navigation(state).await;
                 return Ok(());
             }
-            Err(_e) => {
-                // Could not find a running Chrome with CDP enabled.
-                // Return a helpful error guiding the user to enable it.
-                return Err(format!(
-                    "Could not connect to your Chrome browser.\n\n\
-                     If Chrome showed an \"Allow remote debugging?\" dialog, click \
-                     Allow and re-run — that consent is what lets chrome-use attach.\n\n\
-                     Otherwise, to let chrome-use reuse your logged-in Chrome (recommended):\n\
-                     {}\n\n\
-                     Or launch a separate browser that KEEPS your login state:\n  \
-                     chrome-use --launch --profile auto open <url>\n\
-                     (plain `--launch` alone uses a temporary EMPTY profile — no cookies, \
-                     no logged-in sessions.)\n\n\
-                     Note: remote debugging is a startup flag, not a Chrome setting — \
-                     chrome://inspect/#remote-debugging only enables target discovery and \
-                     does NOT expose the CDP HTTP API on /json/version. \
-                     A full restart with --remote-debugging-port=<port> is required.",
-                    chrome_relaunch_hint(),
+            Err(e) => {
+                // Surface the real cause (relay-down guidance when the extension
+                // is installed) instead of a generic remote-debugging lecture (#54).
+                return Err(auto_connect_failure_message(
+                    &e,
+                    crate::connect::host_installed(),
                 ));
             }
         }
@@ -1794,6 +1782,42 @@ fn chrome_relaunch_hint() -> &'static str {
          2. Run:  google-chrome --remote-debugging-port=9222\n\
          3. Then retry your chrome-use command"
     }
+}
+
+/// Build the error shown when auto-connecting to the user's Chrome fails.
+///
+/// When the ab-connect extension is installed, the relay is the *intended*
+/// transport, and `cause` (from `auto_connect_cdp`) already carries the precise
+/// "extension is installed but its relay isn't connected — wake it / reload it"
+/// guidance. The generic `--remote-debugging-port` lecture would bury that and
+/// misdirect a user whose only problem is a sleeping relay, so surface the real
+/// cause and point at `chrome-use extension connect` instead (issue #54). With
+/// no extension installed, the remote-debugging / `--launch --profile` guidance
+/// is the right help.
+fn auto_connect_failure_message(cause: &str, host_installed: bool) -> String {
+    if host_installed {
+        return format!(
+            "Could not drive your Chrome through the ab-connect extension.\n\n{cause}\n\n\
+             Once the relay is back, `chrome-use extension connect` re-attaches to your \
+             logged-in Chrome."
+        );
+    }
+    format!(
+        "Could not connect to your Chrome browser.\n\n\
+         If Chrome showed an \"Allow remote debugging?\" dialog, click \
+         Allow and re-run — that consent is what lets chrome-use attach.\n\n\
+         Otherwise, to let chrome-use reuse your logged-in Chrome (recommended):\n\
+         {}\n\n\
+         Or launch a separate browser that KEEPS your login state:\n  \
+         chrome-use --launch --profile auto open <url>\n\
+         (plain `--launch` alone uses a temporary EMPTY profile — no cookies, \
+         no logged-in sessions.)\n\n\
+         Note: remote debugging is a startup flag, not a Chrome setting — \
+         chrome://inspect/#remote-debugging only enables target discovery and \
+         does NOT expose the CDP HTTP API on /json/version. \
+         A full restart with --remote-debugging-port=<port> is required.",
+        chrome_relaunch_hint(),
+    )
 }
 
 /// Called after every successful launch / CDP connect / auto-connect.
@@ -2207,22 +2231,12 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                 apply_stealth_to_browser(state).await;
                 return Ok(json!({ "launched": true }));
             }
-            Err(_e) => {
-                return Err(format!(
-                    "Could not connect to your Chrome browser.\n\n\
-                     If Chrome showed an \"Allow remote debugging?\" dialog, click \
-                     Allow and re-run — that consent is what lets chrome-use attach.\n\n\
-                     Otherwise, to let chrome-use reuse your logged-in Chrome (recommended):\n\
-                     {}\n\n\
-                     Or launch a separate browser that KEEPS your login state:\n  \
-                     chrome-use --launch --profile auto open <url>\n\
-                     (plain `--launch` alone uses a temporary EMPTY profile — no cookies, \
-                     no logged-in sessions.)\n\n\
-                     Note: remote debugging is a startup flag, not a Chrome setting — \
-                     chrome://inspect/#remote-debugging only enables target discovery and \
-                     does NOT expose the CDP HTTP API on /json/version. \
-                     A full restart with --remote-debugging-port=<port> is required.",
-                    chrome_relaunch_hint(),
+            Err(e) => {
+                // Surface the real cause (relay-down guidance when the extension
+                // is installed) instead of a generic remote-debugging lecture (#54).
+                return Err(auto_connect_failure_message(
+                    &e,
+                    crate::connect::host_installed(),
                 ));
             }
         }
@@ -9749,6 +9763,31 @@ mod tests {
     use super::*;
     use crate::test_utils::EnvGuard;
     use std::fs;
+
+    #[test]
+    fn test_auto_connect_failure_message_relay_installed() {
+        // With the extension installed, surface the precise relay-down cause and
+        // point at `extension connect` — NOT the generic remote-debugging lecture (#54).
+        let cause = "The chrome-use extension is installed, but its relay isn't connected.";
+        let msg = auto_connect_failure_message(cause, true);
+        assert!(msg.contains(cause), "must surface the real cause");
+        assert!(
+            msg.contains("extension connect"),
+            "must point at `chrome-use extension connect`"
+        );
+        assert!(
+            !msg.contains("--remote-debugging-port"),
+            "must NOT show the generic remote-debugging lecture when the relay is the path"
+        );
+    }
+
+    #[test]
+    fn test_auto_connect_failure_message_no_extension() {
+        // With no extension, the remote-debugging / --launch guidance is correct.
+        let msg = auto_connect_failure_message("connect failed", false);
+        assert!(msg.contains("--remote-debugging-port"));
+        assert!(msg.contains("--launch --profile auto"));
+    }
 
     #[test]
     fn test_cf_recommendation() {
