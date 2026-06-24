@@ -10,6 +10,7 @@ mod flags;
 mod install;
 mod native;
 mod output;
+mod silence;
 mod site;
 mod skills;
 mod test_runner;
@@ -998,6 +999,53 @@ fn main() {
     // (`connect <port>` stays the plain CDP-attach command.)
     if clean.first().map(|s| s.as_str()) == Some("extension") {
         if clean.get(1).map(|s| s.as_str()) == Some("connect") {
+            // Optionally silence Chrome's `chrome.debugger` "started debugging
+            // this browser" banner by cold-relaunching the user's Chrome with
+            // --silent-debugger-extension-api. Default (Auto) only restarts after
+            // an interactive confirm; `--silent` forces it, `--keep-banner` skips.
+            let silence_mode = if clean.iter().any(|a| a == "--keep-banner") {
+                silence::SilenceMode::Off
+            } else if clean.iter().any(|a| a == "--silent") {
+                silence::SilenceMode::Force
+            } else {
+                silence::SilenceMode::Auto
+            };
+            if silence_mode != silence::SilenceMode::Off {
+                match silence::ensure_banner_silenced(silence_mode) {
+                    silence::SilenceOutcome::Restarted => {
+                        // Chrome dropped the relay on quit; wait for ab-connect
+                        // to respawn the native host and rewrite its CDP url.
+                        eprint!(
+                            "{} Chrome restarted; waiting for the extension relay to reconnect…",
+                            color::success_indicator()
+                        );
+                        let _ = std::io::Write::flush(&mut std::io::stderr());
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(25);
+                        while connect::relay_url().is_none() && std::time::Instant::now() < deadline
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        }
+                        eprintln!();
+                    }
+                    silence::SilenceOutcome::Failed(e) => {
+                        eprintln!(
+                            "{} could not silence the debugging banner: {e}",
+                            color::warning_indicator()
+                        );
+                    }
+                    silence::SilenceOutcome::Ambiguous(n) => {
+                        eprintln!(
+                            "{} {n} Chrome instances are running — not auto-restarting (quitting \
+                             would close all of them). Quit the extra Chrome instances and retry, \
+                             or launch Chrome with --silent-debugger-extension-api yourself.",
+                            color::warning_indicator()
+                        );
+                    }
+                    // AlreadySilent / NotRunning / Declined → proceed as before.
+                    _ => {}
+                }
+            }
             match connect::relay_url() {
                 Some(url) => {
                     // The connect path reads `flags.cdp` (parsed from the original
