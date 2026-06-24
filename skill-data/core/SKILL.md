@@ -352,6 +352,13 @@ chrome-use type @e5 "201-0001" --key-events  # real keystrokes (not insertText) 
                                           # use for autocomplete/combobox fields that
                                           # only react to key events (e.g. a postal box
                                           # that auto-fills city/prefecture, Google Places)
+chrome-use type @e6 "ChatGPT" --enter  # type (real keystrokes, implies --key-events)
+                                          # then press Enter to COMMIT the candidate in an
+                                          # async-autocomplete / tag widget. Use when typing
+                                          # alone shows no dropdown and the field needs a tag
+                                          # confirmed (e.g. juejin 「添加标签」). If you'd rather
+                                          # pick from the list, type --key-events first, then
+                                          # snapshot -i and click the candidate.
 chrome-use press Enter                 # press a key at current focus (down+up)
 chrome-use press Control+a             # key combination
 chrome-use keydown d                   # HOLD a key down (no auto-release)

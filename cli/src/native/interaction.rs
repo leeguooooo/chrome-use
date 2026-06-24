@@ -859,6 +859,20 @@ pub async fn type_text_into_active_context(
     Ok(())
 }
 
+/// Commit the value just typed into an async-autocomplete / tag widget by pressing
+/// Enter (issue #50: juejin's 「添加标签」 input). Such widgets query their suggestion
+/// list off the per-character key events `type --key-events` fires, but the
+/// dropdown lands a tick later — so we let the page settle (RAF + microtask) so the
+/// candidate is mounted/highlighted before the Enter, which the widget reads as
+/// "accept the current candidate". Used by `type --enter`, which forces key-events
+/// typing on (a bulk insertText never triggers the dropdown Enter would commit).
+pub async fn commit_with_enter(client: &CdpClient, session_id: &str) -> Result<(), String> {
+    wait_for_paint_settled(client, session_id).await;
+    press_key(client, session_id, "enter").await?;
+    wait_for_paint_settled(client, session_id).await;
+    Ok(())
+}
+
 pub async fn press_key(client: &CdpClient, session_id: &str, key: &str) -> Result<(), String> {
     press_key_with_modifiers(client, session_id, key, None).await
 }
