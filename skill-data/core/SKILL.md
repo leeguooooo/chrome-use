@@ -144,18 +144,19 @@ real browser without cross-talk, and the user's own tabs are never grouped. CDP
 drives the page without moving the user's mouse/keyboard, so it doesn't fight
 them for control.
 
-> **⚠️ Concurrent agents MUST each use their own `--session <name>` (or
-> `AGENT_BROWSER_SESSION=<name>`).** The session *name* is the isolation key: it
-> maps to a dedicated tab group **and a dedicated daemon** (the port is derived
-> from the name). Omitting it puts you on the shared `default` session — so **two
-> agents that both omit it land on the same daemon, same tab group, same
-> active-tab pointer.** Then each agent's `open`/`tab new` repins that one shared
-> tab, and the *other* agent's next `eval`/`click`/`snapshot` silently drifts onto
-> it (the classic "my commands ended up on the wrong tab" failure). Fix: give each
-> agent a unique, **stable** name (e.g. `--session agent-7` / a per-agent id) and
-> reuse that **same** name for every command that agent runs, so its calls stay on
-> its own tab. A single agent driving sequentially can keep `default`; the moment a
-> second agent shares the browser, both need distinct names.
+> **Per-agent isolation is automatic.** The session *name* is the isolation key:
+> it maps to a dedicated tab group **and a dedicated daemon** (the port is derived
+> from the name). When you don't pass `--session` / `AGENT_BROWSER_SESSION`,
+> chrome-use now **auto-derives a per-agent default** — `cu-<repo>-<id>`, where
+> `<id>` is a short hash of a stable per-agent terminal/agent env id
+> (`CMUX_SURFACE_ID`, `TERM_SESSION_ID`, `ITERM_SESSION_ID`, `TMUX_PANE`, … or
+> `AGENT_BROWSER_SESSION_ID` if a runner injects one). So **two agents in the same
+> repo get different tab groups by default** and no longer stomp each other's
+> active tab. The name is stable across that one agent's commands and unique per
+> agent. In a plain shell with none of those env vars it falls back to the shared
+> `default`. Override anytime: pass `--session <name>` / `AGENT_BROWSER_SESSION` to
+> pick an explicit name, or set them to the **same** value across agents to make
+> them deliberately *share* one tab group.
 
 **Strict multi-agent isolation.** A session over the relay tracks and drives
 **only the tabs it created** (its own group). It does **not** adopt the user's

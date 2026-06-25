@@ -359,6 +359,88 @@ pub struct Flags {
     pub cli_headed: bool,
 }
 
+/// Stable per-agent env ids, in priority order. The first present, non-empty
+/// one discriminates one agent / terminal from another — it is the only thing
+/// that can separate two agents working in the SAME directory (the exact case a
+/// cwd-based name cannot). `AGENT_BROWSER_SESSION_ID` lets a runner inject its
+/// own id explicitly (e.g. cmux can export it per agent).
+const AGENT_ID_VARS: &[&str] = &[
+    "AGENT_BROWSER_SESSION_ID",
+    "CMUX_SURFACE_ID",
+    "CMUX_CLAUDE_PID",
+    "GHOSTTY_SURFACE_ID",
+    "TERM_SESSION_ID",
+    "ITERM_SESSION_ID",
+    "WEZTERM_PANE",
+    "KITTY_WINDOW_ID",
+    "TMUX_PANE",
+    "STY",
+    "WINDOWID",
+];
+
+/// Auto-derive the default session so concurrent agents don't all collide on one
+/// shared `default` tab group. A session name maps to its own tab group AND
+/// daemon (the port is derived from the name), so the derived name must be both
+/// STABLE across one agent's many CLI invocations and UNIQUE per agent.
+/// Uniqueness comes from a stable per-agent terminal/agent env id (see
+/// `AGENT_ID_VARS`) — that env is inherited by every `chrome-use` the agent
+/// spawns, so it's constant for the agent's lifetime and differs between agents.
+/// The cwd basename is only a readable prefix, so the Chrome tab group reads e.g.
+/// `cu-myrepo-3f9a1c`. When no per-agent id exists (a plain shell), fall back to
+/// `default` — unchanged behaviour, since there's nothing stable to isolate on.
+/// `--session` / `AGENT_BROWSER_SESSION` are resolved before this and override it.
+fn default_session_name() -> String {
+    let Some(agent_id) = AGENT_ID_VARS
+        .iter()
+        .find_map(|v| env::var(v).ok().filter(|s| !s.is_empty()))
+    else {
+        return "default".to_string();
+    };
+    let tag = format!("{:06x}", session_hash(&agent_id) & 0x00ff_ffff);
+    let repo = env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .map(|n| sanitize_session_component(&n))
+        .unwrap_or_default();
+    if repo.is_empty() {
+        format!("cu-{tag}")
+    } else {
+        format!("cu-{repo}-{tag}")
+    }
+}
+
+/// FNV-1a 32-bit hash — any stable hash works; we only need a short, well-spread
+/// tag so two different agent ids almost never produce the same session name.
+fn session_hash(s: &str) -> u32 {
+    let mut h: u32 = 2_166_136_261;
+    for b in s.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(16_777_619);
+    }
+    h
+}
+
+/// Reduce a repo dir name to a safe, readable session component: lowercase ASCII
+/// alphanumerics and single hyphens, capped at 24 chars, so the derived session
+/// always satisfies `is_valid_session_name`.
+fn sanitize_session_component(s: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !out.is_empty() && !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+        if out.len() >= 24 {
+            break;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
 pub fn parse_flags(args: &[String]) -> Flags {
     let config = load_config(args).unwrap_or_else(|e| {
         eprintln!("{} {}", color::warning_indicator(), e);
@@ -420,7 +502,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         session: env::var("AGENT_BROWSER_SESSION")
             .ok()
             .or(config.session)
-            .unwrap_or_else(|| "default".to_string()),
+            .unwrap_or_else(default_session_name),
         headers: config.headers,
         executable_path: env::var("AGENT_BROWSER_EXECUTABLE_PATH")
             .ok()
@@ -1609,5 +1691,46 @@ mod tests {
         ];
         let clean = clean_args(&input);
         assert_eq!(clean, vec!["open", "example.com"]);
+    }
+
+    #[test]
+    fn session_hash_is_stable_and_distinct() {
+        assert_eq!(session_hash("surface-A"), session_hash("surface-A"));
+        assert_ne!(session_hash("surface-A"), session_hash("surface-B"));
+    }
+
+    #[test]
+    fn sanitize_session_component_stays_valid() {
+        use crate::validation::is_valid_session_name;
+        assert_eq!(
+            sanitize_session_component("agent-browser-stealth"),
+            "agent-browser-stealth"
+        );
+        assert_eq!(sanitize_session_component("My Repo!! (v2)"), "my-repo-v2");
+        let messy = sanitize_session_component("  ../weird@@name//  ");
+        assert!(is_valid_session_name(&format!("cu-{messy}-0a1b2c")));
+        assert!(sanitize_session_component(&"a".repeat(100)).len() <= 24);
+    }
+
+    #[test]
+    fn default_session_isolates_concurrent_agents() {
+        use crate::validation::is_valid_session_name;
+        let guard = EnvGuard::new(AGENT_ID_VARS);
+        for &v in AGENT_ID_VARS {
+            guard.remove(v);
+        }
+        // Plain shell with no per-agent id → unchanged "default" behaviour.
+        assert_eq!(default_session_name(), "default");
+
+        // A per-agent id → a stable, isolated "cu-…" name.
+        guard.set("CMUX_SURFACE_ID", "agent-one-uuid");
+        let one = default_session_name();
+        assert!(one.starts_with("cu-"), "got {one}");
+        assert!(is_valid_session_name(&one));
+        assert_eq!(one, default_session_name(), "must be stable across calls");
+
+        // A different agent (different id) → a different session, no collision.
+        guard.set("CMUX_SURFACE_ID", "agent-two-uuid");
+        assert_ne!(one, default_session_name(), "two agents must not collide");
     }
 }
