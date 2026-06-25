@@ -123,19 +123,17 @@ desktop knows which session owns it. If a launched session needs more:
 **If you DO hit the "Allow remote debugging?" dialog**, don't keep retrying (every
 attempt re-pops it). One of two things is true:
 
-1. **You're on a stale build.** The relay-preference that avoids this dialog
-   landed in **fork.30**. Run `chrome-use --version`: if it's below
-   `0.27.0-fork.30`, upgrade and retry:
+1. **You're on a stale build.** The relay-preference that avoids this dialog has
+   shipped for many releases — if you still hit it, your `chrome-use` is old.
+   Upgrade and retry:
    ```bash
    curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
    ```
    If `which -a chrome-use` shows more than one install, an old **npm/pnpm**
-   copy (the npm registry lags behind — Releases are the source of truth) may be
-   shadowing the upgraded one; remove the stale copy
-   (`npm rm -g chrome-use` / `pnpm rm -g chrome-use`) so the
-   `install.sh` build wins. A tool that bundles its *own* pinned copy
-   (e.g. `node .../chrome-use@0.24.x/.../chrome-use`) needs that
-   copy upgraded too.
+   copy (the npm registry lags behind — GitHub Releases are the source of truth)
+   may be shadowing the upgraded one; remove the stale copy
+   (`npm rm -g chrome-use` / `pnpm rm -g chrome-use`) so the `install.sh` build
+   wins. A tool that bundles its *own* pinned copy needs that copy upgraded too.
 2. **The extension/relay isn't live.** Tell the user to install the Store
    extension (one click, above); after that the relay stays up and the dialog
    never returns.
