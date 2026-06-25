@@ -144,6 +144,19 @@ real browser without cross-talk, and the user's own tabs are never grouped. CDP
 drives the page without moving the user's mouse/keyboard, so it doesn't fight
 them for control.
 
+> **⚠️ Concurrent agents MUST each use their own `--session <name>` (or
+> `AGENT_BROWSER_SESSION=<name>`).** The session *name* is the isolation key: it
+> maps to a dedicated tab group **and a dedicated daemon** (the port is derived
+> from the name). Omitting it puts you on the shared `default` session — so **two
+> agents that both omit it land on the same daemon, same tab group, same
+> active-tab pointer.** Then each agent's `open`/`tab new` repins that one shared
+> tab, and the *other* agent's next `eval`/`click`/`snapshot` silently drifts onto
+> it (the classic "my commands ended up on the wrong tab" failure). Fix: give each
+> agent a unique, **stable** name (e.g. `--session agent-7` / a per-agent id) and
+> reuse that **same** name for every command that agent runs, so its calls stay on
+> its own tab. A single agent driving sequentially can keep `default`; the moment a
+> second agent shares the browser, both need distinct names.
+
 **Strict multi-agent isolation.** A session over the relay tracks and drives
 **only the tabs it created** (its own group). It does **not** adopt the user's
 existing tabs, other agents' tabs, or pop-ups (e.g. an OAuth/login window — that's
