@@ -7799,23 +7799,26 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
 /// srcs, background natural/displayed width and the piece's current displayed
 /// left (relative to the bg). Returns `present:false` if no yidun slider.
 const YIDUN_PROBE: &str = r#"(function(){
-  // Pick the *visible* bg/jigsaw — yidun float mode swaps the inline puzzle for
-  // a popup one during the drag, so always take the widest rendered instance.
+  // Pick the *visible* element of a kind — yidun has several modes (inline float,
+  // popup modal) and may keep hidden duplicates, so take the widest rendered one.
   const vis=(sel)=>{let best=null,bw=-1;document.querySelectorAll(sel).forEach(e=>{
     const r=e.getBoundingClientRect(); if(r.width>bw){bw=r.width;best=e;}}); return best;};
-  const h=document.querySelector('.yidun_slider');
-  const bg=vis('img.yidun_bg-img');
+  const h=vis('.yidun_slider');
+  const bgEl=vis('img.yidun_bg-img');     // for src + natural width
   const jig=vis('img.yidun_jigsaw');
-  if(!h||!bg||!jig) return JSON.stringify({present:false});
+  // The puzzle's *displayed* width comes from the container DIV: in popup mode
+  // (e.g. Zhihu) the inner <img> is 0-sized while .yidun_bgimg is the real
+  // 320px box. Fall back to the img when there's no container.
+  const box=vis('.yidun_bgimg')||bgEl;
+  if(!h||!bgEl||!jig||!box) return JSON.stringify({present:false});
   const hb=h.getBoundingClientRect();
-  const bb=bg.getBoundingClientRect();
+  const cb=box.getBoundingClientRect();
   const jb=jig.getBoundingClientRect();
   return JSON.stringify({present:true,
     hx:hb.x+hb.width/2, hy:hb.y+hb.height/2,
-    bg_src:bg.src, jig_src:jig.src,
-    bg_natW:bg.naturalWidth, bg_dispW:bb.width,
-    n_bg:document.querySelectorAll('img.yidun_bg-img').length,
-    piece_left: jb.x-bb.x});
+    bg_src:bgEl.src, jig_src:jig.src,
+    bg_natW:bgEl.naturalWidth, bg_dispW:cb.width,
+    piece_left: jb.x-cb.x});
 })()"#;
 
 /// Read the yidun result state after a release: success / error / pending.
@@ -7895,11 +7898,18 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
                     If it's inside a cross-origin iframe, solve-slider can't reach it yet."
             .to_string());
     }
-    for _ in 0..15 {
-        if probe.get("bg_dispW").and_then(|v| v.as_f64()).unwrap_or(0.0) >= 1.0 {
+    // Up to ~6s: wait for the handle to be positioned. Popup-mode captchas (e.g.
+    // Zhihu) animate the modal in over a couple of seconds, and pressing before
+    // the handle has settled misses it. We wait on the handle, not the image:
+    // in float mode (demo) the image stays hidden until the press, so waiting on
+    // image width would needlessly burn the whole budget.
+    for _ in 0..40 {
+        let hx = probe.get("hx").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let hy = probe.get("hy").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if hx > 0.0 && hy > 0.0 {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         probe = parse_json_string(mgr.evaluate(YIDUN_PROBE, None).await?, "yidun probe")?;
     }
     let f = |k: &str| probe.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -7916,7 +7926,11 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     }
 
     // 2. Fetch the two slice images and detect the gap offline (natural px).
+    //    A timeout is essential: without it a stalled CDN fetch blocks the daemon
+    //    thread forever and bricks the whole session.
     let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .connect_timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
     let fetch = |url: String| {
