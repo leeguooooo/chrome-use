@@ -13,7 +13,7 @@
 //! to the daemon's relay + CdpClient is layered on next.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Native-messaging host name; must match `HOST_NAME` in the extension and the
 /// manifest filename. `com.agent_browser.connect` is the original name, used by
@@ -147,8 +147,12 @@ pub fn run_connect(args: &[String], json: bool) {
     }
 
     // Status.
-    let manifest = host_manifest_path_for_chrome();
-    let installed = manifest.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let manifests = installed_host_manifests();
+    let installed = !manifests.is_empty();
+    let extension_status = chrome_extension_status();
+    let relay_url = relay_url();
+    let live_extension_version = relay_ext_version();
+    let expected_extension_version = env!("AB_CONNECT_VERSION");
     if json {
         println!(
             "{}",
@@ -156,15 +160,47 @@ pub fn run_connect(args: &[String], json: bool) {
                 "success": true,
                 "data": {
                     "installed": installed,
-                    "manifest": manifest.as_ref().map(|p| p.display().to_string()),
+                    "manifests": manifests.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                    "manifest": manifests.first().map(|p| p.display().to_string()),
+                    "hostNames": HOST_NAMES,
+                    "extensionIds": {
+                        "webStore": STORE_EXTENSION_ID,
+                        "unpacked": EXTENSION_ID,
+                    },
                     "extensionId": EXTENSION_ID,
+                    "expectedExtensionVersion": expected_extension_version,
+                    "liveExtensionVersion": live_extension_version,
+                    "relayUp": relay_url.is_some(),
+                    "relayUrl": relay_url,
+                    "chromeExtension": extension_status,
                 }
             }))
             .unwrap_or_default()
         );
     } else if installed {
         println!("✓ native-messaging host installed ({HOST_NAME}).");
-        println!("  Load the ab-connect extension and it connects automatically.");
+        for path in &manifests {
+            println!("  {}", path.display());
+        }
+        println!("  Web Store extension id: {STORE_EXTENSION_ID}");
+        println!("  unpacked/dev extension id: {EXTENSION_ID}");
+        println!("  expected extension version: {expected_extension_version}");
+        match live_extension_version {
+            Some(ver) => println!("✓ live extension version: {ver}"),
+            None => {
+                println!("  live extension version: unknown (relay has not reported hello yet)")
+            }
+        }
+        if relay_url.is_some() {
+            println!("✓ extension relay (__nm-host): up");
+        } else {
+            println!("  extension relay (__nm-host): not currently connected");
+        }
+        if let Some(status) = extension_status {
+            print_chrome_extension_status(&status, expected_extension_version);
+        } else {
+            println!("  Chrome profile extension status: not found in the default Chrome profile");
+        }
     } else {
         println!("✗ not installed. Run: chrome-use connect --install");
     }
@@ -347,17 +383,199 @@ fn native_messaging_dirs() -> Vec<PathBuf> {
     dirs_out
 }
 
-fn host_manifest_path_for_chrome() -> Option<PathBuf> {
-    native_messaging_dirs()
-        .into_iter()
-        .flat_map(|d| HOST_NAMES.iter().map(move |h| d.join(format!("{h}.json"))))
-        .find(|p| p.exists())
-        .or_else(|| {
-            native_messaging_dirs()
-                .into_iter()
-                .next()
-                .map(|d| d.join(format!("{HOST_NAME}.json")))
+fn installed_host_manifests() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for dir in native_messaging_dirs() {
+        for host in HOST_NAMES {
+            let path = dir.join(format!("{host}.json"));
+            if path.exists() {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChromeExtensionStatus {
+    id: String,
+    name: Option<String>,
+    version: Option<String>,
+    path: Option<String>,
+    profile_file: String,
+    idle_version: Option<String>,
+    idle_path: Option<String>,
+    active_permissions: Vec<String>,
+    disable_reasons: Vec<String>,
+    active_bit: Option<bool>,
+    from_webstore: Option<bool>,
+}
+
+fn chrome_profile_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(config) = dirs::config_dir() {
+        #[cfg(target_os = "macos")]
+        {
+            for sub in [
+                "Google/Chrome",
+                "Google/Chrome Beta",
+                "Google/Chrome Canary",
+                "Chromium",
+            ] {
+                roots.push(config.join(sub));
+            }
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            for sub in [
+                "google-chrome",
+                "google-chrome-beta",
+                "google-chrome-unstable",
+                "chromium",
+            ] {
+                roots.push(config.join(sub));
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            roots.push(config.join("Google").join("Chrome").join("User Data"));
+        }
+    }
+    roots
+}
+
+fn chrome_extension_status() -> Option<ChromeExtensionStatus> {
+    for root in chrome_profile_roots() {
+        for profile in ["Default", "Profile 1", "Profile 2", "Profile 3"] {
+            for file in ["Secure Preferences", "Preferences"] {
+                let path = root.join(profile).join(file);
+                if let Some(status) = chrome_extension_status_from_file(&path) {
+                    return Some(status);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn chrome_extension_status_from_file(path: &Path) -> Option<ChromeExtensionStatus> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    for id in [STORE_EXTENSION_ID, EXTENSION_ID] {
+        if let Some(settings) = value
+            .pointer(&format!("/extensions/settings/{id}"))
+            .and_then(|v| v.as_object())
+        {
+            return Some(parse_chrome_extension_status(
+                id,
+                &serde_json::Value::Object(settings.clone()),
+                path,
+            ));
+        }
+    }
+    None
+}
+
+fn parse_chrome_extension_status(
+    id: &str,
+    settings: &serde_json::Value,
+    profile_file: &Path,
+) -> ChromeExtensionStatus {
+    let manifest = settings.get("manifest");
+    let idle_manifest = settings.pointer("/idle_install_info/manifest");
+    let active_permissions = settings
+        .pointer("/active_permissions/api")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(ToString::to_string))
+                .collect()
         })
+        .unwrap_or_default();
+    let disable_reasons = settings
+        .get("disable_reasons")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    x.as_str()
+                        .map(ToString::to_string)
+                        .or_else(|| x.as_i64().map(|n| n.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ChromeExtensionStatus {
+        id: id.to_string(),
+        name: manifest
+            .and_then(|m| m.get("name"))
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        version: manifest
+            .and_then(|m| m.get("version"))
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        path: settings
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        profile_file: profile_file.display().to_string(),
+        idle_version: idle_manifest
+            .and_then(|m| m.get("version"))
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        idle_path: settings
+            .pointer("/idle_install_info/path")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        active_permissions,
+        disable_reasons,
+        active_bit: settings.get("active_bit").and_then(|v| v.as_bool()),
+        from_webstore: settings.get("from_webstore").and_then(|v| v.as_bool()),
+    }
+}
+
+fn print_chrome_extension_status(status: &ChromeExtensionStatus, expected_version: &str) {
+    let source = if status.id == STORE_EXTENSION_ID {
+        "Web Store"
+    } else {
+        "unpacked/dev"
+    };
+    println!(
+        "  Chrome profile extension: {} ({source}, id {})",
+        status.name.as_deref().unwrap_or("unknown"),
+        status.id
+    );
+    if let Some(ver) = &status.version {
+        println!("  active manifest version: {ver}");
+        if crate::upgrade::version_is_newer(expected_version, ver) {
+            println!(
+                "! active extension is older than bundled {expected_version}; open chrome://extensions, accept pending permissions/reload, or restart Chrome"
+            );
+        }
+    }
+    if let Some(idle) = &status.idle_version {
+        if status.version.as_deref() != Some(idle.as_str()) {
+            println!(
+                "! Chrome has a pending extension update: active {} -> downloaded {idle}; restart Chrome or accept pending permissions",
+                status.version.as_deref().unwrap_or("unknown")
+            );
+        }
+    }
+    if !status.disable_reasons.is_empty() {
+        println!(
+            "! extension has disable reasons: {} (open chrome://extensions/?id={} and accept permissions/enable it)",
+            status.disable_reasons.join(", "),
+            status.id
+        );
+    }
+    if !status.active_permissions.is_empty() {
+        println!(
+            "  active permissions: {}",
+            status.active_permissions.join(", ")
+        );
+    }
 }
 
 /// True if the ab-connect native-messaging host manifest is present — i.e. the
@@ -751,4 +969,64 @@ async fn handle_cdp_client(
     clients.lock().await.remove(&client_id);
     state.lock().await.drop_client(client_id);
     nm_log("[nm-host] cdp client disconnected");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn parses_active_and_pending_store_extension_versions() {
+        let settings = json!({
+            "from_webstore": true,
+            "active_bit": false,
+            "path": "knfcmbamhjmaonkfnjhldjedeobeafmk/0.4.12_1",
+            "manifest": { "name": "chrome-use", "version": "0.4.12" },
+            "active_permissions": { "api": ["debugger", "nativeMessaging"] },
+            "idle_install_info": {
+                "path": "knfcmbamhjmaonkfnjhldjedeobeafmk/0.5.1_0",
+                "manifest": { "name": "chrome-use", "version": "0.5.1" }
+            }
+        });
+
+        let status = parse_chrome_extension_status(
+            STORE_EXTENSION_ID,
+            &settings,
+            Path::new("/tmp/Secure Preferences"),
+        );
+
+        assert_eq!(status.id, STORE_EXTENSION_ID);
+        assert_eq!(status.name.as_deref(), Some("chrome-use"));
+        assert_eq!(status.version.as_deref(), Some("0.4.12"));
+        assert_eq!(status.idle_version.as_deref(), Some("0.5.1"));
+        assert_eq!(
+            status.idle_path.as_deref(),
+            Some("knfcmbamhjmaonkfnjhldjedeobeafmk/0.5.1_0")
+        );
+        assert_eq!(
+            status.active_permissions,
+            vec!["debugger", "nativeMessaging"]
+        );
+        assert_eq!(status.from_webstore, Some(true));
+    }
+
+    #[test]
+    fn parses_numeric_disable_reasons_for_permission_prompts() {
+        let settings = json!({
+            "path": "knfcmbamhjmaonkfnjhldjedeobeafmk/0.5.1_0",
+            "manifest": { "name": "chrome-use", "version": "0.5.1" },
+            "disable_reasons": [4, "permissions_increase"]
+        });
+
+        let status = parse_chrome_extension_status(
+            STORE_EXTENSION_ID,
+            &settings,
+            Path::new("/tmp/Secure Preferences"),
+        );
+
+        assert_eq!(status.version.as_deref(), Some("0.5.1"));
+        assert_eq!(status.disable_reasons, vec!["4", "permissions_increase"]);
+    }
 }
