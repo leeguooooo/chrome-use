@@ -172,6 +172,13 @@ const BOUND_TAB_GONE: &str =
      relay snapshot dropped it). Refusing to silently retarget — that could read/click the \
      wrong tab. Re-open your target URL (`open <url>`) or `adopt <url>` the tab you want.";
 
+/// Message when a relay session has no tab of its own to route a command to.
+const NO_OWNED_TAB: &str =
+    "this session owns no resolvable tab in its group. Refusing to run on a tab this session \
+     didn't open — on the shared browser that could read/click the user's or another agent's \
+     tab. `open <url>` to create your own tab, or `adopt <url>` to explicitly take an existing \
+     one.";
+
 /// Strict session-index resolution for routing READ/CLICK commands.
 ///
 /// On the relay (shared real browser) the lenient [`resolve_active_index`] falls
@@ -189,14 +196,29 @@ fn strict_session_index(
     active_target_id: Option<&str>,
     active_page_index: usize,
     on_relay: bool,
+    created_targets: &HashSet<String>,
 ) -> Result<usize, String> {
     if on_relay {
+        // Prefer the pin — it must resolve to a tab this session owns.
         if let Some(tid) = active_target_id {
             return pages
                 .iter()
-                .position(|p| p.target_id == tid)
+                .position(|p| p.target_id == tid && created_targets.contains(&p.target_id))
                 .ok_or_else(|| BOUND_TAB_GONE.to_string());
         }
+        // No pin: resolve only to a tab THIS session owns. The lenient fallback
+        // would return `active_page_index`, which after foreign-tab churn can
+        // point at the user's / another agent's tab — and a read/click would land
+        // on it (issue #52). Each agent is scoped to its own group; using a tab
+        // outside it requires an explicit `adopt`, so refuse to drift here.
+        let i = resolve_active_index(pages, None, active_page_index);
+        if pages
+            .get(i)
+            .is_some_and(|p| created_targets.contains(&p.target_id))
+        {
+            return Ok(i);
+        }
+        return Err(NO_OWNED_TAB.to_string());
     }
     Ok(resolve_active_index(
         pages,
@@ -1226,6 +1248,7 @@ impl BrowserManager {
             self.active_target_id.as_deref(),
             self.active_page_index,
             self.agent_group().is_some(),
+            &self.created_targets,
         )?;
         self.pages
             .get(idx)
@@ -3449,29 +3472,43 @@ mod tests {
     #[test]
     fn strict_session_index_relay_pin_found_resolves() {
         let pages = vec![page("A"), page("B")];
-        assert_eq!(strict_session_index(&pages, Some("A"), 1, true).unwrap(), 0);
+        let owned = HashSet::from(["A".to_string()]);
+        assert_eq!(
+            strict_session_index(&pages, Some("A"), 1, true, &owned).unwrap(),
+            0
+        );
     }
 
     #[test]
     fn strict_session_index_relay_dangling_pin_errors() {
         let pages = vec![page("A"), page("Z")];
+        let owned = HashSet::from(["A".to_string()]);
         // active_page_index points at the foreign "Z"; lenient would drift there.
-        assert!(strict_session_index(&pages, Some("gone"), 1, true).is_err());
+        assert!(strict_session_index(&pages, Some("gone"), 1, true, &owned).is_err());
     }
 
     #[test]
-    fn strict_session_index_relay_no_pin_is_lenient() {
-        // Before the first open (no pin yet) we keep the lenient behavior.
+    fn strict_session_index_relay_no_pin_resolves_owned_else_refuses() {
+        // No pin on the relay: resolve only if the active tab is OURS; never drift
+        // onto a foreign/foreground tab (issue #52).
         let pages = vec![page("A"), page("B")];
-        assert_eq!(strict_session_index(&pages, None, 1, true).unwrap(), 1);
+        let owns_b = HashSet::from(["B".to_string()]);
+        assert_eq!(
+            strict_session_index(&pages, None, 1, true, &owns_b).unwrap(),
+            1
+        );
+        // active index 1 ("B") is NOT ours -> refuse rather than drift.
+        let owns_a = HashSet::from(["A".to_string()]);
+        assert!(strict_session_index(&pages, None, 1, true, &owns_a).is_err());
     }
 
     #[test]
     fn strict_session_index_off_relay_dangling_pin_stays_lenient() {
         // Off the relay (launched browser, no foreign tabs) behavior is unchanged.
         let pages = vec![page("A"), page("B")];
+        let owned = HashSet::new();
         assert_eq!(
-            strict_session_index(&pages, Some("gone"), 1, false).unwrap(),
+            strict_session_index(&pages, Some("gone"), 1, false, &owned).unwrap(),
             1
         );
     }
