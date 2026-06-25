@@ -751,7 +751,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // trajectory, instead of dragging to another element. A pure numeric /
             // `dx,dy` second arg is unambiguous vs a @ref/selector/text target.
             if let Some((dx, dy)) = parse_drag_offset(tgt) {
-                Ok(json!({ "id": id, "action": "drag", "source": src, "offset_dx": dx, "offset_dy": dy }))
+                Ok(
+                    json!({ "id": id, "action": "drag", "source": src, "offset_dx": dx, "offset_dy": dy }),
+                )
             } else {
                 Ok(json!({ "id": id, "action": "drag", "source": src, "target": tgt }))
             }
@@ -765,7 +767,10 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         }
         "solve-slider" | "solve_slider" => {
             // Optional retry count: `solve-slider [retries]` (default 3).
-            let retries = rest.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(3);
+            let retries = rest
+                .first()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(3);
             Ok(json!({ "id": id, "action": "solve_slider", "retries": retries }))
         }
         "download" => {

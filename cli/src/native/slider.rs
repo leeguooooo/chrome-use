@@ -54,8 +54,7 @@ fn sobel_x(g: &[f64], w: usize, h: usize) -> Vec<f64> {
     for y in 0..h as isize {
         for x in 0..w as isize {
             // [-1 0 1; -2 0 2; -1 0 1]
-            let gx = -at(x - 1, y - 1) + at(x + 1, y - 1) - 2.0 * at(x - 1, y)
-                + 2.0 * at(x + 1, y)
+            let gx = -at(x - 1, y - 1) + at(x + 1, y - 1) - 2.0 * at(x - 1, y) + 2.0 * at(x + 1, y)
                 - at(x - 1, y + 1)
                 + at(x + 1, y + 1);
             out[y as usize * w + x as usize] = gx.abs();
@@ -205,8 +204,11 @@ mod tests {
             }
         }
 
-        let g = detect_gap(&DynamicImage::ImageRgba8(bg), &DynamicImage::ImageRgba8(jig))
-            .expect("gap detected");
+        let g = detect_gap(
+            &DynamicImage::ImageRgba8(bg),
+            &DynamicImage::ImageRgba8(jig),
+        )
+        .expect("gap detected");
         assert_eq!(g.piece_x, px0);
         // within a couple px of the true gap
         assert!(

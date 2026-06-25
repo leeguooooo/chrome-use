@@ -1655,9 +1655,7 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
         // erroring or (worse) tearing down and launching a throwaway Chrome.
         let conn = match connect_auto_with_fresh_tab().await {
             Ok(mgr) => Ok(mgr),
-            Err(e) if crate::connect::host_installed() => {
-                retry_relay_connect_after_wait(e).await
-            }
+            Err(e) if crate::connect::host_installed() => retry_relay_connect_after_wait(e).await,
             Err(e) => Err(e),
         };
         match conn {
@@ -2268,9 +2266,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         // host is registered, wait for the keepalive to revive it and retry once.
         let conn = match connect_auto_with_fresh_tab().await {
             Ok(mgr) => Ok(mgr),
-            Err(e) if crate::connect::host_installed() => {
-                retry_relay_connect_after_wait(e).await
-            }
+            Err(e) if crate::connect::host_installed() => retry_relay_connect_after_wait(e).await,
             Err(e) => Err(e),
         };
         match conn {
@@ -7732,10 +7728,12 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     // move by (dx,dy) px. Used for sliders/canvas where there's no target element
     // — e.g. dragging a slider-puzzle handle to the gap. This is inherently a
     // pointer drag, so it always takes the coordinate path below.
-    let offset = cmd
-        .get("offset_dx")
-        .and_then(|v| v.as_f64())
-        .map(|dx| (dx, cmd.get("offset_dy").and_then(|v| v.as_f64()).unwrap_or(0.0)));
+    let offset = cmd.get("offset_dx").and_then(|v| v.as_f64()).map(|dx| {
+        (
+            dx,
+            cmd.get("offset_dy").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        )
+    });
     let target = cmd.get("target").and_then(|v| v.as_str());
 
     // Over the relay (or into an iframe) a coordinate drag drifts to the
@@ -7846,7 +7844,9 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .await?;
 
     match offset {
-        Some((dx, dy)) => Ok(json!({ "dragged": true, "source": source, "offset": [dx, dy], "to": [tx, ty] })),
+        Some((dx, dy)) => {
+            Ok(json!({ "dragged": true, "source": source, "offset": [dx, dy], "to": [tx, ty] }))
+        }
         None => Ok(json!({ "dragged": true, "source": source, "target": target })),
     }
 }
@@ -7994,10 +7994,16 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     //    is briefly 0 right after a load/refresh), so the natural→CSS scale is
     //    measured from the real render.
     let mut probe = parse_json_string(mgr.evaluate(YIDUN_PROBE, None).await?, "yidun probe")?;
-    if !probe.get("present").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err("No 网易易盾 slider found on the page (.yidun_slider / yidun_bg-img). \
+    if !probe
+        .get("present")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(
+            "No 网易易盾 slider found on the page (.yidun_slider / yidun_bg-img). \
                     If it's inside a cross-origin iframe, solve-slider can't reach it yet."
-            .to_string());
+                .to_string(),
+        );
     }
     // Up to ~6s: wait for the handle to be positioned. Popup-mode captchas (e.g.
     // Zhihu) animate the modal in over a couple of seconds, and pressing before
@@ -8023,8 +8029,16 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
         probe = parse_json_string(mgr.evaluate(YIDUN_PROBE, None).await?, "yidun probe")?;
     }
     let f = |k: &str| probe.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let bg_src = probe.get("bg_src").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let jig_src = probe.get("jig_src").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let bg_src = probe
+        .get("bg_src")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let jig_src = probe
+        .get("jig_src")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let bg_nat_w = f("bg_natW");
     let (hx, hy) = (f("hx"), f("hy"));
     // Baseline geometry from the inline (pre-press) puzzle, which is already
@@ -8065,8 +8079,7 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     let gap = if let Ok(cmd) = std::env::var("AGENT_BROWSER_SLIDER_DETECT_CMD") {
         detect_gap_external(&cmd, &bg_bytes, &jig_bytes).await?
     } else {
-        let bg_img =
-            image::load_from_memory(&bg_bytes).map_err(|e| format!("decode bg: {e}"))?;
+        let bg_img = image::load_from_memory(&bg_bytes).map_err(|e| format!("decode bg: {e}"))?;
         let jig_img =
             image::load_from_memory(&jig_bytes).map_err(|e| format!("decode jig: {e}"))?;
         super::slider::detect_gap(&bg_img, &jig_img)
@@ -8102,8 +8115,8 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
         return Err("yidun puzzle did not reveal after engaging the handle".to_string());
     }
     let scale = disp_w / bg_nat_w; // natural px → displayed CSS px
-    // The piece's left edge (displayed offset from the bg) must reach gap_x;
-    // drag_nat already nets out the piece's resting offset.
+                                   // The piece's left edge (displayed offset from the bg) must reach gap_x;
+                                   // drag_nat already nets out the piece's resting offset.
     let target_piece_left = gap.drag_nat as f64 * scale;
 
     // 4. One smooth humanized sweep to the estimated handle position. The piece
@@ -8112,7 +8125,12 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     let mut ratio_est = 0.9f64;
     let est_target = hx + target_piece_left / ratio_est;
     let seed = humanize::next_seed();
-    for step in humanize::move_path((handle_x, hy), (est_target, hy), humanize::HumanizeLevel::Human, seed) {
+    for step in humanize::move_path(
+        (handle_x, hy),
+        (est_target, hy),
+        humanize::HumanizeLevel::Human,
+        seed,
+    ) {
         yidun_mouse(mgr, &session_id, "mouseMoved", step.x, step.y, 1).await?;
         if !step.delay.is_zero() {
             tokio::time::sleep(step.delay).await;
@@ -8127,7 +8145,10 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     for _ in 0..6 {
         tokio::time::sleep(std::time::Duration::from_millis(110)).await;
         let p = parse_json_string(mgr.evaluate(YIDUN_PROBE, None).await?, "yidun read")?;
-        let piece = p.get("piece_left").and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+        let piece = p
+            .get("piece_left")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::NAN);
         if !piece.is_finite() {
             continue;
         }
@@ -8145,7 +8166,12 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
         }
         let next_x = handle_x + (err / ratio_est).clamp(-60.0, 60.0);
         let seed = humanize::next_seed();
-        for s in humanize::move_path((handle_x, hy), (next_x, hy), humanize::HumanizeLevel::Fast, seed) {
+        for s in humanize::move_path(
+            (handle_x, hy),
+            (next_x, hy),
+            humanize::HumanizeLevel::Fast,
+            seed,
+        ) {
             yidun_mouse(mgr, &session_id, "mouseMoved", s.x, s.y, 1).await?;
             if !s.delay.is_zero() {
                 tokio::time::sleep(s.delay).await;
@@ -8164,7 +8190,11 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     for _ in 0..12 {
         tokio::time::sleep(std::time::Duration::from_millis(180)).await;
         let res = parse_json_string(mgr.evaluate(YIDUN_RESULT, None).await?, "yidun result")?;
-        status = res.get("status").and_then(|v| v.as_str()).unwrap_or("pending").to_string();
+        status = res
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("pending")
+            .to_string();
         detail = res;
         if status != "pending" {
             break;

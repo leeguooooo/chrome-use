@@ -1032,7 +1032,10 @@ mod tests {
         // Must be the published Store id, not the dev/unpacked id, or
         // "Add to Chrome" 404s — that exact mix-up shipped a wrong link to a user.
         assert!(STORE_URL.contains(STORE_EXTENSION_ID));
-        assert!(!STORE_URL.contains(EXTENSION_ID), "STORE_URL must not use the dev id");
+        assert!(
+            !STORE_URL.contains(EXTENSION_ID),
+            "STORE_URL must not use the dev id"
+        );
         assert!(STORE_URL.starts_with("https://chromewebstore.google.com/"));
         // The install-URL alias stays in sync.
         assert_eq!(STORE_INSTALL_URL, STORE_URL);
@@ -1046,7 +1049,6 @@ mod tests {
         assert!(!m.contains("--remote-debugging-port"));
         assert!(!m.to_lowercase().contains("quit chrome"));
     }
-
 
     #[test]
     fn parses_active_and_pending_store_extension_versions() {
