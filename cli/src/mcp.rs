@@ -150,6 +150,8 @@ const TOOL_STREAM_DISABLE: &str = "agent_browser_stream_disable";
 const TOOL_STREAM_STATUS: &str = "agent_browser_stream_status";
 const TOOL_SESSION: &str = "agent_browser_session";
 const TOOL_SESSION_LIST: &str = "agent_browser_session_list";
+const TOOL_SESSION_ID: &str = "agent_browser_session_id";
+const TOOL_SESSION_INFO: &str = "agent_browser_session_info";
 const TOOL_PROFILES: &str = "agent_browser_profiles";
 const TOOL_SKILLS_LIST: &str = "agent_browser_skills_list";
 const TOOL_SKILLS_GET: &str = "agent_browser_skills_get";
@@ -386,6 +388,8 @@ const STATE_PROFILE_TOOLS: &[&str] = &[
     TOOL_STATE_RENAME,
     TOOL_SESSION,
     TOOL_SESSION_LIST,
+    TOOL_SESSION_ID,
+    TOOL_SESSION_INFO,
     TOOL_PROFILES,
     TOOL_SKILLS_LIST,
     TOOL_SKILLS_GET,
@@ -1629,6 +1633,23 @@ fn parity_tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            TOOL_SESSION_ID,
+            "Session id",
+            "Generate a stable session id from the current working tree, cwd, or Git root.",
+            json!({
+                "scope": { "type": "string", "enum": ["worktree", "cwd", "git-root"], "default": "worktree" },
+                "prefix": { "type": "string", "description": "Optional readable prefix for the generated id." }
+            }),
+            &[],
+        ),
+        tool(
+            TOOL_SESSION_INFO,
+            "Session info",
+            "Show session, daemon, launch, and restore diagnostics.",
+            json!({}),
+            &[],
+        ),
+        tool(
             TOOL_PROFILES,
             "Profiles",
             "List Chrome profiles.",
@@ -1806,6 +1827,52 @@ fn tool(name: &str, title: &str, description: &str, properties: Value, required:
         }),
     );
     props.insert(
+        "namespace".to_string(),
+        json!({
+            "type": "string",
+            "description": "Optional namespace that isolates daemon sockets and restore-state directories."
+        }),
+    );
+    props.insert(
+        "restore".to_string(),
+        json!({
+            "oneOf": [
+                { "type": "boolean" },
+                { "type": "string" }
+            ],
+            "description": "Restore and auto-save browser state. true uses the current session as the key; a string uses that explicit key."
+        }),
+    );
+    props.insert(
+        "restoreSave".to_string(),
+        json!({
+            "type": "string",
+            "enum": ["auto", "always", "never"],
+            "description": "Auto-save policy for restored state."
+        }),
+    );
+    props.insert(
+        "restoreCheckUrl".to_string(),
+        json!({
+            "type": "string",
+            "description": "Optional URL pattern that restored state must match."
+        }),
+    );
+    props.insert(
+        "restoreCheckText".to_string(),
+        json!({
+            "type": "string",
+            "description": "Optional page text that restored state must expose."
+        }),
+    );
+    props.insert(
+        "restoreCheckFn".to_string(),
+        json!({
+            "type": "string",
+            "description": "Optional JavaScript expression that must evaluate truthy after restore."
+        }),
+    );
+    props.insert(
         "extraArgs".to_string(),
         json!({
             "type": "array",
@@ -1890,6 +1957,8 @@ fn is_read_only_tool(name: &str) -> bool {
             | TOOL_STREAM_STATUS
             | TOOL_SESSION
             | TOOL_SESSION_LIST
+            | TOOL_SESSION_ID
+            | TOOL_SESSION_INFO
             | TOOL_PROFILES
             | TOOL_SKILLS_LIST
             | TOOL_SKILLS_GET
@@ -1904,6 +1973,8 @@ fn is_open_world_tool(name: &str) -> bool {
         name,
         TOOL_SESSION
             | TOOL_SESSION_LIST
+            | TOOL_SESSION_ID
+            | TOOL_SESSION_INFO
             | TOOL_PROFILES
             | TOOL_SKILLS_LIST
             | TOOL_SKILLS_GET
@@ -2110,6 +2181,8 @@ fn call_tool(params: Option<&Value>, config: &McpConfig) -> Result<Value, Protoc
         TOOL_STREAM_STATUS => call_literal(arguments, &["stream", "status"]),
         TOOL_SESSION => call_literal(arguments, &["session"]),
         TOOL_SESSION_LIST => call_literal(arguments, &["session", "list"]),
+        TOOL_SESSION_ID => call_session_id(arguments),
+        TOOL_SESSION_INFO => call_literal(arguments, &["session", "info"]),
         TOOL_PROFILES => call_literal(arguments, &["profiles"]),
         TOOL_SKILLS_LIST => call_literal(arguments, &["skills", "list"]),
         TOOL_SKILLS_GET => call_skills_get(arguments),
@@ -2178,7 +2251,7 @@ fn call_cli_tool(
     let extra_args = optional_string_array(arguments, "extraArgs")?.unwrap_or_default();
 
     let mut cli_args = vec!["--json".to_string()];
-    append_session_args(&mut cli_args, session.as_deref());
+    append_common_global_args(&mut cli_args, arguments, session.as_deref())?;
     cli_args.extend(command_args);
     cli_args.extend(extra_args);
 
@@ -2859,6 +2932,23 @@ fn call_state_rename(arguments: &Value) -> Result<Value, ProtocolError> {
     )
 }
 
+fn call_session_id(arguments: &Value) -> Result<Value, ProtocolError> {
+    let mut args = vec![
+        "session".to_string(),
+        "id".to_string(),
+        "--json".to_string(),
+    ];
+    if let Some(scope) = optional_string(arguments, "scope")? {
+        args.push("--scope".to_string());
+        args.push(scope);
+    }
+    if let Some(prefix) = optional_string(arguments, "prefix")? {
+        args.push("--prefix".to_string());
+        args.push(prefix);
+    }
+    call_cli_tool(arguments, args, None)
+}
+
 fn call_swipe(arguments: &Value) -> Result<Value, ProtocolError> {
     let direction = required_string(arguments, "direction")?;
     let mut args = vec!["swipe".to_string(), direction];
@@ -3328,6 +3418,51 @@ fn append_session_args(args: &mut Vec<String>, session: Option<&str>) {
     }
 }
 
+fn append_common_global_args(
+    args: &mut Vec<String>,
+    arguments: &Value,
+    session: Option<&str>,
+) -> Result<(), ProtocolError> {
+    if let Some(namespace) = optional_string(arguments, "namespace")? {
+        args.push("--namespace".to_string());
+        args.push(namespace);
+    }
+    append_session_args(args, session);
+
+    if let Some(restore) = arguments.get("restore") {
+        if let Some(enabled) = restore.as_bool() {
+            if enabled {
+                args.push("--restore".to_string());
+            }
+        } else if let Some(key) = restore.as_str() {
+            args.push(format!("--restore={}", key));
+        } else {
+            return Err(ProtocolError::invalid_params(
+                "restore must be a boolean or string",
+            ));
+        }
+    }
+
+    if let Some(policy) = optional_string(arguments, "restoreSave")? {
+        args.push("--restore-save".to_string());
+        args.push(policy);
+    }
+    if let Some(check) = optional_string(arguments, "restoreCheckUrl")? {
+        args.push("--restore-check-url".to_string());
+        args.push(check);
+    }
+    if let Some(check) = optional_string(arguments, "restoreCheckText")? {
+        args.push("--restore-check-text".to_string());
+        args.push(check);
+    }
+    if let Some(check) = optional_string(arguments, "restoreCheckFn")? {
+        args.push("--restore-check-fn".to_string());
+        args.push(check);
+    }
+
+    Ok(())
+}
+
 fn run_cli(args: &[String], stdin_body: Option<String>, timeout_ms: u64) -> Result<CliRun, String> {
     let exe = env::current_exe().map_err(|e| e.to_string())?;
     let mut command = Command::new(exe);
@@ -3569,6 +3704,8 @@ mod tests {
         assert!(names.contains(&TOOL_PLUGIN_LIST));
         assert!(names.contains(&TOOL_PLUGIN_SHOW));
         assert!(names.contains(&TOOL_PLUGIN_RUN));
+        assert!(names.contains(&TOOL_SESSION_ID));
+        assert!(names.contains(&TOOL_SESSION_INFO));
         assert!(!names.contains(&"agent_browser_frame_list"));
     }
 
@@ -3794,6 +3931,23 @@ mod tests {
     }
 
     #[test]
+    fn common_global_args_use_equals_form_for_string_restore_key() {
+        let mut args = Vec::new();
+
+        append_common_global_args(
+            &mut args,
+            &json!({
+                "session": "work",
+                "restore": "open"
+            }),
+            Some("work"),
+        )
+        .unwrap();
+
+        assert_eq!(args, vec!["--session", "work", "--restore=open"]);
+    }
+
+    #[test]
     fn tool_schema_includes_extra_args_for_cli_parity() {
         let tools = tools();
         let open = tools
@@ -3803,6 +3957,14 @@ mod tests {
         assert_eq!(
             open["inputSchema"]["properties"]["extraArgs"]["type"],
             "array"
+        );
+        assert_eq!(
+            open["inputSchema"]["properties"]["restoreSave"]["enum"][0],
+            "auto"
+        );
+        assert_eq!(
+            open["inputSchema"]["properties"]["namespace"]["type"],
+            "string"
         );
     }
 

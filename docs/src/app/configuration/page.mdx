@@ -62,7 +62,13 @@ Global launch, output, provider, and chat options can be set in the config file 
     <tr><td><code>json</code></td><td><code>--json</code></td><td>boolean</td></tr>
     <tr><td><code>debug</code></td><td><code>--debug</code></td><td>boolean</td></tr>
     <tr><td><code>session</code></td><td><code>--session</code></td><td>string</td></tr>
-    <tr><td><code>sessionName</code></td><td><code>--session-name</code></td><td>string</td></tr>
+    <tr><td><code>restore</code></td><td><code>--restore</code></td><td>string</td></tr>
+    <tr><td><code>restoreSave</code></td><td><code>--restore-save</code></td><td>string</td></tr>
+    <tr><td><code>restoreCheckUrl</code></td><td><code>--restore-check-url</code></td><td>string</td></tr>
+    <tr><td><code>restoreCheckText</code></td><td><code>--restore-check-text</code></td><td>string</td></tr>
+    <tr><td><code>restoreCheckFn</code></td><td><code>--restore-check-fn</code></td><td>string</td></tr>
+    <tr><td><code>namespace</code></td><td><code>--namespace</code></td><td>string</td></tr>
+    <tr><td><code>sessionName</code></td><td><code>--session-name</code></td><td>string, legacy restore key</td></tr>
     <tr><td><code>executablePath</code></td><td><code>--executable-path</code></td><td>string</td></tr>
     <tr><td><code>extensions</code></td><td><code>--extension</code></td><td>string[]</td></tr>
     <tr><td><code>initScripts</code></td><td><code>--init-script</code></td><td>string[]</td></tr>
@@ -250,7 +256,13 @@ These environment variables configure additional daemon and runtime behavior:
     <tr><td><code>AGENT_BROWSER_COLOR_SCHEME</code></td><td>Color scheme preference (<code>dark</code>, <code>light</code>, <code>no-preference</code>).</td><td>(none)</td></tr>
     <tr><td><code>AGENT_BROWSER_DOWNLOAD_PATH</code></td><td>Default directory for browser downloads.</td><td>(temp directory)</td></tr>
     <tr><td><code>AGENT_BROWSER_DEFAULT_TIMEOUT</code></td><td>Default timeout in ms. Keep below 30000 to avoid IPC timeouts.</td><td><code>25000</code></td></tr>
-    <tr><td><code>AGENT_BROWSER_SESSION_NAME</code></td><td>Auto-save/load state persistence name.</td><td>(none)</td></tr>
+    <tr><td><code>AGENT_BROWSER_NAMESPACE</code></td><td>Namespace for daemon sockets and restore-state directories.</td><td>(none)</td></tr>
+    <tr><td><code>AGENT_BROWSER_RESTORE</code></td><td>Auto-save/load state persistence key.</td><td>(none)</td></tr>
+    <tr><td><code>AGENT_BROWSER_RESTORE_SAVE</code></td><td>Restore save policy: <code>auto</code>, <code>always</code>, or <code>never</code>.</td><td><code>auto</code></td></tr>
+    <tr><td><code>AGENT_BROWSER_RESTORE_CHECK_URL</code></td><td>URL pattern restored state must match.</td><td>(none)</td></tr>
+    <tr><td><code>AGENT_BROWSER_RESTORE_CHECK_TEXT</code></td><td>Page text restored state must contain.</td><td>(none)</td></tr>
+    <tr><td><code>AGENT_BROWSER_RESTORE_CHECK_FN</code></td><td>JavaScript expression restored state must satisfy.</td><td>(none)</td></tr>
+    <tr><td><code>AGENT_BROWSER_SESSION_NAME</code></td><td>Legacy auto-save/load state persistence name.</td><td>(none)</td></tr>
     <tr><td><code>AGENT_BROWSER_STATE_EXPIRE_DAYS</code></td><td>Auto-delete saved session states older than N days.</td><td><code>30</code></td></tr>
     <tr><td><code>AGENT_BROWSER_ENCRYPTION_KEY</code></td><td>64-char hex key for AES-256-GCM session encryption.</td><td>(none)</td></tr>
     <tr><td><code>AGENT_BROWSER_EXTENSIONS</code></td><td>Comma-separated browser extension paths. Extensions work in both headed and headless mode.</td><td>(none)</td></tr>

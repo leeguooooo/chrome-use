@@ -20,9 +20,35 @@
       "type": "string",
       "description": "Session identifier."
     },
+    "restore": {
+      "type": "string",
+      "description": "Auto-save/restore persistence key. A bare CLI --restore uses the current session; config values use this explicit key."
+    },
+    "restoreSave": {
+      "type": "string",
+      "enum": ["auto", "always", "never"],
+      "default": "auto",
+      "description": "Auto-save policy for restored state."
+    },
+    "restoreCheckUrl": {
+      "type": "string",
+      "description": "URL glob that restored state must match before auto-save."
+    },
+    "restoreCheckText": {
+      "type": "string",
+      "description": "Visible page text that restored state must expose before auto-save."
+    },
+    "restoreCheckFn": {
+      "type": "string",
+      "description": "JavaScript expression that must evaluate truthy before restored state is auto-saved."
+    },
+    "namespace": {
+      "type": "string",
+      "description": "Namespace that isolates daemon sockets and restore-state directories."
+    },
     "sessionName": {
       "type": "string",
-      "description": "Auto-save/load state persistence name."
+      "description": "Legacy alias for restore persistence key."
     },
     "executablePath": {
       "type": "string",
@@ -34,6 +60,21 @@
         "type": "string"
       },
       "description": "Paths to browser extensions. Extensions from user-level and project-level configs are concatenated."
+    },
+    "initScripts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Page init script paths registered before navigation."
+    },
+    "enable": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["react-devtools"]
+      },
+      "description": "Built-in launch features to enable."
     },
     "profile": {
       "type": "string",

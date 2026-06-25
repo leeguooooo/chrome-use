@@ -71,6 +71,94 @@ pub fn gen_id() -> String {
     )
 }
 
+pub fn is_top_level_command(value: &str) -> bool {
+    matches!(
+        value,
+        "open"
+            | "goto"
+            | "navigate"
+            | "back"
+            | "forward"
+            | "reload"
+            | "read"
+            | "click"
+            | "dblclick"
+            | "fill"
+            | "type"
+            | "hover"
+            | "focus"
+            | "check"
+            | "uncheck"
+            | "select"
+            | "drag"
+            | "upload"
+            | "download"
+            | "press"
+            | "key"
+            | "keydown"
+            | "keyup"
+            | "keyboard"
+            | "scroll"
+            | "scrollintoview"
+            | "scrollinto"
+            | "wait"
+            | "screenshot"
+            | "pdf"
+            | "snapshot"
+            | "eval"
+            | "close"
+            | "quit"
+            | "exit"
+            | "inspect"
+            | "auth"
+            | "confirm"
+            | "deny"
+            | "connect"
+            | "stream"
+            | "get"
+            | "is"
+            | "find"
+            | "mouse"
+            | "set"
+            | "network"
+            | "storage"
+            | "cookies"
+            | "tab"
+            | "window"
+            | "frame"
+            | "dialog"
+            | "trace"
+            | "profiler"
+            | "record"
+            | "console"
+            | "errors"
+            | "highlight"
+            | "clipboard"
+            | "state"
+            | "tap"
+            | "swipe"
+            | "device"
+            | "diff"
+            | "batch"
+            | "react"
+            | "vitals"
+            | "web-vitals"
+            | "pushstate"
+            | "removeinitscript"
+            | "session"
+            | "mcp"
+            | "doctor"
+            | "install"
+            | "upgrade"
+            | "profiles"
+            | "skills"
+            | "dashboard"
+            | "plugin"
+            | "plugins"
+            | "chat"
+    )
+}
+
 /// Parse a cookies file in one of three auto-detected formats:
 ///
 /// 1. JSON array — `[{"name":"x","value":"y"}, ...]`
@@ -3003,6 +3091,13 @@ mod tests {
             device: None,
             auto_connect: false,
             session_name: None,
+            restore: None,
+            restore_save: None,
+            restore_check_url: None,
+            restore_check_text: None,
+            restore_check_fn: None,
+            namespace: None,
+            restore_uses_session: false,
             cli_executable_path: false,
             cli_extensions: false,
             cli_init_scripts: false,
@@ -3018,6 +3113,7 @@ mod tests {
             cli_annotate: false,
             cli_download_path: false,
             cli_headed: false,
+            cli_restore: false,
             annotate: false,
             color_scheme: None,
             download_path: None,

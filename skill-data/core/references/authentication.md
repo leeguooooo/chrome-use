@@ -54,20 +54,22 @@ agent-browser --auto-connect state save ./my-auth.json
 # Load auth at launch
 agent-browser --state ./my-auth.json open https://app.example.com/dashboard
 
-# Or load into an existing session
+# Or load into an already-launched session
+agent-browser open about:blank
 agent-browser state load ./my-auth.json
 agent-browser open https://app.example.com/dashboard
 ```
 
-This works for any site, including those with complex OAuth flows, SSO, or 2FA -- as long as Chrome already has valid session cookies.
+This works for any site, including those with complex OAuth flows, SSO, or 2FA, as long as Chrome already has valid session cookies.
 
 > **Security note:** State files contain session tokens in plaintext. Add them to `.gitignore`, delete when no longer needed, and set `AGENT_BROWSER_ENCRYPTION_KEY` for encryption at rest. See [Security Best Practices](#security-best-practices).
 
-**Tip:** Combine with `--session-name` so the imported auth auto-persists across restarts:
+**Tip:** Combine with `--session <id> --restore` so the imported auth auto-persists across restarts:
 
 ```bash
-agent-browser --session-name myapp state load ./my-auth.json
-# From now on, state is auto-saved/restored for "myapp"
+SESSION="$(agent-browser session id --scope worktree --prefix myapp)"
+agent-browser --session "$SESSION" --restore --state ./my-auth.json open https://app.example.com/dashboard
+# From now on, state is auto-saved/restored for this session
 ```
 
 ## Persistent Profiles
@@ -99,23 +101,24 @@ agent-browser open https://app.example.com/dashboard
 
 ## Session Persistence
 
-Use `--session-name` to auto-save and restore cookies + localStorage by name, without managing files:
+Use `--restore` with a stable `--session` to auto-save and restore cookies + localStorage without managing files:
 
 ```bash
 # Auto-saves state on close, auto-restores on next launch
-agent-browser --session-name twitter open https://twitter.com
+SESSION="$(agent-browser session id --scope worktree --prefix twitter)"
+agent-browser --session "$SESSION" --restore open https://twitter.com
 # ... login flow ...
-agent-browser close  # state saved to ~/.agent-browser/sessions/
+agent-browser --session "$SESSION" --restore close  # state saved to ~/.agent-browser/sessions/
 
 # Next time: state is automatically restored
-agent-browser --session-name twitter open https://twitter.com
+agent-browser --session "$SESSION" --restore open https://twitter.com
 ```
 
 Encrypt state at rest:
 
 ```bash
 export AGENT_BROWSER_ENCRYPTION_KEY=$(openssl rand -hex 32)
-agent-browser --session-name secure open https://app.example.com
+agent-browser --session secure --restore open https://app.example.com
 ```
 
 ## Basic Login Flow
