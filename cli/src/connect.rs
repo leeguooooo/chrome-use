@@ -47,16 +47,16 @@ pub const STORE_EXTENSION_ID: &str = "knfcmbamhjmaonkfnjhldjedeobeafmk";
 /// then this policy force-installs it silently (Web Store extensions are allowed).
 pub const UPDATE_URL: &str = "https://clients2.google.com/service/update2/crx";
 
-/// Public Web Store listing — the guaranteed one-click "Add to Chrome" path,
-/// and the fallback when the force-install profile can't be approved headlessly.
+/// The published Chrome Web Store listing — the guaranteed one-click
+/// "Add to Chrome" path. MUST use the **published Store id**
+/// (`STORE_EXTENSION_ID`), not the dev/unpacked id (`EXTENSION_ID`), or the page
+/// 404s — that exact mix-up shipped a wrong install link to a user. Single
+/// source of truth: every user-facing "install the extension" URL uses this.
 pub const STORE_URL: &str =
-    "https://chromewebstore.google.com/detail/ciiljdlhdpfckdcfkphgmfalanpdejep";
+    "https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk";
 
-/// The published Store listing for the **Store build** (`STORE_EXTENSION_ID`) —
-/// the page we auto-open when the relay can't be reached and the extension isn't
-/// set up yet, so the user just clicks "Add to Chrome".
-pub const STORE_INSTALL_URL: &str =
-    "https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk?utm_source=cli-autoheal";
+/// Back-compat alias for callers that referenced the (now-merged) install URL.
+pub const STORE_INSTALL_URL: &str = STORE_URL;
 
 /// Stable identifiers for the generated Chrome configuration profile, so a
 /// re-install replaces (rather than duplicates) it in System Settings.
@@ -1028,10 +1028,14 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn store_install_url_points_at_the_store_build() {
-        // Must be the published Store id, not the dev id, or "Add to Chrome" 404s.
-        assert!(STORE_INSTALL_URL.contains(STORE_EXTENSION_ID));
-        assert!(STORE_INSTALL_URL.starts_with("https://chromewebstore.google.com/"));
+    fn store_url_points_at_the_published_store_build_not_the_dev_id() {
+        // Must be the published Store id, not the dev/unpacked id, or
+        // "Add to Chrome" 404s — that exact mix-up shipped a wrong link to a user.
+        assert!(STORE_URL.contains(STORE_EXTENSION_ID));
+        assert!(!STORE_URL.contains(EXTENSION_ID), "STORE_URL must not use the dev id");
+        assert!(STORE_URL.starts_with("https://chromewebstore.google.com/"));
+        // The install-URL alias stays in sync.
+        assert_eq!(STORE_INSTALL_URL, STORE_URL);
     }
 
     #[test]

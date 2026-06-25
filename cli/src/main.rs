@@ -1046,6 +1046,26 @@ fn main() {
                     _ => {}
                 }
             }
+            // The relay may not be up the instant we ask: after a fresh host
+            // install or an MV3 service-worker sleep, the extension reconnects on
+            // its keepalive (~30s, allow up to ~45s) and only THEN writes its CDP
+            // url. Failing instantly here is exactly what misled users into
+            // quitting/restarting Chrome — verified locally that a running Chrome
+            // picks the host back up on its own, no restart needed. So if the host
+            // is registered, register-to-be-safe and poll for the relay to come up.
+            if connect::relay_url().is_none() && crate::connect::host_installed() {
+                crate::connect::ensure_host_installed();
+                eprint!(
+                    "{} extension relay reconnecting (the worker wakes ~every 30s)…",
+                    color::success_indicator()
+                );
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+                while connect::relay_url().is_none() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(750));
+                }
+                eprintln!();
+            }
             match connect::relay_url() {
                 Some(url) => {
                     // The connect path reads `flags.cdp` (parsed from the original
@@ -1058,9 +1078,26 @@ fn main() {
                     flags.auto_connect = false;
                     clean = vec!["connect".to_string(), url];
                 }
+                None if !crate::connect::host_installed() => {
+                    // Host not set up → register it + open the Store page (one
+                    // click). Never the dev-mode "Load unpacked" lecture.
+                    crate::connect::ensure_host_installed();
+                    crate::connect::open_url(crate::connect::STORE_URL);
+                    eprintln!("{}", crate::connect::extension_not_installed_message());
+                    exit(1);
+                }
                 None => {
+                    // Extension IS set up — the worker just hasn't reconnected yet.
+                    // Accurate guidance: retry, or reload ONLY the extension. NEVER
+                    // "restart Chrome" (a running Chrome picks the host up on its
+                    // own — verified) and never dev-mode "Load unpacked".
                     eprintln!(
-                        "{} extension not connected. Run `chrome-use extension install`, load the\n  ab-connect extension in Chrome (chrome://extensions → Developer mode →\n  Load unpacked → extensions/ab-connect), then retry.",
+                        "{} The chrome-use extension is installed, but its background worker \
+                         hasn't reconnected to the native host yet (MV3 workers sleep and wake \
+                         on a ~30s timer). This usually clears on its own within ~30–60s — just \
+                         re-run this command. To force it immediately, reload ONLY the chrome-use \
+                         extension at chrome://extensions (the ↻ reload icon). A full Chrome \
+                         restart is NOT required.",
                         color::error_indicator()
                     );
                     exit(1);
@@ -1083,16 +1120,40 @@ fn main() {
             Some(spec) if !spec.trim().is_empty() => {
                 std::env::set_var("AGENT_BROWSER_ADOPT", spec.trim());
                 connection::kill_stale_daemon(&flags.session);
+                // Same as `extension connect`: the worker may be mid-reconnect, so
+                // wait for the relay to come up instead of failing instantly (which
+                // misled users into restarting Chrome).
+                if connect::relay_url().is_none() && crate::connect::host_installed() {
+                    crate::connect::ensure_host_installed();
+                    eprint!(
+                        "{} extension relay reconnecting (the worker wakes ~every 30s)…",
+                        color::success_indicator()
+                    );
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+                    while connect::relay_url().is_none() && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(750));
+                    }
+                    eprintln!();
+                }
                 match connect::relay_url() {
                     Some(url) => {
                         flags.cdp = Some(url.clone());
                         flags.auto_connect = false;
                         clean = vec!["connect".to_string(), url];
                     }
+                    None if !crate::connect::host_installed() => {
+                        crate::connect::ensure_host_installed();
+                        crate::connect::open_url(crate::connect::STORE_URL);
+                        eprintln!("{}", crate::connect::extension_not_installed_message());
+                        exit(1);
+                    }
                     None => {
                         eprintln!(
-                            "{} extension relay not connected — open Chrome with the ab-connect \
-                             extension first (this command reads an EXISTING tab, it won't launch one).",
+                            "{} The chrome-use extension is installed but its background worker \
+                             hasn't reconnected to the native host yet (MV3 workers sleep, ~30s \
+                             wake timer). Re-run this in a moment, or reload ONLY the chrome-use \
+                             extension at chrome://extensions (↻). A Chrome restart is NOT needed.",
                             color::error_indicator()
                         );
                         exit(1);

@@ -1574,7 +1574,8 @@ async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
 
 /// The relay went quiet but the native host is registered — almost always the
 /// MV3 service worker was suspended. Its keepalive alarm fires ~every 24s and
-/// reconnects the host, so poll a bounded number of times (default ~27s total;
+/// reconnects the host, so poll a bounded number of times (default ~45s total —
+/// the MV3 alarm is clamped to ~30s, so this reliably covers one full cycle;
 /// tune with `AGENT_BROWSER_RELAY_REVIVE_SECS`) and retry the connect. The first
 /// success wins; otherwise return the last error so the caller shows the cheap
 /// reconnect guidance. This is what lets a dropped relay self-heal invisibly
@@ -1584,7 +1585,7 @@ async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserM
     let budget = env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(27);
+        .unwrap_or(45);
     let step = 3u64;
     let mut waited = 0u64;
     while waited < budget {
