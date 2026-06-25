@@ -1572,6 +1572,32 @@ async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
     Ok(mgr)
 }
 
+/// The relay went quiet but the native host is registered — almost always the
+/// MV3 service worker was suspended. Its keepalive alarm fires ~every 24s and
+/// reconnects the host, so poll a bounded number of times (default ~27s total;
+/// tune with `AGENT_BROWSER_RELAY_REVIVE_SECS`) and retry the connect. The first
+/// success wins; otherwise return the last error so the caller shows the cheap
+/// reconnect guidance. This is what lets a dropped relay self-heal invisibly
+/// instead of erroring or launching a throwaway Chrome. `connect_auto_with_fresh_tab`
+/// only opens a tab on success, so the retries cost nothing while the relay is down.
+async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserManager, String> {
+    let budget = env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(27);
+    let step = 3u64;
+    let mut waited = 0u64;
+    while waited < budget {
+        tokio::time::sleep(std::time::Duration::from_secs(step)).await;
+        waited += step;
+        match connect_auto_with_fresh_tab().await {
+            Ok(mgr) => return Ok(mgr),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
 async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     let mut options = launch_options_from_env();
 
@@ -1621,7 +1647,19 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     // This shares cookies/sessions so the agent can reuse logged-in state.
     // Skip if --launch/--new was passed or running in CI.
     if env::var("AGENT_BROWSER_AUTO_CONNECT").is_ok() && !force_launch {
-        match connect_auto_with_fresh_tab().await {
+        // (Re)connect via the extension relay. If it's momentarily unreachable but
+        // the host is registered, the MV3 service worker has almost certainly just
+        // been suspended — wait for its keepalive alarm (~24s) to revive it and
+        // retry, so a transient relay drop self-heals invisibly instead of
+        // erroring or (worse) tearing down and launching a throwaway Chrome.
+        let conn = match connect_auto_with_fresh_tab().await {
+            Ok(mgr) => Ok(mgr),
+            Err(e) if crate::connect::host_installed() => {
+                retry_relay_connect_after_wait(e).await
+            }
+            Err(e) => Err(e),
+        };
+        match conn {
             Ok(mgr) => {
                 state.reset_input_state();
                 state.browser = Some(mgr);
@@ -1637,12 +1675,18 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
                 return Ok(());
             }
             Err(e) => {
-                // Surface the real cause (relay-down guidance when the extension
-                // is installed) instead of a generic remote-debugging lecture (#54).
-                return Err(auto_connect_failure_message(
-                    &e,
-                    crate::connect::host_installed(),
-                ));
+                if !crate::connect::host_installed() {
+                    // The native host isn't registered → the user hasn't set the
+                    // extension up. Register the host FOR them and open the Web
+                    // Store install page (one click) — never a disruptive "quit
+                    // Chrome and restart with a debug port" lecture.
+                    crate::connect::ensure_host_installed();
+                    crate::connect::open_url(crate::connect::STORE_INSTALL_URL);
+                    return Err(crate::connect::extension_not_installed_message());
+                }
+                // Host installed but the relay never came back within the wait —
+                // point at the cheap reconnect, not a Chrome restart (#54).
+                return Err(auto_connect_failure_message(&e, true));
             }
         }
     }
@@ -2219,7 +2263,16 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     }
 
     if auto_connect {
-        match connect_auto_with_fresh_tab().await {
+        // Same self-heal as the mid-session path: if the relay is asleep but the
+        // host is registered, wait for the keepalive to revive it and retry once.
+        let conn = match connect_auto_with_fresh_tab().await {
+            Ok(mgr) => Ok(mgr),
+            Err(e) if crate::connect::host_installed() => {
+                retry_relay_connect_after_wait(e).await
+            }
+            Err(e) => Err(e),
+        };
+        match conn {
             Ok(mgr) => {
                 state.reset_input_state();
                 state.browser = Some(mgr);
@@ -2233,12 +2286,14 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                 return Ok(json!({ "launched": true }));
             }
             Err(e) => {
-                // Surface the real cause (relay-down guidance when the extension
-                // is installed) instead of a generic remote-debugging lecture (#54).
-                return Err(auto_connect_failure_message(
-                    &e,
-                    crate::connect::host_installed(),
-                ));
+                if !crate::connect::host_installed() {
+                    // Host not registered → set it up + open the Store page (one
+                    // click), never the remote-debugging lecture (#54).
+                    crate::connect::ensure_host_installed();
+                    crate::connect::open_url(crate::connect::STORE_INSTALL_URL);
+                    return Err(crate::connect::extension_not_installed_message());
+                }
+                return Err(auto_connect_failure_message(&e, true));
             }
         }
     }

@@ -52,6 +52,12 @@ pub const UPDATE_URL: &str = "https://clients2.google.com/service/update2/crx";
 pub const STORE_URL: &str =
     "https://chromewebstore.google.com/detail/ciiljdlhdpfckdcfkphgmfalanpdejep";
 
+/// The published Store listing for the **Store build** (`STORE_EXTENSION_ID`) —
+/// the page we auto-open when the relay can't be reached and the extension isn't
+/// set up yet, so the user just clicks "Add to Chrome".
+pub const STORE_INSTALL_URL: &str =
+    "https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk?utm_source=cli-autoheal";
+
 /// Stable identifiers for the generated Chrome configuration profile, so a
 /// re-install replaces (rather than duplicates) it in System Settings.
 const PROFILE_ID: &str = "work.pwtk.chrome-use.ab-connect";
@@ -593,6 +599,50 @@ pub fn host_installed() -> bool {
     })
 }
 
+/// Register the native-messaging host manifest if it isn't already, so the CLI
+/// sets up its own half of the relay with **zero user action** (no manual
+/// `chrome-use extension install`). Returns true if the host is present
+/// afterwards (already was, or we just wrote it). Best-effort: a write failure
+/// returns false rather than erroring.
+pub fn ensure_host_installed() -> bool {
+    host_installed() || install_native_host().is_ok()
+}
+
+/// Best-effort open `url` in the user's default browser (the Web Store install
+/// page). No-op when `AGENT_BROWSER_NO_AUTO_OPEN` is set, so headless/CI/agent
+/// contexts can suppress it. Failures are swallowed — opening a page is a
+/// convenience, never load-bearing.
+pub fn open_url(url: &str) {
+    if std::env::var("AGENT_BROWSER_NO_AUTO_OPEN").is_ok() {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    };
+    let _ = cmd.arg(url).status();
+}
+
+/// Message for when the relay can't be reached AND the host wasn't registered —
+/// i.e. the user hasn't set the extension up. By the time this shows we've
+/// already registered the host and opened the Store page, so the ask is a single
+/// click — never "quit and restart Chrome with a debug port".
+pub fn extension_not_installed_message() -> String {
+    format!(
+        "chrome-use couldn't reach your Chrome — the browser extension isn't connected yet.\n\n\
+         I registered the native-messaging host for you and opened the Chrome Web Store install \
+         page. Click \"Add to Chrome\" there, then re-run your command:\n  {STORE_INSTALL_URL}\n\n\
+         Prefer a throwaway browser instead? `chrome-use --launch --profile auto open <url>` \
+         launches a separate Chrome that keeps your login."
+    )
+}
+
 fn report(json: bool, ok: bool, msg: &str) {
     if json {
         println!(
@@ -976,6 +1026,23 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn store_install_url_points_at_the_store_build() {
+        // Must be the published Store id, not the dev id, or "Add to Chrome" 404s.
+        assert!(STORE_INSTALL_URL.contains(STORE_EXTENSION_ID));
+        assert!(STORE_INSTALL_URL.starts_with("https://chromewebstore.google.com/"));
+    }
+
+    #[test]
+    fn not_installed_message_guides_to_store_never_restarts_chrome() {
+        let m = extension_not_installed_message();
+        assert!(m.contains(STORE_INSTALL_URL));
+        // The whole point of this rework: no "quit/restart Chrome with a debug port".
+        assert!(!m.contains("--remote-debugging-port"));
+        assert!(!m.to_lowercase().contains("quit chrome"));
+    }
+
 
     #[test]
     fn parses_active_and_pending_store_extension_versions() {

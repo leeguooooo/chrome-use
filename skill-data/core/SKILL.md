@@ -138,6 +138,26 @@ attempt re-pops it). One of two things is true:
    extension (one click, above); after that the relay stays up and the dialog
    never returns.
 
+**If the relay drops mid-session** (a command suddenly errors with "couldn't
+reach your Chrome" / "relay … failed" — usually the MV3 service worker got
+suspended, or two agents are sharing one relay): **the CLI now self-heals** — it
+waits for the worker's keepalive to revive the relay (~25s) and retries once, so
+most drops you never even see. If a command *does* surface the error:
+
+1. **Just retry the command** — the relay has usually reconnected by then.
+2. If it persists: `chrome-use status` (check), then `chrome-use extension connect`
+   (re-attach), then retry. The CLI auto-registers the native host and opens the
+   Web Store page itself if the extension was never set up — you don't run
+   `extension install` by hand.
+3. **Never** tell the user to quit/restart Chrome with `--remote-debugging-port`
+   to recover a dropped relay — that throws away their tabs and defeats the
+   extension path. (The old error text said this; it no longer does.)
+4. **Can't restore the browser at all?** Don't stall waiting for a screenshot —
+   **fall back to non-visual verification**: `get text` / `eval` / read the
+   deployed page over `curl`/`WebFetch`. Confirming a change via the DOM/HTML or
+   the live URL is a *correct* result, not a failure. Reserve screenshots for a
+   genuine visual check you report to the user.
+
 Each `--session` that connects gets its **own colored Chrome tab group** (named
 after the session) and drives only its own tabs — multiple agents share the one
 real browser without cross-talk, and the user's own tabs are never grouped. CDP
