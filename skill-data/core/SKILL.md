@@ -245,7 +245,9 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
 > you: a `💡 site adapters for <domain>` line on stderr, and a `siteAdapters: {domain, commands}`
 > field in `--json`. **When you see that, prefer the listed `site <name>/<cmd>` over snapshot+click
 > for reading data** — it's the cheaper, more reliable path and it's already installed. You don't
-> need to run `site update` yourself; just use the command it names.
+> need to run `site update` yourself; just use the command it names. (Only on a brand-new setup
+> where the pack hasn't been fetched yet, a named `site <name>/<cmd>` may say it's not installed —
+> run `site update` once, then re-run the command.)
 
 ## Quickstart
 
@@ -402,11 +404,17 @@ foreground, so prefer refs. For below-the-fold content in such a frame, scroll i
 with `scroll down N --at x,y` (a pixel over the frame) or `--frame n`. For a
 postal/autocomplete box inside the frame, `type @e "…" --key-events`.
 
-> **Caveat: `find text "…"` can't reach into a cross-origin iframe** — it errors
-> "Element not found" even though `snapshot -i` lists those nodes and
-> `get text` reads them. Inside cross-origin iframes, target elements by their
-> **snapshot `@ref`**, not by `find`. (`box @ref` also works on iframe refs when
-> you need a coordinate fallback.)
+> **Caveat: `find` can't reach a CLOSED shadow root or a cross-origin iframe.**
+> `find`/selectors match the page DOM (`querySelectorAll`), so they error
+> "Element not found" for elements inside either — even though `snapshot -i` lists
+> them (it walks the CDP accessibility tree, which pierces both) and `get text`
+> reads them. For those, target the element by its **snapshot `@ref`**, not by
+> `find`. (`box @ref` gives a coordinate fallback.)
+>
+> **And verify the exact label before assuming it's missing** — translations
+> differ. Real case: LinkedIn's "Save" button is labelled `收藏`, not `保存`, so
+> `find text "保存"` finds nothing while `snapshot -i` shows `button "收藏" [ref=eN]`
+> all along — just `click @eN`. (issue #55)
 
 ### When refs don't work or you don't want to snapshot
 
