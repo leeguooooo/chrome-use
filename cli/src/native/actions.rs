@@ -7671,31 +7671,40 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .get("source")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'source' parameter")?;
-    let target = cmd
-        .get("target")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing 'target' parameter")?;
+    // Offset mode (`drag <handle> 60` / `+60,-3`): press at the source center and
+    // move by (dx,dy) px. Used for sliders/canvas where there's no target element
+    // — e.g. dragging a slider-puzzle handle to the gap. This is inherently a
+    // pointer drag, so it always takes the coordinate path below.
+    let offset = cmd
+        .get("offset_dx")
+        .and_then(|v| v.as_f64())
+        .map(|dx| (dx, cmd.get("offset_dy").and_then(|v| v.as_f64()).unwrap_or(0.0)));
+    let target = cmd.get("target").and_then(|v| v.as_str());
 
     // Over the relay (or into an iframe) a coordinate drag drifts to the
     // foreground tab and can't reach an OOPIF — DOM-dispatch an HTML5 drag in the
     // element's own session instead (issues #31/#36). `coord` mode forces the
     // coordinate path for pointer-driven drags (canvas/sliders) on a launched
-    // browser.
-    if std::env::var("AGENT_BROWSER_CLICK_MODE").as_deref() != Ok("coord")
-        && (crate::connect::relay_url().is_some()
-            || state.ref_map.ref_is_in_iframe(source)
-            || state.ref_map.ref_is_in_iframe(target))
-    {
-        super::interaction::dom_drag(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            source,
-            target,
-            &state.iframe_sessions,
-        )
-        .await?;
-        return Ok(json!({ "dragged": { "source": source, "target": target }, "via": "dom" }));
+    // browser. Offset mode is always coordinate-driven (no target ref to DOM-drag
+    // onto), so it skips this branch.
+    if offset.is_none() {
+        let target = target.ok_or("Missing 'target' parameter")?;
+        if std::env::var("AGENT_BROWSER_CLICK_MODE").as_deref() != Ok("coord")
+            && (crate::connect::relay_url().is_some()
+                || state.ref_map.ref_is_in_iframe(source)
+                || state.ref_map.ref_is_in_iframe(target))
+        {
+            super::interaction::dom_drag(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                source,
+                target,
+                &state.iframe_sessions,
+            )
+            .await?;
+            return Ok(json!({ "dragged": { "source": source, "target": target }, "via": "dom" }));
+        }
     }
 
     let (sx, sy, _, _, source_session_id) = super::element::resolve_element_center(
@@ -7706,14 +7715,21 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         &state.iframe_sessions,
     )
     .await?;
-    let (tx, ty, _, _, target_session_id) = super::element::resolve_element_center(
-        &mgr.client,
-        &session_id,
-        &state.ref_map,
-        target,
-        &state.iframe_sessions,
-    )
-    .await?;
+    let (tx, ty, target_session_id) = match offset {
+        Some((dx, dy)) => (sx + dx, sy + dy, source_session_id.clone()),
+        None => {
+            let target = target.ok_or("Missing 'target' parameter")?;
+            let (tx, ty, _, _, target_session_id) = super::element::resolve_element_center(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                target,
+                &state.iframe_sessions,
+            )
+            .await?;
+            (tx, ty, target_session_id)
+        }
+    };
 
     // Mouse down at source
     mgr.client
@@ -7772,7 +7788,10 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         )
         .await?;
 
-    Ok(json!({ "dragged": true, "source": source, "target": target }))
+    match offset {
+        Some((dx, dy)) => Ok(json!({ "dragged": true, "source": source, "offset": [dx, dy], "to": [tx, ty] })),
+        None => Ok(json!({ "dragged": true, "source": source, "target": target })),
+    }
 }
 
 async fn handle_expose(cmd: &Value, state: &DaemonState) -> Result<Value, String> {

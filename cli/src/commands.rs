@@ -88,6 +88,28 @@ const KNOWN_COMMANDS: &[&str] = &[
 ];
 
 /// Levenshtein distance, capped — small inputs only (command names).
+/// Parse a `drag` offset argument: `60`, `+60`, `-12`, or `60,-3` (dx[,dy]).
+/// Returns `None` for anything that isn't a pure pixel offset — those fall
+/// through to the normal ref/selector/text target path.
+fn parse_drag_offset(s: &str) -> Option<(f64, f64)> {
+    let s = s.trim();
+    let (dx_str, dy_str) = match s.split_once(',') {
+        Some((x, y)) => (x.trim(), Some(y.trim())),
+        None => (s, None),
+    };
+    // Reject empties and bare signs; require the whole token to be numeric so a
+    // selector like `.foo` or `@e5` never gets mistaken for an offset.
+    let dx: f64 = dx_str.parse().ok()?;
+    let dy: f64 = match dy_str {
+        Some(y) => y.parse().ok()?,
+        None => 0.0,
+    };
+    if !dx.is_finite() || !dy.is_finite() {
+        return None;
+    }
+    Some((dx, dy))
+}
+
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -717,13 +739,21 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "drag" => {
             let src = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "drag".to_string(),
-                usage: "drag <source> <target>",
+                usage: "drag <source> <target|dx[,dy]>",
             })?;
             let tgt = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                 context: "drag".to_string(),
-                usage: "drag <source> <target>",
+                usage: "drag <source> <target|dx[,dy]>",
             })?;
-            Ok(json!({ "id": id, "action": "drag", "source": src, "target": tgt }))
+            // Offset mode (sliders/canvas): `drag <handle> 60` or `drag <handle> +60,-3`
+            // presses at the source center and moves by (dx,dy) px along the humanize
+            // trajectory, instead of dragging to another element. A pure numeric /
+            // `dx,dy` second arg is unambiguous vs a @ref/selector/text target.
+            if let Some((dx, dy)) = parse_drag_offset(tgt) {
+                Ok(json!({ "id": id, "action": "drag", "source": src, "offset_dx": dx, "offset_dy": dy }))
+            } else {
+                Ok(json!({ "id": id, "action": "drag", "source": src, "target": tgt }))
+            }
         }
         "upload" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
@@ -3622,6 +3652,40 @@ mod tests {
     }
 
     // === Cookies Tests ===
+
+    #[test]
+    fn test_drag_offset_mode() {
+        // Numeric / dx,dy second arg → offset drag (slider).
+        let cmd = parse_command(&args("drag @e5 60"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "drag");
+        assert_eq!(cmd["offset_dx"], 60.0);
+        assert_eq!(cmd["offset_dy"], 0.0);
+        assert!(cmd.get("target").is_none());
+
+        let cmd = parse_command(&args("drag @e5 +60,-3"), &default_flags()).unwrap();
+        assert_eq!(cmd["offset_dx"], 60.0);
+        assert_eq!(cmd["offset_dy"], -3.0);
+
+        // A real selector/ref target stays a ref-to-ref drag.
+        let cmd = parse_command(&args("drag @e5 @e9"), &default_flags()).unwrap();
+        assert_eq!(cmd["target"], "@e9");
+        assert!(cmd.get("offset_dx").is_none());
+    }
+
+    #[test]
+    fn test_parse_drag_offset_unit() {
+        assert_eq!(parse_drag_offset("60"), Some((60.0, 0.0)));
+        assert_eq!(parse_drag_offset("+60"), Some((60.0, 0.0)));
+        assert_eq!(parse_drag_offset("-12"), Some((-12.0, 0.0)));
+        assert_eq!(parse_drag_offset("60,-3"), Some((60.0, -3.0)));
+        assert_eq!(parse_drag_offset(" 60 , 4 "), Some((60.0, 4.0)));
+        // Not offsets — fall through to target path.
+        assert_eq!(parse_drag_offset("@e5"), None);
+        assert_eq!(parse_drag_offset(".foo"), None);
+        assert_eq!(parse_drag_offset("+"), None);
+        assert_eq!(parse_drag_offset(""), None);
+        assert_eq!(parse_drag_offset("60px"), None);
+    }
 
     #[test]
     fn test_cookies_get() {
