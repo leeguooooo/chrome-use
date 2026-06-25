@@ -7916,6 +7916,51 @@ async fn yidun_mouse(
 /// Detects the gap offline from the captcha's own bg/jigsaw images (no
 /// screenshot), then drags the handle into the gap with a humanized,
 /// self-calibrated trajectory. Retries (refreshing the puzzle) up to `retries`.
+/// Run an external detector (e.g. a cv2 prototype for the enhanced variant).
+/// Writes the slices to a temp dir and runs `sh -c "<cmd> <dir>"`; the program
+/// must print JSON `{drag_nat, piece_x?, gap_x?, score?}` to stdout.
+async fn detect_gap_external(
+    cmd: &str,
+    bg: &[u8],
+    jig: &[u8],
+) -> Result<super::slider::Gap, String> {
+    let dir = std::env::temp_dir().join("chrome-use-slider");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("tmpdir: {e}"))?;
+    std::fs::write(dir.join("bg.img"), bg).map_err(|e| format!("write bg: {e}"))?;
+    std::fs::write(dir.join("jig.img"), jig).map_err(|e| format!("write jig: {e}"))?;
+    let out = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{cmd} {}", dir.display()))
+        .output()
+        .await
+        .map_err(|e| format!("detect cmd spawn: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "detect cmd failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: Value = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("detect cmd bad JSON ({e}): {stdout}"))?;
+    let drag_nat = v
+        .get("drag_nat")
+        .and_then(|x| x.as_i64())
+        .ok_or("detect cmd: missing drag_nat")?;
+    let piece_x = v.get("piece_x").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+    let gap_x = v
+        .get("gap_x")
+        .and_then(|x| x.as_u64())
+        .unwrap_or((piece_x as i64 + drag_nat).max(0) as u64) as u32;
+    let score = v.get("score").and_then(|x| x.as_f64()).unwrap_or(1.0);
+    Ok(super::slider::Gap {
+        piece_x,
+        gap_x,
+        drag_nat,
+        score,
+    })
+}
+
 async fn handle_solve_slider(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let retries = cmd.get("retries").and_then(|v| v.as_u64()).unwrap_or(3);
     let mut last: Value = json!({});
@@ -8003,10 +8048,21 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     };
     let bg_bytes = fetch(bg_src).await?;
     let jig_bytes = fetch(jig_src).await?;
-    let bg_img = image::load_from_memory(&bg_bytes).map_err(|e| format!("decode bg: {e}"))?;
-    let jig_img = image::load_from_memory(&jig_bytes).map_err(|e| format!("decode jig: {e}"))?;
-    let gap = super::slider::detect_gap(&bg_img, &jig_img)
-        .ok_or("gap detection failed (no piece silhouette)")?;
+    // Pluggable detector: AGENT_BROWSER_SLIDER_DETECT_CMD lets an external
+    // program (e.g. a cv2 prototype for the enhanced icon-shape variant) supply
+    // the gap, reusing the robust Rust drag + closed-loop below. Falls back to
+    // the built-in pure-Rust detector. The cmd is run as `sh -c "<cmd> <dir>"`
+    // with bg.img + jig.img in <dir>, and must print JSON {drag_nat[,piece_x]}.
+    let gap = if let Ok(cmd) = std::env::var("AGENT_BROWSER_SLIDER_DETECT_CMD") {
+        detect_gap_external(&cmd, &bg_bytes, &jig_bytes).await?
+    } else {
+        let bg_img =
+            image::load_from_memory(&bg_bytes).map_err(|e| format!("decode bg: {e}"))?;
+        let jig_img =
+            image::load_from_memory(&jig_bytes).map_err(|e| format!("decode jig: {e}"))?;
+        super::slider::detect_gap(&bg_img, &jig_img)
+            .ok_or("gap detection failed (no piece silhouette)")?
+    };
 
     let _ = disp_w_pre;
 
