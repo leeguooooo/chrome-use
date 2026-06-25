@@ -1,8 +1,19 @@
 # agent-browser
 
-## 0.30.0
+## 0.30.1
 
 <!-- release:start -->
+### Bug Fixes
+
+- Fixed **URL waits** so `wait --url` and `waitforurl` honor glob patterns such as `**/dashboard` against the full active URL (#1483)
+
+### Contributors
+
+- @gaearon
+<!-- release:end -->
+
+## 0.30.0
+
 ### New Features
 
 - **Read command** - Added `agent-browser read [url]` and the matching MCP tool for agent-readable text extraction. URL reads prefer Markdown, try `.md` and nearby `llms.txt` docs, support outlines, filters, raw and JSON output, headers, and domain/output safeguards; omitting the URL reads the rendered active tab DOM with current browser state (#1480)
@@ -10,7 +21,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.29.1
 
