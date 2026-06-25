@@ -37,6 +37,8 @@ pub mod relay;
 #[allow(dead_code)]
 pub mod screenshot;
 #[allow(dead_code)]
+pub mod slider;
+#[allow(dead_code)]
 pub mod snapshot;
 #[allow(dead_code)]
 pub mod state;
