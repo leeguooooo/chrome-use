@@ -1,8 +1,27 @@
 # agent-browser
 
-## 0.30.1
+## 0.31.0
 
 <!-- release:start -->
+### New Features
+
+- **Restore workflow** - Added `--restore`, `--restore-save`, restore validation flags, worktree-scoped `session id`, `session info`, and `--namespace` so agent runs can use stable, isolated, automatically restored browser state without managing state files by hand (#1486)
+
+### Improvements
+
+- Hardened **session lifecycle handling** with explicit daemon and browser compatibility checks, lifecycle status output, MCP support for restore options, and safer auto-save behavior that avoids overwriting good state after a failed restore or failed validation (#1486)
+
+### Bug Fixes
+
+- Fixed **restore lifecycle edge cases** around switching restore keys with a live browser, daemon configuration startup races, launch mode validation, and clearing restore failures after an explicit state load (#1486)
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.30.1
+
 ### Bug Fixes
 
 - Fixed **URL waits** so `wait --url` and `waitforurl` honor glob patterns such as `**/dashboard` against the full active URL (#1483)
@@ -10,7 +29,6 @@
 ### Contributors
 
 - @gaearon
-<!-- release:end -->
 
 ## 0.30.0
 
