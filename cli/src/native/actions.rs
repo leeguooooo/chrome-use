@@ -8007,7 +8007,16 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     for _ in 0..40 {
         let hx = probe.get("hx").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let hy = probe.get("hy").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        if hx > 0.0 && hy > 0.0 {
+        let nat_w = probe.get("bg_natW").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let has_src = probe
+            .get("bg_src")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        // Ready when the handle is positioned AND the slice images have loaded
+        // (natural width known + src present) — the enhanced float variant loads
+        // its images a beat later than the handle appears.
+        if hx > 0.0 && hy > 0.0 && nat_w >= 1.0 && has_src {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
