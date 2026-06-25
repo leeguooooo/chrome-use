@@ -364,7 +364,15 @@ pub fn to_ai_friendly_error(error: &str) -> String {
             .to_string();
     }
     if lower.contains("element not found") || lower.contains("no element") {
-        return "Element not found. Verify the selector is correct and the element exists in the DOM."
+        // Selectors / `find` match the page DOM, which can't see inside a CLOSED
+        // shadow root or a cross-origin iframe — but `snapshot -i` (the CDP
+        // accessibility tree) pierces both. Also nudge to verify the exact
+        // label, since translations differ (real case: LinkedIn's Save button is
+        // labelled 收藏, not 保存 — issue #55).
+        return "Element not found in the page DOM. If it's inside a CLOSED shadow root or a \
+                cross-origin iframe, selectors/`find` can't reach it — run `snapshot -i` (it \
+                pierces both via the accessibility tree) and `click` the @ref. Also verify the \
+                exact label/text: translations differ (e.g. a \"Save\" button may be labelled 收藏)."
             .to_string();
     }
     error.to_string()
@@ -3614,10 +3622,10 @@ mod tests {
 
     #[test]
     fn test_to_ai_friendly_error_not_found() {
-        assert_eq!(
-            to_ai_friendly_error("Element not found"),
-            "Element not found. Verify the selector is correct and the element exists in the DOM."
-        );
+        let m = to_ai_friendly_error("Element not found");
+        assert!(m.starts_with("Element not found"));
+        // directs to snapshot -i (which pierces closed shadow / cross-origin iframes)
+        assert!(m.contains("snapshot -i") && m.contains("shadow root"));
     }
 
     #[test]
@@ -3635,9 +3643,9 @@ mod tests {
 
     #[test]
     fn test_to_ai_friendly_error_catches_no_element() {
-        let mapped =
-            "Element not found. Verify the selector is correct and the element exists in the DOM.";
-        assert_eq!(to_ai_friendly_error("No element found for css 'x'"), mapped);
+        let m = to_ai_friendly_error("No element found for css 'x'");
+        assert!(m.starts_with("Element not found"));
+        assert!(m.contains("snapshot -i"));
     }
 
     #[test]
