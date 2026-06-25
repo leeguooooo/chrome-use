@@ -76,6 +76,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "url",
     "is",
     "drag",
+    "solve-slider",
     "dialog",
     "upload",
     "site",
@@ -87,7 +88,6 @@ const KNOWN_COMMANDS: &[&str] = &[
     "keep",
 ];
 
-/// Levenshtein distance, capped — small inputs only (command names).
 /// Parse a `drag` offset argument: `60`, `+60`, `-12`, or `60,-3` (dx[,dy]).
 /// Returns `None` for anything that isn't a pure pixel offset — those fall
 /// through to the normal ref/selector/text target path.
@@ -110,6 +110,7 @@ fn parse_drag_offset(s: &str) -> Option<(f64, f64)> {
     Some((dx, dy))
 }
 
+/// Levenshtein distance, capped — small inputs only (command names).
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -761,6 +762,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 usage: "upload <selector> <files...>",
             })?;
             Ok(json!({ "id": id, "action": "upload", "selector": sel, "files": &rest[1..] }))
+        }
+        "solve-slider" | "solve_slider" => {
+            // Optional retry count: `solve-slider [retries]` (default 3).
+            let retries = rest.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(3);
+            Ok(json!({ "id": id, "action": "solve_slider", "retries": retries }))
         }
         "download" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {

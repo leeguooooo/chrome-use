@@ -1443,6 +1443,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "find" => handle_find(cmd, state).await,
         "evalhandle" => handle_evalhandle(cmd, state).await,
         "drag" => handle_drag(cmd, state).await,
+        "solve_slider" => handle_solve_slider(cmd, state).await,
         "expose" => handle_expose(cmd, state).await,
         "pause" => handle_pause(state).await,
         "multiselect" => handle_multiselect(cmd, state).await,
@@ -7792,6 +7793,273 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         Some((dx, dy)) => Ok(json!({ "dragged": true, "source": source, "offset": [dx, dy], "to": [tx, ty] })),
         None => Ok(json!({ "dragged": true, "source": source, "target": target })),
     }
+}
+
+/// Probe the yidun captcha geometry. `JSON.stringify`s handle center, image
+/// srcs, background natural/displayed width and the piece's current displayed
+/// left (relative to the bg). Returns `present:false` if no yidun slider.
+const YIDUN_PROBE: &str = r#"(function(){
+  // Pick the *visible* element of a kind — yidun has several modes (inline float,
+  // popup modal) and may keep hidden duplicates, so take the widest rendered one.
+  const vis=(sel)=>{let best=null,bw=-1;document.querySelectorAll(sel).forEach(e=>{
+    const r=e.getBoundingClientRect(); if(r.width>bw){bw=r.width;best=e;}}); return best;};
+  const h=vis('.yidun_slider');
+  const bgEl=vis('img.yidun_bg-img');     // for src + natural width
+  const jig=vis('img.yidun_jigsaw');
+  // The puzzle's *displayed* width comes from the container DIV: in popup mode
+  // (e.g. Zhihu) the inner <img> is 0-sized while .yidun_bgimg is the real
+  // 320px box. Fall back to the img when there's no container.
+  const box=vis('.yidun_bgimg')||bgEl;
+  if(!h||!bgEl||!jig||!box) return JSON.stringify({present:false});
+  const hb=h.getBoundingClientRect();
+  const cb=box.getBoundingClientRect();
+  const jb=jig.getBoundingClientRect();
+  return JSON.stringify({present:true,
+    hx:hb.x+hb.width/2, hy:hb.y+hb.height/2,
+    bg_src:bgEl.src, jig_src:jig.src,
+    bg_natW:bgEl.naturalWidth, bg_dispW:cb.width,
+    piece_left: jb.x-cb.x});
+})()"#;
+
+/// Read the yidun result state after a release: success / error / pending.
+const YIDUN_RESULT: &str = r#"(function(){
+  const p=document.querySelector('.yidun');
+  const tip=document.querySelector('.yidun_tips__text');
+  const cls=p?p.className:'';
+  const txt=tip?tip.textContent:'';
+  let status='pending';
+  if(/success/.test(cls)||/成功|通过/.test(txt)) status='success';
+  else if(/error/.test(cls)||/失败|错误|重试|不正确/.test(txt)) status='error';
+  return JSON.stringify({status, txt, cls});
+})()"#;
+
+async fn yidun_mouse(
+    mgr: &super::browser::BrowserManager,
+    session_id: &str,
+    ev: &str,
+    x: f64,
+    y: f64,
+    buttons: i32,
+) -> Result<(), String> {
+    let click_count = if ev == "mouseMoved" { 0 } else { 1 };
+    mgr.client
+        .send_command(
+            "Input.dispatchMouseEvent",
+            Some(json!({
+                "type": ev, "x": x, "y": y,
+                "button": "left", "buttons": buttons, "clickCount": click_count
+            })),
+            Some(session_id),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Auto-solve a 网易易盾-style slider-puzzle captcha on the active page.
+///
+/// Detects the gap offline from the captcha's own bg/jigsaw images (no
+/// screenshot), then drags the handle into the gap with a humanized,
+/// self-calibrated trajectory. Retries (refreshing the puzzle) up to `retries`.
+async fn handle_solve_slider(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let retries = cmd.get("retries").and_then(|v| v.as_u64()).unwrap_or(3);
+    let mut last: Value = json!({});
+    for attempt in 0..=retries {
+        let r = solve_slider_once(state).await?;
+        let solved = r.get("solved").and_then(|v| v.as_bool()).unwrap_or(false);
+        last = r;
+        if solved {
+            return Ok(json!({
+                "solved": true, "attempts": attempt + 1, "detail": last
+            }));
+        }
+        // Failed — refresh the puzzle and try again (unless out of attempts).
+        if attempt < retries {
+            let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+            let _ = mgr
+                .evaluate("document.querySelector('.yidun_refresh')?.click()", None)
+                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        }
+    }
+    Ok(json!({ "solved": false, "attempts": retries + 1, "detail": last }))
+}
+
+async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+
+    // 1. Locate the captcha and read image srcs + handle center (pre-press).
+    //    Poll until the puzzle image is actually laid out (its displayed width
+    //    is briefly 0 right after a load/refresh), so the natural→CSS scale is
+    //    measured from the real render.
+    let mut probe = parse_json_string(mgr.evaluate(YIDUN_PROBE, None).await?, "yidun probe")?;
+    if !probe.get("present").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err("No 网易易盾 slider found on the page (.yidun_slider / yidun_bg-img). \
+                    If it's inside a cross-origin iframe, solve-slider can't reach it yet."
+            .to_string());
+    }
+    // Up to ~6s: wait for the handle to be positioned. Popup-mode captchas (e.g.
+    // Zhihu) animate the modal in over a couple of seconds, and pressing before
+    // the handle has settled misses it. We wait on the handle, not the image:
+    // in float mode (demo) the image stays hidden until the press, so waiting on
+    // image width would needlessly burn the whole budget.
+    for _ in 0..40 {
+        let hx = probe.get("hx").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let hy = probe.get("hy").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if hx > 0.0 && hy > 0.0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        probe = parse_json_string(mgr.evaluate(YIDUN_PROBE, None).await?, "yidun probe")?;
+    }
+    let f = |k: &str| probe.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let bg_src = probe.get("bg_src").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let jig_src = probe.get("jig_src").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let bg_nat_w = f("bg_natW");
+    let (hx, hy) = (f("hx"), f("hy"));
+    // Baseline geometry from the inline (pre-press) puzzle, which is already
+    // displayed. Pressing the handle can hide/swap this element, so we never
+    // rely on re-reading its displayed width afterwards.
+    let disp_w_pre = f("bg_dispW");
+    if bg_src.is_empty() || jig_src.is_empty() || bg_nat_w < 1.0 {
+        return Err("yidun images not loaded yet".to_string());
+    }
+
+    // 2. Fetch the two slice images and detect the gap offline (natural px).
+    //    A timeout is essential: without it a stalled CDN fetch blocks the daemon
+    //    thread forever and bricks the whole session.
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let fetch = |url: String| {
+        let http = http.clone();
+        async move {
+            http.get(&url)
+                .send()
+                .await
+                .map_err(|e| format!("fetch {url}: {e}"))?
+                .bytes()
+                .await
+                .map_err(|e| format!("read {url}: {e}"))
+        }
+    };
+    let bg_bytes = fetch(bg_src).await?;
+    let jig_bytes = fetch(jig_src).await?;
+    let bg_img = image::load_from_memory(&bg_bytes).map_err(|e| format!("decode bg: {e}"))?;
+    let jig_img = image::load_from_memory(&jig_bytes).map_err(|e| format!("decode jig: {e}"))?;
+    let gap = super::slider::detect_gap(&bg_img, &jig_img)
+        .ok_or("gap detection failed (no piece silhouette)")?;
+
+    let _ = disp_w_pre;
+
+    // 3. Press and engage the handle. In yidun float mode the puzzle image is
+    //    collapsed (width 0) until the slider is grabbed, so we press + nudge a
+    //    few px to reveal it, then measure the real displayed width.
+    yidun_mouse(mgr, &session_id, "mouseMoved", hx, hy, 0).await?;
+    yidun_mouse(mgr, &session_id, "mousePressed", hx, hy, 1).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(110)).await;
+    let mut handle_x = hx;
+    for i in 1..=3 {
+        handle_x = hx + 6.0 * i as f64;
+        yidun_mouse(mgr, &session_id, "mouseMoved", handle_x, hy, 1).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(22)).await;
+    }
+    // Poll for the revealed puzzle's displayed width.
+    let mut disp_w = 0.0;
+    for _ in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_millis(90)).await;
+        let p = parse_json_string(mgr.evaluate(YIDUN_PROBE, None).await?, "yidun reveal")?;
+        disp_w = p.get("bg_dispW").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if disp_w >= 1.0 {
+            break;
+        }
+    }
+    if disp_w < 1.0 {
+        yidun_mouse(mgr, &session_id, "mouseReleased", handle_x, hy, 0).await?;
+        return Err("yidun puzzle did not reveal after engaging the handle".to_string());
+    }
+    let scale = disp_w / bg_nat_w; // natural px → displayed CSS px
+    // The piece's left edge (displayed offset from the bg) must reach gap_x;
+    // drag_nat already nets out the piece's resting offset.
+    let target_piece_left = gap.drag_nat as f64 * scale;
+
+    // 4. One smooth humanized sweep to the estimated handle position. The piece
+    //    tracks the handle a little under 1:1; start from 0.9 and let the
+    //    closed-loop below refine it.
+    let mut ratio_est = 0.9f64;
+    let est_target = hx + target_piece_left / ratio_est;
+    let seed = humanize::next_seed();
+    for step in humanize::move_path((handle_x, hy), (est_target, hy), humanize::HumanizeLevel::Human, seed) {
+        yidun_mouse(mgr, &session_id, "mouseMoved", step.x, step.y, 1).await?;
+        if !step.delay.is_zero() {
+            tokio::time::sleep(step.delay).await;
+        }
+    }
+    handle_x = est_target;
+
+    // 5. Closed-loop fine correction. The piece is readable between move segments
+    //    (not mid-motion), so read where it landed and nudge until it's within
+    //    tolerance. A couple of small corrections also reads as human.
+    let mut final_piece_left = f64::NAN;
+    for _ in 0..6 {
+        tokio::time::sleep(std::time::Duration::from_millis(110)).await;
+        let p = parse_json_string(mgr.evaluate(YIDUN_PROBE, None).await?, "yidun read")?;
+        let piece = p.get("piece_left").and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+        if !piece.is_finite() {
+            continue;
+        }
+        final_piece_left = piece;
+        let traveled = handle_x - hx;
+        if traveled > 8.0 && piece > 4.0 {
+            let r = piece / traveled;
+            if r > 0.3 && r < 2.5 {
+                ratio_est = r;
+            }
+        }
+        let err = target_piece_left - piece; // +ve ⇒ move right more
+        if err.abs() <= 1.5 {
+            break;
+        }
+        let next_x = handle_x + (err / ratio_est).clamp(-60.0, 60.0);
+        let seed = humanize::next_seed();
+        for s in humanize::move_path((handle_x, hy), (next_x, hy), humanize::HumanizeLevel::Fast, seed) {
+            yidun_mouse(mgr, &session_id, "mouseMoved", s.x, s.y, 1).await?;
+            if !s.delay.is_zero() {
+                tokio::time::sleep(s.delay).await;
+            }
+        }
+        handle_x = next_x;
+    }
+
+    // 6. Settle and release.
+    tokio::time::sleep(std::time::Duration::from_millis(160)).await;
+    yidun_mouse(mgr, &session_id, "mouseReleased", handle_x, hy, 0).await?;
+
+    // 6. Read the result (poll briefly for the async verify round-trip).
+    let mut status = "pending".to_string();
+    let mut detail = json!({});
+    for _ in 0..12 {
+        tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+        let res = parse_json_string(mgr.evaluate(YIDUN_RESULT, None).await?, "yidun result")?;
+        status = res.get("status").and_then(|v| v.as_str()).unwrap_or("pending").to_string();
+        detail = res;
+        if status != "pending" {
+            break;
+        }
+    }
+
+    Ok(json!({
+        "solved": status == "success",
+        "status": status,
+        "gap": { "piece_x": gap.piece_x, "gap_x": gap.gap_x, "drag_nat": gap.drag_nat, "score": gap.score },
+        "scale": scale, "ratio_est": ratio_est,
+        "disp_w": disp_w, "drag_css": handle_x - hx,
+        "final_piece_left": final_piece_left, "target_piece_left": target_piece_left,
+        "err_px": final_piece_left - target_piece_left,
+        "cls": detail.get("cls"), "tip": detail.get("txt"),
+    }))
 }
 
 async fn handle_expose(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
