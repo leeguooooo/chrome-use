@@ -625,22 +625,23 @@ pub async fn fill(
             if (tag === 'SELECT') {{ el.value = v; fire('input'); fire('change'); return 'select'; }}
 
             if (el.isContentEditable) {{
-                // ProseMirror / contenteditable: select-all then insertText fires
-                // beforeinput/input that PM and React composers listen for.
-                let ok = false;
+                // Rich React composers (DraftJS / Lexical / ProseMirror) only commit
+                // an edit — and only flip their send button to enabled — from a
+                // TRUSTED beforeinput/input. execCommand('insertText') fires UNtrusted
+                // events: the text appears but the editor's model (and React's button
+                // state) never updates, so e.g. X's "Post" / Reddit's submit stay
+                // disabled. So here we just focus + select-all; the Rust caller follows
+                // up with CDP Input.insertText (trusted), which replaces the selection
+                // and fires the events these editors honor. Returns 'contenteditable'
+                // to signal the caller to do the trusted insert.
                 try {{
                     const sel = window.getSelection();
                     const range = document.createRange();
                     range.selectNodeContents(el);
                     sel.removeAllRanges();
                     sel.addRange(range);
-                    ok = document.execCommand('insertText', false, v);
                 }} catch (e) {{}}
-                if (!ok) {{ el.textContent = v; fire('input', window.InputEvent || Event); }}
-                fire('change');
-                try {{ el.blur(); }} catch (e) {{}}
-                fire('focusout');
-                return ok ? 'contenteditable' : 'contenteditable-fallback';
+                return 'contenteditable';
             }}
 
             const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
@@ -664,7 +665,7 @@ pub async fn fill(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
                 function_declaration: fill_js,
-                object_id: Some(object_id),
+                object_id: Some(object_id.clone()),
                 arguments: None,
                 return_by_value: Some(true),
                 await_promise: Some(false),
@@ -673,11 +674,89 @@ pub async fn fill(
         )
         .await?;
 
-    Ok(result
+    let engine = result
         .result
         .value
         .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_else(|| "input".to_string()))
+        .unwrap_or_else(|| "input".to_string());
+
+    // Contenteditable rich editors (DraftJS / Lexical / ProseMirror): the JS above
+    // only focused + selected-all. Do the actual edit through CDP so the events are
+    // TRUSTED — that is what flips X's "Post" / Reddit's submit out of the disabled
+    // state (execCommand's untrusted events don't). Input.insertText replaces the
+    // selected (all) content; an empty value replaces the selection with nothing,
+    // i.e. clears the field (verified: fill replaces, and fill "" clears).
+    if engine == "contenteditable" {
+        // Trusted insert replaces the (all-)selected content. An empty value
+        // replaces the selection with nothing, i.e. clears the field.
+        let inserted = client
+            .send_command_typed::<_, Value>(
+                "Input.insertText",
+                &InsertTextParams {
+                    text: value.to_string(),
+                },
+                Some(&effective_session_id),
+            )
+            .await
+            .map(|_| ());
+
+        match inserted {
+            Ok(()) => {
+                // input/beforeinput already fired (trusted). Fire change + focusout
+                // for parity with the plain-input path; don't blur (would collapse
+                // composers that close on blur).
+                let _ = client
+                    .send_command_typed::<_, Value>(
+                        "Runtime.callFunctionOn",
+                        &CallFunctionOnParams {
+                            function_declaration: "function() { try { this.dispatchEvent(new Event('change', { bubbles: true })); this.dispatchEvent(new Event('focusout', { bubbles: true })); } catch (e) {} }".to_string(),
+                            object_id: Some(object_id),
+                            arguments: None,
+                            return_by_value: Some(true),
+                            await_promise: Some(false),
+                        },
+                        Some(&effective_session_id),
+                    )
+                    .await;
+                return Ok("contenteditable".to_string());
+            }
+            Err(_) => {
+                // CDP insert unavailable (rare: some Electron webviews). Fall back to
+                // the old untrusted execCommand path so the field still fills.
+                let fallback_js = format!(
+                    r#"function() {{
+                        const el = this; const v = {val};
+                        let ok = false;
+                        try {{ ok = document.execCommand('insertText', false, v); }} catch (e) {{}}
+                        if (!ok) {{ el.textContent = v; el.dispatchEvent(new (window.InputEvent || Event)('input', {{ bubbles: true }})); }}
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        return ok ? 'contenteditable' : 'contenteditable-fallback';
+                    }}"#,
+                    val = serde_json::to_string(value).unwrap_or_default()
+                );
+                let fb: EvaluateResult = client
+                    .send_command_typed(
+                        "Runtime.callFunctionOn",
+                        &CallFunctionOnParams {
+                            function_declaration: fallback_js,
+                            object_id: Some(object_id),
+                            arguments: None,
+                            return_by_value: Some(true),
+                            await_promise: Some(false),
+                        },
+                        Some(&effective_session_id),
+                    )
+                    .await?;
+                return Ok(fb
+                    .result
+                    .value
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| "contenteditable-fallback".to_string()));
+            }
+        }
+    }
+
+    Ok(engine)
 }
 
 #[allow(clippy::too_many_arguments)]
