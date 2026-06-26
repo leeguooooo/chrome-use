@@ -370,6 +370,20 @@ fn is_stale_target_error(error: &str) -> bool {
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     let lower = error.to_lowercase();
+    // A read (snapshot/screenshot/eval/get) hit a session whose target is gone —
+    // typically a cross-process navigation like an OAuth redirect (issue #58).
+    // `navigate` auto-reattaches, but reads deliberately fail loudly rather than
+    // silently retarget onto the wrong tab (#8.1). The raw CDP text ("stale
+    // sessionId … its tab is gone") tells the agent nothing actionable, so spell
+    // out the recovery instead.
+    if is_stale_target_error(error) {
+        return "the tab this command was driving is gone — it navigated across processes (e.g. \
+                an OAuth/SSO redirect), was closed, or the relay lost it. The session did NOT \
+                silently retarget, since that could read or click the wrong tab. Recover by \
+                re-placing the page yourself: `open <url>` / `navigate <url>` re-attaches to a \
+                fresh tab, or `adopt <url-substring>` the tab you want — then re-`snapshot`."
+            .to_string();
+    }
     if lower.contains("strict mode violation") {
         return "Element matched multiple results. Use a more specific selector.".to_string();
     }
@@ -1477,7 +1491,57 @@ impl BrowserManager {
 
     pub async fn evaluate(&self, script: &str, _args: Option<Value>) -> Result<Value, String> {
         let session_id = self.active_session_id()?.to_string();
+        self.eval_in_context(script, &session_id, None).await
+    }
 
+    /// Evaluate `script` in a specific frame's context (issue #58 `eval --frame`).
+    ///
+    /// - **Out-of-process iframe** (cross-origin; has its own auto-attached session
+    ///   in `iframe_sessions`): run on that session, which lands in the frame's own
+    ///   **main world** — exactly what you want for a cross-origin embed like a
+    ///   Google account-picker.
+    /// - **Same-process (in-page) frame**: there is no stealth-safe way to reach the
+    ///   frame's main world without `Runtime.enable`, so we run in a per-call
+    ///   **isolated world** via `Page.createIsolatedWorld`. The DOM is fully
+    ///   readable there, but page JS globals are not visible (same trade-off
+    ///   `get text --all-frames` already makes).
+    pub async fn evaluate_in_frame(
+        &self,
+        script: &str,
+        frame_id: &str,
+        iframe_sessions: &HashMap<String, String>,
+    ) -> Result<Value, String> {
+        if let Some(oopif_session) = iframe_sessions.get(frame_id) {
+            return self.eval_in_context(script, oopif_session, None).await;
+        }
+
+        let session_id = self.active_session_id()?.to_string();
+        let ctx: Value = self
+            .client
+            .send_command(
+                "Page.createIsolatedWorld",
+                Some(json!({ "frameId": frame_id, "worldName": "chrome_use_eval" })),
+                Some(&session_id),
+            )
+            .await?;
+        let ctx_id = ctx
+            .get("executionContextId")
+            .and_then(|c| c.as_i64())
+            .ok_or_else(|| {
+                format!("Could not resolve an execution context for frame {frame_id}")
+            })?;
+        self.eval_in_context(script, &session_id, Some(ctx_id))
+            .await
+    }
+
+    /// Shared core of `eval`: build the `Runtime.evaluate` params, send on the
+    /// given session (optionally pinned to `context_id`), and unwrap the result.
+    async fn eval_in_context(
+        &self,
+        script: &str,
+        session_id: &str,
+        context_id: Option<i64>,
+    ) -> Result<Value, String> {
         // `replMode: true` lets successive `eval`s re-declare top-level
         // `let`/`const` instead of throwing "Identifier 'x' has already been
         // declared" (issue #38 — independent `eval` steps in a test suite collided
@@ -1493,18 +1557,23 @@ impl BrowserManager {
             || script.contains("Promise");
         let declares = script.contains("let ") || script.contains("const ");
         let repl_mode = declares && !mentions_async;
+        let mut params = json!({
+            "expression": script,
+            "returnByValue": true,
+            "awaitPromise": !repl_mode,
+            "replMode": repl_mode,
+        });
+        if let Some(cid) = context_id {
+            // `contextId` and `replMode` are mutually exclusive in Chrome; when we
+            // pin a frame context, drop replMode (a fresh isolated world per call
+            // can't collide on re-declared top-level bindings anyway).
+            params["replMode"] = json!(false);
+            params["awaitPromise"] = json!(true);
+            params["contextId"] = json!(cid);
+        }
         let result: EvaluateResult = self
             .client
-            .send_command_typed(
-                "Runtime.evaluate",
-                &json!({
-                    "expression": script,
-                    "returnByValue": true,
-                    "awaitPromise": !repl_mode,
-                    "replMode": repl_mode,
-                }),
-                Some(&session_id),
-            )
+            .send_command_typed("Runtime.evaluate", &params, Some(session_id))
             .await?;
 
         if let Some(ref details) = result.exception_details {
@@ -3669,6 +3738,20 @@ mod tests {
     fn test_to_ai_friendly_error_unknown() {
         let msg = "Some custom error message";
         assert_eq!(to_ai_friendly_error(msg), msg);
+    }
+
+    #[test]
+    fn test_to_ai_friendly_error_stale_target_is_actionable() {
+        // The cryptic relay/CDP stale-target text (issue #58) becomes recovery
+        // guidance: re-open/navigate/adopt, and an explicit note that we did NOT
+        // silently retarget (preserving the #8.1 safety contract).
+        let raw = "CDP error (Page.captureScreenshot): stale sessionId cb-tab-123 for \
+                   Page.captureScreenshot — its tab is gone (closed, navigated across processes)";
+        let m = to_ai_friendly_error(raw);
+        assert!(m.contains("navigated across processes"));
+        assert!(m.contains("open <url>") && m.contains("adopt"));
+        assert!(m.contains("did NOT") || m.contains("not silently"));
+        assert_ne!(m, raw, "should rewrite the cryptic CDP text");
     }
 
     /// Errors containing "not found" but NOT "element" should pass through unchanged.

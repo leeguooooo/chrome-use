@@ -152,11 +152,30 @@ most drops you never even see. If a command *does* surface the error:
 3. **Never** tell the user to quit/restart Chrome with `--remote-debugging-port`
    to recover a dropped relay — that throws away their tabs and defeats the
    extension path. (The old error text said this; it no longer does.)
-4. **Can't restore the browser at all?** Don't stall waiting for a screenshot —
+4. `chrome-use reconnect` is a friendly alias for `extension connect` — re-binds
+   the session to the running Chrome without any reinstall.
+
+> **Don't serialize agents to dodge fragility.** Relay drops are transient and
+> self-heal; they are *not* a sign that the shared browser can't be driven
+> concurrently. Concurrent multi-agent **is** supported — each `--session` gets
+> its own tab group and drives only its own tabs (see *Strict multi-agent
+> isolation* below). Give each agent a distinct `--session` and let them run in
+> parallel; you don't need to run them one at a time.
+5. **Can't restore the browser at all?** Don't stall waiting for a screenshot —
    **fall back to non-visual verification**: `get text` / `eval` / read the
    deployed page over `curl`/`WebFetch`. Confirming a change via the DOM/HTML or
    the live URL is a *correct* result, not a failure. Reserve screenshots for a
    genuine visual check you report to the user.
+
+> **After an OAuth/SSO redirect, a read may fail "its tab is gone / stale
+> sessionId".** A login handoff (GitHub/Google OAuth, SSO) navigates the tab
+> *across processes*, which orphans the old session. `navigate`/`open`
+> auto-reattach, but reads (`snapshot`/`screenshot`/`eval`/`get`) deliberately
+> **fail loudly** rather than silently retarget onto the wrong tab. Recovery is
+> what the error now tells you: re-`open <url>` / `navigate <url>` the page (it
+> re-attaches to a fresh tab), or `adopt <url-substring>` the post-redirect tab,
+> then re-`snapshot`. Don't treat the stale error as fatal — it's a one-command
+> recovery.
 
 Each `--session` that connects gets its **own colored Chrome tab group** (named
 after the session) and drives only its own tabs — multiple agents share the one
@@ -374,6 +393,14 @@ So: when text looks missing or wrong, you don't have to guess — just
 holds what), run `chrome-use frames`. To **cut boilerplate** (global nav/header/
 footer, "related items" sidebars), use `chrome-use get text --main`. If content
 is lazy-loaded, `scroll` it into view first, then read.
+
+**`eval` runs in the MAIN frame by default.** It does not silently bind to
+whichever frame Chrome returns — a bare `eval` always targets the top document.
+To run inside a child frame (e.g. a cross-origin Google account-picker), pass
+`--frame <index|url-substring|@ref|css-selector>` (indices/urls come from
+`chrome-use frames`): `eval --frame accounts.google.com "location.href"`.
+Cross-origin (out-of-process) frames run in their own **main world**; same-process
+in-page frames run in an **isolated world** (DOM readable, page JS globals not).
 
 **Closed shadow DOM.** Some injected UI (browser-extension debug panels, web
 components) renders into a *closed* shadow root that `eval`/`innerText` cannot

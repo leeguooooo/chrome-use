@@ -993,6 +993,16 @@ fn main() {
         return;
     }
 
+    // `reconnect` is a friendly alias for `extension connect` (issue #58): re-bind
+    // the session to the running Chrome's relay without any reinstall. Rewrite it
+    // into `extension connect …` (preserving any flags like --silent) and let the
+    // block below handle it.
+    if clean.first().map(|s| s.as_str()) == Some("reconnect") {
+        let mut rebuilt = vec!["extension".to_string(), "connect".to_string()];
+        rebuilt.extend(clean.into_iter().skip(1));
+        clean = rebuilt;
+    }
+
     // Handle extension: native-messaging host install/status, and
     // `extension connect` which attaches to the live relay (auto-discovers the
     // CDP url the host wrote) by rewriting into the normal `connect <url>` flow.
