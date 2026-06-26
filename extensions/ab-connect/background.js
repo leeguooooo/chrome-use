@@ -336,6 +336,21 @@ function tabIdFromSession(sessionId) {
   return m ? Number(m[1]) : null
 }
 
+// A chrome.debugger.attach failure that will NEVER succeed for this tab, no
+// matter how long we wait: the tab is another extension's page, a chrome:// page,
+// or otherwise off-limits to us. Distinct from the transient "detached mid
+// process-swap" errors (handled in sendCdpToTab), which DO clear on retry — so we
+// match the specific permanent phrases, not a bare "cannot access". Used to bail
+// out of the reattach retry loops instead of burning 6 attempts (and 6 warnings)
+// on a page we can't touch (issue: reattach warning storm on multi-extension
+// Chrome).
+function isPermanentAttachError(e) {
+  const m = String((e && e.message) || e)
+  return /different extension|Cannot access a chrome:\/\/|must request permission|Cannot access contents|Cannot attach to (this|the) target/i.test(
+    m,
+  )
+}
+
 // Ensure the debugger is attached to a `cb-tab-<tabId>` session's tab, re-attaching
 // across the transient window of a process swap (with a couple of short retries).
 // Returns the tabId on success, or null when the tab is genuinely gone
@@ -351,7 +366,10 @@ async function recoverSessionTab(sessionId) {
       try {
         await attachTab(tabId)
         if (tabs.has(tabId)) return tabId
-      } catch {
+      } catch (e) {
+        // Permanently off-limits (other extension's page etc.) — stop the tabId
+        // fast-path and let the stable-targetId path below try a different tab.
+        if (isPermanentAttachError(e)) break
         // mid-swap: tab exists but isn't attachable yet — back off and retry.
       }
       await new Promise((r) => setTimeout(r, 120 + i * 150))
@@ -378,7 +396,10 @@ async function recoverSessionTab(sessionId) {
               sessionToTab.set(sessionId, t.tabId) // alias dead session -> live tab
               return t.tabId
             }
-          } catch {
+          } catch (e) {
+            // The tab hosting our target is a page we can never attach to — no
+            // amount of waiting fixes that, so give up the recovery now.
+            if (isPermanentAttachError(e)) return null
             // not attachable yet — keep waiting for the swap to settle.
           }
         }
@@ -689,6 +710,11 @@ chrome.debugger.onDetach.addListener((source, reason) =>
         await attachTab(tabId)
         return
       } catch (e) {
+        // The tab became a page we can never attach to (another extension's page,
+        // chrome://, restricted). Retrying can't help — bail quietly instead of
+        // logging the same failure 6×. (`eligible()` filters most of these, but a
+        // tab can navigate into one between our check and the attach.)
+        if (isPermanentAttachError(e)) return
         console.warn(`ab-connect: reattach attempt ${i + 1} for tab ${tabId} failed:`, e)
       }
     }
