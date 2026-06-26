@@ -110,6 +110,40 @@ async function tabScopeHints(tabId) {
   return { openerTargetId, abGroup }
 }
 
+// Resolve a stable identifier for the Chrome profile this worker runs in, for
+// the `hello` handshake (issue #60). `profileId` is a UUID minted once and kept
+// in this profile's chrome.storage.local — distinct per profile, no permission
+// needed. `profileEmail` is included only when the optional `identity` permission
+// is present and the profile is signed in; otherwise it's omitted (never throws).
+async function buildHelloIdentity() {
+  const extra = {}
+  try {
+    const KEY = 'ab_profile_id'
+    const got = await chrome.storage.local.get(KEY)
+    let id = got && got[KEY]
+    if (!id) {
+      id =
+        (crypto && crypto.randomUUID && crypto.randomUUID()) ||
+        'p-' + Math.abs(Date.now()).toString(36)
+      await chrome.storage.local.set({ [KEY]: id })
+    }
+    extra.profileId = id
+  } catch {}
+  try {
+    if (chrome.identity && chrome.identity.getProfileUserInfo) {
+      const info = await new Promise((resolve) => {
+        try {
+          chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' }, resolve)
+        } catch {
+          resolve(null)
+        }
+      })
+      if (info && info.email) extra.profileEmail = info.email
+    }
+  } catch {}
+  return extra
+}
+
 function postToHost(msg) {
   try {
     if (port) port.postMessage(msg)
@@ -230,12 +264,23 @@ function connectHost() {
     // reconnect. Keep chrome.debugger attached so reconnect is cheap.
     for (const tabId of tabs.keys()) setBadge(tabId, 'connecting')
   })
-  // Report our version so the host can tell the CLI/`doctor` which extension
-  // build is live (otherwise the extension version is a black box — the user
-  // can't tell they're on an old one). Best-effort; ignored by older hosts.
-  try {
-    postToHost({ method: 'hello', version: chrome.runtime.getManifest().version })
-  } catch {}
+  // Report our version + a stable per-profile id so the host can tell the
+  // CLI/`doctor` which extension build is live AND which Chrome profile the relay
+  // is bound to. With many profiles, "logged out" on a site is otherwise
+  // indistinguishable from "wrong profile" — the id removes that ambiguity
+  // (issue #60). The id is a UUID persisted in this profile's chrome.storage.local
+  // (no extra permission). If the profile is signed into Chrome AND the optional
+  // `identity` permission is granted, we also include the account email; absent
+  // that, email is simply omitted. Best-effort; ignored by older hosts.
+  void buildHelloIdentity().then((extra) => {
+    try {
+      postToHost({
+        method: 'hello',
+        version: chrome.runtime.getManifest().version,
+        ...extra,
+      })
+    } catch {}
+  })
   // Tell the daemon about everything we already have attached, then attach
   // anything new.
   void reannounceAttachedTabs()
