@@ -159,6 +159,7 @@ pub fn run_connect(args: &[String], json: bool) {
     let relay_url = relay_url();
     let live_extension_version = relay_ext_version();
     let expected_extension_version = env!("AB_CONNECT_VERSION");
+    let driving_profile = relay_ext_profile();
     if json {
         println!(
             "{}",
@@ -179,6 +180,8 @@ pub fn run_connect(args: &[String], json: bool) {
                     "relayUp": relay_url.is_some(),
                     "relayUrl": relay_url,
                     "chromeExtension": extension_status,
+                    "drivingProfileId": driving_profile.as_ref().map(|(id, _)| id.clone()),
+                    "drivingProfileEmail": driving_profile.as_ref().and_then(|(_, e)| e.clone()),
                 }
             }))
             .unwrap_or_default()
@@ -201,6 +204,20 @@ pub fn run_connect(args: &[String], json: bool) {
             println!("✓ extension relay (__nm-host): up");
         } else {
             println!("  extension relay (__nm-host): not currently connected");
+        }
+        // Which Chrome profile is the relay bound to (issue #60). With many
+        // profiles, this disambiguates a "logged out" result (wrong profile vs.
+        // genuinely not logged in).
+        match &driving_profile {
+            Some((id, Some(email))) => println!("✓ driving Chrome profile: {email} ({id})"),
+            Some((id, None)) => println!(
+                "✓ driving Chrome profile id: {id} \
+                 (grant the extension the optional `identity` permission to also see the email)"
+            ),
+            None => println!(
+                "  driving Chrome profile: unknown (extension predates profile reporting, or \
+                 hasn't sent hello yet)"
+            ),
         }
         if let Some(status) = extension_status {
             print_chrome_extension_status(&status, expected_extension_version);
@@ -780,6 +797,42 @@ pub fn relay_ext_version() -> Option<String> {
     }
 }
 
+/// Sidecar recording WHICH Chrome profile the relay is bound to, written by the
+/// host from the extension's `hello` (issue #60). With many profiles, "logged
+/// out" on a site is otherwise indistinguishable from "wrong profile entirely" —
+/// this lets `doctor`/`extension status` name the driving profile. Sibling of
+/// `relay-cdp-url`.
+fn relay_ext_profile_path() -> PathBuf {
+    relay_url_path().with_file_name("relay-ext-profile")
+}
+
+/// The Chrome profile the relay is currently driving, as `(id, email)` learned
+/// from the extension's `hello`. `id` is a stable per-profile UUID (always
+/// present on a new-enough extension); `email` is the signed-in account, only
+/// present when the profile granted the optional `identity` permission. `None`
+/// when no profile-aware extension has connected yet.
+pub fn relay_ext_profile() -> Option<(String, Option<String>)> {
+    let s = std::fs::read_to_string(relay_ext_profile_path()).ok()?;
+    parse_ext_profile(&s)
+}
+
+/// Parse the `relay-ext-profile` sidecar JSON into `(id, email)`. Pure, so the
+/// shape can be unit-tested without touching the filesystem. Returns `None` when
+/// the id is absent/blank; an empty/missing email becomes `None`.
+fn parse_ext_profile(s: &str) -> Option<(String, Option<String>)> {
+    let v: serde_json::Value = serde_json::from_str(s.trim()).ok()?;
+    let id = v.get("id").and_then(|x| x.as_str())?.trim().to_string();
+    if id.is_empty() {
+        return None;
+    }
+    let email = v
+        .get("email")
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Some((id, email))
+}
+
 /// Hidden `__nm-host` mode: launched by Chrome for the ab-connect extension.
 ///
 /// Bridges the extension (native-messaging stdio, envelope protocol) to a local
@@ -908,6 +961,15 @@ async fn nm_host_main() {
             if let Some(ver) = v.get("version").and_then(|x| x.as_str()) {
                 let _ = std::fs::write(relay_ext_version_path(), ver);
             }
+            // Record which profile is driving (issue #60), if the extension
+            // reported one. Stored as JSON so `email` can be added when present.
+            if let Some(id) = v.get("profileId").and_then(|x| x.as_str()) {
+                let rec = serde_json::json!({
+                    "id": id,
+                    "email": v.get("profileEmail").and_then(|x| x.as_str()),
+                });
+                let _ = std::fs::write(relay_ext_profile_path(), rec.to_string());
+            }
             continue;
         }
         let outs = {
@@ -943,6 +1005,7 @@ async fn nm_host_main() {
     nm_log("[nm-host] stdin EOF — Chrome closed the port");
     let _ = std::fs::remove_file(relay_url_path());
     let _ = std::fs::remove_file(relay_ext_version_path());
+    let _ = std::fs::remove_file(relay_ext_profile_path());
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1026,6 +1089,33 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn parse_ext_profile_reads_id_and_optional_email() {
+        // id + email present
+        assert_eq!(
+            parse_ext_profile(r#"{"id":"uuid-1","email":"me@example.com"}"#),
+            Some(("uuid-1".to_string(), Some("me@example.com".to_string())))
+        );
+        // id only (no identity permission) → email None
+        assert_eq!(
+            parse_ext_profile(r#"{"id":"uuid-2","email":null}"#),
+            Some(("uuid-2".to_string(), None))
+        );
+        assert_eq!(
+            parse_ext_profile(r#"{"id":"uuid-3"}"#),
+            Some(("uuid-3".to_string(), None))
+        );
+        // blank email is treated as absent
+        assert_eq!(
+            parse_ext_profile(r#"{"id":"uuid-4","email":"  "}"#),
+            Some(("uuid-4".to_string(), None))
+        );
+        // missing/blank id → None; malformed → None
+        assert_eq!(parse_ext_profile(r#"{"email":"x@y.z"}"#), None);
+        assert_eq!(parse_ext_profile(r#"{"id":"   "}"#), None);
+        assert_eq!(parse_ext_profile("not json"), None);
+    }
 
     #[test]
     fn store_url_points_at_the_published_store_build_not_the_dev_id() {

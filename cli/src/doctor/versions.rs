@@ -75,6 +75,28 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         }
     }
 
+    // Driving Chrome profile — with many profiles, the relay binds to whichever
+    // profile's extension worker connected; naming it disambiguates a "logged
+    // out" result (wrong profile vs. genuinely not logged in) (issue #60).
+    match connect::relay_ext_profile() {
+        Some((id, Some(email))) => checks.push(Check::new(
+            "relay.profile",
+            category,
+            Status::Info,
+            format!("driving Chrome profile: {email} ({id})"),
+        )),
+        Some((id, None)) => checks.push(Check::new(
+            "relay.profile",
+            category,
+            Status::Info,
+            format!(
+                "driving Chrome profile id: {id} (grant the extension's optional `identity` \
+                 permission to also see the account email)"
+            ),
+        )),
+        None => {}
+    }
+
     // Skill — ships inside the same release artifact as the binary, so it's
     // version-locked here. Copies made elsewhere via `skills add` aren't.
     checks.push(Check::new(
