@@ -241,6 +241,8 @@ function connectHost() {
   void reannounceAttachedTabs()
   void attachAllTabs()
   notifyConnChange(true)
+  // Start the proactive heartbeat so the worker stays alive while paired.
+  scheduleKeepalivePing()
 }
 
 async function onHostMessage(msg) {
@@ -678,14 +680,38 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true
 })
 
-// MV3 service workers get suspended; an alarm wakes us to keep the host link
-// and badges fresh.
+// Hot-path keepalive: while a native-messaging port is open, post a tiny ping
+// every 20s. Each port message resets the MV3 service-worker idle timer, so the
+// worker never reaches the ~30s idle-kill while we're paired and the relay stays
+// live — instead of dropping during any quiet stretch (no CDP traffic) and making
+// the next command hang until a reconnect. The setTimeout chain only survives as
+// long as the worker does, which is exactly what the ping guarantees; on a cold
+// worker restart the alarm below re-runs connectHost() which restarts this loop.
+const KEEPALIVE_PING_MS = 20000
+let keepaliveTimer = null
+function scheduleKeepalivePing() {
+  if (keepaliveTimer) clearTimeout(keepaliveTimer)
+  keepaliveTimer = setTimeout(() => {
+    keepaliveTimer = null
+    if (!port) return // disconnected; connectHost() will restart the loop
+    postToHost({ method: 'ping' }) // host pongs (or ignores); the send is what matters
+    scheduleKeepalivePing()
+  }, KEEPALIVE_PING_MS)
+}
+
+// Cold-restart backstop. MV3 service workers get suspended; an alarm wakes us to
+// reconnect the host link and restart the heartbeat. NOTE: chrome.alarms clamps
+// sub-minute periods (effective floor ~30s+), so the alarm alone can't outpace the
+// 30s idle-kill — that's why the 20s ping above is the real keeper, not this.
 chrome.alarms.create('keepalive', { periodInMinutes: 0.4 })
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== 'keepalive') return
   void whenReady(() => {
     if (!port) connectHost()
-    else void attachAllTabs()
+    else {
+      void attachAllTabs()
+      scheduleKeepalivePing()
+    }
   })
 })
 
