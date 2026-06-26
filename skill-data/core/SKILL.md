@@ -335,6 +335,15 @@ Each line is `- <role> "<accessible name>" [<attrs>, ref=eN]`, indented by nesti
 depth. You pass the ref to commands as `@eN` (e.g. `click @e4`). Refs are
 assigned fresh on every snapshot.
 
+**Validation errors surface too.** When a form rejects a submit, the reason
+(`- alert "字数已超过 8 个字"`, `- alert "Email is required"`) is appended as
+top-level `alert` lines in `-i` mode — even when the message is a plain styled
+`<span>` (`.is-error`, `.invalid-feedback`, `[role=alert]`, `aria-live`), which
+`-i` would otherwise filter out as non-interactive. These lines are
+informational and intentionally ref-less (you read them; you don't click them).
+So if a `click` on a submit no-ops, just re-`snapshot -i` and read the `alert`
+lines instead of guessing why.
+
 For unstructured reading (no refs needed):
 
 ```bash

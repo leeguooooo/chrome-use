@@ -299,6 +299,49 @@ struct CursorElementInfo {
     hidden_input_checked: Option<String>, // "true", "false", or "mixed" (tristate)
 }
 
+/// An inline validation/error message detected via DOM scan (issue #57).
+/// Surfaced in `-i` mode where the non-interactive message node is otherwise
+/// filtered out.
+#[derive(Clone)]
+struct ErrorElement {
+    backend_node_id: Option<i64>,
+    text: String,
+}
+
+/// Pick which error messages to surface, in order. Drops any whose element
+/// already earned a ref elsewhere in the snapshot (matched by `backend_node_id`)
+/// so the same message is never listed twice, plus any exact-duplicate text.
+/// Pure so it can be unit-tested without a browser.
+fn select_error_texts(
+    error_elements: &[ErrorElement],
+    already_reffed: &std::collections::HashSet<i64>,
+) -> Vec<String> {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut texts = Vec::new();
+    for err in error_elements {
+        if let Some(bid) = err.backend_node_id {
+            if already_reffed.contains(&bid) {
+                continue;
+            }
+        }
+        if seen.insert(err.text.as_str()) {
+            texts.push(err.text.clone());
+        }
+    }
+    texts
+}
+
+/// Render a single error message as a top-level `alert` snapshot line.
+///
+/// Deliberately ref-less: the element's real ARIA role is usually `none`/generic
+/// (a styled `<span>`), so attaching a `[ref=...]` whose stored role is `alert`
+/// would make the ref-verifier reject any later use as a phantom DOM mutation.
+/// The message is informational — the agent reads it, it doesn't click it.
+fn render_error_line(text: &str) -> String {
+    let display = serde_json::to_string(text).unwrap_or_else(|_| format!("\"{}\"", text));
+    format!("- alert {}", display.replace(INVISIBLE_CHARS, ""))
+}
+
 struct RoleNameTracker {
     counts: HashMap<String, usize>,
     entries: Vec<(usize, String)>,
@@ -495,6 +538,21 @@ async fn take_snapshot_at_depth(
             .await
             .unwrap_or_default();
 
+    // Collect inline validation/error messages so `-i` (interactive-only) mode
+    // still surfaces *why* a submit was rejected (issue #57). These are usually
+    // non-interactive styled spans (`.is-error`, `[role=alert]`, `aria-live`
+    // regions) that `-i` otherwise filters out, leaving the agent blind exactly
+    // when a form fails. Only at depth 0 (main frame): the scan runs on the main
+    // session, so running it during iframe recursion would re-surface the same
+    // main-frame errors at every nested level.
+    let error_elements: Vec<ErrorElement> = if options.interactive && depth == 0 {
+        find_error_elements(client, session_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     promote_hidden_inputs(&mut tree_nodes, &cursor_elements);
 
     for (idx, node) in tree_nodes.iter().enumerate() {
@@ -557,6 +615,20 @@ async fn take_snapshot_at_depth(
             }
         }
     }
+
+    // Render inline validation/error messages as top-level `alert` lines (issue
+    // #57), appended after the tree so the agent always sees *why* a submit was
+    // rejected even in `-i` mode. Deduped against elements that already earned a
+    // ref (e.g. an alert Chrome surfaced as an AX node) so nothing lists twice.
+    let already_reffed: std::collections::HashSet<i64> = tree_nodes
+        .iter()
+        .filter(|n| n.has_ref)
+        .filter_map(|n| n.backend_node_id)
+        .collect();
+    let error_lines: Vec<String> = select_error_texts(&error_elements, &already_reffed)
+        .iter()
+        .map(|text| render_error_line(text))
+        .collect();
 
     ref_map.set_next_ref_num(next_ref);
 
@@ -702,6 +774,19 @@ async fn take_snapshot_at_depth(
                     output.insert_str(line_end + 1, &indented_child);
                 }
             }
+        }
+    }
+
+    // Append inline validation/error messages as top-level `alert` lines (issue
+    // #57). Done after iframe recursion so the byte-offset insertion above isn't
+    // disturbed, and before compaction so the `[ref=...]` markers survive `-c`.
+    if !error_lines.is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        for line in &error_lines {
+            output.push_str(line);
+            output.push('\n');
         }
     }
 
@@ -1040,6 +1125,218 @@ async fn find_cursor_interactive_elements(
     Ok(map)
 }
 
+/// CSS selector union for inline validation/error message containers. Combines
+/// ARIA semantics (`role=alert`, live regions, `aria-invalid`) with the common
+/// class-name conventions frameworks use for field errors. Kept in one place so
+/// the JS scan and the leaf-match test below agree.
+const ERROR_SELECTOR: &str = "[role=\"alert\"],[aria-live=\"assertive\"],[aria-live=\"polite\"],[aria-invalid=\"true\"],.is-error,.is-invalid,.invalid-feedback,.field-error,.form-error,.error-message,.errorMessage,.help-block,[class*=\"error\"],[class*=\"invalid\"]";
+
+/// Scan the page for inline validation/error messages (issue #57).
+///
+/// `snapshot -i` keeps only interactive nodes, but a rejected submit usually
+/// reports its reason through a non-interactive styled span (`.is-error`, a
+/// `[role=alert]`, an `aria-live` region) that `-i` filters out — the agent then
+/// sees the field and a disabled submit but no clue why. This finds those
+/// message elements directly in the DOM (independent of how the AX tree happens
+/// to represent them) so the snapshot can surface them.
+///
+/// To stay precise it keeps only *leaf* matches (no matching descendant), skips
+/// containers that wrap form controls (page-level error regions, not a field's
+/// message), skips hidden/zero-size nodes and empty/over-long text, and dedupes
+/// identical messages.
+async fn find_error_elements(
+    client: &CdpClient,
+    session_id: &str,
+) -> Result<Vec<ErrorElement>, String> {
+    let js = format!(
+        r#"
+(function() {{
+    var results = [];
+    if (!document.body) return results;
+    var SEL = {sel};
+    var seen = {{}};
+    var matched = document.body.querySelectorAll(SEL);
+    for (var i = 0; i < matched.length; i++) {{
+        var el = matched[i];
+        if (el.closest && el.closest('[hidden], [aria-hidden="true"]')) continue;
+        // Keep the most specific match: skip if a descendant also matches.
+        if (el.querySelector(SEL)) continue;
+        // A field's error message doesn't wrap controls; skip big regions that do.
+        if (el.querySelector('input, button, select, textarea, a')) continue;
+        var st = getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') continue;
+        var rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+        var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!text) continue;
+        if (text.length > 200) text = text.slice(0, 200) + '…';
+        if (seen[text]) continue;
+        seen[text] = 1;
+        el.setAttribute('data-__ab-err', String(results.length));
+        results.push({{ text: text }});
+    }}
+    return results;
+}})()
+"#,
+        sel = serde_json::to_string(ERROR_SELECTOR).unwrap_or_default()
+    );
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: js,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+
+    let elements: Vec<Value> = result
+        .result
+        .value
+        .and_then(|v| serde_json::from_value::<Vec<Value>>(v).ok())
+        .unwrap_or_default();
+
+    if elements.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let idx_to_backend = resolve_tagged_backend_ids(client, session_id, "data-__ab-err").await;
+
+    Ok(elements
+        .iter()
+        .enumerate()
+        .filter_map(|(i, elem)| {
+            let text = elem
+                .get("text")
+                .and_then(|v| v.as_str())?
+                .trim()
+                .to_string();
+            if text.is_empty() {
+                return None;
+            }
+            Some(ErrorElement {
+                backend_node_id: idx_to_backend.get(&i).copied(),
+                text,
+            })
+        })
+        .collect())
+}
+
+/// Resolve the `backendNodeId` for every element previously tagged with a
+/// numeric-indexed data attribute (e.g. `data-__ab-err="3"`), then strip the
+/// attribute. Returns a map from that index to its `backendNodeId`.
+///
+/// Mirrors the batch-resolution dance used by the cursor scan: `DOM.getDocument`
+/// for the root, one `DOM.querySelectorAll` to find tagged nodes, concurrent
+/// `DOM.describeNode` calls to read each backendNodeId + index, then a cleanup
+/// pass. On any CDP failure it returns an empty map (best-effort: callers still
+/// surface the text, just without a clickable ref).
+async fn resolve_tagged_backend_ids(
+    client: &CdpClient,
+    session_id: &str,
+    attr: &str,
+) -> HashMap<usize, i64> {
+    let mut idx_to_backend: HashMap<usize, i64> = HashMap::new();
+
+    let Ok(doc) = client
+        .send_command(
+            "DOM.getDocument",
+            Some(serde_json::json!({ "depth": 0 })),
+            Some(session_id),
+        )
+        .await
+    else {
+        return idx_to_backend;
+    };
+    let Some(root_node_id) = doc
+        .get("root")
+        .and_then(|r| r.get("nodeId"))
+        .and_then(|v| v.as_i64())
+    else {
+        return idx_to_backend;
+    };
+
+    let Ok(query_result) = client
+        .send_command(
+            "DOM.querySelectorAll",
+            Some(serde_json::json!({
+                "nodeId": root_node_id,
+                "selector": format!("[{}]", attr),
+            })),
+            Some(session_id),
+        )
+        .await
+    else {
+        return idx_to_backend;
+    };
+
+    let node_ids: Vec<i64> = query_result
+        .get("nodeIds")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+
+    let describe_futures: Vec<_> = node_ids
+        .iter()
+        .map(|&node_id| {
+            client.send_command(
+                "DOM.describeNode",
+                Some(serde_json::json!({ "nodeId": node_id })),
+                Some(session_id),
+            )
+        })
+        .collect();
+    let describe_results = futures_util::future::join_all(describe_futures).await;
+
+    for desc in describe_results.into_iter().flatten() {
+        let backend_id = desc
+            .get("node")
+            .and_then(|n| n.get("backendNodeId"))
+            .and_then(|v| v.as_i64());
+        let idx = desc
+            .get("node")
+            .and_then(|n| n.get("attributes"))
+            .and_then(|a| a.as_array())
+            .and_then(|attrs| {
+                // attributes is a flat [name, value, name, value, ...] array.
+                attrs
+                    .iter()
+                    .enumerate()
+                    .find(|(_, v)| v.as_str() == Some(attr))
+                    .and_then(|(i, _)| attrs.get(i + 1))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<usize>().ok())
+            });
+        if let (Some(bid), Some(idx)) = (backend_id, idx) {
+            idx_to_backend.insert(idx, bid);
+        }
+    }
+
+    // Strip the data attributes we injected.
+    let cleanup_js = format!(
+        r#"(function(){{ var els = document.querySelectorAll('[{attr}]'); for (var i = 0; i < els.length; i++) els[i].removeAttribute('{attr}'); return els.length; }})()"#,
+    );
+    if let Err(e) = client
+        .send_command_typed::<EvaluateParams, EvaluateResult>(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: cleanup_js,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+    {
+        eprintln!("[chrome-use] Warning: failed to clean up {attr} attributes: {e}");
+    }
+
+    idx_to_backend
+}
+
 /// Promote LabelText/generic nodes that wrap a hidden radio/checkbox input.
 /// When a `<label>` contains a `display:none` `<input type="radio">`, Chrome excludes
 /// the input from the AX tree entirely, leaving only the label with role="LabelText"
@@ -1361,6 +1658,7 @@ fn is_interactive_line(line: &str) -> bool {
         "clickable",
         "focusable",
         "editable",
+        "alert",
     ];
     let t = line.trim_start();
     // Lines look like `- button "Label" [ref=e1]`; match the role token after the
@@ -1752,6 +2050,74 @@ mod tests {
 
         assert_eq!(nodes[0].role, "radio");
         assert_eq!(nodes[0].name, "AX Name"); // preserved, not overwritten
+    }
+
+    // -----------------------------------------------------------------------
+    // Inline validation/error surfacing in `-i` mode (issue #57)
+    // -----------------------------------------------------------------------
+
+    fn err(text: &str, backend_node_id: Option<i64>) -> ErrorElement {
+        ErrorElement {
+            backend_node_id,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_select_error_texts_preserves_order() {
+        let elems = vec![
+            err("字数已超过 8 个字", Some(10)),
+            err("Required", Some(11)),
+        ];
+        let texts = select_error_texts(&elems, &std::collections::HashSet::new());
+        assert_eq!(texts, vec!["字数已超过 8 个字", "Required"]);
+    }
+
+    #[test]
+    fn test_select_error_texts_dedupes_already_reffed() {
+        // An error element whose node already earned a ref (e.g. an alert Chrome
+        // surfaced as an AX node, or a clickable error) must not list twice.
+        let elems = vec![err("already shown", Some(10)), err("new error", Some(11))];
+        let already: std::collections::HashSet<i64> = [10].into_iter().collect();
+        let texts = select_error_texts(&elems, &already);
+        assert_eq!(texts, vec!["new error"]);
+    }
+
+    #[test]
+    fn test_select_error_texts_dedupes_identical_text() {
+        // Two distinct nodes rendering the same message collapse to one line.
+        let elems = vec![err("Required", Some(10)), err("Required", Some(11))];
+        let texts = select_error_texts(&elems, &std::collections::HashSet::new());
+        assert_eq!(texts, vec!["Required"]);
+    }
+
+    #[test]
+    fn test_select_error_texts_keeps_messages_without_backend_id() {
+        // A message we couldn't resolve a backendNodeId for is still surfaced
+        // (best-effort: showing the text beats going blind).
+        let elems = vec![err("no backend", None)];
+        let texts = select_error_texts(&elems, &std::collections::HashSet::new());
+        assert_eq!(texts, vec!["no backend"]);
+    }
+
+    #[test]
+    fn test_render_error_line_format() {
+        let line = render_error_line("字数已超过 8 个字");
+        assert_eq!(line, "- alert \"字数已超过 8 个字\"");
+        // alert lines must read as interactive so compaction never drops them.
+        assert!(is_interactive_line(&line));
+    }
+
+    #[test]
+    fn test_render_error_line_strips_invisible_chars() {
+        let line = render_error_line("error\u{200B}text");
+        assert_eq!(line, "- alert \"errortext\"");
+    }
+
+    #[test]
+    fn test_render_error_line_escapes_quotes() {
+        let line = render_error_line("say \"hi\"");
+        assert_eq!(line, "- alert \"say \\\"hi\\\"\"");
     }
 
     #[test]
