@@ -1,8 +1,19 @@
 # agent-browser
 
-## 0.31.0
+## 0.31.1
 
 <!-- release:start -->
+### Bug Fixes
+
+- Fixed the **React renderer** so it picks the react-dom renderer instead of hardcoding renderer id 1, which prevented reading an empty tree on Next.js 16.3 Turbopack (#1491)
+
+### Contributors
+
+- @gaojude
+<!-- release:end -->
+
+## 0.31.0
+
 ### New Features
 
 - **Restore workflow** - Added `--restore`, `--restore-save`, restore validation flags, worktree-scoped `session id`, `session info`, and `--namespace` so agent runs can use stable, isolated, automatically restored browser state without managing state files by hand (#1486)
@@ -18,7 +29,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.30.1
 
