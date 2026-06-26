@@ -2794,9 +2794,162 @@ async fn handle_evaluate(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
         .and_then(|v| v.as_str())
         .ok_or("Missing 'script' parameter")?;
 
-    let result = mgr.evaluate(script, None).await?;
+    // `--frame <index|url-substring|@ref|css-selector>` (issue #58): run in that
+    // frame's context instead of the main frame. No flag → main frame (unchanged).
+    let result = match cmd.get("frame").and_then(|v| v.as_str()) {
+        Some(spec) => {
+            let frame_id =
+                resolve_frame_spec(mgr, &state.ref_map, &state.iframe_sessions, spec).await?;
+            mgr.evaluate_in_frame(script, &frame_id, &state.iframe_sessions)
+                .await?
+        }
+        None => mgr.evaluate(script, None).await?,
+    };
     let url = mgr.get_url().await.unwrap_or_default();
     Ok(json!({ "result": result, "origin": url }))
+}
+
+/// Resolve an `eval --frame` spec to a frameId. Accepts (in precedence order):
+/// a numeric index into `chrome-use frames`, an `@ref`/CSS selector pointing at an
+/// `<iframe>`, or a URL substring matched against the live frame list.
+async fn resolve_frame_spec(
+    mgr: &BrowserManager,
+    ref_map: &super::element::RefMap,
+    iframe_sessions: &HashMap<String, String>,
+    spec: &str,
+) -> Result<String, String> {
+    let session_id = mgr.active_session_id()?.to_string();
+
+    // 1. Numeric index into the `frames` listing.
+    if let Ok(idx) = spec.parse::<usize>() {
+        let frames =
+            super::element::collect_all_frames_text(&mgr.client, &session_id, iframe_sessions)
+                .await?;
+        return frames.get(idx).map(|f| f.frame_id.clone()).ok_or_else(|| {
+            format!(
+                "eval --frame {idx}: only {} frame(s) present (see `chrome-use frames`)",
+                frames.len()
+            )
+        });
+    }
+
+    // 2. @ref or CSS selector pointing at an <iframe>/<frame> element.
+    let looks_like_selector = super::element::parse_ref(spec).is_some()
+        || spec.starts_with('#')
+        || spec.starts_with('.')
+        || spec.starts_with('[');
+    if looks_like_selector {
+        if let Some(frame_id) = resolve_iframe_selector(mgr, ref_map, &session_id, spec).await? {
+            return Ok(frame_id);
+        }
+    }
+
+    // 3. URL substring against the live frame list.
+    let frames =
+        super::element::collect_all_frames_text(&mgr.client, &session_id, iframe_sessions).await?;
+    if let Some(f) = frames.iter().find(|f| f.url.contains(spec)) {
+        return Ok(f.frame_id.clone());
+    }
+
+    // Fall back to selector resolution for anything not yet matched (covers a bare
+    // tag selector like `iframe` that didn't trip the heuristic above).
+    if let Some(frame_id) = resolve_iframe_selector(mgr, ref_map, &session_id, spec).await? {
+        return Ok(frame_id);
+    }
+
+    Err(format!(
+        "eval --frame: no frame matched '{spec}' (try an index from `chrome-use frames`, a URL \
+         substring, or an iframe @ref/CSS selector)"
+    ))
+}
+
+/// Resolve a `<iframe>`/`<frame>` element (by `@ref` or CSS selector) to the
+/// frameId of the document it hosts. Returns `Ok(None)` when the selector matches
+/// nothing or a non-frame element, so the caller can fall through to other specs.
+async fn resolve_iframe_selector(
+    mgr: &BrowserManager,
+    ref_map: &super::element::RefMap,
+    session_id: &str,
+    selector: &str,
+) -> Result<Option<String>, String> {
+    let backend_node_id = if let Some(ref_id) = super::element::parse_ref(selector) {
+        match ref_map.get(&ref_id).and_then(|e| e.backend_node_id) {
+            Some(bid) => bid,
+            None => return Ok(None),
+        }
+    } else {
+        let js = format!(
+            "(() => {{ const el = document.querySelector({}); return el ? 1 : 0; }})()",
+            serde_json::to_string(selector).unwrap_or_default()
+        );
+        if mgr.evaluate(&js, None).await?.as_i64() != Some(1) {
+            return Ok(None);
+        }
+        let resolved: Value = mgr
+            .client
+            .send_command(
+                "DOM.getDocument",
+                Some(json!({ "depth": 0 })),
+                Some(session_id),
+            )
+            .await?;
+        let root = resolved
+            .get("root")
+            .and_then(|r| r.get("nodeId"))
+            .and_then(|v| v.as_i64())
+            .ok_or("DOM.getDocument returned no root")?;
+        let q: Value = mgr
+            .client
+            .send_command(
+                "DOM.querySelector",
+                Some(json!({ "nodeId": root, "selector": selector })),
+                Some(session_id),
+            )
+            .await?;
+        let node_id = q.get("nodeId").and_then(|v| v.as_i64()).unwrap_or(0);
+        if node_id == 0 {
+            return Ok(None);
+        }
+        let desc: Value = mgr
+            .client
+            .send_command(
+                "DOM.describeNode",
+                Some(json!({ "nodeId": node_id })),
+                Some(session_id),
+            )
+            .await?;
+        match desc
+            .get("node")
+            .and_then(|n| n.get("backendNodeId"))
+            .and_then(|v| v.as_i64())
+        {
+            Some(bid) => bid,
+            None => return Ok(None),
+        }
+    };
+
+    let describe: Value = mgr
+        .client
+        .send_command(
+            "DOM.describeNode",
+            Some(json!({ "backendNodeId": backend_node_id, "depth": 1 })),
+            Some(session_id),
+        )
+        .await?;
+    let node = describe.get("node");
+    let node_name = node
+        .and_then(|n| n.get("nodeName"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if node_name != "IFRAME" && node_name != "FRAME" {
+        return Ok(None);
+    }
+    Ok(node
+        .and_then(|n| n.get("contentDocument"))
+        .and_then(|cd| cd.get("frameId"))
+        .and_then(|v| v.as_str())
+        .or_else(|| node.and_then(|n| n.get("frameId")).and_then(|v| v.as_str()))
+        .map(|s| s.to_string()))
 }
 
 /// Run a site adapter: navigate to its `@meta.domain` (only if we're not already

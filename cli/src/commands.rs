@@ -1334,6 +1334,24 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
         // === Eval ===
         "eval" => {
+            // Optional leading `--frame <selector|url|index>` (issue #58): run the
+            // script in that frame's context instead of the main frame. Default
+            // (no flag) stays the main frame. Leading-only so it never eats a token
+            // from the script body.
+            let mut frame: Option<String> = None;
+            let rest: Vec<&str> = if rest.first() == Some(&"--frame") {
+                let val = rest.get(1).copied().ok_or(ParseError::InvalidValue {
+                    message: "eval --frame requires a value (CSS selector, @ref, url substring, \
+                              or frame index)"
+                        .to_string(),
+                    usage: "eval --frame <selector|url|index> <js>",
+                })?;
+                frame = Some(val.to_string());
+                rest[2..].to_vec()
+            } else {
+                rest.clone()
+            };
+
             // Check for flags: -b/--base64, --stdin, or --file <path>
             let (is_base64, is_stdin, is_file, script_parts): (bool, bool, bool, &[&str]) =
                 if rest.first() == Some(&"-b") || rest.first() == Some(&"--base64") {
@@ -1385,7 +1403,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     raw_script
                 }
             };
-            Ok(json!({ "id": id, "action": "evaluate", "script": script }))
+            let mut action = json!({ "id": id, "action": "evaluate", "script": script });
+            if let Some(f) = frame {
+                action["frame"] = Value::String(f);
+            }
+            Ok(action)
         }
 
         "site" => {
@@ -5298,6 +5320,41 @@ mod tests {
         let cmd = parse_command(&args("eval document.title"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "evaluate");
         assert_eq!(cmd["script"], "document.title");
+    }
+
+    #[test]
+    fn test_eval_no_frame_field_by_default() {
+        let cmd = parse_command(&args("eval document.title"), &default_flags()).unwrap();
+        assert!(cmd.get("frame").is_none());
+    }
+
+    #[test]
+    fn test_eval_frame_flag() {
+        let cmd = parse_command(
+            &args("eval --frame accounts.google.com location.href"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "evaluate");
+        assert_eq!(cmd["frame"], "accounts.google.com");
+        assert_eq!(cmd["script"], "location.href");
+    }
+
+    #[test]
+    fn test_eval_frame_flag_with_index_and_base64() {
+        // --frame composes with the source flags; index value preserved verbatim.
+        let cmd = parse_command(
+            &args("eval --frame 2 -b ZG9jdW1lbnQudGl0bGU="),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["frame"], "2");
+        assert_eq!(cmd["script"], "document.title");
+    }
+
+    #[test]
+    fn test_eval_frame_flag_requires_value() {
+        assert!(parse_command(&args("eval --frame"), &default_flags()).is_err());
     }
 
     #[test]

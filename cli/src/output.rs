@@ -2022,9 +2022,19 @@ Usage: chrome-use eval [options] <script>
 
 Executes JavaScript code in the browser context and returns the result.
 
+Runs in the MAIN frame by default. Use --frame to target a child frame's
+context (see `chrome-use frames` for the index/url list).
+
 Options:
   -b, --base64         Decode script from base64 (avoids shell escaping issues)
   --stdin              Read script from stdin (useful for heredocs/multiline)
+  --file <path>        Read script from a file (verbatim UTF-8; no shell mangling)
+  --frame <f>          Run in a child frame instead of the main frame. <f> is a
+                       frame index (from `chrome-use frames`), a URL substring, or
+                       an iframe @ref/CSS selector. Cross-origin (out-of-process)
+                       frames run in their own MAIN world; same-process in-page
+                       frames run in an isolated world (DOM visible, page globals
+                       not).
 
 Global Options:
   --json               Output as JSON
@@ -2035,6 +2045,8 @@ Examples:
   chrome-use eval "window.location.href"
   chrome-use eval "document.querySelectorAll('a').length"
   chrome-use eval -b "ZG9jdW1lbnQudGl0bGU="
+  chrome-use eval --frame accounts.google.com "location.href"  # into a child frame
+  chrome-use eval --frame 1 "document.body.innerText"          # frame #1 from `frames`
 
   # Read from stdin with heredoc
   cat <<'EOF' | chrome-use eval --stdin
@@ -3326,6 +3338,8 @@ Core Commands:
   snapshot                   Accessibility tree with refs (for AI)
   eval <js>                  Run JavaScript
   connect <port|url>         Connect to browser via CDP
+  reconnect                  Re-bind to the running Chrome's relay (alias for
+                             `extension connect`) — recover a dropped relay, no reinstall
   keep                       Leave the active tab for the user — exempt it from
                              auto-close/idle cleanup + remove it from the session
                              tab group (so scratch tabs get cleaned, this one stays)
