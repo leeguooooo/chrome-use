@@ -414,7 +414,27 @@ in-page frames run in an **isolated world** (DOM readable, page JS globals not).
 components) renders into a *closed* shadow root that `eval`/`innerText` cannot
 read. `chrome-use get text --pierce` reads through closed shadow roots and child
 documents via the CDP DOM tree — use it when content is clearly on screen (you
-see it in a screenshot) but `get text`/`eval` come back empty.
+see it in a screenshot) but `get text`/`eval` come back empty. Good news for
+*clicking*: `snapshot -i` is built from the accessibility tree, which **already
+pierces closed shadow roots** — a closed-shadow `<button>` / `[role=button]`
+shows up as a normal `@ref`. So shadow-rendered controls with a11y semantics are
+clickable the usual way; only a bare non-semantic clickable `<div>` inside a
+*closed* root can slip past both the AX tree and the cursor-element scan.
+
+**Canvas / WebGL UIs (game boards, voice-room mic seats, map tiles, design
+canvases).** These paint to a `<canvas>` — there is **no DOM node and no
+accessibility node** behind what you see, so `snapshot`/`find`/`eval
+querySelector` will never return a ref for them. This is a hard limitation, not a
+missing feature. To work with them:
+- **Read** the rendered pixels with `chrome-use canvas list` then `chrome-use
+  canvas capture [selector] <file>` (extracts the canvas bitmap), or a normal
+  `screenshot` of the region — then *you* interpret it.
+- **Act** by coordinate: compute the target point and `chrome-use click <x> <y>`
+  (or `box @ref` on a container to get its CSS-px box first). Coordinates are the
+  *correct* tool here — the snapshot-first rule explicitly carves out canvas.
+- On the **relay**, a coordinate click can drift onto the user's foreground tab;
+  prefer a `--launch`/owned tab for heavy canvas coordinate work, or confirm the
+  underlying state via the app's backend/API instead of driving the canvas.
 
 ## Interacting
 
