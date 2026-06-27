@@ -370,6 +370,17 @@ fn is_stale_target_error(error: &str) -> bool {
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     let lower = error.to_lowercase();
+    // Top-level `await` in `eval` fails with a bare "await is not defined" /
+    // "await is only valid in async" — unhelpful. Point at the wrapper (issue #65).
+    if lower.contains("await is not defined")
+        || lower.contains("await is only valid")
+        || (lower.contains("unexpected") && lower.contains("await"))
+    {
+        return format!(
+            "{error}\nHint: `eval` has no top-level `await` — wrap async code as \
+             `(async () => {{ /* await … */ }})()` (the promise is awaited and its value returned)."
+        );
+    }
     // A read (snapshot/screenshot/eval/get) hit a session whose target is gone —
     // typically a cross-process navigation like an OAuth redirect (issue #58).
     // `navigate` auto-reattaches, but reads deliberately fail loudly rather than
@@ -3738,6 +3749,19 @@ mod tests {
     fn test_to_ai_friendly_error_unknown() {
         let msg = "Some custom error message";
         assert_eq!(to_ai_friendly_error(msg), msg);
+    }
+
+    #[test]
+    fn test_to_ai_friendly_error_top_level_await_hint() {
+        let m = to_ai_friendly_error("Evaluation error: ReferenceError: await is not defined");
+        assert!(
+            m.contains("async () =>"),
+            "should suggest the async wrapper"
+        );
+        assert!(
+            m.contains("await is not defined"),
+            "keeps the original error"
+        );
     }
 
     #[test]

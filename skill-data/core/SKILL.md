@@ -348,8 +348,16 @@ chrome-use snapshot -i -u              # include href urls on links
 chrome-use snapshot -i -c              # compact (no empty structural nodes)
 chrome-use snapshot -i -d 3            # cap depth at 3 levels
 chrome-use snapshot -s "#main"         # scope to a CSS selector
+chrome-use snapshot -i -f "SSH|端口|应用"  # keep only matching lines + ancestors (regex)
 chrome-use snapshot -i --json          # machine-readable output
 ```
+
+**Huge / truncated snapshot on a "desktop-shell" web app?** Synology DSM, NAS /
+router admin panels, ExtJS apps render many independent app windows into one
+accessibility tree, so `snapshot -i` blows past the token cap and buries the
+target controls. Don't pipe to `tail` — use **`-f/--filter <regex>`** (or `-s
+<css>` to scope to one window's container): `snapshot -i -f "SSH|端口|应用|确定"`
+keeps only the matching lines plus their ancestor context, with refs intact.
 
 Snapshot output looks like:
 

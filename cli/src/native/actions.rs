@@ -3200,6 +3200,15 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     )
     .await?;
 
+    // `--filter <regex>` (issue #65): for desktop-shell web apps (Synology DSM,
+    // NAS/router panels) one snapshot holds many app windows — keep only the
+    // matching lines + their ancestor context so the target controls aren't
+    // buried/truncated. Refs survive (assigned above, before filtering).
+    let tree = match cmd.get("filter").and_then(|v| v.as_str()) {
+        Some(pattern) if !pattern.is_empty() => snapshot::filter_tree(&tree, pattern)?,
+        _ => tree,
+    };
+
     let url = mgr.get_url().await.unwrap_or_default();
 
     let refs: serde_json::Map<String, Value> = state
