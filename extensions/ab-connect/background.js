@@ -43,6 +43,38 @@ function rememberSessionTarget(sessionId, targetId) {
 /** tab-group name -> chrome tabGroups id (best-effort cache) */
 const groupIdByName = new Map()
 
+// Tabs THIS extension owns: ones the agent created (Target.createTarget) or
+// explicitly adopted. We attach the debugger ONLY to these — never to the user's
+// own tabs — so Chrome's "started debugging this browser" banner never appears on
+// a page the user is actually working in (it only shows on attached tabs, and the
+// agent's are background tabs the user doesn't look at). Persisted in
+// chrome.storage.local so a service-worker restart re-attaches exactly these and
+// not the whole window. (Issue: banner occludes the user's foreground tab.)
+const ownedTabs = new Set()
+let ownedLoaded = false
+async function loadOwnedTabs() {
+  if (ownedLoaded) return
+  try {
+    const g = await chrome.storage.local.get('ab_owned_tabs')
+    for (const id of g.ab_owned_tabs || []) ownedTabs.add(id)
+  } catch {}
+  ownedLoaded = true
+}
+function persistOwnedTabs() {
+  try {
+    chrome.storage.local.set({ ab_owned_tabs: [...ownedTabs] })
+  } catch {}
+}
+function markOwned(tabId) {
+  if (tabId != null && !ownedTabs.has(tabId)) {
+    ownedTabs.add(tabId)
+    persistOwnedTabs()
+  }
+}
+function unmarkOwned(tabId) {
+  if (ownedTabs.delete(tabId)) persistOwnedTabs()
+}
+
 // Deterministic color per group name so a given session keeps the same color.
 const GROUP_COLORS = ['blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'grey']
 function colorForName(name) {
@@ -281,10 +313,11 @@ function connectHost() {
       })
     } catch {}
   })
-  // Tell the daemon about everything we already have attached, then attach
-  // anything new.
+  // Tell the daemon about everything we already have attached, then re-attach
+  // the tabs we own (NOT the user's tabs — that's what kept the banner off their
+  // pages).
   void reannounceAttachedTabs()
-  void attachAllTabs()
+  void reattachOwnedTabs()
   notifyConnChange(true)
   // Start the proactive heartbeat so the worker stays alive while paired.
   scheduleKeepalivePing()
@@ -297,11 +330,10 @@ async function onHostMessage(msg) {
     postToHost({ method: 'pong' })
     return
   }
-  // Daemon (re)connected — (re)attach and announce every tab so it discovers
-  // the user's existing tabs rather than racing an empty target list.
+  // Daemon (re)connected — re-announce + re-attach OUR tabs (not the user's).
   if (msg.method === 'attachAll') {
     void reannounceAttachedTabs()
-    await attachAllTabs()
+    await reattachOwnedTabs()
     return
   }
   if (typeof msg.id !== 'undefined' && msg.method === 'forwardCDPCommand') {
@@ -453,11 +485,42 @@ async function handleForwardCdpCommand(msg) {
     return { ungrouped: tabId ?? null }
   }
 
+  // On-demand adopt of a PRE-EXISTING tab (the user's own, or another session's).
+  // Since we no longer eagerly attach the user's tabs (banner!), `adopt <spec>`
+  // can't find them via the already-attached target list — so discover by
+  // chrome.tabs metadata (no debugger, no banner), and attach ONLY the one match
+  // (which announces it to the daemon and makes it ours). `spec` is a targetId or
+  // a URL substring. On no match, return the candidate URLs so the daemon can
+  // print a useful error.
+  if (method === 'ABExt.adoptByUrl') {
+    const spec = String(params?.spec || '').trim()
+    const specL = spec.toLowerCase()
+    let all = []
+    try {
+      all = await chrome.tabs.query({})
+    } catch {}
+    const candidates = all.filter((t) => eligible(t))
+    // Prefer an already-attached target whose id matches; else match a tab URL.
+    const match =
+      candidates.find((t) => tabs.get(t.id)?.targetId === spec) ||
+      candidates.find((t) => (t.url || '').toLowerCase().includes(specL))
+    if (!match || !match.id) {
+      return {
+        targetId: null,
+        candidates: candidates.map((t) => ({ url: t.url || '', title: t.title || '' })),
+      }
+    }
+    const entry = await attachTab(match.id) // attaches + announces attachedToTarget
+    markOwned(match.id)
+    return { targetId: entry.targetId, url: match.url || '', title: match.title || '' }
+  }
+
   // Browser-level Target methods that map onto chrome.tabs.
   if (method === 'Target.createTarget') {
     const url = typeof params?.url === 'string' && params.url ? params.url : 'about:blank'
     const tab = await chrome.tabs.create({ url, active: false })
     if (!tab.id) throw new Error('createTarget: no tab id')
+    markOwned(tab.id) // agent-created → ours to attach (and re-attach after SW restart)
     await new Promise((r) => setTimeout(r, 100))
     const t = await attachTab(tab.id)
     // Per-session tab grouping (non-CDP hint from the daemon). Best-effort.
@@ -616,19 +679,24 @@ function eligible(tab) {
   return !!tab && !!tab.id && typeof tab.url === 'string' && !SKIP_URL.test(tab.url)
 }
 
-async function attachAllTabs() {
-  let all = []
-  try {
-    all = await chrome.tabs.query({})
-  } catch {
-    return
-  }
-  for (const tab of all) {
-    if (eligible(tab) && !tabs.has(tab.id)) {
+// Re-attach ONLY the tabs this extension owns (agent-created / adopted) — never
+// the user's own tabs. This is what keeps the debugger banner off the user's
+// foreground pages. Runs on (re)connect and from the keepalive alarm, so an
+// agent's tabs survive a service-worker restart without dragging the whole window
+// (and its banners) along. Prunes ids whose tab is gone.
+async function reattachOwnedTabs() {
+  await loadOwnedTabs()
+  for (const tabId of [...ownedTabs]) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null)
+    if (!tab || !eligible(tab)) {
+      unmarkOwned(tabId)
+      continue
+    }
+    if (!tabs.has(tabId)) {
       try {
-        await attachTab(tab.id)
+        await attachTab(tabId)
       } catch {
-        // Tab may be a restricted page or already attached elsewhere.
+        // Restricted page or transient — leave owned; next pass retries.
       }
     }
   }
@@ -732,7 +800,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
     }
   }),
 )
-chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => detachTab(tabId, true)))
+chrome.tabs.onRemoved.addListener(
+  (tabId) =>
+    void whenReady(() => {
+      unmarkOwned(tabId)
+      detachTab(tabId, true)
+    }),
+)
 
 // ---- bootstrap + keepalive ------------------------------------------------
 
@@ -780,7 +854,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   void whenReady(() => {
     if (!port) connectHost()
     else {
-      void attachAllTabs()
+      void reattachOwnedTabs()
       scheduleKeepalivePing()
     }
   })

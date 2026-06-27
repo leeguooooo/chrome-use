@@ -964,32 +964,18 @@ impl BrowserManager {
     async fn adopt_existing_target(&mut self, spec: &str) -> Result<(), String> {
         let all = self.collect_all_targets().await?;
         let spec_l = spec.to_lowercase();
-        let target = all
+        let target = match all
             .iter()
             .find(|t| t.target_id == spec)
             .or_else(|| all.iter().find(|t| t.url.to_lowercase().contains(&spec_l)))
-            .ok_or_else(|| {
-                let mut open: Vec<String> = all
-                    .iter()
-                    .map(|t| {
-                        let u = if t.url.len() > 80 {
-                            &t.url[..80]
-                        } else {
-                            &t.url
-                        };
-                        u.to_string()
-                    })
-                    .collect();
-                open.sort();
-                open.dedup();
-                format!(
-                    "adopt: no open tab matching `{spec}` (by targetId or URL substring).\n\
-                     {} tab(s) the extension can see:\n  {}",
-                    open.len(),
-                    open.join("\n  ")
-                )
-            })?
-            .clone();
+        {
+            Some(t) => t.clone(),
+            // Not in the already-attached set. Since we no longer eagerly attach
+            // the user's tabs (so Chrome's debugger banner stays off their pages),
+            // ask the extension to discover the tab by URL/targetId via chrome.tabs
+            // metadata and attach JUST that one on demand, then adopt it.
+            None => self.adopt_by_url_on_demand(spec).await?,
+        };
 
         let attach: AttachToTargetResult = self
             .client
@@ -1016,6 +1002,59 @@ impl BrowserManager {
         self.pin_active_target();
         self.enable_domains(&attach.session_id).await?;
         Ok(())
+    }
+
+    /// Ask the extension to find a pre-existing tab by `spec` (targetId or URL
+    /// substring) via `chrome.tabs` metadata and attach ONLY that one, returning
+    /// its now-live `TargetInfo`. Needed because the extension no longer eagerly
+    /// attaches the user's tabs (keeping the debugger banner off their pages), so
+    /// `collect_all_targets` can't see an unattached user tab until we adopt it.
+    /// On no match, surfaces the candidate URLs the extension reported.
+    async fn adopt_by_url_on_demand(&self, spec: &str) -> Result<TargetInfo, String> {
+        let resp: Value = self
+            .client
+            .send_command_typed("ABExt.adoptByUrl", &json!({ "spec": spec }), None)
+            .await
+            .map_err(|e| format!("adopt: discovery failed ({e})"))?;
+
+        if let Some(tid) = resp.get("targetId").and_then(|v| v.as_str()) {
+            return Ok(TargetInfo {
+                target_id: tid.to_string(),
+                target_type: "page".to_string(),
+                title: resp
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                url: resp
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                attached: Some(true),
+                browser_context_id: None,
+            });
+        }
+
+        // No match — list what the extension could see (its chrome.tabs view).
+        let mut open: Vec<String> = resp
+            .get("candidates")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("url").and_then(|u| u.as_str()))
+                    .map(|u| u.chars().take(80).collect::<String>())
+                    .collect()
+            })
+            .unwrap_or_default();
+        open.sort();
+        open.dedup();
+        Err(format!(
+            "adopt: no open tab matching `{spec}` (by targetId or URL substring).\n\
+             {} tab(s) the extension can see:\n  {}",
+            open.len(),
+            open.join("\n  ")
+        ))
     }
 
     async fn discover_and_attach_targets(&mut self) -> Result<(), String> {

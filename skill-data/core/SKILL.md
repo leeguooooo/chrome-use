@@ -221,6 +221,14 @@ onto the wrong page. Consequence: `tab list` shows only *your* session's tabs; t
 drive a specific page, navigate to it in your own tab instead of expecting a
 pre-existing or popped-up tab to appear in the list.
 
+> **No debugger banner on the user's pages.** The extension attaches Chrome's
+> debugger **only to tabs the agent owns** (ones it created, or that you `adopt`),
+> never to the user's own tabs — so Chrome's "chrome-use started debugging this
+> browser" bar never covers a page they're working in (it only appears on attached
+> tabs, and the agent's are background tabs). `adopt <url>` attaches that one tab
+> on demand (the bar then shows on *that* tab — it's the one you asked to drive).
+> No Chrome restart, fully seamless.
+
 > **Need to read a tab the user already has open?** Use `chrome-use adopt
 > <url-substring|targetId>` — it finds that pre-existing tab (the user's own, or
 > another session's) across groups and drives it **without opening a new tab**.
