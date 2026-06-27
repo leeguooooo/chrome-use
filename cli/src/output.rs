@@ -3340,6 +3340,8 @@ Core Commands:
   connect <port|url>         Connect to browser via CDP
   reconnect                  Re-bind to the running Chrome's relay (alias for
                              `extension connect`) — recover a dropped relay, no reinstall
+  browsers                   List connected Chrome profiles; pin a session to one
+                             with --browser <id|email> (for multi-profile Chrome)
   keep                       Leave the active tab for the user — exempt it from
                              auto-close/idle cleanup + remove it from the session
                              tab group (so scratch tabs get cleaned, this one stays)
@@ -3550,6 +3552,9 @@ Options:
   --headed                   Always on (default). Headless is forbidden (bot-detection tell);
                              display-less servers can opt back in with AGENT_BROWSER_ALLOW_HEADLESS=1
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
+  --browser <id|email>       Pin this session to a specific connected Chrome profile
+                             (run `chrome-use browsers` to list; for multi-profile
+                             relay setups). Sticky per session.
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)

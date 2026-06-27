@@ -109,13 +109,19 @@ popup never fires. `chrome-use extension connect` is the explicit form of the
 same path. Zero-confirmation, zero-token. Use `--launch` instead when a fresh,
 isolated browser is fine.
 
-> **Many Chrome profiles? Check which one you're driving.** The relay binds to
+> **Many Chrome profiles? See which one — and pick it.** The relay binds to
 > whichever profile's extension worker is talking to the native host. If a site
 > comes back logged out, confirm it's the right profile before assuming the login
-> is gone: `chrome-use extension status` (or `doctor`) now reports the **driving
-> Chrome profile** — the account email if the extension has the optional
-> `identity` permission, otherwise a stable per-profile id. A logged-out result
-> on the *wrong* profile is not a missing login.
+> is gone:
+> - `chrome-use browsers` — lists every connected profile (email if the ext has
+>   the optional `identity` permission, else a stable id; marks the default).
+> - `chrome-use --browser <id|email> <cmd>` — pins THIS session to that profile.
+>   It's **sticky per session** (the session's daemon binds on first connect), and
+>   each session can pick a different profile, so concurrent agents don't fight.
+> - `chrome-use extension status` / `doctor` also report the current driving profile.
+>
+> A logged-out result on the *wrong* profile is not a missing login — run
+> `browsers`, then re-run with `--browser <the right one>`.
 
 `--launch` opens an **isolated, empty test profile** — no cookies, no login, no
 extensions (so the extension-relay path is off). Its window is labelled

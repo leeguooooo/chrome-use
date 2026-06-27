@@ -303,6 +303,9 @@ pub struct Flags {
     pub headers: Option<String>,
     pub executable_path: Option<String>,
     pub cdp: Option<String>,
+    /// `--browser <id|email-substr>`: pin this session to a specific connected
+    /// Chrome profile's relay endpoint (issue #60). Resolved to a `relay-cdp-url-<id>`.
+    pub browser: Option<String>,
     pub extensions: Vec<String>,
     pub init_scripts: Vec<String>,
     pub enable: Vec<String>,
@@ -508,6 +511,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .ok()
             .or(config.executable_path),
         cdp: config.cdp,
+        browser: env::var("AGENT_BROWSER_BROWSER").ok(),
         extensions,
         init_scripts,
         enable,
@@ -707,6 +711,12 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--cdp" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.cdp = Some(s.clone());
+                    i += 1;
+                }
+            }
+            "--browser" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.browser = Some(s.clone());
                     i += 1;
                 }
             }
@@ -994,6 +1004,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--headers",
         "--executable-path",
         "--cdp",
+        "--browser",
         "--extension",
         "--init-script",
         "--enable",
