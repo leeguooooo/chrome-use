@@ -993,6 +993,13 @@ fn main() {
         return;
     }
 
+    // `browsers` (no daemon): list the connected Chrome profiles so an agent can
+    // pin a session to one with `--browser <id|email>` (issue #60).
+    if clean.first().map(|s| s.as_str()) == Some("browsers") {
+        connect::run_browsers(flags.json);
+        return;
+    }
+
     // `reconnect` is a friendly alias for `extension connect` (issue #58): re-bind
     // the session to the running Chrome's relay without any reinstall. Rewrite it
     // into `extension connect …` (preserving any flags like --silent) and let the
@@ -1176,6 +1183,26 @@ fn main() {
                     color::error_indicator()
                 );
                 exit(2);
+            }
+        }
+    }
+
+    // `--browser <id|email-substr>` (issue #60): pin this session to a specific
+    // connected Chrome profile by resolving to that profile's stable relay
+    // endpoint and connecting the daemon to it. Session-sticky: the per-session
+    // daemon binds to this endpoint on its first connect and keeps it for life
+    // (a different session can pick a different profile — no global state, so
+    // concurrent agents don't fight). To switch a *running* session's profile,
+    // start a fresh `--session` (or close it first).
+    if let Some(sel) = flags.browser.clone() {
+        match connect::relay_url_for_browser(&sel) {
+            Ok(url) => {
+                flags.cdp = Some(url);
+                flags.auto_connect = false;
+            }
+            Err(msg) => {
+                eprintln!("{} {msg}", color::error_indicator());
+                exit(1);
             }
         }
     }

@@ -64,6 +64,58 @@ const PROFILE_ID: &str = "work.pwtk.chrome-use.ab-connect";
 const PROFILE_UUID: &str = "A1B2C3D4-AB00-4CCE-9E10-AAAABBBBCCCC";
 const PROFILE_PAYLOAD_UUID: &str = "A1B2C3D4-AB01-4CCE-9E10-DDDDEEEEFFFF";
 
+/// `chrome-use browsers` — list the Chrome profiles whose ab-connect worker is
+/// currently connected to the relay, so an agent/user can pin a session to one
+/// with `--browser <id|email>` (issue #60). Local; no daemon.
+pub fn run_browsers(json: bool) {
+    let profiles = list_relay_profiles();
+    // The generic (last-writer) default the relay binds to without `--browser`.
+    let default = relay_ext_profile().map(|(id, _)| id);
+    if json {
+        let arr: Vec<_> = profiles
+            .iter()
+            .map(|(id, email, ws)| {
+                serde_json::json!({
+                    "id": id,
+                    "email": email,
+                    "wsUrl": ws,
+                    "default": default.as_deref() == Some(id.as_str()),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "success": true,
+                "data": { "browsers": arr }
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    if profiles.is_empty() {
+        println!(
+            "no connected Chrome profiles.\n\
+             (needs ab-connect \u{2265}0.5.3; if Chrome is running, try `chrome-use reconnect`.)"
+        );
+        return;
+    }
+    println!("Connected Chrome profiles — drive one with `--browser <id|email>`:");
+    for (id, email, _) in &profiles {
+        let mark = if default.as_deref() == Some(id.as_str()) {
+            "  (default)"
+        } else {
+            ""
+        };
+        match email {
+            Some(e) => println!("  {e}  [{id}]{mark}"),
+            None => println!(
+                "  {id}{mark}  (no email — grant the ext `identity` permission to show it)"
+            ),
+        }
+    }
+}
+
 /// `chrome-use extension <install|uninstall|status>` (local; no daemon).
 /// `args` is the cleaned argv including the leading "extension".
 pub fn run_connect(args: &[String], json: bool) {
@@ -833,6 +885,136 @@ fn parse_ext_profile(s: &str) -> Option<(String, Option<String>)> {
     Some((id, email))
 }
 
+// --- Per-profile relay endpoints (issue #60 `--browser` selection) -----------
+//
+// With several Chrome profiles, each profile's extension worker spawns its OWN
+// native-messaging host, and they all clobber the single `relay-cdp-url` (last
+// writer wins) — which is why the bound profile is non-deterministic. To let a
+// session *pick* a profile deterministically, each host ALSO writes a stable
+// per-profile sidecar keyed by the `hello`'s profileId:
+//   relay-cdp-url-<id>      — that host's ws URL (unique per host/profile)
+//   relay-ext-profile-<id>  — {id,email}
+// removed by that host on disconnect. `--browser <id|email-substr>` resolves to
+// `relay-cdp-url-<id>`; the generic file stays the (last-writer) default.
+
+/// Keep a profileId safe as a filename suffix. profileIds are UUIDs, but be
+/// defensive against anything the extension might report.
+fn sanitize_profile_id(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn relay_url_path_for(id: &str) -> PathBuf {
+    relay_url_path().with_file_name(format!("relay-cdp-url-{}", sanitize_profile_id(id)))
+}
+
+fn relay_ext_profile_path_for(id: &str) -> PathBuf {
+    relay_url_path().with_file_name(format!("relay-ext-profile-{}", sanitize_profile_id(id)))
+}
+
+/// Every profile whose extension worker is currently connected: `(id, email,
+/// ws_url)`. Reads the per-profile sidecars next to `relay-cdp-url`. Powers
+/// `chrome-use browsers` and `--browser` resolution.
+pub fn list_relay_profiles() -> Vec<(String, Option<String>, String)> {
+    let Some(dir) = relay_url_path().parent().map(|p| p.to_path_buf()) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(suffix) = name.strip_prefix("relay-ext-profile-") else {
+            continue;
+        };
+        // Resolve via the recorded id (not the filename suffix) so email rides along.
+        let Some((id, email)) = std::fs::read_to_string(entry.path())
+            .ok()
+            .and_then(|s| parse_ext_profile(&s))
+        else {
+            continue;
+        };
+        // Pair with its live ws URL; skip if the endpoint file is gone (host died).
+        let Some(ws) = std::fs::read_to_string(relay_url_path_for(suffix))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| s.starts_with("ws://"))
+        else {
+            continue;
+        };
+        out.push((id, email, ws));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Resolve a `--browser` selector to a profile's relay ws URL. Matches a
+/// profileId (exact or prefix) or an email substring (case-insensitive).
+/// Returns `Err` with the available list when nothing/ambiguous matches.
+pub fn relay_url_for_browser(selector: &str) -> Result<String, String> {
+    match_browser(&list_relay_profiles(), selector)
+}
+
+/// Pure selector→ws-url resolution (separated from the filesystem read so it can
+/// be unit-tested). Matches a profileId (exact, then prefix) or an email
+/// substring (case-insensitive). Exact id wins over prefix/email so a full id is
+/// never ambiguous; otherwise multiple matches are an explicit error.
+fn match_browser(
+    profiles: &[(String, Option<String>, String)],
+    selector: &str,
+) -> Result<String, String> {
+    let sel = selector.trim();
+    let sel_lc = sel.to_lowercase();
+    if let Some((_, _, ws)) = profiles.iter().find(|(id, _, _)| id == sel) {
+        return Ok(ws.clone());
+    }
+    let matches: Vec<&(String, Option<String>, String)> = profiles
+        .iter()
+        .filter(|(id, email, _)| {
+            id.starts_with(sel)
+                || email
+                    .as_deref()
+                    .is_some_and(|e| e.to_lowercase().contains(&sel_lc))
+        })
+        .collect();
+    match matches.as_slice() {
+        [one] => Ok(one.2.clone()),
+        [] => Err(format!(
+            "--browser: no connected Chrome profile matches '{sel}'.{}",
+            render_browser_list(profiles)
+        )),
+        many => Err(format!(
+            "--browser: '{sel}' is ambiguous ({} profiles match) — use a longer id/email.{}",
+            many.len(),
+            render_browser_list(profiles)
+        )),
+    }
+}
+
+/// Human-readable list of connected profiles for error messages and `browsers`.
+fn render_browser_list(profiles: &[(String, Option<String>, String)]) -> String {
+    if profiles.is_empty() {
+        return " (no profile-aware extension is connected — needs ab-connect ≥0.5.3)".to_string();
+    }
+    let mut s = String::from("\nConnected Chrome profiles:");
+    for (id, email, _) in profiles {
+        match email {
+            Some(e) => s.push_str(&format!("\n  {e}  ({id})")),
+            None => s.push_str(&format!("\n  {id}")),
+        }
+    }
+    s
+}
+
 /// Hidden `__nm-host` mode: launched by Chrome for the ab-connect extension.
 ///
 /// Bridges the extension (native-messaging stdio, envelope protocol) to a local
@@ -940,6 +1122,9 @@ async fn nm_host_main() {
 
     // Extension → host frames.
     let mut stdin = tokio::io::stdin();
+    // The profileId this host got from `hello` — so we can clean up our
+    // per-profile sidecars on disconnect (issue #60).
+    let mut bound_profile_id: Option<String> = None;
     loop {
         let mut len_buf = [0u8; 4];
         if stdin.read_exact(&mut len_buf).await.is_err() {
@@ -968,7 +1153,13 @@ async fn nm_host_main() {
                     "id": id,
                     "email": v.get("profileEmail").and_then(|x| x.as_str()),
                 });
-                let _ = std::fs::write(relay_ext_profile_path(), rec.to_string());
+                let rec = rec.to_string();
+                let _ = std::fs::write(relay_ext_profile_path(), &rec);
+                // Stable per-profile endpoint so `--browser <id>` can pin to THIS
+                // profile regardless of who last clobbered the generic file.
+                let _ = std::fs::write(relay_url_path_for(id), &url);
+                let _ = std::fs::write(relay_ext_profile_path_for(id), &rec);
+                bound_profile_id = Some(id.to_string());
             }
             continue;
         }
@@ -1006,6 +1197,12 @@ async fn nm_host_main() {
     let _ = std::fs::remove_file(relay_url_path());
     let _ = std::fs::remove_file(relay_ext_version_path());
     let _ = std::fs::remove_file(relay_ext_profile_path());
+    // Drop this profile's per-profile sidecars so `browsers` doesn't list a dead
+    // endpoint (issue #60).
+    if let Some(id) = &bound_profile_id {
+        let _ = std::fs::remove_file(relay_url_path_for(id));
+        let _ = std::fs::remove_file(relay_ext_profile_path_for(id));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1089,6 +1286,57 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn match_browser_resolves_by_id_email_prefix_and_errors() {
+        let p = |id: &str, email: Option<&str>, ws: &str| {
+            (id.to_string(), email.map(|e| e.to_string()), ws.to_string())
+        };
+        let profiles = vec![
+            p("uuid-aaa", Some("me@example.com"), "ws://127.0.0.1:1/a"),
+            p("uuid-bbb", None, "ws://127.0.0.1:2/b"),
+            p("ccc-work", Some("work@corp.com"), "ws://127.0.0.1:3/c"),
+        ];
+        // exact id
+        assert_eq!(
+            match_browser(&profiles, "uuid-bbb").unwrap(),
+            "ws://127.0.0.1:2/b"
+        );
+        // unique prefix
+        assert_eq!(
+            match_browser(&profiles, "ccc").unwrap(),
+            "ws://127.0.0.1:3/c"
+        );
+        // email substring (case-insensitive)
+        assert_eq!(
+            match_browser(&profiles, "WORK@corp").unwrap(),
+            "ws://127.0.0.1:3/c"
+        );
+        // exact id wins even though "uuid-aaa" is also a prefix of itself
+        assert_eq!(
+            match_browser(&profiles, "uuid-aaa").unwrap(),
+            "ws://127.0.0.1:1/a"
+        );
+        // ambiguous prefix
+        assert!(match_browser(&profiles, "uuid-").is_err());
+        // no match
+        let e = match_browser(&profiles, "nope").unwrap_err();
+        assert!(e.contains("no connected Chrome profile matches 'nope'"));
+        // empty set
+        assert!(match_browser(&[], "anything")
+            .unwrap_err()
+            .contains("no connected"));
+    }
+
+    #[test]
+    fn sanitize_profile_id_keeps_safe_chars() {
+        assert_eq!(
+            sanitize_profile_id("cedc799c-9af4-4718"),
+            "cedc799c-9af4-4718"
+        );
+        assert_eq!(sanitize_profile_id("a/b c..d"), "a_b_c..d");
+        assert_eq!(sanitize_profile_id("../etc/passwd"), ".._etc_passwd");
+    }
 
     #[test]
     fn parse_ext_profile_reads_id_and_optional_email() {
