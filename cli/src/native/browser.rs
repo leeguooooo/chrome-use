@@ -588,6 +588,12 @@ pub struct BrowserManager {
     /// browser after it ends. Only ever holds tabs we created — never the user's
     /// existing tabs or other sessions' tabs — so closing them is always safe.
     created_targets: HashSet<String>,
+    /// Target IDs of PRE-EXISTING tabs this session explicitly `adopt`ed (the
+    /// user's own, or another session's). These ARE owned for command resolution
+    /// (the user asked us to drive them), but unlike `created_targets` they are
+    /// NEVER auto-closed on `close()` — they belong to the user. Kept separate so
+    /// the "made by us, safe to close" invariant of `created_targets` holds.
+    adopted_targets: HashSet<String>,
     /// The session's *intended* active tab, pinned by stable target_id rather
     /// than the fragile `active_page_index`. Set on every explicit open / tab new
     /// / tab switch. `active_session_id` resolves through this so a foreign tab
@@ -745,6 +751,7 @@ impl BrowserManager {
                 ignore_https_errors,
                 visited_origins: HashSet::new(),
                 created_targets: HashSet::new(),
+                adopted_targets: HashSet::new(),
                 active_target_id: None,
                 relay_target_misses: HashMap::new(),
                 relay_scoped: false,
@@ -849,6 +856,7 @@ impl BrowserManager {
             ignore_https_errors: false,
             visited_origins: HashSet::new(),
             created_targets: HashSet::new(),
+            adopted_targets: HashSet::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
@@ -998,6 +1006,10 @@ impl BrowserManager {
             title: sanitize_title(&target.title),
             target_type: target.target_type.clone(),
         });
+        // Mark as owned-for-resolution so the pinned tab resolves in
+        // strict_session_index — but via adopted_targets (NOT created_targets),
+        // so close() never auto-closes the user's tab.
+        self.adopted_targets.insert(target.target_id.clone());
         self.active_page_index = self.pages.len() - 1;
         self.pin_active_target();
         self.enable_domains(&attach.session_id).await?;
@@ -1275,8 +1287,18 @@ impl BrowserManager {
             &self.pages,
             self.active_target_id.as_deref(),
             self.active_page_index,
-            &self.created_targets,
+            &self.owned_targets(),
         )
+    }
+
+    /// Targets this session owns for command resolution: tabs it created PLUS
+    /// tabs it explicitly adopted. (Adopted tabs are owned-for-driving but, unlike
+    /// created ones, never auto-closed — see `adopted_targets`.)
+    fn owned_targets(&self) -> HashSet<String> {
+        self.created_targets
+            .union(&self.adopted_targets)
+            .cloned()
+            .collect()
     }
 
     /// Drop the page bound to `session_id` from the tracked list — used when the
@@ -1290,6 +1312,7 @@ impl BrowserManager {
         let target_id = self.pages[pos].target_id.clone();
         self.pages.remove(pos);
         self.created_targets.remove(&target_id);
+        self.adopted_targets.remove(&target_id);
         if self.active_target_id.as_deref() == Some(target_id.as_str()) {
             self.active_target_id = None;
         }
@@ -1312,7 +1335,7 @@ impl BrowserManager {
             self.active_target_id.as_deref(),
             self.active_page_index,
             self.agent_group().is_some(),
-            &self.created_targets,
+            &self.owned_targets(),
         )?;
         self.pages
             .get(idx)
@@ -3079,6 +3102,7 @@ async fn initialize_lightpanda_manager(
             ignore_https_errors: false,
             visited_origins: HashSet::new(),
             created_targets: HashSet::new(),
+            adopted_targets: HashSet::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
