@@ -1325,6 +1325,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                             i += 1;
                         }
                     }
+                    "-f" | "--filter" => {
+                        if let Some(s) = rest.get(i + 1) {
+                            obj.insert("filter".to_string(), json!(s));
+                            i += 1;
+                        }
+                    }
                     _ => {}
                 }
                 i += 1;

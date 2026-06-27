@@ -1999,6 +1999,10 @@ Options:
   -c, --compact        Remove empty structural elements
   -d, --depth <n>      Limit tree depth
   -s, --selector <sel> Scope snapshot to CSS selector
+  -f, --filter <regex> Keep only lines matching <regex> (case-insensitive) + their
+                       ancestor context; refs preserved. For desktop-shell apps
+                       (Synology DSM, NAS/router panels) where one snapshot holds
+                       many windows. e.g. -f "SSH|端口|应用|确定"
 
 Global Options:
   --json               Output as JSON

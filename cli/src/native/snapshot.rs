@@ -1711,6 +1711,51 @@ fn count_indent(line: &str) -> usize {
     (line.len() - trimmed.len()) / 2
 }
 
+/// Keep only snapshot lines matching `pattern` (case-insensitive regex), plus the
+/// ancestor chain of each match for window/section context. Refs on kept lines
+/// stay valid (assigned at snapshot time, independent of filtering).
+///
+/// For desktop-shell web apps (Synology DSM, NAS/router admin panels, ExtJS) one
+/// snapshot holds many independent app windows, so `snapshot -i` blows past the
+/// token cap and buries the target controls. `--filter "SSH|端口|应用|确定"` cuts
+/// it down to the few relevant lines (issue #65) — the productized form of the
+/// `| tail -80` workaround, but tree-aware and ref-preserving.
+pub fn filter_tree(tree: &str, pattern: &str) -> Result<String, String> {
+    let re = regex_lite::Regex::new(&format!("(?i){pattern}"))
+        .map_err(|e| format!("invalid --filter regex '{pattern}': {e}"))?;
+    let lines: Vec<&str> = tree.lines().collect();
+    let mut keep = vec![false; lines.len()];
+    for (i, line) in lines.iter().enumerate() {
+        if !re.is_match(line) {
+            continue;
+        }
+        keep[i] = true;
+        // Walk back to the root keeping only the strictly-shallower ancestor chain
+        // (direct parent, grandparent, …) — not shallower siblings.
+        let mut want = count_indent(line);
+        for j in (0..i).rev() {
+            let ind = count_indent(lines[j]);
+            if ind < want {
+                keep[j] = true;
+                want = ind;
+                if ind == 0 {
+                    break;
+                }
+            }
+        }
+    }
+    let kept: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| keep[*i])
+        .map(|(_, l)| *l)
+        .collect();
+    if kept.is_empty() {
+        return Ok(format!("(no elements match /{pattern}/)"));
+    }
+    Ok(kept.join("\n"))
+}
+
 fn extract_ax_string(value: &Option<AXValue>) -> String {
     match value {
         Some(v) => match &v.value {
@@ -1870,6 +1915,47 @@ mod tests {
     fn test_compact_tree_empty_interactive() {
         let result = compact_tree("- generic\n", true);
         assert_eq!(result, "(no interactive elements)");
+    }
+
+    #[test]
+    fn test_filter_tree_keeps_matches_with_ancestors_and_refs() {
+        // Desktop-shell shape: two app windows; filter should keep only the
+        // matching controls + their window ancestor, dropping the other window.
+        let tree = "\
+- application
+  - group \"控制面板\"
+    - checkbox \"启动 SSH 功能\" [checked=true, ref=e5]
+    - textbox \"端口：\" [ref=e6]: 10022
+    - button \"应用\" [ref=e7]
+  - group \"Package Center\"
+    - listitem \"some package\" [ref=e20]
+    - listitem \"another\" [ref=e21]";
+        let out = filter_tree(tree, "SSH|端口|应用").unwrap();
+        // matched controls kept, with refs intact
+        assert!(out.contains("checkbox \"启动 SSH 功能\" [checked=true, ref=e5]"));
+        assert!(out.contains("textbox \"端口：\" [ref=e6]: 10022"));
+        assert!(out.contains("button \"应用\" [ref=e7]"));
+        // ancestor window kept for context
+        assert!(out.contains("控制面板"));
+        assert!(out.contains("- application"));
+        // the unrelated window + its items are gone
+        assert!(!out.contains("Package Center"));
+        assert!(!out.contains("some package"));
+    }
+
+    #[test]
+    fn test_filter_tree_case_insensitive_and_no_match() {
+        let tree = "- button \"Apply\" [ref=e1]";
+        assert!(filter_tree(tree, "apply").unwrap().contains("[ref=e1]"));
+        assert_eq!(
+            filter_tree(tree, "nonexistent").unwrap(),
+            "(no elements match /nonexistent/)"
+        );
+    }
+
+    #[test]
+    fn test_filter_tree_bad_regex_errors() {
+        assert!(filter_tree("- x", "[unclosed").is_err());
     }
 
     #[test]
