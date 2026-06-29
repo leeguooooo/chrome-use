@@ -1306,6 +1306,34 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         );
     }
 
+    // `--observe` (issue #65 followup): for a mutating action, capture a cheap
+    // interactive-snapshot baseline BEFORE the action so we can return only what
+    // changed (added/removed nodes, new toasts/validation via the #57 surface,
+    // url change, requests fired) instead of the agent running act→wait→snapshot→
+    // diff by hand. Baseline into a THROWAWAY RefMap so a `@ref` the action uses
+    // still resolves against the live state.ref_map.
+    const OBSERVABLE_ACTIONS: &[&str] = &[
+        "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "evaluate",
+    ];
+    let observe = cmd
+        .get("observe")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        && OBSERVABLE_ACTIONS.contains(&action)
+        && state.browser.is_some()
+        && !matches!(state.backend_type, BackendType::WebDriver);
+    let observe_baseline: Option<(String, String, usize)> = if observe {
+        enable_request_tracking(state).await;
+        let _ = state.drain_cdp_events();
+        let req_mark = state.tracked_requests.len();
+        let mgr = state.browser.as_ref().unwrap();
+        let url = mgr.get_url().await.unwrap_or_default();
+        let snap = observe_snapshot(state).await;
+        Some((url, snap, req_mark))
+    } else {
+        None
+    };
+
     let result = match action {
         "launch" => handle_launch(cmd, state).await,
         "navigate" => handle_navigate(cmd, state).await,
@@ -1500,10 +1528,63 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         other => other,
     };
 
+    let ok = result.is_ok();
     let mut resp = match result {
         Ok(data) => success_response(&id, data),
         Err(e) => error_response(&id, &super::browser::to_ai_friendly_error(&e)),
     };
+
+    // `--observe`: after a successful mutating action, settle briefly, re-snapshot,
+    // and attach ONLY the delta vs the baseline (added/removed lines, url change,
+    // requests fired). Collapses act→wait→snapshot→diff into one reply.
+    if let (true, Some((url0, snap0, req_mark))) = (ok, observe_baseline) {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let _ = state.drain_cdp_events();
+        let snap1 = observe_snapshot(state).await;
+        // Normalize trailing newline so the diff doesn't report a spurious
+        // remove+add for the last line ("No newline at end of file").
+        let d = super::diff::diff_snapshots(
+            &format!("{}\n", snap0.trim_end()),
+            &format!("{}\n", snap1.trim_end()),
+        );
+        let url1 = state
+            .browser
+            .as_ref()
+            .unwrap()
+            .get_url()
+            .await
+            .unwrap_or_default();
+        let new_reqs: Vec<String> = state
+            .tracked_requests
+            .get(req_mark..)
+            .map(|s| {
+                s.iter()
+                    .map(|r| format!("{} {}", r.method, r.url))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut observed = serde_json::Map::new();
+        observed.insert("changed".into(), json!(d.changed || url0 != url1));
+        if d.changed {
+            observed.insert("delta".into(), json!(d.diff));
+            observed.insert("added".into(), json!(d.additions));
+            observed.insert("removed".into(), json!(d.removals));
+        }
+        if url0 != url1 {
+            observed.insert("urlChanged".into(), json!({ "from": url0, "to": url1 }));
+        }
+        if !new_reqs.is_empty() {
+            observed.insert("requests".into(), json!(new_reqs));
+        }
+        if let Some(obj) = resp.as_object_mut() {
+            let data = obj
+                .entry("data")
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Some(d) = data.as_object_mut() {
+                d.insert("observed".into(), Value::Object(observed));
+            }
+        }
+    }
 
     // Auto-report pending JavaScript dialog so agents know why commands may hang
     if action != "dialog" {
@@ -5381,6 +5462,35 @@ fn describe_expect(cmd: &Value) -> String {
         _ => "?".to_string(),
     };
     format!("{not}{body}")
+}
+
+/// Cheap interactive+compact snapshot into a THROWAWAY RefMap (so it never
+/// disturbs the session's live `@ref`s) — the baseline/after capture for
+/// `--observe`. Returns "" on failure so a snapshot error never breaks the action.
+async fn observe_snapshot(state: &DaemonState) -> String {
+    let Some(mgr) = state.browser.as_ref() else {
+        return String::new();
+    };
+    let Ok(session_id) = mgr.active_session_id() else {
+        return String::new();
+    };
+    let session_id = session_id.to_string();
+    let options = snapshot::SnapshotOptions {
+        interactive: true,
+        compact: true,
+        ..Default::default()
+    };
+    let mut tmp = super::element::RefMap::new();
+    snapshot::take_snapshot(
+        &mgr.client,
+        &session_id,
+        &options,
+        &mut tmp,
+        state.active_frame_id.as_deref(),
+        &state.iframe_sessions,
+    )
+    .await
+    .unwrap_or_default()
 }
 
 /// Whether an error means "the target element isn't on the page" (vs a real

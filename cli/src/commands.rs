@@ -420,6 +420,12 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
             obj.insert("ifPresent".to_string(), json!(true));
         }
     }
+    // `--observe`: stamp so the daemon returns the post-action a11y delta.
+    if flags.observe {
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("observe".to_string(), json!(true));
+        }
+    }
 
     Ok(result)
 }
@@ -3950,6 +3956,7 @@ mod tests {
             cdp: None,
             browser: None,
             if_present: false,
+            observe: false,
             profile: None,
             state: None,
             proxy: None,
@@ -5753,6 +5760,16 @@ mod tests {
         // off by default
         let c = parse_command(&args("click #x"), &default_flags()).unwrap();
         assert!(c.get("ifPresent").is_none());
+    }
+
+    #[test]
+    fn test_observe_stamps_action() {
+        let mut f = default_flags();
+        f.observe = true;
+        let c = parse_command(&args("click @e1"), &f).unwrap();
+        assert_eq!(c["observe"], true);
+        let c = parse_command(&args("click @e1"), &default_flags()).unwrap();
+        assert!(c.get("observe").is_none());
     }
 
     // === extract parse tests ===

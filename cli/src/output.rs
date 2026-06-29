@@ -3712,6 +3712,8 @@ Options:
   --no-auto-dialog           Disable automatic dismissal of alert/beforeunload dialogs (or AGENT_BROWSER_NO_AUTO_DIALOG)
   --if-present, --optional   Skip a selector action (success, no-op) instead of
                              erroring when the target element is absent
+  --observe                  After a mutating action, return only what changed
+                             (a11y delta + url + requests) — skip act→snapshot→diff
   --model <name>             AI model for chat (or AI_GATEWAY_MODEL env)
   -v, --verbose              Show tool commands and their raw output
   -q, --quiet                Show only AI text responses (hide tool calls)
