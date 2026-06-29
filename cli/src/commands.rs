@@ -38,6 +38,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "navigate",
     "expect",
     "extract",
+    "form",
     "click",
     "fill",
     "type",
@@ -1801,6 +1802,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "is" => parse_is(&rest, &id),
         "expect" => parse_expect(&rest, &id),
         "extract" => parse_extract(&rest, &id),
+        "form" => parse_form(&rest, &id),
 
         // === Find (locators) ===
         "find" => parse_find(&rest, &id),
@@ -3008,6 +3010,86 @@ fn parse_is(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             usage: "is <visible|enabled|checked> <selector>",
         }),
     }
+}
+
+/// `form fill --map <json>` — fill a whole form from a {label|selector: value}
+/// map in one call, then optionally submit, returning per-field status + any
+/// inline validation errors. Values: string → text/select/radio, bool → checkbox.
+fn parse_form(rest: &[&str], id: &str) -> Result<Value, ParseError> {
+    let usage =
+        "form fill --map <json> [--submit <selector|text>]  (also --map-file <path> / --stdin)";
+    if rest.first().copied() != Some("fill") {
+        return Err(ParseError::UnknownSubcommand {
+            subcommand: rest.first().copied().unwrap_or("").to_string(),
+            valid_options: &["fill"],
+        });
+    }
+    let rest = &rest[1..];
+    let mut submit: Option<String> = None;
+    let mut map_str: Option<String> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--map" => {
+                map_str = rest.get(i + 1).map(|s| s.to_string());
+                i += 1;
+            }
+            "--map-file" => {
+                let p = rest.get(i + 1).ok_or(ParseError::MissingArguments {
+                    context: "form fill --map-file".to_string(),
+                    usage,
+                })?;
+                map_str =
+                    Some(
+                        std::fs::read_to_string(p).map_err(|e| ParseError::InvalidValue {
+                            message: format!("form fill --map-file: cannot read {p}: {e}"),
+                            usage,
+                        })?,
+                    );
+                i += 1;
+            }
+            "--stdin" => {
+                use std::io::BufRead;
+                let s = std::io::stdin();
+                map_str = Some(
+                    s.lock()
+                        .lines()
+                        .map(|l| l.unwrap_or_default())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+            }
+            "--submit" => {
+                submit = rest.get(i + 1).map(|s| s.to_string());
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let map_str = map_str.ok_or(ParseError::MissingArguments {
+        context: "form fill".to_string(),
+        usage,
+    })?;
+    let map: Value =
+        serde_json::from_str(map_str.trim()).map_err(|e| ParseError::InvalidValue {
+            message: format!("form fill --map is not valid JSON: {e}"),
+            usage,
+        })?;
+    if !map.is_object() || map.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+        return Err(ParseError::InvalidValue {
+            message: "form fill --map must be a non-empty JSON object".to_string(),
+            usage,
+        });
+    }
+    let mut obj = serde_json::Map::new();
+    obj.insert("id".into(), json!(id));
+    obj.insert("action".into(), json!("form_fill"));
+    obj.insert("map".into(), map);
+    if let Some(s) = submit {
+        obj.insert("submit".into(), json!(s));
+    }
+    Ok(Value::Object(obj))
 }
 
 /// `extract --schema <json>` — declarative structured scrape → JSON. Schema:
@@ -5770,6 +5852,28 @@ mod tests {
         assert_eq!(c["observe"], true);
         let c = parse_command(&args("click @e1"), &default_flags()).unwrap();
         assert!(c.get("observe").is_none());
+    }
+
+    // === form fill parse tests ===
+    #[test]
+    fn test_form_fill_ok() {
+        let c = parse_command(
+            &args(r#"form fill --map {"Email":"a@b.com","Sub":true} --submit Save"#),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(c["action"], "form_fill");
+        assert_eq!(c["map"]["Email"], "a@b.com");
+        assert_eq!(c["map"]["Sub"], true);
+        assert_eq!(c["submit"], "Save");
+    }
+
+    #[test]
+    fn test_form_fill_validation() {
+        assert!(parse_command(&args("form fill --map {bad"), &default_flags()).is_err());
+        assert!(parse_command(&args("form fill --map {}"), &default_flags()).is_err());
+        assert!(parse_command(&args("form fill"), &default_flags()).is_err());
+        assert!(parse_command(&args("form wiggle"), &default_flags()).is_err());
     }
 
     // === extract parse tests ===

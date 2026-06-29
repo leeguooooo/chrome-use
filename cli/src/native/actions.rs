@@ -1471,6 +1471,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "find" => handle_find(cmd, state).await,
         "expect" => handle_expect(cmd, state).await,
         "extract" => handle_extract(cmd, state).await,
+        "form_fill" => handle_form_fill(cmd, state).await,
         "evalhandle" => handle_evalhandle(cmd, state).await,
         "drag" => handle_drag(cmd, state).await,
         "solve_slider" => handle_solve_slider(cmd, state).await,
@@ -5491,6 +5492,106 @@ async fn observe_snapshot(state: &DaemonState) -> String {
     )
     .await
     .unwrap_or_default()
+}
+
+/// `form fill --map` — fill a whole form from a {label|selector: value} map in
+/// ONE call (React-safe), optionally submit, then return per-field status + any
+/// inline validation errors (the #57 alert surface). Standard controls only
+/// (text/select/checkbox/radio); for rich editors (DraftJS/Monaco) use `fill`
+/// per field — it handles those. (Feature from #65-followup brainstorm.)
+async fn handle_form_fill(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let map = cmd.get("map").ok_or("form fill: missing map")?;
+    let submit = cmd.get("submit").and_then(|v| v.as_str());
+    let map_json = serde_json::to_string(map).unwrap_or_else(|_| "{}".to_string());
+    let submit_json = serde_json::to_string(&submit).unwrap_or_else(|_| "null".to_string());
+
+    // One eval fills every field React-safely (native value setter + input/change
+    // events so controlled components register the change), then optionally submits.
+    let script = format!(
+        r#"(() => {{
+  const MAP = {map_json};
+  const SUBMIT = {submit_json};
+  const lc = (s) => (s || '').trim().toLowerCase();
+  const isControl = (e) => e && /^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName) || (e && e.isContentEditable);
+  const findControl = (key) => {{
+    try {{ const el = document.querySelector(key); if (isControl(el)) return el; }} catch (e) {{}}
+    const k = lc(key);
+    const lab = Array.from(document.querySelectorAll('label')).find((l) => lc(l.innerText).includes(k));
+    if (lab) {{
+      if (lab.htmlFor) {{ const c = document.getElementById(lab.htmlFor); if (isControl(c)) return c; }}
+      const c = lab.querySelector('input,select,textarea,[contenteditable]'); if (isControl(c)) return c;
+    }}
+    for (const e of document.querySelectorAll('input,select,textarea,[contenteditable]')) {{
+      const al = lc(e.getAttribute('aria-label')), ph = lc(e.getAttribute('placeholder')), nm = lc(e.getAttribute('name'));
+      if ((al && al.includes(k)) || (ph && ph.includes(k)) || nm === k) return e;
+    }}
+    return null;
+  }};
+  const setNative = (el, val) => {{
+    const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype
+      : el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+    if (setter) setter.call(el, val); else el.value = val;
+    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  }};
+  const results = [];
+  for (const key of Object.keys(MAP)) {{
+    const val = MAP[key];
+    const el = findControl(key);
+    if (!el) {{ results.push({{ key, ok: false, reason: 'control not found' }}); continue; }}
+    try {{
+      const t = el.tagName;
+      if (el.isContentEditable) {{ el.focus(); el.textContent = String(val); el.dispatchEvent(new Event('input', {{ bubbles: true }})); results.push({{ key, ok: true, type: 'contenteditable' }}); }}
+      else if (t === 'SELECT') {{ setNative(el, String(val)); results.push({{ key, ok: el.value === String(val), type: 'select' }}); }}
+      else if (t === 'INPUT' && (el.type === 'checkbox')) {{ const want = val === true || val === 'true' || val === 1; if (el.checked !== want) el.click(); results.push({{ key, ok: el.checked === want, type: 'checkbox' }}); }}
+      else if (t === 'INPUT' && el.type === 'radio') {{
+        const grp = Array.from(document.querySelectorAll('input[type=radio][name="' + (el.name || '') + '"]'));
+        const pick = grp.find((r) => r.value === String(val)) || el;
+        if (!pick.checked) pick.click();
+        results.push({{ key, ok: pick.checked, type: 'radio' }});
+      }}
+      else {{ setNative(el, String(val)); results.push({{ key, ok: true, type: (el.type || t.toLowerCase()) }}); }}
+    }} catch (e) {{ results.push({{ key, ok: false, reason: String(e && e.message || e) }}); }}
+  }}
+  let submitted = false;
+  if (SUBMIT) {{
+    let btn = null;
+    try {{ btn = document.querySelector(SUBMIT); }} catch (e) {{}}
+    if (!btn) {{
+      const s = lc(SUBMIT);
+      btn = Array.from(document.querySelectorAll('button,input[type=submit],[role=button]'))
+        .find((b) => lc(b.innerText || b.value).includes(s));
+    }}
+    if (btn) {{ btn.click(); submitted = true; }}
+  }}
+  return {{ results, submitted }};
+}})()"#
+    );
+
+    let filled = mgr.evaluate(&script, None).await?;
+    let submitted = filled
+        .get("submitted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let results = filled.get("results").cloned().unwrap_or(Value::Null);
+
+    // Let validation/toasts render, then collect inline errors (#57 alert lines).
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    let snap = observe_snapshot(state).await;
+    let errors: Vec<String> = snap
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("- alert "))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .collect();
+    let url = mgr.get_url().await.unwrap_or_default();
+    Ok(json!({
+        "filled": results,
+        "submitted": submitted,
+        "errors": errors,
+        "origin": url,
+    }))
 }
 
 /// Whether an error means "the target element isn't on the page" (vs a real

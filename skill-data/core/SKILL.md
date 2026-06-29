@@ -723,6 +723,17 @@ chrome-use requests --clear && chrome-use click @save \
 chrome-use expect no-errors                                     # no console errors?
 ```
 
+**Fill a whole form in one call — `form fill --map`.** Instead of N
+`fill`/`select`/`check` steps, pass a `{label-or-selector: value}` map: it
+resolves each field (by `<label>`, aria-label, placeholder, name, or CSS),
+dispatches the right control type (string → text/select/radio, `true/false` →
+checkbox), optionally submits (`--submit "<text|selector>"`), and returns
+`{filled, submitted, errors}` — `errors` are the inline validation messages, so a
+rejected submit tells you why in the same call. `chrome-use form fill --map
+'{"Email":"a@b.com","Country":"US","Subscribe":true}' --submit "Sign up"`. For
+rich editors (DraftJS/Monaco/CodeMirror) fill those fields with `fill` instead —
+it handles them; `form fill` covers standard controls.
+
 **See what an action changed — `--observe`.** Add it to a mutating action
 (`click`/`fill`/`type`/`select`/`check`/`press`/`eval`) and instead of you
 running act → wait → `snapshot` → `diff`, the result carries an `observed` delta:
