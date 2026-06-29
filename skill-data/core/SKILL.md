@@ -81,6 +81,7 @@ need a **real, logged-in browser** — not for reading text off a public page.
 | Discover what exists / find sources | `WebSearch` |
 | Specific facts from a static or public page | `WebFetch` or `curl` (no browser) |
 | **Structured data from a known site** (GitHub issues, Reddit/HN search, Bilibili/Twitter feed, …) — esp. behind login | `chrome-use site <name>/<cmd>` (see below) — skip snapshot+click entirely |
+| **Structured data from ANY page** (no community adapter) — tables, search results, feed rows, dashboards | `chrome-use extract --schema '{rows,fields}'` → clean JSON in one call (vs N find/get, or dumping HTML that blows the context window) |
 | Login state, interaction, JS-rendered or anti-bot pages | **chrome-use** (this skill) |
 | A page the user saved before / an internal system | `chrome-use find-url <keywords>` (their bookmarks), then open it |
 | The user's **own already-open, logged-in** Chrome window | the **extension connect** flow (below) |
