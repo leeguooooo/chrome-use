@@ -829,6 +829,22 @@ chrome.runtime.onInstalled.addListener((details) => {
 })
 chrome.runtime.onStartup.addListener(() => void whenReady(connectHost))
 
+// Wake-from-sleep / return-from-idle fast reconnect. After the machine sleeps (or
+// the user is away long enough), the MV3 worker is killed and its native-messaging
+// port dies; previously only the keepalive alarm revived it — and chrome.alarms
+// clamps to a ~30s floor, so the relay stayed dead for up to ~30s after wake (the
+// "first command after coming back hangs/reconnects slowly" feeling). chrome.idle
+// fires on the transition back to "active" and is wake-eligible (it restarts a
+// suspended worker), so we reconnect the instant the user returns instead of
+// waiting for the alarm. `idle` is a no-warning permission, so this auto-updates
+// with no re-consent.
+try {
+  chrome.idle.setDetectionInterval(15)
+  chrome.idle.onStateChanged.addListener((state) => {
+    if (state === 'active') void whenReady(() => { if (!port) connectHost() })
+  })
+} catch {}
+
 // Popup status page asks for the live pairing state. Attempt a (re)connect on
 // demand so opening the popup also nudges the link awake, then report.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
