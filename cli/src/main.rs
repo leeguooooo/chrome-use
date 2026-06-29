@@ -1338,6 +1338,47 @@ fn main() {
         return;
     }
 
+    // Relay self-heal (the "用不了" fix). On the extension-relay path, a dropped
+    // relay used to mean either a 2-minute hang (a stale daemon still bound to the
+    // dead relay ws keeps sending into the void) or a hard error that forced the
+    // user to run `chrome-use reconnect` by hand. Instead, when we're about to
+    // drive the user's real Chrome and the relay is down (host installed but
+    // `relay-cdp-url` gone), recover automatically: drop the stale daemon so it
+    // can't reuse the dead binding, then wait (bounded, with progress) for the MV3
+    // worker to republish the relay — the fresh daemon then connects clean. Opt
+    // out with AGENT_BROWSER_NO_AUTO_RECONNECT. Skipped for --launch/--cdp.
+    if flags.auto_connect
+        && flags.cdp.is_none()
+        && !flags.force_launch
+        && std::env::var("AGENT_BROWSER_NO_AUTO_RECONNECT").is_err()
+        && connect::host_installed()
+        && connect::relay_url().is_none()
+    {
+        connection::kill_stale_daemon(&flags.session);
+        connect::ensure_host_installed();
+        // Reap any zombie native-messaging host (it already lost its Chrome port —
+        // relay-cdp-url is gone — but the process can linger). Killing it makes the
+        // extension worker's port disconnect fire immediately, so it reconnects and
+        // republishes the relay in ~2s instead of waiting ~30s for the keepalive
+        // alarm. Best-effort, unix-only; safe here because the relay is already down.
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("pkill")
+                .args(["-f", "__nm-host"])
+                .output();
+        }
+        eprint!(
+            "{} Chrome relay dropped — reconnecting…",
+            color::success_indicator()
+        );
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        while connect::relay_url().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        eprintln!();
+    }
+
     // Parse proxy URL to separate server from credentials for the daemon.
     let (proxy_server, proxy_username, proxy_password) = if let Some(ref proxy_str) = flags.proxy {
         let parsed = parse_proxy(proxy_str);
