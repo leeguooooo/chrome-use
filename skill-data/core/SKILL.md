@@ -21,6 +21,10 @@ web pages — see [When to load another skill](#when-to-load-another-skill).
 > **<https://github.com/leeguooooo/chrome-use/issues>** with the exact
 > command and what happened vs. what you expected. Agent-filed friction reports
 > are how this tool gets sharper; a 30-second issue is genuinely valuable.
+>
+> (Failures are also auto-logged locally — run `chrome-use friction` to see what's
+> been painful, by command/category/host. Local only, never uploaded; opt out
+> with `AGENT_BROWSER_NO_FRICTION_LOG=1`.)
 
 ## The core loop
 

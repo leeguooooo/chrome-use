@@ -1530,6 +1530,18 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     };
 
     let ok = result.is_ok();
+    // Friction auto-reporting (#65 followup): a genuine command failure is a data
+    // point for "what's painful to drive". Record it locally (host only, never the
+    // full URL) using the CACHED url so we never block. `--if-present` skips became
+    // Ok above, so they're correctly excluded.
+    if let Err(ref e) = result {
+        let origin = state
+            .browser
+            .as_ref()
+            .map(|m| m.cached_active_url())
+            .unwrap_or_default();
+        crate::friction::record_now(action, e, &origin);
+    }
     let mut resp = match result {
         Ok(data) => success_response(&id, data),
         Err(e) => error_response(&id, &super::browser::to_ai_friendly_error(&e)),
