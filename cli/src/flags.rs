@@ -342,6 +342,9 @@ pub struct Flags {
     /// `--if-present`/`--optional`: skip a selector action (success {skipped})
     /// instead of erroring when the target element is absent (issue #65 followup).
     pub if_present: bool,
+    /// `--observe`: after a mutating action, return only what changed on the page
+    /// (a11y delta + url + requests) instead of the agent re-snapshotting.
+    pub observe: bool,
     pub model: Option<String>,
     pub verbose: bool,
     pub quiet: bool,
@@ -607,6 +610,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         no_auto_dialog: env_var_is_truthy("AGENT_BROWSER_NO_AUTO_DIALOG")
             || config.no_auto_dialog.unwrap_or(false),
         if_present: false,
+        observe: false,
         model: env::var("AI_GATEWAY_MODEL").ok().or(config.model),
         verbose: false,
         quiet: false,
@@ -954,6 +958,9 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--if-present" | "--optional" => {
                 flags.if_present = true;
             }
+            "--observe" => {
+                flags.observe = true;
+            }
             "--model" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.model = Some(s.clone());
@@ -1002,6 +1009,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         // parse_command from Flags.if_present.
         "--if-present",
         "--optional",
+        "--observe",
         "-v",
         "--verbose",
         "-q",

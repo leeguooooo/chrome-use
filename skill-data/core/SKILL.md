@@ -33,8 +33,17 @@ chrome-use snapshot -i       # 4. Re-snapshot after any page change
 
 Refs (`@e1`, `@e2`, ...) are assigned fresh on every snapshot. They become
 **stale the moment the page changes** — after clicks that navigate, form
-submits, dynamic re-renders, dialog opens. Always re-snapshot before your
-next ref interaction.
+submits, dynamic re-renders, dialog opens. Re-snapshot before your next ref
+interaction after a *navigation* or a structural change.
+
+> **@refs self-heal across re-renders — you don't need to re-snapshot for every
+> minor DOM churn.** Each ref records a fingerprint (role + accessible name +
+> ancestor path); if its node is gone when you use it, chrome-use automatically
+> relocates to the matching element on the *current* page and proceeds. So after a
+> React/Vue list re-render that keeps the same labels, `click @e3` still hits the
+> right element. If the element is genuinely gone, it refuses (loud error) rather
+> than click the wrong node — it never silently mis-targets. Re-snapshot only when
+> you navigated, or when the labels/structure actually changed.
 
 > **Hard rule: snapshot-first, never screenshot-to-locate.** For form fields and
 > buttons, ALWAYS `snapshot -i` and act on refs/selectors. Do **not** reach for
@@ -713,6 +722,15 @@ chrome-use requests --clear && chrome-use click @save \
   && chrome-use expect request /api/save --status 2xx           # the POST fired & 2xx?
 chrome-use expect no-errors                                     # no console errors?
 ```
+
+**See what an action changed — `--observe`.** Add it to a mutating action
+(`click`/`fill`/`type`/`select`/`check`/`press`/`eval`) and instead of you
+running act → wait → `snapshot` → `diff`, the result carries an `observed` delta:
+the added/removed interactive lines (new toasts/validation included via the alert
+surface), any url change, and requests fired — or `{changed:false}` if nothing
+moved. e.g. `chrome-use click @e8 --observe` → see the dialog/toast/row that
+appeared in one ~20-80 token reply. Use `expect` when you want a hard pass/fail
+gate; use `--observe` when you want to *see* what happened.
 
 **Optional steps — `--if-present` (alias `--optional`).** Add it to any selector
 action to make it a no-op success (`↷ skipped`, exit 0) when the target is
