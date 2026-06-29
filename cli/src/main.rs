@@ -1353,6 +1353,12 @@ fn main() {
         && std::env::var("AGENT_BROWSER_NO_AUTO_RECONNECT").is_err()
         && connect::host_installed()
         && connect::relay_url().is_none()
+        // Don't disturb a session that already has a healthy daemon — e.g. one
+        // driving a `--launch`ed browser (its follow-up commands omit --launch and
+        // would otherwise trip this relay-down branch and get the daemon killed). A
+        // daemon stuck on a dead relay fails this probe (hangs → times out) and is
+        // healed; a live launched browser answers fast and is left alone.
+        && !connection::probe_daemon_healthy(&flags.session, std::time::Duration::from_secs(3))
     {
         connection::kill_stale_daemon(&flags.session);
         connect::ensure_host_installed();
