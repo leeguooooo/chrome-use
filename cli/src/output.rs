@@ -2047,6 +2047,33 @@ Examples:
 "##
         }
 
+        // === Form fill ===
+        "form" => {
+            r##"
+chrome-use form fill - Fill a whole form in one call
+
+Usage:
+  chrome-use form fill --map <json> [--submit <selector|text>]
+  chrome-use form fill --map-file <path> | --stdin   [--submit ...]
+
+Fills every field from a {label-or-selector: value} map in one shot, dispatching
+the right control type, then optionally clicks a submit button and returns
+per-field status + any inline validation errors (the alerts `snapshot -i` shows).
+Keys match a <label>, aria-label, placeholder, name, or a CSS selector.
+Values: string → text/select/radio; true/false → checkbox.
+
+Standard controls (input/select/textarea/checkbox/radio/contenteditable) only —
+for rich editors (DraftJS/Monaco/CodeMirror) fill those fields individually with
+`fill`, which handles them.
+
+Examples:
+  chrome-use form fill --map '{"Email":"a@b.com","Country":"US","Subscribe":true}'
+  chrome-use form fill --map '{"#email":"a@b.com"}' --submit "Sign up"
+
+Returns { filled:[{key,ok,type}], submitted, errors:[...] } — use --json for it.
+"##
+        }
+
         // === Screenshot/PDF ===
         "screenshot" => {
             r##"
@@ -3473,6 +3500,8 @@ Core Commands:
                              count, text/value/attr, url, request fired, no-errors
   extract --schema <json>    Scrape structured JSON (rows+fields) → array/object
                              (one call vs N find/get; generic, any logged-in site)
+  form fill --map <json>     Fill a whole form by label/selector, submit, return
+                             per-field status + inline validation errors
   screenshot [path]          Take screenshot (auto-downscaled to ≤2000px long edge;
                              --max-width/--max-height/--scale to override)
   pdf <path>                 Save as PDF
