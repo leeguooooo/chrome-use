@@ -413,6 +413,14 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
         }
     }
 
+    // Action guards (#65 followup): stamp the `--if-present`/`--optional` flag onto
+    // the action so the daemon turns an "element absent" error into a skip.
+    if flags.if_present {
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("ifPresent".to_string(), json!(true));
+        }
+    }
+
     Ok(result)
 }
 
@@ -3941,6 +3949,7 @@ mod tests {
             enable: Vec::new(),
             cdp: None,
             browser: None,
+            if_present: false,
             profile: None,
             state: None,
             proxy: None,
@@ -5733,6 +5742,17 @@ mod tests {
         let c = parse_command(&args("expect no-errors"), &default_flags()).unwrap();
         assert_eq!(c["kind"], "errors");
         assert_eq!(c["max"], 0);
+    }
+
+    #[test]
+    fn test_if_present_stamps_action() {
+        let mut f = default_flags();
+        f.if_present = true;
+        let c = parse_command(&args("click #x"), &f).unwrap();
+        assert_eq!(c["ifPresent"], true);
+        // off by default
+        let c = parse_command(&args("click #x"), &default_flags()).unwrap();
+        assert!(c.get("ifPresent").is_none());
     }
 
     // === extract parse tests ===
