@@ -1943,6 +1943,22 @@ fn main() {
             // Extract action for context-specific output handling
             let action = cmd.get("action").and_then(|v| v.as_str());
             print_response_with_opts(&resp, action, &output_opts);
+            // `expect` is an assertion: map to a 3-way exit code so it composes in
+            // shells/CI — 0 pass, 1 condition false, 2 un-evaluable (transport
+            // error: no browser / bad grammar). Must run before the generic
+            // `!success → exit(1)` below.
+            if action == Some("expect") {
+                if !success {
+                    exit(2);
+                }
+                let pass = resp
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get("pass"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                exit(if pass { 0 } else { 1 });
+            }
             if !success {
                 exit(1);
             }

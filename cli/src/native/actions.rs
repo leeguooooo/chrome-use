@@ -1441,6 +1441,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "getbytestid" => handle_getbytestid(cmd, state).await,
         "nth" => handle_nth(cmd, state).await,
         "find" => handle_find(cmd, state).await,
+        "expect" => handle_expect(cmd, state).await,
         "evalhandle" => handle_evalhandle(cmd, state).await,
         "drag" => handle_drag(cmd, state).await,
         "solve_slider" => handle_solve_slider(cmd, state).await,
@@ -5100,6 +5101,270 @@ fn console_capture_active(state: &DaemonState) -> bool {
 const CONSOLE_DISABLED_HINT: &str =
     "console/error capture is disabled for stealth (Runtime.enable is a detectable CDP \
      signal). Restart the session with AGENT_BROWSER_CAPTURE_CONSOLE=1 to capture page output.";
+
+/// `expect <condition>` — assertion verb. Polls the condition until it holds or
+/// the timeout elapses (unless --no-wait), then returns {pass, actual, ...}.
+/// main.rs maps the outcome to a process exit code (0 pass / 1 fail / 2
+/// un-evaluable, i.e. this returns Err). (Feature from #65-followup brainstorm.)
+async fn handle_expect(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let kind = cmd
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let not = cmd.get("not").and_then(|v| v.as_bool()).unwrap_or(false);
+    let no_wait = cmd.get("noWait").and_then(|v| v.as_bool()).unwrap_or(false);
+    let timeout = state.timeout_ms(cmd);
+
+    // no-errors is only meaningful if console/error capture is on — otherwise a
+    // PASS would be a false negative. Treat as un-evaluable (exit 2), not pass.
+    if kind == "errors" && !console_capture_active(state) {
+        return Err(format!(
+            "expect no-errors requires console capture — {CONSOLE_DISABLED_HINT}"
+        ));
+    }
+    if kind == "request" {
+        enable_request_tracking(state).await;
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout);
+    let mut actual;
+    let mut pass;
+    loop {
+        // For network assertions, pull any buffered CDP events so requests that
+        // arrived during the poll window become visible (drain otherwise only runs
+        // once per command, before this handler).
+        if kind == "request" {
+            let _ = state.drain_cdp_events();
+        }
+        let (raw, act) = eval_expect_once(cmd, &kind, state).await?;
+        actual = act;
+        pass = raw ^ not;
+        if pass || no_wait || std::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    Ok(json!({
+        "pass": pass,
+        "kind": kind,
+        "condition": describe_expect(cmd),
+        "actual": actual,
+        "timedOut": !pass && !no_wait,
+    }))
+}
+
+/// One evaluation of an expect condition. Returns (condition-holds, actual-value).
+/// Errs only when genuinely un-evaluable (no browser) — a missing element is a
+/// normal `false`/`true`, never an error.
+async fn eval_expect_once(
+    cmd: &Value,
+    kind: &str,
+    state: &DaemonState,
+) -> Result<(bool, Value), String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let sel = cmd.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+    let predicate = cmd.get("predicate").and_then(|v| v.as_str()).unwrap_or("");
+    let expected = cmd.get("expected").and_then(|v| v.as_str()).unwrap_or("");
+    let regex = cmd.get("regex").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    match kind {
+        "element" => {
+            let want = cmd
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("present");
+            let present = super::element::resolve_element_object_id(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                sel,
+                &state.iframe_sessions,
+            )
+            .await
+            .is_ok();
+            let holds = match want {
+                "attached" => present,
+                "detached" => !present,
+                "visible" => {
+                    present
+                        && super::element::is_element_visible(
+                            &mgr.client,
+                            &session_id,
+                            &state.ref_map,
+                            sel,
+                            &state.iframe_sessions,
+                        )
+                        .await
+                        .unwrap_or(false)
+                }
+                "hidden" => {
+                    !present
+                        || !super::element::is_element_visible(
+                            &mgr.client,
+                            &session_id,
+                            &state.ref_map,
+                            sel,
+                            &state.iframe_sessions,
+                        )
+                        .await
+                        .unwrap_or(false)
+                }
+                _ => present,
+            };
+            Ok((holds, json!({ "present": present })))
+        }
+        "count" => {
+            let op = cmd.get("op").and_then(|v| v.as_str()).unwrap_or("eq");
+            let want = cmd.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
+            let n = super::element::get_element_count(&mgr.client, &session_id, sel)
+                .await
+                .unwrap_or(0)
+                .max(0) as u64;
+            Ok((compare_count(op, n, want), json!(n)))
+        }
+        "text" | "value" => {
+            let got = if kind == "text" {
+                super::element::get_element_text(
+                    &mgr.client,
+                    &session_id,
+                    &state.ref_map,
+                    sel,
+                    &state.iframe_sessions,
+                )
+                .await
+            } else {
+                super::element::get_element_input_value(
+                    &mgr.client,
+                    &session_id,
+                    &state.ref_map,
+                    sel,
+                    &state.iframe_sessions,
+                )
+                .await
+            };
+            match got {
+                Ok(s) => Ok((predicate_match(predicate, &s, expected, regex), json!(s))),
+                // element not found → condition false, not an error
+                Err(_) => Ok((false, Value::Null)),
+            }
+        }
+        "attr" => {
+            let name = cmd.get("attr").and_then(|v| v.as_str()).unwrap_or("");
+            match super::element::get_element_attribute(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                sel,
+                name,
+                &state.iframe_sessions,
+            )
+            .await
+            {
+                Ok(v) => {
+                    let s = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| {
+                        if v.is_null() {
+                            String::new()
+                        } else {
+                            v.to_string()
+                        }
+                    });
+                    Ok((predicate_match(predicate, &s, expected, regex), json!(s)))
+                }
+                Err(_) => Ok((false, Value::Null)),
+            }
+        }
+        "url" => {
+            let url = mgr.get_url().await.unwrap_or_default();
+            let holds = match predicate {
+                "equals" => url == expected,
+                "contains" => url.contains(expected),
+                "matches" => {
+                    let pat = if regex {
+                        expected.to_string()
+                    } else {
+                        url_glob_to_regex(expected)
+                    };
+                    regex_lite::Regex::new(&pat)
+                        .map(|re| re.is_match(&url))
+                        .unwrap_or(false)
+                }
+                _ => false,
+            };
+            Ok((holds, json!(url)))
+        }
+        "request" => {
+            let filter = cmd.get("filter").and_then(|v| v.as_str());
+            let method = cmd.get("method").and_then(|v| v.as_str());
+            let status = cmd.get("status").and_then(|v| v.as_str());
+            let type_list: Vec<String> = cmd
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|t| t.split(',').map(|s| s.trim().to_lowercase()).collect())
+                .unwrap_or_default();
+            let n = state
+                .tracked_requests
+                .iter()
+                .filter(|r| request_matches(r, filter, method, status, &type_list))
+                .count() as u64;
+            let holds = match cmd.get("count").and_then(|v| v.as_u64()) {
+                Some(want) => n == want,
+                None => n >= 1,
+            };
+            Ok((holds, json!(n)))
+        }
+        "errors" => {
+            let errs = state.event_tracker.get_errors_json();
+            let n = errs
+                .get("errors")
+                .and_then(|e| e.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            Ok((n == 0, json!(n)))
+        }
+        other => Err(format!("expect: unknown kind '{other}'")),
+    }
+}
+
+/// Human-readable one-liner for an expect condition (for PASS/FAIL output).
+fn describe_expect(cmd: &Value) -> String {
+    let g = |k: &str| cmd.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    let not = if cmd.get("not").and_then(|v| v.as_bool()).unwrap_or(false) {
+        "NOT "
+    } else {
+        ""
+    };
+    let body = match g("kind") {
+        "element" => format!("{} {}", g("selector"), g("state")),
+        "count" => format!(
+            "count {} {} {}",
+            g("selector"),
+            g("op"),
+            cmd.get("value").and_then(|v| v.as_u64()).unwrap_or(0)
+        ),
+        "text" | "value" => format!(
+            "{} {} {} \"{}\"",
+            g("kind"),
+            g("selector"),
+            g("predicate"),
+            g("expected")
+        ),
+        "attr" => format!(
+            "attr {} {} {} \"{}\"",
+            g("selector"),
+            g("attr"),
+            g("predicate"),
+            g("expected")
+        ),
+        "url" => format!("url {} \"{}\"", g("predicate"), g("expected")),
+        "request" => format!("request \"{}\"", g("filter")),
+        "errors" => "no-errors".to_string(),
+        _ => "?".to_string(),
+    };
+    format!("{not}{body}")
+}
 
 async fn handle_errors(state: &DaemonState) -> Result<Value, String> {
     let mut result = state.event_tracker.get_errors_json();
@@ -9434,6 +9699,66 @@ async fn handle_unroute(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
     Ok(json!({ "unrouted": label }))
 }
 
+/// Whether a tracked request matches the given filters. Shared by `requests`
+/// (list) and `expect request` (assert) so both filter identically.
+pub fn request_matches(
+    r: &TrackedRequest,
+    filter: Option<&str>,
+    method: Option<&str>,
+    status: Option<&str>,
+    type_list: &[String],
+) -> bool {
+    if let Some(f) = filter {
+        if !r.url.contains(f) {
+            return false;
+        }
+    }
+    if !type_list.is_empty() && !type_list.contains(&r.resource_type.to_lowercase()) {
+        return false;
+    }
+    if let Some(m) = method {
+        if !r.method.eq_ignore_ascii_case(m) {
+            return false;
+        }
+    }
+    if let Some(s) = status {
+        if !matches_status_filter(r.status, s) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Integer comparison for `expect count` (op is canonical eq/ne/gt/lt/ge/le).
+pub fn compare_count(op: &str, actual: u64, expected: u64) -> bool {
+    match op {
+        "eq" => actual == expected,
+        "ne" => actual != expected,
+        "gt" => actual > expected,
+        "lt" => actual < expected,
+        "ge" => actual >= expected,
+        "le" => actual <= expected,
+        _ => false,
+    }
+}
+
+/// String predicate for `expect text|value|attr` (equals/contains/matches).
+/// `matches` (or any predicate when `regex` is set) treats `needle` as a
+/// regex-lite pattern; an invalid pattern yields `false` (callers that want a
+/// hard error validate at parse time).
+pub fn predicate_match(predicate: &str, haystack: &str, needle: &str, regex: bool) -> bool {
+    if regex || predicate == "matches" {
+        return regex_lite::Regex::new(needle)
+            .map(|re| re.is_match(haystack))
+            .unwrap_or(false);
+    }
+    match predicate {
+        "equals" => haystack == needle,
+        "contains" => haystack.contains(needle),
+        _ => false,
+    }
+}
+
 pub fn matches_status_filter(status: Option<i64>, filter: &str) -> bool {
     let Some(code) = status else { return false };
     let f = filter.to_lowercase();
@@ -9500,27 +9825,7 @@ async fn handle_requests(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     let requests: Vec<&TrackedRequest> = state
         .tracked_requests
         .iter()
-        .filter(|r| {
-            if let Some(f) = filter {
-                if !r.url.contains(f) {
-                    return false;
-                }
-            }
-            if !type_list.is_empty() && !type_list.contains(&r.resource_type.to_lowercase()) {
-                return false;
-            }
-            if let Some(m) = method_filter {
-                if !r.method.eq_ignore_ascii_case(m) {
-                    return false;
-                }
-            }
-            if let Some(s) = status_filter {
-                if !matches_status_filter(r.status, s) {
-                    return false;
-                }
-            }
-            true
-        })
+        .filter(|r| request_matches(r, filter, method_filter, status_filter, &type_list))
         .collect();
 
     // NB: do NOT add a top-level `count` field here — the human formatter treats
@@ -10422,6 +10727,67 @@ mod tests {
         assert_eq!(clearance_state(Some(2000.0), 1000.0), (true, false));
         // expired: expiry in the past
         assert_eq!(clearance_state(Some(500.0), 1000.0), (true, true));
+    }
+
+    #[test]
+    fn test_compare_count() {
+        assert!(compare_count("eq", 3, 3) && !compare_count("eq", 3, 4));
+        assert!(compare_count("ne", 3, 4) && !compare_count("ne", 3, 3));
+        assert!(compare_count("gt", 4, 3) && !compare_count("gt", 3, 3));
+        assert!(compare_count("lt", 2, 3) && !compare_count("lt", 3, 3));
+        assert!(
+            compare_count("ge", 3, 3) && compare_count("ge", 4, 3) && !compare_count("ge", 2, 3)
+        );
+        assert!(
+            compare_count("le", 3, 3) && compare_count("le", 2, 3) && !compare_count("le", 4, 3)
+        );
+        assert!(!compare_count("??", 3, 3));
+    }
+
+    #[test]
+    fn test_predicate_match() {
+        assert!(predicate_match("equals", "Saved", "Saved", false));
+        assert!(!predicate_match("equals", "Saved!", "Saved", false));
+        assert!(predicate_match("contains", "error: bad", "error", false));
+        assert!(predicate_match("matches", "Saved", "^Sav", false));
+        // regex flag forces regex even with equals/contains predicate name
+        assert!(predicate_match("contains", "abc123", r"\d+", true));
+        // invalid regex → false, not panic
+        assert!(!predicate_match("matches", "x", "[unclosed", false));
+    }
+
+    #[test]
+    fn test_request_matches_parity() {
+        let r = TrackedRequest {
+            url: "https://x.com/api/save".to_string(),
+            method: "POST".to_string(),
+            headers: json!({}),
+            timestamp: 0,
+            resource_type: "xhr".to_string(),
+            request_id: "1".to_string(),
+            post_data: None,
+            status: Some(200),
+            response_headers: None,
+            mime_type: None,
+        };
+        assert!(request_matches(&r, Some("/api/save"), None, None, &[]));
+        assert!(request_matches(
+            &r,
+            Some("/api"),
+            Some("post"),
+            Some("2xx"),
+            &["xhr".to_string()]
+        ));
+        assert!(!request_matches(&r, Some("/nope"), None, None, &[]));
+        assert!(!request_matches(&r, None, Some("GET"), None, &[]));
+        assert!(!request_matches(&r, None, None, Some("4xx"), &[]));
+        assert!(!request_matches(
+            &r,
+            None,
+            None,
+            None,
+            &["document".to_string()]
+        ));
     }
 
     #[test]
