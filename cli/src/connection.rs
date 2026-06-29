@@ -952,6 +952,32 @@ fn is_transient_error(error: &str) -> bool {
         || error.contains("os error 10054") // Connection reset by peer (Windows)
 }
 
+/// Quick health probe of an existing session daemon: connect and send a
+/// lightweight `url` command with a short read timeout. Returns `true` only if
+/// the daemon answers within `timeout` — i.e. it's alive AND its browser is
+/// responsive. A daemon bound to a dead relay HANGS on `url` and times out
+/// (false); a daemon driving a launched browser answers fast (true); no daemon
+/// fails to connect (false). Lets the relay self-heal avoid killing a healthy
+/// `--launch` session's daemon when the relay happens to be down.
+pub fn probe_daemon_healthy(session: &str, timeout: Duration) -> bool {
+    let Ok(mut stream) = connect(session) else {
+        return false;
+    };
+    stream.set_read_timeout(Some(timeout)).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+    let probe = serde_json::json!({ "id": "probe", "action": "url" });
+    let Ok(mut json_str) = serde_json::to_string(&probe) else {
+        return false;
+    };
+    json_str.push('\n');
+    if stream.write_all(json_str.as_bytes()).is_err() {
+        return false;
+    }
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).is_ok() && !line.trim().is_empty()
+}
+
 fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
     let mut stream = connect(session)?;
 

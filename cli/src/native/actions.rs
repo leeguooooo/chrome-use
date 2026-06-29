@@ -5544,7 +5544,14 @@ async fn handle_form_fill(cmd: &Value, state: &DaemonState) -> Result<Value, Str
     try {{
       const t = el.tagName;
       if (el.isContentEditable) {{ el.focus(); el.textContent = String(val); el.dispatchEvent(new Event('input', {{ bubbles: true }})); results.push({{ key, ok: true, type: 'contenteditable' }}); }}
-      else if (t === 'SELECT') {{ setNative(el, String(val)); results.push({{ key, ok: el.value === String(val), type: 'select' }}); }}
+      else if (t === 'SELECT') {{
+        const opts = Array.from(el.options);
+        const m = opts.find((o) => o.value === String(val))
+          || opts.find((o) => lc(o.textContent) === lc(String(val)))
+          || opts.find((o) => lc(o.textContent).includes(lc(String(val))));
+        if (m) setNative(el, m.value);
+        results.push({{ key, ok: !!m && el.value === (m ? m.value : null), type: 'select' }});
+      }}
       else if (t === 'INPUT' && (el.type === 'checkbox')) {{ const want = val === true || val === 'true' || val === 1; if (el.checked !== want) el.click(); results.push({{ key, ok: el.checked === want, type: 'checkbox' }}); }}
       else if (t === 'INPUT' && el.type === 'radio') {{
         const grp = Array.from(document.querySelectorAll('input[type=radio][name="' + (el.name || '') + '"]'));
