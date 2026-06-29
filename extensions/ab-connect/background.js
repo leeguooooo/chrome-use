@@ -511,7 +511,11 @@ async function handleForwardCdpCommand(msg) {
       }
     }
     const entry = await attachTab(match.id) // attaches + announces attachedToTarget
-    markOwned(match.id)
+    // Do NOT markOwned: an adopted tab is the USER'S — attach it for this session,
+    // but never persist it into the re-attach set. Persisting would re-attach the
+    // user's tab on every SW restart forever, leaving Chrome's debugger banner
+    // stuck on a page they own. On SW restart the adoption simply releases (banner
+    // clears); re-`adopt` if still needed. Only agent-CREATED tabs are persisted.
     return { targetId: entry.targetId, url: match.url || '', title: match.title || '' }
   }
 
@@ -810,7 +814,19 @@ chrome.tabs.onRemoved.addListener(
 
 // ---- bootstrap + keepalive ------------------------------------------------
 
-chrome.runtime.onInstalled.addListener(() => void whenReady(connectHost))
+chrome.runtime.onInstalled.addListener((details) => {
+  // One-time purge: a prior build persisted ADOPTED user tabs into the owned set,
+  // which then re-attached them on every restart and left the debugger banner
+  // stuck on the user's pages. Clear the persisted set on install/update — agent
+  // tabs from a previous SW are dead anyway, and createTarget re-marks new ones.
+  if (details && (details.reason === 'update' || details.reason === 'install')) {
+    try {
+      chrome.storage.local.remove('ab_owned_tabs')
+    } catch {}
+    ownedTabs.clear()
+  }
+  void whenReady(connectHost)
+})
 chrome.runtime.onStartup.addListener(() => void whenReady(connectHost))
 
 // Popup status page asks for the live pairing state. Attempt a (re)connect on
