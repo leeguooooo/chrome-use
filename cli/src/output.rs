@@ -2047,6 +2047,25 @@ Examples:
 "##
         }
 
+        // === Friction log ===
+        "friction" => {
+            r##"
+chrome-use friction - What's been painful to drive (local failure log)
+
+Usage:
+  chrome-use friction            aggregated summary (by command / category / host)
+  chrome-use friction --json     machine-readable aggregation
+  chrome-use friction --clear    reset the log
+
+Every command that genuinely FAILS is auto-recorded to a local JSONL log
+(~/.chrome-use/friction.jsonl) with its error category and the page host. This
+turns "what should we improve" into real usage data instead of guesswork.
+
+Privacy: LOCAL ONLY — never uploaded. Records the host (e.g. example.com), never
+the full URL/query/params. Opt out entirely: AGENT_BROWSER_NO_FRICTION_LOG=1.
+"##
+        }
+
         // === Form fill ===
         "form" => {
             r##"
@@ -3502,6 +3521,8 @@ Core Commands:
                              (one call vs N find/get; generic, any logged-in site)
   form fill --map <json>     Fill a whole form by label/selector, submit, return
                              per-field status + inline validation errors
+  friction [--json|--clear]  Local log of failed commands (what's painful to
+                             drive) — local only, never uploaded
   screenshot [path]          Take screenshot (auto-downscaled to ≤2000px long edge;
                              --max-width/--max-height/--scale to override)
   pdf <path>                 Save as PDF

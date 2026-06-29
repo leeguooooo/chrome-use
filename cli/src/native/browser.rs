@@ -1320,6 +1320,22 @@ impl BrowserManager {
             active_page_index_after_removal(self.active_page_index, pos, self.pages.len());
     }
 
+    /// The active page's last-known URL from cached page state — NO CDP round
+    /// trip (so it never hangs, even when the relay is dead). Best-effort, "" if
+    /// unknown. Used for cheap friction logging where calling `get_url` would
+    /// block on exactly the failures we want to record.
+    pub fn cached_active_url(&self) -> String {
+        let idx = resolve_active_index(
+            &self.pages,
+            self.active_target_id.as_deref(),
+            self.active_page_index,
+        );
+        self.pages
+            .get(idx)
+            .map(|p| p.url.clone())
+            .unwrap_or_default()
+    }
+
     /// Pin the current active page by target_id so later commands stick to it.
     /// Call after any explicit open / tab new / tab switch.
     fn pin_active_target(&mut self) {

@@ -7,6 +7,7 @@ mod cookie_export;
 mod doctor;
 mod findurl;
 mod flags;
+mod friction;
 mod install;
 mod native;
 mod output;
@@ -990,6 +991,13 @@ fn main() {
         Some("find-url") | Some("findurl")
     ) {
         findurl::run_find_url(&clean, flags.json);
+        return;
+    }
+
+    // `friction` (no daemon): aggregate the local friction log — what's been
+    // painful to drive. Data for the next round of features.
+    if clean.first().map(|s| s.as_str()) == Some("friction") {
+        friction::run_friction(&clean[1..], flags.json);
         return;
     }
 
