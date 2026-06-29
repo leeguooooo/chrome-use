@@ -36,6 +36,7 @@ pub enum ParseError {
 const KNOWN_COMMANDS: &[&str] = &[
     "open",
     "navigate",
+    "expect",
     "click",
     "fill",
     "type",
@@ -1783,6 +1784,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
         // === Is (state checks) ===
         "is" => parse_is(&rest, &id),
+        "expect" => parse_expect(&rest, &id),
 
         // === Find (locators) ===
         "find" => parse_find(&rest, &id),
@@ -2989,6 +2991,229 @@ fn parse_is(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             context: "is".to_string(),
             usage: "is <visible|enabled|checked> <selector>",
         }),
+    }
+}
+
+/// `expect <condition>` — pass/fail assertion verb. Subject-first for element
+/// state (`expect <sel> visible`), keyword-first for the rest (count/text/value/
+/// attr/url/request/no-errors). Waits up to --timeout by default. See the help
+/// text in output.rs for the full grammar.
+fn parse_expect(rest: &[&str], id: &str) -> Result<Value, ParseError> {
+    // Split out boolean/value flags first; the positional grammar is parsed from
+    // what's left, so flags may appear anywhere after the subject.
+    let mut pos: Vec<&str> = Vec::new();
+    let mut timeout: Option<u64> = None;
+    let mut no_wait = false;
+    let mut regex = false;
+    let mut not = false;
+    let mut method: Option<String> = None;
+    let mut status: Option<String> = None;
+    let mut rtype: Option<String> = None;
+    let mut req_count: Option<u64> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--no-wait" => no_wait = true,
+            "--regex" => regex = true,
+            "--not" => not = true,
+            "--timeout" => {
+                timeout = rest.get(i + 1).and_then(|v| v.parse().ok());
+                i += 1;
+            }
+            "--method" => {
+                method = rest.get(i + 1).map(|s| s.to_string());
+                i += 1;
+            }
+            "--status" => {
+                status = rest.get(i + 1).map(|s| s.to_string());
+                i += 1;
+            }
+            "--type" => {
+                rtype = rest.get(i + 1).map(|s| s.to_string());
+                i += 1;
+            }
+            "--count" => {
+                req_count = rest.get(i + 1).and_then(|v| v.parse().ok());
+                i += 1;
+            }
+            other => pos.push(other),
+        }
+        i += 1;
+    }
+
+    let usage = "expect <sel> <visible|hidden|gone|present>  |  expect count <sel> <op> <n>  |  expect text|value <sel> <equals|contains|matches> <str>  |  expect attr <sel> <name> <pred> <str>  |  expect url <pred> <str>  |  expect request <url-substr> [--method M --status S]  |  expect no-errors";
+    let miss = |ctx: &str| ParseError::MissingArguments {
+        context: ctx.to_string(),
+        usage,
+    };
+    let mut obj = serde_json::Map::new();
+    obj.insert("id".into(), json!(id));
+    obj.insert("action".into(), json!("expect"));
+    if let Some(t) = timeout {
+        obj.insert("timeout".into(), json!(t));
+    }
+    obj.insert("noWait".into(), json!(no_wait));
+    obj.insert("not".into(), json!(not));
+
+    let first = *pos.first().ok_or_else(|| miss("expect"))?;
+    match first {
+        "count" => {
+            let sel = pos.get(1).ok_or_else(|| miss("expect count"))?;
+            if sel.starts_with('@') {
+                return Err(ParseError::InvalidValue {
+                    message: "expect count takes a CSS selector, not an @ref".to_string(),
+                    usage,
+                });
+            }
+            let op_raw = *pos
+                .get(2)
+                .ok_or_else(|| miss("expect count <sel> <op> <n>"))?;
+            let op = canon_count_op(op_raw).ok_or_else(|| ParseError::InvalidValue {
+                message: format!("bad count op '{op_raw}' (use ==,!=,>,<,>=,<= or eq/ne/gt/lt/ge/le; quote > and <)"),
+                usage,
+            })?;
+            let n: u64 = pos.get(3).and_then(|v| v.parse().ok()).ok_or_else(|| {
+                ParseError::InvalidValue {
+                    message: "expect count needs a numeric <n>".to_string(),
+                    usage,
+                }
+            })?;
+            obj.insert("kind".into(), json!("count"));
+            obj.insert("selector".into(), json!(sel));
+            obj.insert("op".into(), json!(op));
+            obj.insert("value".into(), json!(n));
+        }
+        "text" | "value" => {
+            let sel = pos.get(1).ok_or_else(|| miss("expect text/value"))?;
+            let pred = *pos
+                .get(2)
+                .ok_or_else(|| miss("expect text <sel> <equals|contains|matches> <str>"))?;
+            canon_predicate(pred).ok_or_else(|| ParseError::InvalidValue {
+                message: format!("bad predicate '{pred}' (use equals|contains|matches)"),
+                usage,
+            })?;
+            let expected = pos.get(3..).map(|s| s.join(" ")).unwrap_or_default();
+            if pos.len() < 4 {
+                return Err(miss("expect text <sel> <pred> <str>"));
+            }
+            obj.insert("kind".into(), json!(first));
+            obj.insert("selector".into(), json!(sel));
+            obj.insert("predicate".into(), json!(pred));
+            obj.insert("expected".into(), json!(expected));
+            obj.insert("regex".into(), json!(regex || pred == "matches"));
+        }
+        "attr" => {
+            let sel = pos.get(1).ok_or_else(|| miss("expect attr"))?;
+            let name = pos
+                .get(2)
+                .ok_or_else(|| miss("expect attr <sel> <name> <pred> <str>"))?;
+            let pred = *pos
+                .get(3)
+                .ok_or_else(|| miss("expect attr <sel> <name> <pred> <str>"))?;
+            canon_predicate(pred).ok_or_else(|| ParseError::InvalidValue {
+                message: format!("bad predicate '{pred}' (use equals|contains|matches)"),
+                usage,
+            })?;
+            if pos.len() < 5 {
+                return Err(miss("expect attr <sel> <name> <pred> <str>"));
+            }
+            let expected = pos[4..].join(" ");
+            obj.insert("kind".into(), json!("attr"));
+            obj.insert("selector".into(), json!(sel));
+            obj.insert("attr".into(), json!(name));
+            obj.insert("predicate".into(), json!(pred));
+            obj.insert("expected".into(), json!(expected));
+            obj.insert("regex".into(), json!(regex || pred == "matches"));
+        }
+        "url" => {
+            let pred = *pos
+                .get(1)
+                .ok_or_else(|| miss("expect url <equals|contains|matches> <str>"))?;
+            canon_predicate(pred).ok_or_else(|| ParseError::InvalidValue {
+                message: format!("bad predicate '{pred}' (use equals|contains|matches)"),
+                usage,
+            })?;
+            let expected = pos.get(2..).map(|s| s.join(" ")).unwrap_or_default();
+            if pos.len() < 3 {
+                return Err(miss("expect url <pred> <str>"));
+            }
+            obj.insert("kind".into(), json!("url"));
+            obj.insert("predicate".into(), json!(pred));
+            obj.insert("expected".into(), json!(expected));
+            obj.insert("regex".into(), json!(regex));
+        }
+        "request" => {
+            let filter = pos
+                .get(1)
+                .ok_or_else(|| miss("expect request <url-substr>"))?;
+            obj.insert("kind".into(), json!("request"));
+            obj.insert("filter".into(), json!(filter));
+            if let Some(m) = method {
+                obj.insert("method".into(), json!(m));
+            }
+            if let Some(s) = status {
+                obj.insert("status".into(), json!(s));
+            }
+            if let Some(t) = rtype {
+                obj.insert("type".into(), json!(t));
+            }
+            if let Some(c) = req_count {
+                obj.insert("count".into(), json!(c));
+            }
+        }
+        "no-errors" => {
+            obj.insert("kind".into(), json!("errors"));
+            obj.insert("max".into(), json!(0));
+        }
+        // Subject-first element-state assertion: `expect <sel> <state>`.
+        sel => {
+            let state_raw = *pos
+                .get(1)
+                .ok_or_else(|| miss("expect <sel> <visible|hidden|gone|present>"))?;
+            let state = canon_element_state(state_raw).ok_or_else(|| ParseError::InvalidValue {
+                message: format!("unknown state '{state_raw}' (use visible|hidden|gone|present|attached|detached)"),
+                usage,
+            })?;
+            obj.insert("kind".into(), json!("element"));
+            obj.insert("selector".into(), json!(sel));
+            obj.insert("state".into(), json!(state));
+        }
+    }
+    Ok(Value::Object(obj))
+}
+
+/// Map a count operator token (symbolic or word) to canonical eq/ne/gt/lt/ge/le.
+fn canon_count_op(op: &str) -> Option<&'static str> {
+    match op {
+        "==" | "eq" => Some("eq"),
+        "!=" | "ne" => Some("ne"),
+        ">" | "gt" => Some("gt"),
+        "<" | "lt" => Some("lt"),
+        ">=" | "ge" => Some("ge"),
+        "<=" | "le" => Some("le"),
+        _ => None,
+    }
+}
+
+fn canon_predicate(p: &str) -> Option<&'static str> {
+    match p {
+        "equals" => Some("equals"),
+        "contains" => Some("contains"),
+        "matches" => Some("matches"),
+        _ => None,
+    }
+}
+
+/// Canonicalize an `expect` element state to what the wait helpers understand:
+/// `gone`→`detached`, `present`→`attached`; visible/hidden/attached/detached
+/// pass through. (Review fix: the helpers don't understand gone/present.)
+fn canon_element_state(s: &str) -> Option<&'static str> {
+    match s {
+        "visible" => Some("visible"),
+        "hidden" => Some("hidden"),
+        "gone" | "detached" => Some("detached"),
+        "present" | "attached" => Some("attached"),
+        _ => None,
     }
 }
 
@@ -5345,6 +5570,101 @@ mod tests {
         assert_eq!(cmd["action"], "evaluate");
         assert_eq!(cmd["frame"], "accounts.google.com");
         assert_eq!(cmd["script"], "location.href");
+    }
+
+    // === expect (assertion verb) parse tests ===
+    #[test]
+    fn test_expect_element_state_canonicalized() {
+        let c = parse_command(&args("expect #x gone"), &default_flags()).unwrap();
+        assert_eq!(c["action"], "expect");
+        assert_eq!(c["kind"], "element");
+        assert_eq!(c["selector"], "#x");
+        assert_eq!(c["state"], "detached"); // gone → detached (review fix)
+        let c = parse_command(&args("expect @e5 visible"), &default_flags()).unwrap();
+        assert_eq!(c["kind"], "element");
+        assert_eq!(c["state"], "visible");
+        let c = parse_command(&args("expect #m present"), &default_flags()).unwrap();
+        assert_eq!(c["state"], "attached"); // present → attached
+    }
+
+    #[test]
+    fn test_expect_unknown_state_errors() {
+        assert!(parse_command(&args("expect #x wobbly"), &default_flags()).is_err());
+    }
+
+    #[test]
+    fn test_expect_count_ops() {
+        let c = parse_command(&args("expect count .row >= 3"), &default_flags()).unwrap();
+        assert_eq!(c["kind"], "count");
+        assert_eq!(c["op"], "ge");
+        assert_eq!(c["value"], 3);
+        let c = parse_command(&args("expect count .row == 5"), &default_flags()).unwrap();
+        assert_eq!(c["op"], "eq");
+        // word form + bad value / bad op
+        assert_eq!(
+            parse_command(&args("expect count .r ne 2"), &default_flags()).unwrap()["op"],
+            "ne"
+        );
+        assert!(parse_command(&args("expect count .r >= x"), &default_flags()).is_err());
+        assert!(parse_command(&args("expect count .r ?? 2"), &default_flags()).is_err());
+        // count rejects @ref
+        assert!(parse_command(&args("expect count @e1 == 1"), &default_flags()).is_err());
+    }
+
+    #[test]
+    fn test_expect_text_value_attr() {
+        let c = parse_command(&args("expect text @e1 equals Saved"), &default_flags()).unwrap();
+        assert_eq!(c["kind"], "text");
+        assert_eq!(c["predicate"], "equals");
+        assert_eq!(c["expected"], "Saved");
+        let c = parse_command(
+            &args("expect text #t contains hello world"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(c["expected"], "hello world"); // remaining tokens joined
+        let c = parse_command(&args("expect text #t matches ^Saved$"), &default_flags()).unwrap();
+        assert_eq!(c["regex"], true); // matches ⇒ regex
+        let c = parse_command(
+            &args("expect attr @e1 aria-expanded equals true"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(c["kind"], "attr");
+        assert_eq!(c["attr"], "aria-expanded");
+        assert!(parse_command(&args("expect text #t bogus x"), &default_flags()).is_err());
+    }
+
+    #[test]
+    fn test_expect_url_request_errors() {
+        let c = parse_command(&args("expect url contains /dash"), &default_flags()).unwrap();
+        assert_eq!(c["kind"], "url");
+        assert_eq!(c["predicate"], "contains");
+        let c = parse_command(
+            &args("expect request /api/save --method POST --status 2xx --count 1"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(c["kind"], "request");
+        assert_eq!(c["filter"], "/api/save");
+        assert_eq!(c["method"], "POST");
+        assert_eq!(c["status"], "2xx");
+        assert_eq!(c["count"], 1);
+        let c = parse_command(&args("expect no-errors"), &default_flags()).unwrap();
+        assert_eq!(c["kind"], "errors");
+        assert_eq!(c["max"], 0);
+    }
+
+    #[test]
+    fn test_expect_flags_stamped() {
+        let c = parse_command(
+            &args("expect #x visible --timeout 9000 --not --no-wait"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(c["timeout"], 9000);
+        assert_eq!(c["not"], true);
+        assert_eq!(c["noWait"], true);
     }
 
     #[test]

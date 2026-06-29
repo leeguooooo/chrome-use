@@ -695,6 +695,31 @@ After any page-changing action, pick one:
 Avoid bare `wait 2000` except when debugging — it makes scripts slow and
 flaky. Timeouts default to 25 seconds.
 
+### Confirm an action worked — `expect`
+
+After acting, **assert the result instead of eyeballing a snapshot**. `expect`
+is a pass/fail verb with an exit code (0 pass / 1 false / 2 un-evaluable), so it
+composes with `&&` and `chrome-use batch`, and costs ~1 line instead of a
+snapshot you have to read:
+
+```bash
+chrome-use click @e8 && chrome-use expect "#toast" visible      # did the toast show?
+chrome-use expect count ".result" ">=" 1                        # results loaded?
+chrome-use expect text @e3 contains "Saved"                     # success message?
+chrome-use expect url contains /dashboard                       # navigation landed?
+chrome-use expect "#spinner" gone                               # finished loading?
+chrome-use requests --clear && chrome-use click @save \
+  && chrome-use expect request /api/save --status 2xx           # the POST fired & 2xx?
+chrome-use expect no-errors                                     # no console errors?
+```
+
+It **waits** up to the timeout for the condition to hold (poll), so you often
+don't need a separate `wait`. Conditions: element `visible|hidden|gone|present`;
+`count <css> <op> <n>`; `text|value|attr … equals|contains|matches`; `url …`;
+`request <substr> [--status 2xx]`; `no-errors`. `--not` inverts, `--no-wait`
+checks once. (`expect request` only sees requests captured after tracking is on —
+`requests --clear` first; `no-errors` needs console capture — run `console` once.)
+
 ## Common workflows
 
 ### Log in

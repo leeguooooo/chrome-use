@@ -244,6 +244,39 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
 
+        // `expect` assertion result → a PASS/FAIL line. Action-gated and placed
+        // early so the generic key-based renderers don't swallow it. The exit code
+        // is set in main.rs.
+        if action == Some("expect") {
+            let pass = data.get("pass").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cond = data.get("condition").and_then(|v| v.as_str()).unwrap_or("");
+            if pass {
+                println!("{} expect: {}", color::green("PASS"), cond);
+            } else {
+                let actual = data
+                    .get("actual")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let timed = data
+                    .get("timedOut")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let suffix = if timed { " (timed out)" } else { "" };
+                println!(
+                    "{} expect: {} — actual: {}{}",
+                    color::red("FAIL"),
+                    cond,
+                    if actual.is_null() {
+                        "∅".to_string()
+                    } else {
+                        actual.to_string()
+                    },
+                    suffix
+                );
+            }
+            return;
+        }
+
         // Cloudflare challenge/clearance preflight (`cf-status`). Checked early
         // because its response carries `url`/`title`, which later generic
         // renderers would otherwise swallow.
@@ -1910,6 +1943,46 @@ Examples:
 "##
         }
 
+        // === Expect (assertion) ===
+        "expect" => {
+            r##"
+chrome-use expect - Assert a condition (pass/fail with exit code)
+
+Usage: chrome-use expect <condition> [--timeout <ms>] [--no-wait] [--not]
+
+The "did it actually work?" gate. Waits up to --timeout for the condition to
+hold (poll), then exits: 0 = pass, 1 = condition false, 2 = un-evaluable
+(no browser / bad grammar). --json prints {pass, actual, ...} on both outcomes.
+
+Conditions:
+  expect <sel|@ref> visible|hidden|gone|present   element state
+  expect count <css> <op> <n>                     op: == != > < >= <= (quote > <) or eq/ne/gt/lt/ge/le
+  expect text|value <sel|@ref> equals|contains|matches <str>
+  expect attr <sel|@ref> <name> equals|contains|matches <str>
+  expect url equals|contains|matches <pat>        matches = glob (use --regex for raw regex)
+  expect request <url-substr> [--method M] [--status 2xx] [--type xhr] [--count N]
+  expect no-errors                                no console errors captured
+
+Flags:
+  --timeout <ms>   how long to wait for it to hold (default AGENT_BROWSER_DEFAULT_TIMEOUT)
+  --no-wait        evaluate once, don't poll
+  --not            invert (pass when the condition is false)
+  --regex          treat the match value as a raw regex (text/value/attr/url)
+
+Examples:
+  chrome-use click @e8 && chrome-use expect "#toast" visible
+  chrome-use expect count ".result" ">=" 1
+  chrome-use expect text @e3 contains "Saved"
+  chrome-use expect url contains /dashboard
+  chrome-use requests --clear && chrome-use click @save && chrome-use expect request /api/save --status 2xx
+  chrome-use expect no-errors
+
+Note: `expect request` only sees requests captured AFTER tracking is on — run
+`requests --clear` (or any network command) before the action that fires it.
+`expect no-errors` needs console capture active (run `console` once to enable).
+"##
+        }
+
         // === Screenshot/PDF ===
         "screenshot" => {
             r##"
@@ -3332,6 +3405,8 @@ Core Commands:
   scroll <dir> [px]          Scroll (up/down/left/right)
   scrollintoview <sel>       Scroll element into view
   wait <sel|ms>              Wait for element or time
+  expect <condition>         Assert (pass/fail + exit code): element visible/gone,
+                             count, text/value/attr, url, request fired, no-errors
   screenshot [path]          Take screenshot (auto-downscaled to ≤2000px long edge;
                              --max-width/--max-height/--scale to override)
   pdf <path>                 Save as PDF
