@@ -37,6 +37,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "open",
     "navigate",
     "expect",
+    "extract",
     "click",
     "fill",
     "type",
@@ -1785,6 +1786,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         // === Is (state checks) ===
         "is" => parse_is(&rest, &id),
         "expect" => parse_expect(&rest, &id),
+        "extract" => parse_extract(&rest, &id),
 
         // === Find (locators) ===
         "find" => parse_find(&rest, &id),
@@ -2992,6 +2994,84 @@ fn parse_is(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             usage: "is <visible|enabled|checked> <selector>",
         }),
     }
+}
+
+/// `extract --schema <json>` — declarative structured scrape → JSON. Schema:
+/// `{ "rows"?: "<css>", "fields": { "k": "<css>" | {"sel","get","all"} } }`.
+/// `get` = text (default) | @attr | html | value. Compiled to one eval (see
+/// handle_extract). `--frame` is leading-only, mirroring `eval`.
+fn parse_extract(rest: &[&str], id: &str) -> Result<Value, ParseError> {
+    let usage = "extract --schema <json> | --schema-file <path> | --stdin  [--frame <f>]";
+    // Leading-only --frame (copy eval's pattern so it never eats a schema token).
+    let mut frame: Option<String> = None;
+    let rest: Vec<&str> = if rest.first() == Some(&"--frame") {
+        let v = rest.get(1).copied().ok_or(ParseError::InvalidValue {
+            message: "extract --frame requires a value".to_string(),
+            usage,
+        })?;
+        frame = Some(v.to_string());
+        rest[2..].to_vec()
+    } else {
+        rest.to_vec()
+    };
+
+    let schema_str = match rest.first().copied() {
+        Some("--schema") => {
+            rest.get(1)
+                .map(|s| s.to_string())
+                .ok_or(ParseError::MissingArguments {
+                    context: "extract --schema".to_string(),
+                    usage,
+                })?
+        }
+        Some("--schema-file") => {
+            let path = rest.get(1).ok_or(ParseError::MissingArguments {
+                context: "extract --schema-file".to_string(),
+                usage,
+            })?;
+            std::fs::read_to_string(path).map_err(|e| ParseError::InvalidValue {
+                message: format!("extract --schema-file: cannot read {path}: {e}"),
+                usage,
+            })?
+        }
+        Some("--stdin") => {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            stdin
+                .lock()
+                .lines()
+                .map(|l| l.unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        _ => {
+            return Err(ParseError::MissingArguments {
+                context: "extract".to_string(),
+                usage,
+            })
+        }
+    };
+
+    let schema: Value =
+        serde_json::from_str(schema_str.trim()).map_err(|e| ParseError::InvalidValue {
+            message: format!("extract schema is not valid JSON: {e}"),
+            usage,
+        })?;
+    if !schema.get("fields").map(|f| f.is_object()).unwrap_or(false) {
+        return Err(ParseError::InvalidValue {
+            message: "extract schema needs a \"fields\" object".to_string(),
+            usage,
+        });
+    }
+
+    let mut obj = serde_json::Map::new();
+    obj.insert("id".into(), json!(id));
+    obj.insert("action".into(), json!("extract"));
+    obj.insert("schema".into(), schema);
+    if let Some(f) = frame {
+        obj.insert("frame".into(), json!(f));
+    }
+    Ok(Value::Object(obj))
 }
 
 /// `expect <condition>` — pass/fail assertion verb. Subject-first for element
@@ -5653,6 +5733,42 @@ mod tests {
         let c = parse_command(&args("expect no-errors"), &default_flags()).unwrap();
         assert_eq!(c["kind"], "errors");
         assert_eq!(c["max"], 0);
+    }
+
+    // === extract parse tests ===
+    #[test]
+    fn test_extract_schema_ok() {
+        let c = parse_command(
+            &args(r#"extract --schema {"rows":".card","fields":{"name":".t"}}"#),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(c["action"], "extract");
+        assert_eq!(c["schema"]["rows"], ".card");
+        assert_eq!(c["schema"]["fields"]["name"], ".t");
+    }
+
+    #[test]
+    fn test_extract_requires_fields_and_valid_json() {
+        // missing fields
+        assert!(
+            parse_command(&args(r#"extract --schema {"rows":".x"}"#), &default_flags()).is_err()
+        );
+        // invalid json
+        assert!(parse_command(&args("extract --schema {bad"), &default_flags()).is_err());
+        // no source
+        assert!(parse_command(&args("extract"), &default_flags()).is_err());
+    }
+
+    #[test]
+    fn test_extract_leading_frame() {
+        let c = parse_command(
+            &args(r#"extract --frame 1 --schema {"fields":{"a":".x"}}"#),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(c["frame"], "1");
+        assert_eq!(c["schema"]["fields"]["a"], ".x");
     }
 
     #[test]

@@ -277,6 +277,19 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
 
+        // `extract` → print the structured result as pretty JSON (its whole point
+        // is machine-readable data; that's also the best human view). Action-gated
+        // + early so generic renderers don't swallow it.
+        if action == Some("extract") {
+            if let Some(ex) = data.get("extracted") {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(ex).unwrap_or_else(|_| ex.to_string())
+                );
+            }
+            return;
+        }
+
         // Cloudflare challenge/clearance preflight (`cf-status`). Checked early
         // because its response carries `url`/`title`, which later generic
         // renderers would otherwise swallow.
@@ -1983,6 +1996,42 @@ Note: `expect request` only sees requests captured AFTER tracking is on — run
 "##
         }
 
+        // === Extract (structured scrape) ===
+        "extract" => {
+            r##"
+chrome-use extract - Scrape structured JSON from the page
+
+Usage:
+  chrome-use extract --schema <json>        inline schema
+  chrome-use extract --schema-file <path>   schema from a file
+  chrome-use extract --stdin                schema from stdin (heredoc)
+  [--frame <index|url|@ref|css>]            scope to a child frame (leading flag)
+
+One declarative call instead of N find/get round-trips or hand-written eval.
+Compiled to a single page evaluation; returns a JSON array (with `rows`) or a
+single object.
+
+Schema:
+  {
+    "rows": "<css>",        // optional: repeating container → array; omit → one object on the document
+    "fields": {
+      "name": ".title",                          // shorthand: css → trimmed text
+      "price": { "sel": ".price", "get": "text" },
+      "href":  { "sel": "a", "get": "@href" },   // @attr
+      "html":  { "sel": ".body", "get": "html" },
+      "value": { "sel": "input", "get": "value" },
+      "tags":  { "sel": ".tag", "get": "text", "all": true }   // array of every match
+    }
+  }
+  get = text (default) | @<attr> | html | value.  sel "" or omitted = the row root itself.
+
+Examples:
+  chrome-use extract --schema '{"rows":".product","fields":{"name":".name","price":".price"}}'
+  chrome-use extract --schema '{"fields":{"title":"h1","canonical":{"sel":"link[rel=canonical]","get":"@href"}}}'
+  cat schema.json | chrome-use extract --stdin
+"##
+        }
+
         // === Screenshot/PDF ===
         "screenshot" => {
             r##"
@@ -3407,6 +3456,8 @@ Core Commands:
   wait <sel|ms>              Wait for element or time
   expect <condition>         Assert (pass/fail + exit code): element visible/gone,
                              count, text/value/attr, url, request fired, no-errors
+  extract --schema <json>    Scrape structured JSON (rows+fields) → array/object
+                             (one call vs N find/get; generic, any logged-in site)
   screenshot [path]          Take screenshot (auto-downscaled to ≤2000px long edge;
                              --max-width/--max-height/--scale to override)
   pdf <path>                 Save as PDF

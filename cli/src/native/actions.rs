@@ -1442,6 +1442,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "nth" => handle_nth(cmd, state).await,
         "find" => handle_find(cmd, state).await,
         "expect" => handle_expect(cmd, state).await,
+        "extract" => handle_extract(cmd, state).await,
         "evalhandle" => handle_evalhandle(cmd, state).await,
         "drag" => handle_drag(cmd, state).await,
         "solve_slider" => handle_solve_slider(cmd, state).await,
@@ -5364,6 +5365,86 @@ fn describe_expect(cmd: &Value) -> String {
         _ => "?".to_string(),
     };
     format!("{not}{body}")
+}
+
+/// `extract --schema` — compile the schema to ONE eval that returns structured
+/// JSON. No new CDP plumbing: BrowserManager::evaluate returns the JSON value
+/// directly (returnByValue). (Feature from #65-followup brainstorm.)
+async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let schema = cmd.get("schema").ok_or("extract: missing schema")?;
+    let fields = schema
+        .get("fields")
+        .and_then(|f| f.as_object())
+        .ok_or("extract: schema.fields must be an object")?;
+    let rows = schema.get("rows").and_then(|v| v.as_str());
+
+    // Normalize each field to {sel, get, all} so the JS template is uniform.
+    let mut norm = serde_json::Map::new();
+    for (k, v) in fields {
+        let spec = match v {
+            Value::String(s) => json!({ "sel": s, "get": "text", "all": false }),
+            Value::Object(o) => json!({
+                "sel": o.get("sel").and_then(|x| x.as_str()).unwrap_or(""),
+                "get": o.get("get").and_then(|x| x.as_str()).unwrap_or("text"),
+                "all": o.get("all").and_then(|x| x.as_bool()).unwrap_or(false),
+            }),
+            _ => {
+                return Err(format!(
+                    "extract: field '{k}' must be a css string or {{sel,get,all}} object"
+                ))
+            }
+        };
+        norm.insert(k.clone(), spec);
+    }
+    let fields_json = serde_json::to_string(&Value::Object(norm)).unwrap_or_default();
+    let rows_json = serde_json::to_string(&rows).unwrap_or_else(|_| "null".to_string());
+
+    let script = format!(
+        r#"(() => {{
+  const FIELDS = {fields_json};
+  const ROWSEL = {rows_json};
+  const pick = (el, get) => {{
+    if (!el) return null;
+    if (get && get[0] === '@') return el.getAttribute(get.slice(1));
+    if (get === 'html') return el.innerHTML;
+    if (get === 'value') return el.value != null ? el.value : null;
+    return ((el.innerText || el.textContent) || '').trim();
+  }};
+  const one = (root, spec) => {{
+    if (spec.all) {{
+      const nodes = spec.sel ? Array.from(root.querySelectorAll(spec.sel)) : [];
+      return nodes.map((n) => pick(n, spec.get));
+    }}
+    const el = spec.sel ? root.querySelector(spec.sel) : root;
+    return pick(el, spec.get);
+  }};
+  const extractRow = (root) => {{
+    const o = {{}};
+    for (const k in FIELDS) o[k] = one(root, FIELDS[k]);
+    return o;
+  }};
+  if (ROWSEL) return Array.from(document.querySelectorAll(ROWSEL)).map(extractRow);
+  return extractRow(document);
+}})()"#
+    );
+
+    let extracted = match cmd.get("frame").and_then(|v| v.as_str()) {
+        Some(spec) => {
+            let frame_id =
+                resolve_frame_spec(mgr, &state.ref_map, &state.iframe_sessions, spec).await?;
+            mgr.evaluate_in_frame(&script, &frame_id, &state.iframe_sessions)
+                .await?
+        }
+        None => mgr.evaluate(&script, None).await?,
+    };
+    let count = extracted.as_array().map(|a| a.len());
+    let url = mgr.get_url().await.unwrap_or_default();
+    let mut out = json!({ "extracted": extracted, "origin": url });
+    if let Some(c) = count {
+        out["count"] = json!(c);
+    }
+    Ok(out)
 }
 
 async fn handle_errors(state: &DaemonState) -> Result<Value, String> {
