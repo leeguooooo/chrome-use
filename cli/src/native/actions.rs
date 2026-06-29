@@ -1484,6 +1484,22 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         _ => Err(format!("Not yet implemented: {}", action)),
     };
 
+    // Action guards (#65 followup): with `--if-present`/`--optional`, an action
+    // whose target element is absent becomes a no-op success ({skipped:true})
+    // instead of an error — so optional steps (dismiss a maybe-present banner,
+    // toggle a maybe-missing control) don't need a pre-check read and flows stay
+    // idempotent. Only swallows "element absent" errors, never real failures.
+    let if_present = cmd
+        .get("ifPresent")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let result = match result {
+        Err(e) if if_present && is_element_absent_error(&e) => {
+            Ok(json!({ "skipped": true, "reason": "target not present (--if-present)" }))
+        }
+        other => other,
+    };
+
     let mut resp = match result {
         Ok(data) => success_response(&id, data),
         Err(e) => error_response(&id, &super::browser::to_ai_friendly_error(&e)),
@@ -5365,6 +5381,22 @@ fn describe_expect(cmd: &Value) -> String {
         _ => "?".to_string(),
     };
     format!("{not}{body}")
+}
+
+/// Whether an error means "the target element isn't on the page" (vs a real
+/// failure). Used by the `--if-present`/`--optional` guards to skip rather than
+/// error. Matches the locator/resolve "not found" phrasings; deliberately does
+/// NOT match timeouts, navigation, or transport errors.
+fn is_element_absent_error(e: &str) -> bool {
+    let l = e.to_lowercase();
+    l.contains("element not found")
+        || l.contains("no element")
+        || l.contains("did not match any element")
+        || l.contains("could not resolve")
+        || l.contains("no node found")
+        || l.contains("unknown ref")
+        || l.contains("node with given id does not exist")
+        || l.contains("cannot find")
 }
 
 /// `extract --schema` — compile the schema to ONE eval that returns structured
@@ -10808,6 +10840,24 @@ mod tests {
         assert_eq!(clearance_state(Some(2000.0), 1000.0), (true, false));
         // expired: expiry in the past
         assert_eq!(clearance_state(Some(500.0), 1000.0), (true, true));
+    }
+
+    #[test]
+    fn test_is_element_absent_error() {
+        assert!(is_element_absent_error("Element not found in the page DOM"));
+        assert!(is_element_absent_error("No element found for css 'x'"));
+        assert!(is_element_absent_error("Unknown ref: e9"));
+        assert!(is_element_absent_error(
+            "Selector 'x' did not match any element"
+        ));
+        // real failures are NOT swallowed
+        assert!(!is_element_absent_error("Operation timed out"));
+        assert!(!is_element_absent_error(
+            "Navigation failed: ERR_CONNECTION"
+        ));
+        assert!(!is_element_absent_error(
+            "stale sessionId ... its tab is gone"
+        ));
     }
 
     #[test]

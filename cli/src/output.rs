@@ -277,6 +277,21 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
 
+        // Action guard skip (`--if-present`/`--optional`): the target was absent so
+        // the action no-op'd. Surface it so a skip isn't mistaken for a real action.
+        if data
+            .get("skipped")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            let reason = data
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("skipped");
+            println!("{} {}", color::dim("↷"), color::dim(reason));
+            return;
+        }
+
         // `extract` → print the structured result as pretty JSON (its whole point
         // is machine-readable data; that's also the best human view). Action-gated
         // + early so generic renderers don't swallow it.
@@ -3695,6 +3710,8 @@ Options:
   --confirm-interactive      Interactive confirmation prompts; auto-denies if stdin is not a TTY (or AGENT_BROWSER_CONFIRM_INTERACTIVE)
   --engine <name>            Browser engine: chrome (default), lightpanda (or AGENT_BROWSER_ENGINE)
   --no-auto-dialog           Disable automatic dismissal of alert/beforeunload dialogs (or AGENT_BROWSER_NO_AUTO_DIALOG)
+  --if-present, --optional   Skip a selector action (success, no-op) instead of
+                             erroring when the target element is absent
   --model <name>             AI model for chat (or AI_GATEWAY_MODEL env)
   -v, --verbose              Show tool commands and their raw output
   -q, --quiet                Show only AI text responses (hide tool calls)

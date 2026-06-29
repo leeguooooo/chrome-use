@@ -714,6 +714,13 @@ chrome-use requests --clear && chrome-use click @save \
 chrome-use expect no-errors                                     # no console errors?
 ```
 
+**Optional steps — `--if-present` (alias `--optional`).** Add it to any selector
+action to make it a no-op success (`↷ skipped`, exit 0) when the target is
+absent, instead of erroring — no pre-check read needed, and flows stay
+re-runnable: `chrome-use click ".cookie-accept" --if-present` (dismiss a banner
+that may not be there), `chrome-use check "#opt-in" --if-present`. Only "element
+absent" is skipped; real failures still error.
+
 It **waits** up to the timeout for the condition to hold (poll), so you often
 don't need a separate `wait`. Conditions: element `visible|hidden|gone|present`;
 `count <css> <op> <n>`; `text|value|attr … equals|contains|matches`; `url …`;

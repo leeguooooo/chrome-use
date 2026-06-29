@@ -339,6 +339,9 @@ pub struct Flags {
     pub idle_timeout: Option<String>, // Canonical milliseconds string for AGENT_BROWSER_IDLE_TIMEOUT_MS
     pub default_timeout: Option<u64>, // AGENT_BROWSER_DEFAULT_TIMEOUT in ms
     pub no_auto_dialog: bool,
+    /// `--if-present`/`--optional`: skip a selector action (success {skipped})
+    /// instead of erroring when the target element is absent (issue #65 followup).
+    pub if_present: bool,
     pub model: Option<String>,
     pub verbose: bool,
     pub quiet: bool,
@@ -603,6 +606,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .and_then(|s| s.parse::<u64>().ok()),
         no_auto_dialog: env_var_is_truthy("AGENT_BROWSER_NO_AUTO_DIALOG")
             || config.no_auto_dialog.unwrap_or(false),
+        if_present: false,
         model: env::var("AI_GATEWAY_MODEL").ok().or(config.model),
         verbose: false,
         quiet: false,
@@ -947,6 +951,9 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
+            "--if-present" | "--optional" => {
+                flags.if_present = true;
+            }
             "--model" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.model = Some(s.clone());
@@ -989,6 +996,12 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--content-boundaries",
         "--confirm-interactive",
         "--no-auto-dialog",
+        // Action guards (issue #65 followup): skip an action instead of erroring
+        // when its target element is absent. Stripped here so they don't break a
+        // command's positional parsing; injected into the action JSON via
+        // parse_command from Flags.if_present.
+        "--if-present",
+        "--optional",
         "-v",
         "--verbose",
         "-q",
