@@ -76,3 +76,4 @@ out/
 .secrets/
 *.pem
 /cu-test-artifacts
+!assets/landing/*.png
