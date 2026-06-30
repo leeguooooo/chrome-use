@@ -4778,6 +4778,79 @@ async fn e2e_upload_via_trigger_button() {
     assert_success(&resp);
 }
 
+// Upload: a selector/ref that resolves to NO file input must fail cleanly and
+// leave the tab exactly where it was — never navigate to about:blank (the old
+// drop-dispatch side effect).
+#[tokio::test]
+#[ignore]
+async fn e2e_upload_no_input_does_not_navigate() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let url = native_test_fixture_url("hidden_upload_probe");
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "eval", "expression": "location.href" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let url_before = get_data(&resp)["result"].as_str().unwrap().to_string();
+
+    let tmp = std::env::temp_dir().join(format!("ab-upload-noinput-{}.txt", std::process::id()));
+    std::fs::write(&tmp, "test").unwrap();
+
+    // (a) Matches an element that is NOT a file input and has none under/around
+    // it. (b) Matches nothing at all. Both must fail, neither may navigate.
+    for (id, sel) in [("4", "h1"), ("5", ".does-not-exist-xyz")] {
+        let resp = execute_command(
+            &json!({ "id": id, "action": "upload", "selector": sel, "files": [tmp.to_string_lossy()] }),
+            &mut state,
+        )
+        .await;
+        assert_eq!(
+            resp.get("success").and_then(|v| v.as_bool()),
+            Some(false),
+            "upload to {:?} should fail: {}",
+            sel,
+            serde_json::to_string_pretty(&resp).unwrap_or_default()
+        );
+    }
+
+    // The tab must be exactly where it started — NOT about:blank.
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "eval", "expression": "location.href" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let url_after = get_data(&resp)["result"].as_str().unwrap().to_string();
+    assert_eq!(
+        url_before, url_after,
+        "a failed upload must not navigate the tab"
+    );
+    assert!(
+        !url_after.starts_with("about:blank"),
+        "tab navigated to about:blank"
+    );
+
+    let _ = std::fs::remove_file(&tmp);
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 // ---------------------------------------------------------------------------
 // Recording: viewport inheritance
 // ---------------------------------------------------------------------------

@@ -2676,7 +2676,7 @@ impl BrowserManager {
         // set files on the node the framework actually listens on, and so hidden
         // inputs are reachable (a11y/visibility-based locators miss them).
         let input_object_id = self
-            .resolve_file_input_object_id(&object_id, &effective_session_id)
+            .resolve_file_input_object_id(&object_id, &effective_session_id, selector)
             .await?;
 
         let describe: Value = self
@@ -2717,8 +2717,17 @@ impl BrowserManager {
             // the dropzone branch, whose uncancelled `drop` DragEvent made the
             // tab navigate to the dropped file (the about:blank side effect).
             if e.contains("Not allowed") || e.contains("-32000") {
-                self.upload_files_via_page(input_object_id.clone(), files, &effective_session_id)
-                    .await?;
+                // `allow_dropzone = false`: we hand it a resolved `<input type=file>`,
+                // so it takes the `input.files = …` branch. The drop/paste dropzone
+                // branch stays gated OFF (and is nav-guarded even when enabled), so a
+                // stray `drop` can never navigate the page.
+                self.upload_files_via_page(
+                    input_object_id.clone(),
+                    files,
+                    &effective_session_id,
+                    false,
+                )
+                .await?;
             } else {
                 return Err(e);
             }
@@ -2753,6 +2762,7 @@ impl BrowserManager {
         &self,
         object_id: &str,
         session_id: &str,
+        selector: &str,
     ) -> Result<String, String> {
         let func = r#"function() {
             const isFileInput = e => !!e && e.tagName === 'INPUT' && e.type === 'file';
@@ -2802,11 +2812,17 @@ impl BrowserManager {
             return Err(format!("resolving file input threw: {}", details.text));
         }
 
+        // No file input under/around the target. Fail cleanly and LOUDLY here —
+        // the caller must NOT fall through to any drop/paste path (an uncancelled
+        // `drop` carrying a File makes Chrome navigate to open it → about:blank).
+        // A failed upload leaves the tab exactly where it was.
         result.result.object_id.ok_or_else(|| {
-            "No <input type=file> found for the given selector. Pass the file input \
-             (e.g. `input[type=file]`) or the upload trigger button inside the same \
-             upload container."
-                .to_string()
+            format!(
+                "no <input type=file> resolved for \"{}\" — pass the file input \
+                 (e.g. `input[type=file]`) or an upload trigger inside the same \
+                 upload container (is the upload dialog open / the ref still valid?)",
+                selector
+            )
         })
     }
 
@@ -2870,6 +2886,7 @@ impl BrowserManager {
         object_id: String,
         files: &[String],
         session_id: &str,
+        allow_dropzone: bool,
     ) -> Result<(), String> {
         use base64::Engine;
         // The relay tunnels every CDP message through Chrome native messaging,
@@ -2934,7 +2951,13 @@ impl BrowserManager {
         }
 
         // Assemble the Files from the buffer and attach to the element, then clean up.
-        let func = r#"function() {
+        // Arg 0 (`allowDropzone`): when false, a NON-file-input target is a hard
+        // no-op (returns `noinput:0`) — we never dispatch `drop`/`paste`, because an
+        // uncancelled `drop` carrying a File makes Chrome navigate to open it
+        // (the about:blank side effect). When true, the drop is wrapped in a
+        // capture-phase `preventDefault` guard so the browser's default file
+        // navigation can NEVER fire, while the page's own drop handlers still run.
+        let func = r#"function(allowDropzone) {
             const filesData = window.__cuUpload || [];
             const dt = new DataTransfer();
             for (const f of filesData) {
@@ -2945,19 +2968,33 @@ impl BrowserManager {
             }
             try { delete window.__cuUpload; } catch (e) { window.__cuUpload = undefined; }
             const el = this;
-            if (el.tagName === 'INPUT' && el.type === 'file') {
+            if (el && el.tagName === 'INPUT' && el.type === 'file') {
                 el.files = dt.files;
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
                 return 'input:' + dt.files.length;
             }
-            // Dropzone / rich composer: replay paste then drop with the files.
-            try { el.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: dt })); } catch (e) {}
+            // Non-input target. Only a real dropzone/composer can take this, and
+            // only when explicitly opted in. Otherwise: do NOTHING and report it,
+            // so a stray drop can never navigate the page.
+            if (!allowDropzone) return 'noinput:0';
+            // Suppress the browser's default drop action (navigate-to-file) no
+            // matter what the page does, while still letting the page's own
+            // handlers see the event.
+            const guard = e => { e.preventDefault(); };
+            window.addEventListener('dragover', guard, true);
+            window.addEventListener('drop', guard, true);
             try {
-                const ev = new DragEvent('drop', { bubbles: true, cancelable: true });
-                Object.defineProperty(ev, 'dataTransfer', { value: dt });
-                el.dispatchEvent(ev);
-            } catch (e) {}
+                try { el.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: dt })); } catch (e) {}
+                try {
+                    const ev = new DragEvent('drop', { bubbles: true, cancelable: true });
+                    Object.defineProperty(ev, 'dataTransfer', { value: dt });
+                    el.dispatchEvent(ev);
+                } catch (e) {}
+            } finally {
+                window.removeEventListener('dragover', guard, true);
+                window.removeEventListener('drop', guard, true);
+            }
             return 'event:' + dt.files.length;
         }"#;
 
@@ -2968,7 +3005,10 @@ impl BrowserManager {
                 &CallFunctionOnParams {
                     function_declaration: func.to_string(),
                     object_id: Some(object_id),
-                    arguments: None,
+                    arguments: Some(vec![CallArgument {
+                        value: Some(json!(allow_dropzone)),
+                        object_id: None,
+                    }]),
                     return_by_value: Some(true),
                     await_promise: Some(false),
                 },
@@ -2986,6 +3026,17 @@ impl BrowserManager {
                     .and_then(|ex| ex.description.as_deref())
                     .unwrap_or(&details.text)
             ));
+        }
+
+        // A `noinput:` sentinel means the target wasn't a file input and the
+        // dropzone path was (correctly) gated off — surface it as a clean error
+        // rather than a silent success, and without having touched the page.
+        if let Some(s) = result.result.value.as_ref().and_then(|v| v.as_str()) {
+            if s.starts_with("noinput") {
+                return Err(
+                    "relay upload target is not a file input (dropzone path disabled)".to_string(),
+                );
+            }
         }
         Ok(())
     }
