@@ -77,3 +77,4 @@ out/
 *.pem
 /cu-test-artifacts
 !assets/landing/*.png
+!assets/landing/*.jpg
