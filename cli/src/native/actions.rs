@@ -1334,7 +1334,20 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         None
     };
 
-    let result = match action {
+    // On the relay, a cross-process navigation (an OAuth/SSO redirect) can swap the
+    // renderer and rotate the CDP sessionId out from under a non-navigate read or
+    // click, which then fails with a stale-target error even though the tab is fine.
+    // The extension's own `recoverSessionTab` gives ~9s; mirror that here by
+    // reattaching to the SAME tab (no new tab — preserves an in-flight OAuth opener)
+    // and retrying the action up to 3 times over ~3s before surfacing the unchanged
+    // error. `navigate`/`launch` run their own reattach, and a read that never
+    // recovers still fails loudly rather than retarget onto the wrong tab (#58/#8.1).
+    let stale_recoverable = action != "navigate"
+        && action != "launch"
+        && state.browser.as_ref().is_some_and(|m| m.on_relay());
+    let mut stale_attempts = 0u32;
+    let result = loop {
+        let attempt_result = match action {
         "launch" => handle_launch(cmd, state).await,
         "navigate" => handle_navigate(cmd, state).await,
         "url" => handle_url(state).await,
@@ -1511,6 +1524,28 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "mousedown" => handle_mousedown(cmd, state).await,
         "mouseup" => handle_mouseup(cmd, state).await,
         _ => Err(format!("Not yet implemented: {}", action)),
+        };
+
+        let is_stale = matches!(
+            &attempt_result,
+            Err(e) if super::browser::is_stale_target_error(e)
+        );
+        if !(stale_recoverable && is_stale && stale_attempts < 2) {
+            break attempt_result;
+        }
+        // Re-attach to the same tab (relay-only, never spawns a tab). If the target
+        // is genuinely gone, stop retrying and surface the original error.
+        let reattached = match state.browser.as_mut() {
+            Some(mgr) => mgr.reattach_active_session().await.is_ok(),
+            None => false,
+        };
+        if !reattached {
+            break attempt_result;
+        }
+        stale_attempts += 1;
+        // Give the relay a beat to settle the renderer swap before retrying, so a
+        // transient mid-OAuth session rotation no longer hard-fails the command.
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     };
 
     // Action guards (#65 followup): with `--if-present`/`--optional`, an action

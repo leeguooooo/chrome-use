@@ -359,7 +359,7 @@ fn active_index_is_owned(
 /// `unknown sessionId …`, or `no attached tab …`. `navigate` keys its
 /// auto-reattach recovery off this (issue #35) so a dead session rebinds to a
 /// fresh tab instead of erroring on every command until the user runs `tab new`.
-fn is_stale_target_error(error: &str) -> bool {
+pub(crate) fn is_stale_target_error(error: &str) -> bool {
     let lower = error.to_lowercase();
     lower.contains("its tab is gone")
         || lower.contains("stale sessionid")
@@ -1359,6 +1359,66 @@ impl BrowserManager {
             .ok_or_else(|| "No active page".to_string())
     }
 
+    /// Whether this manager is driving the user's real Chrome through the
+    /// `ab-connect` extension relay (vs. a launched / direct-CDP browser). Public
+    /// mirror of the relay gate used internally (`agent_group().is_some()`), so the
+    /// daemon dispatcher can scope relay-only recovery (the stale-session retry)
+    /// without reaching into private internals.
+    pub fn on_relay(&self) -> bool {
+        self.agent_group().is_some()
+    }
+
+    /// Non-destructive recovery for a stale relay session (OAuth-popup logins,
+    /// issue #58). On the extension relay a cross-process navigation (an OAuth/SSO
+    /// redirect, `display=popup` + `response_mode=form_post`) can swap the renderer
+    /// and rotate the CDP sessionId while Chrome keeps the SAME `targetId` for the
+    /// tab. The cached `cb-tab-<id>` session then goes stale and every command keyed
+    /// off it fails ("its tab is gone").
+    ///
+    /// Re-discover the live target set and re-attach to the SAME pinned
+    /// `active_target_id` to pick up its current (rotated) sessionId — WITHOUT
+    /// creating a new tab, so an in-flight OAuth opener window (the x.com page about
+    /// to receive the id_token via postMessage) is never discarded. The pinned
+    /// target is protected from pruning, and on the relay the targetId is stable
+    /// across the renderer swap, so this is unambiguous. Errors only when the target
+    /// genuinely vanished (closed for real), leaving the caller to fall back.
+    ///
+    /// Relay-only: off the relay sessions don't rotate this way and the direct-CDP
+    /// path has no `agent_group`, so callers gate this on `on_relay()`.
+    pub async fn reattach_active_session(&mut self) -> Result<(), String> {
+        let target_id = self.active_target_id()?.to_string();
+        // Refresh the live target set first (updates url/title, drops only
+        // genuinely-gone tabs — the pinned active target is debounce-protected, so
+        // a single flaky snapshot during the swap can't prune it). Best-effort: a
+        // failed resync shouldn't abort the re-attach below.
+        self.resync_targets().await.ok();
+        // The pin must still resolve to a tracked tab. If resync pruned it the tab
+        // is genuinely gone and the caller should fall back to opening a fresh one.
+        if !self.pages.iter().any(|p| p.target_id == target_id) {
+            return Err(BOUND_TAB_GONE.to_string());
+        }
+        // Re-attach to the SAME target to obtain its current sessionId. On the relay
+        // this is keyed by tabId, so it returns the live `cb-tab-<id>` session even
+        // after the renderer swap.
+        let attach: AttachToTargetResult = self
+            .client
+            .send_command_typed(
+                "Target.attachToTarget",
+                &AttachToTargetParams {
+                    target_id: target_id.clone(),
+                    flatten: true,
+                },
+                None,
+            )
+            .await?;
+        // Rebind the tracked page to the fresh session and re-enable domains on it.
+        if let Some(page) = self.pages.iter_mut().find(|p| p.target_id == target_id) {
+            page.session_id = attach.session_id.clone();
+        }
+        let _ = self.enable_domains(&attach.session_id).await;
+        Ok(())
+    }
+
     pub async fn navigate(&mut self, url: &str, wait_until: WaitUntil) -> Result<Value, String> {
         // On the shared real browser (extension relay), a fresh session only
         // passively attached to the user's existing tabs — it doesn't own any. The
@@ -1400,9 +1460,24 @@ impl BrowserManager {
             // commands deliberately still fail loudly rather than silently
             // recover onto a blank tab and return wrong data (issue #8.1).
             Err(e) if self.agent_group().is_some() && is_stale_target_error(&e) => {
-                self.drop_page_by_session(&session_id);
-                self.tab_new(None, None).await?;
-                session_id = self.active_session_id()?.to_string();
+                // Non-destructive recovery FIRST (issue #58): the relay keeps the
+                // targetId stable across a cross-process nav (only the sessionId
+                // rotates), so re-attach to the SAME tab and retry the navigate on
+                // it. This preserves an in-flight OAuth opener window that the old
+                // drop+`tab new` path would have destroyed (killing the popup login
+                // mid-handshake). Only if the target is genuinely gone fall back to
+                // the original behaviour: drop the dead page and open a fresh owned
+                // tab to navigate (issue #35).
+                match self.reattach_active_session().await {
+                    Ok(()) => {
+                        session_id = self.active_session_id()?.to_string();
+                    }
+                    Err(_) => {
+                        self.drop_page_by_session(&session_id);
+                        self.tab_new(None, None).await?;
+                        session_id = self.active_session_id()?.to_string();
+                    }
+                }
                 lifecycle_rx = self.client.subscribe();
                 self.client
                     .send_command_typed(
