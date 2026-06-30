@@ -11,7 +11,7 @@
 <meta property="og:type" content="website" />
 <meta property="og:title" content="chrome-use — 把你已经登录好的 Chrome 交给 AI agent" />
 <meta property="og:description" content="复用你现成的登录态，对反爬完全不可检测,因为它就是你的真实浏览器。" />
-<meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero.png" />
+<meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
 <meta property="og:url" content="https://chrome-use.leeguoo.com/" />
 <meta name="twitter:card" content="summary_large_image" />
 
@@ -182,6 +182,22 @@
   }
   @media (max-width: 460px) { .grid3, .stats { grid-template-columns: 1fr; } }
 </style>
+
+<!-- extended SEO / social -->
+<meta property="og:site_name" content="chrome-use" />
+<meta property="og:locale" content="zh_CN" />
+<meta name="robots" content="index, follow, max-image-preview:large" />
+<meta name="author" content="郭立 (Guo Li / Leo / leeguoo)" />
+<meta name="theme-color" content="#0e1014" />
+<link rel="alternate" type="text/markdown" href="/llms.txt" title="llms.txt for AI engines" />
+
+<!-- structured data: software + FAQ (SEO rich results + GEO) -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"chrome-use","alternateName":"chrome-use CLI","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux, Windows","url":"https://chrome-use.leeguoo.com/","downloadUrl":"https://github.com/leeguooooo/chrome-use","description":"让任意 AI agent 直接操作你已登录的真实 Chrome：复用现成会话，原生消息无调试端口，CreepJS 实测 0% 机器人。","license":"https://www.apache.org/licenses/LICENSE-2.0","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Person","name":"郭立 (Guo Li / Leo)","url":"https://leeguoo.com","sameAs":["https://github.com/leeguooooo","https://x.com/leeguooooo"]}}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"chrome-use 和 Playwright / Puppeteer 有什么区别？","acceptedAnswer":{"@type":"Answer","text":"Playwright、Puppeteer 启动的是空 profile 的全新浏览器，需要重新登录、硬扛验证码，仍会被识别为自动化。chrome-use 直接连接你已登录的真实 Chrome，复用现成会话，对反爬不可检测。"}},{"@type":"Question","name":"为什么不弹 Allow remote debugging 确认框？","acceptedAnswer":{"@type":"Answer","text":"chrome-use 通过 Chrome 原生消息和浏览器扩展通信，不走 --remote-debugging-port。Chrome 136+ 对裸调试端口每次连接都会弹确认框，chrome-use 商店一键装后零确认。"}},{"@type":"Question","name":"网站能检测到它是自动化吗？","acceptedAnswer":{"@type":"Answer","text":"不能，因为它就是你的真实浏览器。CreepJS 实测 0% 机器人、0% headless，无 Runtime.enable CDP 泄漏，仅 7 个权限且无 all_urls。"}}]}
+</script>
 </head>
 <body>
 
@@ -214,7 +230,7 @@
         <pre><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</pre>
       </div>
       <div class="hero-art">
-        <img src="assets/landing/hero.png" alt="AI agent 操作你已登录的真实 Chrome，你随时可以接管" loading="eager" />
+        <img src="assets/landing/hero.webp" alt="AI agent 操作你已登录的真实 Chrome，你随时可以接管" loading="eager" />
       </div>
     </div>
   </div>
@@ -255,14 +271,14 @@
           <li>不走 <code>--remote-debugging-port</code>,所以<b>永不弹</b>那个调试确认框。</li>
         </ul>
       </div>
-      <img src="assets/landing/how.png" alt="CLI ↔ 扩展 ↔ 原生消息 ↔ 你的 Chrome,全本机闭环" loading="lazy" />
+      <img src="assets/landing/how.webp" alt="CLI ↔ 扩展 ↔ 原生消息 ↔ 你的 Chrome,全本机闭环" loading="lazy" />
     </div>
   </section>
 
   <!-- STEALTH -->
   <section id="stealth">
     <div class="wrap split">
-      <img src="assets/landing/stealth.png" alt="真实但不可检测的浏览器指纹" loading="lazy" />
+      <img src="assets/landing/stealth.webp" alt="真实但不可检测的浏览器指纹" loading="lazy" />
       <div>
         <div class="kicker">// 反检测</div>
         <h2>网站眼里,它 100% 是个人。</h2>

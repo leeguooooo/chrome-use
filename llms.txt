@@ -1,0 +1,28 @@
+# chrome-use — drive your real, logged-in Chrome from any AI agent
+
+chrome-use lets any AI agent (Claude Code, Cursor, Codex, or your own scripts) drive the real Chrome you are already signed into. It reuses your existing login sessions and is undetectable by anti-bot systems because it IS your real browser. Part of the *-use family by 郭立 (Guo Li / Leo / leeguoo).
+
+## What it is
+- A CLI plus a one-click browser extension that drives your already-logged-in Chrome over native messaging — no remote debugging port, no token, no remote server; everything stays on your machine.
+- Works with any agent or CLI, not a single app.
+- Each `--session` gets its own colored Chrome tab group, so multiple agents share one real browser without conflict.
+
+## Why it is different
+- vs Playwright / Puppeteer / browser-use: those launch an empty browser, so you re-login, fight captchas, and still get flagged as automation. chrome-use reuses the session you already have.
+- vs Claude's Chrome extension: that drives only Claude; chrome-use drives any agent or CLI.
+- vs a raw `--remote-debugging-port`: Chrome 136+ pops "Allow remote debugging?" on every connect. chrome-use never does (native messaging).
+
+## Anti-detection (measured)
+- CreepJS: 0% bot, 0% headless.
+- No `Runtime.enable` CDP leak (rebrowser) — off by default.
+- 7 permissions, no `<all_urls>`.
+
+## Install
+- `curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh`
+- Agent skills: `npx skills add leeguooooo/chrome-use`
+
+## Links
+- Site: https://chrome-use.leeguoo.com/
+- Repo: https://github.com/leeguooooo/chrome-use
+- Author: 郭立 (Guo Li / Leo / leeguoo) — https://leeguoo.com
+- Family: chrome-use, iphone-use, cookie-use, profile-use, chatgpt-imagegen, wechat-use.
