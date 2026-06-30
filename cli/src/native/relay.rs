@@ -24,7 +24,7 @@
 //! This module is the pure translation core (no I/O) so the protocol can be
 //! unit-tested; the tokio WebSocket server that drives it lives alongside.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
@@ -68,6 +68,15 @@ pub struct RelayState {
     /// relay-global id of an in-flight `Target.createTarget` -> the `agentGroup`
     /// it carried, so the reply's `targetId` can be tagged with that group.
     pending_create: HashMap<i64, String>,
+    /// Sessions of OOPIF (cross-origin iframe) child targets the extension
+    /// auto-attached (flat `Target.setAutoAttach`). Unlike the page-level
+    /// `cb-tab-*` attaches (which the relay consumes to maintain `targets`),
+    /// these are FORWARDED to clients so the daemon can build its
+    /// `iframe_sessions` map and pierce cross-origin iframes (e.g. the Google
+    /// GSI sign-in iframe). Tracked here so the matching `detachedFromTarget`
+    /// is forwarded too — and so they're never mistaken for a tab in
+    /// `getTargets` (they're not added to `targets`). (OAuth/OOPIF support)
+    oopif_sessions: HashSet<String>,
 }
 
 /// What to do with a raw CDP command received from a `CdpClient`.
@@ -319,6 +328,32 @@ impl RelayState {
             // attachedToTarget would duplicate the one attachToTarget emits.
             match inner_method {
                 "Target.attachedToTarget" => {
+                    // OOPIF (cross-origin iframe) child session: the extension
+                    // flat-auto-attached it. The daemon builds `iframe_sessions`
+                    // from this event to snapshot INTO the iframe (so the GSI
+                    // "Continue as …" button gets a ref instead of an opaque
+                    // `Iframe` leaf). Forward it through instead of consuming —
+                    // it's a sub-frame session, NOT a tab, so it never enters
+                    // `targets`/`getTargets`. Remember the sid so its detach is
+                    // forwarded too. (OAuth/OOPIF support)
+                    let is_oopif = inner_params
+                        .get("targetInfo")
+                        .and_then(|i| i.get("type"))
+                        .and_then(|t| t.as_str())
+                        == Some("iframe");
+                    if is_oopif {
+                        if let Some(sid) =
+                            inner_params.get("sessionId").and_then(|s| s.as_str())
+                        {
+                            self.oopif_sessions.insert(sid.to_string());
+                        }
+                        let mut ev =
+                            json!({ "method": inner_method, "params": inner_params });
+                        if let Some(sid) = session_id {
+                            ev["sessionId"] = json!(sid);
+                        }
+                        return vec![RelayOut::ToClient { to: None, msg: ev }];
+                    }
                     if let Some(info) = inner_params.get("targetInfo") {
                         if let Some(tid) = info.get("targetId").and_then(|t| t.as_str()) {
                             let sid = inner_params
@@ -360,6 +395,20 @@ impl RelayState {
                 }
                 "Target.detachedFromTarget" => {
                     let gone = inner_params.get("sessionId").and_then(|s| s.as_str());
+                    // An OOPIF child session went away (iframe removed / cross-
+                    // process re-nav) — forward it so the daemon prunes the stale
+                    // entry from `iframe_sessions`. (Pairs with the iframe attach
+                    // forward above.)
+                    if let Some(g) = gone {
+                        if self.oopif_sessions.remove(g) {
+                            let mut ev =
+                                json!({ "method": inner_method, "params": inner_params });
+                            if let Some(sid) = session_id {
+                                ev["sessionId"] = json!(sid);
+                            }
+                            return vec![RelayOut::ToClient { to: None, msg: ev }];
+                        }
+                    }
                     if let Some(gone) = gone {
                         let gone_tids: Vec<String> = self
                             .targets
@@ -482,6 +531,65 @@ mod tests {
             route,
             ClientRoute::Local(json!({ "id": 2, "result": { "sessionId": "cb-tab-42" } }))
         );
+    }
+
+    #[test]
+    fn oopif_iframe_attach_is_forwarded_not_consumed() {
+        // A cross-origin iframe (OOPIF) child session the extension flat-auto-
+        // attached must FLOW THROUGH to the daemon (it builds iframe_sessions
+        // from it), unlike a page-level `cb-tab-*` attach which is consumed.
+        let mut s = RelayState::new();
+        let ev = json!({
+            "method": "forwardCDPEvent",
+            "params": {
+                "sessionId": "cb-tab-9",
+                "method": "Target.attachedToTarget",
+                "params": {
+                    "sessionId": "OOPIF-SID",
+                    "targetInfo": {
+                        "targetId": "FRAME-1", "type": "iframe",
+                        "url": "https://accounts.google.com/gsi/", "attached": true
+                    }
+                }
+            }
+        });
+        let out = s.handle_ext_message(&ev, "tok");
+        // Forwarded to all clients (broadcast), carrying the child sessionId.
+        match &out[..] {
+            [RelayOut::ToClient { to, msg }] => {
+                assert_eq!(*to, None);
+                assert_eq!(msg["method"], "Target.attachedToTarget");
+                assert_eq!(msg["params"]["sessionId"], "OOPIF-SID");
+                assert_eq!(msg["params"]["targetInfo"]["type"], "iframe");
+            }
+            _ => panic!("OOPIF attach must be forwarded as a single ToClient event"),
+        }
+        // It is NOT a tab — never surfaces in getTargets.
+        let route = s.route_client_command(1, &json!({ "id": 1, "method": "Target.getTargets" }));
+        match route {
+            ClientRoute::Local(v) => {
+                assert!(v["result"]["targetInfos"].as_array().unwrap().is_empty());
+            }
+            _ => panic!("getTargets must be local"),
+        }
+        // Its detach is forwarded too, so the daemon can prune iframe_sessions.
+        let det = json!({
+            "method": "forwardCDPEvent",
+            "params": {
+                "sessionId": "cb-tab-9",
+                "method": "Target.detachedFromTarget",
+                "params": { "sessionId": "OOPIF-SID" }
+            }
+        });
+        let out = s.handle_ext_message(&det, "tok");
+        match &out[..] {
+            [RelayOut::ToClient { to, msg }] => {
+                assert_eq!(*to, None);
+                assert_eq!(msg["method"], "Target.detachedFromTarget");
+                assert_eq!(msg["params"]["sessionId"], "OOPIF-SID");
+            }
+            _ => panic!("OOPIF detach must be forwarded"),
+        }
     }
 
     #[test]

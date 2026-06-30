@@ -446,8 +446,15 @@ async function recoverSessionTab(sessionId) {
 // our attach check and the command itself (a renderer-process swap mid-flight).
 // On a detached-style failure, drop the stale handle, re-attach the stable tab,
 // and retry once — so a cross-process nav never surfaces as a hard error (#23).
-async function sendCdpToTab(tabId, method, params) {
-  const dbg = { tabId }
+//
+// `childSessionId` (optional): the flattened CDP session of a cross-origin
+// (out-of-process) iframe child. When set, the command is dispatched to that
+// child via a `{tabId, sessionId}` DebuggerSession (Chrome 125+) so e.g.
+// Accessibility.getFullAXTree runs INSIDE the iframe instead of on the top
+// frame — this is what lets the daemon pierce the GSI sign-in iframe over the
+// relay. Omitted/undefined ⇒ the top (page) session, addressed by tabId alone.
+async function sendCdpToTab(tabId, method, params, childSessionId) {
+  const dbg = childSessionId ? { tabId, sessionId: childSessionId } : { tabId }
   try {
     return await chrome.debugger.sendCommand(dbg, method, params)
   } catch (e) {
@@ -599,17 +606,26 @@ async function handleForwardCdpCommand(msg) {
   }
   if (tabId == null) throw new Error(`no attached tab for ${method}`)
 
+  // A flattened child (cross-origin iframe / worker) session — NOT a `cb-tab-*`
+  // page session — is dispatched to that sub-frame directly so e.g.
+  // Accessibility.getFullAXTree pierces the OOPIF instead of re-reading the top
+  // frame. `cb-tab-*` ids resolve to the page (no child sessionId). (OAuth/OOPIF)
+  const childSid =
+    sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
+      ? sessionId
+      : undefined
+
   // Re-enabling Runtime can leave a stale state; bounce it (matches upstream).
   if (method === 'Runtime.enable') {
     try {
-      await sendCdpToTab(tabId, 'Runtime.disable', undefined)
+      await sendCdpToTab(tabId, 'Runtime.disable', undefined, childSid)
       await new Promise((r) => setTimeout(r, 30))
     } catch {}
-    return await sendCdpToTab(tabId, 'Runtime.enable', params)
+    return await sendCdpToTab(tabId, 'Runtime.enable', params, childSid)
   }
   // Mirror agent mouse activity to the friendly on-page cursor (opt-in; best-effort).
   maybeDriveCursor(tabId, method, params)
-  return await sendCdpToTab(tabId, method, params)
+  return await sendCdpToTab(tabId, method, params, childSid)
 }
 
 // ---- attach / detach ------------------------------------------------------
@@ -631,6 +647,22 @@ async function attachTab(tabId) {
     if (!/already attached|already being debugged/i.test(msg)) throw e
   }
   await chrome.debugger.sendCommand(dbg, 'Page.enable').catch(() => {})
+  // Enable FLAT auto-attach so Chrome attaches each cross-origin (out-of-process)
+  // iframe as a child CDP session and fires Target.attachedToTarget through
+  // chrome.debugger.onEvent below. Without this the GSI / payment / SSO iframe is
+  // an opaque leaf in the snapshot (no inner refs); with it the daemon learns the
+  // child sessionId and snapshots INTO the frame. `flatten:true` makes the child
+  // addressable as a {tabId, sessionId} DebuggerSession (Chrome 125+). We do this
+  // here (not only via the daemon's forwarded command) so it's re-armed on every
+  // attach/re-attach — including the cross-process-nav recovery — regardless of
+  // daemon timing. Best-effort; ignored where unsupported.
+  await chrome.debugger
+    .sendCommand(dbg, 'Target.setAutoAttach', {
+      autoAttach: true,
+      flatten: true,
+      waitForDebuggerOnStart: false,
+    })
+    .catch(() => {})
   const info = /** @type {any} */ (await chrome.debugger.sendCommand(dbg, 'Target.getTargetInfo'))
   const targetInfo = info?.targetInfo
   const targetId = String(targetInfo?.targetId || '')
@@ -795,6 +827,39 @@ chrome.debugger.onDetach.addListener((source, reason) =>
 
 // ---- tab lifecycle --------------------------------------------------------
 
+// EARLY-attach a popup our own tab opened (window.open / OAuth account-chooser),
+// the moment Chrome creates it — before it finishes loading. The old path only
+// attached on chrome.tabs.onUpdated('complete'), which for a cross-origin OAuth
+// window lands too late: the daemon tries to drive the popup first and fails with
+// "tab is not responding (session re-attaching)" / "tab can no longer be
+// resolved". Attaching at creation makes the account-chooser debuggable
+// immediately so the daemon can select the Google account and finish the login.
+//
+// Gated to popups whose opener is a tab WE drive (owned/attached) so we never
+// attach the USER's own window.open, and so the relay can tag the popup into the
+// opener's tab-group (the synthesized targetInfo carries openerTargetId) —
+// keeping multi-agent isolation intact: only the session that opened it sees it.
+// Not persisted into ownedTabs (an OAuth popup is transient and usually self-
+// closes; persisting would re-attach a dead tab and stick the debugger banner) —
+// it's adopted for this session only, like an explicitly-adopted tab.
+chrome.tabs.onCreated.addListener((tab) =>
+  void whenReady(async () => {
+    if (!port || !tab || tab.id == null) return
+    const opener = tab.openerTabId
+    if (typeof opener !== 'number') return
+    if (!ownedTabs.has(opener) && !tabs.has(opener)) return
+    if (tabs.has(tab.id)) return
+    // A fresh popup is often still at about:blank (no url yet) — that's fine to
+    // attach; only bail on a clearly-restricted scheme. attachTab tolerates the
+    // rest, and the cross-process onDetach reattach picks up the OAuth nav.
+    if (typeof tab.url === 'string' && tab.url && SKIP_URL.test(tab.url)) return
+    try {
+      await attachTab(tab.id)
+    } catch {
+      // Restricted/transient — onDetach reattach + onUpdated('complete') retry.
+    }
+  }),
+)
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
   void whenReady(async () => {
     if (changeInfo.status === 'complete' && eligible(tab) && !tabs.has(tabId) && port) {
