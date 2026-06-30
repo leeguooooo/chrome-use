@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>chrome-use — 把你已经登录好的 Chrome 交给 AI agent</title>
-<meta name="description" content="chrome-use 让任意 AI agent 直接操作你自己正在用的、已登录的真实 Chrome：复用现成会话，原生消息无调试端口，CreepJS 实测 0% 机器人。" />
+<title>chrome-use — 让任意 AI agent 驱动你已登录的真实 Chrome（反检测 0% bot）</title>
+<meta name="description" content="chrome-use：让 Claude Code、Cursor、Codex 等任意 AI agent 直接驱动你已登录的真实 Chrome。一键浏览器扩展 + 原生消息，无调试端口、复用现成会话，CreepJS 实测 0% 机器人。开源 *-use 家族 CLI。" />
+<meta name="keywords" content="chrome-use, AI agent 浏览器, 浏览器自动化, 真实 Chrome, 原生消息, native messaging, 反检测, CreepJS, Claude Code, Cursor, Codex, agent browser, *-use" />
 <link rel="canonical" href="https://chrome-use.leeguoo.com/" />
 
 <!-- Open Graph -->
 <meta property="og:type" content="website" />
-<meta property="og:title" content="chrome-use — 把你已经登录好的 Chrome 交给 AI agent" />
-<meta property="og:description" content="复用你现成的登录态，对反爬完全不可检测,因为它就是你的真实浏览器。" />
+<meta property="og:title" content="chrome-use — 让任意 AI agent 驱动你已登录的真实 Chrome（反检测 0% bot）" />
+<meta property="og:description" content="一键浏览器扩展 + 原生消息,让任意 agent 驱动你现成的、已登录的真实 Chrome。对反爬完全不可检测,因为它就是你的真实浏览器。" />
 <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
 <meta property="og:url" content="https://chrome-use.leeguoo.com/" />
 <meta name="twitter:card" content="summary_large_image" />
@@ -193,7 +194,7 @@
 
 <!-- structured data: software + FAQ (SEO rich results + GEO) -->
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"chrome-use","alternateName":"chrome-use CLI","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux, Windows","url":"https://chrome-use.leeguoo.com/","downloadUrl":"https://github.com/leeguooooo/chrome-use","description":"让任意 AI agent 直接操作你已登录的真实 Chrome：复用现成会话，原生消息无调试端口，CreepJS 实测 0% 机器人。","license":"https://www.apache.org/licenses/LICENSE-2.0","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Person","name":"郭立 (Guo Li / Leo)","url":"https://leeguoo.com","sameAs":["https://github.com/leeguooooo","https://x.com/leeguooooo"]}}
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"chrome-use","alternateName":"chrome-use CLI","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux, Windows","url":"https://chrome-use.leeguoo.com/","downloadUrl":"https://github.com/leeguooooo/chrome-use","description":"让任意 AI agent 直接驱动你已登录的真实 Chrome：一键浏览器扩展 + 原生消息，无调试端口、复用现成会话，CreepJS 实测 0% 机器人。","license":"https://www.apache.org/licenses/LICENSE-2.0","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Person","name":"郭立 (Guo Li / Leo)","url":"https://leeguoo.com","sameAs":["https://github.com/leeguooooo","https://x.com/leeguooooo"]}}
 </script>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"chrome-use 和 Playwright / Puppeteer 有什么区别？","acceptedAnswer":{"@type":"Answer","text":"Playwright、Puppeteer 启动的是空 profile 的全新浏览器，需要重新登录、硬扛验证码，仍会被识别为自动化。chrome-use 直接连接你已登录的真实 Chrome，复用现成会话，对反爬不可检测。"}},{"@type":"Question","name":"为什么不弹 Allow remote debugging 确认框？","acceptedAnswer":{"@type":"Answer","text":"chrome-use 通过 Chrome 原生消息和浏览器扩展通信，不走 --remote-debugging-port。Chrome 136+ 对裸调试端口每次连接都会弹确认框，chrome-use 商店一键装后零确认。"}},{"@type":"Question","name":"网站能检测到它是自动化吗？","acceptedAnswer":{"@type":"Answer","text":"不能，因为它就是你的真实浏览器。CreepJS 实测 0% 机器人、0% headless，无 Runtime.enable CDP 泄漏，仅 7 个权限且无 all_urls。"}}]}
@@ -328,14 +329,22 @@
   <section id="install">
     <div class="wrap">
       <div class="kicker">// 安装</div>
-      <h2>一行装好,无 npm、无 token。</h2>
-      <p class="sub">从最新 GitHub Release 拉对应平台的预编译二进制,装好 <code>chrome-use</code>(带 <code>abs</code> 别名)。</p>
+      <h2>装好 CLI + 一键浏览器扩展,无 npm、无 token。</h2>
+      <p class="sub">三步:装 CLI、装 Chrome 扩展并注册本地桥、拉 agent 技能。扩展走原生消息,装一次之后零确认,永远不弹 "Allow remote debugging?"。</p>
       <div class="term">
-        <div class="tt"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">安装 CLI</span></div>
+        <div class="tt"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">① 安装 CLI</span></div>
         <pre><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</pre>
       </div>
       <div class="term">
-        <div class="tt"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">拉 AI agent 技能</span></div>
+        <div class="tt"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">② 浏览器扩展(推荐) + 注册本地桥</span></div>
+        <pre><span class="cmt"># 1) 从 Chrome 应用商店装扩展(下方按钮)  2) 注册原生消息 host</span>
+<span class="prompt">$</span> chrome-use extension install</pre>
+      </div>
+      <p style="margin:16px 0 0">
+        <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk" target="_blank" rel="noopener">从 Chrome 应用商店安装扩展 ↗</a>
+      </p>
+      <div class="term" style="margin-top:18px">
+        <div class="tt"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">③ 拉 AI agent 技能</span></div>
         <pre><span class="cmt"># 把 Claude Code / Cursor 等的 SKILL.md 拉进当前项目</span>
 <span class="prompt">$</span> npx skills add leeguooooo/chrome-use</pre>
       </div>
