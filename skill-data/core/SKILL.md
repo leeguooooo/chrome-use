@@ -195,15 +195,15 @@ most drops you never even see. If a command *does* surface the error:
    the live URL is a *correct* result, not a failure. Reserve screenshots for a
    genuine visual check you report to the user.
 
-> **After an OAuth/SSO redirect, a read may fail "its tab is gone / stale
-> sessionId".** A login handoff (GitHub/Google OAuth, SSO) navigates the tab
-> *across processes*, which orphans the old session. `navigate`/`open`
-> auto-reattach, but reads (`snapshot`/`screenshot`/`eval`/`get`) deliberately
-> **fail loudly** rather than silently retarget onto the wrong tab. Recovery is
-> what the error now tells you: re-`open <url>` / `navigate <url>` the page (it
-> re-attaches to a fresh tab), or `adopt <url-substring>` the post-redirect tab,
-> then re-`snapshot`. Don't treat the stale error as fatal — it's a one-command
-> recovery.
+> **OAuth/SSO popups and redirects now just work.** A login handoff
+> (GitHub/Google OAuth, SSO) navigates the tab *across processes*, which used to
+> orphan the old session and make the next read fail "stale sessionId". The relay
+> now **auto-reattaches the opener across that cross-process nav** and retries a
+> read briefly while the new process settles, so reads
+> (`snapshot`/`screenshot`/`eval`/`get`) keep working through the handoff and
+> "Sign in with Google" / OAuth-popup logins complete end-to-end. (The
+> cross-origin Google GSI iframe — the "Continue as <user>" button — is pierced
+> only on Chrome 125+; on older Chrome that one button may stay unreachable.)
 
 Each `--session` that connects gets its **own colored Chrome tab group** (named
 after the session) and drives only its own tabs — multiple agents share the one
@@ -226,9 +226,12 @@ them for control.
 > them deliberately *share* one tab group.
 
 **Strict multi-agent isolation.** A session over the relay tracks and drives
-**only the tabs it created** (its own group). It does **not** adopt the user's
-existing tabs, other agents' tabs, or pop-ups (e.g. an OAuth/login window — that's
-the user's), so several agents (and other tools opening tabs) can work in the same
+**only the tabs it created** (its own group). A pop-up that **your own action
+opened** — e.g. the OAuth account-chooser window from a "Sign in with Google"
+click — is followed and drivable as part of your session (switch to it and drive
+the chooser). But it does **not** adopt the user's existing tabs, other agents'
+tabs, or *unrelated* pop-ups (a login window the user opened on their own is
+theirs), so several agents (and other tools opening tabs) can work in the same
 real Chrome concurrently without ever dropping or stealing each other's tabs —
 another agent's tab churn can't make your bound tab vanish or drift your commands
 onto the wrong page. Consequence: `tab list` shows only *your* session's tabs; to
@@ -787,6 +790,19 @@ chrome-use auth save my-app --url https://app.example.com/login \
 
 chrome-use auth login my-app    # fills + clicks, waits for form
 ```
+
+**"Sign in with Google" / OAuth.** Click the site's Google button, then
+`snapshot -i` — the GSI "Continue as <user>" button gets a clickable `@ref` even
+though it lives in a cross-origin iframe (Chrome 125+). If an account-chooser
+pop-up opens instead, switch to it and drive it; the relay follows the pop-up
+your click opened.
+
+**Credentials/passkeys from Bitwarden.** Besides the local auth vault, you can
+pull credentials and passkeys from a Bitwarden/Vaultwarden vault with the sibling
+tool [`bitwarden-use`](https://github.com/leeguooooo/bitwarden-use) (`bwu`):
+`bwu get <item>` returns the password (and 2FA code), and `bwu fido2 get` extracts
+the passkey private key — so an agent can log in with credentials, not just OAuth.
+e.g. `bwu get github.com | chrome-use fill '#password' --stdin`.
 
 ### Persist session across runs
 

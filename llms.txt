@@ -25,4 +25,4 @@ chrome-use lets any AI agent (Claude Code, Cursor, Codex, or your own scripts) d
 - Site: https://chrome-use.leeguoo.com/
 - Repo: https://github.com/leeguooooo/chrome-use
 - Author: 郭立 (Guo Li / Leo / leeguoo) — https://leeguoo.com
-- Family: chrome-use, iphone-use, cookie-use, profile-use, chatgpt-imagegen, wechat-use.
+- Family: chrome-use, iphone-use, cookie-use, profile-use, bitwarden-use, chatgpt-imagegen, wechat-use.

@@ -7,6 +7,7 @@ Login flows, session persistence, OAuth, 2FA, and authenticated browsing.
 ## Contents
 
 - [Import Auth from Your Browser](#import-auth-from-your-browser)
+- [Credentials & Passkeys from Bitwarden](#credentials--passkeys-from-bitwarden)
 - [Persistent Profiles](#persistent-profiles)
 - [Session Persistence](#session-persistence)
 - [Basic Login Flow](#basic-login-flow)
@@ -68,6 +69,27 @@ This works for any site, including those with complex OAuth flows, SSO, or 2FA -
 chrome-use --session-name myapp state load ./my-auth.json
 # From now on, state is auto-saved/restored for "myapp"
 ```
+
+## Credentials & Passkeys from Bitwarden
+
+When you need an actual username/password (or passkey) rather than a reused
+cookie, the sibling tool [`bitwarden-use`](https://github.com/leeguooooo/bitwarden-use)
+(`bwu`) reads them out of a Bitwarden/Vaultwarden vault, so an agent can log in
+with credentials, not just OAuth.
+
+```bash
+# install once
+curl -fsSL https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh
+
+# password (and 2FA code) for an item, piped straight into a field
+bwu get github.com | chrome-use fill '#password' --stdin
+
+# passkey private key for sites that take a FIDO2/WebAuthn passkey
+bwu fido2 get
+```
+
+This pairs with the local auth vault (`chrome-use auth`) above: keep credentials
+in Bitwarden, pull them at login time, and never put a password in shell history.
 
 ## Persistent Profiles
 

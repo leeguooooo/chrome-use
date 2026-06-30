@@ -4,7 +4,7 @@
 
 ![chrome-use](assets/hero.png)
 
-**chrome-use** 让任意 AI agent 直接操作你自己正在用的、已登录的 Chrome —— 复用你的登录态，对反爬/反自动化系统**完全不可检测**，因为它**就是**你的真实浏览器。属于 `*-use` 家族（iphone-use 驱动你的真实 iPhone，chrome-use 驱动你的真实 Chrome）。
+**chrome-use** 让任意 AI agent 直接操作你自己正在用的、已登录的 Chrome —— 复用你的登录态，对反爬/反自动化系统**完全不可检测**，因为它**就是**你的真实浏览器。属于 `*-use` 家族（iphone-use 驱动你的真实 iPhone，[bitwarden-use](https://github.com/leeguooooo/bitwarden-use) 从你的 Bitwarden 库里取密码、2FA 和 passkey，让 agent 用账号密码登录，chrome-use 驱动你的真实 Chrome）。
 
 <sub>最初基于 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)（Apache-2.0）；现已是独立项目 —— 隐身/扩展中继架构、反检测、humanize、多 agent 隔离与 CLI 都已大幅分化。</sub>
 
