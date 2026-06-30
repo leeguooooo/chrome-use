@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Hidden Upload Test</title></head>
+<body>
+  <h1>Hidden Upload Test</h1>
+  <!-- Mimics Element-Plus <el-upload :auto-upload="false" :show-file-list="false">:
+       a display:none <input type=file> plus a visible trigger button, where the
+       framework listens for `change` on the hidden input and flips a dependent
+       button from disabled to enabled. -->
+  <div class="el-upload" id="uploader">
+    <input type="file" id="hiddenFile" style="display:none">
+    <button type="button" id="trigger" onclick="document.getElementById('hiddenFile').click()">选择文件</button>
+  </div>
+  <button id="submit" disabled>上传</button>
+  <div id="result"></div>
+  <script>
+    document.getElementById('hiddenFile').addEventListener('change', function(e) {
+      var file = e.target.files[0];
+      if (file) {
+        document.getElementById('submit').disabled = false;
+        document.getElementById('result').textContent = 'changed:' + file.name;
+      }
+    });
+  </script>
+</body>
+</html>

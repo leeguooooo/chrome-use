@@ -2669,11 +2669,21 @@ impl BrowserManager {
             resolve_element_object_id(&self.client, session_id, ref_map, selector, iframe_sessions)
                 .await?;
 
+        // The selector/ref may point at the *trigger* rather than the file input
+        // itself — e.g. Element-Plus `<el-upload>` renders a `display:none`
+        // `<input type=file>` and the user clicks/snapshots the "选择文件"
+        // `<el-button>` next to it. Resolve to the real `<input type=file>` so we
+        // set files on the node the framework actually listens on, and so hidden
+        // inputs are reachable (a11y/visibility-based locators miss them).
+        let input_object_id = self
+            .resolve_file_input_object_id(&object_id, &effective_session_id)
+            .await?;
+
         let describe: Value = self
             .client
             .send_command(
                 "DOM.describeNode",
-                Some(json!({ "objectId": object_id })),
+                Some(json!({ "objectId": input_object_id })),
                 Some(&effective_session_id),
             )
             .await?;
@@ -2702,16 +2712,152 @@ impl BrowserManager {
             // `-32000 "Not allowed"`. Fall back to constructing the File entirely
             // IN THE PAGE and assigning it to the input — the standard
             // Playwright/Cypress trick, which needs no privileged CDP and so works
-            // over the relay (issue #13).
+            // over the relay (issue #13). We hand it the resolved INPUT (not the
+            // trigger button), so it takes the `input.files = …` branch — never
+            // the dropzone branch, whose uncancelled `drop` DragEvent made the
+            // tab navigate to the dropped file (the about:blank side effect).
             if e.contains("Not allowed") || e.contains("-32000") {
-                return self
-                    .upload_files_via_page(object_id, files, &effective_session_id)
-                    .await;
+                self.upload_files_via_page(input_object_id.clone(), files, &effective_session_id)
+                    .await?;
+            } else {
+                return Err(e);
             }
-            return Err(e);
+        }
+
+        // Verify the files actually attached and make sure the framework saw the
+        // change. `DOM.setFileInputFiles` fires a trusted `input`+`change`, but we
+        // also dispatch bubbling synthetic events as a belt-and-suspenders fallback
+        // for frameworks (Vue's `el-upload` `on-change`, React) that may have
+        // re-bound the listener — and only report success if `files.length > 0`,
+        // so "✓ Done" can never lie.
+        let attached = self
+            .notify_and_count_file_input(&input_object_id, &effective_session_id)
+            .await?;
+        if attached == 0 {
+            return Err(
+                "file input is still empty after upload — the page did not accept the file(s)"
+                    .to_string(),
+            );
         }
 
         Ok(())
+    }
+
+    /// Given an arbitrary resolved element, return the object id of the
+    /// associated `<input type=file>`. Handles the input itself, a `<label>`
+    /// (via `for=` or a wrapped input), a descendant input, or an ancestor
+    /// upload container (e.g. `.el-upload`) that holds a hidden input. Works on
+    /// `display:none` inputs — it never filters by visibility. Errors (without
+    /// navigating or otherwise touching the page) if none is found.
+    async fn resolve_file_input_object_id(
+        &self,
+        object_id: &str,
+        session_id: &str,
+    ) -> Result<String, String> {
+        let func = r#"function() {
+            const isFileInput = e => !!e && e.tagName === 'INPUT' && e.type === 'file';
+            const el = this;
+            if (isFileInput(el)) return el;
+            // A <label> trigger: explicit `for=`, then a wrapped input.
+            if (el.tagName === 'LABEL') {
+                if (el.htmlFor) {
+                    const t = el.ownerDocument.getElementById(el.htmlFor);
+                    if (isFileInput(t)) return t;
+                }
+            }
+            // A descendant input (el-upload wrapper passed directly).
+            if (el.querySelector) {
+                const within = el.querySelector('input[type=file]');
+                if (within) return within;
+            }
+            // A trigger button/element: walk up to the nearest container that
+            // owns a file input (el-upload puts the hidden input as a sibling).
+            let p = el;
+            for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
+                if (p.querySelector) {
+                    const found = p.querySelector('input[type=file]');
+                    if (found) return found;
+                }
+            }
+            return null;
+        }"#;
+
+        let result: EvaluateResult = self
+            .client
+            .send_command_typed(
+                "Runtime.callFunctionOn",
+                &CallFunctionOnParams {
+                    function_declaration: func.to_string(),
+                    object_id: Some(object_id.to_string()),
+                    arguments: None,
+                    return_by_value: Some(false),
+                    await_promise: Some(false),
+                },
+                Some(session_id),
+            )
+            .await
+            .map_err(|e| format!("resolving file input failed: {}", e))?;
+
+        if let Some(ref details) = result.exception_details {
+            return Err(format!("resolving file input threw: {}", details.text));
+        }
+
+        result.result.object_id.ok_or_else(|| {
+            "No <input type=file> found for the given selector. Pass the file input \
+             (e.g. `input[type=file]`) or the upload trigger button inside the same \
+             upload container."
+                .to_string()
+        })
+    }
+
+    /// Read the file input's `files.length` and dispatch bubbling `input`+`change`
+    /// so Vue/React register the new files. Returns the attached file count.
+    async fn notify_and_count_file_input(
+        &self,
+        input_object_id: &str,
+        session_id: &str,
+    ) -> Result<u64, String> {
+        let func = r#"function() {
+            const el = this;
+            if (!el || el.tagName !== 'INPUT' || el.type !== 'file') return -1;
+            const n = el.files ? el.files.length : 0;
+            if (n > 0) {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            return n;
+        }"#;
+
+        let result: EvaluateResult = self
+            .client
+            .send_command_typed(
+                "Runtime.callFunctionOn",
+                &CallFunctionOnParams {
+                    function_declaration: func.to_string(),
+                    object_id: Some(input_object_id.to_string()),
+                    arguments: None,
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(session_id),
+            )
+            .await
+            .map_err(|e| format!("verifying upload failed: {}", e))?;
+
+        if let Some(ref details) = result.exception_details {
+            return Err(format!("verifying upload threw: {}", details.text));
+        }
+
+        let count = result
+            .result
+            .value
+            .as_ref()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
+        if count < 0 {
+            return Err("resolved upload target is not a file input".to_string());
+        }
+        Ok(count as u64)
     }
 
     /// Relay-safe file upload: read each file locally, hand its bytes to the page

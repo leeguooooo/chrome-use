@@ -35,6 +35,7 @@ fn native_test_fixture_html(name: &str) -> &'static str {
         "html5_drag_probe" => include_str!("test_fixtures/html5_drag_probe.html"),
         "pointer_capture_probe" => include_str!("test_fixtures/pointer_capture_probe.html"),
         "upload_probe" => include_str!("test_fixtures/upload_probe.html"),
+        "hidden_upload_probe" => include_str!("test_fixtures/hidden_upload_probe.html"),
         "iframe_button_probe" => include_str!("test_fixtures/iframe_button_probe.html"),
         _ => panic!("Unknown native test fixture: {}", name),
     }
@@ -4678,6 +4679,99 @@ async fn e2e_upload_with_css_selector() {
     .await;
     assert_success(&resp);
     assert_eq!(get_data(&resp)["uploaded"], 1);
+
+    let _ = std::fs::remove_file(&tmp);
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+// Upload: hidden (`display:none`) file input must be reachable, and the
+// framework's `change` handler must fire (el-upload `:auto-upload=false`).
+#[tokio::test]
+#[ignore]
+async fn e2e_upload_hidden_input() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": native_test_fixture_url("hidden_upload_probe") }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let tmp = std::env::temp_dir().join(format!("ab-upload-hidden-{}.txt", std::process::id()));
+    std::fs::write(&tmp, "test").unwrap();
+
+    // Target the hidden input directly by CSS — a visibility-filtered locator
+    // would miss it.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "upload", "selector": "#hiddenFile", "files": [tmp.to_string_lossy()] }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["uploaded"], 1);
+
+    // The framework's change handler must have fired and enabled the submit button.
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "eval", "expression": "document.getElementById('submit').disabled" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], false);
+
+    let _ = std::fs::remove_file(&tmp);
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+// Upload: passing the trigger button (the el-upload "选择文件" <button>) must
+// resolve to the sibling hidden `<input type=file>` and attach the file there.
+#[tokio::test]
+#[ignore]
+async fn e2e_upload_via_trigger_button() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": native_test_fixture_url("hidden_upload_probe") }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let tmp = std::env::temp_dir().join(format!("ab-upload-trigger-{}.txt", std::process::id()));
+    std::fs::write(&tmp, "test").unwrap();
+
+    // Pass the trigger button, NOT the input — upload must walk to the input.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "upload", "selector": "#trigger", "files": [tmp.to_string_lossy()] }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "eval", "expression": "document.getElementById('hiddenFile').files.length" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], 1);
 
     let _ = std::fs::remove_file(&tmp);
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
