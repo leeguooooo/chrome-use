@@ -102,6 +102,10 @@ pub struct RouteEntry {
     /// `response`: a `response` fulfills (short-circuits) the request, so it
     /// takes priority and the request is never sent.
     pub request_override: Option<RouteRequestOverride>,
+    /// Response-stage edits applied via `Fetch.getResponseBody` + `fulfillRequest`
+    /// (rewrite the REAL response). When set, this route is intercepted at the
+    /// response stage instead of the request stage.
+    pub response_edit: Option<ResponseEdit>,
     pub abort: bool,
     /// When non-empty, only requests whose `resourceType` (as reported by
     /// CDP Fetch.requestPaused) is in this list are matched. Values are
@@ -123,6 +127,18 @@ pub struct RouteRequestOverride {
     pub url: Option<String>,
     pub post_data: Option<String>,
     pub headers: Option<HashMap<String, String>>,
+}
+
+/// Edits applied to the REAL response (response-stage interception): the request
+/// goes out, the real response comes back, then these tweak it before the page
+/// sees it. Distinct from `RouteResponse`, which fully mocks/replaces without
+/// hitting the network.
+pub struct ResponseEdit {
+    pub status: Option<u16>,
+    /// Added/overridden on top of the real response headers (case-insensitive).
+    pub headers: Option<HashMap<String, String>>,
+    /// Ordered `(from, to)` substring replacements applied to the real body.
+    pub replacements: Vec<(String, String)>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -153,6 +169,19 @@ pub struct FetchPausedRequest {
     /// Original request headers from the Fetch.requestPaused event, needed
     /// because Fetch.continueRequest replaces (not merges) headers.
     pub request_headers: Option<serde_json::Map<String, Value>>,
+    /// Present only when the pause is at the **response** stage (the request
+    /// already went out and the real response came back). `None` at request
+    /// stage. Its presence is how we tell the two stages apart.
+    pub response_status: Option<i64>,
+    /// Real response headers (array of `{name,value}`) at the response stage.
+    pub response_headers: Option<Value>,
+}
+
+impl FetchPausedRequest {
+    /// True when this pause carries a real response (response-stage interception).
+    fn is_response_stage(&self) -> bool {
+        self.response_status.is_some()
+    }
 }
 
 pub enum BackendType {
@@ -459,6 +488,13 @@ impl DaemonState {
                             .and_then(|h| h.as_object())
                             .cloned();
                         let sid = event.session_id.clone().unwrap_or_default();
+                        // Present only at the response stage (requestStage: Response).
+                        let response_status = event
+                            .params
+                            .get("responseStatusCode")
+                            .and_then(|v| v.as_i64());
+                        let response_headers =
+                            event.params.get("responseHeaders").cloned();
 
                         let paused = FetchPausedRequest {
                             request_id,
@@ -466,6 +502,8 @@ impl DaemonState {
                             resource_type,
                             session_id: sid,
                             request_headers,
+                            response_status,
+                            response_headers,
                         };
 
                         let df = domain_filter.read().await;
@@ -9758,6 +9796,163 @@ fn browser_metadata_from_version(version: &Value) -> Option<Value> {
 // Fetch interception resolver (domain filter + routes + origin headers)
 // ---------------------------------------------------------------------------
 
+/// A reason phrase for a status code. `Fetch.fulfillRequest` hangs on a
+/// non-standard `responseCode` (e.g. 599) unless a `responsePhrase` is supplied,
+/// so we always send one. Cosmetic for standard codes; required for custom ones.
+fn reason_phrase(code: i64) -> &'static str {
+    match code {
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        204 => "No Content",
+        206 => "Partial Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        409 => "Conflict",
+        418 => "I'm a Teapot",
+        422 => "Unprocessable Entity",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "Status",
+    }
+}
+
+/// Does this route's URL glob + resource-type filter match the paused request?
+fn route_matches(route: &RouteEntry, paused: &FetchPausedRequest) -> bool {
+    let url_matches = if route.url_pattern == "*" {
+        true
+    } else if route.url_pattern.contains('*') {
+        let parts: Vec<&str> = route.url_pattern.split('*').collect();
+        if parts.len() == 2 {
+            paused.url.starts_with(parts[0]) && paused.url.ends_with(parts[1])
+        } else {
+            paused.url.contains(&route.url_pattern)
+        }
+    } else {
+        paused.url.contains(&route.url_pattern)
+    };
+    let resource_type_matches = route.resource_types.is_empty()
+        || route
+            .resource_types
+            .iter()
+            .any(|rt| rt.eq_ignore_ascii_case(&paused.resource_type));
+    url_matches && resource_type_matches
+}
+
+/// Response-stage edit: pull the real body, apply substring replacements, and
+/// fulfill with the (optionally) overridden status + merged headers. Falls back
+/// to releasing the response unchanged if the body can't be read.
+async fn apply_response_edit(
+    client: &CdpClient,
+    session_id: &str,
+    paused: &FetchPausedRequest,
+    edit: &ResponseEdit,
+) {
+    let body_resp = client
+        .send_command(
+            "Fetch.getResponseBody",
+            Some(json!({ "requestId": paused.request_id })),
+            Some(session_id),
+        )
+        .await;
+
+    let mut body_bytes: Option<Vec<u8>> = None;
+    if let Ok(v) = body_resp {
+        if let Some(b) = v.get("body").and_then(|x| x.as_str()) {
+            let is_b64 = v
+                .get("base64Encoded")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
+            if is_b64 {
+                if let Ok(dec) = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b,
+                ) {
+                    body_bytes = Some(dec);
+                }
+            } else {
+                body_bytes = Some(b.as_bytes().to_vec());
+            }
+        }
+    }
+
+    let Some(mut bytes) = body_bytes else {
+        // Couldn't read the body — release the real response unchanged.
+        let _ = client
+            .send_command(
+                "Fetch.continueResponse",
+                Some(json!({ "requestId": paused.request_id })),
+                Some(session_id),
+            )
+            .await;
+        return;
+    };
+
+    if !edit.replacements.is_empty() {
+        if let Ok(mut text) = String::from_utf8(bytes.clone()) {
+            for (from, to) in &edit.replacements {
+                text = text.replace(from, to);
+            }
+            bytes = text.into_bytes();
+        }
+    }
+
+    let status = edit
+        .status
+        .map(|s| s as i64)
+        .or(paused.response_status)
+        .unwrap_or(200);
+
+    // Keep the real headers, minus any the edit overrides by name, then append
+    // the overrides.
+    let mut headers: Vec<Value> = Vec::new();
+    if let Some(Value::Array(arr)) = &paused.response_headers {
+        for h in arr {
+            let name = h.get("name").and_then(|x| x.as_str()).unwrap_or("");
+            let overridden = edit
+                .headers
+                .as_ref()
+                .map(|m| m.keys().any(|k| k.eq_ignore_ascii_case(name)))
+                .unwrap_or(false);
+            if !overridden {
+                headers.push(h.clone());
+            }
+        }
+    }
+    if let Some(m) = &edit.headers {
+        for (k, v) in m {
+            headers.push(json!({ "name": k, "value": v }));
+        }
+    }
+
+    let encoded =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+    let _ = client
+        .send_command(
+            "Fetch.fulfillRequest",
+            Some(json!({
+                "requestId": paused.request_id,
+                "responseCode": status,
+                "responsePhrase": reason_phrase(status),
+                "responseHeaders": headers,
+                "body": encoded,
+            })),
+            Some(session_id),
+        )
+        .await;
+}
+
 async fn resolve_fetch_paused(
     client: &CdpClient,
     domain_filter: Option<&DomainFilter>,
@@ -9766,6 +9961,28 @@ async fn resolve_fetch_paused(
     paused: &FetchPausedRequest,
 ) {
     let session_id = &paused.session_id;
+
+    // Response-stage pause: the real response is in hand. Only response-edit
+    // routes are intercepted at this stage, so find one, apply it, and fulfill;
+    // if none matches (shouldn't normally happen) release it unchanged.
+    if paused.is_response_stage() {
+        for route in routes {
+            if route_matches(route, paused) {
+                if let Some(ref edit) = route.response_edit {
+                    apply_response_edit(client, session_id, paused, edit).await;
+                    return;
+                }
+            }
+        }
+        let _ = client
+            .send_command(
+                "Fetch.continueResponse",
+                Some(json!({ "requestId": paused.request_id })),
+                Some(session_id),
+            )
+            .await;
+        return;
+    }
 
     // Domain filter check (takes priority over routes and origin headers)
     if let Some(filter) = domain_filter {
@@ -9838,30 +10055,13 @@ async fn resolve_fetch_paused(
         }
     }
 
-    // Route matching
+    // Route matching (request stage)
     for route in routes {
-        let url_matches = if route.url_pattern == "*" {
-            true
-        } else if route.url_pattern.contains('*') {
-            let parts: Vec<&str> = route.url_pattern.split('*').collect();
-            if parts.len() == 2 {
-                paused.url.starts_with(parts[0]) && paused.url.ends_with(parts[1])
-            } else {
-                paused.url.contains(&route.url_pattern)
-            }
-        } else {
-            paused.url.contains(&route.url_pattern)
-        };
-
-        let resource_type_matches = route.resource_types.is_empty()
-            || route
-                .resource_types
-                .iter()
-                .any(|rt| rt.eq_ignore_ascii_case(&paused.resource_type));
-
-        let matches = url_matches && resource_type_matches;
-
-        if matches {
+        // Response-edit routes act only at the response stage; skip here.
+        if route.response_edit.is_some() {
+            continue;
+        }
+        if route_matches(route, paused) {
             if route.abort {
                 let _ = client
                     .send_command(
@@ -9899,6 +10099,7 @@ async fn resolve_fetch_paused(
                         Some(json!({
                             "requestId": paused.request_id,
                             "responseCode": status,
+                            "responsePhrase": reason_phrase(status as i64),
                             "responseHeaders": headers,
                             "body": encoded,
                         })),
@@ -10006,7 +10207,15 @@ async fn build_fetch_patterns(state: &DaemonState) -> Vec<Value> {
     let routes = state.routes.read().await;
     let mut patterns: Vec<Value> = routes
         .iter()
-        .map(|r| json!({ "urlPattern": r.url_pattern }))
+        .map(|r| {
+            // Response-edit routes must pause at the response stage so the real
+            // response is available; everything else at the (default) request stage.
+            if r.response_edit.is_some() {
+                json!({ "urlPattern": r.url_pattern, "requestStage": "Response" })
+            } else {
+                json!({ "urlPattern": r.url_pattern })
+            }
+        })
         .collect();
     let has_domain_filter = state.domain_filter.read().await.is_some();
     let has_origin_headers = !state.origin_headers.read().await.is_empty();
@@ -10101,12 +10310,43 @@ async fn handle_route(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         })
     });
 
+    let response_edit = cmd.get("responseEdit").and_then(|v| {
+        if v.is_null() {
+            return None;
+        }
+        let replacements = v
+            .get("replacements")
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|pair| {
+                        let a = pair.get(0).and_then(|x| x.as_str())?;
+                        let b = pair.get(1).and_then(|x| x.as_str())?;
+                        Some((a.to_string(), b.to_string()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Some(ResponseEdit {
+            status: v.get("status").and_then(|s| s.as_u64()).map(|s| s as u16),
+            headers: v.get("headers").and_then(|h| {
+                h.as_object().map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+            }),
+            replacements,
+        })
+    });
+
     {
         let mut routes = state.routes.write().await;
         routes.push(RouteEntry {
             url_pattern: url_pattern.clone(),
             response,
             request_override,
+            response_edit,
             abort,
             resource_types,
         });
@@ -12057,6 +12297,7 @@ mod tests {
                 url_pattern: "https://example.com/*".to_string(),
                 response: None,
                 request_override: None,
+                response_edit: None,
                 abort: true,
                 resource_types: Vec::new(),
             });
@@ -12101,6 +12342,7 @@ mod tests {
                 url_pattern: "*".to_string(),
                 response: None,
                 request_override: None,
+                response_edit: None,
                 abort: false,
                 resource_types: Vec::new(),
             });

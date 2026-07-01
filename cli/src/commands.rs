@@ -3893,6 +3893,23 @@ fn parse_network(rest: &[&str], id: &str) -> Result<Value, ParseError> {
                 || rewrite_url.is_some()
                 || !req_headers.is_empty();
 
+            // Response-edit side (Fetch response stage — tweak the REAL response).
+            let edit_status = val("--edit-status").and_then(|s| s.parse::<u64>().ok());
+            let edit_headers = kv_map("--edit-header");
+            // `--replace from=>to`, repeatable.
+            let mut replacements: Vec<Value> = Vec::new();
+            for (i, &s) in rest.iter().enumerate() {
+                if s == "--replace" {
+                    if let Some(&pair) = rest.get(i + 1) {
+                        if let Some((from, to)) = pair.split_once("=>") {
+                            replacements.push(json!([from, to]));
+                        }
+                    }
+                }
+            }
+            let has_edit =
+                edit_status.is_some() || !edit_headers.is_empty() || !replacements.is_empty();
+
             let rt_idx = rest
                 .iter()
                 .position(|&s| s == "--resource-type" || s == "--resource-types");
@@ -3930,6 +3947,19 @@ fn parse_network(rest: &[&str], id: &str) -> Result<Value, ParseError> {
                     req.insert("headers".into(), Value::Object(req_headers));
                 }
                 cmd["requestOverride"] = Value::Object(req);
+            }
+            if has_edit {
+                let mut ed = serde_json::Map::new();
+                if let Some(st) = edit_status {
+                    ed.insert("status".into(), json!(st));
+                }
+                if !edit_headers.is_empty() {
+                    ed.insert("headers".into(), Value::Object(edit_headers));
+                }
+                if !replacements.is_empty() {
+                    ed.insert("replacements".into(), Value::Array(replacements));
+                }
+                cmd["responseEdit"] = Value::Object(ed);
             }
             if let Some(rt) = resource_type {
                 cmd["resourceType"] = json!(rt);
@@ -4471,6 +4501,23 @@ mod tests {
         assert_eq!(cmd["requestOverride"]["url"], "https://x.test/y");
         // No response-side mock was given.
         assert!(cmd.get("response").is_none());
+    }
+
+    #[test]
+    fn test_network_route_response_edit() {
+        let cmd = parse_command(
+            &args("network route **/api/* --edit-status 503 --edit-header X-Edited=1 --replace foo=>bar"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "route");
+        assert_eq!(cmd["responseEdit"]["status"], 503);
+        assert_eq!(cmd["responseEdit"]["headers"]["X-Edited"], "1");
+        assert_eq!(cmd["responseEdit"]["replacements"][0][0], "foo");
+        assert_eq!(cmd["responseEdit"]["replacements"][0][1], "bar");
+        // Response-edit is distinct from full mock and request override.
+        assert!(cmd.get("response").is_none());
+        assert!(cmd.get("requestOverride").is_none());
     }
 
     #[test]

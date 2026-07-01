@@ -1010,6 +1010,11 @@ chrome-use network route "**/api/save" --method POST --set-header Authorization=
 chrome-use network route "**/api/save" --set-body '{"x":1}'          # replace the request body
 chrome-use network route "**/v1/*" --rewrite-url https://staging.example.com/v1/thing
 
+# Edit the REAL response (request goes out, response comes back, then tweak it)
+chrome-use network route "**/api/me" --edit-status 503                # override status
+chrome-use network route "**/api/me" --edit-header X-Env=test         # add/override a response header
+chrome-use network route "**/api/me" --replace 'prod=>staging'        # substring-replace in the real body (repeatable)
+
 # Block entirely
 chrome-use network route "**/analytics" --abort
 
@@ -1023,12 +1028,20 @@ chrome-use network har stop /tmp/trace.har
 chrome-use network unroute                 # drop all routes
 ```
 
-Response fields (`--body` / `--status` / `--header` / `--content-type`) fulfill a
-mock and short-circuit the request. Request fields (`--method` / `--set-body` /
-`--set-header` / `--rewrite-url`) rewrite the outgoing request and let the real
-response come back. If both are given on one rule, the response mock wins.
-`--header`/`--set-header` are repeatable (`K=V`); request headers merge over the
-originals.
+Three modes, distinguished by which flags you pass:
+- **Mock** (`--body` / `--status` / `--header` / `--content-type`): fulfill a fake
+  response, short-circuit the request (never hits the network).
+- **Rewrite request** (`--method` / `--set-body` / `--set-header` / `--rewrite-url`):
+  change the outgoing request, then let the real response come back.
+- **Edit real response** (`--edit-status` / `--edit-header` / `--replace 'from=>to'`):
+  let the request go out, then tweak the real response before the page sees it.
+  Great for forcing an error state or patching a field without a mock server.
+
+If both a mock and a rewrite are given on one rule, the mock wins. `--header` /
+`--set-header` / `--edit-header` / `--replace` are repeatable; request/response
+headers merge over the originals. Note: editing the **top-level document**
+navigation's status can confuse page load — scope response edits to API calls
+with `--resource-type xhr,fetch` when needed.
 
 ### Record a video of the workflow
 

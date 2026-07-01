@@ -184,6 +184,7 @@ chrome-use network route <url>              # Intercept requests
 chrome-use network route <url> --abort      # Block requests
 chrome-use network route <url> --body '{}' --status 200 --header K=V --content-type application/json  # Mock response (fulfill)
 chrome-use network route <url> --method POST --set-body '{}' --set-header K=V --rewrite-url <u>       # Rewrite request (continue)
+chrome-use network route <url> --edit-status 503 --edit-header K=V --replace 'from=>to'              # Edit the real response
 chrome-use network unroute [url]            # Remove routes
 chrome-use network requests                 # View tracked requests
 chrome-use network requests --filter api    # Filter requests
