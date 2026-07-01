@@ -54,7 +54,9 @@ const MAP = [
 ];
 
 const pageFiles = (slug) =>
-  slug === 'overview' ? ['index.html', 'en/index.html'] : [`${slug}.html`, `en/${slug}.html`];
+  slug === 'overview'
+    ? ['docs/index.html', 'docs/en/index.html']
+    : [`docs/${slug}.html`, `docs/en/${slug}.html`];
 
 const range = process.env.DOCS_CHECK_DIFF;
 const diffCmd = range
