@@ -1,4 +1,49 @@
 /* ==========================================================================
+   Shared analytics + ads for every docs page (chrome-use.leeguoo.com).
+   Injected here so all pages (and future ones) are covered by one edit.
+   - Google AdSense account association (ads.txt lives at the site root)
+   - blog.leeguoo.com central traffic beacon (self-locating → posts to the blog)
+   - Google Analytics 4, reusing leeguoo.com's streams so this is counted
+     together with the rest of the leeguoo.com network
+   ========================================================================== */
+(function () {
+  var head = document.head || document.getElementsByTagName('head')[0];
+  if (!head) return;
+
+  // AdSense account meta (ad units added later; ads.txt authorizes the seller)
+  if (!document.querySelector('meta[name="google-adsense-account"]')) {
+    var meta = document.createElement('meta');
+    meta.name = 'google-adsense-account';
+    meta.content = 'ca-pub-4085449715128420';
+    head.appendChild(meta);
+  }
+
+  // Central visitor beacon — the script self-locates its origin, so served from
+  // blog.leeguoo.com it posts here to blog.leeguoo.com/api/traffic/collect.
+  if (!document.querySelector('script[src*="visitor-beacon.js"]')) {
+    var beacon = document.createElement('script');
+    beacon.defer = true;
+    beacon.src = 'https://blog.leeguoo.com/scripts/visitor-beacon.js?v=20260629-2';
+    head.appendChild(beacon);
+  }
+
+  // Google Analytics 4 — same measurement IDs leeguoo.com fires, so docs
+  // traffic lands in the same properties ("counted together with leeguoo.com").
+  var GA_IDS = ['G-1PPMNQSBQ5', 'G-RCV0Z432Y8'];
+  if (!window.__cuGtag) {
+    window.__cuGtag = true;
+    var ga = document.createElement('script');
+    ga.async = true;
+    ga.src = 'https://www.googletagmanager.com/gtag/js?id=' + GA_IDS[0];
+    head.appendChild(ga);
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () { window.dataLayer.push(arguments); };
+    window.gtag('js', new Date());
+    GA_IDS.forEach(function (id) { window.gtag('config', id); });
+  }
+})();
+
+/* ==========================================================================
    chrome-use docs — docs.js  (vanilla JS, zero deps)
    --------------------------------------------------------------------------
    On DOMContentLoaded it:

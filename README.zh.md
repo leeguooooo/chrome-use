@@ -8,6 +8,8 @@
 
 <sub>最初基于 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)（Apache-2.0）；现已是独立项目 —— 隐身/扩展中继架构、反检测、humanize、多 agent 隔离与 CLI 都已大幅分化。</sub>
 
+> 📚 **文档站：** **[chrome-use.leeguoo.com](https://chrome-use.leeguoo.com)** —— 完整指南、工作流与命令参考（中文 · English）。
+
 ## 把你**已经登录好**的浏览器，交给你的 AI agent
 
 **不用开新 Chrome。不用重新登录。不用跟"你是不是机器人"较劲。**

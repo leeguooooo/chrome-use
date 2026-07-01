@@ -8,6 +8,8 @@
 
 <sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); now a standalone project — the stealth/extension-relay architecture, anti-detection, humanize, multi-agent isolation, and CLI have diverged substantially.</sub>
 
+> 📚 **Documentation:** **[chrome-use.leeguoo.com](https://chrome-use.leeguoo.com)** — full guides, workflows & command reference (中文 · English).
+>
 > 📖 **Deep dive:** [Letting an agent click into cross-origin iframes — how chrome-use solves the hardest part of browser control](https://blog.leeguoo.com/en/posts/chrome-use-cross-origin-iframe/)
 
 ## Give your AI agent the browser you already live in
