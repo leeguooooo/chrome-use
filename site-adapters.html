@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>站点适配器 · chrome-use 文档</title>
+  <meta name="description" content="站点适配器：社区写的一小段 JS，在你登录态的标签页里直接打站点自己的 JSON API，返回干净结构化数据——不点击、不爬、不截图。site update / list / info / run 全流程，以及自动触发提示与选型对比。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="site-adapters" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">核心用法 / Core Usage</p>
+
+      <div class="du-title-row">
+        <h1>站点适配器</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        读「站点 X 的结构化数据」，最省的路径是<span class="mark">跳过 snapshot + click</span>。
+        在你 <code>open</code>、翻页、一路点击穿越 GitHub / Reddit / Bilibili 之前，先看有没有现成的
+        <strong>站点适配器</strong>——一小段社区写的 JS，在你登录态的标签页里直接打站点自己的 JSON API，
+        把干净的结构化数据一次交给你。不点击、不爬、不截图。
+      </p>
+
+      <!-- ============ SECTION ======= -->
+      <h2>是什么</h2>
+      <p>
+        站点适配器（site adapter）是<strong>社区写的一个 JS 函数</strong>：它在你当前<em>登录态的标签页里</em>
+        直接调用站点自己的 JSON API，返回清洗好的结构化数据。本质上就是打包好的、按站点划分的
+        <a href="/extract.html"><code>eval</code></a>——只是不用你自己写，也不用摸清每个站点的接口。
+      </p>
+      <p>
+        因为它跑在你已经登录的那个标签页里、<span class="mark">以你的身份</span>发请求，所以像
+        <code>bilibili/feed</code>、<code>twitter/…</code> 这类需要登录态的信息流也能直接读到——
+        这正是手拼 URL 或匿名抓取做不到的地方。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 和 eval 的关系</div>
+        如果你已经会用 <a href="/extract.html"><code>eval</code></a> 打某个站点的内部接口，那站点适配器就是把这段代码
+        <strong>沉淀成命令</strong>、由社区维护、按站点归类。你少写一次脏活，别人也复用得到。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>怎么用</h2>
+      <p>
+        四个动作：一次性拉包（<code>update</code>）、看装了哪些（<code>list</code>）、看某个适配器怎么调
+        （<code>info</code>）、运行它（<code>site &lt;name&gt;/&lt;cmd&gt;</code>）。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># 一次性：拉取适配器包（约 145 条命令）</span>
+<span class="du-prompt">$</span> chrome-use site list                              <span class="du-cmt"># 已装了哪些（github/issues、reddit/search…）</span>
+<span class="du-prompt">$</span> chrome-use site info github/issues                <span class="du-cmt"># 某适配器的参数 + 在哪个域名上跑</span>
+<span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># 运行 → JSON（自动帮你导航过去）</span></code></pre>
+      </div>
+
+      <ul>
+        <li><code>site update</code>：从 bb-sites 社区包拉取整套适配器。只需一次；之后 chrome-use 会自动保持同步（见下方「自动触发」）。</li>
+        <li><code>site list</code>：列出本地已安装的所有 <code>&lt;name&gt;/&lt;cmd&gt;</code>，例如 <code>github/issues</code>、<code>reddit/search</code>。</li>
+        <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>：查一个适配器声明了哪些参数、以及它会在哪个域名上运行——调之前先看这个，就知道该传什么。</li>
+        <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>：真正运行。加 <code>--json</code> 拿一行可解析的结构化输出。</li>
+      </ul>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 先 info，再 run</div>
+        不确定某个适配器要什么参数时，先 <code>site info &lt;name&gt;/&lt;cmd&gt;</code> 看它的参数声明和目标域名，
+        再照着传。这比盲跑一次看报错更省。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>参数与导航</h2>
+      <p>
+        适配器的参数按<strong>声明顺序</strong>用位置参数填入；想按名字覆盖某一个，就用 <code>--key value</code>。
+        两种写法可以混用：位置参数先占位，<code>--key</code> 再定点覆盖。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">位置参数 vs --key 覆盖</span>
+        </div>
+<pre><code><span class="du-cmt"># 位置参数按声明顺序填</span>
+<span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>
+
+<span class="du-cmt"># --key 按名覆盖（顺序无所谓）</span>
+<span class="du-prompt">$</span> chrome-use site reddit/search <span class="du-flag">--query</span> <span class="du-str">"chrome-use"</span> <span class="du-flag">--sort</span> new <span class="du-flag">--json</span></code></pre>
+      </div>
+
+      <p>
+        运行时它会<span class="mark">导航到适配器声明的域名</span>——如果你当前标签页已经在那个域名上，就<strong>复用当前标签页</strong>，
+        不新开。正因为请求发生在你登录态的那个标签页里，所以像 <code>bilibili/feed</code>、<code>twitter/…</code>
+        这类登录才可见的信息流能正常返回：它们<strong>以你的身份</strong>运行。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 它会帮你导航</div>
+        你不必先手动 <code>open</code> 到目标站点。<code>site &lt;name&gt;/&lt;cmd&gt;</code> 会自己导航到适配器的域名再执行；
+        但你得<strong>已经登录</strong>那个站点，登录态信息流才读得到。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>自动触发 —— 看到就用它</h2>
+      <p>
+        你不用记住哪些站点有适配器。chrome-use 会自动保持适配器包同步（<strong>首次使用 + 每周</strong>），
+        并且当你 <code>open</code> / <code>navigate</code> / <code>snapshot</code> 一个<strong>域名有适配器</strong>的页面时主动提示你：
+      </p>
+
+      <ul>
+        <li>stderr 上一行 <code>💡 site adapters for &lt;domain&gt;</code>；</li>
+        <li><code>--json</code> 输出里的 <code>siteAdapters: {domain, commands}</code> 字段。</li>
+      </ul>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">自动提示 · stderr</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/epiral/bb-sites
+<span class="du-cmt"># … 页面打开的同时，stderr 冒出一行：</span>
+💡 site adapters for github.com: github/issues, github/pulls, github/repo …</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 看到提示，优先用它列出的 <code>site &lt;name&gt;/&lt;cmd&gt;</code></div>
+        看到 <code>💡 site adapters for &lt;domain&gt;</code> 时，<strong>别再 snapshot + click 去读数据</strong>——
+        直接用它点名的 <code>site &lt;name&gt;/&lt;cmd&gt;</code>：更省、更稳，而且已经装好了。你也<strong>不需要</strong>自己先跑
+        <code>site update</code>，用它给出的命令即可。
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 全新环境的例外</div>
+        只有在<strong>刚装好、适配器包还没拉取</strong>的全新环境里，点名一个 <code>site &lt;name&gt;/&lt;cmd&gt;</code>
+        可能提示「未安装」。这时手动跑一次 <code>site update</code>，再重跑那条命令即可。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>什么时候用它 vs extract --schema vs snapshot</h2>
+      <p>
+        同一页数据往往有多条路。站点适配器是<strong>已知站点</strong>结构化数据的首选；没有合适适配器时，
+        再往下退。下面这张表帮你对号入座。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>你的情况</th><th>用什么</th><th>为什么</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>已知站点</strong>的结构化数据（GitHub issues、Reddit/HN 搜索、B 站 / Twitter 信息流），尤其登录态之后</td>
+            <td><code>chrome-use site &lt;name&gt;/&lt;cmd&gt;</code></td>
+            <td>直接打站点 JSON API、以你身份运行，跳过 snapshot + click，最省最稳</td>
+          </tr>
+          <tr>
+            <td><strong>任意页面</strong>的结构化数据，<strong>没有</strong>社区适配器——表格、搜索结果、信息流行、仪表盘</td>
+            <td><a href="/extract.html"><code>extract --schema '{rows,fields}'</code></a></td>
+            <td>给个形状，一次调用出干净 JSON，不用自己写 eval、也不倒整页 HTML</td>
+          </tr>
+          <tr>
+            <td>要给模型<strong>做推理</strong>、或需要拿 <code>@ref</code> 去交互</td>
+            <td><a href="/reading.html"><code>snapshot -i --json</code></a></td>
+            <td>结构化快照带稳定 ref，既能读也能驱动后续 click / type</td>
+          </tr>
+          <tr>
+            <td>需要<strong>自定义形状</strong>、逻辑较特殊的一次性抽取</td>
+            <td><a href="/extract.html"><code>eval --stdin</code></a></td>
+            <td>在页面 MAIN world 里直接写 JS，最灵活（适配器就是它的沉淀版）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 从便宜到贵的顺序</div>
+        大致是：<strong>site 适配器 → extract --schema → snapshot/eval 循环</strong>。
+        有适配器就用适配器；没适配器但形状规整就 <code>extract --schema</code>；再不行才回到常规的
+        <code>snapshot</code> / <code>eval</code> 手动循环。数据抽取的全景见 <a href="/extract.html">提取数据</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>来源与许可</h2>
+      <p>
+        适配器来自 <a href="https://github.com/epiral/bb-sites">bb-sites</a> 社区包。
+        chrome-use 负责在<strong>运行时拉取并执行</strong>它们——本仓库<span class="mark">不打包、不重分发</span>任何适配器代码，
+        <code>site update</code> 每次从上游获取最新版本。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 运行时拉取，不内置</div>
+        因为适配器是上游社区维护、运行时才拉取的，所以你看到的命令集会随 bb-sites 更新而变化；
+        <code>site list</code> 反映的是你本地这一次同步到的版本。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>下一步</h2>
+      <p>站点适配器是数据抽取里最省的一档；配合下面这些手段覆盖其余场景。</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/extract.html">
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> 提取数据</div>
+          <p>没有适配器时：eval 自定义形状，或 extract --schema 一步到位。</p>
+        </a>
+        <a class="du-card" href="/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> 读取页面</div>
+          <p>snapshot 拿结构化视图与稳定 @ref，既能读也能驱动交互。</p>
+        </a>
+        <a class="du-card" href="/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> 定位元素</div>
+          <p>快照太大时，用 find 精准锁定目标。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

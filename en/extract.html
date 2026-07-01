@@ -180,41 +180,13 @@ EOF</code></pre>
 
       <h2>Site adapters: the cheapest path to "structured data from site X"</h2>
       <p>
-        Before you <code>open</code> + <code>snapshot</code> + click your way through GitHub/Reddit/Bilibili, check whether
-        a ready-made <strong>site adapter</strong> exists. An adapter is a small piece of community-written JS that hits the
-        site's own JSON API <em>from your logged-in tab</em> and returns clean structured data — no clicking, no scraping,
-        no screenshots. It's essentially a packaged, per-site <code>eval</code>.
+        A <strong>site adapter</strong> is a small piece of community-written JS that hits a site's own JSON API
+        <em>from your logged-in tab</em> and returns clean structured data — no clicking, no scraping, no screenshots,
+        much cheaper than <code>snapshot</code>+click. Prefer one when it exists.
       </p>
-
-      <div class="du-code">
-        <div class="du-code-head">
-          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">bash</span>
-        </div>
-<pre><code><span class="du-prompt">$</span> chrome-use site update                       <span class="du-cmt"># one-time: fetch the adapter pack (~145 commands)</span>
-<span class="du-prompt">$</span> chrome-use site list                         <span class="du-cmt"># what's installed (github/issues, reddit/search…)</span>
-<span class="du-prompt">$</span> chrome-use site info github/issues           <span class="du-cmt"># an adapter's params + which domain it runs on</span>
-<span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># run → JSON (navigates there for you)</span></code></pre>
-      </div>
-
-      <ul>
-        <li>Positional arguments fill the adapter's parameters <strong>in declaration order</strong>; <code>--key value</code>
-          overrides by name.</li>
-        <li>It navigates to the adapter's domain (reusing the current tab if you're already on it), which is why logged-in
-          feeds like <code>bilibili/feed</code> or <code>twitter/…</code> work — they run <strong>as you</strong>.</li>
-        <li>When there's no suitable adapter, fall back to the regular <code>snapshot</code>/<code>eval</code> loop. Adapters
-          come from the <a href="https://github.com/epiral/bb-sites">bb-sites</a> community pack; chrome-use fetches and runs
-          them.</li>
-      </ul>
-
-      <div class="du-callout tip">
-        <div class="du-callout-title">✅ Auto-hint: see it, use it</div>
-        chrome-use keeps the adapter pack in sync automatically (first use + weekly). When you
-        <code>open</code>/<code>navigate</code>/<code>snapshot</code> a domain that has an adapter, it tells you: a line on
-        stderr, <code>💡 site adapters for &lt;domain&gt;</code>, plus a <code>siteAdapters: {domain, commands}</code> field
-        in <code>--json</code>. <strong>When you see it, prefer the <code>site &lt;name&gt;/&lt;cmd&gt;</code> it lists</strong>
-        over snapshot+click — cheaper, more stable, and already installed.
-      </div>
+      <p>
+        <a href="/en/site-adapters.html">Full site-adapters guide →</a>
+      </p>
 
       <hr class="du-divider" />
 

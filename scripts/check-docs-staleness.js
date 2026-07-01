@@ -38,7 +38,8 @@ const MAP = [
   // the core skill feeds most of the guide pages
   { test: /^skill-data\/core\/SKILL\.md$/, pages: [
       'core-loop', 'reading', 'interacting', 'finding', 'waiting', 'extract',
-      'login-auth', 'sessions', 'real-chrome', 'network', 'react', 'media', 'troubleshooting',
+      'login-auth', 'sessions', 'real-chrome', 'stealth', 'network', 'react', 'media', 'troubleshooting',
+      'extract', 'site-adapters',
     ] },
   { test: /^skill-data\/canvas\//,         pages: ['canvas'] },
   { test: /^skill-data\/electron\//,       pages: ['electron'] },

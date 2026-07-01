@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Site Adapters · chrome-use</title>
+  <meta name="description" content="Site adapters: a small community-written JS snippet that hits a site's own JSON API directly from your logged-in tab and returns clean structured data — no clicking, no scraping, no screenshots. The full site update / list / info / run flow, plus auto-hints and how it compares to the alternatives." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="site-adapters" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Core Usage</p>
+
+      <div class="du-title-row">
+        <h1>Site Adapters</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        To read "structured data from site X," the cheapest path is to <span class="mark">skip snapshot + click</span>.
+        Before you <code>open</code>, page through, and click your way across GitHub / Reddit / Bilibili, check whether a ready-made
+        <strong>site adapter</strong> exists — a small community-written JS snippet that hits the site's own JSON API directly from your
+        logged-in tab and hands you clean structured data in one shot. No clicking, no scraping, no screenshots.
+      </p>
+
+      <!-- ============ SECTION ======= -->
+      <h2>What it is</h2>
+      <p>
+        A site adapter is <strong>a community-written JS function</strong>: it calls the site's own JSON API directly
+        <em>from your currently logged-in tab</em> and returns clean, structured data. Essentially it's a packaged,
+        per-site <a href="/en/extract.html"><code>eval</code></a> — except you don't have to write it yourself, and you don't
+        have to reverse-engineer each site's endpoints.
+      </p>
+      <p>
+        Because it runs inside the tab you're already logged into and makes requests <span class="mark">as you</span>, feeds that
+        require a session — like <code>bilibili/feed</code> or <code>twitter/…</code> — read fine too. That's exactly what
+        hand-crafting URLs or anonymous scraping can't do.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Relationship to eval</div>
+        If you already know how to use <a href="/en/extract.html"><code>eval</code></a> to hit a site's internal API, a site adapter is
+        that same code <strong>distilled into a command</strong> — maintained by the community and organized per site. You skip the grunt
+        work once, and everyone else gets to reuse it.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>How to use it</h2>
+      <p>
+        Four actions: pull the pack once (<code>update</code>), see what's installed (<code>list</code>), see how a given adapter is
+        called (<code>info</code>), and run it (<code>site &lt;name&gt;/&lt;cmd&gt;</code>).
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># one-time: pull the adapter pack (~145 commands)</span>
+<span class="du-prompt">$</span> chrome-use site list                              <span class="du-cmt"># what's installed (github/issues, reddit/search…)</span>
+<span class="du-prompt">$</span> chrome-use site info github/issues                <span class="du-cmt"># an adapter's params + which domain it runs on</span>
+<span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># run → JSON (navigates there for you)</span></code></pre>
+      </div>
+
+      <ul>
+        <li><code>site update</code>: pulls the whole adapter set from the bb-sites community pack. Only needed once; after that chrome-use keeps it in sync automatically (see "Auto-triggering" below).</li>
+        <li><code>site list</code>: lists every <code>&lt;name&gt;/&lt;cmd&gt;</code> installed locally, e.g. <code>github/issues</code>, <code>reddit/search</code>.</li>
+        <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>: shows which params an adapter declares and which domain it runs on — check this before calling, and you'll know what to pass.</li>
+        <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>: actually runs it. Add <code>--json</code> for one line of parseable structured output.</li>
+      </ul>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ info first, then run</div>
+        When you're not sure what params an adapter needs, run <code>site info &lt;name&gt;/&lt;cmd&gt;</code> first to see its declared
+        params and target domain, then pass them accordingly. Cheaper than blindly running once and reading the error.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Params and navigation</h2>
+      <p>
+        Adapter params are filled positionally in <strong>declaration order</strong>; to override one by name, use <code>--key value</code>.
+        The two forms mix freely: positional args fill the slots, and <code>--key</code> pins a specific override.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">positional vs --key override</span>
+        </div>
+<pre><code><span class="du-cmt"># positional args fill in declaration order</span>
+<span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>
+
+<span class="du-cmt"># --key overrides by name (order doesn't matter)</span>
+<span class="du-prompt">$</span> chrome-use site reddit/search <span class="du-flag">--query</span> <span class="du-str">"chrome-use"</span> <span class="du-flag">--sort</span> new <span class="du-flag">--json</span></code></pre>
+      </div>
+
+      <p>
+        When it runs, it <span class="mark">navigates to the domain the adapter declares</span> — and if your current tab is already on that
+        domain, it <strong>reuses the current tab</strong> instead of opening a new one. Because the request happens inside the tab you're
+        logged into, feeds visible only when signed in — like <code>bilibili/feed</code> or <code>twitter/…</code> — return normally:
+        they run <strong>as you</strong>.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ It navigates for you</div>
+        You don't have to <code>open</code> the target site manually first. <code>site &lt;name&gt;/&lt;cmd&gt;</code> navigates to the adapter's
+        domain and then executes; but you do need to be <strong>already logged in</strong> to that site for logged-in feeds to be readable.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Auto-triggering — see it, use it</h2>
+      <p>
+        You don't have to remember which sites have adapters. chrome-use keeps the adapter pack in sync automatically
+        (<strong>on first use + weekly</strong>), and when you <code>open</code> / <code>navigate</code> / <code>snapshot</code> a page whose
+        <strong>domain has adapters</strong>, it proactively hints you:
+      </p>
+
+      <ul>
+        <li>a line on stderr: <code>💡 site adapters for &lt;domain&gt;</code>;</li>
+        <li>a <code>siteAdapters: {domain, commands}</code> field in <code>--json</code> output.</li>
+      </ul>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">auto-hint · stderr</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/epiral/bb-sites
+<span class="du-cmt"># … as the page opens, a line pops up on stderr:</span>
+💡 site adapters for github.com: github/issues, github/pulls, github/repo …</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ See the hint, prefer the <code>site &lt;name&gt;/&lt;cmd&gt;</code> it lists</div>
+        When you see <code>💡 site adapters for &lt;domain&gt;</code>, <strong>don't snapshot + click to read the data</strong> —
+        just use the <code>site &lt;name&gt;/&lt;cmd&gt;</code> it names: cheaper, more reliable, and already installed. You also
+        <strong>don't need</strong> to run <code>site update</code> yourself first — just use the command it gives you.
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Exception on a fresh environment</div>
+        Only on a <strong>brand-new environment where the adapter pack hasn't been pulled yet</strong> might naming a
+        <code>site &lt;name&gt;/&lt;cmd&gt;</code> report "not installed." In that case run <code>site update</code> once and re-run the command.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>When to use it vs extract --schema vs snapshot</h2>
+      <p>
+        There's often more than one path to the same page of data. Site adapters are the first choice for structured data from a
+        <strong>known site</strong>; fall back down the ladder when no suitable adapter exists. The table below helps you pick.
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>Your situation</th><th>Use</th><th>Why</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Structured data from a <strong>known site</strong> (GitHub issues, Reddit/HN search, Bilibili / Twitter feeds), especially once logged in</td>
+            <td><code>chrome-use site &lt;name&gt;/&lt;cmd&gt;</code></td>
+            <td>Hits the site's JSON API directly, runs as you, skips snapshot + click — cheapest and most reliable</td>
+          </tr>
+          <tr>
+            <td>Structured data from <strong>any page</strong> with <strong>no</strong> community adapter — tables, search results, feed rows, dashboards</td>
+            <td><a href="/en/extract.html"><code>extract --schema '{rows,fields}'</code></a></td>
+            <td>Give it a shape, get clean JSON in one call — no writing eval, no dumping the whole page's HTML</td>
+          </tr>
+          <tr>
+            <td>You need to <strong>reason</strong> over it with a model, or need <code>@ref</code>s to interact</td>
+            <td><a href="/en/reading.html"><code>snapshot -i --json</code></a></td>
+            <td>A structured snapshot with stable refs — readable and drives follow-up click / type</td>
+          </tr>
+          <tr>
+            <td>A one-off extraction needing a <strong>custom shape</strong> with special logic</td>
+            <td><a href="/en/extract.html"><code>eval --stdin</code></a></td>
+            <td>Write JS directly in the page's MAIN world — most flexible (an adapter is just this, distilled)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Cheapest to most expensive</div>
+        Roughly: <strong>site adapter → extract --schema → snapshot/eval loop</strong>.
+        If there's an adapter, use it; no adapter but a regular shape, use <code>extract --schema</code>; only when neither fits
+        fall back to the usual manual <code>snapshot</code> / <code>eval</code> loop. For the full picture of data extraction, see
+        <a href="/en/extract.html">Extracting Data</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Source and license</h2>
+      <p>
+        Adapters come from the <a href="https://github.com/epiral/bb-sites">bb-sites</a> community pack.
+        chrome-use <strong>fetches and executes them at runtime</strong> — this repo <span class="mark">does not bundle or redistribute</span>
+        any adapter code, and <code>site update</code> fetches the latest version from upstream each time.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Fetched at runtime, not built in</div>
+        Because adapters are maintained upstream by the community and fetched only at runtime, the command set you see changes as bb-sites
+        updates; <code>site list</code> reflects the version you synced to locally this time.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Next steps</h2>
+      <p>Site adapters are the cheapest tier of data extraction; the methods below cover the rest.</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/extract.html">
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> Extracting Data</div>
+          <p>No adapter? eval for a custom shape, or extract --schema in one step.</p>
+        </a>
+        <a class="du-card" href="/en/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> Reading Pages</div>
+          <p>snapshot for a structured view with stable @refs — readable and drives interaction.</p>
+        </a>
+        <a class="du-card" href="/en/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> Finding Elements</div>
+          <p>When the snapshot is too big, use find to pin the target precisely.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

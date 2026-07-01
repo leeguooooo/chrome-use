@@ -116,6 +116,40 @@
 
       <hr class="du-divider" />
 
+      <h2>Why it doesn't get banned</h2>
+      <p>
+        Many sites actively ban browser automation, and tripping their anti-bot systems
+        <strong>takes your account down with it</strong>. chrome-use's answer is to treat
+        <strong>anti-detection as a first-class capability</strong>: it doesn't <em>simulate</em> a human —
+        it <em>is</em> your already-logged-in real browser, so sites read it as
+        <span class="mark">100% human</span> and there's nothing to ban.
+      </p>
+
+      <div class="du-cards">
+        <a class="du-card" href="/en/stealth.html">
+          <div class="du-card-title"><span class="du-card-ico">🛡️</span> CreepJS <span class="mark">0% bot · 0% headless</span></div>
+          <p>When it drives your real Chrome over the extension it injects <strong>no JS patches</strong> — no disguise means no seams for the lie-detectors to catch. bot.incolumitas / sannysoft / BrowserScan all green.</p>
+        </a>
+        <a class="du-card" href="/en/stealth.html">
+          <div class="du-card-title"><span class="du-card-ico">⚙️</span> Native overrides &gt; JS lies</div>
+          <p>The <code>--launch</code> standalone browser uses <em>native</em> overrides: <code>navigator.webdriver=false</code> (<code>Emulation.setAutomationOverride</code>), timezone, WebRTC local IP, canvas/audio noise — none of them redefined getters that can be probed back. Headless is <strong>disabled by default</strong> (it's a bot tell in itself).</p>
+        </a>
+        <a class="du-card" href="/en/stealth.html">
+          <div class="du-card-title"><span class="du-card-ico">🖐️</span> <code>--humanize</code> beats behavioral detection</div>
+          <p>Beyond fingerprints, Akamai / PerimeterX / DataDome also score <em>behavior</em>. Turn it on and the cursor follows curved Bézier paths, lands on jittered points inside the element, and typing cadence varies — and it's <strong>adaptive</strong>: it escalates on pages from those vendors, and stays instant with zero overhead on ordinary sites.</p>
+        </a>
+        <a class="du-card" href="/en/stealth.html">
+          <div class="du-card-title"><span class="du-card-ico">☁️</span> Cloudflare pass-once, reuse</div>
+          <p>The <code>cf_clearance</code> earned by clearing a challenge once (bound to IP+UA) is saved and reused, so you don't re-solve it every time. Run <code>chrome-use stealth status</code> anytime to self-check the webdriver / chrome / plugins / UA probes.</p>
+        </a>
+      </div>
+
+      <p style="margin-top:18px">
+        <a href="/en/stealth.html">Stealth &amp; Anti-detection →</a>
+      </p>
+
+      <hr class="du-divider" />
+
       <h2>Get started</h2>
       <p>Three short reads take you from zero to driving your own Chrome:</p>
       <div class="du-cards cols-3">

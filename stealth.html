@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>反检测与隐身 · chrome-use 文档</title>
+  <meta name="description" content="很多站点会封禁自动化、甚至封号。chrome-use 的答案：它不是模拟真人，它就是你的真实浏览器——CreepJS 0% stealth·0% headless，连接路径什么都不改；原生指纹覆盖 webdriver/时区/WebRTC/canvas；--humanize 过 Akamai/PerimeterX/DataDome；Cloudflare 一次通过、复用 clearance。" />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="stealth" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 C14 12 10 26 12 38 C22 44 38 44 48 38 C50 26 46 12 30 6 Z"/>
+          <path d="M30 6 L30 44"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">会话与登录 / SESSIONS &amp; AUTH</p>
+
+      <div class="du-title-row">
+        <h1>反检测与隐身</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        很多网站会<strong>主动拦截浏览器自动化</strong>——轻则挑战、验证码，重则<span class="mark">直接封号</span>。
+        绝大多数自动化工具都在往一个空白浏览器上「打补丁」冒充真人，而每一个补丁都是反-bot 系统的破绽。
+        chrome-use 的答案不一样：它<strong>不去模拟真人，它本身就是你那个真实、已登录的浏览器</strong>——
+        没有可被抓的谎言，也就没有被封的理由。
+      </p>
+
+      <h2>为什么反检测是核心能力</h2>
+      <p>
+        任何在真实站点上跑的 agent，第一道门槛都不是「会不会点按钮」，而是<strong>会不会被当成机器人拦下来</strong>。
+        Akamai、PerimeterX、DataDome、Cloudflare 这类反-bot 供应商既看<em>指纹</em>（浏览器有没有自动化痕迹），
+        也看<em>行为</em>（鼠标怎么动、字怎么打）。一旦触发，代价往往不只是这一次请求失败——是这个账号被标记、被封。
+      </p>
+      <p>
+        所以 chrome-use 把反检测当作<strong>一等能力</strong>，而不是事后补丁。核心思路一句话：
+        <span class="mark">优先驱动你真实、已登录的 Chrome</span>——站点看到的就是一个货真价实的人类浏览器。
+        对确实需要隔离浏览器的场景，才用「原生覆盖 &gt; JS 谎言」的方式把痕迹做干净。
+      </p>
+
+      <hr class="du-divider" />
+
+      <h2>核心理念：0% stealth = 什么都不改</h2>
+      <p>
+        连接你真实 Chrome（扩展 relay）时，chrome-use 注入的 JavaScript 补丁数量是 <span class="mark">零</span>。
+        你浏览器的指纹是<strong>完全真实的</strong>。指导原则是「<strong>原生 CDP/Chrome 覆盖优先于 JS 谎言</strong>」——
+        一个被重定义的 getter 本身就可被检测，而一个原生覆盖不会。
+      </p>
+      <ul>
+        <li>
+          <code>navigator.webdriver = false</code> 通过 <code>Emulation.setAutomationOverride</code> 实现（原生，
+          CreepJS 那类「测谎」测不出来）。
+        </li>
+        <li>
+          <strong><code>Runtime.enable</code> 默认关闭。</strong> 一个活跃的 <code>Runtime</code> 域是可被检测的 CDP 信号
+          （patchright/rebrowser 说的「runtime leak」）——即便是连着你真实 Chrome 也一样。只有当你主动开启
+          console/错误捕获时才启用它；<code>click</code>、<code>fill</code>、<code>eval</code> 等在不开它的情况下照常工作。
+        </li>
+      </ul>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 为什么 0% 是最强的分数</div>
+        CreepJS 上 <span class="mark">0% stealth</span> 是关键数字：因为连接路径<strong>什么都不改</strong>，
+        测谎器根本没有任何「覆盖」可抓。它不是「补丁做得好」，而是<strong>压根没有补丁</strong>——这是真实浏览器本身的分数。
+      </div>
+
+      <h2>实测数据</h2>
+      <p>
+        chrome-use <strong>刻意不自带 bot 检测器</strong>——最诚实的基准，是拿市面上最强的检测站直接打你的真实浏览器。
+        以下是连接真实 Chrome 时的实测结果：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">实测结果 · 连接真实 Chrome</span>
+        </div>
+<pre><code><span class="du-cmt"># CreepJS —— 最严苛的指纹 / 测谎检测器</span>
+CreepJS            <span class="du-str">0% stealth · 0% headless</span>   <span class="du-cmt"># 完全没有覆盖痕迹</span>
+
+<span class="du-cmt"># bot.incolumitas —— 行为 + 指纹综合评分（方法公开）</span>
+bot.incolumitas    all checks OK          <span class="du-cmt"># overflowTest / overrideTest /</span>
+                                          <span class="du-cmt"># puppeteerExtraStealthUsed / worker 一致性</span>
+
+<span class="du-cmt"># 经典自动化标记清单</span>
+bot.sannysoft      all green
+BrowserScan        Webdriver · User-Agent · CDP 全部干净
+Cloudflare Turnstile (nowsecure.nl)  passed</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 关于「soft flag」</div>
+        某些仪表盘读 <code>navigator.languages</code> 顺序或 IP 地理位置时，可能给一个软性的 <code>navigator</code> /
+        <code>location</code> 标记——那反映的是<em>你真实 Chrome</em> 的语言列表和网络，<strong>不是</strong>自动化痕迹。
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ <code>--launch</code> 隔离浏览器的一个 caveat</div>
+        用 <code>--launch</code>（独立浏览器）时会改为应用一整套 stealth 补丁，同样能通过上面这套检测——
+        但 CreepJS 会报 <strong>~20% stealth</strong>，因为 srcdoc-iframe 的 <code>contentWindow</code> 补丁触发了它的
+        <code>hasIframeProxy</code> 探针（那个用来藏自动化的 proxy 本身成了破绽）。其余全干净（<code>0% headless</code>，
+        sannysoft/browserscan 全绿，Cloudflare 通过）。设 <code>AGENT_BROWSER_DISABLE_IFRAME_PROXY=1</code> 去掉那个补丁
+        即可拿到干净的 <span class="mark">0% stealth</span>。而扩展连接路径（你真实的 Chrome）注入零 JS，不受影响——它就是那个真正的 0% 路径。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>三层防线</h2>
+      <p>
+        反检测在 chrome-use 里是三层叠起来的：从「用哪个浏览器」到「指纹长什么样」再到「行为像不像人」。
+      </p>
+
+      <h3>① 真实会话 &gt; headed &gt; headless（禁用）</h3>
+      <p>
+        <strong>反检测等级排名：真实、已登录的 Chrome（扩展连接）&gt; 有头 launched 浏览器 &gt; headless（禁止）。</strong>
+        一个货真价实的人类浏览器完全没有 headless / 自动化的破绽，所以任何对反-bot 敏感的任务都优先用它。
+        headless 默认是<strong>被禁止的</strong>——它本身就是一个 bot 破绽（<code>--headed</code> 是 stealth 的默认且始终开启）。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · headed 默认</span>
+        </div>
+<pre><code><span class="du-cmt"># --headed 是 stealth 的默认、始终开启 —— headless 被禁止</span>
+<span class="du-cmt"># （它是 bot 破绽：creepjs 对 headless 报 ~33%，对 headed 报 0%）</span>
+<span class="du-cmt"># 仅无显示器的服务器才放开：</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_ALLOW_HEADLESS=1 chrome-use <span class="du-flag">--launch</span> open <span class="du-str">"https://example.com"</span></code></pre>
+      </div>
+
+      <h3>② 原生指纹覆盖</h3>
+      <p>
+        对隔离 / launched 浏览器，用<strong>原生覆盖</strong>把关键指纹对齐到你想要的身份——全都不是 JS 谎言，
+        测谎器抓不到。这些开关只作用于 <code>--launch</code>：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · 指纹覆盖（--launch）</span>
+        </div>
+<pre><code><span class="du-cmt"># 原生时区覆盖（IANA id，或 "auto" 从 locale 推导），Intl+Date 跟随，无 JS 谎言</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_TIMEZONE=<span class="du-str">"Asia/Tokyo"</span> chrome-use <span class="du-flag">--launch</span> open <span class="du-str">"https://example.com"</span>
+
+<span class="du-cmt"># 通过 WebRTC 隐藏本机 IP（设了代理时自动强制走代理，不泄露真实 IP）</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_BLOCK_WEBRTC=1 chrome-use <span class="du-flag">--launch</span> open <span class="du-str">"https://example.com"</span>
+
+<span class="du-cmt"># 会话内稳定的 canvas/audio 指纹噪声（默认关，因为噪声本身也是一种「谎言」）</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_HIDE_CANVAS=1 chrome-use <span class="du-flag">--launch</span> open <span class="du-str">"https://example.com"</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ webdriver 也是原生覆盖</div>
+        <code>navigator.webdriver = false</code> 走的是 <code>Emulation.setAutomationOverride</code>——原生实现，
+        不是重定义 getter，所以 CreepJS 那类测谎测不出来。
+      </div>
+
+      <h3>③ 行为层：--humanize 过 Akamai/PerimeterX/DataDome</h3>
+      <p>
+        指纹干净不是全部——最强的反-bot 供应商还给<em>行为</em>打分。一个把光标瞬移到元素正中心、零按压延迟的点击就是破绽，
+        <strong>即便我们的 CDP 事件是 <code>isTrusted</code></strong>。开启 humanize 后，光标像手一样动：点击沿一条弯曲、
+        减速的贝塞尔轨迹落到元素<em>内部</em>一个抖动的点（绝不落在死正中心）；打字用可变的击键间隔；滚动分段缓动；拖拽走曲线。
+      </p>
+      <p>
+        它是<strong>自适应</strong>的——每次导航都会探测已知的反-bot 供应商（cookie / 脚本 / 全局变量），
+        被守卫的页面自动升级到完整的 <code>human</code> 运动，而普通站点保持即时（零开销）。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · humanize</span>
+        </div>
+<pre><code><span class="du-cmt"># off（默认，瞬时）| fast（轻量缓动轨迹）| human（完整曲线 + 落点抖动 + 打字节奏 + 缓动滚动/拖拽）</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--humanize</span> human click <span class="du-str">"@ref=e42"</span>
+
+<span class="du-cmt"># 或用环境变量设定整个 session 的默认值</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_HUMANIZE=human chrome-use type <span class="du-str">"hello"</span></code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 让它保持 auto</div>
+        默认 <code>off</code>，自适应检测器会把被 Akamai/PerimeterX/DataDome 守卫的页面自动升到 <code>human</code>。
+        只有当你<strong>已经确知</strong>目标在给行为打分时，才手动强制 <code>human</code>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Cloudflare：一次通过、复用 clearance</h2>
+      <p>
+        通过一次 Cloudflare 挑战会铸出一个 <code>cf_clearance</code> cookie（<strong>HttpOnly</strong>——对
+        <code>eval</code>/<code>document.cookie</code> 不可见，用 <code>chrome-use cookies</code> 读它）。它绑定你的
+        <span class="mark">IP + User-Agent</span>：复用同一个出口 IP 和 UA，就能在它过期前跳过挑战。驱动用户真实 Chrome（relay）
+        会<strong>原生持久化</strong>它；隔离 session 用 <code>--session-name &lt;name&gt;</code> 保存 / 恢复。
+      </p>
+      <p>
+        在花力气去解之前，先跑 <code>chrome-use cf-status</code>（别名 <code>cf</code>、<code>clearance</code>）做预检——
+        避免重复解一个已经过了的挑战。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · cf-status</span>
+        </div>
+<pre><code><span class="du-cmt"># 预检：页面当前是否是 Cloudflare 挑战？是否已有有效的 cf_clearance？</span>
+<span class="du-prompt">$</span> chrome-use cf-status
+
+<span class="du-cmt"># 读取 HttpOnly 的 cf_clearance cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ cf-status 给的三种建议</div>
+        <code>proceed</code>（已通关，别再解）、<code>solve</code>（挑战在、无 clearance）、
+        <code>reissue</code>（有 clearance 但页面仍被挡 → IP/UA 漂移了，重新解）。把它当预检，别重复解已经过了的挑战。
+      </div>
+
+      <h2>自检：chrome-use stealth status</h2>
+      <p>
+        任何时候都能自查当前的隐身状态：<code>chrome-use stealth status</code> 报告当前模式加上一组实时探针
+        （<code>webdriver</code> / <code>chrome</code> / <code>plugins</code> / UA），以及已生效的覆盖。加 <code>--json</code> 拿机器可读输出。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · stealth status</span>
+        </div>
+<pre><code><span class="du-cmt"># 隐身自检：模式 + 实时探针（webdriver / chrome / plugins / UA）+ 已生效的覆盖</span>
+<span class="du-prompt">$</span> chrome-use stealth status
+<span class="du-prompt">$</span> chrome-use stealth status <span class="du-flag">--json</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>相关页面</h2>
+      <div class="du-cards cols-2">
+        <a class="du-card" href="/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🛡️</span> 驱动真实 Chrome（扩展）</div>
+          <p>反检测等级最高的一档：接管你已登录的真实窗口，零补丁、无 headless 痕迹。</p>
+        </a>
+        <a class="du-card" href="/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> 定位元素</div>
+          <p>find 与 @ref 精准锁定目标，配合 humanize 的拟人点击落点。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

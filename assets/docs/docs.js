@@ -33,11 +33,13 @@
       { slug: "finding",     ico: "🔎", zh: "定位元素",  en: "Finding Elements",    kw: "find selector ref locate 定位 查找 元素" },
       { slug: "waiting",     ico: "⏳", zh: "等待与断言", en: "Waiting & Asserting", kw: "wait expect assert 等待 断言" },
       { slug: "extract",     ico: "🧪", zh: "提取数据",  en: "Extracting Data",     kw: "extract schema scrape json 提取 抓取" },
+      { slug: "site-adapters", ico: "🧩", zh: "站点适配器", en: "Site Adapters",     kw: "site adapter bb-sites structured data github reddit bilibili 站点 适配器 结构化" },
     ]},
     { id: "auth", label: { zh: "会话与登录", en: "Sessions & Auth" }, items: [
       { slug: "login-auth",  ico: "🔐", zh: "登录与凭证", en: "Login & Credentials", kw: "login auth password 2fa 登录 凭证" },
       { slug: "sessions",    ico: "💾", zh: "会话与持久化", en: "Sessions & Persistence", kw: "session persist cookie profile 会话 持久化" },
       { slug: "real-chrome", ico: "🌐", zh: "驱动真实 Chrome", en: "Real Chrome (Extension)", kw: "real chrome extension native messaging 真实 扩展" },
+      { slug: "stealth",     ico: "🥷", zh: "反检测与隐身", en: "Stealth & Anti-detection", kw: "stealth anti-detection antibot cloudflare creepjs humanize 反检测 隐身 封号 指纹 bot" },
     ]},
     { id: "advanced", label: { zh: "进阶", en: "Advanced" }, items: [
       { slug: "canvas",  ico: "🎨", zh: "Canvas / WebGL / 游戏", en: "Canvas / WebGL / Games", kw: "canvas webgl game figma capture 游戏" },

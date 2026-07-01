@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Stealth &amp; Anti-detection · chrome-use</title>
+  <meta name="description" content="Many sites block automation, and some ban accounts. chrome-use's answer: it doesn't simulate a human, it IS your real browser — CreepJS 0% stealth · 0% headless, the connection path changes nothing; native fingerprint overrides for webdriver/timezone/WebRTC/canvas; --humanize beats Akamai/PerimeterX/DataDome; Cloudflare passes once, then reuses clearance." />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="stealth" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 C14 12 10 26 12 38 C22 44 38 44 48 38 C50 26 46 12 30 6 Z"/>
+          <path d="M30 6 L30 44"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Sessions &amp; Auth</p>
+
+      <div class="du-title-row">
+        <h1>Stealth &amp; Anti-detection</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Many sites <strong>actively block browser automation</strong>—at best a challenge or CAPTCHA, at worst
+        an <span class="mark">outright account ban</span>.
+        Most automation tools try to "patch" a blank browser into impersonating a human, and every patch is a
+        crack for the anti-bot systems to find.
+        chrome-use's answer is different: it <strong>doesn't simulate a human—it IS your real, already-logged-in
+        browser</strong>—there are no lies to catch, so there is no reason to ban.
+      </p>
+
+      <h2>Why anti-detection is a core capability</h2>
+      <p>
+        For any agent running against real sites, the first hurdle isn't "can it click a button," it's
+        <strong>can it avoid being flagged as a bot</strong>.
+        Anti-bot vendors like Akamai, PerimeterX, DataDome, and Cloudflare look at both the <em>fingerprint</em>
+        (does the browser show automation traces) and the <em>behavior</em> (how the mouse moves, how text is typed).
+        Once triggered, the cost is often more than a single failed request—it's this account getting flagged and banned.
+      </p>
+      <p>
+        So chrome-use treats anti-detection as a <strong>first-class capability</strong>, not an afterthought patch.
+        The core idea in one line:
+        <span class="mark">prefer driving your real, already-logged-in Chrome</span>—what the site sees is a genuine
+        human browser.
+        Only for the cases that truly need an isolated browser do we fall back to the "native overrides &gt; JS lies"
+        approach to keep the traces clean.
+      </p>
+
+      <hr class="du-divider" />
+
+      <h2>Core philosophy: 0% stealth = change nothing</h2>
+      <p>
+        When connected to your real Chrome (via the extension relay), the number of JavaScript patches chrome-use
+        injects is <span class="mark">zero</span>.
+        Your browser's fingerprint is <strong>completely real</strong>. The guiding principle is "<strong>native
+        CDP/Chrome overrides over JS lies</strong>"—a redefined getter is itself detectable, while a native override is not.
+      </p>
+      <ul>
+        <li>
+          <code>navigator.webdriver = false</code> is done via <code>Emulation.setAutomationOverride</code> (native,
+          so lie-detectors like CreepJS can't catch it).
+        </li>
+        <li>
+          <strong><code>Runtime.enable</code> is off by default.</strong> An active <code>Runtime</code> domain is a
+          detectable CDP signal
+          (the "runtime leak" that patchright/rebrowser talk about)—even when connected to your real Chrome. It's only
+          enabled when you actively turn on
+          console/error capture; <code>click</code>, <code>fill</code>, <code>eval</code>, etc. work fine without it.
+        </li>
+      </ul>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Why 0% is the strongest score</div>
+        On CreepJS, <span class="mark">0% stealth</span> is the key number: because the connection path <strong>changes
+        nothing</strong>,
+        the lie-detector has no "override" to catch at all. It isn't "the patches are well made," it's <strong>there are
+        no patches at all</strong>—this is the real browser's own score.
+      </div>
+
+      <h2>Measured results</h2>
+      <p>
+        chrome-use <strong>deliberately ships no bot detector of its own</strong>—the most honest benchmark is to point
+        the strongest detection sites on the market straight at your real browser.
+        Here are the measured results when connected to a real Chrome:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">measured results · connected to real Chrome</span>
+        </div>
+<pre><code><span class="du-cmt"># CreepJS —— the strictest fingerprint / lie detector</span>
+CreepJS            <span class="du-str">0% stealth · 0% headless</span>   <span class="du-cmt"># zero override traces at all</span>
+
+<span class="du-cmt"># bot.incolumitas —— combined behavior + fingerprint score (public methodology)</span>
+bot.incolumitas    all checks OK          <span class="du-cmt"># overflowTest / overrideTest /</span>
+                                          <span class="du-cmt"># puppeteerExtraStealthUsed / worker consistency</span>
+
+<span class="du-cmt"># classic automation-flag checklist</span>
+bot.sannysoft      all green
+BrowserScan        Webdriver · User-Agent · CDP all clean
+Cloudflare Turnstile (nowsecure.nl)  passed</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ About "soft flags"</div>
+        When some dashboards read <code>navigator.languages</code> order or IP geolocation, they may raise a soft
+        <code>navigator</code> /
+        <code>location</code> flag—that reflects <em>your real Chrome's</em> language list and network, <strong>not</strong>
+        an automation trace.
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ A caveat for <code>--launch</code> isolated browsers</div>
+        With <code>--launch</code> (a standalone browser), a full set of stealth patches is applied instead, which also
+        passes the detections above—
+        but CreepJS will report <strong>~20% stealth</strong>, because the srcdoc-iframe <code>contentWindow</code> patch
+        trips its
+        <code>hasIframeProxy</code> probe (the very proxy used to hide automation becomes the crack). Everything else is
+        clean (<code>0% headless</code>,
+        sannysoft/browserscan all green, Cloudflare passes). Set <code>AGENT_BROWSER_DISABLE_IFRAME_PROXY=1</code> to drop
+        that patch
+        and get a clean <span class="mark">0% stealth</span>. The extension connection path (your real Chrome) injects zero
+        JS and is unaffected—it is the true 0% path.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Three lines of defense</h2>
+      <p>
+        In chrome-use, anti-detection is three layers stacked: from "which browser to use" to "what the fingerprint looks
+        like" to "how human the behavior is."
+      </p>
+
+      <h3>① Real session &gt; headed &gt; headless (disabled)</h3>
+      <p>
+        <strong>Anti-detection ranking: real, already-logged-in Chrome (extension connection) &gt; headed launched browser
+        &gt; headless (disabled).</strong>
+        A genuine human browser has no headless / automation cracks at all, so any anti-bot-sensitive task should prefer it.
+        Headless is <strong>disabled by default</strong>—it is itself a bot crack (<code>--headed</code> is the stealth
+        default and always on).
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · headed by default</span>
+        </div>
+<pre><code><span class="du-cmt"># --headed is the stealth default, always on —— headless is disabled</span>
+<span class="du-cmt"># (it's a bot crack: creepjs reports ~33% for headless, 0% for headed)</span>
+<span class="du-cmt"># only unlock it on a headless server with no display:</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_ALLOW_HEADLESS=1 chrome-use <span class="du-flag">--launch</span> open <span class="du-str">"https://example.com"</span></code></pre>
+      </div>
+
+      <h3>② Native fingerprint overrides</h3>
+      <p>
+        For isolated / launched browsers, use <strong>native overrides</strong> to align key fingerprints to the identity
+        you want—none of them are JS lies,
+        so lie-detectors can't catch them. These switches only apply to <code>--launch</code>:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · fingerprint overrides (--launch)</span>
+        </div>
+<pre><code><span class="du-cmt"># native timezone override (IANA id, or "auto" to derive from locale), Intl+Date follow, no JS lies</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_TIMEZONE=<span class="du-str">"Asia/Tokyo"</span> chrome-use <span class="du-flag">--launch</span> open <span class="du-str">"https://example.com"</span>
+
+<span class="du-cmt"># hide the local IP via WebRTC (when a proxy is set, force through it so the real IP never leaks)</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_BLOCK_WEBRTC=1 chrome-use <span class="du-flag">--launch</span> open <span class="du-str">"https://example.com"</span>
+
+<span class="du-cmt"># session-stable canvas/audio fingerprint noise (off by default, because noise is itself a kind of "lie")</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_HIDE_CANVAS=1 chrome-use <span class="du-flag">--launch</span> open <span class="du-str">"https://example.com"</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ webdriver is a native override too</div>
+        <code>navigator.webdriver = false</code> goes through <code>Emulation.setAutomationOverride</code>—a native
+        implementation,
+        not a redefined getter, so lie-detectors like CreepJS can't catch it.
+      </div>
+
+      <h3>③ Behavior layer: --humanize beats Akamai/PerimeterX/DataDome</h3>
+      <p>
+        A clean fingerprint isn't everything—the strongest anti-bot vendors also score <em>behavior</em>. A click that
+        teleports the cursor to the dead center of an element with zero press delay is a crack,
+        <strong>even though our CDP events are <code>isTrusted</code></strong>. With humanize on, the cursor moves like a
+        hand: a click lands along a curved,
+        decelerating Bézier trajectory on a jittered point <em>inside</em> the element (never dead center); typing uses
+        variable keystroke intervals; scrolling eases in segments; drags follow a curve.
+      </p>
+      <p>
+        It's <strong>adaptive</strong>—each navigation probes for known anti-bot vendors (cookies / scripts / globals),
+        and guarded pages auto-upgrade to full <code>human</code> motion, while ordinary sites stay instant (zero overhead).
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · humanize</span>
+        </div>
+<pre><code><span class="du-cmt"># off (default, instant) | fast (lightweight eased trajectory) | human (full curve + landing jitter + typing rhythm + eased scroll/drag)</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--humanize</span> human click <span class="du-str">"@ref=e42"</span>
+
+<span class="du-cmt"># or set the default for the whole session via an env var</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_HUMANIZE=human chrome-use type <span class="du-str">"hello"</span></code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Leave it on auto</div>
+        The default is <code>off</code>, and the adaptive detector auto-upgrades pages guarded by Akamai/PerimeterX/DataDome
+        to <code>human</code>.
+        Only force <code>human</code> manually when you <strong>already know for sure</strong> the target scores behavior.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Cloudflare: pass once, reuse the clearance</h2>
+      <p>
+        Passing a Cloudflare challenge once mints a <code>cf_clearance</code> cookie (<strong>HttpOnly</strong>—invisible
+        to
+        <code>eval</code>/<code>document.cookie</code>, read it with <code>chrome-use cookies</code>). It's bound to your
+        <span class="mark">IP + User-Agent</span>: reuse the same egress IP and UA to skip the challenge until it expires.
+        Driving the user's real Chrome (relay)
+        <strong>persists it natively</strong>; for an isolated session, use <code>--session-name &lt;name&gt;</code> to
+        save / restore.
+      </p>
+      <p>
+        Before spending effort on solving it, run <code>chrome-use cf-status</code> (aliases <code>cf</code>,
+        <code>clearance</code>) as a preflight—
+        to avoid re-solving a challenge that's already passed.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · cf-status</span>
+        </div>
+<pre><code><span class="du-cmt"># preflight: is the page currently a Cloudflare challenge? is there already a valid cf_clearance?</span>
+<span class="du-prompt">$</span> chrome-use cf-status
+
+<span class="du-cmt"># read the HttpOnly cf_clearance cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ The three recommendations cf-status gives</div>
+        <code>proceed</code> (already through, don't re-solve), <code>solve</code> (challenge present, no clearance),
+        <code>reissue</code> (has clearance but the page is still blocked → IP/UA drifted, re-solve). Treat it as a
+        preflight, don't re-solve a challenge that's already passed.
+      </div>
+
+      <h2>Self-check: chrome-use stealth status</h2>
+      <p>
+        You can inspect the current stealth state at any time: <code>chrome-use stealth status</code> reports the current
+        mode plus a set of live probes
+        (<code>webdriver</code> / <code>chrome</code> / <code>plugins</code> / UA), along with the overrides in effect. Add
+        <code>--json</code> for machine-readable output.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · stealth status</span>
+        </div>
+<pre><code><span class="du-cmt"># stealth self-check: mode + live probes (webdriver / chrome / plugins / UA) + overrides in effect</span>
+<span class="du-prompt">$</span> chrome-use stealth status
+<span class="du-prompt">$</span> chrome-use stealth status <span class="du-flag">--json</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Related pages</h2>
+      <div class="du-cards cols-2">
+        <a class="du-card" href="/en/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🛡️</span> Drive real Chrome (extension)</div>
+          <p>The highest anti-detection tier: take over your already-logged-in real window, zero patches, no headless traces.</p>
+        </a>
+        <a class="du-card" href="/en/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> Finding elements</div>
+          <p>find and @ref pin the target precisely, paired with humanize's human-like click landing.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

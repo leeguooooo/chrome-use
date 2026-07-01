@@ -174,38 +174,13 @@ EOF</code></pre>
 
       <h2>站点适配器：读“站点 X 结构化数据”的最省路径</h2>
       <p>
-        在 <code>open</code> + <code>snapshot</code> + 一路点击穿越 GitHub/Reddit/Bilibili 之前，
-        先看有没有现成的<strong>站点适配器</strong>。适配器是社区写的一小段 JS：
-        <em>在你登录态的标签页里</em>直接打站点自己的 JSON API，返回干净结构化数据——不点击、不爬、不截图。
-        本质上就是打包好的、按站点划分的 <code>eval</code>。
+        <strong>社区适配器</strong>是一小段按站点划分的 JS：<em>在你登录态的标签页里</em>直接打站点自己的
+        JSON API，返回干净结构化数据——不点击、不爬、不截图，比 <code>snapshot</code>+click 省得多。
+        有现成适配器时优先用它。
       </p>
-
-      <div class="du-code">
-        <div class="du-code-head">
-          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">bash</span>
-        </div>
-<pre><code><span class="du-prompt">$</span> chrome-use site update                       <span class="du-cmt"># 一次性：拉取适配器包（约 145 条命令）</span>
-<span class="du-prompt">$</span> chrome-use site list                         <span class="du-cmt"># 已安装了哪些（github/issues、reddit/search…）</span>
-<span class="du-prompt">$</span> chrome-use site info github/issues           <span class="du-cmt"># 某适配器的参数 + 在哪个域名上跑</span>
-<span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># 运行 → JSON（自动帮你导航过去）</span></code></pre>
-      </div>
-
-      <ul>
-        <li>位置参数<strong>按声明顺序</strong>填入适配器的参数；<code>--key value</code> 按名覆盖。</li>
-        <li>它会导航到适配器的域名（若已在该域名则复用当前标签页），所以像 <code>bilibili/feed</code>、<code>twitter/…</code>
-          这类登录态信息流能工作——因为它们<strong>以你的身份</strong>运行。</li>
-        <li>没有合适的适配器时，退回到常规的 <code>snapshot</code>/<code>eval</code> 循环。适配器来自
-          <a href="https://github.com/epiral/bb-sites">bb-sites</a> 社区包，chrome-use 负责拉取并运行。</li>
-      </ul>
-
-      <div class="du-callout tip">
-        <div class="du-callout-title">✅ 自动提示：看到就用它</div>
-        chrome-use 会自动保持适配器包同步（首次使用 + 每周）。当你 <code>open</code>/<code>navigate</code>/<code>snapshot</code>
-        一个有适配器的域名时，它会告诉你：stderr 上一行 <code>💡 site adapters for &lt;domain&gt;</code>，
-        以及 <code>--json</code> 里的 <code>siteAdapters: {domain, commands}</code> 字段。
-        <strong>看到就优先用它列出的 <code>site &lt;name&gt;/&lt;cmd&gt;</code></strong>，别再 snapshot+click——更省更稳，而且已经装好了。
-      </div>
+      <p>
+        <a href="/site-adapters.html">站点适配器完整用法 →</a>
+      </p>
 
       <hr class="du-divider" />
 

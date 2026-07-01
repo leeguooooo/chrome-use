@@ -130,6 +130,38 @@
 
       <hr class="du-divider" />
 
+      <h2>为什么它不会被封</h2>
+      <p>
+        很多网站主动封禁浏览器自动化，踩中反爬系统<strong>连账号一起封</strong>。chrome-use 的答案是把
+        <strong>反检测当成一等能力</strong>：它不去<em>模拟</em>一个真人——它<em>就是</em>你已登录的真实浏览器，
+        所以网站读它为 <span class="mark">100% 真人</span>，也就无从封起。
+      </p>
+
+      <div class="du-cards">
+        <a class="du-card" href="/stealth.html">
+          <div class="du-card-title"><span class="du-card-ico">🛡️</span> CreepJS <span class="mark">0% 机器人 · 0% headless</span></div>
+          <p>走扩展连你的真实 Chrome 时<strong>不注入任何 JS 补丁</strong>——没有伪装，也就没有破绽给测谎器抓。bot.incolumitas / sannysoft / BrowserScan 全绿。</p>
+        </a>
+        <a class="du-card" href="/stealth.html">
+          <div class="du-card-title"><span class="du-card-ico">⚙️</span> 原生覆盖 &gt; JS 谎言</div>
+          <p><code>--launch</code> 独立浏览器用<em>原生</em>覆盖：<code>navigator.webdriver=false</code>（<code>Emulation.setAutomationOverride</code>）、timezone、WebRTC 本地 IP、canvas/audio 噪声——都不是能被反查的重定义 getter。headless <strong>默认禁用</strong>（本身就是机器人特征）。</p>
+        </a>
+        <a class="du-card" href="/stealth.html">
+          <div class="du-card-title"><span class="du-card-ico">🖐️</span> <code>--humanize</code> 过行为检测</div>
+          <p>指纹之外，Akamai / PerimeterX / DataDome 还打<em>行为</em>分。开启后光标走曲线贝塞尔轨迹、落在元素内的抖动点、打字节奏可变——且<strong>自适应</strong>：命中这些厂商的页面自动升级，普通站保持瞬时零开销。</p>
+        </a>
+        <a class="du-card" href="/stealth.html">
+          <div class="du-card-title"><span class="du-card-ico">☁️</span> Cloudflare 一次通过复用</div>
+          <p>过一次挑战拿到的 <code>cf_clearance</code>（绑 IP+UA）被保存复用，不用每次重刷。随时 <code>chrome-use stealth status</code> 自查 webdriver / chrome / plugins / UA 探针。</p>
+        </a>
+      </div>
+
+      <p style="margin-top:18px">
+        <a href="/stealth.html">反检测与隐身 →</a>
+      </p>
+
+      <hr class="du-divider" />
+
       <h2>上手</h2>
       <p>三篇短文，带你从零到驱动自己的 Chrome：</p>
       <div class="du-cards cols-3">
