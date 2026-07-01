@@ -9,6 +9,7 @@ mod findurl;
 mod flags;
 mod friction;
 mod install;
+mod mcp;
 mod native;
 mod output;
 mod read;
@@ -823,6 +824,16 @@ fn main() {
             json: flags.json,
         };
         exit(doctor::run_doctor(opts));
+    }
+
+    // Handle MCP stdio server mode. This must never share stdout with normal
+    // CLI output — stdout is reserved for newline-delimited JSON-RPC messages.
+    if clean.first().map(|s| s.as_str()) == Some("mcp") {
+        if let Err(err) = mcp::run_mcp(&clean[1..]) {
+            eprintln!("{} {}", color::error_indicator(), err);
+            exit(1);
+        }
+        return;
     }
 
     // Handle dashboard subcommand

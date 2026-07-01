@@ -125,6 +125,31 @@ npx skills add leeguooooo/chrome-use
 
 This drops `skills/chrome-use` (and the specialized `skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}`) into your project so your AI agent gets the right usage patterns and pre-approved bash permissions for `chrome-use`, `chrome-use`, and `abs`.
 
+### Use from an MCP client (Claude Desktop, etc.)
+
+Agents that run a shell should use the skill above (it's lighter). For hosts that
+speak **MCP but can't run arbitrary shell commands** — Claude Desktop, ChatGPT
+connectors, n8n/Dify — run chrome-use as an MCP stdio server instead:
+
+```bash
+chrome-use mcp        # stdio Model Context Protocol server (core tool profile)
+```
+
+Wire it into Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "chrome-use": { "command": "chrome-use", "args": ["mcp"] }
+  }
+}
+```
+
+Exposes a core profile of typed tools (`chrome_use_open` / `read` / `snapshot` /
+`click` / `fill` / `type` / `press` / `eval` / `wait` / `back` / `forward` /
+`reload`); each tool-call delegates to the same binary in `--json` mode. Use the
+absolute path as `command` if `chrome-use` isn't on the host's PATH.
+
 ## Command names
 
 `chrome-use`, `chrome-use`, and `abs` are **the same binary** —

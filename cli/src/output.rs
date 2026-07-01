@@ -3074,6 +3074,33 @@ Examples:
 "##
         }
 
+        // === MCP ===
+        "mcp" => {
+            r##"
+chrome-use mcp - Run a stdio MCP server
+
+Usage: chrome-use mcp
+
+Runs a Model Context Protocol server over stdio (JSON-RPC, newline-delimited)
+so MCP-only hosts (Claude Desktop, etc.) can drive chrome-use. Exposes a CORE
+profile of ~12 tools (chrome_use_open, chrome_use_read, chrome_use_snapshot,
+chrome_use_click, chrome_use_fill, chrome_use_type, chrome_use_press,
+chrome_use_eval, chrome_use_wait, chrome_use_back, chrome_use_forward,
+chrome_use_reload) — not full CLI parity. Each tool call delegates to this
+same binary in `--json` mode, so behavior matches the normal CLI surface.
+
+Claude Desktop config (claude_desktop_config.json):
+  {
+    "mcpServers": {
+      "chrome-use": { "command": "chrome-use", "args": ["mcp"] }
+    }
+  }
+
+Examples:
+  chrome-use mcp
+"##
+        }
+
         // === Doctor ===
         "doctor" => {
             r##"
@@ -3713,6 +3740,11 @@ Dashboard:
   dashboard [start]          Start the dashboard server (default port: 4848)
   dashboard start --port <n> Start on a specific port
   dashboard stop             Stop the dashboard server
+
+MCP:
+  mcp                         Run a stdio MCP server (JSON-RPC) exposing a
+                              core ~12-tool profile for MCP-only hosts
+                              (Claude Desktop, etc.)
 
 Setup:
   install                    Install browser binaries
