@@ -305,6 +305,20 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
 
+        // `read` prints only the extracted document content (markdown / text /
+        // outline), optionally wrapped in content boundaries. Action-gated + early
+        // so the generic `✓ <url>` renderer doesn't swallow the body.
+        if action == Some("read") {
+            if let Some(content) = data.get("content").and_then(|v| v.as_str()) {
+                let origin = data
+                    .get("finalUrl")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| data.get("url").and_then(|v| v.as_str()));
+                print_with_boundaries(content, origin, opts);
+            }
+            return;
+        }
+
         // Cloudflare challenge/clearance preflight (`cf-status`). Checked early
         // because its response carries `url`/`title`, which later generic
         // renderers would otherwise swallow.
@@ -3494,6 +3508,8 @@ Start here (for AI agents):
 
 Core Commands:
   open <url>                 Navigate to URL
+  read [url]                 Fetch a URL (or the active tab) as agent-readable text
+                             [--raw --require-md --llms <index|full> --outline --filter <t> --timeout <ms>]
   click <sel|x y>            Click element/@ref, or a viewport coordinate
   dblclick <sel>             Double-click element
   type <sel> <text>          Type into element

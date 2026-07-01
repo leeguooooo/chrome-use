@@ -1312,7 +1312,16 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             | "stream_enable"
             | "stream_disable"
             | "stream_status"
-    );
+    ) || (action == "read"
+        // `read <url>` (and --llms / --require-md) is a pure HTTP fetch — it
+        // never touches the browser, so don't auto-launch. Only `read` with no
+        // url reads the active tab and needs a browser.
+        && (cmd.get("url").is_some()
+            || cmd.get("llms").is_some()
+            || cmd
+                .get("requireMd")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)));
     if !skip_launch {
         // Check if existing connection is stale and needs re-launch.
         // First do a fast, non-blocking check: did the browser process crash/exit?
@@ -1402,6 +1411,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         let attempt_result = match action {
         "launch" => handle_launch(cmd, state).await,
         "navigate" => handle_navigate(cmd, state).await,
+        "read" => handle_read(cmd, state).await,
         "url" => handle_url(state).await,
         "cdp_url" => handle_cdp_url(state),
         "inspect" => handle_inspect(state).await,
@@ -2903,6 +2913,53 @@ async fn handle_url(state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let url = mgr.get_url().await?;
     Ok(json!({ "url": url }))
+}
+
+/// `read [url]` — agent-readable text extraction. With a URL it HTTP-fetches
+/// (markdown negotiation / llms.txt / outline / filter); with no URL it reads
+/// the rendered active tab DOM. (Ported from vercel-labs/agent-browser #1480.)
+async fn handle_read(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+    let mut options = crate::read::options_from_command(cmd)?;
+    if let Some(allowed_domains) = {
+        let df = state.domain_filter.read().await;
+        df.as_ref().map(|filter| filter.allowed_domains.clone())
+    } {
+        if !allowed_domains.is_empty() {
+            options.enforced_allowed_domains.push(allowed_domains);
+        }
+    }
+
+    if let Some(url) = cmd.get("url").and_then(|v| v.as_str()) {
+        return crate::read::run_read(url, options).await;
+    }
+
+    let url_data = handle_url(state).await?;
+    let active_url = url_data
+        .get("url")
+        .and_then(|v| v.as_str())
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| "Active tab has no URL".to_string())?;
+    crate::read::check_allowed_active_url_for_options(active_url, &options)?;
+
+    if options.llms.is_some() || options.require_md {
+        return crate::read::run_read(active_url, options).await;
+    }
+
+    let content_data = handle_content(state).await?;
+    let html = content_data
+        .get("html")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Active tab content is unavailable".to_string())?;
+    let origin = content_data
+        .get("origin")
+        .and_then(|v| v.as_str())
+        .filter(|origin| !origin.is_empty())
+        .unwrap_or(active_url);
+    Ok(crate::read::read_json_from_active_html(
+        origin,
+        html.to_string(),
+        &options,
+    ))
 }
 
 fn handle_cdp_url(state: &DaemonState) -> Result<Value, String> {
