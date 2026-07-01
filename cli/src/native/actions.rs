@@ -8339,16 +8339,37 @@ async fn handle_semantic_locator(
     };
 
     let query = match strategy {
+        // Like Playwright's getByLabel: match <label> associations AND
+        // aria-label / aria-labelledby. Icon buttons and custom controls are
+        // often labelled via aria-label only. (Ported from
+        // vercel-labs/agent-browser #1432.)
         "label" => format!(
             r#"(() => {{
-                const label = Array.from(document.querySelectorAll('label')).find(el => {match_fn});
-                if (!label) return false;
-                const forId = label.getAttribute('for');
-                const target = forId ? document.getElementById(forId) : label.querySelector('input,select,textarea');
-                if (target) {{ target.setAttribute('data-chrome-use-located', 'true'); return true; }}
+                const __want = {want};
+                const matches = (t) => {cmp};
+                const label = Array.from(document.querySelectorAll('label')).find(el => matches(el.textContent));
+                if (label) {{
+                    const forId = label.getAttribute('for');
+                    const target = forId ? document.getElementById(forId) : label.querySelector('input,select,textarea');
+                    if (target) {{ target.setAttribute('data-chrome-use-located', 'true'); return true; }}
+                }}
+                const aria = Array.from(document.querySelectorAll('[aria-label]')).find(el => matches(el.getAttribute('aria-label')));
+                if (aria) {{ aria.setAttribute('data-chrome-use-located', 'true'); return true; }}
+                const referenced = Array.from(document.querySelectorAll('[aria-labelledby]')).find(el => {{
+                    const text = el.getAttribute('aria-labelledby').split(/\s+/)
+                        .map(id => {{ const r = document.getElementById(id); return r ? r.textContent : ''; }})
+                        .join(' ');
+                    return matches(text);
+                }});
+                if (referenced) {{ referenced.setAttribute('data-chrome-use-located', 'true'); return true; }}
                 return false;
             }})()"#,
-            match_fn = match_fn,
+            want = serde_json::to_string(value).unwrap_or_default(),
+            cmp = if exact {
+                "(t != null && String(t).trim() === __want)"
+            } else {
+                "(t != null && String(t).includes(__want))"
+            },
         ),
         "placeholder" => format!(
             r#"(() => {{

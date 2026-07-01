@@ -55,7 +55,7 @@ chrome-use click @e1 --new-tab # Click and open in new tab
 chrome-use dblclick @e1        # Double-click
 chrome-use focus @e1           # Focus element
 chrome-use fill @e2 "text"     # Clear and type
-chrome-use type @e2 "text"     # Type without clearing
+chrome-use type @e2 "text"     # Type without clearing (add --clear to clear first, --delay <ms> for per-key delay)
 chrome-use press Enter         # Press key (alias: key)
 chrome-use press Control+a     # Key combination
 chrome-use keydown Shift       # Hold key down
@@ -141,7 +141,7 @@ chrome-use mouse wheel 100         # Scroll wheel
 chrome-use find role button click --name "Submit"
 chrome-use find text "Sign In" click
 chrome-use find text "Sign In" click --exact      # Exact match only
-chrome-use find label "Email" fill "user@test.com"
+chrome-use find label "Email" fill "user@test.com"   # matches <label>, aria-label, and aria-labelledby
 chrome-use find placeholder "Search" type "query"
 chrome-use find alt "Logo" click
 chrome-use find title "Close" click

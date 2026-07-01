@@ -654,33 +654,59 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             if commit_enter {
                 key_events = true;
             }
-            let rest: Vec<&str> = rest
-                .iter()
-                .copied()
-                .filter(|a| {
-                    *a != "--key-events"
-                        && *a != "--keys"
-                        && *a != "--enter"
-                        && *a != "--commit-enter"
-                })
-                .collect();
+            // `--clear` clears the field before typing; `--delay <ms>` types with
+            // a per-key delay. The daemon has always honored these, but the CLI
+            // used to join every remaining arg into the text, so they leaked in
+            // as literal characters. Parse them out here. (Ported from
+            // vercel-labs/agent-browser #1432.)
+            let clear = rest.iter().any(|a| *a == "--clear");
+            let mut delay: Option<u64> = None;
+            let type_usage =
+                "type <selector> <text>   (or: type --focused <text>) [--clear] [--delay <ms>] [--key-events] [--enter]";
+            if let Some(i) = rest.iter().position(|a| *a == "--delay") {
+                let raw = rest.get(i + 1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "type --delay".to_string(),
+                    usage: type_usage,
+                })?;
+                delay = Some(raw.parse::<u64>().map_err(|_| ParseError::InvalidValue {
+                    message: format!("--delay expects a number in ms, got '{}'", raw),
+                    usage: type_usage,
+                })?);
+            }
+            // Strip flags (and --delay's value) from the positional args.
+            let mut rest: Vec<&str> = {
+                let mut out = Vec::new();
+                let mut skip_next = false;
+                for a in rest.iter().copied() {
+                    if skip_next {
+                        skip_next = false;
+                        continue;
+                    }
+                    match a {
+                        "--key-events" | "--keys" | "--enter" | "--commit-enter" | "--clear" => {}
+                        "--delay" => skip_next = true,
+                        other => out.push(other),
+                    }
+                }
+                out
+            };
             // `type --focused <text>` types into whatever element currently has
             // focus (no selector) — for custom widgets that move focus to a hidden
             // input after you open them.
             if rest.first() == Some(&"--focused") {
+                rest.remove(0);
                 return Ok(json!({
                     "id": id, "action": "type", "focused": true,
-                    "text": rest[1..].join(" "), "keyEvents": key_events,
-                    "commitEnter": commit_enter,
+                    "text": rest.join(" "), "keyEvents": key_events,
+                    "commitEnter": commit_enter, "clear": clear, "delay": delay,
                 }));
             }
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "type".to_string(),
-                usage:
-                    "type <selector> <text>   (or: type --focused <text>) [--key-events] [--enter]",
+                usage: type_usage,
             })?;
             Ok(
-                json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" "), "keyEvents": key_events, "commitEnter": commit_enter }),
+                json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" "), "keyEvents": key_events, "commitEnter": commit_enter, "clear": clear, "delay": delay }),
             )
         }
         "pick" => {
@@ -5096,6 +5122,27 @@ mod tests {
         assert_eq!(cmd["text"], "some text");
         assert_eq!(cmd["keyEvents"], false);
         assert_eq!(cmd["commitEnter"], false);
+    }
+
+    #[test]
+    fn test_type_clear_and_delay() {
+        // --clear and --delay must be parsed as flags, not typed as literal text.
+        let cmd = parse_command(
+            &args("type #input hello world --clear --delay 40"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "type");
+        assert_eq!(cmd["selector"], "#input");
+        assert_eq!(cmd["text"], "hello world");
+        assert_eq!(cmd["clear"], true);
+        assert_eq!(cmd["delay"], 40);
+    }
+
+    #[test]
+    fn test_type_delay_requires_number() {
+        let err = parse_command(&args("type #input hi --delay abc"), &default_flags());
+        assert!(err.is_err(), "non-numeric --delay must be rejected");
     }
 
     #[test]
