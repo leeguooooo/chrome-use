@@ -2857,8 +2857,14 @@ impl BrowserManager {
             }
             // A trigger button/element: walk up to the nearest container that
             // owns a file input (el-upload puts the hidden input as a sibling).
+            // Stop at <body>/<html>: a file input found only at page-root level
+            // is not associated with this element — it's just "some other input
+            // on the page". Matching it would be a false-success upload (e.g.
+            // uploading to an <h1> that merely shares <body> with an unrelated
+            // hidden input). A real upload widget wraps its input in a container.
             let p = el;
             for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
+                if (p.tagName === 'BODY' || p.tagName === 'HTML') break;
                 if (p.querySelector) {
                     const found = p.querySelector('input[type=file]');
                     if (found) return found;

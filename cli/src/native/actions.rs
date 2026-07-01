@@ -1546,6 +1546,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "expect" => handle_expect(cmd, state).await,
             "extract" => handle_extract(cmd, state).await,
             "form_fill" => handle_form_fill(cmd, state).await,
+            "eval" => handle_eval(cmd, state).await,
             "evalhandle" => handle_evalhandle(cmd, state).await,
             "drag" => handle_drag(cmd, state).await,
             "solve_slider" => handle_solve_slider(cmd, state).await,
@@ -8626,6 +8627,44 @@ async fn handle_find(cmd: &Value, state: &DaemonState) -> Result<Value, String> 
 
     let result = mgr.evaluate(&js, None).await?;
     Ok(json!({ "elements": result, "selector": selector }))
+}
+
+// Evaluate a JS expression in the active page and return its value by value.
+// Sibling to `evalhandle` (which returns a remote object handle instead). Used
+// e.g. to read DOM state after an action (`document.querySelector(...).disabled`).
+async fn handle_eval(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    // Accept `expression` (canonical) or `script` (alias, matching evalhandle).
+    let expression = cmd
+        .get("expression")
+        .or_else(|| cmd.get("script"))
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'expression' parameter")?;
+
+    let result: super::cdp::types::EvaluateResult = mgr
+        .client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &super::cdp::types::EvaluateParams {
+                expression: expression.to_string(),
+                return_by_value: Some(true),
+                await_promise: Some(true),
+            },
+            Some(&session_id),
+        )
+        .await?;
+
+    // Surface a thrown JS exception as a command error rather than a null result.
+    if let Some(exc) = result.exception_details {
+        let msg = exc
+            .exception
+            .and_then(|o| o.description.or(o.value.map(|v| v.to_string())))
+            .unwrap_or_else(|| exc.text.clone());
+        return Err(format!("eval threw: {}", msg));
+    }
+
+    Ok(json!({ "result": result.result.value.unwrap_or(Value::Null) }))
 }
 
 async fn handle_evalhandle(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
