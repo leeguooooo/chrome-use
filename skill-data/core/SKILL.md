@@ -995,17 +995,40 @@ chrome-use daemon restart    # kill every session daemon worker
 alone, so the relay to your live Chrome stays up — the next command just spins up
 a fresh, clean daemon against the same browser. It does **not** close any tabs.
 
-### Mock network requests
+### Mock responses & rewrite requests
+
+`network route` intercepts matching requests via the CDP Fetch domain (no proxy,
+no extension permission). Three modes, verbs/fields mirror Playwright:
 
 ```bash
-chrome-use network route "**/api/users" --body '{"users":[]}'   # stub a response
-chrome-use network route "**/analytics" --abort                 # block entirely
-chrome-use network requests --clear                             # start capturing fresh
-chrome-use network requests                                     # inspect what fired
-chrome-use network har start                                    # record all traffic
+# Mock the RESPONSE (fulfill — the request never leaves the browser)
+chrome-use network route "**/api/users" --body '{"users":[]}' --status 200 --content-type application/json
+chrome-use network route "**/api/me" --body '{"vip":true}' --header X-From=mock
+
+# Rewrite the outgoing REQUEST (continue with overrides — real response returns)
+chrome-use network route "**/api/save" --method POST --set-header Authorization="Bearer test"
+chrome-use network route "**/api/save" --set-body '{"x":1}'          # replace the request body
+chrome-use network route "**/v1/*" --rewrite-url https://staging.example.com/v1/thing
+
+# Block entirely
+chrome-use network route "**/analytics" --abort
+
+# Scope any rule to resource types, and inspect / record traffic
+chrome-use network route "**/*.json" --abort --resource-type xhr,fetch
+chrome-use network requests --clear        # start capturing fresh
+chrome-use network requests                # inspect what fired
+chrome-use network har start               # record all traffic
 # ... perform actions ...
 chrome-use network har stop /tmp/trace.har
+chrome-use network unroute                 # drop all routes
 ```
+
+Response fields (`--body` / `--status` / `--header` / `--content-type`) fulfill a
+mock and short-circuit the request. Request fields (`--method` / `--set-body` /
+`--set-header` / `--rewrite-url`) rewrite the outgoing request and let the real
+response come back. If both are given on one rule, the response mock wins.
+`--header`/`--set-header` are repeatable (`K=V`); request headers merge over the
+originals.
 
 ### Record a video of the workflow
 

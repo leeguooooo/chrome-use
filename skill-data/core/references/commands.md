@@ -182,7 +182,8 @@ chrome-use storage local clear         # Clear all
 ```bash
 chrome-use network route <url>              # Intercept requests
 chrome-use network route <url> --abort      # Block requests
-chrome-use network route <url> --body '{}'  # Mock response
+chrome-use network route <url> --body '{}' --status 200 --header K=V --content-type application/json  # Mock response (fulfill)
+chrome-use network route <url> --method POST --set-body '{}' --set-header K=V --rewrite-url <u>       # Rewrite request (continue)
 chrome-use network unroute [url]            # Remove routes
 chrome-use network requests                 # View tracked requests
 chrome-use network requests --filter api    # Filter requests
