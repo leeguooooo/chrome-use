@@ -41,6 +41,15 @@
     window.gtag('js', new Date());
     GA_IDS.forEach(function (id) { window.gtag('config', id); });
   }
+
+  // OIDC SSO client (account.leeguoo.com) — renders the topbar account chip
+  // and unlocks [data-members-only] blocks for members.
+  if (!document.querySelector('script[src*="/assets/docs/auth.js"]')) {
+    var authjs = document.createElement('script');
+    authjs.src = '/assets/docs/auth.js';
+    authjs.defer = true;
+    head.appendChild(authjs);
+  }
 })();
 
 /* ==========================================================================
@@ -193,7 +202,15 @@
     gh.href = GH; gh.target = "_blank"; gh.rel = "noopener";
     right.appendChild(gh);
 
+    // SSO account chip (filled by auth.js once account.leeguoo.com SSO resolves)
+    var account = el("div", "du-account");
+    account.id = "du-account";
+    right.appendChild(account);
+
     host.appendChild(right);
+
+    // Kick the OIDC client now that #du-account exists.
+    if (window.CUAuth) window.CUAuth.init();
   }
 
   /* ============================================================= SIDEBAR == */

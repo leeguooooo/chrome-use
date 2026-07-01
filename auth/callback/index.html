@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Signing in… · chrome-use</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: #fcfbf4; color: #1a1a1a;
+      font-family: "Noto Sans SC", -apple-system, system-ui, "PingFang SC", sans-serif; }
+    .box { text-align: center; }
+    .sp { width: 26px; height: 26px; margin: 0 auto 14px; border: 3px solid #e5e1d3;
+      border-top-color: #e8503a; border-radius: 50%; animation: s .8s linear infinite; }
+    @keyframes s { to { transform: rotate(360deg); } }
+    a { color: #3b5bdb; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="sp" id="sp"></div>
+    <div id="msg">正在登录…</div>
+  </div>
+  <script>
+  (function () {
+    var CFG = {
+      issuer: 'https://account.leeguoo.com',
+      clientId: 'chrome-use-web',
+      redirectUri: (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+        ? location.origin + '/auth/callback/'
+        : 'https://chrome-use.leeguoo.com/auth/callback/'
+    };
+    var LS = { tok: 'cu_oidc_tok', verifier: 'cu_oidc_pkce', state: 'cu_oidc_state', ret: 'cu_oidc_return' };
+    var q = new URLSearchParams(location.search);
+    var code = q.get('code'), st = q.get('state'), err = q.get('error');
+    var inIframe = window.top !== window.self;
+
+    // Silent SSO path: we're inside the hidden iframe → hand the result to the parent.
+    if (inIframe) {
+      try {
+        window.parent.postMessage({ type: 'cu-oidc-callback', code: code, state: st, error: err }, location.origin);
+      } catch (e) {}
+      return;
+    }
+
+    // Interactive path: exchange the code ourselves, then go back.
+    function done(msg, isErr) {
+      var sp = document.getElementById('sp'); if (sp) sp.style.display = 'none';
+      document.getElementById('msg').innerHTML = msg;
+    }
+    var ret = '/';
+    try { ret = sessionStorage.getItem(LS.ret) || '/'; } catch (e) {}
+
+    if (err || !code) { done('登录未完成。<a href="/">返回首页</a>', true); return; }
+    if (st && st !== sessionStorage.getItem(LS.state)) { done('登录校验失败（state）。<a href="/">返回</a>', true); return; }
+
+    var verifier = '';
+    try { verifier = sessionStorage.getItem(LS.verifier) || ''; } catch (e) {}
+    var body = new URLSearchParams({
+      grant_type: 'authorization_code', code: code, redirect_uri: CFG.redirectUri,
+      client_id: CFG.clientId, code_verifier: verifier
+    });
+    fetch(CFG.issuer + '/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString()
+    }).then(function (r) {
+      if (!r.ok) throw new Error('token ' + r.status);
+      return r.json();
+    }).then(function (data) {
+      var claims = {};
+      try { claims = JSON.parse(decodeURIComponent(escape(atob((data.id_token || '').split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))))); } catch (e) {}
+      var exp = claims.exp || (Math.floor(Date.now() / 1000) + (data.expires_in || 3600));
+      try {
+        localStorage.setItem(LS.tok, JSON.stringify({ access_token: data.access_token, id_token: data.id_token, exp: exp }));
+        sessionStorage.removeItem(LS.verifier); sessionStorage.removeItem(LS.state); sessionStorage.removeItem(LS.ret);
+      } catch (e) {}
+      location.replace(ret);
+    }).catch(function () {
+      done('登录失败，请重试。<a href="/">返回首页</a>', true);
+    });
+  })();
+  </script>
+</body>
+</html>

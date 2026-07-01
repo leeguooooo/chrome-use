@@ -168,6 +168,63 @@ img { max-width: 100%; }
 .du-gh:hover { background: var(--ink); color: var(--paper); text-decoration: none; }
 .du-gh svg { width: 15px; height: 15px; }
 
+/* ---------------------------------------------------- SSO account chip (auth.js) */
+.du-account { display: flex; align-items: center; }
+.du-account-wrap { position: relative; }
+.du-account-login {
+  font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer;
+  color: var(--ink); background: var(--yellow); padding: 6px 14px;
+  border: 2px solid var(--line-ink); border-radius: 225px 15px 255px 15px / 15px 255px 15px 225px;
+}
+.du-account-login:hover { filter: brightness(1.04); }
+.du-account-chip {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  font-family: var(--font-body); font-size: 13px; color: var(--ink);
+  background: var(--paper); padding: 4px 10px 4px 4px;
+  border: 2px solid var(--line-ink); border-radius: 999px;
+}
+.du-account-chip:hover { background: var(--paper-2); }
+.du-account-av { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; display: block; }
+.du-account-av-fallback {
+  display: grid; place-items: center; background: var(--blue); color: #fff;
+  font-weight: 700; font-size: 12px; text-transform: uppercase;
+}
+.du-account-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.du-account-badge {
+  font-size: 10.5px; font-weight: 700; color: var(--ink); background: var(--yellow);
+  padding: 1px 6px; border-radius: 8px; letter-spacing: .02em;
+}
+.du-account-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; min-width: 180px; z-index: 70;
+  background: var(--paper); border: 2px solid var(--line-ink);
+  border-radius: 14px 6px 14px 6px / 6px 14px 6px 14px;
+  box-shadow: 3px 4px 0 rgba(26,26,26,.12); padding: 6px;
+}
+.du-account-menu-head { font-size: 12px; color: var(--ink-soft); padding: 6px 8px; border-bottom: 1px dashed var(--line); margin-bottom: 4px; }
+.du-account-menu-item {
+  display: block; width: 100%; text-align: left; box-sizing: border-box;
+  font-family: var(--font-body); font-size: 13px; color: var(--ink);
+  padding: 7px 8px; border: 0; background: none; border-radius: 8px; cursor: pointer; text-decoration: none;
+}
+.du-account-menu-item:hover { background: var(--paper-2); text-decoration: none; }
+
+/* ---------------------------------------------------- members-only gating (auth.js) */
+.du-locked { border-color: var(--red) !important; background: color-mix(in srgb, var(--red) 6%, var(--paper)); }
+.du-locked-title { font-weight: 700; margin-bottom: 6px; color: var(--ink); }
+.du-locked-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.du-btn-primary {
+  font-family: var(--font-body); font-size: 13px; font-weight: 600; cursor: pointer; color: var(--ink);
+  background: var(--yellow); padding: 8px 16px; border: 2px solid var(--line-ink);
+  border-radius: 225px 15px 255px 15px / 15px 255px 15px 225px;
+}
+.du-btn-ghost {
+  font-family: var(--font-body); font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none;
+  background: var(--paper); padding: 8px 16px; border: 2px solid var(--line-ink);
+  border-radius: 15px 225px 15px 255px / 255px 15px 225px 15px;
+}
+.du-btn-ghost:hover, .du-btn-primary:hover { filter: brightness(1.04); text-decoration: none; }
+@media (max-width: 620px) { .du-account-name { display: none; } }
+
 /* ============================================================ LAYOUT ===== */
 .du-shell {
   display: grid;
