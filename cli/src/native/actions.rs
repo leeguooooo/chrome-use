@@ -97,6 +97,11 @@ pub struct HarEntry {
 pub struct RouteEntry {
     pub url_pattern: String,
     pub response: Option<RouteResponse>,
+    /// Request-stage overrides applied via `Fetch.continueRequest` (rewrite the
+    /// outgoing request before it hits the network). Mutually exclusive with
+    /// `response`: a `response` fulfills (short-circuits) the request, so it
+    /// takes priority and the request is never sent.
+    pub request_override: Option<RouteRequestOverride>,
     pub abort: bool,
     /// When non-empty, only requests whose `resourceType` (as reported by
     /// CDP Fetch.requestPaused) is in this list are matched. Values are
@@ -108,6 +113,15 @@ pub struct RouteResponse {
     pub status: Option<u16>,
     pub body: Option<String>,
     pub content_type: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+}
+
+/// Overrides for the outgoing request (all optional; `None` fields pass through
+/// unchanged). `headers` are merged over the original request headers.
+pub struct RouteRequestOverride {
+    pub method: Option<String>,
+    pub url: Option<String>,
+    pub post_data: Option<String>,
     pub headers: Option<HashMap<String, String>>,
 }
 
@@ -9893,6 +9907,51 @@ async fn resolve_fetch_paused(
                     .await;
                 return;
             }
+
+            if let Some(ref reqov) = route.request_override {
+                let mut params = serde_json::Map::new();
+                params.insert("requestId".into(), json!(paused.request_id));
+                if let Some(m) = &reqov.method {
+                    params.insert("method".into(), json!(m));
+                }
+                if let Some(u) = &reqov.url {
+                    params.insert("url".into(), json!(u));
+                }
+                if let Some(pd) = &reqov.post_data {
+                    // CDP wants postData base64-encoded.
+                    let enc = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        pd.as_bytes(),
+                    );
+                    params.insert("postData".into(), json!(enc));
+                }
+                if let Some(h) = &reqov.headers {
+                    // continueRequest REPLACES headers, so start from the
+                    // originals and let the overrides win (case-insensitive).
+                    let mut combined: Vec<Value> = Vec::new();
+                    if let Some(ref orig) = paused.request_headers {
+                        for (k, v) in orig {
+                            if !h.keys().any(|ek| ek.eq_ignore_ascii_case(k)) {
+                                if let Some(s) = v.as_str() {
+                                    combined.push(json!({ "name": k, "value": s }));
+                                }
+                            }
+                        }
+                    }
+                    for (k, v) in h {
+                        combined.push(json!({ "name": k, "value": v }));
+                    }
+                    params.insert("headers".into(), json!(combined));
+                }
+                let _ = client
+                    .send_command(
+                        "Fetch.continueRequest",
+                        Some(Value::Object(params)),
+                        Some(session_id),
+                    )
+                    .await;
+                return;
+            }
         }
     }
 
@@ -10024,11 +10083,30 @@ async fn handle_route(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         })
     });
 
+    let request_override = cmd.get("requestOverride").and_then(|v| {
+        if v.is_null() {
+            return None;
+        }
+        Some(RouteRequestOverride {
+            method: v.get("method").and_then(|s| s.as_str()).map(String::from),
+            url: v.get("url").and_then(|s| s.as_str()).map(String::from),
+            post_data: v.get("postData").and_then(|s| s.as_str()).map(String::from),
+            headers: v.get("headers").and_then(|h| {
+                h.as_object().map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+            }),
+        })
+    });
+
     {
         let mut routes = state.routes.write().await;
         routes.push(RouteEntry {
             url_pattern: url_pattern.clone(),
             response,
+            request_override,
             abort,
             resource_types,
         });
@@ -11978,6 +12056,7 @@ mod tests {
             routes.push(super::RouteEntry {
                 url_pattern: "https://example.com/*".to_string(),
                 response: None,
+                request_override: None,
                 abort: true,
                 resource_types: Vec::new(),
             });
@@ -12021,6 +12100,7 @@ mod tests {
             routes.push(super::RouteEntry {
                 url_pattern: "*".to_string(),
                 response: None,
+                request_override: None,
                 abort: false,
                 resource_types: Vec::new(),
             });

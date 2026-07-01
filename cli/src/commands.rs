@@ -3850,17 +3850,87 @@ fn parse_network(rest: &[&str], id: &str) -> Result<Value, ParseError> {
         Some("route") => {
             let url = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                 context: "network route".to_string(),
-                usage: "network route <url> [--abort|--body <json>] [--resource-type <csv>]",
+                usage: "network route <url> [--abort] [--body <s> --status <n> --header K=V --content-type <ct>] [--method <M> --set-body <s> --set-header K=V --rewrite-url <u>] [--resource-type <csv>]",
             })?;
+            // Single-value flag → its following token.
+            let val = |name: &str| -> Option<&str> {
+                rest.iter()
+                    .position(|&s| s == name)
+                    .and_then(|i| rest.get(i + 1).copied())
+            };
+            // Repeatable `--flag K=V` → object (split on the first '=').
+            let kv_map = |name: &str| -> serde_json::Map<String, Value> {
+                let mut m = serde_json::Map::new();
+                for (i, &s) in rest.iter().enumerate() {
+                    if s == name {
+                        if let Some(&pair) = rest.get(i + 1) {
+                            if let Some((k, v)) = pair.split_once('=') {
+                                m.insert(k.to_string(), json!(v));
+                            }
+                        }
+                    }
+                }
+                m
+            };
+
             let abort = rest.contains(&"--abort");
-            let body_idx = rest.iter().position(|&s| s == "--body");
-            let body = body_idx.and_then(|i| rest.get(i + 1).copied());
+
+            // Response side (Fetch.fulfillRequest — mock/replace the response).
+            let body = val("--body");
+            let status = val("--status").and_then(|s| s.parse::<u64>().ok());
+            let content_type = val("--content-type");
+            let resp_headers = kv_map("--header");
+            let has_response =
+                body.is_some() || status.is_some() || content_type.is_some() || !resp_headers.is_empty();
+
+            // Request side (Fetch.continueRequest — rewrite the outgoing request).
+            let set_body = val("--set-body");
+            let method = val("--method");
+            let rewrite_url = val("--rewrite-url");
+            let req_headers = kv_map("--set-header");
+            let has_request = set_body.is_some()
+                || method.is_some()
+                || rewrite_url.is_some()
+                || !req_headers.is_empty();
+
             let rt_idx = rest
                 .iter()
                 .position(|&s| s == "--resource-type" || s == "--resource-types");
             let resource_type = rt_idx.and_then(|i| rest.get(i + 1).copied());
-            let mut cmd =
-                json!({ "id": id, "action": "route", "url": url, "abort": abort, "body": body });
+
+            let mut cmd = json!({ "id": id, "action": "route", "url": url, "abort": abort });
+            if has_response {
+                let mut resp = serde_json::Map::new();
+                if let Some(b) = body {
+                    resp.insert("body".into(), json!(b));
+                }
+                if let Some(st) = status {
+                    resp.insert("status".into(), json!(st));
+                }
+                if let Some(ct) = content_type {
+                    resp.insert("contentType".into(), json!(ct));
+                }
+                if !resp_headers.is_empty() {
+                    resp.insert("headers".into(), Value::Object(resp_headers));
+                }
+                cmd["response"] = Value::Object(resp);
+            }
+            if has_request {
+                let mut req = serde_json::Map::new();
+                if let Some(b) = set_body {
+                    req.insert("postData".into(), json!(b));
+                }
+                if let Some(m) = method {
+                    req.insert("method".into(), json!(m));
+                }
+                if let Some(u) = rewrite_url {
+                    req.insert("url".into(), json!(u));
+                }
+                if !req_headers.is_empty() {
+                    req.insert("headers".into(), Value::Object(req_headers));
+                }
+                cmd["requestOverride"] = Value::Object(req);
+            }
             if let Some(rt) = resource_type {
                 cmd["resourceType"] = json!(rt);
             }
@@ -4370,6 +4440,37 @@ mod tests {
         assert_eq!(cmd["action"], "route");
         assert_eq!(cmd["resourceType"], "script");
         assert_eq!(cmd["abort"], true);
+    }
+
+    #[test]
+    fn test_network_route_fulfill_response() {
+        let cmd = parse_command(
+            &args("network route **/api/* --body {\"ok\":1} --status 201 --header X-Test=yes"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "route");
+        assert_eq!(cmd["response"]["body"], "{\"ok\":1}");
+        assert_eq!(cmd["response"]["status"], 201);
+        assert_eq!(cmd["response"]["headers"]["X-Test"], "yes");
+        // No request-side override was given.
+        assert!(cmd.get("requestOverride").is_none());
+    }
+
+    #[test]
+    fn test_network_route_request_override() {
+        let cmd = parse_command(
+            &args("network route **/api/* --method POST --set-body hello --set-header A=B --rewrite-url https://x.test/y"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "route");
+        assert_eq!(cmd["requestOverride"]["method"], "POST");
+        assert_eq!(cmd["requestOverride"]["postData"], "hello");
+        assert_eq!(cmd["requestOverride"]["headers"]["A"], "B");
+        assert_eq!(cmd["requestOverride"]["url"], "https://x.test/y");
+        // No response-side mock was given.
+        assert!(cmd.get("response").is_none());
     }
 
     #[test]

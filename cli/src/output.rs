@@ -2493,7 +2493,9 @@ Global Options:
 
 Examples:
   chrome-use network route "**/api/*" --abort
-  chrome-use network route "**/data.json" --body '{"mock": true}'
+  chrome-use network route "**/data.json" --body '{"mock": true}' --status 200 --header X-From=mock
+  chrome-use network route "**/api/save" --method POST --set-body '{"x":1}' --set-header Authorization="Bearer test"
+  chrome-use network route "**/v1/*" --rewrite-url https://staging.example.com/v1/thing
   chrome-use network unroute
   chrome-use network requests
   chrome-use network requests --filter "api"
@@ -3572,7 +3574,10 @@ Browser Settings:  chrome-use set <setting> [value]
   media [dark|light] [reduced-motion]
 
 Network:  chrome-use network <action>
-  route <url> [--abort|--body <json>] [--resource-type <csv>]
+  route <url> [--abort]
+        [--body <s> --status <n> --header K=V --content-type <ct>]   # mock response
+        [--method <M> --set-body <s> --set-header K=V --rewrite-url <u>]  # rewrite request
+        [--resource-type <csv>]
   unroute [url]
   requests [--clear] [--filter <pattern>]
   har <start|stop> [path]
