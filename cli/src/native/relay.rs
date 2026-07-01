@@ -342,13 +342,10 @@ impl RelayState {
                         .and_then(|t| t.as_str())
                         == Some("iframe");
                     if is_oopif {
-                        if let Some(sid) =
-                            inner_params.get("sessionId").and_then(|s| s.as_str())
-                        {
+                        if let Some(sid) = inner_params.get("sessionId").and_then(|s| s.as_str()) {
                             self.oopif_sessions.insert(sid.to_string());
                         }
-                        let mut ev =
-                            json!({ "method": inner_method, "params": inner_params });
+                        let mut ev = json!({ "method": inner_method, "params": inner_params });
                         if let Some(sid) = session_id {
                             ev["sessionId"] = json!(sid);
                         }
@@ -401,8 +398,7 @@ impl RelayState {
                     // forward above.)
                     if let Some(g) = gone {
                         if self.oopif_sessions.remove(g) {
-                            let mut ev =
-                                json!({ "method": inner_method, "params": inner_params });
+                            let mut ev = json!({ "method": inner_method, "params": inner_params });
                             if let Some(sid) = session_id {
                                 ev["sessionId"] = json!(sid);
                             }

@@ -74,9 +74,15 @@ jobs:
     name: Rust (${{ matrix.os }} - ${{ matrix.target }})
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
-    # Fail fast on a hung test instead of running to GitHub's 6h default.
-    timeout-minutes: 30
+    # The x86_64-apple-darwin cross-build on the arm64 macos-latest runner
+    # recompiles every dependency for the foreign target; a cold cache can run
+    # ~31 min and was getting cancelled at the old 30-min cap. Give it headroom
+    # (still far under GitHub's 6h default) so a legit cold build can finish and
+    # warm the cache for later runs.
+    timeout-minutes: 50
     strategy:
+      # Don't cancel the arm64 / windows targets just because one target is slow.
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
