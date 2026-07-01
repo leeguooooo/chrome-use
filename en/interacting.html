@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Interacting · chrome-use</title>
+  <meta name="description" content="Drive a real browser with click, type, fill, check, select, upload, scroll and drag; understand @ref interactions, keyboard events, cross-origin iframes and slider CAPTCHAs." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="interacting" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 40 C20 20 40 20 52 40 M40 30 l12 10 -12 8"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Core Usage</p>
+
+      <div class="du-title-row">
+        <h1>Interacting</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Once you've read the page, it's time to act. This page covers every interaction verb for driving a
+        real browser—<span class="mark">click, type, check, select, upload, scroll, drag</span>.
+        The first argument to most commands is the <code>@ref</code> you got from
+        <code>snapshot -i</code> (e.g. <code>@e42</code>); first <a href="/en/finding.html">find the element</a>,
+        then act on it with the commands here.
+      </p>
+
+      <!-- ============ Clicking &amp; pointer ============ -->
+      <h2>Clicking &amp; pointer</h2>
+      <p>
+        The most-used group of verbs, all acting on a single <code>@ref</code>. <code>click</code> auto-scrolls the
+        element into the viewport, and if the coordinate click is occluded it falls back to the DOM's <code>.click()</code>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">click / hover / focus</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e1                   <span class="du-cmt"># click</span>
+<span class="du-prompt">$</span> chrome-use click @e1 <span class="du-flag">--new-tab</span>         <span class="du-cmt"># open the link in a new tab instead of navigating the current one</span>
+<span class="du-prompt">$</span> chrome-use dblclick @e1                <span class="du-cmt"># double-click</span>
+<span class="du-prompt">$</span> chrome-use hover @e1                   <span class="du-cmt"># hover</span>
+<span class="du-prompt">$</span> chrome-use focus @e1                   <span class="du-cmt"># focus (often used before keyboard input)</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Click succeeds but "nothing happens"?</div>
+        A classic case: an autocomplete/menu <code>&lt;li&gt;</code> closes the moment the input loses focus.
+        Try again with a DOM-dispatched click:
+        <code>AGENT_BROWSER_CLICK_MODE=dom chrome-use click @e1</code>,
+        or just use <code>eval</code> to select that item in the page.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Typing text ============ -->
+      <h2>Typing text</h2>
+      <p>
+        <code>fill</code> clears first and then types, while <code>type</code> appends after the existing content.
+        The default path is <code>insertText</code> (fast), but many fields with autocomplete only react to
+        <strong>real keystrokes</strong>—that's when you add <code>--key-events</code>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">fill / type</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"hello"</span>            <span class="du-cmt"># clear, then type</span>
+<span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">" world"</span>          <span class="du-cmt"># don't clear, just append</span>
+
+<span class="du-cmt"># real keystrokes (not insertText)—for autocomplete/combobox fields that</span>
+<span class="du-cmt"># only respond to key events, e.g. auto-filling city from a postcode (Google Places, etc.)</span>
+<span class="du-prompt">$</span> chrome-use type @e5 <span class="du-str">"201-0001"</span> <span class="du-flag">--key-events</span>
+
+<span class="du-cmt"># real keystrokes plus Enter to submit the candidate (--enter implies --key-events)—</span>
+<span class="du-cmt"># for async autocomplete / tag controls, e.g. Juejin's "add tag"</span>
+<span class="du-prompt">$</span> chrome-use type @e6 <span class="du-str">"ChatGPT"</span> <span class="du-flag">--enter</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ --key-events or --enter?</div>
+        If you just want to <strong>confirm one tag</strong> and plain typing doesn't pop a dropdown, use <code>--enter</code>
+        in a single step. If you'd rather <strong>pick one</strong> from a candidate list, first run
+        <code>type … --key-events</code> to trigger the dropdown, then <code>snapshot -i</code> to find the candidate and
+        <code>click @ref</code>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Keyboard ============ -->
+      <h2>Keyboard</h2>
+      <p>
+        <code>press</code> presses a single key on the current focus (down + up), and also supports key combos.
+        <code>keydown</code>/<code>keyup</code> split the press and release apart, and used as a pair they let you "hold".
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">press / keydown / keyup</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use press Enter                 <span class="du-cmt"># press a key on the current focus</span>
+<span class="du-prompt">$</span> chrome-use press Control+a             <span class="du-cmt"># key combo</span>
+<span class="du-prompt">$</span> chrome-use keydown d                   <span class="du-cmt"># hold a key down (no auto release)</span>
+<span class="du-prompt">$</span> chrome-use keyup d                     <span class="du-cmt"># release—use as a pair to "hold to move"</span>
+                                       <span class="du-cmt"># in a game: keydown d; sleep; keyup d</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ More precise holds in games / Canvas</div>
+        For canvas / WebGL apps, <code>press d --hold 800</code> is better—the hold duration is timed inside the daemon,
+        with ~250ms less jitter per cycle than <code>keydown</code> + shell <code>sleep</code> + <code>keyup</code>. See
+        <a href="/en/canvas.html">Canvas &amp; games</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Check &amp; select ============ -->
+      <h2>Check, select and dropdowns</h2>
+      <p>
+        Checkboxes use <code>check</code>/<code>uncheck</code>. For dropdowns, tell the two kinds apart: native
+        <code>&lt;select&gt;</code> uses <code>select</code>; <strong>any custom combobox</strong>
+        (react-select / ARIA, etc.) uses <code>pick</code>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">check / select / pick</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use check @e3                   <span class="du-cmt"># check a checkbox</span>
+<span class="du-prompt">$</span> chrome-use uncheck @e3                 <span class="du-cmt"># uncheck</span>
+
+<span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"option-value"</span>   <span class="du-cmt"># native &lt;select&gt; only</span>
+<span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"a"</span> <span class="du-str">"b"</span>          <span class="du-cmt"># multi-select</span>
+
+<span class="du-cmt"># any combobox: open it, wait for the menu to appear (including portal-rendered),</span>
+<span class="du-cmt"># match by visible text, dispatch the right events; errors out if the option never</span>
+<span class="du-cmt"># appears (never silently no-ops)</span>
+<span class="du-prompt">$</span> chrome-use pick @e4 <span class="du-flag">--option</span> <span class="du-str">"Europe"</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ select returns ✓ but nothing changed</div>
+        For custom dropdowns, <code>select</code> may return success while nothing actually changed. In that case always
+        switch to <code>pick</code>—it genuinely opens the menu, matches, and dispatches events, and errors clearly when
+        the option doesn't appear.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Uploading files ============ -->
+      <h2>Uploading files</h2>
+      <p>
+        <code>upload</code> feeds a file to a file <code>&lt;input&gt;</code> or to a drop/paste-style editor (like X's
+        composer). It also works over the extension relay.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">upload</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use upload @e5 file1.pdf        <span class="du-cmt"># upload a file</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Why upload works in relay mode too</div>
+        <code>chrome.debugger</code> forbids <code>setFileInputFiles</code>, so the file bytes are streamed into the page
+        and reconstructed there into a <code>File</code> (chunked to native-messaging's 1 MiB cap). That's why both file
+        <code>&lt;input&gt;</code> elements and drop/paste editors receive it.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Scrolling ============ -->
+      <h2>Scrolling</h2>
+      <p>
+        <code>scroll</code> scrolls the page in a direction; <code>scrollintoview</code> scrolls a specific element into
+        the viewport. For content inside cross-origin iframes (payment / checkout / KYC widgets), ordinary page scrolling
+        can't reach it—use <code>--at x,y</code> to wheel at a pixel point, or <code>--frame n</code> to target a frame.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">scroll / scrollintoview</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use scroll down 500              <span class="du-cmt"># scroll the page (up/down/left/right)</span>
+<span class="du-prompt">$</span> chrome-use scroll down 700 <span class="du-flag">--at</span> 640,400  <span class="du-cmt"># wheel at a pixel point—reaches cross-origin iframes</span>
+                                        <span class="du-cmt"># (Stripe/checkout/KYC) that ordinary page scrolling can't</span>
+<span class="du-prompt">$</span> chrome-use scroll down 700 <span class="du-flag">--frame</span> 2    <span class="du-cmt"># scroll frame #2 from `chrome-use frames`</span>
+<span class="du-prompt">$</span> chrome-use scrollintoview @e1           <span class="du-cmt"># scroll the element into the viewport</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Drag &amp; slider CAPTCHA ============ -->
+      <h2>Drag &amp; slider CAPTCHAs</h2>
+      <p>
+        <code>drag</code> can both drop between two refs and drag a handle by a pixel offset (sliders / canvas).
+        For the <strong>NetEase Yidun slider CAPTCHA</strong> common to unattended logins, use <code>solve-slider</code>
+        to pass it automatically.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">drag / solve-slider</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use drag @e1 @e2                <span class="du-cmt"># drag and drop</span>
+<span class="du-prompt">$</span> chrome-use drag @e1 60                 <span class="du-cmt"># drag the handle +60px (slider/canvas); `+60,-3` means dx,dy</span>
+<span class="du-prompt">$</span> chrome-use solve-slider                <span class="du-cmt"># auto-solve the NetEase Yidun slider CAPTCHA on the page</span>
+<span class="du-prompt">$</span> chrome-use solve-slider 5              <span class="du-cmt"># …retry up to 5 times (each failure refreshes the puzzle)</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ How solve-slider passes</div>
+        It fetches the CAPTCHA's own background image + puzzle-piece slice by URL (no screenshot), locates the gap offline
+        via edge + mask cross-correlation, then drags the handle into the gap with a
+        <strong>humanized, self-calibrating closed-loop trajectory</strong>—it's exactly this human-like motion that gets
+        past Yidun's behavioral detection. Both float (inline) and popup (modal, as on Zhihu) modes are supported; just run
+        it right after the submit that triggers the slider. This drag force-enables the humanize trajectory regardless of
+        the global <code>AGENT_BROWSER_HUMANIZE</code>.
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ CAPTCHAs not yet covered</div>
+        Yidun's <strong>enhanced</strong> slider (icon-shaped puzzle pieces + decoys) and <strong>click-select</strong>
+        (click in order) are harder challenges and aren't handled yet.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Cross-origin iframes ============ -->
+      <h2>Cross-origin iframes: always act by ref</h2>
+      <p>
+        Embedded payment / checkout / KYC widgets (Google Payments, Stripe, etc.) are cross-process out-of-process iframes.
+        <strong>Drive them by ref, never by screenshot.</strong>
+        <code>snapshot -i</code> pierces these iframes and lists the elements inside them by <code>@ref</code> (including
+        input values); <code>get text --all-frames</code> reads their text. Once you have the ref, act on it as usual.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">act by ref inside an iframe</span>
+        </div>
+<pre><code><span class="du-cmt"># snapshot -i lists elements inside cross-origin iframes, then:</span>
+<span class="du-prompt">$</span> chrome-use click @e
+<span class="du-prompt">$</span> chrome-use type @e <span class="du-str">"…"</span>
+<span class="du-prompt">$</span> chrome-use hover @e
+<span class="du-prompt">$</span> chrome-use dblclick @e
+<span class="du-prompt">$</span> chrome-use drag @a @b
+
+<span class="du-cmt"># postcode/autocomplete field inside the frame—use real keystrokes:</span>
+<span class="du-prompt">$</span> chrome-use type @e <span class="du-str">"201-0001"</span> <span class="du-flag">--key-events</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Why by ref, not coordinates</div>
+        Over the extension relay, these actions are dispatched via DOM in the element's <strong>own frame</strong>,
+        so they precisely hit the right element in the right tab. Coordinate clicks/scrolls can <strong>drift</strong>
+        onto whatever other tab is currently in the foreground—so prefer refs. When you need to scroll to content further
+        down inside a frame, use <code>scroll down N --at x,y</code> (a pixel point on the frame) or <code>--frame n</code>.
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ find can't reach closed shadow roots or cross-origin iframes</div>
+        <code>find</code>/selectors match the page DOM (<code>querySelectorAll</code>), so for these two kinds of elements
+        they report "Element not found"—even though <code>snapshot -i</code> can list them (it goes through the CDP
+        accessibility tree, which pierces both) and <code>get text</code> can read them. In that case locate by the
+        <code>@ref</code> from the snapshot instead of <code>find</code>; <code>box @ref</code> gives coordinates as a
+        fallback. Also, <strong>verify the exact label text</strong> before concluding an element "doesn't exist":
+        LinkedIn's "Save" button is actually labeled <code>收藏</code>, not <code>保存</code>, and
+        <code>snapshot -i</code> has always shown <code>button "收藏" [ref=eN]</code>—just <code>click @eN</code>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Next ============ -->
+      <h2>Next</h2>
+      <p>Interacting is just one link in the core loop; read it alongside these pages:</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> Finding elements</div>
+          <p>When refs aren't enough, switch to find role/text/label, CSS or coordinates.</p>
+        </a>
+        <a class="du-card" href="/en/waiting.html">
+          <div class="du-card-title"><span class="du-card-ico">⏳</span> Waiting</div>
+          <p>Wait for the page to settle before and after actions, so you don't hit unrendered elements.</p>
+        </a>
+        <a class="du-card" href="/en/canvas.html">
+          <div class="du-card-title"><span class="du-card-ico">🎮</span> Canvas &amp; games</div>
+          <p>Canvas apps with no accessibility tree—drive by coordinates and WebSocket.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>截图·录像·视口 · chrome-use 文档</title>
+  <meta name="description" content="用 chrome-use 抓截图、录制工作流视频、模拟视口尺寸，并处理 iframe 与弹窗对话框——为调试、留档和响应式排查而生。" />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="media" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 44 L20 22 32 38 44 14 52 30" />
+          <rect x="4" y="8" width="52" height="44" rx="4" />
+        </svg>
+      </span>
+
+      <!-- eyebrow = group name -->
+      <p class="du-eyebrow">采集 / Capture</p>
+
+      <!-- title row -->
+      <div class="du-title-row">
+        <h1>截图·录像·视口</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <!-- lede -->
+      <p class="du-lede">
+        这一页讲的是「把浏览器里发生的事变成文件」：抓一张
+        <span class="mark">截图</span>、录一段
+        <span class="mark">工作流视频</span>、把视口缩到手机宽度复现响应式 bug，
+        以及处理挡在中间的 iframe 与弹窗。它们都是<strong>输出</strong>手段——
+        不是用来「找元素、点元素」的。定位和交互请始终走
+        <a href="/interacting.html">snapshot + @ref</a>。
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 硬性规则：截图用于留档，不用于定位</div>
+        永远不要靠「截图 + 坐标点击」去找或命中一个元素——那是 bug。表单字段、按钮、
+        链接都用 <code>snapshot -i</code> 拿到 <code>@ref</code>，它连
+        <strong>跨源 iframe</strong>（内嵌的 Stripe / Google Payments / 结账框）都能穿透。
+        截图只负责把渲染结果<strong>存成可复用的图片资产</strong>（地图、图表、og 图、视觉回归基线、报告插图）。
+      </div>
+
+      <!-- ============ Screenshot ======= -->
+      <h2>截图</h2>
+      <p>
+        <code>screenshot</code> 把当前页面渲染成 PNG。不带路径时存到临时文件并把路径打到
+        stdout；带路径就写到指定位置。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">screenshot.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use screenshot                        <span class="du-cmt"># 临时路径，打印到 stdout</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-str">page.png</span>               <span class="du-cmt"># 指定路径</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--full</span> <span class="du-str">full.png</span>        <span class="du-cmt"># 整个滚动高度</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--annotate</span> <span class="du-str">map.png</span>     <span class="du-cmt"># 编号标注 + 图例，对应 snapshot 的 ref</span></code></pre>
+      </div>
+
+      <p>
+        <code>--full</code> 抓的是整页滚动高度而非只有可视区。
+        <code>--annotate</code> 是给多模态模型看的：每个标签 <code>[N]</code> 对应快照里的
+        <code>@eN</code>，方便把一张图和结构化快照对上号。
+      </p>
+
+      <h3>缩放与裁剪</h3>
+      <p>
+        真实 retina Chrome 的整页截图往往太大、塞不进图片阅读器，所以截图会
+        <strong>自动降采样到最长边 ≤2000px</strong>——这样既能被阅读器读取，像素坐标又能和
+        <code>click x y</code> 对齐。需要时用下面的开关覆盖，或只截某个选择器 / 某块区域：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 只截某个元素 / 某块区域，存成可复用图片资产</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-str">"selector"</span> <span class="du-flag">--clip</span> <span class="du-str">x,y,w,h</span> <span class="du-str">region.png</span>
+
+<span class="du-cmt"># 覆盖默认降采样上限</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--max-width</span> 1600 <span class="du-str">wide.png</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--scale</span> 1 <span class="du-str">sharp.png</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 关于滚动条</div>
+        无头 Chromium 截图会隐藏原生滚动条，保证输出图一致。启动时传
+        <code>--hide-scrollbars false</code> 可以保留可见的原生滚动条。
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 想点一个 ref 点不到的东西？</div>
+        不要靠截图找坐标。用 <code>box @ref</code> 拿到元素的 CSS 像素框和
+        <code>centerX/centerY</code>，直接喂给 <code>click &lt;centerX&gt; &lt;centerY&gt;</code>——全程不需要截图。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Record ======= -->
+      <h2>录制工作流视频</h2>
+      <p>
+        把一整段自动化录成视频，用于调试、写文档或留证据。
+        <code>record start</code> 开始录，中间正常跑你的命令，
+        <code>record stop</code> 结束并落盘。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">record.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use record start <span class="du-str">demo.webm</span>
+<span class="du-prompt">$</span> chrome-use open <span class="du-str">https://example.com</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e3</span>
+<span class="du-prompt">$</span> chrome-use record stop</code></pre>
+      </div>
+
+      <p>还有一个 <code>restart</code> 子命令，等价于「停掉当前录制 + 用新文件开录」：</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use record start <span class="du-str">./output.webm</span>       <span class="du-cmt"># 开始录制到文件</span>
+<span class="du-prompt">$</span> chrome-use record stop                     <span class="du-cmt"># 停止当前录制</span>
+<span class="du-prompt">$</span> chrome-use record restart <span class="du-str">./take2.webm</span>    <span class="du-cmt"># 停当前 + 用新文件重开</span></code></pre>
+      </div>
+
+      <h3>录制的实用做法</h3>
+      <table>
+        <thead>
+          <tr><th>目标</th><th>做法</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>让人看清每一步</td>
+            <td>在关键动作后插 <code>chrome-use wait 500</code>，给观看者反应时间</td>
+          </tr>
+          <tr>
+            <td>文件名带上下文</td>
+            <td><code>login-flow-2024-01-15.webm</code>、<code>checkout-test-run-42.webm</code></td>
+          </tr>
+          <tr>
+            <td>出错也要保住录像</td>
+            <td>用 <code>trap cleanup EXIT</code> 里调 <code>chrome-use record stop</code></td>
+          </tr>
+          <tr>
+            <td>视频 + 关键帧一起留</td>
+            <td>录制的同时在每一步 <code>chrome-use screenshot ./stepN.png</code> 抓帧</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 输出格式与限制</div>
+        默认输出 <strong>WebM</strong>（VP8/VP9 编码），所有现代浏览器与播放器都能放。录制会给自动化带来轻微开销，
+        长录像很占磁盘，个别无头环境可能有编解码限制。编解码选项、GIF 导出等更多细节见
+        <code>references/video-recording.md</code>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Iframes ======= -->
+      <h2>Iframe 作用域</h2>
+      <p>
+        iframe 的内容会自动内联进快照，refs 直接透明可用——通常你什么都不用做：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-cmt"># @e3 [Iframe] "payment-frame"</span>
+<span class="du-cmt">#   @e4 [input] "Card number"</span>
+<span class="du-cmt">#   @e5 [button] "Pay"</span>
+
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">@e4</span> <span class="du-str">"4111111111111111"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e5</span></code></pre>
+      </div>
+
+      <p>
+        当你想把快照<strong>聚焦到某个 iframe</strong>（为了专注，或处理深层嵌套）时，用
+        <code>frame</code> 切换上下文，处理完再 <code>frame main</code> 切回主框架：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use frame <span class="du-str">@e3</span>      <span class="du-cmt"># 把上下文切进这个 iframe</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use frame <span class="du-str">main</span>     <span class="du-cmt"># 切回主框架</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Viewport ======= -->
+      <h2>视口 / 窗口尺寸</h2>
+      <p>
+        要复现<strong>依赖宽度的 bug</strong>（响应式断点、横向溢出排查、移动端布局），先设视口。
+        这是一个 <strong>CDP 虚拟视口</strong>（<code>Emulation.setDeviceMetricsOverride</code>）——
+        它只改这个标签页的布局视口，<strong>不会真的去缩放操作系统窗口</strong>。所以无头能用，
+        走扩展中继（extension relay）时也能用，而不会去拉扯用户真实的 Chrome 窗口。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">viewport.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use viewport 1280 800        <span class="du-cmt"># 设宽 x 高（别名：resize）</span>
+<span class="du-prompt">$</span> chrome-use viewport 375x812         <span class="du-cmt"># WxH 简写</span>
+<span class="du-prompt">$</span> chrome-use viewport 375 812 <span class="du-flag">--dpr</span> 3 <span class="du-flag">--mobile</span>   <span class="du-cmt"># retina + 移动端模拟</span>
+<span class="du-prompt">$</span> chrome-use viewport reset           <span class="du-cmt"># 清除覆盖，恢复真实尺寸</span></code></pre>
+      </div>
+
+      <p>典型用途——找出在窄宽度下是什么撑破了布局：</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use viewport 375 812
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">'document.documentElement.scrollWidth + " vs " + innerWidth'</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 等价别名</div>
+        <code>set viewport &lt;w&gt; &lt;h&gt; [scale]</code> 与 <code>viewport</code> 等价，<code>resize</code> 也是别名——
+        怎么顺手怎么写。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Dialogs ======= -->
+      <h2>弹窗对话框</h2>
+      <p>
+        <code>alert</code> 和 <code>beforeunload</code> 会被<strong>自动接受</strong>，
+        这样 agent 永远不会被弹窗卡住。需要手动处理 <code>confirm</code> 和 <code>prompt</code> 时：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">dialog.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use dialog status          <span class="du-cmt"># 有没有待处理的弹窗？</span>
+<span class="du-prompt">$</span> chrome-use dialog accept           <span class="du-cmt"># 接受</span>
+<span class="du-prompt">$</span> chrome-use dialog accept <span class="du-str">"text"</span>    <span class="du-cmt"># 接受并填入 prompt 内容</span>
+<span class="du-prompt">$</span> chrome-use dialog dismiss          <span class="du-cmt"># 取消</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 什么时候需要它</div>
+        大多数流程不用碰 <code>dialog</code>——原生 <code>alert</code> 已自动放行。只有当页面弹出
+        <code>confirm</code>（「确定要删除吗？」）或 <code>prompt</code>（要求输入一段文本）并阻塞后续操作时，
+        才用 <code>dialog accept</code> / <code>dialog dismiss</code> 明确应答。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>相关页面</h2>
+      <div class="du-cards cols-2">
+        <a class="du-card" href="/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 交互操作</div>
+          <p>click、type、fill 驱动真实浏览器——定位靠这里的 @ref，不靠截图。</p>
+        </a>
+        <a class="du-card" href="/canvas.html">
+          <div class="du-card-title"><span class="du-card-ico">🎨</span> Canvas / WebGL</div>
+          <p>纯像素渲染的 canvas 应用没有 DOM，用捕获 + 坐标来处理。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

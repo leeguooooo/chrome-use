@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Slack · chrome-use</title>
+  <meta name="description" content="Drive a real, logged-in Slack web session with chrome-use: check unreads, navigate channels, search conversations, extract message data — pure browser automation, no Slack API, OAuth, or bot tokens." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="slack" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Advanced / Specialized</p>
+
+      <div class="du-title-row">
+        <h1>Slack automation</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Slack's web app is just a big web app — chrome-use drives it like any other page:
+        <span class="mark">connect to an already-logged-in session</span>, read an accessibility snapshot to get elements with <code>@ref</code>,
+        then check unreads, jump to channels, search conversations, and extract messages. Everything runs through a real browser,
+        <strong>never touching the Slack API, and needing no OAuth, webhooks, or bot tokens</strong>.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ This page is just a quick tour</div>
+        Below are the recipes you'll reach for most often. For the full refs conventions, edge cases, and debugging details,
+        pull up the complete skill doc any time with <code>skills get slack</code>.
+      </div>
+
+      <h2>Quick start</h2>
+      <p>
+        When Slack is already open in the browser, connecting straight to its debug port is fastest — far less hassle than spinning up a new browser.
+        If it isn't open, have chrome-use open the Slack web app.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">connect-or-open.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># Connect to an already-open Slack session (9222 is the common debug port)</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+
+<span class="du-cmt"># Or open the Slack web app from scratch</span>
+<span class="du-prompt">$</span> chrome-use open https://app.slack.com
+
+<span class="du-cmt"># Grab an interactive snapshot to see what's on the page</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ The core loop</div>
+        Connect / navigate → <code>snapshot -i</code> to get elements with refs → click a tab, expand a group, or enter a channel →
+        read data or run an action → <code>screenshot</code> when you need evidence. <strong>Re-snapshot after every navigation</strong>,
+        because refs change as the page changes.
+      </div>
+
+      <h2>Check unread messages</h2>
+      <p>
+        Unreads are scattered across a few places: the "More unreads" button at the top of the sidebar, the unread roundup in the Activity tab,
+        and channel names shown in bold / with a badge. Snapshot first to locate refs, then check them one by one.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">check-unreads.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># Open the Activity tab to see the unread roundup (ref may differ each time)</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e14</span>
+<span class="du-prompt">$</span> chrome-use wait 1000
+<span class="du-prompt">$</span> chrome-use screenshot activity-unreads.png
+
+<span class="du-cmt"># Or expand the sidebar's "More unreads"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e21</span>
+<span class="du-prompt">$</span> chrome-use wait 500
+<span class="du-prompt">$</span> chrome-use screenshot expanded-unreads.png</code></pre>
+      </div>
+
+      <p>To count how many unread channels there are, expand the unread group and count the treeitems:</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">count-unreads.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># After expanding unreads, each treeitem with a channel name counts as one unread</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> | grep -c <span class="du-str">"treeitem"</span></code></pre>
+      </div>
+
+      <h2>Navigate to a channel</h2>
+      <p>
+        After snapshotting, find the channel name in the sidebar list (e.g. <code>engineering</code>, <code>product-design</code>)
+        and click its treeitem ref. Once inside the channel, use <code>wait --load networkidle</code> to let the content finish loading before acting.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">open-channel.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># Click the channel's treeitem (example ref — go by your own snapshot)</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e94</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
+
+<span class="du-cmt"># Scroll down in the message area to load more history</span>
+<span class="du-prompt">$</span> chrome-use scroll down 500
+<span class="du-prompt">$</span> chrome-use screenshot channel-messages.png</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ When the sidebar is long</div>
+        Channel list won't scroll? Scroll inside the sidebar container, not the whole page:
+        <code>chrome-use scroll down 300 --selector ".p-sidebar"</code>.
+      </div>
+
+      <h2>Search conversations</h2>
+      <p>
+        Using Slack's built-in search is the easiest path: click the search button, type the keyword, hit Enter, and wait for results to load.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">search.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e5</span>          <span class="du-cmt"># search button</span>
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">@e_search</span> <span class="du-str">"keyword"</span>
+<span class="du-prompt">$</span> chrome-use press Enter
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
+<span class="du-prompt">$</span> chrome-use screenshot search-results.png</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Extract data</h2>
+      <p>
+        For programmatic parsing, use a JSON snapshot to get a machine-readable accessibility tree; for a single element's text, use <code>get text</code>.
+        For more systematic extraction patterns, see <a href="/en/extract.html">Extract data</a>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">extract.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># Export the whole accessibility tree as JSON for easy parsing</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--json</span> &gt; slack-snapshot.json
+
+<span class="du-cmt"># Get the plain text of a specific message / element</span>
+<span class="du-prompt">$</span> chrome-use get text <span class="du-str">@e_message_ref</span>
+
+<span class="du-cmt"># Current page URL and title, to keep as a reference</span>
+<span class="du-prompt">$</span> chrome-use get url
+<span class="du-prompt">$</span> chrome-use get title</code></pre>
+      </div>
+
+      <p>When parsing the JSON, watch for how these fields map:</p>
+      <table>
+        <thead>
+          <tr><th>What you want</th><th>Where to find it in the snapshot</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Channel name</td><td>the <code>name</code> field of a <code>treeitem</code> (sub-channels are <code>level=2</code>)</td></tr>
+          <tr><td>Message content</td><td><code>listitem</code> / <code>document</code> elements</td></tr>
+          <tr><td>Username</td><td><code>button</code> elements carrying user info</td></tr>
+          <tr><td>Timestamp</td><td><code>link</code> elements carrying time info</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Common refs &amp; sidebar structure</h2>
+      <p>
+        The Slack sidebar is roughly: Threads / Huddles / Drafts &amp; sent / Directories,
+        followed by group headers (Starred, Channels, etc.) with channel treeitems under them, then Direct Messages, Apps,
+        and a "More unreads" button at the bottom. The refs below are common locations, <strong>for reference only — go by your own snapshot</strong>.
+      </p>
+      <div class="du-cards cols-3">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🏠</span> @e12 · Home</div>
+          <p>Home tab (usually).</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">✉️</span> @e13 · DMs</div>
+          <p>Direct messages tab.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔔</span> @e14 · Activity</div>
+          <p>Activity tab, showing the unread count.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> @e5 · Search</div>
+          <p>Search button.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">📥</span> @e21 · More unreads</div>
+          <p>Expands the unread channel list (changes each time).</p>
+        </div>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ refs drift</div>
+        The <code>@e14</code> and <code>@e21</code> written in the docs are just typical values; they change with the session and page state.
+        <strong>Always <code>snapshot -i</code> before you click</strong> — don't hard-code refs.
+      </div>
+
+      <h2>Debugging</h2>
+      <p>
+        This stealth fork disables console/error capture by default — to use <code>console</code> / <code>errors</code>,
+        start the session with <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code>, otherwise they return empty.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">debug.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># You must first start the session with AGENT_BROWSER_CAPTURE_CONSOLE=1</span>
+<span class="du-prompt">$</span> chrome-use console
+<span class="du-prompt">$</span> chrome-use errors
+
+<span class="du-cmt"># When stuck, check the current page state</span>
+<span class="du-prompt">$</span> chrome-use get url
+<span class="du-prompt">$</span> chrome-use get title
+<span class="du-prompt">$</span> chrome-use screenshot page-state.png</code></pre>
+      </div>
+
+      <h2>Caveats</h2>
+      <ul>
+        <li><strong>Pure browser automation</strong>: it doesn't go through the Slack API, so there's no OAuth, webhooks, or bot tokens involved.</li>
+        <li><strong>Session-bound</strong>: screenshots and snapshots are all tied to the current browser session.</li>
+        <li><strong>May get rate-limited</strong>: Slack throttles overly dense actions — add a <code>sleep 1</code> or <code>wait</code> between commands to let the UI catch up.</li>
+        <li><strong>Only your own workspace</strong>: you can't automate across workspaces.</li>
+      </ul>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Related pages</div>
+        The Slack web app is also a kind of Electron desktop app — to drive the desktop client itself, see
+        <a href="/en/electron.html">Electron desktop apps</a>. To connect to the logged-in browser you use day to day, see
+        <a href="/en/real-chrome.html">Drive real Chrome</a>. For basic actions and reading snapshots, see
+        <a href="/en/interacting.html">Interacting</a> and <a href="/en/reading.html">Reading pages</a>,
+        and for waiting strategies see <a href="/en/waiting.html">Waiting &amp; asserting</a>.
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

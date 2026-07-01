@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Extracting Data · chrome-use</title>
+  <meta name="description" content="Turn a page into clean structured data: snapshot --json, get text/attr, custom shapes with eval, site adapters, and the one-shot extract --schema." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="extract" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Core Usage</p>
+
+      <div class="du-title-row">
+        <h1>Extracting Data</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        When what you want is the <span class="mark">data</span> on a page rather than to act on it, don't dump the whole
+        HTML into your context. chrome-use offers a full ladder of extraction techniques from light to heavy: a structured
+        snapshot, precise reads by ref, custom-shaped <code>eval</code>, community site adapters, all the way up to the
+        one-shot <code>extract --schema</code>. This page helps you pick the cheapest one for each kind of page.
+      </p>
+
+      <h2>Pick the cheapest tool first</h2>
+      <p>
+        Driving a real browser is heavy work. chrome-use is only worth starting up when you genuinely need
+        <strong>a logged-in session, interaction, JS rendering, or an anti-bot page</strong>. To read a piece of public,
+        static text, don't open a browser at all. The table below helps you find your case.
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>What you want</th><th>What to use</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Discover what's out there / find sources</td><td><code>WebSearch</code></td></tr>
+          <tr><td>A specific fact on a static or public page</td><td><code>WebFetch</code> or <code>curl</code> (no browser)</td></tr>
+          <tr><td>Structured data from a <strong>known site</strong> (GitHub issues, Reddit/HN search, Bilibili/Twitter feeds), especially when logged in</td><td><code>chrome-use site &lt;name&gt;/&lt;cmd&gt;</code> (see below) — skip snapshot+click</td></tr>
+          <tr><td>Structured data from <strong>any page</strong> (no community adapter) — tables, search results, feed rows, dashboards</td><td><code>chrome-use extract --schema '{rows,fields}'</code> — clean JSON in one call</td></tr>
+          <tr><td>A logged-in session, interaction, JS rendering, or an anti-bot page</td><td><strong>chrome-use</strong> (this tool)</td></tr>
+          <tr><td>A page the user saved earlier / an internal system</td><td><code>chrome-use find-url &lt;keywords&gt;</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Tip</div>
+        Don't hand-craft deep links stuffed with query parameters. A link obtained <strong>through interaction</strong>
+        carries the right hidden context and can pass anti-bot checks; a hand-assembled URL usually does neither.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Structured snapshot: snapshot --json</h2>
+      <p>
+        To make a model reason about page content, the best input is a <strong>structured snapshot</strong>.
+        <code>snapshot -i --json</code> outputs the interactive elements together with their refs as a single line of
+        parseable JSON — compact and stable, ready to feed straight into downstream logic. For how to read the snapshot
+        itself, see <a href="/en/reading.html">Reading Pages</a>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># structured snapshot — best for letting AI reason over page content</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--json</span> &gt; page.json</code></pre>
+      </div>
+
+      <h2>Precise extraction: get text / get attr</h2>
+      <p>
+        Once you already have an <code>@ref</code> from a snapshot, reading by ref is the least effort:
+        <code>get text</code> pulls the visible text, <code>get attr</code> pulls a given attribute (such as a link's
+        <code>href</code>). Refs are reassigned on every <code>snapshot</code>, so snapshot first, then read.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># targeted extraction by ref</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use get text @e5
+<span class="du-prompt">$</span> chrome-use get attr @e10 href</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Note</div>
+        <code>get text</code> also accepts a CSS selector; pair it with switches like <code>--main</code> (body only, skip
+        nav/sidebar) and <code>--pierce</code> (read through closed shadow DOM). For more ways to locate elements, see
+        <a href="/en/finding.html">Finding Elements</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Any shape: extract with eval</h2>
+      <p>
+        For data that needs a custom shape, like tables and lists, a snippet of JavaScript is the most direct:
+        <code>querySelectorAll</code> in the page and map it into the array of objects you want. <code>eval</code> runs in
+        the page's <strong>MAIN world</strong>, so it reads the real DOM directly.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">extract-rows.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># feed the script to eval --stdin via a heredoc</span>
+<span class="du-prompt">$</span> cat &lt;&lt;<span class="du-str">'EOF'</span> | chrome-use eval <span class="du-flag">--stdin</span>
+const rows = document.querySelectorAll("table tbody tr");
+Array.from(rows).map(r =&gt; ({
+  name: r.cells[0].innerText,
+  price: r.cells[1].innerText,
+}));
+EOF</code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Don't cram complex scripts into an inline string</div>
+        Whenever your JS contains quotes, <strong>non-ASCII identifiers/strings (e.g. Chinese)</strong>, or is on the longer
+        side, use <code>eval --stdin</code> (heredoc), <code>eval --file &lt;path&gt;</code>, or <code>eval -b &lt;base64&gt;</code>.
+        Inline <code>chrome-use eval "..."</code> gets mangled by shell escaping and only works for simple ASCII expressions.
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Use --json for array/object results</div>
+        The normal renderer pretty-prints results across multiple lines, which gets shredded the moment you
+        <code>tail</code>/<code>head</code>/pipe it. <strong><code>eval --json</code></strong> outputs a single line of
+        parseable JSON, ready for programmatic consumption.
+      </div>
+
+      <h3>MAIN-world state persists across calls</h3>
+      <p>
+        Because <code>eval</code> runs in the page's MAIN world and <strong>state persists across calls</strong>, a
+        top-level <code>const x</code>/<code>let x</code>/<code>var x</code> in one call collides with the next
+        (<code>SyntaxError: Identifier 'x' has already been declared</code>). The fixes: use non-colliding variable names,
+        assign to <code>window.x</code>, or wrap the whole snippet in an IIFE
+        <code>(() =&gt; { const x = …; return x; })()</code>.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ type/fill don't fire key events</div>
+        <code>type</code>/<code>fill</code> go through CDP <code>insertText</code> — the value lands, but no
+        <code>keydown</code>/<code>keyup</code> is fired. Some type-to-search widgets that depend on key events won't
+        respond; when you need real keystrokes, switch to <code>keyboard type</code> (or key-by-key <code>press</code>).
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Site adapters: the cheapest path to "structured data from site X"</h2>
+      <p>
+        Before you <code>open</code> + <code>snapshot</code> + click your way through GitHub/Reddit/Bilibili, check whether
+        a ready-made <strong>site adapter</strong> exists. An adapter is a small piece of community-written JS that hits the
+        site's own JSON API <em>from your logged-in tab</em> and returns clean structured data — no clicking, no scraping,
+        no screenshots. It's essentially a packaged, per-site <code>eval</code>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use site update                       <span class="du-cmt"># one-time: fetch the adapter pack (~145 commands)</span>
+<span class="du-prompt">$</span> chrome-use site list                         <span class="du-cmt"># what's installed (github/issues, reddit/search…)</span>
+<span class="du-prompt">$</span> chrome-use site info github/issues           <span class="du-cmt"># an adapter's params + which domain it runs on</span>
+<span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># run → JSON (navigates there for you)</span></code></pre>
+      </div>
+
+      <ul>
+        <li>Positional arguments fill the adapter's parameters <strong>in declaration order</strong>; <code>--key value</code>
+          overrides by name.</li>
+        <li>It navigates to the adapter's domain (reusing the current tab if you're already on it), which is why logged-in
+          feeds like <code>bilibili/feed</code> or <code>twitter/…</code> work — they run <strong>as you</strong>.</li>
+        <li>When there's no suitable adapter, fall back to the regular <code>snapshot</code>/<code>eval</code> loop. Adapters
+          come from the <a href="https://github.com/epiral/bb-sites">bb-sites</a> community pack; chrome-use fetches and runs
+          them.</li>
+      </ul>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Auto-hint: see it, use it</div>
+        chrome-use keeps the adapter pack in sync automatically (first use + weekly). When you
+        <code>open</code>/<code>navigate</code>/<code>snapshot</code> a domain that has an adapter, it tells you: a line on
+        stderr, <code>💡 site adapters for &lt;domain&gt;</code>, plus a <code>siteAdapters: {domain, commands}</code> field
+        in <code>--json</code>. <strong>When you see it, prefer the <code>site &lt;name&gt;/&lt;cmd&gt;</code> it lists</strong>
+        over snapshot+click — cheaper, more stable, and already installed.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>One shot: extract --schema</h2>
+      <p>
+        When there's no community adapter and you don't feel like writing <code>eval</code>, use
+        <code>extract --schema</code>: give it a <code>{rows, fields}</code> shape and it extracts tables, search results,
+        feed rows, and dashboards into clean JSON <strong>in a single call</strong> — no N rounds of
+        <code>find</code>/<code>get</code>, and no dumping the whole page's HTML into your context to blow out the window.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># any page: give a {rows, fields} shape, get clean JSON in one call</span>
+<span class="du-prompt">$</span> chrome-use extract <span class="du-flag">--schema</span> <span class="du-str">'{rows,fields}'</span></code></pre>
+      </div>
+
+      <h2>How to choose: a cheat card</h2>
+      <p>The same page of data often has several routes; roughly from cheap to expensive, this is the order.</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> snapshot --json</div>
+          <p>Model reasoning or refs needed → the structured snapshot is most reliable.</p>
+        </a>
+        <a class="du-card" href="/en/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> get text / attr</div>
+          <p>Already have an @ref → grabbing a single value is the least effort.</p>
+        </a>
+        <a class="du-card" href="/en/extract.html">
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> eval / extract</div>
+          <p>Custom shape → use eval; too lazy to write it → extract --schema.</p>
+        </a>
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Reading Pages · chrome-use</title>
+  <meta name="description" content="Get a structured accessibility snapshot with snapshot, read body text across frames with get text, pierce closed shadow DOM, and run eval inside a specific frame — turning the page into an actionable structured view." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="reading" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Core Usage</p>
+
+      <div class="du-title-row">
+        <h1>Reading Pages</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Reading is the starting point of every browser operation. <code>snapshot</code> turns the page into
+        <span class="mark">an accessibility tree with refs</span> — you click and type based on it; <code>get text</code>
+        grabs body text across every frame, piercing even closed shadow DOM. This page makes clear
+        "how to understand a page" so that the interactions that follow are well-aimed.
+      </p>
+
+      <!-- ============ SECTION ======= -->
+      <h2>snapshot: a structured view of the page</h2>
+      <p>
+        <code>snapshot</code> generates the page structure from the accessibility tree. By default it prints the full tree (fairly verbose);
+        in practice you almost always add <code>-i</code>: <span class="mark">keep only interactive elements</span>,
+        each carrying a <code>ref</code>. Pass it as <code>@eN</code> to a following command to act on it.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">snapshot</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot                    <span class="du-cmt"># full tree (verbose)</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                 <span class="du-cmt"># interactive elements only (recommended)</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-u</span>              <span class="du-cmt"># include href url on links</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-c</span>              <span class="du-cmt"># compact: drop empty structural nodes</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-d</span> 3            <span class="du-cmt"># depth limit of 3 levels</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--json</span>             <span class="du-cmt"># machine-readable output</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Tip</div>
+        Start with <code>snapshot -i</code> by default. It's small, contains only what you can act on,
+        and gives stable, usable <code>@ref</code> values — the proper entry point for driving clicks and typing.
+      </div>
+
+      <h3>Reading snapshot's output</h3>
+      <p>The output is an indented accessibility tree, where indentation represents nesting depth:</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">snapshot -i · example output</span>
+        </div>
+<pre><code>Page: Example - Log in
+URL: https://example.com/login
+
+- heading "Log in" [level=1, ref=e1]
+- textbox "Email" [ref=e2]
+- textbox "Password" [ref=e3]
+- button "Continue" [ref=e4]
+- link "Forgot password?" [ref=e5]</code></pre>
+      </div>
+
+      <p>
+        Each line has the format <code>- &lt;role&gt; "&lt;accessible name&gt;" [&lt;attributes&gt;, ref=eN]</code>.
+        Pass the <code>ref</code> as <code>@eN</code> to a command to act on it, for example
+        <code>click @e4</code>.
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Note: refs are reassigned every time</div>
+        <code>ref</code> values are renumbered on every <code>snapshot</code>. Don't cache an old
+        <code>@eN</code> and reuse it across operations — after the page changes, run <code>snapshot</code> again first and grab the new ref.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Filtering a huge snapshot</h2>
+      <p>
+        Synology DSM, NAS / router admin panels, and ExtJS apps render many independent "application windows"
+        into a single accessibility tree, and <code>snapshot -i</code> can easily blow past the token limit and
+        bury the control you want. <span class="mark">Don't pipe to <code>tail</code></span> — narrow it precisely with filters.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">filter / narrow</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span>              <span class="du-cmt"># scope to one container with a CSS selector</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-f</span> <span class="du-str">"SSH|端口|应用"</span>    <span class="du-cmt"># keep matching lines + their ancestors (regex)</span></code></pre>
+      </div>
+
+      <p>
+        <code>-f/--filter &lt;regex&gt;</code> keeps only the matching lines plus their ancestor context,
+        with <span class="mark">refs intact</span>; <code>-s &lt;css&gt;</code> scopes the whole tree to one
+        window's container. The two can be stacked.
+      </p>
+
+      <h3>Validation errors show up too</h3>
+      <p>
+        When a form refuses to submit, the reason is appended to the <code>-i</code> output as a top-level
+        <code>alert</code> line, for example <code>- alert "字数已超过 8 个字"</code> or
+        <code>- alert "Email is required"</code> — even when the message is just a styled
+        <code>&lt;span&gt;</code> (<code>.is-error</code>, <code>.invalid-feedback</code>,
+        <code>[role=alert]</code>, <code>aria-live</code>) that <code>-i</code> would otherwise filter out as a
+        non-interactive element.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Note</div>
+        These <code>alert</code> lines are <strong>informational</strong> and deliberately carry no ref (you read it, you don't click it).
+        So when a <code>click</code> submission does nothing, don't guess the reason — just run
+        <code>snapshot -i</code> again and read those <code>alert</code> lines.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>get text: reading body text unstructured</h2>
+      <p>
+        When you don't need a ref and just want to read text, use <code>get text</code>. It can read the whole page, a single element,
+        skip navigation boilerplate, and even pierce closed shadow DOM.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">get</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use get text                    <span class="du-cmt"># whole page — aggregates all frames by default (see below)</span>
+<span class="du-prompt">$</span> chrome-use get text @e1                <span class="du-cmt"># visible text of a single element (a CSS selector works too)</span>
+<span class="du-prompt">$</span> chrome-use get text <span class="du-flag">--main</span>             <span class="du-cmt"># body only — skips nav / header / sidebar</span>
+<span class="du-prompt">$</span> chrome-use get text <span class="du-flag">--pierce</span>           <span class="du-cmt"># pierce closed shadow DOM (injected panels)</span>
+<span class="du-prompt">$</span> chrome-use frames                      <span class="du-cmt"># list each frame + where the text lives</span>
+<span class="du-prompt">$</span> chrome-use get html @e1                <span class="du-cmt"># innerHTML</span>
+<span class="du-prompt">$</span> chrome-use get attr @e1 href           <span class="du-cmt"># any attribute</span>
+<span class="du-prompt">$</span> chrome-use get value @e1               <span class="du-cmt"># value of an input</span>
+<span class="du-prompt">$</span> chrome-use get title                   <span class="du-cmt"># page title</span>
+<span class="du-prompt">$</span> chrome-use get url                     <span class="du-cmt"># current URL</span>
+<span class="du-prompt">$</span> chrome-use get count <span class="du-str">".item"</span>           <span class="du-cmt"># count matching elements</span></code></pre>
+      </div>
+
+      <h3>Whole-page text spans frames by default</h3>
+      <p>
+        <code>chrome-use get text</code> without a selector aggregates the visible text of <strong>every</strong> frame
+        — the top-level document, same-process child frames, and cross-origin iframes — so you <span class="mark">won't silently miss</span>
+        content hidden inside an iframe (Yahoo Auctions / Rakuten / Mercari product descriptions, embedded checkout / spec frames).
+        Each child frame is delimited by a <code>----- frame [kind] url -----</code> marker. You don't need to remember any flag;
+        it reads all frames by default (<code>--all-frames</code> remains as an explicit alias).
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ When text looks missing or wrong</div>
+        Don't guess — just run <code>chrome-use get text</code> to read everything. To <strong>see</strong> the structure (which frame
+        holds what), run <code>chrome-use frames</code>; to <strong>strip boilerplate</strong> (global nav/header/footer,
+        "related products" sidebars), use <code>get text --main</code>. If the content is lazy-loaded, first
+        <a href="/en/interacting.html">scroll</a> it into view before reading.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>eval: running inside a specific frame</h2>
+      <p>
+        <code>eval</code> runs in the <strong>main frame</strong> by default. It won't silently bind to whatever frame
+        Chrome happens to return — a bare <code>eval</code> always targets the top-level document. To run inside a child frame
+        (for example a cross-origin Google account picker), use
+        <code>--frame &lt;index|url-substring|@ref|css-selector&gt;</code>
+        (index / url come from <code>chrome-use frames</code>).
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">eval --frame</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use frames                                       <span class="du-cmt"># get the index / url first</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-flag">--frame</span> accounts.google.com <span class="du-str">"location.href"</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ main world vs. isolated world</div>
+        A cross-origin (cross-process) frame runs in its own <strong>main world</strong>; a same-process in-page frame
+        runs in an <strong>isolated world</strong> (the DOM is readable, but the page JS's global variables are not).
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Piercing closed shadow DOM</h2>
+      <p>
+        Some injected UIs (a browser extension's debug panel, Web Components) render into a
+        <em>closed</em> shadow root that <code>eval</code> / <code>innerText</code> can't read.
+        <code>chrome-use get text --pierce</code> reads through closed shadow roots and child documents via CDP's DOM tree
+        — use it when the content is clearly on screen (a screenshot shows it) but <code>get text</code> /
+        <code>eval</code> returns empty.
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Clicking such controls is good news</div>
+        <code>snapshot -i</code> is built from the accessibility tree, and the AX tree <strong>already pierces</strong>
+        closed shadow roots — a closed-shadow <code>&lt;button&gt;</code> /
+        <code>[role=button]</code> shows up as an ordinary <code>@ref</code> and clicks as usual.
+        Only a <strong>semantically empty</strong> clickable <code>&lt;div&gt;</code> inside a closed root
+        can dodge both the AX tree and the cursor-element scan.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Next steps</h2>
+      <p>Once you understand the page, take those refs and text and do something with them.</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Interacting</div>
+          <p>Drive click, type, fill, and scroll with <code>@ref</code>.</p>
+        </a>
+        <a class="du-card" href="/en/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> Finding Elements</div>
+          <p>When a snapshot is too big, use find to pinpoint the target.</p>
+        </a>
+        <a class="du-card" href="/en/extract.html">
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> Extracting Data</div>
+          <p>Scrape what you read into structured JSON.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

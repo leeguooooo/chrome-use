@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Electron Apps · chrome-use docs</title>
+  <meta name="description" content="Automate any Electron desktop app with chrome-use over the Chrome DevTools Protocol — Slack, VS Code, Discord, Figma, Notion, Spotify. Launch with a debug port, connect, explore via snapshot, interact by ref." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="electron" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Desktop Apps</p>
+
+      <div class="du-title-row">
+        <h1>Electron Apps</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Slack, VS Code, Discord, Figma, Notion, Spotify — these desktop apps are really just <span class="mark">Chromium in a shell</span>: they're all built on Electron.
+        Launch them with <code>--remote-debugging-port</code> and chrome-use can attach exactly like it would to a web page:
+        the same <a href="/en/core-loop.html">snapshot → interact → snapshot again</a> loop, the same <code>@ref</code> targeting.
+      </p>
+
+      <h2>The core flow</h2>
+      <p>
+        Automating an Electron app is just five steps: <strong>launch</strong> (with remote debugging) → <strong>connect</strong> to the CDP port →
+        <strong>snapshot</strong> to discover interactive elements → <strong>interact</strong> by ref → <strong>snapshot again</strong> after the state changes.
+        It's barely any different from driving an ordinary web page.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · a full run</span>
+        </div>
+<pre><code><span class="du-cmt"># launch the Electron app with a remote debugging port</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Slack"</span> --args <span class="du-flag">--remote-debugging-port</span>=9222
+
+<span class="du-cmt"># attach chrome-use to that app</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+
+<span class="du-cmt"># from here it's the standard workflow</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click @e5
+<span class="du-prompt">$</span> chrome-use screenshot slack-desktop.png</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Launch the app with CDP</h2>
+      <p>
+        Every Electron app supports <code>--remote-debugging-port</code>, because it's a built-in Chromium capability.
+        Here's how to launch on all three platforms — assign a different port to each app and you can drive several at once.
+      </p>
+
+      <h3>macOS</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · macOS</span>
+        </div>
+<pre><code><span class="du-cmt"># Slack</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Slack"</span> --args <span class="du-flag">--remote-debugging-port</span>=9222
+
+<span class="du-cmt"># VS Code</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Visual Studio Code"</span> --args <span class="du-flag">--remote-debugging-port</span>=9223
+
+<span class="du-cmt"># Discord</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Discord"</span> --args <span class="du-flag">--remote-debugging-port</span>=9224
+
+<span class="du-cmt"># Figma</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Figma"</span> --args <span class="du-flag">--remote-debugging-port</span>=9225
+
+<span class="du-cmt"># Notion</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Notion"</span> --args <span class="du-flag">--remote-debugging-port</span>=9226
+
+<span class="du-cmt"># Spotify</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Spotify"</span> --args <span class="du-flag">--remote-debugging-port</span>=9227</code></pre>
+      </div>
+
+      <h3>Linux</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · Linux</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> slack <span class="du-flag">--remote-debugging-port</span>=9222
+<span class="du-prompt">$</span> code <span class="du-flag">--remote-debugging-port</span>=9223
+<span class="du-prompt">$</span> discord <span class="du-flag">--remote-debugging-port</span>=9224</code></pre>
+      </div>
+
+      <h3>Windows</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · Windows</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> <span class="du-str">"C:\Users\%USERNAME%\AppData\Local\slack\slack.exe"</span> <span class="du-flag">--remote-debugging-port</span>=9222
+<span class="du-prompt">$</span> <span class="du-str">"C:\Users\%USERNAME%\AppData\Local\Programs\Microsoft VS Code\Code.exe"</span> <span class="du-flag">--remote-debugging-port</span>=9223</code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ When the app is already running</div>
+        <code>--remote-debugging-port</code> has to be present the moment the app launches. If the app is already open, <strong>quit</strong> it first, then relaunch it with the flag — otherwise you won't be able to connect.
+      </div>
+
+      <h2>Connecting</h2>
+      <p>
+        There are three ways to connect: <code>connect &lt;port&gt;</code> directly, <code>--cdp</code> on each command, or let it auto-discover.
+        Once you've run <code>connect</code>, every subsequent command automatically targets that app — no need to repeat the port.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · three ways to connect</span>
+        </div>
+<pre><code><span class="du-cmt"># connect to a specific port</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+
+<span class="du-cmt"># or use --cdp on each command</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--cdp</span> 9222 snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># auto-discover a running Chromium-based app</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--auto-connect</span> snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <h2>Windows and tab management</h2>
+      <p>
+        Electron apps often have multiple windows or webviews. Use the <code>tab</code> command to list and switch between these targets.
+        Note that tab ids look like <code>t1</code>, <code>t2</code> — they <strong>don't accept bare integers</strong>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · tab</span>
+        </div>
+<pre><code><span class="du-cmt"># list all available targets (windows, webviews, etc.)</span>
+<span class="du-prompt">$</span> chrome-use tab
+
+<span class="du-cmt"># switch to a tab by id (t1, t2 …; integers not accepted)</span>
+<span class="du-prompt">$</span> chrome-use tab t2
+
+<span class="du-cmt"># switch by URL pattern</span>
+<span class="du-prompt">$</span> chrome-use tab <span class="du-flag">--url</span> <span class="du-str">"*settings*"</span></code></pre>
+      </div>
+
+      <h2>Webview support</h2>
+      <p>
+        Electron <code>&lt;webview&gt;</code> elements are discovered automatically and can be driven like any ordinary page.
+        They show up in the <code>tab</code> list as independent targets, with type <code>type: "webview"</code>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · webview</span>
+        </div>
+<pre><code><span class="du-cmt"># connect to the running Electron app</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+
+<span class="du-cmt"># list targets — webviews appear alongside pages</span>
+<span class="du-prompt">$</span> chrome-use tab
+<span class="du-cmt">#   0: [page]    Slack - Main Window     https://app.slack.com/</span>
+<span class="du-cmt">#   1: [webview] Embedded Content        https://example.com/widget</span>
+
+<span class="du-cmt"># switch to a webview</span>
+<span class="du-prompt">$</span> chrome-use tab t1
+
+<span class="du-cmt"># interact as usual</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click @e3
+<span class="du-prompt">$</span> chrome-use screenshot webview.png</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Note</div>
+        Webview support works over the raw CDP connection — no extra configuration needed. As long as it shows up in the <code>tab</code> list, you can drive it.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Common patterns</h2>
+      <p>Here are a few combinations you'll reach for again and again on desktop apps. They all reuse the verbs you already know from web automation.</p>
+
+      <h3>Explore and navigate</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · inspect + navigate</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> open -a <span class="du-str">"Slack"</span> --args <span class="du-flag">--remote-debugging-port</span>=9222
+<span class="du-prompt">$</span> sleep 3  <span class="du-cmt"># wait for the app to start</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-cmt"># read the snapshot output and identify UI elements</span>
+<span class="du-prompt">$</span> chrome-use click @e10  <span class="du-cmt"># jump to a section</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>  <span class="du-cmt"># snapshot again after navigating</span></code></pre>
+      </div>
+
+      <h3>Screenshots</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · screenshot</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use screenshot app-state.png
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--full</span> full-app.png
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--annotate</span> annotated-app.png</code></pre>
+      </div>
+
+      <h3>Extract data</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · extract</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use get text @e5
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--json</span> &gt; app-state.json</code></pre>
+      </div>
+
+      <h3>Fill a form</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · fill</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use fill @e3 <span class="du-str">"search query"</span>
+<span class="du-prompt">$</span> chrome-use press Enter
+<span class="du-prompt">$</span> chrome-use wait 1000
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <h3>Drive several apps at once</h3>
+      <p>
+        Use <strong>named sessions</strong> to control several Electron apps simultaneously without them interfering with each other. See <a href="/en/sessions.html">Sessions &amp; concurrency</a>.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · --session</span>
+        </div>
+<pre><code><span class="du-cmt"># connect Slack</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> slack connect 9222
+
+<span class="du-cmt"># connect VS Code</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> vscode connect 9223
+
+<span class="du-cmt"># interact with each independently</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> slack snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> vscode snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Color scheme (dark mode)</h2>
+      <p>
+        When you connect over CDP, the default color scheme may be <code>light</code>. If you want to keep the app's dark mode, use <code>--color-scheme dark</code>,
+        or set it globally with an environment variable.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · color-scheme</span>
+        </div>
+<pre><code><span class="du-cmt"># keep dark for a single command</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--color-scheme</span> dark snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># or set it globally</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_COLOR_SCHEME=dark chrome-use connect 9222</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Troubleshooting</h2>
+
+      <h3>"Connection refused" / can't connect</h3>
+      <ul>
+        <li>Confirm the app was launched with <code>--remote-debugging-port=NNNN</code></li>
+        <li>If the app was already running, quit it and relaunch with the flag</li>
+        <li>Check the port isn't taken by another process: <code>lsof -i :9222</code></li>
+      </ul>
+
+      <h3>App launched but connect fails</h3>
+      <ul>
+        <li>Wait a few seconds after launch before connecting (<code>sleep 3</code>)</li>
+        <li>Some apps need time to initialize their webviews</li>
+      </ul>
+
+      <h3>An element isn't showing up in the snapshot</h3>
+      <ul>
+        <li>The app may use multiple webviews. Use <code>chrome-use tab</code> to list targets and switch to the right one</li>
+      </ul>
+
+      <h3>Can't type into an input</h3>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Two workarounds</div>
+        <ul style="margin:6px 0 0;">
+          <li>Use <code>chrome-use keyboard type "text"</code> to type at the current focus without a selector</li>
+          <li>Some Electron apps use custom input components — use <code>chrome-use keyboard inserttext "text"</code> to bypass key events</li>
+        </ul>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Supported apps</h2>
+      <p>Any app built with Electron supports <code>--remote-debugging-port</code> and can be automated by chrome-use. Common ones include:</p>
+
+      <div class="du-cards cols-3">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">💬</span> Communication</div>
+          <p>Slack, Discord, Microsoft Teams, Signal, Telegram Desktop</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🛠️</span> Development</div>
+          <p>VS Code, GitHub Desktop, Postman, Insomnia</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🎨</span> Design</div>
+          <p>Figma, Notion, Obsidian</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🎵</span> Media</div>
+          <p>Spotify, Tidal</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">✅</span> Productivity</div>
+          <p>Todoist, Linear, 1Password</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> Keep reading</div>
+          <p><a href="/en/reading.html">Reading a page</a> · <a href="/en/core-loop.html">The core loop</a></p>
+        </div>
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

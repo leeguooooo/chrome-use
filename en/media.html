@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Screenshots, Video &amp; Viewport · chrome-use</title>
+  <meta name="description" content="Use chrome-use to grab screenshots, record workflow videos, emulate viewport sizes, and handle iframes and dialogs — built for debugging, archiving, and responsive-layout triage." />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="media" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 44 L20 22 32 38 44 14 52 30" />
+          <rect x="4" y="8" width="52" height="44" rx="4" />
+        </svg>
+      </span>
+
+      <!-- eyebrow = group name -->
+      <p class="du-eyebrow">Core Usage</p>
+
+      <!-- title row -->
+      <div class="du-title-row">
+        <h1>Screenshots, Video &amp; Viewport</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <!-- lede -->
+      <p class="du-lede">
+        This page is about turning what happens in the browser into files: grab a
+        <span class="mark">screenshot</span>, record a
+        <span class="mark">workflow video</span>, shrink the viewport to phone width to reproduce a responsive bug,
+        and deal with iframes and dialogs that get in the way. These are all <strong>output</strong> tools —
+        not for "finding elements and clicking them." For locating and interacting, always go through
+        <a href="/en/interacting.html">snapshot + @ref</a>.
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Hard rule: screenshots are for archiving, not for locating</div>
+        Never rely on "screenshot + coordinate click" to find or hit an element — that's a bug. For form fields, buttons, and
+        links, use <code>snapshot -i</code> to get a <code>@ref</code>, which pierces even
+        <strong>cross-origin iframes</strong> (embedded Stripe / Google Payments / checkout frames).
+        Screenshots only exist to <strong>save the rendered result as a reusable image asset</strong> (maps, charts, og images, visual-regression baselines, report illustrations).
+      </div>
+
+      <!-- ============ Screenshot ======= -->
+      <h2>Screenshots</h2>
+      <p>
+        <code>screenshot</code> renders the current page to PNG. With no path, it saves to a temp file and prints the path to
+        stdout; with a path, it writes to the location you give.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">screenshot.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use screenshot                        <span class="du-cmt"># temp path, printed to stdout</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-str">page.png</span>               <span class="du-cmt"># specific path</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--full</span> <span class="du-str">full.png</span>        <span class="du-cmt"># entire scroll height</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--annotate</span> <span class="du-str">map.png</span>     <span class="du-cmt"># numbered labels + legend, mapped to snapshot refs</span></code></pre>
+      </div>
+
+      <p>
+        <code>--full</code> captures the full scroll height rather than just the visible area.
+        <code>--annotate</code> is for multimodal models: each label <code>[N]</code> maps to
+        <code>@eN</code> in the snapshot, making it easy to line up an image with the structured snapshot.
+      </p>
+
+      <h3>Scaling and clipping</h3>
+      <p>
+        Full-page screenshots from a real retina Chrome are often too large to fit into an image reader, so screenshots are
+        <strong>automatically downsampled to a longest edge of ≤2000px</strong> — this keeps them readable while pixel coordinates stay aligned with
+        <code>click x y</code>. Override with the flags below when needed, or capture just one selector / region:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># capture just an element / region, saved as a reusable image asset</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-str">"selector"</span> <span class="du-flag">--clip</span> <span class="du-str">x,y,w,h</span> <span class="du-str">region.png</span>
+
+<span class="du-cmt"># override the default downsample cap</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--max-width</span> 1600 <span class="du-str">wide.png</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--scale</span> 1 <span class="du-str">sharp.png</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ About scrollbars</div>
+        Headless Chromium hides native scrollbars in screenshots to keep output consistent. Pass
+        <code>--hide-scrollbars false</code> at launch to keep the visible native scrollbars.
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Want to click something a ref can't reach?</div>
+        Don't use a screenshot to find coordinates. Use <code>box @ref</code> to get the element's CSS pixel box and
+        <code>centerX/centerY</code>, then feed those straight into <code>click &lt;centerX&gt; &lt;centerY&gt;</code> — no screenshot needed at any point.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Record ======= -->
+      <h2>Recording workflow videos</h2>
+      <p>
+        Record a whole automation run as video, for debugging, documentation, or evidence.
+        <code>record start</code> begins recording, you run your commands as usual in between, and
+        <code>record stop</code> ends it and writes to disk.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">record.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use record start <span class="du-str">demo.webm</span>
+<span class="du-prompt">$</span> chrome-use open <span class="du-str">https://example.com</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e3</span>
+<span class="du-prompt">$</span> chrome-use record stop</code></pre>
+      </div>
+
+      <p>There's also a <code>restart</code> subcommand, equivalent to "stop the current recording + start a new one to a new file":</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use record start <span class="du-str">./output.webm</span>       <span class="du-cmt"># start recording to a file</span>
+<span class="du-prompt">$</span> chrome-use record stop                     <span class="du-cmt"># stop the current recording</span>
+<span class="du-prompt">$</span> chrome-use record restart <span class="du-str">./take2.webm</span>    <span class="du-cmt"># stop current + reopen to a new file</span></code></pre>
+      </div>
+
+      <h3>Practical recording tips</h3>
+      <table>
+        <thead>
+          <tr><th>Goal</th><th>How</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Make each step clear to watch</td>
+            <td>Insert <code>chrome-use wait 500</code> after key actions to give viewers time to react</td>
+          </tr>
+          <tr>
+            <td>Put context in the filename</td>
+            <td><code>login-flow-2024-01-15.webm</code>, <code>checkout-test-run-42.webm</code></td>
+          </tr>
+          <tr>
+            <td>Keep the recording even on error</td>
+            <td>Call <code>chrome-use record stop</code> inside <code>trap cleanup EXIT</code></td>
+          </tr>
+          <tr>
+            <td>Keep video + key frames together</td>
+            <td>While recording, grab a frame at each step with <code>chrome-use screenshot ./stepN.png</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Output format and limits</div>
+        The default output is <strong>WebM</strong> (VP8/VP9 codec), which every modern browser and player can play. Recording adds slight overhead to automation,
+        long recordings take a lot of disk, and some headless environments may have codec restrictions. For codec options, GIF export, and more, see
+        <code>references/video-recording.md</code>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Iframes ======= -->
+      <h2>Iframe scope</h2>
+      <p>
+        Iframe content is automatically inlined into the snapshot, and refs are transparently usable — usually you don't have to do anything:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-cmt"># @e3 [Iframe] "payment-frame"</span>
+<span class="du-cmt">#   @e4 [input] "Card number"</span>
+<span class="du-cmt">#   @e5 [button] "Pay"</span>
+
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">@e4</span> <span class="du-str">"4111111111111111"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e5</span></code></pre>
+      </div>
+
+      <p>
+        When you want to <strong>focus the snapshot on a specific iframe</strong> (for concentration, or to handle deep nesting), use
+        <code>frame</code> to switch context, then <code>frame main</code> to switch back to the main frame when done:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use frame <span class="du-str">@e3</span>      <span class="du-cmt"># switch context into this iframe</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use frame <span class="du-str">main</span>     <span class="du-cmt"># switch back to the main frame</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Viewport ======= -->
+      <h2>Viewport / window size</h2>
+      <p>
+        To reproduce <strong>width-dependent bugs</strong> (responsive breakpoints, horizontal-overflow triage, mobile layouts), set the viewport first.
+        This is a <strong>CDP virtual viewport</strong> (<code>Emulation.setDeviceMetricsOverride</code>) —
+        it only changes this tab's layout viewport, and <strong>does not actually resize the OS window</strong>. So it works headless,
+        and it works over the extension relay, without yanking around the user's real Chrome window.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">viewport.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use viewport 1280 800        <span class="du-cmt"># set width x height (alias: resize)</span>
+<span class="du-prompt">$</span> chrome-use viewport 375x812         <span class="du-cmt"># WxH shorthand</span>
+<span class="du-prompt">$</span> chrome-use viewport 375 812 <span class="du-flag">--dpr</span> 3 <span class="du-flag">--mobile</span>   <span class="du-cmt"># retina + mobile emulation</span>
+<span class="du-prompt">$</span> chrome-use viewport reset           <span class="du-cmt"># clear the override, restore real size</span></code></pre>
+      </div>
+
+      <p>A typical use — find out what's blowing out the layout at a narrow width:</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use viewport 375 812
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">'document.documentElement.scrollWidth + " vs " + innerWidth'</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Equivalent aliases</div>
+        <code>set viewport &lt;w&gt; &lt;h&gt; [scale]</code> is equivalent to <code>viewport</code>, and <code>resize</code> is an alias too —
+        write whichever feels natural.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Dialogs ======= -->
+      <h2>Dialogs</h2>
+      <p>
+        <code>alert</code> and <code>beforeunload</code> are <strong>automatically accepted</strong>,
+        so the agent never gets stuck on a popup. When you need to handle <code>confirm</code> and <code>prompt</code> manually:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">dialog.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use dialog status          <span class="du-cmt"># is there a pending dialog?</span>
+<span class="du-prompt">$</span> chrome-use dialog accept           <span class="du-cmt"># accept</span>
+<span class="du-prompt">$</span> chrome-use dialog accept <span class="du-str">"text"</span>    <span class="du-cmt"># accept and fill in the prompt text</span>
+<span class="du-prompt">$</span> chrome-use dialog dismiss          <span class="du-cmt"># cancel</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ When you need it</div>
+        Most flows never touch <code>dialog</code> — native <code>alert</code> is already auto-accepted. Only when a page pops a
+        <code>confirm</code> ("Are you sure you want to delete?") or a <code>prompt</code> (asking for text) and blocks what follows do you
+        use <code>dialog accept</code> / <code>dialog dismiss</code> to respond explicitly.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Related pages</h2>
+      <div class="du-cards cols-2">
+        <a class="du-card" href="/en/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Interacting</div>
+          <p>click, type, fill drive a real browser — locate via the @ref here, not via screenshots.</p>
+        </a>
+        <a class="du-card" href="/en/canvas.html">
+          <div class="du-card-title"><span class="du-card-ico">🎨</span> Canvas / WebGL</div>
+          <p>Pure-pixel canvas apps have no DOM; handle them with capture + coordinates.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

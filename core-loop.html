@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>核心循环 · chrome-use 文档</title>
+  <meta name="description" content="chrome-use 的基本节奏：open → snapshot -i → click / type → 再 snapshot。理解 @ref 何时失效、何时自愈，以及为什么永远快照优先、绝不靠截图定位；结构化与 eval 两条驱动路径何时切换。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="core-loop" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
+      </span>
+
+      <p class="du-eyebrow">开始 / Getting Started</p>
+
+      <div class="du-title-row">
+        <h1>核心循环</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        驱动浏览器完成一件事，节奏几乎永远是这四步：<span class="mark">打开页面 → 看清页面上有什么 → 对着快照给出的 @ref 动手 → 页面一变就重新快照</span>。
+        把这个循环跑顺，再理解 <code>@ref</code> 何时失效、何时自愈，你就掌握了 chrome-use 九成的日常用法。
+      </p>
+
+      <!-- ============ THE LOOP ============ -->
+      <h2>四步循环</h2>
+      <p>
+        每一步都对着上一步的结果做决定：<code>snapshot -i</code> 给你一份只含可交互元素的结构化视图，
+        每个元素带一个短 <code>@ref</code>；你拿 ref 去 <code>click</code> / <code>type</code>；页面一旦变化，就再快照一次拿到新的 ref。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">core loop</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open &lt;url&gt;        <span class="du-cmt"># 1. 打开一个页面</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>       <span class="du-cmt"># 2. 看清页面上有什么（只列可交互元素）</span>
+<span class="du-prompt">$</span> chrome-use click @e3         <span class="du-cmt"># 3. 对着快照给出的 ref 动手</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>       <span class="du-cmt"># 4. 页面一变，就重新快照</span></code></pre>
+      </div>
+
+      <p>
+        浏览器在多条命令之间保持运行，所以这些命令感觉像同一个会话。完事后用 <code>chrome-use close</code>
+        （或 <code>close --all</code>）收尾。想更细地读页面、找元素、做交互，分别见
+        <a href="/reading.html">读取页面</a>、<a href="/finding.html">定位元素</a>、<a href="/interacting.html">交互操作</a>。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 一个完整的小例子</div>
+        搜索、点结果、截图——就是这个循环在跑：
+      </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">search → click → capture</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://duckduckgo.com
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># 找到搜索框的 ref</span>
+<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"chrome-use cli"</span>
+<span class="du-prompt">$</span> chrome-use press Enter
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># 现在的 ref 反映的是搜索结果</span>
+<span class="du-prompt">$</span> chrome-use click @e5                        <span class="du-cmt"># 点一个结果</span>
+<span class="du-prompt">$</span> chrome-use screenshot result.png</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ REFS STALE ============ -->
+      <h2>@ref 会失效：页面一变就重新快照</h2>
+      <p>
+        Ref（<code>@e1</code>、<code>@e2</code> …）在<strong>每次 snapshot 时重新分配</strong>。
+        它们会在<strong>页面变化的那一刻失效</strong>——导航的点击、表单提交、动态重渲染、弹窗打开之后都可能失效。
+        所以在一次<em>导航</em>或结构性变化之后、下一次用 ref 交互之前，先重新快照。
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ "Ref not found" / "Element not found: @eN"</div>
+        这几乎总是同一个原因：快照之后页面变了。别猜——重新 <code>chrome-use snapshot -i</code> 一次，用新的 ref。
+      </div>
+
+      <!-- ============ REFS SELF-HEAL ============ -->
+      <h2>@ref 也会自愈：不必为每次微小 DOM 变动都重新快照</h2>
+      <p>
+        每个 ref 都记录了一个指纹——<strong>role + 可访问名称 + 祖先路径</strong>。当你使用它时，如果原节点已经不在，
+        chrome-use 会自动在<em>当前</em>页面上重新定位到那个匹配的元素并继续执行。所以在一次
+        React / Vue 列表重渲染（标签没变）之后，<code>click @e3</code> 依然会命中正确的元素。
+      </p>
+      <p>
+        如果那个元素是真的没了，它会<strong>明确报错</strong>而不是去点一个错误的节点——它从不会悄悄打错目标。
+        因此：只有当你<strong>发生了导航</strong>，或者<strong>标签 / 结构真的变了</strong>时，才需要重新快照。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 什么时候一定要重新快照</div>
+        导航到了新页面、切换了标签页、表单提交后结构大改、弹窗 / 对话框打开——这些之后一定重新 <code>snapshot -i</code>。
+        单纯的列表重渲染（标签不变）不用，交给 ref 自愈就好。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ SNAPSHOT-FIRST ============ -->
+      <h2>硬规则：快照优先，绝不靠截图定位</h2>
+      <p>
+        对于表单字段和按钮，<strong>永远</strong>先 <code>snapshot -i</code>，然后对 ref / selector 动手。
+        <strong>不要</strong>用 <code>screenshot</code> + 坐标点击去找元素或命中元素。
+      </p>
+      <p>
+        <code>snapshot -i</code> 现在能<strong>穿透跨域 iframe</strong>（内嵌的 Google Payments / Stripe / 结账 / KYC 表单），
+        把它们的元素连同输入值一起按 <code>@ref</code> 列出来——所以 <code>click @e</code> / <code>type @e</code> / <code>fill @e</code>
+        直接就能打进 iframe 里。只有 canvas / WebGL，或者 <code>snapshot</code> 对你的目标确实什么都返回不了时，才用坐标。
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 截图是输出，不是输入</div>
+        截图用于你<em>报告给用户看的视觉验证</em>，永远不作为 agent 自己的输入。而且一张真实 retina 浏览器的整页截图
+        对图像阅读器来说往往太大了。<strong>如果你觉得"需要一张截图才能读到状态或找到元素"，那是个 bug——请提 issue。</strong>
+        在 relay 上按像素驱动还有额外风险：一次坐标事件可能漂移到用户的前台标签上，而 ref 永远不会。
+      </div>
+
+      <!-- ============ CAPTURE VS LOCATE ============ -->
+      <h3>两种不同意图——只有一种被劝阻</h3>
+      <p>
+        上面这条规则针对的是 <strong>screenshot-to-locate</strong>（用一张图去找 / 命中元素）——那才是 bug。
+        而 <strong>screenshot-to-capture</strong>（把一块区域或某个元素存成文件，作为可复用的<strong>图片素材</strong>——
+        地图、图表、og 图、视觉回归基线、报告插图）是<strong>完全支持且鼓励</strong>的：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">capture 是对的用法</span>
+        </div>
+<pre><code><span class="du-cmt"># 把一块渲染出来的区域存成可复用的图片素材（不是用来定位）</span>
+<span class="du-prompt">$</span> chrome-use screenshot [selector] <span class="du-flag">--clip</span> x,y,w,h &lt;file&gt;
+
+<span class="du-cmt"># 想点一个用 ref 命中不了的东西？box 给出元素的 CSS 像素框 + 中心点</span>
+<span class="du-prompt">$</span> chrome-use box @ref
+<span class="du-prompt">$</span> chrome-use click &lt;centerX&gt; &lt;centerY&gt;</code></pre>
+      </div>
+
+      <p>
+        截图会自动降采样到最长边 ≤ 2000px，好让图像阅读器读得下、并让像素和 <code>click x y</code> 对齐；
+        用 <code>--max-width</code> / <code>--max-height</code> / <code>--scale</code> 可以覆盖。想点一个用 ref 命中不了的元素，
+        <code>box @ref</code> 会给出它的 CSS 像素框和 <code>centerX/centerY</code>，直接喂给 <code>click &lt;centerX&gt; &lt;centerY&gt;</code>——不需要截图。
+        canvas / WebGL 的坐标玩法见 <a href="/media.html">截图 · 录像 · 视口</a> 与画布相关章节。
+      </p>
+
+      <hr class="du-divider" />
+
+      <!-- ============ TWO WAYS ============ -->
+      <h2>两条驱动路径——以及何时切到 eval</h2>
+      <p>
+        你手上是一个带着用户真实 DOM 的<strong>真实 Chrome</strong>。有两层，可以随意混用：
+      </p>
+
+      <div class="du-cards">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🧩</span> 结构化路径</div>
+          <p>
+            <code>snapshot</code> + <code>@ref</code>、<code>find</code>、带类型的动作。方便、可读，适合直白的表单和导航。
+            但可访问性视图是<em>有损而脆弱</em>的：ref 一变就失效、隐藏 input 从不出现、遮罩会挡住坐标点击。
+          </p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🛠️</span> eval 优先路径</div>
+          <p>
+            <code>chrome-use eval "&lt;js&gt;"</code>——你在真实 DOM 上的眼睛和手：读隐藏 input、探进 Shadow DOM / iframe、
+            查 <code>form.elements</code> 和 <code>.validity</code>、抽出你要的确切结构，或直接 <code>el.click()</code>。
+          </p>
+        </div>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 结构化路径一开始跟你较劲，立刻切 eval</div>
+        <strong>结构化路径一开始跟你较劲的那一刻，就切到 <code>eval</code>，别反复重试它</strong>——
+        这是查明"为什么失败"最快的方式（比如一个 UI 从不暴露的隐藏 <code>point_choice=none</code>）。
+        别把一个不稳的结构化 locator 试三遍；直接掉到 <code>eval</code> 上对 DOM 动手。
+      </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">这表单里到底有什么 / 为什么提交不了？</span>
+        </div>
+<pre><code><span class="du-cmt"># 列出表单里所有字段的 name / type / value / checked</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"[...document.forms[0].elements].map(e=&gt;[e.name,e.type,e.value,e.checked])"</span>
+
+<span class="du-cmt"># 读一个 UI 从不暴露的隐藏字段</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"document.querySelector('[name=point_choice]')?.value"</span>
+
+<span class="du-cmt"># 找出所有校验不通过的字段和它们的报错信息</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"[...document.forms[0].elements].filter(e=&gt;!e.validity.valid).map(e=&gt;e.name+': '+e.validationMessage)"</span>
+
+<span class="du-cmt"># 直接 DOM 点击，绕过遮罩</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"document.querySelector('#stubborn').click()"</span></code></pre>
+      </div>
+
+      <p>
+        升级阶梯是：直白页面用 <code>snapshot</code> + <code>@eN</code> 最快 → 不想快照时用
+        <code>find role/text/label</code> → 原生 CSS selector → <strong>上面任何一条跟你较劲的那一刻，就上 <code>eval</code></strong>
+        直接对 DOM 动手。更多定位手段见 <a href="/finding.html">定位元素</a>。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ eval 跑在页面的 MAIN world</div>
+        <code>eval</code> 默认在顶层文档的主世界执行，状态跨调用保留——所以顶层的 <code>const x</code> / <code>let x</code>
+        会和下一次调用冲突（<code>Identifier 'x' has already been declared</code>）。用唯一名字、挂到 <code>window.x</code>，
+        或把函数体包进 IIFE。带引号 / 非 ASCII / 大段脚本时用 <code>eval --stdin</code>（heredoc）、
+        <code>eval --file &lt;path&gt;</code> 或 <code>eval -b &lt;base64&gt;</code>，别用会被 shell 搅乱的内联写法。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>下一步</h2>
+      <p>把核心循环跑顺之后，按需深入：</p>
+
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> 读取页面</div>
+          <p><code>snapshot</code> 的各种旗标、<code>get text</code>、跨帧读取与穿透闭合 Shadow DOM。</p>
+        </a>
+        <a class="du-card" href="/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 交互操作</div>
+          <p><code>click</code>、<code>fill</code>、<code>type</code>、<code>select</code>、<code>pick</code> 驱动真实浏览器。</p>
+        </a>
+        <a class="du-card" href="/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> 定位元素</div>
+          <p><code>find role/text/label</code> 与 <code>@ref</code> 精准锁定目标。</p>
+        </a>
+        <a class="du-card" href="/install.html">
+          <div class="du-card-title"><span class="du-card-ico">📦</span> 安装</div>
+          <p>还没装好？装 CLI、装 Chrome 扩展、拉 agent 技能。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

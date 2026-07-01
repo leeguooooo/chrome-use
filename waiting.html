@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>等待与断言 · chrome-use 文档</title>
+  <meta name="description" content="页面变化后怎么等、怎么确认动作真的生效——wait 选对等待条件，expect 用退出码断言结果，--observe 看变化，--if-present 让可选步骤幂等。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="waiting" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">操作 / Driving the page</p>
+
+      <div class="du-title-row">
+        <h1>等待与断言</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Agent 翻车，<span class="mark">更多是败在乱等，而不是选错元素</span>。
+        点完、填完之后，页面还在动——这时候该等什么、怎么确认动作真的生效，
+        决定了你的脚本是稳还是脆。这一页讲清楚 <code>wait</code> 怎么等、
+        <code>expect</code> 怎么断言、<code>--observe</code> 怎么看变化，
+        以及 <code>--if-present</code> 怎么让可选步骤保持幂等。
+      </p>
+
+      <!-- ============ WAIT ============ -->
+      <h2>选对等待条件 — wait</h2>
+      <p>
+        每次会改变页面的动作之后，都要挑一个<strong>具体</strong>的条件去等，
+        而不是拍脑袋 sleep 一个固定毫秒数。<code>wait</code> 支持这些形式：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use wait @e1                     <span class="du-cmt"># 直到某个元素出现</span>
+<span class="du-prompt">$</span> chrome-use wait 2000                    <span class="du-cmt"># 傻等，毫秒（最后手段）</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--text</span> <span class="du-str">"Success"</span>        <span class="du-cmt"># 直到页面上出现这段文字</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/dashboard"</span>    <span class="du-cmt"># 直到 URL 匹配模式（glob）</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle       <span class="du-cmt"># 直到网络空闲（导航后收尾）</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> domcontentloaded  <span class="du-cmt"># 直到 DOMContentLoaded</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--fn</span> <span class="du-str">"window.myApp.ready === true"</span>  <span class="du-cmt"># 直到 JS 条件成立</span></code></pre>
+      </div>
+
+      <p>任何会改变页面的动作之后，从下面三种里挑一个：</p>
+      <ul>
+        <li>等你预期会出现的<strong>具体元素</strong>：<code>wait @ref</code> 或 <code>wait --text "..."</code>。</li>
+        <li>等 <strong>URL 变化</strong>：<code>wait --url "**/new-page"</code>。</li>
+        <li>等<strong>网络空闲</strong>（SPA 导航的万能兜底）：<code>wait --load networkidle</code>。</li>
+      </ul>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 少用裸 wait 2000</div>
+        除了调试，别用固定毫秒的 <code>wait 2000</code>——它让脚本又慢又脆。
+        超时默认 25 秒，所以等一个真实条件不会白等太久，但会在条件满足的<strong>那一刻</strong>就继续。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ EXPECT ============ -->
+      <h2>确认动作生效 — expect</h2>
+      <p>
+        动作做完之后，<strong>用断言去确认结果，而不是拉一张快照用眼睛看</strong>。
+        <code>expect</code> 是一个带<strong>退出码</strong>的 pass/fail 动词
+        （0 通过 / 1 为假 / 2 无法判断），所以它能和 <code>&amp;&amp;</code>、
+        <code>chrome-use batch</code> 组合，而且只花 ~1 行、不用你去读一整张快照。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash — expect 断言</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e8 &amp;&amp; chrome-use expect <span class="du-str">"#toast"</span> visible      <span class="du-cmt"># toast 弹出来了吗？</span>
+<span class="du-prompt">$</span> chrome-use expect count <span class="du-str">".result"</span> <span class="du-str">"&gt;="</span> 1                        <span class="du-cmt"># 结果加载出来了吗？</span>
+<span class="du-prompt">$</span> chrome-use expect text @e3 contains <span class="du-str">"Saved"</span>                    <span class="du-cmt"># 成功提示？</span>
+<span class="du-prompt">$</span> chrome-use expect url contains /dashboard                       <span class="du-cmt"># 导航落地了吗？</span>
+<span class="du-prompt">$</span> chrome-use expect <span class="du-str">"#spinner"</span> gone                               <span class="du-cmt"># 加载完成了？</span>
+<span class="du-prompt">$</span> chrome-use requests <span class="du-flag">--clear</span> &amp;&amp; chrome-use click @save \
+    &amp;&amp; chrome-use expect request /api/save <span class="du-flag">--status</span> 2xx           <span class="du-cmt"># POST 发出且 2xx？</span>
+<span class="du-prompt">$</span> chrome-use expect no-errors                                     <span class="du-cmt"># 没有 console 报错？</span></code></pre>
+      </div>
+
+      <h3>expect 自带等待</h3>
+      <p>
+        <code>expect</code> 会在超时时间内<strong>轮询</strong>、等条件成立，
+        所以你常常不需要再单独写一个 <code>wait</code>。支持的条件有：
+      </p>
+      <ul>
+        <li>元素状态：<code>visible</code> | <code>hidden</code> | <code>gone</code> | <code>present</code>；</li>
+        <li>数量：<code>count &lt;css&gt; &lt;op&gt; &lt;n&gt;</code>；</li>
+        <li>文本/值/属性：<code>text|value|attr … equals|contains|matches</code>；</li>
+        <li>URL：<code>url …</code>；</li>
+        <li>网络请求：<code>request &lt;substr&gt; [--status 2xx]</code>；</li>
+        <li>控制台：<code>no-errors</code>。</li>
+      </ul>
+      <p>
+        <code>--not</code> 反转判断，<code>--no-wait</code> 只检查一次不轮询。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 请求与控制台的前置条件</div>
+        <code>expect request</code> 只能看到<strong>开始跟踪之后</strong>捕获的请求——
+        先跑一次 <code>requests --clear</code>；<code>no-errors</code> 需要控制台捕获——
+        先跑一次 <code>console</code>。详见 <a href="/troubleshooting.html">排查问题</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ OBSERVE ============ -->
+      <h2>看清动作改了什么 — --observe</h2>
+      <p>
+        给一个会改变页面的动作（<code>click</code> / <code>fill</code> / <code>type</code> /
+        <code>select</code> / <code>check</code> / <code>press</code> / <code>eval</code>）
+        加上 <code>--observe</code>，就不用你手动跑「动作 → wait → snapshot → diff」那一套了：
+        返回结果里会带一个 <code>observed</code> 增量——新增/移除的可交互行
+        （新的 toast、校验提示也会通过 alert 面通道带上）、URL 变化、发出的请求；
+        什么都没动就返回 <code>{changed:false}</code>。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e8 <span class="du-flag">--observe</span>   <span class="du-cmt"># 一条 ~20-80 token 的回复里就看到弹出的对话框/toast/新行</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ expect 还是 --observe？</div>
+        想要一个<strong>硬性 pass/fail 门禁</strong>（配合退出码、<code>&amp;&amp;</code>、批处理）用
+        <code>expect</code>；想<strong>看清</strong>到底发生了什么、拿到结构化的变化用 <code>--observe</code>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ FORM FILL --MAP ============ -->
+      <h2>一次填完整张表单 — form fill --map</h2>
+      <p>
+        与其写 N 步 <code>fill</code> / <code>select</code> / <code>check</code>，
+        不如传一个 <code>{标签或选择器: 值}</code> 的映射：它按 <code>&lt;label&gt;</code>、
+        aria-label、placeholder、name、CSS 逐个解析字段，自动派发到对应的控件类型
+        （字符串 → 文本/下拉/单选，<code>true/false</code> → 复选框），
+        还能顺手提交（<code>--submit "&lt;文本|选择器&gt;"</code>），返回
+        <code>{filled, submitted, errors}</code>——<code>errors</code> 就是行内校验消息，
+        所以一次提交被拒会在同一次调用里告诉你为什么。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash — form fill --map</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use form fill <span class="du-flag">--map</span> \
+    <span class="du-str">'{"Email":"a@b.com","Country":"US","Subscribe":true}'</span> \
+    <span class="du-flag">--submit</span> <span class="du-str">"Sign up"</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 富文本编辑器例外</div>
+        DraftJS / Monaco / CodeMirror 这类富文本编辑器，用 <code>fill</code> 单独填——它能处理；
+        <code>form fill</code> 覆盖的是标准控件。更多输入细节见 <a href="/interacting.html">交互操作</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ IF-PRESENT ============ -->
+      <h2>可选步骤 — --if-present</h2>
+      <p>
+        给任意基于选择器的动作加上 <code>--if-present</code>（别名 <code>--optional</code>），
+        当目标不存在时它就变成一个<strong>空操作但成功</strong>（<code>↷ skipped</code>，退出码 0），
+        而不是报错——不用事先读一遍页面判断，流程也能反复重跑。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click <span class="du-str">".cookie-accept"</span> <span class="du-flag">--if-present</span>   <span class="du-cmt"># 关掉可能不存在的 cookie 横幅</span>
+<span class="du-prompt">$</span> chrome-use check <span class="du-str">"#opt-in"</span> <span class="du-flag">--if-present</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 只跳过「元素不存在」</div>
+        <code>--if-present</code> 只对「目标缺失」放行；真正的失败（比如元素在但点不动）
+        仍然会报错，不会被悄悄吞掉。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ NEXT ============ -->
+      <h2>下一步</h2>
+      <div class="du-cards cols-2">
+        <a class="du-card" href="/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 交互操作</div>
+          <p>click、type、fill、select 驱动真实浏览器——先会动，再谈等和断言。</p>
+        </a>
+        <a class="du-card" href="/troubleshooting.html">
+          <div class="du-card-title"><span class="du-card-ico">🛠️</span> 排查问题</div>
+          <p>requests / console 的前置捕获、超时、脆弱等待——出问题时来这里对症。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

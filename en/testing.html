@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Testing &amp; Dogfood · chrome-use docs</title>
+  <meta name="description" content="Use chrome-use test to turn repetitive manual browser checks into rerunnable YAML regression suites; use dogfood for exploratory testing, QA, and bug hunting with complete reproduction evidence." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="testing" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Advanced / Workflow</p>
+
+      <div class="du-title-row">
+        <h1>Testing &amp; Dogfood</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Even though both drive a browser, testing comes in two very different flavors: one
+        <span class="mark">freezes repetitive manual checks into a rerunnable regression suite</span>,
+        like frontend unit tests; the other
+        <span class="mark">systematically walks the whole app like a real user</span>,
+        digging out bugs and UX problems and bringing along complete reproduction evidence.
+        chrome-use does both &mdash; the former with <code>chrome-use test</code>, the latter with a dogfood exploratory flow.
+      </p>
+
+      <h2>Two flavors of testing</h2>
+      <p>First figure out which one you're doing, then pick the section below. Their goals, outputs, and how they run are all different.</p>
+      <div class="du-cards">
+        <a class="du-card" href="#write-a-rerunnable-test-suite">
+          <div class="du-card-title"><span class="du-card-ico">🧷</span> Write a rerunnable test suite</div>
+          <p>Freeze "open it, click around, check it's right" into <code>*.yaml</code> suites whose exit code drops straight into CI.</p>
+        </a>
+        <a class="du-card" href="#exploratory-testing-and-bug-hunting">
+          <div class="du-card-title"><span class="du-card-ico">🔬</span> Exploratory testing / bug hunting</div>
+          <p>Systematically walk the app like a user, recording as you explore, leaving a screenshot, recording, and repro steps for every issue.</p>
+        </a>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2 id="write-a-rerunnable-test-suite">Write a rerunnable test suite</h2>
+      <p>
+        Turn the repetitive manual chore of "open it, click around, confirm it's right" into a
+        <strong>rerunnable suite</strong>, just like frontend unit tests. Every time you find a regression, add a case &mdash;
+        the more you use it, the more the suite is worth.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Run a suite</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use test <span class="du-str">&lt;suite.yaml&gt;</span> <span class="du-flag">[--launch | --session &lt;name&gt;]</span> <span class="du-flag">[--json]</span></code></pre>
+      </div>
+
+      <ul>
+        <li>Exit code is <strong>0</strong> when every case passes, <strong>1</strong> if any fails &mdash; drop it straight into CI.</li>
+        <li>By default it <strong>launches a brand-new isolated browser</strong> in a <code>cu-test</code> session (deterministic, reproducible) and closes it when done.</li>
+        <li>Pass <code>--session &lt;name&gt;</code> to run against an <strong>already-connected session</strong> (for example a real Chrome attached via <code>chrome-use extension connect</code>).</li>
+        <li>Failing cases automatically save a screenshot to <code>cu-test-artifacts/&lt;case&gt;.png</code>.</li>
+      </ul>
+
+      <h3>Suite format (YAML)</h3>
+      <p>
+        A suite is made of an optional <code>setup</code> (run once before all cases) and a list of <code>cases</code>. Each case has
+        <code>steps</code> (the actions to perform) and <code>assert</code> (the checks that must hold).
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">chatgpt-smoke.yaml</span>
+        </div>
+<pre><code><span class="du-cmt">suite: chatgpt smoke</span>               <span class="du-cmt"># label (optional)</span>
+<span class="du-cmt">setup:</span>                             <span class="du-cmt"># run once before all cases (optional)</span>
+  - account: chatgpt/huayue        <span class="du-cmt"># inject a cookie-use saved login (optional)</span>
+  - open: https://chatgpt.com/     <span class="du-cmt"># …or any normal step</span>
+cases:
+  - name: home loads logged in
+    steps:                         <span class="du-cmt"># steps reuse chrome-use's own commands</span>
+      - open: https://chatgpt.com/
+      - wait: { load: networkidle }
+    assert:                        <span class="du-cmt"># every assertion must hold for the case to pass</span>
+      - url: { contains: chatgpt.com }
+      - visible: <span class="du-str">"#prompt-textarea"</span>
+  - name: composer takes text
+    steps:
+      - fill: { sel: <span class="du-str">"#prompt-textarea"</span>, text: <span class="du-str">"hi"</span> }
+    assert:
+      - text: { sel: <span class="du-str">"#prompt-textarea"</span>, contains: hi }
+      - eval: <span class="du-str">"!!window.__NEXT_DATA__"</span></code></pre>
+      </div>
+
+      <h3>Steps &mdash; actions</h3>
+      <p>Each step is a "single-key map" whose key is a chrome-use command.</p>
+      <table>
+        <thead><tr><th>Step</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>open: &lt;url&gt;</code></td><td>navigate</td></tr>
+          <tr><td><code>click: &lt;selector|@ref&gt;</code></td><td>click</td></tr>
+          <tr><td><code>fill: { sel: &lt;s&gt;, text: &lt;t&gt; }</code></td><td>clear then type</td></tr>
+          <tr><td><code>type: { sel: &lt;s&gt;, text: &lt;t&gt; }</code></td><td>type (without clearing)</td></tr>
+          <tr><td><code>press: &lt;key&gt;</code></td><td>key press (e.g. <code>Enter</code>)</td></tr>
+          <tr><td><code>wait: &lt;ms&gt;</code> / <code>wait: { load: networkidle }</code> / <code>wait: &lt;selector&gt;</code></td><td>wait</td></tr>
+          <tr><td><code>scroll: &lt;up|down|...&gt;</code> or <code>{ dir: down, px: 500 }</code></td><td>scroll</td></tr>
+          <tr><td><code>eval: "&lt;js&gt;"</code></td><td>run JS</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Assertions &mdash; checks</h3>
+      <p>Every assertion ultimately compiles down to a truthy <code>eval</code>.</p>
+      <table>
+        <thead><tr><th>Assert</th><th>Passes when</th></tr></thead>
+        <tbody>
+          <tr><td><code>url: { contains|equals|matches: &lt;v&gt; }</code></td><td>page URL matches</td></tr>
+          <tr><td><code>visible: &lt;selector&gt;</code></td><td>element exists and is laid out</td></tr>
+          <tr><td><code>hidden: &lt;selector&gt;</code></td><td>element is absent / not laid out</td></tr>
+          <tr><td><code>text: { sel: &lt;s&gt;, contains|equals|matches: &lt;v&gt; }</code></td><td>element text matches</td></tr>
+          <tr><td><code>count: { sel: &lt;s&gt;, eq: &lt;n&gt; }</code></td><td>exactly N elements match</td></tr>
+          <tr><td><code>eval: "&lt;js&gt;"</code></td><td>the JS expression is truthy</td></tr>
+        </tbody>
+      </table>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ How assertions relate to steps</div>
+        <code>steps</code> all run in order first, then <code>assert</code> is evaluated one by one, independently. For more ways to write <code>wait</code> and assertions, see
+        <a href="/en/waiting.html">Waiting &amp; Asserting</a>; every command used in steps is covered in the <a href="/en/commands.html">Command Reference</a>.
+      </div>
+
+      <h3>Login and multiple accounts</h3>
+      <p>
+        <code>account: &lt;id&gt;</code> injects a
+        <a href="https://github.com/leeguooooo/cookie-use">cookie-use</a>
+        saved login into the test session. It can be used in <strong>two</strong> places:
+      </p>
+      <ul>
+        <li><strong><code>setup:</code></strong> &mdash; injected once before all cases, so the whole suite runs as that account.</li>
+        <li><strong>Inside a case's <code>steps:</code></strong> &mdash; switch accounts partway through the suite. The new login takes effect at that case's next <code>open</code>/navigation, so put <code>account:</code> before <code>open</code>. This is how you test "admin can see X, a regular member can't" in one suite, or hop back and forth between accounts.</li>
+      </ul>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">rbac.yaml &mdash; permission comparison</span>
+        </div>
+<pre><code>setup:
+  - account: myapp/admin           <span class="du-cmt"># start as admin</span>
+cases:
+  - name: admin sees the settings tab
+    steps:
+      - open: https://app.example.com/
+    assert:
+      - visible: <span class="du-str">"#settings-tab"</span>
+  - name: member does NOT see it
+    steps:
+      - account: myapp/member      <span class="du-cmt"># switch account, then reload the page</span>
+      - open: https://app.example.com/
+    assert:
+      - hidden: <span class="du-str">"#settings-tab"</span>
+  - name: back to admin
+    steps:
+      - account: myapp/admin
+      - open: https://app.example.com/
+    assert:
+      - visible: <span class="du-str">"#settings-tab"</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Requires cookie-use</div>
+        <code>account:</code> relies on an installed <a href="https://github.com/leeguooooo/cookie-use">cookie-use</a>; if you don't use it, just leave the line out.
+        A failed <code>account:</code> switch (wrong id, or cookie-use not installed) fails that case and gives a clear reason.
+        For more account details see <a href="/en/login-auth.html">Login &amp; Credentials</a>.
+      </div>
+
+      <h3>Workflow</h3>
+      <ol>
+        <li>First do it by hand with <code>open</code>/<code>snapshot</code>/<code>eval</code> to nail down the selectors.</li>
+        <li>Write it up as a case and put it in a <code>*.yaml</code> suite.</li>
+        <li><code>chrome-use test suite.yaml</code> &mdash; green means all good; red shows the failing assertion + a screenshot.</li>
+        <li>Find another regression later? Add a case. Run the whole suite in CI.</li>
+      </ol>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ v1 limitations</div>
+        Assertions are evaluated independently after the steps run. For now there is <strong>no</strong> per-case retry, no parallel cases, and no snapshot/screenshot baseline diff (use an <code>eval</code> assertion against known content instead). Steps run in order, and a failing step fails the case immediately.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2 id="exploratory-testing-and-bug-hunting">Exploratory testing &amp; bug hunting (dogfood)</h2>
+      <p>
+        The other kind of testing has no predefined script; instead it <strong>systematically walks a web app end to end</strong>, finding bugs, UX issues, and other glitches, and producing <strong>complete reproduction evidence</strong> for each finding &mdash; step-by-step screenshots, a reproduction recording, detailed repro steps &mdash; so the results can be handed straight to the relevant team.
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Only Target URL is required</div>
+        Everything else has a sensible default. The session name defaults to the domain slug (<code>vercel.com</code> → <code>vercel-com</code>), the output directory defaults to <code>./dogfood-output/</code>, and the scope defaults to the whole app. When the user says "dogfood vercel.com," just run with the defaults &mdash; don't ask back unless they mention login but give no credentials.
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Use chrome-use, not npx chrome-use</div>
+        Always call <code>chrome-use</code> directly &mdash; the binary uses the fast Rust client; <code>npx</code> detours through Node.js and is noticeably slower.
+      </div>
+
+      <h3>The six-step flow</h3>
+      <table>
+        <thead><tr><th>Step</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>1. Initialize</td><td>create the session, output directory, report file</td></tr>
+          <tr><td>2. Authenticate</td><td>log in if needed, save the state</td></tr>
+          <tr><td>3. Orient</td><td>navigate to the starting point, take the first snapshot</td></tr>
+          <tr><td>4. Explore</td><td>systematically visit pages, test features</td></tr>
+          <tr><td>5. Document</td><td>screenshot + record every issue as you find it</td></tr>
+          <tr><td>6. Wrap up</td><td>update the summary counts, close the session</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Initialize and log in</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Initialize + start the session</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> mkdir -p {OUTPUT_DIR}/screenshots {OUTPUT_DIR}/videos
+
+<span class="du-cmt"># start a named session, navigate to the target</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} open {TARGET_URL}
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} wait <span class="du-flag">--load</span> networkidle</code></pre>
+      </div>
+
+      <p>When login is required, use <code>snapshot -i</code> to find the form's <code>@ref</code>, fill it in and submit, then save the state for reuse. For OTP / email verification codes, ask the user and only enter them after they reply.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Log in and save state</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} snapshot <span class="du-flag">-i</span>
+<span class="du-cmt"># find the login form's refs, fill in the credentials</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} fill <span class="du-str">@e1</span> <span class="du-str">"{EMAIL}"</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} fill <span class="du-str">@e2</span> <span class="du-str">"{PASSWORD}"</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} click <span class="du-str">@e3</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} wait <span class="du-flag">--load</span> networkidle
+
+<span class="du-cmt"># after a successful login, save the state for reuse</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} state save {OUTPUT_DIR}/auth-state.json</code></pre>
+      </div>
+
+      <h3>Explore and gather evidence</h3>
+      <p>
+        Start from the main navigation and visit the top-level sections one by one; within each section test the interactive elements (click buttons, fill forms, open dropdowns/dialogs); check empty states, error handling, boundary inputs; and run real end-to-end flows (create, update, delete).
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ console / errors are empty by default</div>
+        This stealth fork <strong>disables</strong> console and error capture by default. To use <code>console</code>/<code>errors</code>, start the session with
+        <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code>, for example
+        <code>AGENT_BROWSER_CAPTURE_CONSOLE=1 chrome-use --session {SESSION} open &lt;url&gt;</code>, otherwise they return empty.
+      </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">The four-hit combo for every page</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/{page-name}.png
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} errors
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} console</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Pick the right snapshot mode</div>
+        <code>snapshot -i</code> &mdash; find clickable/fillable elements (buttons, inputs, links);
+        <code>snapshot</code> (no flag) &mdash; read page content (text, headings, data lists).
+      </div>
+
+      <h3>Repro first: interactive vs static</h3>
+      <p>Exploring and documenting happen in the <strong>same pass</strong>: when you find an issue, stop and record it immediately, then continue. Match the evidence granularity to the issue type.</p>
+
+      <h3>Interactive / behavioral issues</h3>
+      <p>These need user interaction to reproduce (features, UX, action-triggered console errors) &mdash; use full repro with a recording and step-by-step screenshots: start recording first, then walk the steps at a human pace, screenshot each step, and finally capture the broken state.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Recording + step-by-step screenshots</span>
+        </div>
+<pre><code><span class="du-cmt"># 1. start recording before the repro</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} record start {OUTPUT_DIR}/videos/issue-{NNN}-repro.webm
+
+<span class="du-cmt"># 2. walk the steps at a human pace, pause 1-2s between actions, screenshot each step</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot {OUTPUT_DIR}/screenshots/issue-{NNN}-step-1.png
+<span class="du-prompt">$</span> sleep 1
+<span class="du-cmt"># perform the action (click / fill etc.), sleep 1, then step-2 screenshot…</span>
+
+<span class="du-cmt"># 3. capture the broken state (pause first so the viewer can see it)</span>
+<span class="du-prompt">$</span> sleep 2
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/issue-{NNN}-result.png
+
+<span class="du-cmt"># 4. stop recording</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} record stop</code></pre>
+      </div>
+
+      <h3>Static / visible-on-load issues</h3>
+      <p>These are visible without interaction (typos, placeholder text, truncated text, misalignment, console errors thrown on load) &mdash; a single annotated screenshot is enough, no recording, no multi-step repro; set "reproduction recording" to <code>N/A</code>.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Static issue: one annotated screenshot</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/issue-{NNN}.png</code></pre>
+      </div>
+
+      <h3>Wrap up</h3>
+      <p>The goal is to find <strong>5&ndash;10 well-documented issues</strong> and stop &mdash; depth of evidence matters more than count; 5 with full repro beat 20 vague ones. Then reread the report, update the summary severity counts (every <code>### ISSUE-</code> block must be reflected in the totals), and finally close the session.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Close the session</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} close</code></pre>
+      </div>
+
+      <h3>A few hard rules</h3>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Don't read the app under test's source</div>
+        You're testing as a user, not auditing code. Don't read the tested app's HTML/JS/config. Every finding must come from what you <strong>observe</strong> in the browser.
+      </div>
+      <ul>
+        <li><strong>Reproduction is everything</strong>: every issue needs evidence, but match the granularity &mdash; interactive issues need a recording and step-by-step screenshots, static ones just one annotated screenshot.</li>
+        <li><strong>Verify reproducibility before collecting evidence</strong>: before recording/screenshotting, retry at least once to confirm it reproduces reliably; if it's flaky it doesn't count as a valid issue.</li>
+        <li><strong>Write the report incrementally</strong>: append to the report the moment you find something, don't save it all for the end. A finding survives even if the session is interrupted.</li>
+        <li><strong>Never delete output</strong>: don't <code>rm</code> screenshots, recordings, or the report partway through, and don't close and restart the session. Only move forward.</li>
+        <li><strong>Type like a human</strong>: when recording, fill forms with <code>type</code> (character by character); only use <code>fill</code> when you're not recording and want speed.</li>
+        <li><strong>Pace the recording for humans</strong>: add <code>sleep 1</code> between actions and <code>sleep 2</code> before the final result screenshot so the recording is watchable at 1x.</li>
+        <li><strong>Check the console</strong>: many issues aren't visible in the UI but show up as JS errors or failed requests.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>What's next</h2>
+      <div class="du-cards">
+        <a class="du-card" href="/en/waiting.html">
+          <div class="du-card-title"><span class="du-card-ico">⏳</span> Waiting &amp; Asserting</div>
+          <p>Master how to write <code>wait</code> and assertions so your suites stay stable.</p>
+        </a>
+        <a class="du-card" href="/en/commands.html">
+          <div class="du-card-title"><span class="du-card-ico">📚</span> Command Reference</div>
+          <p>The full usage of every verb used in steps lives here.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

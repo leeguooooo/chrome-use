@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>云端浏览器 · chrome-use 文档</title>
+  <meta name="description" content="在 Vercel Sandbox microVM 与 AWS Bedrock AgentCore 云浏览器里运行 chrome-use：无二进制体积限制、会话可持久化、命令用法与本地完全一致。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="cloud" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 40 q10 -22 22 -14 q6 4 12 -2 q10 -10 14 2 q4 12 -6 18 q-24 8 -42 -4z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">部署 / Cloud</p>
+
+      <div class="du-title-row">
+        <h1>云端浏览器</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        本地没有屏幕、没有 Chrome，甚至没有一台常驻服务器？chrome-use 一样能跑。
+        把浏览器搬到云上，有两条成熟路径：<span class="mark">Vercel Sandbox</span> 的按需 microVM，
+        和 <span class="mark">AWS Bedrock AgentCore</span> 的托管云浏览器会话。
+        两者的命令行用法和你在本地敲的<em>几乎一模一样</em>——差别只在于浏览器在哪台机器上运行。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 这一页解决什么</div>
+        当自动化需要跑在无头环境里——Serverless 函数、CI、定时任务、或者面向用户的 Web 应用后端——就用这一页。
+        如果你想驱动的是<strong>自己电脑上正在用的那个 Chrome</strong>，请看
+        <a href="/real-chrome.html">连接真实 Chrome</a>。
+      </div>
+
+      <h2>Vercel Sandbox：按需 microVM</h2>
+      <p>
+        Vercel Sandbox 会按需拉起一台 Linux microVM，在里面执行浏览器命令，用完即销毁。
+        它与任意部署在 Vercel 上的框架配合（Next.js、SvelteKit、Nuxt、Remix、Astro 等），
+        并且<strong>不受 Serverless 二进制体积限制</strong>——因为 Chromium 装在 VM 里，而不是打进你的函数包。
+      </p>
+
+      <h3>安装依赖</h3>
+      <p>先在你的项目里装上 Sandbox SDK：</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> pnpm add @vercel/sandbox</code></pre>
+      </div>
+      <p>
+        VM 里则需要 Chromium 的系统库、chrome-use 本身、以及 Chromium 浏览器。首次运行时通过
+        <code>dnf</code> 安装系统库（Amazon Linux），再用 npm 装 chrome-use，最后跑
+        <code>chrome-use install</code> 拉取浏览器：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">withBrowser.ts</span>
+        </div>
+<pre><code><span class="du-kw">import</span> { Sandbox } <span class="du-kw">from</span> <span class="du-str">"@vercel/sandbox"</span>;
+
+<span class="du-cmt">// Chromium 在 sandbox VM 上所需的系统库（Amazon Linux / dnf）</span>
+<span class="du-kw">const</span> CHROMIUM_SYSTEM_DEPS = [
+  <span class="du-str">"nss"</span>, <span class="du-str">"nspr"</span>, <span class="du-str">"libxkbcommon"</span>, <span class="du-str">"atk"</span>, <span class="du-str">"at-spi2-atk"</span>, <span class="du-str">"at-spi2-core"</span>,
+  <span class="du-str">"libXcomposite"</span>, <span class="du-str">"libXdamage"</span>, <span class="du-str">"libXrandr"</span>, <span class="du-str">"libXfixes"</span>, <span class="du-str">"libXcursor"</span>,
+  <span class="du-str">"libXi"</span>, <span class="du-str">"libXtst"</span>, <span class="du-str">"libXScrnSaver"</span>, <span class="du-str">"libXext"</span>, <span class="du-str">"mesa-libgbm"</span>, <span class="du-str">"libdrm"</span>,
+  <span class="du-str">"mesa-libGL"</span>, <span class="du-str">"mesa-libEGL"</span>, <span class="du-str">"cups-libs"</span>, <span class="du-str">"alsa-lib"</span>, <span class="du-str">"pango"</span>, <span class="du-str">"cairo"</span>,
+  <span class="du-str">"gtk3"</span>, <span class="du-str">"dbus-libs"</span>,
+];
+
+<span class="du-kw">async function</span> withBrowser&lt;T&gt;(
+  fn: (sandbox: InstanceType&lt;<span class="du-kw">typeof</span> Sandbox&gt;) =&gt; Promise&lt;T&gt;,
+): Promise&lt;T&gt; {
+  <span class="du-kw">const</span> snapshotId = process.env.AGENT_BROWSER_SNAPSHOT_ID;
+
+  <span class="du-kw">const</span> sandbox = snapshotId
+    ? <span class="du-kw">await</span> Sandbox.create({ source: { type: <span class="du-str">"snapshot"</span>, snapshotId }, timeout: <span class="du-num">120_000</span> })
+    : <span class="du-kw">await</span> Sandbox.create({ runtime: <span class="du-str">"node24"</span>, timeout: <span class="du-num">120_000</span> });
+
+  <span class="du-kw">if</span> (!snapshotId) {
+    <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"sh"</span>, [<span class="du-str">"-c"</span>,
+      <span class="du-str">`sudo dnf install -y --skip-broken ${CHROMIUM_SYSTEM_DEPS.join(" ")} && sudo ldconfig`</span>]);
+    <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"npm"</span>, [<span class="du-str">"install"</span>, <span class="du-str">"-g"</span>, <span class="du-str">"chrome-use"</span>]);
+    <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"npx"</span>, [<span class="du-str">"chrome-use"</span>, <span class="du-str">"install"</span>]);
+  }
+
+  <span class="du-kw">try</span> { <span class="du-kw">return await</span> fn(sandbox); }
+  <span class="du-kw">finally</span> { <span class="du-kw">await</span> sandbox.stop(); }
+}</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 命令与本地一致</div>
+        VM 起来之后，你在里面跑的就是普通的 <code>chrome-use open</code>、<code>chrome-use snapshot</code>、
+        <code>chrome-use click</code>……和本地毫无区别。sandbox 只是把这些命令送进 microVM 执行。
+      </div>
+
+      <h3>截图与快照</h3>
+      <p>
+        <code>screenshot --json</code> 会把图存成文件并返回路径，再把文件读回成 base64 即可传给前端；
+        读取页面结构则用 <code>snapshot -i -c</code>（可交互元素 + 紧凑输出）。sandbox 在多条命令之间会保持存活，
+        所以可以串起完整流程：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">screenshotUrl.ts</span>
+        </div>
+<pre><code><span class="du-kw">return</span> withBrowser(<span class="du-kw">async</span> (sandbox) =&gt; {
+  <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"open"</span>, url]);
+
+  <span class="du-cmt">// 拿标题</span>
+  <span class="du-kw">const</span> t = <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"get"</span>, <span class="du-str">"title"</span>, <span class="du-str">"--json"</span>]);
+  <span class="du-kw">const</span> title = JSON.parse(<span class="du-kw">await</span> t.stdout())?.data?.title || url;
+
+  <span class="du-cmt">// 截图 → 读文件 → base64</span>
+  <span class="du-kw">const</span> ss = <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"screenshot"</span>, <span class="du-str">"--json"</span>]);
+  <span class="du-kw">const</span> ssPath = JSON.parse(<span class="du-kw">await</span> ss.stdout())?.data?.path;
+  <span class="du-kw">const</span> b64 = <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"base64"</span>, [<span class="du-str">"-w"</span>, <span class="du-str">"0"</span>, ssPath]);
+
+  <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"close"</span>]);
+  <span class="du-kw">return</span> { title, screenshot: (<span class="du-kw">await</span> b64.stdout()).trim() };
+});</code></pre>
+      </div>
+
+      <h3>多步表单流程</h3>
+      <p>
+        因为 sandbox 在命令之间持久存在，填表 → 提交 → 等待加载 → 截图这样的完整自动化可以一气呵成。
+        典型顺序是 <code>open</code> → <code>snapshot -i</code> 拿到元素 <code>@ref</code> → 逐个
+        <code>fill</code> → <code>click</code> → <code>wait --load networkidle</code>：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">fillAndSubmitForm.ts</span>
+        </div>
+<pre><code><span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"open"</span>, url]);
+<span class="du-kw">const</span> snap = <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"snapshot"</span>, <span class="du-str">"-i"</span>]);
+<span class="du-cmt">// 解析 snapshot，拿到每个字段的 ref…</span>
+
+<span class="du-kw">for</span> (<span class="du-kw">const</span> [ref, value] <span class="du-kw">of</span> Object.entries(data)) {
+  <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"fill"</span>, ref, value]);
+}
+
+<span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"click"</span>, <span class="du-str">"@e5"</span>]);
+<span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"wait"</span>, <span class="du-str">"--load"</span>, <span class="du-str">"networkidle"</span>]);</code></pre>
+      </div>
+
+      <h3>Sandbox 快照：秒级冷启动</h3>
+      <p>
+        <strong>sandbox 快照</strong>是一份预装好系统库 + chrome-use + Chromium 的 VM 镜像，
+        类似 Docker image：boot 时直接从镜像启动，不必每次从零安装。
+        没有快照，每次运行要装依赖 + chrome-use + Chromium（约 30 秒）；有快照，启动进入亚秒级。
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 别混淆两种「快照」</div>
+        <strong>sandbox 快照</strong>是 Vercel 的基础设施概念，用于快速启动 VM；
+        它和 chrome-use 的<strong>可访问性快照</strong>（<code>chrome-use snapshot</code>，导出页面 a11y 树）
+        完全是两回事。
+      </div>
+
+      <p>创建一次快照，再把返回的 ID 存进环境变量即可：</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 仓库 demo 里有现成的创建脚本</span>
+<span class="du-prompt">$</span> npx tsx examples/environments/scripts/create-snapshot.ts
+
+<span class="du-cmt"># 脚本会返回 snapshotId，写进环境变量</span>
+<span class="du-prompt">$</span> <span class="du-flag">AGENT_BROWSER_SNAPSHOT_ID</span>=snap_xxxxxxxxxxxx</code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 生产环境推荐</div>
+        任何走 Sandbox 模式的生产部署都建议预建快照，把冷启动从 30 秒压到亚秒级。
+      </div>
+
+      <h3>鉴权</h3>
+      <p>
+        部署在 Vercel 上时，Sandbox SDK 会通过 OIDC 自动鉴权，无需额外配置。
+        本地开发或需要显式控制时，设置以下三个变量，它们会被展开进 <code>Sandbox.create()</code>；
+        缺省时 SDK 会回退到自动注入的 <code>VERCEL_OIDC_TOKEN</code>：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">.env（本地开发）</span>
+        </div>
+<pre><code><span class="du-flag">VERCEL_TOKEN</span>=&lt;personal-access-token&gt;
+<span class="du-flag">VERCEL_TEAM_ID</span>=&lt;team-id&gt;
+<span class="du-flag">VERCEL_PROJECT_ID</span>=&lt;project-id&gt;</code></pre>
+      </div>
+
+      <h3>定时任务（Cron）</h3>
+      <p>
+        把 <code>withBrowser</code> 接进 Vercel Cron Jobs，就能做周期性的浏览器任务——
+        比如每天早上 9 点抓一次价格页并对比告警：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">vercel.json</span>
+        </div>
+<pre><code>{ <span class="du-str">"crons"</span>: [{ <span class="du-str">"path"</span>: <span class="du-str">"/api/cron"</span>, <span class="du-str">"schedule"</span>: <span class="du-str">"0 9 * * *"</span> }] }</code></pre>
+      </div>
+
+      <h3>Vercel 环境变量一览</h3>
+      <table>
+          <thead>
+            <tr><th>变量</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>AGENT_BROWSER_SNAPSHOT_ID</code></td><td>否（推荐）</td><td>预建 sandbox 快照 ID，用于亚秒级启动</td></tr>
+            <tr><td><code>VERCEL_TOKEN</code></td><td>否</td><td>Vercel 个人访问令牌（本地开发用；Vercel 上 OIDC 自动）</td></tr>
+            <tr><td><code>VERCEL_TEAM_ID</code></td><td>否</td><td>Vercel team ID（本地开发用）</td></tr>
+            <tr><td><code>VERCEL_PROJECT_ID</code></td><td>否</td><td>Vercel project ID（本地开发用）</td></tr>
+          </tbody>
+        </table>
+
+      <p>
+        同一套模式在各框架下写法一致，只是服务端代码放的位置不同：Next.js 放 server actions / route handlers，
+        SvelteKit 放 <code>+page.server.ts</code> / <code>+server.ts</code>，Nuxt 放 <code>server/api/</code>，
+        Remix 放 <code>loader</code> / <code>action</code>，Astro 放 <code>.astro</code> frontmatter 或 API 路由。
+        完整可跑示例见 chrome-use 仓库的 <code>examples/environments/</code>。
+      </p>
+
+      <hr class="du-divider" />
+
+      <h2>AWS Bedrock AgentCore：托管云浏览器</h2>
+      <p>
+        AgentCore 由 AWS 托管浏览器会话，所有 chrome-use 命令的用法完全不变——
+        唯一的区别是浏览器跑在 AWS 上。只要加一个 <code>-p agentcore</code>，其余照旧：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 在 AgentCore 云浏览器上打开页面</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">-p</span> agentcore open https://example.com
+
+<span class="du-cmt"># 之后和本地 Chrome 完全一样</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e1</span>
+<span class="du-prompt">$</span> chrome-use screenshot page.png
+<span class="du-prompt">$</span> chrome-use close</code></pre>
+      </div>
+
+      <h3>凭证解析</h3>
+      <p>AWS 凭证会自动解析，已有可用凭证时无需额外配置。解析顺序是：</p>
+      <ul>
+        <li>环境变量 <code>AWS_ACCESS_KEY_ID</code>、<code>AWS_SECRET_ACCESS_KEY</code>（可选 <code>AWS_SESSION_TOKEN</code>）</li>
+        <li>AWS CLI 回退（<code>aws configure export-credentials</code>），支持 SSO、IAM 角色与命名 profile</li>
+      </ul>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 显式凭证（CI/CD、脚本）</span>
+<span class="du-prompt">$</span> export <span class="du-flag">AWS_ACCESS_KEY_ID</span>=AKIA...
+<span class="du-prompt">$</span> export <span class="du-flag">AWS_SECRET_ACCESS_KEY</span>=...
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">-p</span> agentcore open https://example.com
+
+<span class="du-cmt"># SSO（交互式）</span>
+<span class="du-prompt">$</span> aws sso login <span class="du-flag">--profile</span> my-profile
+<span class="du-prompt">$</span> <span class="du-flag">AWS_PROFILE</span>=my-profile chrome-use <span class="du-flag">-p</span> agentcore open https://example.com
+
+<span class="du-cmt"># IAM 角色 / 默认凭证链</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">-p</span> agentcore open https://example.com</code></pre>
+      </div>
+
+      <h3>持久化 Profile：保住登录态</h3>
+      <p>
+        用 <code>AGENTCORE_PROFILE_ID</code> 可以在多次会话之间持久化浏览器状态（cookie、localStorage），
+        非常适合维持登录态：第一次跑登录流程，之后再跑就已经是登录状态了。
+        更完整的登录与会话复用思路见 <a href="/sessions.html">会话管理</a> 与 <a href="/login-auth.html">登录与鉴权</a>。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 第一次：登录</span>
+<span class="du-prompt">$</span> <span class="du-flag">AGENTCORE_PROFILE_ID</span>=my-app chrome-use <span class="du-flag">-p</span> agentcore open https://app.example.com/login
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">@e1</span> <span class="du-str">"user@example.com"</span>
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">@e2</span> <span class="du-str">"password"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e3</span>
+<span class="du-prompt">$</span> chrome-use close
+
+<span class="du-cmt"># 以后：已是登录态</span>
+<span class="du-prompt">$</span> <span class="du-flag">AGENTCORE_PROFILE_ID</span>=my-app chrome-use <span class="du-flag">-p</span> agentcore open https://app.example.com/dashboard</code></pre>
+      </div>
+
+      <h3>Live View：在控制台实时围观</h3>
+      <p>
+        会话启动时，AgentCore 会往 stderr 打印一个 Live View URL。在浏览器里打开它，
+        就能从 AWS 控制台实时观看这次会话的画面——调试无头流程时特别有用：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">stderr</span>
+        </div>
+<pre><code>Session: abc123-def456
+Live View: https://us-east-1.console.aws.amazon.com/bedrock-agentcore/browser/aws.browser.v1/session/abc123-def456#</code></pre>
+      </div>
+
+      <h3>选区域 / 用环境变量指定 provider</h3>
+      <p>
+        默认区域是 <code>us-east-1</code>，用 <code>AGENTCORE_REGION</code> 显式切换。
+        如果不想每条命令都带 <code>-p agentcore</code>，可以设 <code>AGENT_BROWSER_PROVIDER</code>：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 显式区域</span>
+<span class="du-prompt">$</span> <span class="du-flag">AGENTCORE_REGION</span>=eu-west-1 chrome-use <span class="du-flag">-p</span> agentcore open https://example.com
+
+<span class="du-cmt"># 用环境变量固定 provider，命令就不用再带 -p</span>
+<span class="du-prompt">$</span> export <span class="du-flag">AGENT_BROWSER_PROVIDER</span>=agentcore
+<span class="du-prompt">$</span> export <span class="du-flag">AGENTCORE_REGION</span>=us-east-2
+<span class="du-prompt">$</span> chrome-use open https://example.com
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use close</code></pre>
+      </div>
+
+      <h3>AgentCore 环境变量一览</h3>
+      <table>
+          <thead>
+            <tr><th>变量</th><th>说明</th><th>默认值</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>AGENTCORE_REGION</code></td><td>AWS 区域</td><td><code>us-east-1</code></td></tr>
+            <tr><td><code>AGENTCORE_BROWSER_ID</code></td><td>浏览器标识</td><td><code>aws.browser.v1</code></td></tr>
+            <tr><td><code>AGENTCORE_PROFILE_ID</code></td><td>持久化浏览器 profile（cookie、localStorage）</td><td>（无）</td></tr>
+            <tr><td><code>AGENTCORE_SESSION_TIMEOUT</code></td><td>会话超时（秒）</td><td><code>3600</code></td></tr>
+            <tr><td><code>AWS_PROFILE</code></td><td>用于凭证解析的 AWS CLI profile</td><td><code>default</code></td></tr>
+          </tbody>
+        </table>
+
+      <h3>常见问题</h3>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 排错清单</div>
+        <ul>
+          <li><strong>Failed to run aws CLI</strong>：AWS CLI 没装或不在 PATH。装上，或直接设 <code>AWS_ACCESS_KEY_ID</code> 和 <code>AWS_SECRET_ACCESS_KEY</code>。</li>
+          <li><strong>AWS CLI failed: ... Run 'aws sso login'</strong>：SSO 凭证过期，跑一次 <code>aws sso login</code> 刷新。</li>
+          <li><strong>会话超时</strong>：默认 3600 秒（1 小时）。长任务用 <code>AGENTCORE_SESSION_TIMEOUT=7200</code> 拉长。</li>
+        </ul>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>两条路径怎么选</h2>
+      <div class="du-cards cols-2">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">▲</span> Vercel Sandbox</div>
+          <p>已经在 Vercel 上部署应用、想要按需拉起即用即销的 microVM，且不愿被 Serverless 二进制体积限制卡住时选它。用 sandbox 快照拿到秒级冷启动。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">☁︎</span> AWS Bedrock AgentCore</div>
+          <p>身处 AWS 生态、想要托管的云浏览器会话、需要持久化 profile 保住登录态、或想在控制台 Live View 实时围观时选它。命令行体验与本地零差别。</p>
+        </div>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 相关阅读</div>
+        想驱动本机 Chrome 而非云端，见 <a href="/real-chrome.html">连接真实 Chrome</a>；
+        跨会话复用登录态的通用做法，见 <a href="/sessions.html">会话管理</a>。
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

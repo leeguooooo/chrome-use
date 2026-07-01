@@ -1,2 +1,5 @@
 node scripts/sync-version.js
 git add cli/Cargo.toml cli/Cargo.lock
+
+# Remind to update chrome-use.leeguoo.com docs when their sources change (warn-only).
+node scripts/check-docs-staleness.js

@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Waiting &amp; Asserting · chrome-use docs</title>
+  <meta name="description" content="Once the page changes, what do you wait for and how do you confirm an action really landed — pick the right wait condition, assert results with expect's exit codes, see changes with --observe, and keep optional steps idempotent with --if-present." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="waiting" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Driving the page</p>
+
+      <div class="du-title-row">
+        <h1>Waiting &amp; Asserting</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        When an agent goes off the rails, <span class="mark">it's usually because it waited wrong, not because it picked the wrong element</span>.
+        After a click or a fill, the page is still moving — what you wait for and how you confirm the action really landed
+        decides whether your script is solid or brittle. This page spells out how <code>wait</code> waits, how
+        <code>expect</code> asserts, how <code>--observe</code> shows you what changed,
+        and how <code>--if-present</code> keeps optional steps idempotent.
+      </p>
+
+      <!-- ============ WAIT ============ -->
+      <h2>Pick the right wait condition — wait</h2>
+      <p>
+        After every action that changes the page, wait for a <strong>specific</strong> condition
+        instead of blindly sleeping a fixed number of milliseconds. <code>wait</code> supports these forms:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use wait @e1                     <span class="du-cmt"># until an element appears</span>
+<span class="du-prompt">$</span> chrome-use wait 2000                    <span class="du-cmt"># dumb sleep, milliseconds (last resort)</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--text</span> <span class="du-str">"Success"</span>        <span class="du-cmt"># until this text shows up on the page</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/dashboard"</span>    <span class="du-cmt"># until the URL matches the pattern (glob)</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle       <span class="du-cmt"># until the network goes idle (post-navigation settle)</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> domcontentloaded  <span class="du-cmt"># until DOMContentLoaded</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--fn</span> <span class="du-str">"window.myApp.ready === true"</span>  <span class="du-cmt"># until a JS condition holds</span></code></pre>
+      </div>
+
+      <p>After any action that changes the page, pick one of these three:</p>
+      <ul>
+        <li>Wait for the <strong>specific element</strong> you expect to appear: <code>wait @ref</code> or <code>wait --text "..."</code>.</li>
+        <li>Wait for the <strong>URL to change</strong>: <code>wait --url "**/new-page"</code>.</li>
+        <li>Wait for the <strong>network to go idle</strong> (the catch-all for SPA navigations): <code>wait --load networkidle</code>.</li>
+      </ul>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Avoid bare wait 2000</div>
+        Outside of debugging, don't use a fixed-millisecond <code>wait 2000</code> — it makes scripts slow and brittle.
+        The timeout defaults to 25 seconds, so waiting on a real condition never costs much, and it continues the <strong>instant</strong> the condition is met.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ EXPECT ============ -->
+      <h2>Confirm the action landed — expect</h2>
+      <p>
+        Once an action is done, <strong>confirm the result with an assertion instead of pulling a snapshot and eyeballing it</strong>.
+        <code>expect</code> is a pass/fail verb with an <strong>exit code</strong>
+        (0 pass / 1 false / 2 can't tell), so it composes with <code>&amp;&amp;</code> and
+        <code>chrome-use batch</code>, and it costs ~1 line — no reading a whole snapshot.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash — expect assertions</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e8 &amp;&amp; chrome-use expect <span class="du-str">"#toast"</span> visible      <span class="du-cmt"># did the toast pop up?</span>
+<span class="du-prompt">$</span> chrome-use expect count <span class="du-str">".result"</span> <span class="du-str">"&gt;="</span> 1                        <span class="du-cmt"># did results load?</span>
+<span class="du-prompt">$</span> chrome-use expect text @e3 contains <span class="du-str">"Saved"</span>                    <span class="du-cmt"># success message?</span>
+<span class="du-prompt">$</span> chrome-use expect url contains /dashboard                       <span class="du-cmt"># did navigation land?</span>
+<span class="du-prompt">$</span> chrome-use expect <span class="du-str">"#spinner"</span> gone                               <span class="du-cmt"># finished loading?</span>
+<span class="du-prompt">$</span> chrome-use requests <span class="du-flag">--clear</span> &amp;&amp; chrome-use click @save \
+    &amp;&amp; chrome-use expect request /api/save <span class="du-flag">--status</span> 2xx           <span class="du-cmt"># POST fired and 2xx?</span>
+<span class="du-prompt">$</span> chrome-use expect no-errors                                     <span class="du-cmt"># no console errors?</span></code></pre>
+      </div>
+
+      <h3>expect waits for you</h3>
+      <p>
+        <code>expect</code> <strong>polls</strong> until the condition holds within the timeout window,
+        so you often don't need a separate <code>wait</code>. The supported conditions are:
+      </p>
+      <ul>
+        <li>Element state: <code>visible</code> | <code>hidden</code> | <code>gone</code> | <code>present</code>;</li>
+        <li>Count: <code>count &lt;css&gt; &lt;op&gt; &lt;n&gt;</code>;</li>
+        <li>Text/value/attribute: <code>text|value|attr … equals|contains|matches</code>;</li>
+        <li>URL: <code>url …</code>;</li>
+        <li>Network request: <code>request &lt;substr&gt; [--status 2xx]</code>;</li>
+        <li>Console: <code>no-errors</code>.</li>
+      </ul>
+      <p>
+        <code>--not</code> inverts the check, and <code>--no-wait</code> checks once without polling.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Prerequisites for requests and console</div>
+        <code>expect request</code> can only see requests captured <strong>after tracking started</strong> —
+        run <code>requests --clear</code> first; <code>no-errors</code> needs console capture —
+        run <code>console</code> first. See <a href="/en/troubleshooting.html">Troubleshooting</a> for more.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ OBSERVE ============ -->
+      <h2>See what an action changed — --observe</h2>
+      <p>
+        Add <code>--observe</code> to any action that changes the page (<code>click</code> / <code>fill</code> / <code>type</code> /
+        <code>select</code> / <code>check</code> / <code>press</code> / <code>eval</code>)
+        and you skip the manual "action → wait → snapshot → diff" dance:
+        the result carries an <code>observed</code> delta — interactive rows added/removed
+        (new toasts and validation hints come through the alert channel too), URL changes, and requests fired;
+        if nothing moved, it returns <code>{changed:false}</code>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e8 <span class="du-flag">--observe</span>   <span class="du-cmt"># one ~20-80 token reply shows the dialog/toast/new rows that popped up</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ expect or --observe?</div>
+        For a <strong>hard pass/fail gate</strong> (with exit codes, <code>&amp;&amp;</code>, batches) use
+        <code>expect</code>; to <strong>see</strong> what actually happened and get a structured diff, use <code>--observe</code>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ FORM FILL --MAP ============ -->
+      <h2>Fill a whole form at once — form fill --map</h2>
+      <p>
+        Instead of writing N separate <code>fill</code> / <code>select</code> / <code>check</code> steps,
+        pass a <code>{label or selector: value}</code> map: it resolves each field by <code>&lt;label&gt;</code>,
+        aria-label, placeholder, name, then CSS, and auto-dispatches to the right control type
+        (string → text/dropdown/radio, <code>true/false</code> → checkbox).
+        It can also submit for you (<code>--submit "&lt;text|selector&gt;"</code>) and returns
+        <code>{filled, submitted, errors}</code> — where <code>errors</code> are the inline validation messages,
+        so a rejected submit tells you why in the same call.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash — form fill --map</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use form fill <span class="du-flag">--map</span> \
+    <span class="du-str">'{"Email":"a@b.com","Country":"US","Subscribe":true}'</span> \
+    <span class="du-flag">--submit</span> <span class="du-str">"Sign up"</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Rich-text editors are the exception</div>
+        For rich-text editors like DraftJS / Monaco / CodeMirror, fill them individually with <code>fill</code> — it handles them;
+        <code>form fill</code> covers standard controls. More input detail in <a href="/en/interacting.html">Interacting</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ IF-PRESENT ============ -->
+      <h2>Optional steps — --if-present</h2>
+      <p>
+        Add <code>--if-present</code> (aliased <code>--optional</code>) to any selector-based action, and
+        when the target doesn't exist it becomes a <strong>no-op that still succeeds</strong> (<code>↷ skipped</code>, exit code 0)
+        instead of erroring — no need to read the page first to decide, and the flow can be re-run over and over.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click <span class="du-str">".cookie-accept"</span> <span class="du-flag">--if-present</span>   <span class="du-cmt"># dismiss a cookie banner that may not be there</span>
+<span class="du-prompt">$</span> chrome-use check <span class="du-str">"#opt-in"</span> <span class="du-flag">--if-present</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Only skips "element not present"</div>
+        <code>--if-present</code> only lets a <strong>missing target</strong> through; a real failure (say, the element is there but won't click)
+        still errors and is not silently swallowed.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ NEXT ============ -->
+      <h2>Next</h2>
+      <div class="du-cards cols-2">
+        <a class="du-card" href="/en/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Interacting</div>
+          <p>click, type, fill, select drive a real browser — move first, then talk about waiting and asserting.</p>
+        </a>
+        <a class="du-card" href="/en/troubleshooting.html">
+          <div class="du-card-title"><span class="du-card-ico">🛠️</span> Troubleshooting</div>
+          <p>Pre-capture for requests / console, timeouts, brittle waits — come here to diagnose when things break.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

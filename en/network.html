@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Network Interception · chrome-use docs</title>
+  <meta name="description" content="Use network route to intercept, rewrite, mock, or block requests and responses in a real browser — no proxy, no extension permissions; pair with requests and har to observe and record traffic." />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="network" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 34 C18 12 30 56 42 34 S54 20 54 20"/>
+          <circle cx="10" cy="20" r="3"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Advanced</p>
+
+      <div class="du-title-row">
+        <h1>Network Interception</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        <code>network route</code> intercepts matching requests through CDP's <span class="mark">Fetch domain</span> —
+        <strong>no proxy, and no extension permissions</strong>. You can mock a fake response, rewrite the outgoing request,
+        tamper with the real response, or simply block certain traffic. The verbs and fields mirror Playwright's
+        conventions, so there's almost nothing to learn.
+      </p>
+
+      <h2>Three modes</h2>
+      <p>
+        Which mode a single <code>network route</code> rule falls into depends on which flags you pass.
+        They each step in at a different moment:
+      </p>
+
+      <div class="du-cards cols-3">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🎭</span> Mock response</div>
+          <p><code>--body</code> / <code>--status</code> / <code>--header</code> / <code>--content-type</code>: return a fake response directly; the request is <strong>short-circuited and never sent</strong>.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">✏️</span> Rewrite request</div>
+          <p><code>--method</code> / <code>--set-body</code> / <code>--set-header</code> / <code>--rewrite-url</code>: alter the outgoing request, then let the real response come back.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🩹</span> Edit real response</div>
+          <p><code>--edit-status</code> / <code>--edit-header</code> / <code>--replace</code>: the request goes out as usual, then you modify the real response once it returns.</p>
+        </div>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ When to pick which mode</div>
+        Mock is great for fabricating data when the frontend has no backend yet; rewrite request is for injecting
+        auth headers or switching environments; editing the real response is for <strong>forcing a specific error
+        state</strong>, or patching in one field without standing up a mock server.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Mock response</h2>
+      <p>
+        Pass flags like <code>--body</code> and the request is fulfilled directly — a fake response returns immediately
+        and the real network request is never sent. Ideal for producing empty lists, permission states, or isolating
+        the backend.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Mock response (fulfill — the request never leaves the browser)</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/users"</span> <span class="du-flag">--body</span> <span class="du-str">'{"users":[]}'</span> <span class="du-flag">--status</span> 200 <span class="du-flag">--content-type</span> application/json
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--body</span> <span class="du-str">'{"vip":true}'</span> <span class="du-flag">--header</span> X-From=mock</code></pre>
+      </div>
+
+      <h2>Rewrite the outgoing request</h2>
+      <p>
+        Pass <code>--method</code>, <code>--set-body</code>, <code>--set-header</code>, or <code>--rewrite-url</code>,
+        and the request continues with your overrides (continue with overrides), after which the <strong>real response</strong>
+        comes back as usual. This is how you inject a test auth header, replace the request body, or route traffic to staging.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Rewrite the outgoing request (the real response still comes back)</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/save"</span> <span class="du-flag">--method</span> POST <span class="du-flag">--set-header</span> Authorization=<span class="du-str">"Bearer test"</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/save"</span> <span class="du-flag">--set-body</span> <span class="du-str">'{"x":1}'</span>          <span class="du-cmt"># replace the request body</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/v1/*"</span> <span class="du-flag">--rewrite-url</span> https://staging.example.com/v1/thing</code></pre>
+      </div>
+
+      <h2>Edit the real response</h2>
+      <p>
+        Pass <code>--edit-status</code>, <code>--edit-header</code>, or <code>--replace 'from=&gt;to'</code>,
+        and the request goes out normally; once the real response returns, you tamper with it, and the page sees the
+        modified version. Perfect for <strong>forcing an endpoint into a 503 error state</strong>, or swapping one field
+        in the response without touching the backend.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Edit the real response (request sent, response returns, then modified)</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--edit-status</span> 503                <span class="du-cmt"># override the status code</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--edit-header</span> X-Env=test         <span class="du-cmt"># add/override a response header</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--replace</span> <span class="du-str">'prod=&gt;staging'</span>        <span class="du-cmt"># substring replace in the real response body (repeatable)</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Precedence and repeatability</div>
+        When one rule specifies both a mock and a rewrite, <strong>mock wins</strong>.
+        <code>--header</code> / <code>--set-header</code> / <code>--edit-header</code> / <code>--replace</code>
+        are all <strong>repeatable</strong>; request/response headers are merged and layered on top of the originals.
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Don't touch top-level document navigation</div>
+        Editing the status code of a <strong>top-level document</strong> navigation disrupts page loading.
+        When you need to, use <code>--resource-type xhr,fetch</code> to <strong>scope response edits to API calls</strong>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Block and scope by resource type</h2>
+      <p>
+        Use <code>--abort</code> to cut off a request outright. Any rule can be scoped with
+        <code>--resource-type</code> to limit its reach and avoid catching other traffic by accident.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Block completely</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/analytics"</span> <span class="du-flag">--abort</span>
+
+<span class="du-cmt"># Scope a rule to certain resource types</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/*.json"</span> <span class="du-flag">--abort</span> <span class="du-flag">--resource-type</span> xhr,fetch</code></pre>
+      </div>
+
+      <h2>Observe and record traffic</h2>
+      <p>
+        Before rewriting, see clearly which requests are in flight. <code>network requests</code> lists captured traffic,
+        and <code>--clear</code> starts recording fresh; <code>network har</code> records the whole session into a standard
+        HAR file.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use network requests <span class="du-flag">--clear</span>        <span class="du-cmt"># clear and start capturing again</span>
+<span class="du-prompt">$</span> chrome-use network requests                <span class="du-cmt"># see which requests went out</span>
+
+<span class="du-prompt">$</span> chrome-use network har start               <span class="du-cmt"># record all traffic</span>
+<span class="du-cmt"># ... perform your actions ...</span>
+<span class="du-prompt">$</span> chrome-use network har stop /tmp/trace.har</code></pre>
+      </div>
+
+      <h2>Clean up rules</h2>
+      <p>
+        All route rules are persistent and stay in effect until you explicitly remove them. When you're done, use
+        <code>network unroute</code> to drop them all at once so they don't affect later sessions.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use network unroute                 <span class="du-cmt"># remove all route rules</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Wrap-up habit</div>
+        Routes are a global side effect. When you're done, remember to run <code>network unroute</code>,
+        otherwise a stray <code>--abort</code> can quietly break the next task's page.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Related reading</h2>
+      <div class="du-cards">
+        <a class="du-card" href="/en/waiting.html">
+          <div class="du-card-title"><span class="du-card-ico">⏳</span> Waiting &amp; syncing</div>
+          <p>Once a mock/rewrite is in effect, wait for the page to actually fire the request before asserting.</p>
+        </a>
+        <a class="du-card" href="/en/troubleshooting.html">
+          <div class="du-card-title"><span class="du-card-ico">🧰</span> Troubleshooting</div>
+          <p>Route not matching, or the page loading oddly? Start your investigation here.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

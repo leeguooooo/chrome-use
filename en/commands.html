@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Command Reference · chrome-use</title>
+  <meta name="description" content="A complete cheat sheet of every chrome-use command, alias, and flag: navigation, snapshots, interaction, network interception, tabs, React/Web Vitals, global options, and stealth knobs." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="commands" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Reference</p>
+
+      <div class="du-title-row">
+        <h1>Command Reference</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        This is the <span class="mark">complete cheat sheet</span> of every chrome-use command, alias, and flag.
+        It's organized by command group so it's easy to scan and verify. To get a feel for the overall rhythm first,
+        read the <a href="/en/core-loop.html">Core Loop</a>; when a command doesn't work, check
+        <a href="/en/troubleshooting.html">Troubleshooting</a>.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Conventions</div>
+        The <code>@e1</code>, <code>@e2</code> in interaction commands are element references (refs) from
+        <code>snapshot</code> output. Run <code>snapshot -i</code> first to get the refs, then act on them.
+        Any command with a <code>@ref</code> always targets the tab that was active when the snapshot ran.
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Navigation</h2>
+      <p>
+        Open, navigate, go back/forward, and close the browser. Without a URL, <code>open</code> just launches
+        the browser and stops at <code>about:blank</code> — handy for registering network interceptors, cookies,
+        or init scripts <strong>before the first real navigation</strong>.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">navigation</span>
+        </div>
+<pre><code><span class="du-cmt"># launch the browser only, no navigation; stops at about:blank</span>
+<span class="du-prompt">$</span> chrome-use open
+<span class="du-cmt"># launch and navigate (aliases: goto, navigate); prepends https:// when no protocol</span>
+<span class="du-prompt">$</span> chrome-use open <span class="du-str">&lt;url&gt;</span>
+<span class="du-prompt">$</span> chrome-use back                <span class="du-cmt"># go back</span>
+<span class="du-prompt">$</span> chrome-use forward             <span class="du-cmt"># go forward</span>
+<span class="du-prompt">$</span> chrome-use reload              <span class="du-cmt"># reload</span>
+<span class="du-cmt"># SPA client-side navigation: auto-detects Next.js router.push, falls back to history.pushState</span>
+<span class="du-prompt">$</span> chrome-use pushstate <span class="du-str">&lt;url&gt;</span>
+<span class="du-prompt">$</span> chrome-use close               <span class="du-cmt"># close the browser (aliases: quit, exit)</span>
+<span class="du-prompt">$</span> chrome-use connect 9222        <span class="du-cmt"># connect over a CDP port</span></code></pre>
+      </div>
+
+      <p>
+        You can line up all the pre-navigation setup in one shot with <code>batch</code> — launch cleanly, register
+        interceptors / cookies in order, then navigate. This suits SSR-only debugging (block everything except
+        <code>--resource-type script</code>), authenticating against a protected origin, or capturing a clean
+        <code>react suspense</code> / <code>vitals</code> state.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">pre-navigation batch</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use batch \
+    <span class="du-str">'["open"]'</span> \
+    <span class="du-str">'["network","route","*","--abort","--resource-type","script"]'</span> \
+    <span class="du-str">'["cookies","set","--curl","cookies.curl","--domain","localhost"]'</span> \
+    <span class="du-str">'["navigate","http://localhost:3000/target"]'</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>Snapshot (page analysis)</h2>
+      <p>
+        <code>snapshot</code> gives you a structured accessibility view of the page — the starting point for all
+        interaction. <code>snapshot -i</code> is recommended: it lists only interactive elements, so the output is
+        compact and every ref is present.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">snapshot</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot            <span class="du-cmt"># full accessibility tree</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>         <span class="du-cmt"># interactive elements only (recommended)</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-c</span>         <span class="du-cmt"># compact output</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-d</span> 3       <span class="du-cmt"># limit depth to 3</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span> <span class="du-cmt"># scope to a CSS selector</span></code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Tip</div>
+        <code>snapshot -i</code> only surfaces visible, interactive elements — it does <strong>not</strong> show
+        hidden inputs or a control's actual submitted value. When a form "looks filled in" but won't pass validation,
+        don't guess from the snapshot — inspect the DOM directly with <a href="#javascript">eval</a>.
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Interactions</h2>
+      <p>Drive the real browser with the <code>@ref</code> values from <code>snapshot</code>: click, type, check, drag, upload.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">interactions</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e1           <span class="du-cmt"># click</span>
+<span class="du-prompt">$</span> chrome-use click @e1 <span class="du-flag">--new-tab</span> <span class="du-cmt"># click and open in a new tab</span>
+<span class="du-prompt">$</span> chrome-use dblclick @e1        <span class="du-cmt"># double-click</span>
+<span class="du-prompt">$</span> chrome-use focus @e1           <span class="du-cmt"># focus the element</span>
+<span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># clear then type</span>
+<span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># type directly (no clear)</span>
+<span class="du-prompt">$</span> chrome-use press Enter         <span class="du-cmt"># press a key (alias: key)</span>
+<span class="du-prompt">$</span> chrome-use press Control+a     <span class="du-cmt"># key combo</span>
+<span class="du-prompt">$</span> chrome-use keydown Shift       <span class="du-cmt"># hold a key down</span>
+<span class="du-prompt">$</span> chrome-use keyup Shift         <span class="du-cmt"># release a key</span>
+<span class="du-prompt">$</span> chrome-use hover @e1           <span class="du-cmt"># hover</span>
+<span class="du-prompt">$</span> chrome-use check @e1           <span class="du-cmt"># check a checkbox</span>
+<span class="du-prompt">$</span> chrome-use uncheck @e1         <span class="du-cmt"># uncheck</span>
+<span class="du-prompt">$</span> chrome-use select @e1 <span class="du-str">"value"</span>   <span class="du-cmt"># pick a dropdown option</span>
+<span class="du-prompt">$</span> chrome-use select @e1 <span class="du-str">"a"</span> <span class="du-str">"b"</span>   <span class="du-cmt"># multi-select</span>
+<span class="du-prompt">$</span> chrome-use scroll down 500     <span class="du-cmt"># scroll the page (default down 300px)</span>
+<span class="du-prompt">$</span> chrome-use scrollintoview @e1  <span class="du-cmt"># scroll element into the viewport (alias: scrollinto)</span>
+<span class="du-prompt">$</span> chrome-use drag @e1 @e2        <span class="du-cmt"># drag and drop</span>
+<span class="du-prompt">$</span> chrome-use upload @e1 file.pdf <span class="du-cmt"># upload a file</span></code></pre>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Click "succeeds but nothing happens"</div>
+        Autocomplete / menu <code>&lt;li&gt;</code> items often close when the input loses focus. If <code>click</code>
+        reports success but the page doesn't react, retry that click with <code>AGENT_BROWSER_CLICK_MODE=dom</code> —
+        DOM dispatch doesn't move focus the way a real pointer does, so the option still gets selected.
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Reading information</h2>
+      <p>Read text, HTML, attributes, values, bounding boxes, and computed styles from elements or the page.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">get</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use get text @e1        <span class="du-cmt"># element text</span>
+<span class="du-prompt">$</span> chrome-use get html @e1        <span class="du-cmt"># innerHTML</span>
+<span class="du-prompt">$</span> chrome-use get value @e1       <span class="du-cmt"># input value</span>
+<span class="du-prompt">$</span> chrome-use get attr @e1 href   <span class="du-cmt"># attribute</span>
+<span class="du-prompt">$</span> chrome-use get title           <span class="du-cmt"># page title</span>
+<span class="du-prompt">$</span> chrome-use get url             <span class="du-cmt"># current URL</span>
+<span class="du-prompt">$</span> chrome-use get cdp-url         <span class="du-cmt"># CDP WebSocket URL</span>
+<span class="du-prompt">$</span> chrome-use get count <span class="du-str">".item"</span>   <span class="du-cmt"># number of matching elements</span>
+<span class="du-prompt">$</span> chrome-use get box @e1         <span class="du-cmt"># bounding box</span>
+<span class="du-prompt">$</span> chrome-use get styles @e1      <span class="du-cmt"># computed styles (font, color, background, etc.)</span></code></pre>
+      </div>
+
+      <h3>Check state</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">is</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use is visible @e1      <span class="du-cmt"># is it visible</span>
+<span class="du-prompt">$</span> chrome-use is enabled @e1      <span class="du-cmt"># is it enabled</span>
+<span class="du-prompt">$</span> chrome-use is checked @e1      <span class="du-cmt"># is it checked</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>Screenshots &amp; PDF</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">screenshot / pdf</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use screenshot          <span class="du-cmt"># save to a temp directory</span>
+<span class="du-prompt">$</span> chrome-use screenshot path.png <span class="du-cmt"># save to a specific path</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--full</span>   <span class="du-cmt"># full-page screenshot</span>
+<span class="du-prompt">$</span> chrome-use pdf output.pdf      <span class="du-cmt"># save as PDF</span></code></pre>
+      </div>
+      <p>
+        Headless Chromium hides native scrollbars in screenshots for consistent image output. Pass
+        <code>--hide-scrollbars false</code> at launch to keep the native scrollbars.
+      </p>
+
+      <!-- ============================================================ -->
+      <h2>Recording</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">record</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use record start ./demo.webm    <span class="du-cmt"># start recording</span>
+<span class="du-prompt">$</span> chrome-use click @e1                   <span class="du-cmt"># perform actions</span>
+<span class="du-prompt">$</span> chrome-use record stop                 <span class="du-cmt"># stop and save</span>
+<span class="du-prompt">$</span> chrome-use record restart ./take2.webm <span class="du-cmt"># stop the current one + start a new recording</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Waiting</h2>
+      <p>Wait for an element, text, URL, network idle, or any JS condition before asserting state.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">wait</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use wait @e1                     <span class="du-cmt"># wait for an element</span>
+<span class="du-prompt">$</span> chrome-use wait 2000                    <span class="du-cmt"># wait a number of milliseconds</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--text</span> <span class="du-str">"Success"</span>        <span class="du-cmt"># wait for text (or -t)</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/dashboard"</span>    <span class="du-cmt"># wait for a URL pattern (or -u)</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle       <span class="du-cmt"># wait for network idle (or -l)</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--fn</span> <span class="du-str">"window.ready"</span>     <span class="du-cmt"># wait for a JS condition (or -f)</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Mouse control</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">mouse</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use mouse move 100 200      <span class="du-cmt"># move the mouse</span>
+<span class="du-prompt">$</span> chrome-use mouse down left         <span class="du-cmt"># press a button</span>
+<span class="du-prompt">$</span> chrome-use mouse up left           <span class="du-cmt"># release a button</span>
+<span class="du-prompt">$</span> chrome-use mouse wheel 100         <span class="du-cmt"># wheel</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>Semantic locators</h2>
+      <p>
+        An alternative to refs: locate by role, text, label, placeholder, alt, title, testid, or position,
+        and chain the action to perform directly after it.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">find</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use find role button click <span class="du-flag">--name</span> <span class="du-str">"Submit"</span>
+<span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
+<span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>      <span class="du-cmt"># exact match only</span>
+<span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
+<span class="du-prompt">$</span> chrome-use find placeholder <span class="du-str">"Search"</span> type <span class="du-str">"query"</span>
+<span class="du-prompt">$</span> chrome-use find alt <span class="du-str">"Logo"</span> click
+<span class="du-prompt">$</span> chrome-use find title <span class="du-str">"Close"</span> click
+<span class="du-prompt">$</span> chrome-use find testid <span class="du-str">"submit-btn"</span> click
+<span class="du-prompt">$</span> chrome-use find first <span class="du-str">".item"</span> click
+<span class="du-prompt">$</span> chrome-use find last <span class="du-str">".item"</span> click
+<span class="du-prompt">$</span> chrome-use find nth 2 <span class="du-str">"a"</span> hover</code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Browser settings</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">set</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use set viewport 1920 1080          <span class="du-cmt"># viewport size</span>
+<span class="du-prompt">$</span> chrome-use set viewport 1920 1080 2        <span class="du-cmt"># 2x retina (CSS size unchanged, higher-res screenshots)</span>
+<span class="du-prompt">$</span> chrome-use set device <span class="du-str">"iPhone 14"</span>          <span class="du-cmt"># emulate a device</span>
+<span class="du-prompt">$</span> chrome-use set geo 37.7749 -122.4194       <span class="du-cmt"># geolocation (alias: geolocation)</span>
+<span class="du-prompt">$</span> chrome-use set offline on                  <span class="du-cmt"># toggle offline mode</span>
+<span class="du-prompt">$</span> chrome-use set headers <span class="du-str">'{"X-Key":"v"}'</span>     <span class="du-cmt"># extra HTTP headers</span>
+<span class="du-prompt">$</span> chrome-use set credentials user pass       <span class="du-cmt"># HTTP basic auth (alias: auth)</span>
+<span class="du-prompt">$</span> chrome-use set media dark                  <span class="du-cmt"># emulate color scheme</span>
+<span class="du-prompt">$</span> chrome-use set media light reduced-motion  <span class="du-cmt"># light + reduced motion</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Cookies &amp; storage</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">cookies / storage</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use cookies                     <span class="du-cmt"># get all cookies</span>
+<span class="du-prompt">$</span> chrome-use cookies set name value      <span class="du-cmt"># set a cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies clear               <span class="du-cmt"># clear cookies</span>
+<span class="du-prompt">$</span> chrome-use storage local               <span class="du-cmt"># all of localStorage</span>
+<span class="du-prompt">$</span> chrome-use storage local key           <span class="du-cmt"># a specific key</span>
+<span class="du-prompt">$</span> chrome-use storage local set k v       <span class="du-cmt"># set a value</span>
+<span class="du-prompt">$</span> chrome-use storage local clear         <span class="du-cmt"># clear everything</span></code></pre>
+      </div>
+
+      <h3>Import cookies from cURL</h3>
+      <p>
+        Auto-detects the format: a JSON array of <code>{name, value}</code>, a DevTools → Network → Copy as cURL dump,
+        or a bare Cookie header. Cookie values are never echoed back on error.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">cookies set --curl</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use cookies set <span class="du-flag">--curl</span> <span class="du-str">&lt;file&gt;</span>                       <span class="du-cmt"># auto-detect JSON / cURL / Cookie header</span>
+<span class="du-prompt">$</span> chrome-use cookies set <span class="du-flag">--curl</span> <span class="du-str">&lt;file&gt;</span> <span class="du-flag">--domain</span> example.com  <span class="du-cmt"># scope to a domain</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>Network interception</h2>
+      <p>
+        Intercept, block, mock responses, rewrite requests, or edit real responses. For in-depth usage, see the
+        network section in the <a href="/en/core-loop.html">Core Loop</a>.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">network</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span>              <span class="du-cmt"># intercept requests</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span> <span class="du-flag">--abort</span>      <span class="du-cmt"># block requests</span>
+<span class="du-cmt"># mock a response (fulfill)</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span> <span class="du-flag">--body</span> <span class="du-str">'{}'</span> <span class="du-flag">--status</span> 200 <span class="du-flag">--header</span> K=V <span class="du-flag">--content-type</span> application/json
+<span class="du-cmt"># rewrite a request (continue)</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span> <span class="du-flag">--method</span> POST <span class="du-flag">--set-body</span> <span class="du-str">'{}'</span> <span class="du-flag">--set-header</span> K=V <span class="du-flag">--rewrite-url</span> <span class="du-str">&lt;u&gt;</span>
+<span class="du-cmt"># edit a real response</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span> <span class="du-flag">--edit-status</span> 503 <span class="du-flag">--edit-header</span> K=V <span class="du-flag">--replace</span> <span class="du-str">'from=&gt;to'</span>
+<span class="du-prompt">$</span> chrome-use network unroute [url]            <span class="du-cmt"># remove a route</span>
+<span class="du-prompt">$</span> chrome-use network requests                 <span class="du-cmt"># view tracked requests</span>
+<span class="du-prompt">$</span> chrome-use network requests <span class="du-flag">--filter</span> api    <span class="du-cmt"># filter requests</span></code></pre>
+      </div>
+
+      <h3>Intercept by resource type</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">network route --resource-type</span>
+        </div>
+<pre><code><span class="du-cmt"># block scripts only (SSR-lock mode)</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">'*'</span> <span class="du-flag">--abort</span> <span class="du-flag">--resource-type</span> script
+<span class="du-cmt"># replace images and fonts with empty responses</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">'*'</span> <span class="du-flag">--resource-type</span> image,font <span class="du-flag">--body</span> <span class="du-str">''</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>Tabs &amp; windows</h2>
+      <p>
+        Tab ids are stable strings like <code>t1</code>, <code>t2</code> and are not reused within a session.
+        Positional integers are <strong>not</strong> accepted — <code>tab 2</code> errors; use <code>t2</code>.
+        You can also give a tab a readable label (<code>docs</code>, <code>app</code>), interchangeable with the id.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">tab / window</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use tab                              <span class="du-cmt"># list tabs (with tabId and label)</span>
+<span class="du-prompt">$</span> chrome-use tab new [url]                    <span class="du-cmt"># new tab</span>
+<span class="du-prompt">$</span> chrome-use tab new <span class="du-flag">--label</span> docs [url]       <span class="du-cmt"># new tab with a readable label</span>
+<span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># switch by id</span>
+<span class="du-prompt">$</span> chrome-use tab docs                         <span class="du-cmt"># switch by label</span>
+<span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># close the current tab</span>
+<span class="du-prompt">$</span> chrome-use tab close t2                     <span class="du-cmt"># close by id</span>
+<span class="du-prompt">$</span> chrome-use tab close docs                   <span class="du-cmt"># close by label</span>
+<span class="du-prompt">$</span> chrome-use window new                       <span class="du-cmt"># new window</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ refs belong to the tab active at snapshot time</div>
+        The daemon maintains a single active tab, and <code>@eN</code> belongs to the tab that was active when the
+        snapshot ran. To operate on another tab, <strong>switch to it first, then snapshot</strong>. Labels are never
+        auto-generated, aren't rewritten after navigation, and are unique within a session.
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Frames (iframe)</h2>
+      <p>
+        iframes are detected automatically during a snapshot, and their contents are inlined beneath the iframe
+        element (one level of nesting). refs inside an iframe can be operated on directly; you can also switch frame
+        context for a scoped snapshot.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">frame</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use frame <span class="du-str">"#iframe"</span>     <span class="du-cmt"># switch to an iframe by CSS selector</span>
+<span class="du-prompt">$</span> chrome-use frame @e3           <span class="du-cmt"># switch to an iframe by element ref</span>
+<span class="du-prompt">$</span> chrome-use frame main          <span class="du-cmt"># return to the main frame</span></code></pre>
+      </div>
+      <p>
+        <code>frame</code> accepts three kinds of input: an <strong>element ref</strong> (<code>frame @e3</code>),
+        a <strong>CSS selector</strong> (<code>frame "#payment-iframe"</code>), and a
+        <strong>frame name / URL</strong> (matched against the browser's frame tree).
+      </p>
+
+      <!-- ============================================================ -->
+      <h2>Dialogs</h2>
+      <p>
+        By default <code>alert</code> and <code>beforeunload</code> are accepted automatically so the agent doesn't
+        block; <code>confirm</code> and <code>prompt</code> still need explicit handling. Use <code>--no-auto-dialog</code>
+        to turn that behavior off.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">dialog</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use dialog accept [text]  <span class="du-cmt"># accept the dialog</span>
+<span class="du-prompt">$</span> chrome-use dialog dismiss        <span class="du-cmt"># dismiss the dialog</span>
+<span class="du-prompt">$</span> chrome-use dialog status         <span class="du-cmt"># check whether a dialog is open</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2 id="javascript">Running JavaScript</h2>
+      <p>
+        <code>eval</code> runs in the page's <strong>MAIN world</strong>, so state persists and handlers fire.
+        When your code contains nested quotes or special characters, <code>-b</code> / <code>--stdin</code> is more
+        reliable — shell escaping is easy to get wrong.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">eval</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use eval <span class="du-str">"document.title"</span>          <span class="du-cmt"># simple expressions only</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-flag">-b</span> <span class="du-str">"&lt;base64&gt;"</span>             <span class="du-cmt"># arbitrary JS (base64-encoded)</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-flag">--stdin</span>                   <span class="du-cmt"># read the script from stdin</span>
+
+<span class="du-cmt"># multi-line scripts via stdin + heredoc:</span>
+<span class="du-prompt">$</span> cat &lt;&lt;<span class="du-str">'EOF'</span> | chrome-use eval <span class="du-flag">--stdin</span>
+const links = document.querySelectorAll('a');
+Array.from(links).map(a =&gt; a.href);
+EOF</code></pre>
+      </div>
+
+      <h3>Debug forms / hidden state with eval</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">form debugging</span>
+        </div>
+<pre><code><span class="du-cmt"># dump every field's name → value, including hidden inputs and unchecked radios</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"JSON.stringify([...document.forms[0].elements].map(e=&gt;({name:e.name,type:e.type,value:e.value,checked:e.checked})).filter(e=&gt;e.name))"</span>
+<span class="du-cmt"># why won't it submit? ask the browser's own validity API</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"[...document.forms[0].elements].filter(e=&gt;!e.validity?.valid).map(e=&gt;e.name+': '+e.validationMessage)"</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>State management</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">state</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use state save auth.json    <span class="du-cmt"># save cookies, storage, and auth state</span>
+<span class="du-prompt">$</span> chrome-use state load auth.json    <span class="du-cmt"># restore saved state</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Init scripts</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">init scripts</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open <span class="du-flag">--init-script</span> <span class="du-str">&lt;path&gt;</span>       <span class="du-cmt"># register before the first navigation (repeatable)</span>
+<span class="du-prompt">$</span> chrome-use addinitscript <span class="du-str">&lt;js&gt;</span>            <span class="du-cmt"># register at runtime (returns an identifier)</span>
+<span class="du-prompt">$</span> chrome-use removeinitscript <span class="du-str">&lt;id&gt;</span>         <span class="du-cmt"># remove a registered init script</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>React / Web Vitals</h2>
+      <p>
+        The <code>react ...</code> commands require launching with <code>--enable react-devtools</code>;
+        <code>vitals</code> and <code>pushstate</code> are framework-agnostic.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">react / vitals</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open <span class="du-flag">--enable</span> react-devtools <span class="du-str">&lt;url&gt;</span>    <span class="du-cmt"># launch with the React hook</span>
+<span class="du-prompt">$</span> chrome-use react tree                            <span class="du-cmt"># full component tree</span>
+<span class="du-prompt">$</span> chrome-use react inspect <span class="du-str">&lt;fiberId&gt;</span>               <span class="du-cmt"># props / hooks / state / source</span>
+<span class="du-prompt">$</span> chrome-use react renders start                   <span class="du-cmt"># start recording re-renders</span>
+<span class="du-prompt">$</span> chrome-use react renders stop [<span class="du-flag">--json</span>]           <span class="du-cmt"># stop and print the render analysis</span>
+<span class="du-prompt">$</span> chrome-use react suspense [<span class="du-flag">--only-dynamic</span>] [<span class="du-flag">--json</span>]  <span class="du-cmt"># Suspense boundaries + classifier</span>
+<span class="du-prompt">$</span> chrome-use vitals [url] [<span class="du-flag">--json</span>]                 <span class="du-cmt"># LCP/CLS/TTFB/FCP/INP + hydration</span>
+<span class="du-prompt">$</span> chrome-use pushstate <span class="du-str">&lt;url&gt;</span>                       <span class="du-cmt"># SPA client-side navigation (auto-detects Next router)</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Debugging</h2>
+      <p>
+        <code>console</code> / <code>errors</code> capture is <strong>off by default</strong> — an active CDP
+        <code>Runtime</code> domain is a detectable bot signal. Start the session with
+        <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code> when you need it.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">debugging</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--headed</span> open example.com   <span class="du-cmt"># show the browser window</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--cdp</span> 9222 snapshot         <span class="du-cmt"># connect over a CDP port</span>
+<span class="du-prompt">$</span> chrome-use connect 9222                <span class="du-cmt"># alternative: the connect command</span>
+<span class="du-prompt">$</span> chrome-use console                     <span class="du-cmt"># view console messages (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)</span>
+<span class="du-prompt">$</span> chrome-use console <span class="du-flag">--clear</span>             <span class="du-cmt"># clear the console</span>
+<span class="du-prompt">$</span> chrome-use errors                      <span class="du-cmt"># view page errors (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)</span>
+<span class="du-prompt">$</span> chrome-use errors <span class="du-flag">--clear</span>              <span class="du-cmt"># clear errors</span>
+<span class="du-prompt">$</span> chrome-use highlight @e1               <span class="du-cmt"># highlight an element</span>
+<span class="du-prompt">$</span> chrome-use inspect                     <span class="du-cmt"># open DevTools for this session</span>
+<span class="du-prompt">$</span> chrome-use trace start                 <span class="du-cmt"># start recording a trace</span>
+<span class="du-prompt">$</span> chrome-use trace stop trace.zip        <span class="du-cmt"># stop and save</span>
+<span class="du-prompt">$</span> chrome-use profiler start              <span class="du-cmt"># start profiling</span>
+<span class="du-prompt">$</span> chrome-use profiler stop trace.json    <span class="du-cmt"># stop and save the profile</span></code></pre>
+      </div>
+
+      <h3>Find pages the user saved (find-url)</h3>
+      <p>
+        Search local Chrome/Edge <strong>bookmarks</strong> by keyword — for internal systems or previously saved
+        pages that public search can't reach. Reads locally; no browser / daemon required. Results are sorted by
+        most recently added, and <code>javascript:</code> / <code>data:</code> bookmarks are skipped.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">find-url</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use find-url jira board          <span class="du-cmt"># all keywords must match (name or url)</span>
+<span class="du-prompt">$</span> chrome-use find-url <span class="du-flag">--limit</span> 10 invoices
+<span class="du-prompt">$</span> chrome-use find-url <span class="du-flag">--browser</span> edge <span class="du-flag">--profile</span> <span class="du-str">"Profile 1"</span> wiki
+<span class="du-prompt">$</span> chrome-use find-url grafana <span class="du-flag">--json</span>      <span class="du-cmt"># {results:[{name,url,folder}], count}</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>Drive your real logged-in Chrome (extension)</h2>
+      <p>
+        Chrome 136 locked down <code>--remote-debugging-port</code> on the default profile, so to drive the user's
+        <strong>existing</strong> logged-in window, chrome-use goes through a Chrome <strong>extension</strong> + native
+        messaging — no port, no token, no per-use confirmation. A one-time install writes the native messaging host
+        manifest:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">extension</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use extension install        <span class="du-cmt"># write the native messaging host manifest (one-time)</span>
+<span class="du-prompt">$</span> chrome-use extension connect        <span class="du-cmt"># auto-attach to the real logged-in tabs</span>
+<span class="du-prompt">$</span> chrome-use tab                      <span class="du-cmt"># list the real tabs it now controls</span>
+<span class="du-prompt">$</span> chrome-use tab t3                   <span class="du-cmt"># switch the session to one of them</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>              <span class="du-cmt"># drive it like any normal session</span>
+<span class="du-prompt">$</span> chrome-use extension status         <span class="du-cmt"># is the host installed?</span>
+<span class="du-prompt">$</span> chrome-use extension uninstall      <span class="du-cmt"># remove the host manifest</span></code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Install from the Chrome Web Store (recommended)</div>
+        The Store build is stable across restarts and auto-updates (store id <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>).
+        A loaded unpacked dev build can be disabled / dropped when Chrome restarts, silently breaking the relay — use
+        the Store build for unattended scenarios.
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Security</div>
+        The extension↔host link is authenticated by Chrome (the extension id); the host↔chrome-use CDP link uses an
+        unguessable URL in a 0600 file. <code>--extension &lt;path&gt;</code> is unrelated — that loads an extension into a
+        <em>freshly launched</em> browser.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>Global options</h2>
+      <p>
+        These flags go before the command and apply to the whole session. Note: <strong>headless mode is forbidden</strong>
+        (a bot signal) — it's headed by default and always (stealth); on a display-less server, use
+        <code>AGENT_BROWSER_ALLOW_HEADLESS=1</code>.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">global options</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> <span class="du-str">&lt;name&gt;</span> ...    <span class="du-cmt"># isolated browser session</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--json</span> ...              <span class="du-cmt"># JSON output, easy to parse</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--headed</span> ...            <span class="du-cmt"># default and always on (stealth)</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--full</span> ...              <span class="du-cmt"># full-page screenshot (-f)</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--cdp</span> <span class="du-str">&lt;port&gt;</span> ...        <span class="du-cmt"># connect over CDP</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">-p</span> <span class="du-str">&lt;provider&gt;</span> ...        <span class="du-cmt"># cloud browser provider (--provider)</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--proxy</span> <span class="du-str">&lt;url&gt;</span> ...       <span class="du-cmt"># use a proxy server</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--proxy-bypass</span> <span class="du-str">&lt;hosts&gt;</span>   <span class="du-cmt"># hosts that bypass the proxy</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--headers</span> <span class="du-str">&lt;json&gt;</span> ...    <span class="du-cmt"># HTTP headers scoped to the URL origin</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--executable-path</span> <span class="du-str">&lt;p&gt;</span>   <span class="du-cmt"># custom browser executable</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--extension</span> <span class="du-str">&lt;path&gt;</span> ...  <span class="du-cmt"># load an extension (repeatable)</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--ignore-https-errors</span>   <span class="du-cmt"># ignore SSL certificate errors</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--hide-scrollbars</span> false <span class="du-cmt"># keep native scrollbars in headless Chromium screenshots</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--help</span>                  <span class="du-cmt"># help (-h)</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--version</span>               <span class="du-cmt"># version (-V)</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-str">&lt;command&gt;</span> <span class="du-flag">--help</span>       <span class="du-cmt"># detailed help for a command</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Environment variables</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">environment</span>
+        </div>
+<pre><code>AGENT_BROWSER_SESSION=<span class="du-str">"mysession"</span>            <span class="du-cmt"># default session name</span>
+AGENT_BROWSER_EXECUTABLE_PATH=<span class="du-str">"/path/chrome"</span> <span class="du-cmt"># custom browser path</span>
+AGENT_BROWSER_EXTENSIONS=<span class="du-str">"/ext1,/ext2"</span>       <span class="du-cmt"># comma-separated extension paths</span>
+AGENT_BROWSER_INIT_SCRIPTS=<span class="du-str">"/a.js,/b.js"</span>     <span class="du-cmt"># comma-separated init script paths</span>
+AGENT_BROWSER_ENABLE=<span class="du-str">"react-devtools"</span>        <span class="du-cmt"># comma-separated built-in init features</span>
+AGENT_BROWSER_HIDE_SCROLLBARS=<span class="du-str">"false"</span>        <span class="du-cmt"># keep native scrollbars</span>
+AGENT_BROWSER_PROVIDER=<span class="du-str">"browserbase"</span>         <span class="du-cmt"># cloud browser provider</span>
+AGENT_BROWSER_STREAM_PORT=<span class="du-str">"9223"</span>             <span class="du-cmt"># override the WebSocket stream port</span>
+AGENT_BROWSER_HOME=<span class="du-str">"/path/to/chrome-use"</span>     <span class="du-cmt"># custom install location</span>
+AGENT_BROWSER_CLICK_MODE=<span class="du-str">"dom"</span>               <span class="du-cmt"># click strategy: ""(default) / "coord" / "dom"</span></code></pre>
+      </div>
+
+      <h3>Stealth / anti-detection knobs (fork)</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">stealth knobs</span>
+        </div>
+<pre><code>AGENT_BROWSER_CAPTURE_CONSOLE=<span class="du-str">"1"</span>     <span class="du-cmt"># enable console/errors capture (off by default; the Runtime domain is a bot signal)</span>
+AGENT_BROWSER_TIMEZONE=<span class="du-str">"Asia/Tokyo"</span>   <span class="du-cmt"># --launch only. native timezone override (IANA id or "auto")</span>
+AGENT_BROWSER_BLOCK_WEBRTC=<span class="du-str">"1"</span>        <span class="du-cmt"># --launch only. hide the local IP via WebRTC</span>
+AGENT_BROWSER_HIDE_CANVAS=<span class="du-str">"1"</span>         <span class="du-cmt"># --launch only. session-stable canvas/audio fingerprint noise</span>
+AGENT_BROWSER_ADAPTIVE_REF=<span class="du-str">"0"</span>        <span class="du-cmt"># disable adaptive @ref relocation (on by default)</span></code></pre>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ console / errors return empty by default</div>
+        In this stealth fork, both return <code>{"messages":[]}</code> / <code>{"errors":[]}</code> plus a
+        <code>hint</code> until you start the session with <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code> — this keeps the
+        CDP <code>Runtime</code> domain disabled on the common automation paths. When something doesn't work, cross-check
+        <a href="/en/troubleshooting.html">Troubleshooting</a>.
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

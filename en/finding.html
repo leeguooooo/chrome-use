@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Finding Elements · chrome-use docs</title>
+  <meta name="description" content="When @ref is unreliable, or you'd rather not snapshot first: use the find semantic locators (role/text/label/placeholder/testid/first/nth), raw CSS, coordinate clicks, and the escalation ladder from snapshot to eval." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="finding" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 34 q14 -22 26 -10 q10 10 20 -2 M46 22 l8 0 0 8"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Driving the Page</p>
+
+      <div class="du-title-row">
+        <h1>Finding Elements</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Most of the time the <code>@ref</code> you get from <a href="/en/reading.html">snapshot</a> is all you need. But sometimes a ref
+        goes <span class="mark">stale</span>, the target is buried in a hidden state, or you simply <span class="mark">don't want to snapshot first</span>.
+        This page covers the other ways to lock onto a target — the <code>find</code> semantic locators, raw CSS, coordinate clicks — plus the ladder that
+        <span class="mark">escalates to <code>eval</code></span> when structured locating runs out.
+      </p>
+
+      <h2>When not to use @ref</h2>
+      <p>
+        <code>@ref</code> is the fastest path, but it is built on top of each <code>snapshot</code> and expires the moment the page changes.
+        In the situations below, reaching straight for a semantic locator or CSS is less work:
+      </p>
+      <ul>
+        <li>The page is simple, and running a separate snapshot just to locate one button isn't worth it;</li>
+        <li>refs keep going stale (after navigation, form submission, or a dynamic re-render);</li>
+        <li>you already know the element's role, visible text, label, or a stable selector.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>find semantic locators</h2>
+      <p>
+        <code>find</code> locates elements by <strong>semantics</strong> instead of a ref: role + name, visible text, form
+        label, placeholder, <code>data-testid</code>, or "first / Nth" match. On a hit, chain an action verb directly
+        (<code>click</code> / <code>fill</code> / <code>type</code> / <code>hover</code> …).
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">find — semantic locators</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use find role button click <span class="du-flag">--name</span> <span class="du-str">"Submit"</span>
+<span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
+<span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>     <span class="du-cmt"># exact match only</span>
+<span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
+<span class="du-prompt">$</span> chrome-use find placeholder <span class="du-str">"Search"</span> type <span class="du-str">"query"</span>
+<span class="du-prompt">$</span> chrome-use find testid <span class="du-str">"submit-btn"</span> click
+<span class="du-prompt">$</span> chrome-use find first <span class="du-str">".card"</span> click
+<span class="du-prompt">$</span> chrome-use find nth 2 <span class="du-str">".card"</span> hover</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Check the real label text first</div>
+        Translation will trip you up. Real case: LinkedIn's "Save" button is labeled <code>收藏</code>, not <code>保存</code>,
+        so <code>find text "保存"</code> finds nothing, while <code>snapshot -i</code> steadily shows
+        <code>button "收藏" [ref=eN]</code> — just <code>click @eN</code> and you're done. Before concluding "the element doesn't exist," confirm its exact label.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Raw CSS selectors</h2>
+      <p>
+        Any action verb can take a CSS selector directly, no <code>find</code> required:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">CSS selectors</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click <span class="du-str">"#submit"</span>
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">"input[name=email]"</span> <span class="du-str">"user@test.com"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">"button.primary"</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>The escalation ladder</h2>
+      <p>
+        Locating an element follows a ladder from <span class="mark">cheap to all-purpose</span>. Walk down it in order, and don't get stuck grinding on one rung:
+      </p>
+
+      <div class="du-cards cols-2">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">①</span> snapshot + @eN</div>
+          <p>Fastest on cleanly structured pages. Grab the ref and <code>click @eN</code>.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">②</span> find role/text/label</div>
+          <p>When you'd rather not snapshot first, hit the target by semantics directly.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">③</span> raw CSS</div>
+          <p>When you already have a stable selector, pass it straight to an action verb.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">④</span> eval</div>
+          <p>The moment any rung above fights back (stale ref, hidden state, an occluded click), drop straight to <code>eval</code> and operate the DOM directly.</p>
+        </div>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Don't retry a flaky locator three times</div>
+        When you hit a stale ref, a hidden state, or an occluded click, don't keep retrying the same structured locator — go straight to <code>eval</code>
+        against the DOM; it's the fastest way to find out "why it failed." See <a href="/en/extract.html">Extracting Data</a> for more.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>click's auto-scroll and DOM fallback</h2>
+      <p>
+        <code>click</code> first <strong>scrolls the element into the viewport</strong>; if a coordinate click is occluded, it automatically falls back to the DOM's
+        <code>.click()</code>. If a <code>click</code> <em>reports success but nothing happens</em> — the classic being an autocomplete / menu
+        <code>&lt;li&gt;</code> that closes the instant it loses focus — retry that one click in DOM click mode, or just <code>eval</code>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">click reports success but does nothing</span>
+        </div>
+<pre><code><span class="du-cmt"># retry this click in DOM click mode</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_CLICK_MODE=dom chrome-use click @e3
+
+<span class="du-cmt"># or select and click the item directly with JS</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"document.querySelector('#stubborn').click()"</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Clicking by coordinates</h2>
+      <p>
+        When the only handle you have is a coordinate — a canvas, a marker from a screenshot, a target with no stable selector — click the pixel point directly:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">coordinate click</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click 449 320            <span class="du-cmt"># click viewport coords (x y)</span>
+<span class="du-prompt">$</span> chrome-use click 449,320            <span class="du-cmt"># same, comma form</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-flag">--coords</span> 449,320   <span class="du-cmt"># same, explicit flag</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ A bare number is always a coordinate</div>
+        A bare numeric argument is always treated as a coordinate, never as a selector. Coordinate clicks are the <strong>right</strong> tool for canvas / WebGL scenarios;
+        for form fields and buttons, prefer <a href="/en/reading.html">snapshot + @ref</a> — don't locate off a screenshot.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Where find can't reach</h2>
+      <p>
+        Both <code>find</code> and CSS selectors are based on the page DOM (<code>querySelectorAll</code>), so they report
+        "Element not found" for two kinds of elements — even though <code>snapshot -i</code> plainly lists them (snapshots go through the CDP accessibility tree, which pierces both), and
+        <code>get text</code> can read them too:
+      </p>
+      <ul>
+        <li>elements inside a <strong>closed shadow root</strong>;</li>
+        <li>elements inside a <strong>cross-origin iframe</strong>.</li>
+      </ul>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Use snapshot's @ref for these two kinds</div>
+        For elements inside a closed shadow root or a cross-origin iframe, locate them by their <code>@ref</code> from <code>snapshot</code>
+        rather than <code>find</code>. When you need a coordinate fallback, <code>box @ref</code> gives the element's coordinate box.
+        See the notes on cross-origin iframes in <a href="/en/interacting.html">Interacting</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Next steps</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> Reading the Page</div>
+          <p>snapshot gives a structured @ref view.</p>
+        </a>
+        <a class="du-card" href="/en/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Interacting</div>
+          <p>click, fill, type drive a real browser.</p>
+        </a>
+        <a class="du-card" href="/en/extract.html">
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> Extracting Data</div>
+          <p>eval and --schema scrape the page into clean JSON.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

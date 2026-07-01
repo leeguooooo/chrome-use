@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>The Core Loop · chrome-use docs</title>
+  <meta name="description" content="chrome-use's basic rhythm: open → snapshot -i → click / type → snapshot again. Understand when @ref goes stale, when it self-heals, why you always snapshot-first and never locate by screenshot, and when to switch between the structured and eval driving paths." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="core-loop" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
+      </span>
+
+      <p class="du-eyebrow">Getting Started</p>
+
+      <div class="du-title-row">
+        <h1>The Core Loop</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        To drive the browser through a task, the rhythm is almost always these four steps:<span class="mark">open the page → see what's on it → act on the @ref the snapshot gave you → snapshot again the moment the page changes</span>.
+        Get this loop flowing, then understand when <code>@ref</code> goes stale and when it self-heals, and you've got ninety percent of chrome-use's day-to-day usage.
+      </p>
+
+      <!-- ============ THE LOOP ============ -->
+      <h2>The four-step loop</h2>
+      <p>
+        Each step decides based on the result of the last: <code>snapshot -i</code> gives you a structured view containing only interactive elements,
+        each carrying a short <code>@ref</code>; you take a ref to <code>click</code> / <code>type</code>; the moment the page changes, snapshot again to get fresh refs.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">core loop</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open &lt;url&gt;        <span class="du-cmt"># 1. open a page</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>       <span class="du-cmt"># 2. see what's on the page (interactive elements only)</span>
+<span class="du-prompt">$</span> chrome-use click @e3         <span class="du-cmt"># 3. act on the ref the snapshot gave you</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>       <span class="du-cmt"># 4. the page changed, so snapshot again</span></code></pre>
+      </div>
+
+      <p>
+        The browser stays running between commands, so these feel like one session. When you're done, wrap up with <code>chrome-use close</code>
+        (or <code>close --all</code>). To read the page, find elements, or interact in more detail, see
+        <a href="/en/reading.html">Reading the Page</a>, <a href="/en/finding.html">Finding Elements</a>, and <a href="/en/interacting.html">Interacting</a>.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ A complete little example</div>
+        Search, click a result, screenshot — that's just the loop running:
+      </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">search → click → capture</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://duckduckgo.com
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># find the search box's ref</span>
+<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"chrome-use cli"</span>
+<span class="du-prompt">$</span> chrome-use press Enter
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># the refs now reflect the search results</span>
+<span class="du-prompt">$</span> chrome-use click @e5                        <span class="du-cmt"># click a result</span>
+<span class="du-prompt">$</span> chrome-use screenshot result.png</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ REFS STALE ============ -->
+      <h2>@ref goes stale: snapshot again the moment the page changes</h2>
+      <p>
+        Refs (<code>@e1</code>, <code>@e2</code>, …) are <strong>reassigned on every snapshot</strong>.
+        They go <strong>stale the moment the page changes</strong> — a navigating click, a form submit, a dynamic re-render, or a modal opening can all invalidate them.
+        So after a <em>navigation</em> or a structural change, snapshot again before your next ref-based interaction.
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ "Ref not found" / "Element not found: @eN"</div>
+        This is almost always the same cause: the page changed after the snapshot. Don't guess — just <code>chrome-use snapshot -i</code> again and use the new ref.
+      </div>
+
+      <!-- ============ REFS SELF-HEAL ============ -->
+      <h2>@ref also self-heals: you don't have to re-snapshot for every tiny DOM change</h2>
+      <p>
+        Each ref records a fingerprint — <strong>role + accessible name + ancestor path</strong>. When you use it, if the original node is gone,
+        chrome-use automatically re-locates the matching element on the <em>current</em> page and carries on. So after a
+        React / Vue list re-render (labels unchanged), <code>click @e3</code> still hits the right element.
+      </p>
+      <p>
+        If the element is genuinely gone, it <strong>fails loudly</strong> rather than clicking the wrong node — it never silently mis-targets.
+        So: you only need to re-snapshot when you've <strong>navigated</strong>, or when the <strong>labels / structure genuinely changed</strong>.
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ When you must re-snapshot</div>
+        Navigated to a new page, switched tabs, structure changed significantly after a form submit, a popup / dialog opened — always <code>snapshot -i</code> again after these.
+        A plain list re-render (labels unchanged) doesn't need it; let ref self-healing handle it.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ SNAPSHOT-FIRST ============ -->
+      <h2>Hard rule: snapshot-first, never locate by screenshot</h2>
+      <p>
+        For form fields and buttons, <strong>always</strong> <code>snapshot -i</code> first, then act on the ref / selector.
+        <strong>Do not</strong> use <code>screenshot</code> + coordinate clicks to find or hit elements.
+      </p>
+      <p>
+        <code>snapshot -i</code> now <strong>pierces cross-origin iframes</strong> (embedded Google Payments / Stripe / checkout / KYC forms),
+        listing their elements — along with their input values — by <code>@ref</code>, so <code>click @e</code> / <code>type @e</code> / <code>fill @e</code>
+        reach straight into the iframe. Only use coordinates for canvas / WebGL, or when <code>snapshot</code> genuinely returns nothing for your target.
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ A screenshot is output, not input</div>
+        Screenshots are for <em>visual verification you report to the user</em>, never as the agent's own input. And a full-page screenshot of a real retina browser
+        is often too large for an image reader to take in. <strong>If you feel you "need a screenshot to read state or find an element," that's a bug — please file an issue.</strong>
+        Driving by pixels over the relay carries an extra risk: a coordinate event can drift to the user's foreground tab, whereas a ref never does.
+      </div>
+
+      <!-- ============ CAPTURE VS LOCATE ============ -->
+      <h3>Two different intents — only one is discouraged</h3>
+      <p>
+        The rule above targets <strong>screenshot-to-locate</strong> (using an image to find / hit an element) — that's the bug.
+        Whereas <strong>screenshot-to-capture</strong> (saving a region or element to a file as reusable <strong>image assets</strong> —
+        maps, charts, og images, visual-regression baselines, report illustrations) is <strong>fully supported and encouraged</strong>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">capture is the right use</span>
+        </div>
+<pre><code><span class="du-cmt"># save a rendered region as a reusable image asset (not for locating)</span>
+<span class="du-prompt">$</span> chrome-use screenshot [selector] <span class="du-flag">--clip</span> x,y,w,h &lt;file&gt;
+
+<span class="du-cmt"># want to click something a ref can't hit? box gives the element's CSS-pixel box + center</span>
+<span class="du-prompt">$</span> chrome-use box @ref
+<span class="du-prompt">$</span> chrome-use click &lt;centerX&gt; &lt;centerY&gt;</code></pre>
+      </div>
+
+      <p>
+        Screenshots auto-downsample to a longest edge of ≤ 2000px so image readers can take them in and so pixels line up with <code>click x y</code>;
+        override with <code>--max-width</code> / <code>--max-height</code> / <code>--scale</code>. To click an element a ref can't hit,
+        <code>box @ref</code> gives its CSS-pixel box and <code>centerX/centerY</code>, which you feed straight to <code>click &lt;centerX&gt; &lt;centerY&gt;</code> — no screenshot needed.
+        For canvas / WebGL coordinate tricks, see <a href="/en/media.html">Screenshots · Recording · Viewport</a> and the canvas-related sections.
+      </p>
+
+      <hr class="du-divider" />
+
+      <!-- ============ TWO WAYS ============ -->
+      <h2>Two driving paths — and when to switch to eval</h2>
+      <p>
+        What you have in hand is a <strong>real Chrome</strong> with the user's real DOM. There are two layers, and you can mix them freely:
+      </p>
+
+      <div class="du-cards">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🧩</span> The structured path</div>
+          <p>
+            <code>snapshot</code> + <code>@ref</code>, <code>find</code>, typed actions. Convenient and readable, good for straightforward forms and navigation.
+            But the accessibility view is <em>lossy and fragile</em>: refs go stale on any change, hidden inputs never appear, and overlays block coordinate clicks.
+          </p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🛠️</span> The eval-first path</div>
+          <p>
+            <code>chrome-use eval "&lt;js&gt;"</code> — your eyes and hands on the real DOM: read hidden inputs, reach into Shadow DOM / iframes,
+            inspect <code>form.elements</code> and <code>.validity</code>, extract the exact structure you want, or just <code>el.click()</code>.
+          </p>
+        </div>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ The moment the structured path fights you, switch to eval</div>
+        <strong>The moment the structured path starts fighting you, switch to <code>eval</code> instead of retrying it over and over</strong> —
+        it's the fastest way to find out "why it failed" (e.g. a hidden <code>point_choice=none</code> the UI never exposes).
+        Don't try a flaky structured locator three times; drop straight to <code>eval</code> and act on the DOM.
+      </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">what's actually in this form / why won't it submit?</span>
+        </div>
+<pre><code><span class="du-cmt"># list every field's name / type / value / checked in the form</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"[...document.forms[0].elements].map(e=&gt;[e.name,e.type,e.value,e.checked])"</span>
+
+<span class="du-cmt"># read a hidden field the UI never exposes</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"document.querySelector('[name=point_choice]')?.value"</span>
+
+<span class="du-cmt"># find every field that fails validation and its error message</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"[...document.forms[0].elements].filter(e=&gt;!e.validity.valid).map(e=&gt;e.name+': '+e.validationMessage)"</span>
+
+<span class="du-cmt"># click directly via the DOM, bypassing overlays</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"document.querySelector('#stubborn').click()"</span></code></pre>
+      </div>
+
+      <p>
+        The escalation ladder is: for straightforward pages, <code>snapshot</code> + <code>@eN</code> is fastest → when you don't want to snapshot, use
+        <code>find role/text/label</code> → native CSS selectors → <strong>the moment any of the above fights you, go to <code>eval</code></strong>
+        and act on the DOM directly. For more locating techniques, see <a href="/en/finding.html">Finding Elements</a>.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ eval runs in the page's MAIN world</div>
+        <code>eval</code> runs by default in the top document's main world, and state persists across calls — so a top-level <code>const x</code> / <code>let x</code>
+        will collide with the next call (<code>Identifier 'x' has already been declared</code>). Use unique names, attach to <code>window.x</code>,
+        or wrap the body in an IIFE. For quotes / non-ASCII / large scripts, use <code>eval --stdin</code> (heredoc),
+        <code>eval --file &lt;path&gt;</code>, or <code>eval -b &lt;base64&gt;</code> instead of an inline form the shell will mangle.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Next steps</h2>
+      <p>Once the core loop is flowing, dive deeper as needed:</p>
+
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> Reading the Page</div>
+          <p>The various <code>snapshot</code> flags, <code>get text</code>, cross-frame reads, and piercing closed Shadow DOM.</p>
+        </a>
+        <a class="du-card" href="/en/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Interacting</div>
+          <p><code>click</code>, <code>fill</code>, <code>type</code>, <code>select</code>, <code>pick</code> to drive a real browser.</p>
+        </a>
+        <a class="du-card" href="/en/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> Finding Elements</div>
+          <p><code>find role/text/label</code> and <code>@ref</code> to lock onto a target precisely.</p>
+        </a>
+        <a class="du-card" href="/en/install.html">
+          <div class="du-card-title"><span class="du-card-ico">📦</span> Install</div>
+          <p>Not set up yet? Install the CLI, install the Chrome extension, pull the agent skill.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

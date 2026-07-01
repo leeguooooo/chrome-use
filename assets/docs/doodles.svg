@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- chrome-use docs — hand-drawn doodle sprite.
+     Reference set of decorations. Copy any <symbol>'s inner <path> into an
+     inline <svg> inside a `.du-doodle` span for a scattered accent, e.g.:
+
+       <span class="du-doodle" style="top:-6px;right:8px;width:56px;height:56px">
+         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor"
+              stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+           <use href="/assets/docs/doodles.svg#star"/>
+         </svg>
+       </span>
+
+     Strokes use currentColor so the parent `.du-doodle { color: … }` tints them.
+     Keep opacity low (the .du-doodle class sets ~0.16) and never place over text. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+
+  <!-- ✦ star -->
+  <symbol id="star" viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+  </symbol>
+
+  <!-- ☁ cloud -->
+  <symbol id="cloud" viewBox="0 0 72 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 40 C 8 40, 6 28, 16 26 C 16 14, 34 12, 38 22 C 48 16, 62 24, 56 34 C 66 34, 66 44, 56 42 Z"/>
+  </symbol>
+
+  <!-- ⚡ lightning -->
+  <symbol id="lightning" viewBox="0 0 40 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 4 L 10 32 L 22 32 L 16 56 L 34 24 L 22 24 Z"/>
+  </symbol>
+
+  <!-- ☀ sun -->
+  <symbol id="sun" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="32" cy="32" r="12"/>
+    <path d="M32 4v8M32 52v8M4 32h8M52 32h8M11 11l6 6M47 47l6 6M53 11l-6 6M17 47l-6 6"/>
+  </symbol>
+
+  <!-- ⛓ chain -->
+  <symbol id="chain" viewBox="0 0 72 40" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="6" y="12" width="30" height="16" rx="8"/>
+    <rect x="30" y="12" width="36" height="16" rx="8"/>
+  </symbol>
+
+  <!-- ~ wavy divider stroke (stretch horizontally) -->
+  <symbol id="wave" viewBox="0 0 240 12" preserveAspectRatio="none">
+    <path d="M2 7 C 30 2, 46 11, 74 6 S 122 2, 150 7 S 200 11, 238 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  </symbol>
+
+  <!-- ✎ squiggle underline (for custom emphasis) -->
+  <symbol id="squiggle" viewBox="0 0 80 7" preserveAspectRatio="none">
+    <path d="M1 4 C 14 1, 26 7, 40 3.5 S 66 1, 79 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  </symbol>
+
+  <!-- ❤ heart -->
+  <symbol id="heart" viewBox="0 0 48 44" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 40 C 4 26, 6 8, 18 10 C 22 10.5, 24 14, 24 16 C 24 14, 26 10.5, 30 10 C 42 8, 44 26, 24 40 Z"/>
+  </symbol>
+
+</svg>

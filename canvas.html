@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Canvas / WebGL / 游戏 · chrome-use 文档</title>
+  <meta name="description" content="用坐标点击、hold 移动、batch 定时序列和实时 WebSocket 流驱动没有 DOM/无障碍节点的 canvas / WebGL / 游戏界面：canvas 捕获像素、读取引擎全局变量、60fps 实时输入。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="canvas" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
+      </span>
+
+      <p class="du-eyebrow">进阶 / Advanced</p>
+
+      <div class="du-title-row">
+        <h1>Canvas / WebGL / 游戏</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        游戏画面、语音房麦位、地图瓦片、3D 查看器、设计画布（Figma / 墨刀）——这些界面把一切都画在
+        <code>&lt;canvas&gt;</code> 上，<span class="mark">背后没有 DOM 节点、也没有无障碍节点</span>。
+        <a href="/reading.html">snapshot</a> / find / eval querySelector 永远拿不到它们的 <code>@ref</code>。
+        这不是缺失的功能，而是硬限制。本页教你换一套打法：<span class="mark">看像素、按坐标</span>驱动。
+      </p>
+
+      <h2>为什么 canvas 拿不到 ref</h2>
+      <p>
+        <code>&lt;canvas&gt;</code> / WebGL 的命中区域，以及<strong>闭合</strong> shadow root，都不会为画出来的控件暴露任何 DOM / AX 节点。
+        因此无论 snapshot 怎么扫都造不出 <code>@ref</code>——<span class="mark">坐标是唯一的抓手</span>。snapshot 检测到这种页面时会打印一行提示。
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 什么才是 coordinate-only</div>
+        只有 <strong>canvas</strong> 和<strong>闭合 shadow root</strong> 需要靠坐标。开放 shadow root、以及同源 / 跨源 iframe
+        都会被 <code>snapshot -i</code> 正常呈现，优先用 <code>@ref</code>。
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ relay 下坐标点击可能漂移</div>
+        走扩展 relay 时，坐标点击可能落到用户的<strong>前台标签页</strong>上。做大量 canvas 坐标操作前，优先用
+        <code>--launch</code> 或自己拥有的标签页，或者干脆绕过画布、通过 App 后端 / API 确认真实状态。
+        参见 <a href="/real-chrome.html">驱动真实 Chrome</a>。
+      </div>
+
+      <h2>读取画面：canvas capture 与 screenshot</h2>
+      <p>
+        canvas 页面的 <code>eval</code> / <code>get text</code> 基本返回不了有用信息，所以<strong>看</strong>是你唯一的读取路径。
+        先枚举画布，再把渲染像素抓下来，然后<em>由你</em>来解读：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">读取画布像素</span>
+        </div>
+<pre><code><span class="du-cmt"># 枚举页面上的 &lt;canvas&gt; 元素（尺寸、类型）</span>
+<span class="du-prompt">$</span> chrome-use canvas list
+
+<span class="du-cmt"># 把画布的「渲染像素」存成 PNG —— toDataURL 拿到完整</span>
+<span class="du-cmt"># 后备存储分辨率（如 Figma 的 2522x1904）；对没开</span>
+<span class="du-cmt"># preserveDrawingBuffer / 被污染的 WebGL 回退到 screenshot</span>
+<span class="du-prompt">$</span> chrome-use canvas capture out.png
+
+<span class="du-cmt"># 或者直接截一张区域图来「看」当前状态</span>
+<span class="du-prompt">$</span> chrome-use screenshot /tmp/s.png</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 拿到的是「渲染结果」，不是源数据</div>
+        <code>canvas capture</code> 抓的是画出来的画面。Figma 的源资产、游戏的隐藏状态等都活在 App 的二进制存储 / API 里，
+        画布上并没有。需要源数据时走那个 App 自己的接口。
+      </div>
+
+      <h3>症状：get text 里有文字，却没有 @ref</h3>
+      <p>
+        语音房麦位（Zego / Agora）、原型画布（墨刀 / modao）、游戏 HUD 和某些 Web Component 会把控件<em>画</em>出来——
+        于是文字出现在 <code>get text</code> / read_page 里（比如一串 "Add Add Add…"），但 <code>snapshot -i</code> 什么都列不出、
+        <code>querySelectorAll</code> 返回 0。没有可寻址节点，<code>@ref</code> / find 就够不着它。按位置驱动：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">先排除闭合 shadow，再按坐标点</span>
+        </div>
+<pre><code><span class="du-cmt"># 先试：如果只是「闭合」shadow root（不是 canvas），</span>
+<span class="du-cmt"># 这条能读穿它 —— 便宜，值得先试一下</span>
+<span class="du-prompt">$</span> chrome-use get text <span class="du-flag">--pierce</span>
+
+<span class="du-cmt"># 否则先「看」控件在哪</span>
+<span class="du-prompt">$</span> chrome-use screenshot /tmp/s.png
+
+<span class="du-cmt"># 点那个像素（裸数字 = 坐标）</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">&lt;x&gt;</span> <span class="du-str">&lt;y&gt;</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>按坐标交互：click 与 press --hold</h2>
+      <p>
+        canvas 上一切靠坐标。算出目标点直接 <code>click x y</code>；需要先知道某个容器的 CSS-px 盒子时，用
+        <code>box @ref</code> 拿到它的位置再换算。坐标在这里是<span class="mark">正确</span>的工具——
+        snapshot-first 规则明确为 canvas 开了这个口子。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">坐标点击与按住移动</span>
+        </div>
+<pre><code><span class="du-cmt"># 按视口坐标交互</span>
+<span class="du-prompt">$</span> chrome-use click 640 360
+
+<span class="du-cmt"># 按住移动，精确定时（在 daemon 内计时 ——</span>
+<span class="du-cmt"># 不是 keydown + shell-sleep + keyup，那样每次往返</span>
+<span class="du-cmt"># 会多出约 250ms 抖动）</span>
+<span class="du-prompt">$</span> chrome-use press d <span class="du-flag">--hold</span> 800
+
+<span class="du-cmt"># 离散动作（跳 / 攻击 / 确认）</span>
+<span class="du-prompt">$</span> chrome-use press Space</code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ press --hold 而不是拼 sleep</div>
+        持续动作用 <code>press --hold &lt;ms&gt;</code>，计时发生在 daemon 内部，比 shell 里 keydown / sleep / keyup 拼出来的
+        稳得多。更多按键与输入见 <a href="/interacting.html">交互操作</a>。
+      </div>
+
+      <h2>batch：一次往返跑完定时序列</h2>
+      <p>
+        <span class="mark">别一条 CLI 一个动作地逐帧驱动</span>——那是最慢、保真度最低的方式，每次调用都是一次进程启动 + 往返。
+        用 <code>batch</code> 把一段<em>定时序列</em>塞进单次往返：它把每一步发给正在运行的 daemon，
+        <code>press --hold</code> 和 <code>wait</code> 都在 daemon 内阻塞，所以时序很准。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">单次往返的定时序列</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use batch <span class="du-str">"press d --hold 900"</span> <span class="du-str">"press j"</span> <span class="du-str">"press j"</span> <span class="du-str">"wait 200"</span> <span class="du-str">"press d --hold 500"</span></code></pre>
+      </div>
+
+      <h2>读引擎全局变量，而不是猜像素</h2>
+      <p>
+        与其从截图里猜，不如直接读真实状态。<code>eval</code> 运行在页面的 main world，
+        对基于框架 / 引擎的游戏，你往往能直接够到它的全局对象——比如一个 Phaser / PIXI / Three 实例、
+        一个 store、或者 <code>window.__GAME__</code>——直接读出位置 / 分数，远胜于对着截图猜。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">直接读游戏状态</span>
+        </div>
+<pre><code><span class="du-cmt"># eval 在 main world，能读到引擎挂在 window 上的实例</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"window.__GAME__.player.position"</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>实时驱动：WebSocket 流</h2>
+      <p>
+        要真正做<span class="mark">实时</span>驱动，就彻底抛开 CLI，改用 WebSocket。
+        <code>chrome-use stream enable</code> 打开一条双向 WS（<code>stream status</code> 会打印
+        <code>ws://127.0.0.1:&lt;port&gt;</code>）。连上一次，你就同时拿到 ~60fps 的实时投屏，
+        <strong>并且能在同一条 socket 上发输入</strong>——没有逐动作的进程启动、没有往返，而且能跨扩展 relay 工作。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">开流并读取地址</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use stream enable
+<span class="du-prompt">$</span> chrome-use stream status   <span class="du-cmt"># 打印 ws://127.0.0.1:&lt;port&gt;</span></code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">node —— 实时帧 + 本地计时输入</span>
+        </div>
+<pre><code><span class="du-cmt">// node（全局 WebSocket）：实时帧 + 本地计时输入</span>
+<span class="du-kw">const</span> ws = <span class="du-kw">new</span> WebSocket(<span class="du-str">"ws://127.0.0.1:PORT"</span>)
+ws.onmessage = e =&gt; { <span class="du-kw">const</span> m = JSON.parse(e.data); <span class="du-kw">if</span> (m.type===<span class="du-str">"frame"</span>) {<span class="du-cmt">/* base64 jpeg */</span>} }
+<span class="du-kw">const</span> k = (eventType,key,code,vk) =&gt; ws.send(JSON.stringify({type:<span class="du-str">"input_keyboard"</span>,eventType,key,code,windowsVirtualKeyCode:vk}))
+k(<span class="du-str">"keyDown"</span>,<span class="du-str">" "</span>,<span class="du-str">"Space"</span>,32); setTimeout(()=&gt;k(<span class="du-str">"keyUp"</span>,<span class="du-str">" "</span>,<span class="du-str">"Space"</span>,32), 80)   <span class="du-cmt">// 一次跳跃</span>
+<span class="du-cmt">// 鼠标同理：{type:"input_mouse",eventType:"mousePressed",x,y,button:"left",clickCount:1}</span></code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 什么时候用 WS，什么时候用截图</div>
+        这是「看幻灯片」和「真正玩游戏」的区别。一次性检查留给 <code>screenshot</code>；任何<strong>持续的实时控制</strong>都用 WS。
+      </div>
+
+      <h2>决策速查</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> 先试 snapshot</div>
+          <p>不确定是不是 canvas？先 snapshot -i / get text --pierce，能拿到 @ref 就别用坐标。</p>
+        </a>
+        <a class="du-card" href="/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 坐标交互</div>
+          <p>click x y、press --hold、batch 定时序列，驱动画出来的控件。</p>
+        </a>
+        <a class="du-card" href="/media.html">
+          <div class="du-card-title"><span class="du-card-ico">🎬</span> 截图与录像</div>
+          <p>screenshot 看状态、canvas capture 抓渲染像素、录制视口回放。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

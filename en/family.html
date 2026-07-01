@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>The *-use Family · chrome-use</title>
+  <meta name="description" content="The *-use family shares one idea: don't build a simulated environment — take over the one real, already-logged-in device in your hand. chrome-use drives real Chrome, iphone-use drives a real iPhone, bitwarden-use fetches passwords/2FA/passkeys, cookie-use manages multi-account sessions." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="family" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">// Reference</p>
+
+      <div class="du-title-row">
+        <h1>The *-use Family</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        <code>chrome-use</code> is just one piece of a bigger idea. The whole <span class="mark">*-use family</span>
+        shares the same philosophy: no simulated environments, no virtual machines, no fingerprint spoofing —
+        <strong>take over the one real, already-logged-in device in your hand</strong>. Browser, phone, password vault,
+        account sessions — each is an open-source tool an agent can safely call.
+      </p>
+
+      <h2>One idea: drive real devices</h2>
+      <p>
+        Simulated environments always have cracks: a brand-new browser fingerprint, a session with no login state,
+        automation traces that anti-bot systems can spot. Every tool in the family flips the premise — it <em>is</em>
+        the device you were already using, so cookies, sessions, login state, and fingerprint are all naturally real.
+        The agent is just pressing buttons for you.
+      </p>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ What they share</div>
+        Every tool is a locally-run, open-source CLI designed for AI agents. Use them on their own or combine them —
+        for example, <code>bitwarden-use</code> fetches a password and hands it to <code>chrome-use</code> to log in, and
+        <code>cookie-use</code> then saves that login state to reuse across profiles.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Members at a glance</h2>
+      <p>A one-line summary and the real repo for each tool. To go deeper on any one, open its GitHub repo.</p>
+      <div class="du-cards">
+        <a class="du-card" href="https://github.com/leeguooooo/chrome-use" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🌐</span> chrome-use</div>
+          <p>Drives your real, already-logged-in Chrome. It shares your existing sessions and anti-bot systems can't detect it — because it <em>is</em> your real browser.</p>
+        </a>
+        <a class="du-card" href="https://github.com/leeguooooo" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">📱</span> iphone-use</div>
+          <p>Drives your real iPhone. Operate iOS apps with no API, export data that only lives on the phone, tap/type/scroll/screenshot.</p>
+        </a>
+        <a class="du-card" href="https://github.com/leeguooooo/bitwarden-use" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> bitwarden-use</div>
+          <p>Fetches passwords, 2FA, and passkeys from your Bitwarden vault so an agent can log in with real credentials.</p>
+        </a>
+        <a class="du-card" href="https://github.com/leeguooooo/cookie-use" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🍪</span> cookie-use</div>
+          <p>An encrypted, site-agnostic multi-account session vault: save, switch, and inject multiple login states for a website.</p>
+        </a>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ More tools</div>
+        The family keeps growing. More *-use tools and the writing behind them live at
+        <a href="https://leeguoo.com" target="_blank" rel="noopener">leeguoo.com</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>chrome-use — drive real Chrome</h2>
+      <p>
+        The family's workhorse. It connects <strong>any</strong> agent (Claude Code, Cursor, Codex, or your own script)
+        to the Chrome you're already using — a browser extension plus a native-messaging channel, no debug port, reusing
+        your existing cookies. Install with one command:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">install</span>
+        </div>
+<pre><code><span class="du-cmt"># Download the prebuilt binary for your platform from the latest GitHub Release</span>
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+      <p>Wrap the skill into any agent runner:</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">skill</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
+      </div>
+      <p>
+        After installing the Chrome Web Store extension, register the native-messaging host once, and then you can take over your real browser:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Register the native-messaging host (only once)</span>
+<span class="du-prompt">$</span> chrome-use extension install
+<span class="du-prompt">$</span> chrome-use open https://x.com/home</code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Go deeper on chrome-use</div>
+        Start from the <a href="/en/index.html">Overview</a>, or jump straight to
+        <a href="/en/real-chrome.html">Drive Real Chrome (extension)</a> to understand how the extension + native messaging take over.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>bitwarden-use + cookie-use — let the agent log in with an identity</h2>
+      <p>
+        Two login-related tools that sit right upstream and downstream of chrome-use.
+        <code>bitwarden-use</code> pulls passwords, 2FA, and passkeys from your Bitwarden vault
+        and hands them to the agent to complete a real credential login; <code>cookie-use</code>
+        treats the login state itself as an asset — encrypting it into a local vault so you can
+        switch and inject it across Chrome profiles anytime.
+      </p>
+      <p>
+        In the <code>chrome-use test</code> suite, you can inject a login state saved by cookie-use
+        directly with <code>account:</code>, so every case starts from an "already logged in" state:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">smoke.yaml</span>
+        </div>
+<pre><code><span class="du-cmt"># smoke.yaml</span>
+suite: chatgpt smoke
+setup:
+  - account: chatgpt/huayue          <span class="du-cmt"># inject a cookie-use login state (optional)</span>
+cases:
+  - name: home loads logged in
+    steps:
+      - open: https://chatgpt.com/
+      - wait: { load: networkidle }
+    assert:
+      - url: { contains: chatgpt.com }
+      - visible: <span class="du-str">"#prompt-textarea"</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Related docs</div>
+        For login and credential-injection details on the chrome-use side, see <a href="/en/login-auth.html">Login &amp; Credentials</a>,
+        and for keeping login state across processes, see <a href="/en/sessions.html">Sessions &amp; Persistence</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>iphone-use — drive a real iPhone</h2>
+      <p>
+        Some data only lives on the phone: Apple Health, banking apps, IMs with no open API.
+        <code>iphone-use</code> brings the same "take over the real device" idea to iOS — tapping,
+        typing, scrolling, and screenshotting through macOS iPhone Mirroring to operate apps that
+        will never give you an API. Repo:
+        <a href="https://github.com/leeguooooo" target="_blank" rel="noopener">github.com/leeguooooo</a>.
+      </p>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Each tool installs separately</div>
+        Family members share a philosophy, but they're not one monorepo. iphone-use, bitwarden-use, and cookie-use
+        each have their own repo and install steps — follow each one's README. This page is only navigation; it doesn't
+        replace their docs.
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

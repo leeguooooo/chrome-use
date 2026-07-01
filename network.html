@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>网络拦截与改写 · chrome-use 文档</title>
+  <meta name="description" content="用 network route 拦截、改写、mock 或屏蔽真实浏览器里的请求与响应，无需代理或扩展权限；配合 requests 与 har 观察和录制流量。" />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="network" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 34 C18 12 30 56 42 34 S54 20 54 20"/>
+          <circle cx="10" cy="20" r="3"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">进阶 / Advanced</p>
+
+      <div class="du-title-row">
+        <h1>网络拦截与改写</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        <code>network route</code> 通过 CDP 的 <span class="mark">Fetch 域</span>拦截匹配到的请求——
+        <strong>无需代理，也不需要扩展权限</strong>。你可以 mock 一个假响应、改写发出去的请求、
+        篡改真实响应，或者干脆屏蔽掉某些流量。动词与字段都对齐了 Playwright 的习惯，
+        上手几乎零成本。
+      </p>
+
+      <h2>三种模式</h2>
+      <p>
+        一条 <code>network route</code> 规则属于哪种模式，取决于你传了哪些 flag。
+        三者的介入时机各不相同：
+      </p>
+
+      <div class="du-cards cols-3">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🎭</span> Mock 响应</div>
+          <p><code>--body</code> / <code>--status</code> / <code>--header</code> / <code>--content-type</code>：直接返回假响应，请求<strong>短路，永不发出</strong>。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">✏️</span> 改写请求</div>
+          <p><code>--method</code> / <code>--set-body</code> / <code>--set-header</code> / <code>--rewrite-url</code>：改动发出去的请求，再让真实响应回来。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🩹</span> 编辑真实响应</div>
+          <p><code>--edit-status</code> / <code>--edit-header</code> / <code>--replace</code>：请求照常发出，拿回真实响应后再改。</p>
+        </div>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 三种模式的取舍</div>
+        Mock 适合前端还没有后端时造数据；改写请求适合注入鉴权头或换环境；
+        编辑真实响应适合<strong>强制某个错误态</strong>、或者不搭 mock server 就能补一个字段。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Mock 响应</h2>
+      <p>
+        传入 <code>--body</code> 等 flag，请求会被直接 fulfill——一个假响应立刻返回，
+        真实网络请求根本不会发出。适合造空列表、造权限态、隔离后端。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Mock 响应（fulfill —— 请求永不离开浏览器）</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/users"</span> <span class="du-flag">--body</span> <span class="du-str">'{"users":[]}'</span> <span class="du-flag">--status</span> 200 <span class="du-flag">--content-type</span> application/json
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--body</span> <span class="du-str">'{"vip":true}'</span> <span class="du-flag">--header</span> X-From=mock</code></pre>
+      </div>
+
+      <h2>改写发出去的请求</h2>
+      <p>
+        传入 <code>--method</code>、<code>--set-body</code>、<code>--set-header</code> 或 <code>--rewrite-url</code>，
+        请求会带着你的改动继续发出（continue with overrides），随后<strong>真实响应</strong>照常回来。
+        注入测试鉴权头、替换请求体、或把流量导到 staging 都靠它。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 改写发出去的请求（真实响应仍会返回）</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/save"</span> <span class="du-flag">--method</span> POST <span class="du-flag">--set-header</span> Authorization=<span class="du-str">"Bearer test"</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/save"</span> <span class="du-flag">--set-body</span> <span class="du-str">'{"x":1}'</span>          <span class="du-cmt"># 替换请求体</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/v1/*"</span> <span class="du-flag">--rewrite-url</span> https://staging.example.com/v1/thing</code></pre>
+      </div>
+
+      <h2>编辑真实响应</h2>
+      <p>
+        传入 <code>--edit-status</code>、<code>--edit-header</code> 或 <code>--replace 'from=&gt;to'</code>，
+        请求会正常发出、真实响应回来后再被你篡改，页面看到的是改过的版本。
+        非常适合把接口<strong>强制成 503 错误态</strong>，或在不改后端的前提下替换响应里的一个字段。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 编辑真实响应（请求发出、响应回来、再改）</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--edit-status</span> 503                <span class="du-cmt"># 覆盖状态码</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--edit-header</span> X-Env=test         <span class="du-cmt"># 新增/覆盖一个响应头</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--replace</span> <span class="du-str">'prod=&gt;staging'</span>        <span class="du-cmt"># 在真实响应体里做子串替换（可重复）</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 优先级与可重复性</div>
+        同一条规则同时给了 mock 和 rewrite 时，<strong>mock 胜出</strong>。
+        <code>--header</code> / <code>--set-header</code> / <code>--edit-header</code> / <code>--replace</code>
+        都是<strong>可重复</strong>的；请求/响应头会合并覆盖在原始头之上。
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 别改顶层文档导航</div>
+        编辑<strong>顶层文档（top-level document）</strong>导航的状态码会扰乱页面加载。
+        需要时用 <code>--resource-type xhr,fetch</code> 把响应编辑<strong>限定到 API 调用</strong>上。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>屏蔽与按资源类型限定</h2>
+      <p>
+        用 <code>--abort</code> 直接掐断一条请求。任何规则都可以用
+        <code>--resource-type</code> 限定作用范围，避免误伤其他流量。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 彻底屏蔽</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/analytics"</span> <span class="du-flag">--abort</span>
+
+<span class="du-cmt"># 把规则限定到某些资源类型</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/*.json"</span> <span class="du-flag">--abort</span> <span class="du-flag">--resource-type</span> xhr,fetch</code></pre>
+      </div>
+
+      <h2>观察与录制流量</h2>
+      <p>
+        改写之前，先看清楚都有哪些请求在飞。<code>network requests</code> 列出已捕获的流量，
+        <code>--clear</code> 从头开始记；<code>network har</code> 则把整段流量录成标准的 HAR 文件。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use network requests <span class="du-flag">--clear</span>        <span class="du-cmt"># 清空并重新开始捕获</span>
+<span class="du-prompt">$</span> chrome-use network requests                <span class="du-cmt"># 查看都发出了哪些请求</span>
+
+<span class="du-prompt">$</span> chrome-use network har start               <span class="du-cmt"># 录制全部流量</span>
+<span class="du-cmt"># ... 执行你的操作 ...</span>
+<span class="du-prompt">$</span> chrome-use network har stop /tmp/trace.har</code></pre>
+      </div>
+
+      <h2>清理规则</h2>
+      <p>
+        所有路由规则是常驻的，会一直生效直到你显式移除。收工时用
+        <code>network unroute</code> 一次性丢弃全部规则，避免影响后续会话。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use network unroute                 <span class="du-cmt"># 移除所有路由规则</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 收尾习惯</div>
+        路由是全局副作用。用完记得 <code>network unroute</code>，
+        否则一条 <code>--abort</code> 可能会悄悄影响下一个任务的页面。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>相关阅读</h2>
+      <div class="du-cards">
+        <a class="du-card" href="/waiting.html">
+          <div class="du-card-title"><span class="du-card-ico">⏳</span> 等待与同步</div>
+          <p>mock/改写生效后，等页面把请求真正打出来再断言。</p>
+        </a>
+        <a class="du-card" href="/troubleshooting.html">
+          <div class="du-card-title"><span class="du-card-ico">🧰</span> 排障</div>
+          <p>路由没命中、页面加载异常？先从这里排查。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

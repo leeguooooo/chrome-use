@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>安装 · chrome-use 文档</title>
+  <meta name="description" content="安装 chrome-use：一行 install.sh 从 GitHub Release 装好 CLI（无 npm、无 token），装 Chrome 扩展并注册本地桥，拉 agent 技能，再用 chrome-use doctor 自检安装环境。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="install" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
+      </span>
+
+      <p class="du-eyebrow">开始 / Getting Started</p>
+
+      <div class="du-title-row">
+        <h1>安装</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        装 chrome-use 就三件事：<span class="mark">一行命令装好 CLI</span>、装上 Chrome 扩展并注册本地桥、把 agent 技能拉进项目。
+        走 <span class="mark">GitHub Release</span> 的预编译二进制——<strong>无 npm、无 token</strong>，发布方和使用方都不用登录任何账号。
+        装完用 <code>chrome-use doctor</code> 一键自检。
+      </p>
+
+      <!-- ============ 1. INSTALL CLI ============ -->
+      <h2>一行装好 CLI</h2>
+      <p>
+        从最新的 <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Release</a>
+        下载对应平台的预编译二进制，装好 <code>chrome-use</code>（以及 <code>abs</code> 短别名）。这是主要分发渠道，不经过 npm，也不需要任何 token。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">一行装好</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 一个二进制，两个名字</div>
+        <code>chrome-use</code> 和 <code>abs</code> 是<strong>同一个可执行文件</strong>——<code>abs</code> 只是短别名。
+        没有单独的「stealth 可执行文件」；反检测是运行时行为，连你的真实 Chrome 就零补丁，<code>--launch</code> 开新浏览器才上全套补丁。详见
+        <a href="/real-chrome.html">连接真实 Chrome</a>。
+      </div>
+
+      <h3>其它安装方式</h3>
+      <p>需要固定版本、换安装目录，或在 Windows 上手动放置时：</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 固定某个版本</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+
+<span class="du-cmt"># 装到自定义目录</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+
+      <ul>
+        <li><strong>Windows：</strong>从 <a href="https://github.com/leeguooooo/chrome-use/releases">Releases 页面</a> 下载 <code>chrome-use-win32-x64.tar.gz</code>，把 <code>chrome-use.exe</code> 放进 PATH。</li>
+        <li><strong>npm（遗留）：</strong><code>npm install -g chrome-use</code> 仍在发布，但 GitHub Releases 是现在的主渠道。</li>
+      </ul>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 装了多份会互相遮盖</div>
+        如果 <code>which -a chrome-use</code> 显示不止一个安装，旧的 <strong>npm / pnpm</strong> 拷贝可能盖住了 <code>install.sh</code> 装的新版本
+        （npm registry 落后于 GitHub Releases）。删掉旧拷贝——<code>npm rm -g chrome-use</code> 或 <code>pnpm rm -g chrome-use</code>——让新构建生效。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 2. EXTENSION + BRIDGE ============ -->
+      <h2>装扩展、连你的真实 Chrome</h2>
+      <p>
+        要驱动你<em>已经登录好</em>的真实 Chrome（复用现成会话、不弹确认框），装浏览器扩展并注册一次本地桥。这是推荐路径。
+      </p>
+
+      <ol>
+        <li>
+          从 <a href="https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk">Chrome 应用商店安装 <strong>chrome-use</strong> 扩展</a>，一键 <em>Add to Chrome</em>。
+          商店版重启后依然稳定，适合无人值守。
+        </li>
+        <li>注册原生消息（native-messaging）主机——一次性：</li>
+      </ol>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">连你的真实 Chrome</span>
+        </div>
+<pre><code><span class="du-cmt"># 注册本地桥（一次性）</span>
+<span class="du-prompt">$</span> chrome-use extension install
+
+<span class="du-cmt"># 之后 open 就直接驱动你已登录的 Chrome</span>
+<span class="du-prompt">$</span> chrome-use open https://x.com/home</code></pre>
+      </div>
+
+      <p>
+        此后 <code>chrome-use open</code> 通过 <strong>原生消息</strong>驱动你真实、已登录的 Chrome——无调试端口、无 token，
+        <strong>也永远不弹「Allow remote debugging?」确认框</strong>。扩展会自动更新、重启后依然连着，做到零per-use确认。想深入了解连接原理见
+        <a href="/real-chrome.html">连接真实 Chrome</a>。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 不想碰你的真实 Chrome？</div>
+        用 <code>chrome-use --launch open &lt;url&gt;</code> 开一个全新的、隔离的空 profile 浏览器（上全套反检测补丁），
+        无需扩展，CI 会自动走这条路。需要真实 cookies / 登录态时改用 <code>--profile auto</code>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 3. SKILLS ============ -->
+      <h2>拉 agent 技能</h2>
+      <p>
+        仓库为 Claude Code、Cursor 等准备了 SKILL.md。用 <a href="https://skills.sh">skills.sh</a> 拉进当前项目：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
+      </div>
+
+      <p>
+        这会把 <code>skills/chrome-use</code>（以及专门化的 <code>skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}</code>）
+        放进你的项目，让 AI agent 拿到正确的用法模式和对 <code>chrome-use</code>、<code>abs</code> 预授权的 bash 权限。装好后建议先读一遍
+        <a href="/core-loop.html">核心循环</a>。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 技能装不上时自愈</div>
+        <code>skills add</code> 只拷贝 markdown，不会附带 ~20MB 的二进制。如果技能环境里没有 <code>chrome-use</code>，
+        重新跑一次上面的 <code>install.sh</code> 一行命令即可补齐二进制。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ QUICKSTART ============ -->
+      <h2>跑通第一条命令</h2>
+      <p>
+        浏览器在多条命令之间保持运行，所以下面这些命令感觉像一次会话。完事用 <code>chrome-use close</code>（或 <code>close --all</code>）收尾。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">quickstart</span>
+        </div>
+<pre><code><span class="du-cmt"># 截一张页面图</span>
+<span class="du-prompt">$</span> chrome-use open https://example.com
+<span class="du-prompt">$</span> chrome-use screenshot home.png
+<span class="du-prompt">$</span> chrome-use close
+
+<span class="du-cmt"># 搜索、点结果、再截图</span>
+<span class="du-prompt">$</span> chrome-use open https://duckduckgo.com
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># 找到搜索框的 ref</span>
+<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"chrome-use cli"</span>
+<span class="du-prompt">$</span> chrome-use press Enter
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># refs 现在对应结果</span>
+<span class="du-prompt">$</span> chrome-use click @e5                        <span class="du-cmt"># 点一个结果</span>
+<span class="du-prompt">$</span> chrome-use screenshot result.png</code></pre>
+      </div>
+
+      <p>想理解 <code>open → snapshot → click</code> 这个基本节奏，接着读 <a href="/core-loop.html">核心循环</a>。</p>
+
+      <hr class="du-divider" />
+
+      <!-- ============ DOCTOR ============ -->
+      <h2>诊断安装问题</h2>
+      <p>
+        命令意外失败时（<code>Unknown command</code>、<code>Failed to connect</code>、守护进程卡死、<code>upgrade</code> 后版本不一致、找不到 Chrome 等），
+        先跑 <code>doctor</code>，别的都放后面。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">chrome-use doctor</span>
+        </div>
+<pre><code><span class="du-cmt"># 完整诊断：环境、Chrome、守护进程、配置、providers、网络、启动自测</span>
+<span class="du-prompt">$</span> chrome-use doctor
+<span class="du-prompt">$</span> chrome-use doctor <span class="du-flag">--offline --quick</span>   <span class="du-cmt"># 快速、纯本地</span>
+<span class="du-prompt">$</span> chrome-use doctor <span class="du-flag">--fix</span>               <span class="du-cmt"># 执行破坏性修复（重装 Chrome、清旧状态…）</span>
+<span class="du-prompt">$</span> chrome-use doctor <span class="du-flag">--json</span>              <span class="du-cmt"># 结构化输出，供程序消费</span></code></pre>
+      </div>
+
+      <p>
+        <code>doctor</code> 每次运行都会自动清理陈旧的 socket / pid / 版本 sidecar 文件；破坏性操作只有加 <code>--fix</code> 才执行。
+        退出码：全部通过（含 warning）为 <code>0</code>，有任何 fail 为 <code>1</code>。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 反检测自检</div>
+        要在敏感流程前确认 stealth 状态，用 <code>chrome-use stealth status</code>（加 <code>--json</code> 拿结构化结果）——
+        它跑 webdriver / chrome / plugins / UA 的实时探针并列出已应用的 override，比去驱动外部检测器更可靠。
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 弹了「Allow remote debugging?」别硬重试</div>
+        每次重试都会再弹一次。要么你的 <code>chrome-use</code> 太旧（重跑 <code>install.sh</code> 升级），要么扩展 / 本地桥没起来
+        （装商店扩展后这个框就再也不出现）。更多排障见 <a href="/troubleshooting.html">排障</a>。
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>登录与凭证 · chrome-use 文档</title>
+  <meta name="description" content="用 chrome-use 完成真实浏览器的登录：fill/click/wait 表单流程、auth 凭证保险库、Sign in with Google / OAuth、Bitwarden 密码与 passkey，以及安全注意事项。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="login-auth" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 30 a10 10 0 1 1 20 0 v6 a4 4 0 0 1 -4 4 h-12 a4 4 0 0 1 -4 -4z"/>
+          <path d="M24 30 v-4 a6 6 0 0 1 12 0 v4"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">会话与登录 / Sessions &amp; Auth</p>
+
+      <div class="du-title-row">
+        <h1>登录与凭证</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        登录是自动化里最容易卡住的一步。这一页讲清楚三条稳妥的路子：直接用
+        <span class="mark">snapshot → fill → click → wait</span> 驱动登录表单、把账号收进
+        <code>chrome-use auth</code> 凭证保险库一键回填、以及处理
+        <span class="mark">Sign in with Google / OAuth</span> 与 Bitwarden 密码和 passkey。
+        目标是让 agent 用真实浏览器完成登录，而不是把密码留在 shell history 里。
+      </p>
+
+      <!-- ============ 基础登录流程 ======= -->
+      <h2>基础登录流程</h2>
+      <p>
+        最直接的方式：打开登录页，用 <code>snapshot -i</code> 读出表单里的可交互元素，
+        挑出邮箱、密码、提交按钮对应的 <code>@ref</code>，逐个 <code>fill</code> 再
+        <code>click</code>，最后用 <code>wait --url</code> 确认已经跳到登录后的页面。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">表单登录</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://app.example.com/login
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># 从快照里挑出邮箱 / 密码 / 提交按钮的 @ref，然后：</span>
+<span class="du-prompt">$</span> chrome-use fill @e3 <span class="du-str">"user@example.com"</span>
+<span class="du-prompt">$</span> chrome-use fill @e4 <span class="du-str">"hunter2"</span>
+<span class="du-prompt">$</span> chrome-use click @e5
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/dashboard"</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 为什么每次都要先 snapshot</div>
+        <code>@ref</code> 是当前快照里的元素句柄，页面一变就可能失效。养成
+        <strong>先 <code>snapshot -i</code> 拿到当前 ref、再动作</strong> 的习惯，比硬编码选择器稳得多。
+        最后再 <code>snapshot -i</code> 一次，是为了确认真的登录成功（而不是停在报错的登录页）。
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 明文密码会泄漏</div>
+        把密码直接写进命令里，它会留在 shell history、进程列表和日志里。只在一次性的本地调试里这么做；
+        任何敏感账号都应改用下面的 <strong>凭证保险库</strong> 或 <strong>Bitwarden</strong>，让密码永远不进命令行。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 凭证保险库 ======= -->
+      <h2>凭证保险库（auth save / login）</h2>
+      <p>
+        对于要反复登录的站点，把凭证一次性存进本地保险库，之后一条命令就能自动回填并提交。
+        <code>--password-stdin</code> 让密码从标准输入读取，不进 shell history。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">auth save + auth login</span>
+        </div>
+<pre><code><span class="du-cmt"># 保存一份凭证（密码从 stdin 读入，输入后按 Ctrl+D 结束）</span>
+<span class="du-prompt">$</span> chrome-use auth save my-app <span class="du-flag">--url</span> https://app.example.com/login \
+    <span class="du-flag">--username</span> user@example.com <span class="du-flag">--password-stdin</span>
+
+<span class="du-cmt"># 之后一条命令：打开登录页、回填、点击、等待表单完成</span>
+<span class="du-prompt">$</span> chrome-use auth login my-app</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 保险库 + Bitwarden 的分工</div>
+        <code>auth save</code> 把凭证收进 chrome-use 的本地保险库；下面的 <code>bwu</code> 则从 Bitwarden 拉取。
+        两者可以配合：把密码留在 Bitwarden，登录时临时取用，凭证不落在命令行里。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Sign in with Google / OAuth ======= -->
+      <h2>Sign in with Google / OAuth</h2>
+      <p>
+        点站点自己的 Google 登录按钮，然后 <code>snapshot -i</code>：即使 GSI 的
+        “Continue as &lt;user&gt;” 按钮位于跨源 iframe 里，它也会拿到一个可点击的
+        <code>@ref</code>（Chrome 125+）。如果弹出的是账号选择弹窗，切到那个弹窗去驱动即可——
+        relay 会跟着你点击打开的弹窗走。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">OAuth 跳转流程</span>
+        </div>
+<pre><code><span class="du-cmt"># 触发 OAuth 流程</span>
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/auth/google
+
+<span class="du-cmt"># 等跳到 Google，再读一次快照</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/accounts.google.com**"</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># 填 Google 账号，逐步推进</span>
+<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"user@gmail.com"</span>
+<span class="du-prompt">$</span> chrome-use click @e2
+<span class="du-prompt">$</span> chrome-use wait 2000
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use fill @e3 <span class="du-str">"password"</span>
+<span class="du-prompt">$</span> chrome-use click @e4
+
+<span class="du-cmt"># 等它跳回业务站点</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/app.example.com**"</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 复用已登录的浏览器最省事</div>
+        如果你本地的 Chrome 已经登进了 Google / 目标站点，与其重跑一遍 OAuth，不如直接
+        <a href="/real-chrome.html">驱动那个真实 Chrome</a> 或把它的会话状态存下来复用——详见
+        <a href="/sessions.html">会话与持久化</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Bitwarden ======= -->
+      <h2>从 Bitwarden 取密码与 passkey</h2>
+      <p>
+        当你需要真正的用户名 / 密码（或 passkey），而不是复用 cookie 时，姊妹工具
+        <a href="https://github.com/leeguooooo/bitwarden-use">bitwarden-use</a>（<code>bwu</code>）
+        能从 Bitwarden / Vaultwarden 保险库读出它们，让 agent 用凭证登录，而不只是走 OAuth。
+        <code>bwu get &lt;item&gt;</code> 返回密码（以及 2FA 验证码），<code>bwu fido2 get</code>
+        取出 passkey 私钥，用于接受 FIDO2 / WebAuthn passkey 的站点。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bwu · 密码 / passkey 直灌字段</span>
+        </div>
+<pre><code><span class="du-cmt"># 安装一次</span>
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh
+
+<span class="du-cmt"># 取某个条目的密码（及 2FA），直接 pipe 进输入框</span>
+<span class="du-prompt">$</span> bwu get github.com | chrome-use fill <span class="du-str">'#password'</span> <span class="du-flag">--stdin</span>
+
+<span class="du-cmt"># 站点需要 FIDO2 / WebAuthn passkey 时，取出 passkey 私钥</span>
+<span class="du-prompt">$</span> bwu fido2 get</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 用 --stdin 把密码喂进字段</div>
+        <code>chrome-use fill '#password' --stdin</code> 从标准输入读取要填的值，
+        所以用 pipe 从 <code>bwu</code> 灌进去时，密码不会出现在命令行参数里，也不会进 history。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 双因素 ======= -->
+      <h2>处理两步验证（2FA）</h2>
+      <p>
+        遇到需要短信 / TOTP / 硬件密钥的第二步时，最省心的办法是让浏览器可见、由人来完成这一步，
+        脚本只负责在旁边等它跳转。用 <code>--headed</code> 打开有界面的窗口，
+        再用一个较长的 <code>--timeout</code> 等待登录后的 URL。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">2FA：人工完成第二步</span>
+        </div>
+<pre><code><span class="du-cmt"># 显示浏览器窗口，先用凭证登录</span>
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/login <span class="du-flag">--headed</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"user@example.com"</span>
+<span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"password123"</span>
+<span class="du-prompt">$</span> chrome-use click @e3
+
+<span class="du-cmt"># 在窗口里手动完成 2FA，脚本等它跳转（最多 120s）</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/dashboard"</span> <span class="du-flag">--timeout</span> 120000</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 其它认证形态 ======= -->
+      <h2>HTTP Basic 与 Cookie 认证</h2>
+      <p>
+        不是所有站点都走表单。对 HTTP Basic Auth，导航前先设好凭证；
+        需要手动注入会话时，可以直接设置 cookie。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Basic Auth / cookie 注入</span>
+        </div>
+<pre><code><span class="du-cmt"># HTTP Basic：导航前设置用户名 / 密码</span>
+<span class="du-prompt">$</span> chrome-use set credentials username password
+<span class="du-prompt">$</span> chrome-use open https://protected.example.com/api
+
+<span class="du-cmt"># 手动设置认证 cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies set session_token <span class="du-str">"abc123xyz"</span>
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/dashboard</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 复用登录状态 ======= -->
+      <h2>登录一次，之后免登录</h2>
+      <p>
+        登录成本很高，别每次都重来。登录成功后把 cookie 和 localStorage 存成一份
+        state 文件，后续用 <code>--state</code> 加载即可以“已登录”状态启动。要跳过整套 OAuth /
+        2FA，这是最实用的一招。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">state save / --state 复用</span>
+        </div>
+<pre><code><span class="du-cmt"># 登录一次，保存 cookie + localStorage</span>
+<span class="du-prompt">$</span> chrome-use state save ./auth.json
+
+<span class="du-cmt"># 之后的运行直接带着登录态启动</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--state</span> ./auth.json open https://app.example.com</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 想要自动保存 / 恢复？</div>
+        用 <code>--session-name</code>（或 <code>AGENT_BROWSER_SESSION_NAME</code>）可以按名字自动存取会话，
+        不用手动管理文件。State 文件里含明文会话令牌——加密、gitignore、按名会话等细节都在
+        <a href="/sessions.html">会话与持久化</a> 里。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 安全 ======= -->
+      <h2>安全注意事项</h2>
+      <p>登录不可避免地碰凭证和会话令牌。几条底线：</p>
+      <ul>
+        <li><strong>别把 state 文件提交进仓库</strong> —— 里面是明文会话令牌，加进 <code>.gitignore</code>，不用了就删。</li>
+        <li><strong>凭证走环境变量或保险库</strong> —— 用 <code>auth save</code> / <code>bwu</code> / <code>--stdin</code> / 环境变量，而不是把密码写死在命令里。</li>
+        <li><strong>加密静态存储</strong> —— 设置 <code>AGENT_BROWSER_ENCRYPTION_KEY</code> 让存下来的会话状态加密。</li>
+        <li><strong>用完清理</strong> —— <code>chrome-use cookies clear</code> 加删掉临时 state 文件；CI 里干脆不落盘、跑完 <code>close</code>。</li>
+      </ul>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ state 文件 = 一把可复用的钥匙</div>
+        一份保存下来的认证状态等同于一个活的登录会话——谁拿到都能冒充你。把它当密码看待：
+        最小权限、加密、及时销毁。别用共享目录，别塞进日志。
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Overview · chrome-use docs</title>
+  <meta name="description" content="chrome-use lets any AI agent — Claude Code, Cursor, Codex, your own scripts — drive your real, logged-in Chrome. Undetectable by anti-bot systems (CreepJS 0% bot) because it is your real browser." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="overview" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <use href="/assets/docs/doodles.svg#star"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Getting Started</p>
+
+      <div class="du-title-row">
+        <h1>chrome-use</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        chrome-use lets <span class="mark">any AI agent drive your real, logged-in Chrome</span> —
+        Claude Code, Cursor, Codex, your own scripts. It shares your existing login sessions and is
+        <strong>undetectable by anti-bot systems because it <em>is</em> your real browser</strong>:
+        <a href="/en/real-chrome.html">CreepJS scores it 0% bot</a>.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># install the CLI — no npm, no tokens</span>
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ New here?</div>
+        Read <a href="/en/install.html">Install &amp; Setup</a> to connect the browser extension, then
+        walk the <a href="/en/core-loop.html">Core Loop</a> (snapshot → find → act) — that's 90% of
+        everything you'll do with chrome-use.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Why chrome-use</h2>
+      <p>
+        <strong>No fresh Chrome. No re-login. No "are you a robot?" walls.</strong> Typical browser
+        automation boots an <em>empty</em> browser with a blank profile — so you redo every login,
+        fight every captcha, and still get flagged as automation. chrome-use points the agent at the
+        Chrome you're <em>already</em> signed into everything on. It clicks in <em>your</em> window,
+        so you watch it work and grab the wheel the moment it hits a 2FA prompt or captcha, then let
+        it continue.
+      </p>
+
+      <div class="du-cards">
+        <a class="du-card" href="/en/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🔒</span> Your real, logged-in Chrome</div>
+          <p>Your cookies, sessions, and fingerprint are all real — because it IS your real browser. Undetectable by anti-bot systems.</p>
+        </a>
+        <a class="du-card" href="/en/install.html">
+          <div class="du-card-title"><span class="du-card-ico">🧩</span> Extension, not a debug port</div>
+          <p>A one-click Store extension over native messaging — no <code>--remote-debugging-port</code>, so it never pops "Allow remote debugging?".</p>
+        </a>
+        <a class="du-card" href="/en/sessions.html">
+          <div class="du-card-title"><span class="du-card-ico">🎨</span> Multi-agent isolation</div>
+          <p>Each <code>--session</code> gets its own colored tab group, so many agents share one real Chrome without stepping on each other.</p>
+        </a>
+        <a class="du-card" href="/en/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🕵️</span> Silent operation</div>
+          <p>Runs entirely in the background — new tabs open un-focused, the agent never force-fronts a tab or steals your foreground.</p>
+        </a>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Why not just use…</h2>
+      <ul>
+        <li><strong>Playwright / Puppeteer / browser-use?</strong> They boot an <em>empty</em> browser — you redo every login, fight every captcha, and still get flagged as automation. chrome-use uses the session you already have.</li>
+        <li><strong>Claude's Chrome extension?</strong> Great, but it only drives Claude. chrome-use drives <em>any</em> agent or CLI over the same real browser.</li>
+        <li><strong>A raw <code>--remote-debugging-port</code>?</strong> Chrome 136+ pops <span class="mark">"Allow remote debugging?"</span> on <em>every</em> connect. chrome-use never does — one-click Store extension, native messaging.</li>
+      </ul>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ The receipts</div>
+        Real-browser fingerprint verified against the toughest public detectors: <strong>CreepJS 0% stealth · 0% headless</strong>,
+        no <code>Runtime.enable</code> CDP leak (off by default), and a small permission footprint —
+        <strong>7 permissions, no <code>&lt;all_urls&gt;</code></strong>. See <a href="/en/real-chrome.html">Real Chrome &amp; Anti-detection</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Get started</h2>
+      <p>Three short reads take you from zero to driving your own Chrome:</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/install.html">
+          <div class="du-card-title"><span class="du-card-ico">📦</span> Install &amp; Setup</div>
+          <p>One-line installer, then the browser extension + native-messaging bridge.</p>
+        </a>
+        <a class="du-card" href="/en/core-loop.html">
+          <div class="du-card-title"><span class="du-card-ico">🔁</span> Core Loop</div>
+          <p>snapshot → find → act: the read/interact rhythm behind every task.</p>
+        </a>
+        <a class="du-card" href="/en/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> Reading Pages</div>
+          <p>Pull a structured, agent-friendly view of any page with <code>snapshot</code>.</p>
+        </a>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>The *-use family</h2>
+      <p>
+        Same idea across the board: don't build a simulated environment — drive the real,
+        already-logged-in device you're holding.
+      </p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="https://github.com/leeguooooo/chrome-use" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🌐</span> chrome-use</div>
+          <p>Drives your real, logged-in Chrome.</p>
+        </a>
+        <a class="du-card" href="https://github.com/leeguooooo" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">📱</span> iphone-use</div>
+          <p>Drives your real iPhone.</p>
+        </a>
+        <a class="du-card" href="https://github.com/leeguooooo/bitwarden-use" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🔑</span> bitwarden-use</div>
+          <p>Pulls passwords, 2FA, and passkeys from your Bitwarden vault so an agent can log in with credentials.</p>
+        </a>
+      </div>
+
+      <p style="margin-top:22px">
+        Apache-2.0 · <a href="https://github.com/leeguooooo/chrome-use" target="_blank" rel="noopener">GitHub</a>
+        · part of the <a href="https://leeguoo.com" target="_blank" rel="noopener">leeguoo.com</a> *-use family.
+      </p>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

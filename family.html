@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>*-use 家族 · chrome-use 文档</title>
+  <meta name="description" content="*-use 家族：同一个思路——不造模拟环境，直接接管你手里真实、已登录的那一个设备。chrome-use 驱动真实 Chrome，iphone-use 驱动真实 iPhone，bitwarden-use 取密码/2FA/passkey，cookie-use 管理多账号会话。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="family" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">// *-use 家族</p>
+
+      <div class="du-title-row">
+        <h1>*-use 家族</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        <code>chrome-use</code> 只是一个更大想法里的一件。整个 <span class="mark">*-use 家族</span>
+        共用同一条哲学：不造模拟环境、不开虚拟机、不 spoof 指纹——
+        <strong>直接接管你手里真实、已登录的那一个设备</strong>。浏览器、手机、密码库、账号会话，
+        每一件都是 agent 能安全调用的开源工具。
+      </p>
+
+      <h2>同一个思路：驱动真实设备</h2>
+      <p>
+        模拟环境总有裂缝：全新的浏览器指纹、没有登录态的会话、被反爬系统识别的自动化痕迹。
+        家族里的每件工具都换了个前提——它 <em>就是</em> 你本来在用的那台设备，所以 cookie、session、
+        登录态、指纹全都是天然真实的，agent 只是替你按下按钮而已。
+      </p>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 共同点</div>
+        每件工具都是本地运行、开源、面向 AI agent 设计的 CLI。它们可以单独用，也可以组合——
+        比如 <code>bitwarden-use</code> 取出密码交给 <code>chrome-use</code> 登录，
+        <code>cookie-use</code> 再把这份登录态存起来跨 profile 复用。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>成员一览</h2>
+      <p>每件工具一句话概括与真实仓库地址。想深入某一件，点开对应的 GitHub 仓库。</p>
+      <div class="du-cards">
+        <a class="du-card" href="https://github.com/leeguooooo/chrome-use" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🌐</span> chrome-use</div>
+          <p>驱动你真实、已登录的 Chrome。共享现成会话，反爬系统检测不到——因为它<em>就是</em>你的真实浏览器。</p>
+        </a>
+        <a class="du-card" href="https://github.com/leeguooooo" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">📱</span> iphone-use</div>
+          <p>驱动你真实的 iPhone。操作没有 API 的 iOS App、导出手机上的数据、点按/输入/滚动/截图。</p>
+        </a>
+        <a class="du-card" href="https://github.com/leeguooooo/bitwarden-use" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> bitwarden-use</div>
+          <p>从你的 Bitwarden 密码库取出密码、2FA 和 passkey，让 agent 用账号密码登录。</p>
+        </a>
+        <a class="du-card" href="https://github.com/leeguooooo/cookie-use" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🍪</span> cookie-use</div>
+          <p>加密的、站点无关的多账号会话保险库：保存、切换、注入某个网站的多个登录态。</p>
+        </a>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 更多工具</div>
+        家族还在生长。更多 *-use 工具与背后的文章都在
+        <a href="https://leeguoo.com" target="_blank" rel="noopener">leeguoo.com</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>chrome-use — 驱动真实 Chrome</h2>
+      <p>
+        家族里的主力。它把<strong>任意</strong> agent（Claude Code、Cursor、Codex 或你自己的脚本）
+        接到你已经在用的那个 Chrome 上——一个浏览器扩展加原生消息通道，不开调试端口、复用现成 cookie。
+        一行命令安装：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">install</span>
+        </div>
+<pre><code><span class="du-cmt"># 从最新 GitHub Release 下载对应平台的预编译二进制</span>
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+      <p>把技能包装进任意 agent 运行器：</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">skill</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
+      </div>
+      <p>
+        装上 Chrome Web Store 扩展后，一次性注册原生消息宿主，然后就能接管你真实的浏览器：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 注册原生消息宿主（只需一次）</span>
+<span class="du-prompt">$</span> chrome-use extension install
+<span class="du-prompt">$</span> chrome-use open https://x.com/home</code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 想深入 chrome-use</div>
+        从 <a href="/index.html">概览</a> 开始，或直接看
+        <a href="/real-chrome.html">驱动真实 Chrome（扩展）</a> 了解扩展 + 原生消息的接管原理。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>bitwarden-use + cookie-use — 让 agent 带着身份登录</h2>
+      <p>
+        两件与登录相关的工具，正好补上 chrome-use 的上游与下游。
+        <code>bitwarden-use</code> 从你的 Bitwarden 密码库取出密码、2FA 和 passkey，
+        交给 agent 完成真正的账号密码登录；<code>cookie-use</code> 则把登录态本身当成资产——
+        加密存进本地保险库，随时切换、跨 Chrome profile 注入。
+      </p>
+      <p>
+        在 <code>chrome-use test</code> 的测试套件里，你可以直接用 <code>account:</code> 注入一个
+        cookie-use 保存的登录态，让每条用例都从「已登录」状态开始：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">smoke.yaml</span>
+        </div>
+<pre><code><span class="du-cmt"># smoke.yaml</span>
+suite: chatgpt smoke
+setup:
+  - account: chatgpt/huayue          <span class="du-cmt"># 注入一个 cookie-use 登录态（可选）</span>
+cases:
+  - name: home loads logged in
+    steps:
+      - open: https://chatgpt.com/
+      - wait: { load: networkidle }
+    assert:
+      - url: { contains: chatgpt.com }
+      - visible: <span class="du-str">"#prompt-textarea"</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 相关文档</div>
+        chrome-use 侧的登录与凭证注入细节见 <a href="/login-auth.html">登录与凭证</a>，
+        跨进程保持登录态见 <a href="/sessions.html">会话与持久化</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>iphone-use — 驱动真实 iPhone</h2>
+      <p>
+        有些数据只活在手机上：Apple Health、银行 App、没有开放 API 的 IM。
+        <code>iphone-use</code> 把同样的「接管真实设备」思路搬到 iOS——通过 macOS 的 iPhone 镜像
+        点按、输入、滚动、截图，操作那些永远不会给你 API 的 App。仓库地址：
+        <a href="https://github.com/leeguooooo" target="_blank" rel="noopener">github.com/leeguooooo</a>。
+      </p>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 各工具独立安装</div>
+        家族成员共用哲学，但不是一个 monorepo。iphone-use、bitwarden-use、cookie-use
+        各自有独立仓库与安装步骤，请以各自 README 为准——本页只做导航，不代替它们的文档。
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>读取页面 · chrome-use 文档</title>
+  <meta name="description" content="用 snapshot 拿到结构化的可访问性快照，用 get text 跨 frame 读取正文，穿透 closed shadow DOM，在指定 frame 里执行 eval——把页面变成可操作的结构化视图。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="reading" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">核心用法 / Core Usage</p>
+
+      <div class="du-title-row">
+        <h1>读取页面</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        读取是每一次浏览器操作的起点。<code>snapshot</code> 把页面变成一棵
+        <span class="mark">带 ref 的可访问性树</span>——你据此点击、输入；<code>get text</code>
+        则跨所有 frame 抓取正文，连 closed shadow DOM 都能穿透。这一页讲清楚
+        「怎么看懂页面」，让后续的交互有的放矢。
+      </p>
+
+      <!-- ============ SECTION ======= -->
+      <h2>snapshot：结构化的页面视图</h2>
+      <p>
+        <code>snapshot</code> 从可访问性树生成页面结构。默认输出完整树（较冗长），
+        实际使用几乎总是加 <code>-i</code>：<span class="mark">只保留可交互元素</span>，
+        每个元素带一个 <code>ref</code>，把它作为 <code>@eN</code> 传给后续命令即可操作。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">snapshot</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot                    <span class="du-cmt"># 完整树（冗长）</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                 <span class="du-cmt"># 仅可交互元素（推荐）</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-u</span>              <span class="du-cmt"># 链接上带出 href url</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-c</span>              <span class="du-cmt"># 紧凑：去掉空的结构节点</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-d</span> 3            <span class="du-cmt"># 深度上限 3 层</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--json</span>             <span class="du-cmt"># 机器可读输出</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 小贴士</div>
+        默认从 <code>snapshot -i</code> 开始。它体量小、只含你能操作的东西，
+        并且给出稳定可用的 <code>@ref</code>——这是驱动点击 / 输入的正规入口。
+      </div>
+
+      <h3>读懂 snapshot 的输出</h3>
+      <p>输出是缩进的可访问性树，缩进代表嵌套深度：</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">snapshot -i · 输出示例</span>
+        </div>
+<pre><code>Page: Example - Log in
+URL: https://example.com/login
+
+- heading "Log in" [level=1, ref=e1]
+- textbox "Email" [ref=e2]
+- textbox "Password" [ref=e3]
+- button "Continue" [ref=e4]
+- link "Forgot password?" [ref=e5]</code></pre>
+      </div>
+
+      <p>
+        每一行的格式是 <code>- &lt;role&gt; "&lt;可访问名称&gt;" [&lt;属性&gt;, ref=eN]</code>。
+        把 <code>ref</code> 作为 <code>@eN</code> 传给命令即可操作，例如
+        <code>click @e4</code>。
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 注意：ref 每次都会重新分配</div>
+        <code>ref</code> 在每次 <code>snapshot</code> 时重新编号。不要缓存旧的
+        <code>@eN</code> 跨操作复用——页面变化后先重新 <code>snapshot</code>，再拿新的 ref。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>过滤庞大的快照</h2>
+      <p>
+        Synology DSM、NAS / 路由器管理后台、ExtJS 应用会把许多独立的「应用窗口」
+        渲染进同一棵可访问性树，<code>snapshot -i</code> 很容易撑爆 token 上限、
+        把目标控件淹没。<span class="mark">不要 pipe 到 <code>tail</code></span>——用过滤器精准收窄。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">过滤 / 收窄</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span>              <span class="du-cmt"># 用 CSS 选择器把范围限定到一个容器</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-f</span> <span class="du-str">"SSH|端口|应用"</span>    <span class="du-cmt"># 只保留匹配行 + 其祖先（正则）</span></code></pre>
+      </div>
+
+      <p>
+        <code>-f/--filter &lt;regex&gt;</code> 只保留匹配的行以及它们的祖先上下文，
+        <span class="mark">refs 保持完整</span>；<code>-s &lt;css&gt;</code> 则把整棵树限定到某一个
+        窗口的容器内。两者可以叠加使用。
+      </p>
+
+      <h3>校验错误也会一并出现</h3>
+      <p>
+        当表单拒绝提交时，原因会作为顶层的 <code>alert</code> 行追加进
+        <code>-i</code> 输出，例如 <code>- alert "字数已超过 8 个字"</code> 或
+        <code>- alert "Email is required"</code>——即使这条消息只是一个带样式的
+        <code>&lt;span&gt;</code>（<code>.is-error</code>、<code>.invalid-feedback</code>、
+        <code>[role=alert]</code>、<code>aria-live</code>），本来会被 <code>-i</code> 当作
+        非交互元素过滤掉。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 说明</div>
+        这些 <code>alert</code> 行是<strong>信息性</strong>的、故意不带 ref（你读它，不是点它）。
+        所以当一次 <code>click</code> 提交没反应时，别猜原因——直接重新
+        <code>snapshot -i</code>，读那几行 <code>alert</code>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>get text：非结构化地读正文</h2>
+      <p>
+        不需要 ref、只想读文字时用 <code>get text</code>。它可以读整页、读单个元素、
+        跳过导航样板、甚至穿透 closed shadow DOM。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">get</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use get text                    <span class="du-cmt"># 整页——默认聚合所有 frame（见下）</span>
+<span class="du-prompt">$</span> chrome-use get text @e1                <span class="du-cmt"># 单个元素的可见文本（也可传 CSS 选择器）</span>
+<span class="du-prompt">$</span> chrome-use get text <span class="du-flag">--main</span>             <span class="du-cmt"># 仅正文——跳过 nav / header / 侧栏</span>
+<span class="du-prompt">$</span> chrome-use get text <span class="du-flag">--pierce</span>           <span class="du-cmt"># 穿透 closed shadow DOM 读取（注入面板）</span>
+<span class="du-prompt">$</span> chrome-use frames                      <span class="du-cmt"># 列出每个 frame + 文本所在位置</span>
+<span class="du-prompt">$</span> chrome-use get html @e1                <span class="du-cmt"># innerHTML</span>
+<span class="du-prompt">$</span> chrome-use get attr @e1 href           <span class="du-cmt"># 任意属性</span>
+<span class="du-prompt">$</span> chrome-use get value @e1               <span class="du-cmt"># 输入框的值</span>
+<span class="du-prompt">$</span> chrome-use get title                   <span class="du-cmt"># 页面标题</span>
+<span class="du-prompt">$</span> chrome-use get url                     <span class="du-cmt"># 当前 URL</span>
+<span class="du-prompt">$</span> chrome-use get count <span class="du-str">".item"</span>           <span class="du-cmt"># 统计匹配元素数量</span></code></pre>
+      </div>
+
+      <h3>整页文本默认跨 frame</h3>
+      <p>
+        不带选择器的 <code>chrome-use get text</code> 会聚合<strong>每一个</strong> frame 的可见文本
+        ——顶层文档、同进程子 frame、以及跨源 iframe——所以你<span class="mark">不会静默漏掉</span>
+        藏在 iframe 里的内容（Yahoo 拍卖 / 乐天 / Mercari 的商品描述、内嵌的结算 / 规格 frame）。
+        每个子 frame 用 <code>----- frame [kind] url -----</code> 标记分隔。你不需要记任何 flag,
+        默认就已经读全部 frame（<code>--all-frames</code> 仍作为显式别名保留）。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 当文本看起来缺失或不对时</div>
+        不用猜——直接 <code>chrome-use get text</code> 读全部。想<strong>看清</strong>结构（哪个 frame
+        装了什么）就 <code>chrome-use frames</code>；想<strong>去掉样板</strong>（全局 nav/header/footer、
+        「相关商品」侧栏）就 <code>get text --main</code>。若内容是懒加载的，先
+        <a href="/interacting.html">scroll</a> 到可视区再读。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>eval：在指定 frame 里执行</h2>
+      <p>
+        <code>eval</code> 默认跑在<strong>主 frame</strong>。它不会静默绑定到 Chrome 恰好返回的
+        某个 frame——裸的 <code>eval</code> 永远指向顶层文档。要在子 frame 里执行
+        （例如跨源的 Google 账号选择器），用
+        <code>--frame &lt;index|url-substring|@ref|css-selector&gt;</code>
+        （index / url 来自 <code>chrome-use frames</code>）。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">eval --frame</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use frames                                       <span class="du-cmt"># 先拿到 index / url</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-flag">--frame</span> accounts.google.com <span class="du-str">"location.href"</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ main world 与 isolated world</div>
+        跨源（跨进程）frame 运行在它自己的 <strong>main world</strong>；同进程的页内 frame
+        运行在 <strong>isolated world</strong>（DOM 可读，但页面 JS 的全局变量读不到）。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>穿透 closed shadow DOM</h2>
+      <p>
+        有些注入式 UI（浏览器扩展的调试面板、Web Components）渲染进
+        <em>closed</em> shadow root，<code>eval</code> / <code>innerText</code> 读不到。
+        <code>chrome-use get text --pierce</code> 通过 CDP 的 DOM 树穿透 closed shadow root
+        和子文档读取——当内容明明在屏幕上（截图能看到），而 <code>get text</code> /
+        <code>eval</code> 却返回空时，就用它。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 点击这类控件是好消息</div>
+        <code>snapshot -i</code> 基于可访问性树构建，而 AX 树<strong>本身就已经穿透</strong>
+        closed shadow root——一个 closed-shadow 的 <code>&lt;button&gt;</code> /
+        <code>[role=button]</code> 会作为普通 <code>@ref</code> 出现，照常点击即可。
+        只有 closed root 里那种<strong>无语义</strong>的可点击 <code>&lt;div&gt;</code>
+        才可能同时躲过 AX 树和光标元素扫描。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>下一步</h2>
+      <p>读懂页面之后，拿着这些 ref 与文本去做点什么。</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 交互操作</div>
+          <p>用 <code>@ref</code> 驱动 click、type、fill、scroll。</p>
+        </a>
+        <a class="du-card" href="/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> 定位元素</div>
+          <p>当 snapshot 太大时，用 find 精准锁定目标。</p>
+        </a>
+        <a class="du-card" href="/extract.html">
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> 提取数据</div>
+          <p>把读到的内容抓成结构化 JSON。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

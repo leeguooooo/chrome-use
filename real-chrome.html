@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>驱动真实 Chrome（扩展） · chrome-use 文档</title>
+  <meta name="description" content="用扩展 relay 连接用户当前打开的、已登录的真实 Chrome 窗口：一次安装、自动连接、多 profile 选择、掉线自愈、OAuth 跨进程、多 agent 严格隔离，以及最强的反检测等级。" />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="real-chrome" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">连接方式 / Connecting</p>
+
+      <div class="du-title-row">
+        <h1>驱动真实 Chrome（扩展）</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        当任务需要用户<strong>此刻正看着的那个窗口</strong>——他们真实的、<span class="mark">已登录的</span>
+        会话，而不是一个全新的空白浏览器时，走扩展连接（extension connect）。它通过一个原生消息 relay
+        接管用户的真实 Chrome：零确认、零 token、无 headless 痕迹，是所有连接方式里反检测等级最高的一档。
+      </p>
+
+      <h2>一次性安装</h2>
+      <p>
+        扩展连接只需配置一次。先注册原生消息宿主（native-messaging host），再装上 <strong>chrome-use</strong> 扩展。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 1. 注册原生消息宿主</span>
+<span class="du-prompt">$</span> chrome-use extension install</code></pre>
+      </div>
+
+      <p>
+        <strong>2. 安装 chrome-use 扩展。</strong> 最省事、且重启后依然稳定的方式是从
+        <strong>Chrome Web Store</strong> 一键 <em>Add to Chrome</em>：
+      </p>
+      <ul>
+        <li>
+          商店地址：<a href="https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk">chromewebstore.google.com/detail/chrome-use</a>
+        </li>
+      </ul>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 开发版兜底（Load unpacked）</div>
+        <code>chrome://extensions</code> → 打开 <strong>Developer mode</strong> → <em>Load unpacked</em> →
+        选 <code>extensions/ab-connect</code>。注意：Load-unpacked 装的扩展在 Chrome 重启后可能被禁用，
+        所以无人值守的场景优先用商店版。
+      </div>
+
+      <h2>自动连接：open 即接管</h2>
+      <p>
+        装好扩展后，普通的 <code>chrome-use open &lt;url&gt;</code> 会自动通过扩展 relay 连接。
+        <code>auto_connect_cdp</code> <strong>优先选用 live relay，而不是裸的
+        <code>--remote-debugging-port</code></strong>，所以 Chrome 136+ 那个「是否允许远程调试？」的授权弹窗
+        <span class="mark">永远不会出现</span>。<code>chrome-use extension connect</code> 是同一条路径的显式写法。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 装好扩展后，open 自动走 relay 接管真实 Chrome</span>
+<span class="du-prompt">$</span> chrome-use open <span class="du-str">"https://example.com"</span>
+
+<span class="du-cmt"># 同一条路径的显式写法</span>
+<span class="du-prompt">$</span> chrome-use extension connect</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 何时不用它</div>
+        如果一个全新、隔离的测试浏览器就够用（不需要真实登录），用 <code>--launch</code> 即可，见下文。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>多个 Chrome profile：看清是哪一个，然后选它</h2>
+      <p>
+        relay 绑定的是<strong>当前正在和原生宿主通信的那个 profile</strong> 的扩展 worker。
+        如果某个站点回来显示未登录，先确认接管的是不是对的 profile，再下结论说登录丢了。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 列出所有已连接的 profile（有 identity 权限则显示邮箱，否则显示稳定 id，标注默认项）</span>
+<span class="du-prompt">$</span> chrome-use browsers
+
+<span class="du-cmt"># 把「本次 session」钉到指定 profile —— 按 session 粘滞，不同 agent 互不干扰</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--browser</span> <span class="du-str">"me@example.com"</span> snapshot
+
+<span class="du-cmt"># 查看当前正在驱动的 profile</span>
+<span class="du-prompt">$</span> chrome-use extension status
+<span class="du-prompt">$</span> chrome-use doctor</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ sticky per session</div>
+        <code>--browser &lt;id|email&gt;</code> 把<strong>本次 session</strong> 钉到某个 profile：session 的 daemon
+        在首次连接时绑定，<strong>每个 session 可以选不同的 profile</strong>，所以并发的多个 agent 不会互相抢。
+        错的 profile 上显示未登录 ≠ 登录丢失——先跑 <code>browsers</code>，再带上正确的 <code>--browser</code> 重跑。
+      </div>
+
+      <h2>--launch vs --profile auto</h2>
+      <p>
+        <code>--launch</code> 会开一个<strong>隔离的空白测试 profile</strong>——没有 cookie、没有登录、没有扩展
+        （所以扩展 relay 路径是关闭的）。它的窗口在 Chrome 的 profile 菜单里标为
+        <code>chrome-use (&lt;session&gt;)</code>，让盯着桌面的人一眼看出这个窗口属于哪个 session。
+        如果一个 launched session 需要更多东西：
+      </p>
+
+      <div class="du-cards cols-2">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> 需要真实 cookie / 登录 / 扩展</div>
+          <p>去掉 <code>--launch</code>，改用 <code>--profile auto</code>（复用用户的真实 Chrome profile），
+          或一次性设置 <code>AGENT_BROWSER_PROFILE=auto</code> 让之后每次调用都默认这么做。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🧩</span> 测试 profile 里加载某个 unpacked 扩展</div>
+          <p><code>--launch --args "--load-extension=&lt;dir&gt;"</code>。</p>
+        </div>
+      </div>
+
+      <h2>万一真弹出「是否允许远程调试？」</h2>
+      <p>
+        <strong>不要反复重试</strong>——每次重试都会再弹一次。此时只有两种可能：
+      </p>
+      <ol>
+        <li>
+          <strong>你在用旧版。</strong> 避免这个弹窗的 relay 优先逻辑早已发布很多个版本了；如果还撞得到，
+          说明你的 <code>chrome-use</code> 太老，升级后重试：
+        </li>
+      </ol>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · 升级</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> curl <span class="du-flag">-fsSL</span> https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+
+<span class="du-cmt"># 若 which 显示多份安装，旧的 npm/pnpm 副本可能在遮挡新版</span>
+<span class="du-prompt">$</span> which <span class="du-flag">-a</span> chrome-use
+<span class="du-prompt">$</span> npm rm <span class="du-flag">-g</span> chrome-use   <span class="du-cmt"># 或 pnpm rm -g chrome-use，让 install.sh 版本胜出</span></code></pre>
+      </div>
+
+      <ol start="2">
+        <li>
+          <strong>扩展 / relay 没起来。</strong> 让用户装商店版扩展（上面那个一键链接）；装好后 relay 会持续在线，
+          这个弹窗再也不会回来。
+        </li>
+      </ol>
+
+      <hr class="du-divider" />
+
+      <h2>relay 掉线：CLI 会自愈</h2>
+      <p>
+        如果某条命令突然报「couldn't reach your Chrome」/「relay … failed」——通常是 MV3 service worker 被挂起，
+        或两个 agent 在共用一个 relay——<strong>CLI 现在会自愈</strong>：它会等 worker 的 keepalive 把 relay 拉活
+        （约 25 秒）并重试一次，所以大多数掉线你根本感知不到。如果某条命令<strong>确实</strong>把错误抛出来了：
+      </p>
+      <ol>
+        <li><strong>直接重跑这条命令</strong>——到那会儿 relay 通常已经重连好了。</li>
+        <li>还不行：<code>chrome-use status</code>（检查）→ <code>chrome-use extension connect</code>（重新 attach）→ 再重试。
+          CLI 会自动注册原生宿主，如果扩展从没装过还会自己打开商店页面——你不用手动跑 <code>extension install</code>。</li>
+        <li><strong>绝不要</strong>让用户用 <code>--remote-debugging-port</code> 退出/重启 Chrome 来恢复掉线的 relay——
+          那会丢掉他们的所有标签页，也彻底破坏了扩展路径。</li>
+        <li><code>chrome-use reconnect</code> 是 <code>extension connect</code> 的友好别名——无需任何重装，
+          就把 session 重新绑定到运行中的 Chrome。</li>
+        <li><strong>浏览器完全恢复不了？</strong> 不要干等一张截图——<strong>退回到非视觉的验证方式</strong>：
+          <code>get text</code> / <code>eval</code>，或用 <code>curl</code>/<code>WebFetch</code> 读已部署的页面。
+          通过 DOM/HTML 或 live URL 确认一个改动是<em>正确</em>的结果，不是失败。截图留给你真正要报告给用户的视觉检查。</li>
+      </ol>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 不要为了躲「脆弱」而把 agent 串行化</div>
+        relay 掉线是短暂的、会自愈的，它<strong>不是</strong>共享浏览器无法并发驱动的信号。并发多 agent
+        <strong>是</strong>被支持的——每个 <code>--session</code> 有自己的标签组、只驱动自己的标签页。
+        给每个 agent 一个不同的 <code>--session</code> 让它们并行跑，不用一个个来。
+      </div>
+
+      <h2>OAuth / SSO 跳转现在直接就能过</h2>
+      <p>
+        一次登录 handoff（GitHub/Google OAuth、SSO）会把标签页<strong>跨进程</strong>导航，这过去会遗弃旧 session、
+        让下一次读取报「stale sessionId」失败。relay 现在会<strong>跨这次跨进程导航自动重新 attach opener</strong>，
+        并在新进程稳定期间短暂重试读取，所以 <code>snapshot</code>/<code>screenshot</code>/<code>eval</code>/<code>get</code>
+        在整个 handoff 期间都能正常工作，「Sign in with Google」/ OAuth 弹窗登录能端到端走完。
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ GSI iframe 的一个限制</div>
+        跨域的 Google GSI iframe（那个「Continue as &lt;user&gt;」按钮）只在 Chrome 125+ 上能被穿透；
+        更老的 Chrome 上，唯独那一个按钮可能仍然够不到。更多登录/鉴权场景见
+        <a href="/login-auth.html">登录与鉴权</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>严格的多 agent 隔离</h2>
+      <p>
+        每个连接的 <code>--session</code> 都会拿到<strong>自己的一个彩色 Chrome 标签组</strong>（以 session 命名），
+        并只驱动它自己的标签页——多个 agent 共享同一个真实浏览器而不串话，用户自己的标签页永远不会被编组。
+        CDP 驱动页面时不会移动用户的鼠标/键盘，所以不会跟他们抢控制权。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 每 agent 隔离是自动的</div>
+        session <strong>名字</strong>就是隔离键：它映射到一个专属标签组<strong>和一个专属 daemon</strong>（端口从名字派生）。
+        不传 <code>--session</code> / <code>AGENT_BROWSER_SESSION</code> 时，chrome-use 会<strong>自动派生一个每-agent 默认值</strong>——
+        <code>cu-&lt;repo&gt;-&lt;id&gt;</code>，其中 <code>&lt;id&gt;</code> 是稳定的每-agent 终端/agent 环境 id
+        （<code>CMUX_SURFACE_ID</code>、<code>TERM_SESSION_ID</code>、<code>ITERM_SESSION_ID</code>、<code>TMUX_PANE</code> …）的短哈希。
+        所以<strong>同一个 repo 里的两个 agent 默认拿到不同的标签组</strong>，不再互踩活动标签页。纯 shell 里没有这些环境变量时，
+        回退到共享的 <code>default</code>。随时可覆盖：传 <code>--session &lt;name&gt;</code>，或把它设成<strong>相同</strong>的值让多个 agent 刻意<em>共享</em>一个标签组。
+      </div>
+
+      <p>
+        一个 session（走 relay）只跟踪并驱动<strong>它自己创建的标签页</strong>。<strong>你自己的动作</strong>打开的弹窗——
+        比如点「Sign in with Google」弹出的 OAuth 账号选择窗口——会被跟随、可作为你 session 的一部分来驱动
+        （切过去驱动那个选择器）。但它<strong>不会</strong>收编用户已有的标签页、其他 agent 的标签页，或<em>无关</em>的弹窗
+        （用户自己开的登录窗口是用户的）。结论：<code>tab list</code> 只显示<em>你这个 session</em> 的标签页；
+        要驱动某个具体页面，就在你自己的标签页里导航过去，别指望一个已存在或弹出来的标签页出现在列表里。
+      </p>
+
+      <h2>用户页面上不会出现调试横幅</h2>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 无感接管</div>
+        扩展<strong>只对 agent 拥有的标签页</strong>（它创建的，或你 <code>adopt</code> 的）attach Chrome 调试器，
+        绝不对用户自己的标签页 attach——所以 Chrome 那条「chrome-use started debugging this browser」的横幅
+        永远不会盖住用户正在用的页面（它只出现在被 attach 的标签页上，而 agent 的都是后台标签页）。
+        无需重启 Chrome，完全无缝。
+      </div>
+
+      <h2>读取用户已经打开的标签页：adopt</h2>
+      <p>
+        需要读一个用户已经开着的标签页？用 <code>chrome-use adopt &lt;url-substring|targetId&gt;</code>——
+        它会跨标签组找到那个已存在的标签页（用户自己的，或另一个 session 的）并驱动它，<strong>不会新开标签页</strong>。
+        没匹配上时它会报错并列出它能看到的标签页。这是穿过上面那层隔离的显式、opt-in 方式（它会把被收编的标签页打上你 session 的标签组）。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · adopt</span>
+        </div>
+<pre><code><span class="du-cmt"># 收编用户正看着的那个标签页，再对它做只读提取</span>
+<span class="du-prompt">$</span> chrome-use adopt <span class="du-str">"claude.ai/design"</span>
+<span class="du-prompt">$</span> chrome-use snapshot
+<span class="du-prompt">$</span> chrome-use get text</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ adopt 后横幅会出现在那个标签页上</div>
+        因为它正是你主动要求驱动的那一个。这是符合预期的，不是 bug。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>反检测等级排名</h2>
+      <p>
+        <strong>这个真实的、已登录的 Chrome（扩展连接） &gt; 一个有头的 launched 浏览器 &gt; headless（禁止）。</strong>
+        一个真正的人类浏览器完全没有 headless / 自动化的破绽，所以任何对反-bot 敏感的任务都优先用它。
+      </p>
+
+      <h2>默认静默运行</h2>
+      <p>
+        驱动用户的真实 Chrome 时，agent 完全在<strong>后台</strong>工作——新标签页开出来时不聚焦，agent 从不强制把某个标签页顶到前台，
+        并且焦点是模拟的，所以后台页面仍然会渲染、并报告 <code>visibilityState: 'visible'</code>。你什么都不用做；
+        只是别指望用户的视图跟着你跑（只有当你<strong>刻意</strong>想把某个标签页surface出来时，才用显式的 <code>bringToFront</code>）。
+      </p>
+
+      <h2>行为层反-bot：拟人化输入</h2>
+      <p>
+        除了指纹层的 stealth，<code>--humanize off|fast|human</code>（或 <code>AGENT_BROWSER_HUMANIZE</code>）让点击沿一条
+        弯曲、减速的轨迹落点并带元素内落点抖动，让打字用可变节奏，让滚动/拖拽带缓动。默认 <code>off</code>；
+        一个每-导航的检测器会把被 Akamai/PerimeterX/DataDome 守卫的页面自动升到 <code>human</code>。
+        让它保持 auto 就好；只有当你已经知道目标在给行为打分时，才强制 <code>human</code>。
+      </p>
+
+      <h2>Cloudflare 通关：solve 一次，复用</h2>
+      <p>
+        通过一次 Cloudflare 挑战会铸出一个 <code>cf_clearance</code> cookie（HttpOnly——对 <code>eval</code>/<code>document.cookie</code>
+        不可见，用 <code>chrome-use cookies</code> 读它）。它绑定你的 <strong>IP + User-Agent</strong>：复用同一个出口 IP 和 UA，
+        就能在它过期前跳过挑战。驱动用户真实 Chrome（relay）会原生持久化它；隔离 session 用 <code>--session-name &lt;name&gt;</code> 保存/恢复。
+        在花力气去解之前，先跑 <code>chrome-use cf-status</code>（别名 <code>cf</code>、<code>clearance</code>）做预检。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · cf-status</span>
+        </div>
+<pre><code><span class="du-cmt"># 预检：页面当前是否是 Cloudflare 挑战？是否已有有效的 cf_clearance？</span>
+<span class="du-prompt">$</span> chrome-use cf-status
+
+<span class="du-cmt"># 读取 HttpOnly 的 cf_clearance cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ cf-status 会给出建议</div>
+        <code>proceed</code>（已通关，别再解）、<code>solve</code>（挑战在、无 clearance）、
+        <code>reissue</code>（有 clearance 但页面仍被挡 → IP/UA 漂移了，重新解）。把它当预检，避免重复解已经过了的挑战。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>相关页面</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/sessions.html">
+          <div class="du-card-title"><span class="du-card-ico">🗂️</span> 会话与隔离</div>
+          <p><code>--session</code>、标签组、每-agent 默认与并发。</p>
+        </a>
+        <a class="du-card" href="/login-auth.html">
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> 登录与鉴权</div>
+          <p>OAuth/SSO handoff、复用真实登录会话。</p>
+        </a>
+        <a class="du-card" href="/troubleshooting.html">
+          <div class="du-card-title"><span class="du-card-ico">🩺</span> 疑难排查</div>
+          <p>relay 掉线、授权弹窗、profile 选错的自查。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>交互操作 · chrome-use 文档</title>
+  <meta name="description" content="用 click、type、fill、check、select、upload、scroll、drag 等命令驱动真实浏览器；理解 @ref 交互、键盘事件、跨源 iframe 与滑块验证码。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="interacting" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 40 C20 20 40 20 52 40 M40 30 l12 10 -12 8"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">核心用法 / Core</p>
+
+      <div class="du-title-row">
+        <h1>交互操作</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        读到页面之后，就该动手了。这一页覆盖驱动真实浏览器的全部交互动词——
+        <span class="mark">点击、输入、勾选、下拉、上传、滚动、拖拽</span>。
+        大多数命令的第一个参数是 <code>snapshot -i</code> 拿到的
+        <code>@ref</code>（例如 <code>@e42</code>）；先<a href="/finding.html">定位元素</a>，
+        再用这里的命令操作它。
+      </p>
+
+      <!-- ============ 点击与指针 ============ -->
+      <h2>点击与指针</h2>
+      <p>
+        最常用的一组动词，都作用在一个 <code>@ref</code> 上。<code>click</code> 会自动把元素滚动进视口，
+        若坐标点击被遮挡，会回退到 DOM 的 <code>.click()</code>。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">点击 / 悬停 / 聚焦</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e1                   <span class="du-cmt"># 点击</span>
+<span class="du-prompt">$</span> chrome-use click @e1 <span class="du-flag">--new-tab</span>         <span class="du-cmt"># 在新标签页打开链接，而不是当前页导航</span>
+<span class="du-prompt">$</span> chrome-use dblclick @e1                <span class="du-cmt"># 双击</span>
+<span class="du-prompt">$</span> chrome-use hover @e1                   <span class="du-cmt"># 悬停</span>
+<span class="du-prompt">$</span> chrome-use focus @e1                   <span class="du-cmt"># 聚焦（键盘输入前常用）</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 点击成功却「没反应」？</div>
+        典型场景：一个 autocomplete/菜单的 <code>&lt;li&gt;</code> 在输入框失焦时就关掉了。
+        换成 DOM 派发的点击再试一次：
+        <code>AGENT_BROWSER_CLICK_MODE=dom chrome-use click @e1</code>，
+        或直接用 <code>eval</code> 在页面里选中那一项。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 输入文本 ============ -->
+      <h2>输入文本</h2>
+      <p>
+        <code>fill</code> 先清空再输入，<code>type</code> 在现有内容后追加。默认走
+        <code>insertText</code>（快），但很多带联想的字段只对<strong>真实按键</strong>有反应——这时加
+        <code>--key-events</code>。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">fill / type</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"hello"</span>            <span class="du-cmt"># 清空后输入</span>
+<span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">" world"</span>          <span class="du-cmt"># 不清空，直接追加</span>
+
+<span class="du-cmt"># 真实按键（非 insertText）——用于只认按键事件的联想/组合框，</span>
+<span class="du-cmt"># 例如输入邮编后自动补全市区（Google Places 一类）</span>
+<span class="du-prompt">$</span> chrome-use type @e5 <span class="du-str">"201-0001"</span> <span class="du-flag">--key-events</span>
+
+<span class="du-cmt"># 真实按键并回车提交候选（--enter 隐含 --key-events）——</span>
+<span class="du-cmt"># 用于异步联想 / 标签控件，例如掘金「添加标签」</span>
+<span class="du-prompt">$</span> chrome-use type @e6 <span class="du-str">"ChatGPT"</span> <span class="du-flag">--enter</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ --key-events 还是 --enter？</div>
+        如果只想<strong>确认一个标签</strong>、且单纯输入不弹下拉，用 <code>--enter</code> 一步到位。
+        如果你更想从候选列表里<strong>挑一个</strong>，先 <code>type … --key-events</code> 触发下拉，
+        再 <code>snapshot -i</code> 找到候选并 <code>click @ref</code>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 键盘 ============ -->
+      <h2>键盘</h2>
+      <p>
+        <code>press</code> 在当前焦点上按一个键（按下+抬起），也支持组合键。
+        <code>keydown</code>/<code>keyup</code> 把按下和抬起拆开，成对使用可以实现「按住」。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">press / keydown / keyup</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use press Enter                 <span class="du-cmt"># 在当前焦点按一个键</span>
+<span class="du-prompt">$</span> chrome-use press Control+a             <span class="du-cmt"># 组合键</span>
+<span class="du-prompt">$</span> chrome-use keydown d                   <span class="du-cmt"># 按住某键不放（不自动抬起）</span>
+<span class="du-prompt">$</span> chrome-use keyup d                     <span class="du-cmt"># 抬起——成对用来「按住移动」</span>
+                                       <span class="du-cmt"># 游戏里：keydown d; sleep; keyup d</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 游戏 / Canvas 里更精确的按住</div>
+        对 canvas / WebGL 应用，用 <code>press d --hold 800</code> 更好——按住时长在守护进程里计时，
+        比 <code>keydown</code> + shell <code>sleep</code> + <code>keyup</code> 每轮少 ~250ms 抖动。详见
+        <a href="/canvas.html">Canvas 与游戏</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 勾选与下拉 ============ -->
+      <h2>勾选、选择与下拉</h2>
+      <p>
+        复选框用 <code>check</code>/<code>uncheck</code>。下拉框要分清两种：原生
+        <code>&lt;select&gt;</code> 用 <code>select</code>；<strong>任何自定义组合框</strong>
+        （react-select / ARIA 等）用 <code>pick</code>。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">check / select / pick</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use check @e3                   <span class="du-cmt"># 勾选复选框</span>
+<span class="du-prompt">$</span> chrome-use uncheck @e3                 <span class="du-cmt"># 取消勾选</span>
+
+<span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"option-value"</span>   <span class="du-cmt"># 仅限原生 &lt;select&gt;</span>
+<span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"a"</span> <span class="du-str">"b"</span>          <span class="du-cmt"># 多选</span>
+
+<span class="du-cmt"># 任意组合框：打开它、等菜单出现（含 portal 渲染）、按可见文本匹配、</span>
+<span class="du-cmt"># 触发正确事件；若选项始终不出现会「报错」（不会静默无操作）</span>
+<span class="du-prompt">$</span> chrome-use pick @e4 <span class="du-flag">--option</span> <span class="du-str">"Europe"</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ select 返回 ✓ 却没变化</div>
+        对自定义下拉，<code>select</code> 可能返回成功但实际什么都没改。这种情况一律改用
+        <code>pick</code>——它会真正打开菜单、匹配、派发事件，选项不出现时明确报错。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 上传文件 ============ -->
+      <h2>上传文件</h2>
+      <p>
+        <code>upload</code> 给文件 <code>&lt;input&gt;</code> 或拖拽/粘贴式的编辑器（如 X 的输入框）投喂文件。
+        它在扩展中继模式下也能工作。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">upload</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use upload @e5 file1.pdf        <span class="du-cmt"># 上传文件</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 为什么中继模式也能上传</div>
+        <code>chrome.debugger</code> 禁止 <code>setFileInputFiles</code>，所以文件字节会被流式送进页面、
+        在页面里重建成一个 <code>File</code>（按 native-messaging 的 1 MiB 上限分块传输）。
+        因此文件 <code>&lt;input&gt;</code> 和 drop/paste 编辑器都能收到。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 滚动 ============ -->
+      <h2>滚动</h2>
+      <p>
+        <code>scroll</code> 按方向滚动页面；<code>scrollintoview</code> 把某个元素滚进视口。
+        对跨源 iframe（支付 / 结算 / KYC 组件）里的内容，普通页面滚动够不着，用
+        <code>--at x,y</code> 在像素点上滚滚轮，或 <code>--frame n</code> 指定帧。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">scroll / scrollintoview</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use scroll down 500              <span class="du-cmt"># 滚动页面（up/down/left/right）</span>
+<span class="du-prompt">$</span> chrome-use scroll down 700 <span class="du-flag">--at</span> 640,400  <span class="du-cmt"># 在某像素点滚滚轮——能滚到普通页面</span>
+                                        <span class="du-cmt"># 滚不到的跨源 iframe（Stripe/结算/KYC）</span>
+<span class="du-prompt">$</span> chrome-use scroll down 700 <span class="du-flag">--frame</span> 2    <span class="du-cmt"># 滚 `chrome-use frames` 里的第 2 帧</span>
+<span class="du-prompt">$</span> chrome-use scrollintoview @e1           <span class="du-cmt"># 把元素滚进视口</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 拖拽与滑块 ============ -->
+      <h2>拖拽与滑块验证码</h2>
+      <p>
+        <code>drag</code> 既能在两个 ref 之间拖放，也能把一个手柄按像素偏移拖动（滑块 / canvas）。
+        对无人值守登录常见的<strong>网易易盾滑块验证码</strong>，用 <code>solve-slider</code> 自动过。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">drag / solve-slider</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use drag @e1 @e2                <span class="du-cmt"># 拖放</span>
+<span class="du-prompt">$</span> chrome-use drag @e1 60                 <span class="du-cmt"># 把手柄拖 +60px（滑块/canvas）；`+60,-3` 表示 dx,dy</span>
+<span class="du-prompt">$</span> chrome-use solve-slider                <span class="du-cmt"># 自动解页面上的网易易盾滑块验证码</span>
+<span class="du-prompt">$</span> chrome-use solve-slider 5              <span class="du-cmt"># ……最多重试 5 次（每次失败会刷新拼图）</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ solve-slider 是怎么过的</div>
+        它按 URL 抓取验证码自己的背景图 + 拼图切片（不截图），离线用边缘 + 掩码互相关定位缺口，
+        再用<strong>拟人化、自校准的闭环轨迹</strong>把手柄拖进缺口——正是这段人类般的运动通过了易盾的行为检测。
+        float（内嵌）和 popup（模态，如知乎）两种模式都支持，在触发滑块的提交之后立即运行即可。
+        这个拖拽会强制启用 humanize 轨迹，不受全局 <code>AGENT_BROWSER_HUMANIZE</code> 影响。
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 还没覆盖的验证码</div>
+        易盾的<strong>增强版</strong>滑块（图标形状拼块 + 干扰项）和<strong>点选</strong>（按顺序点击）
+        是更难的挑战，目前尚未处理。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 跨源 iframe ============ -->
+      <h2>跨源 iframe：始终按 ref 操作</h2>
+      <p>
+        内嵌的支付 / 结算 / KYC 组件（Google Payments、Stripe 等）是跨进程的 out-of-process iframe。
+        <strong>用 ref 驱动它们，永远不要靠截图。</strong>
+        <code>snapshot -i</code> 会穿透这些 iframe，按 <code>@ref</code> 列出里面的元素（含输入框的值）；
+        <code>get text --all-frames</code> 读它们的文本。拿到 ref 后照常操作即可。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">在 iframe 里按 ref 操作</span>
+        </div>
+<pre><code><span class="du-cmt"># snapshot -i 列出跨源 iframe 内的元素，然后：</span>
+<span class="du-prompt">$</span> chrome-use click @e
+<span class="du-prompt">$</span> chrome-use type @e <span class="du-str">"…"</span>
+<span class="du-prompt">$</span> chrome-use hover @e
+<span class="du-prompt">$</span> chrome-use dblclick @e
+<span class="du-prompt">$</span> chrome-use drag @a @b
+
+<span class="du-cmt"># 帧内的邮编/联想框——用真实按键：</span>
+<span class="du-prompt">$</span> chrome-use type @e <span class="du-str">"201-0001"</span> <span class="du-flag">--key-events</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 为什么按 ref 而不是坐标</div>
+        在扩展中继模式下，这些操作是通过 DOM 在元素<strong>自己的帧</strong>里派发的，
+        所以能精准命中正确标签页里的正确元素。而坐标点击/滚动可能<strong>漂移</strong>到当前前台的其它标签页上——
+        所以优先用 ref。帧内需要滚动到下方内容时，用 <code>scroll down N --at x,y</code>（帧上的一个像素点）或 <code>--frame n</code>。
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ find 够不到闭合 shadow root 或跨源 iframe</div>
+        <code>find</code>/选择器匹配的是页面 DOM（<code>querySelectorAll</code>），所以对这两类元素会报
+        「Element not found」——即便 <code>snapshot -i</code> 能列出它们（它走 CDP 可访问性树，能穿透两者）、
+        <code>get text</code> 能读到。这时请用快照里的 <code>@ref</code> 定位，而不是 <code>find</code>；
+        <code>box @ref</code> 可给出坐标兜底。另外，<strong>先核对准确的标签文案</strong>再断定它「不存在」：
+        LinkedIn 的「Save」按钮实际标注为 <code>收藏</code> 而非 <code>保存</code>，
+        <code>snapshot -i</code> 一直显示着 <code>button "收藏" [ref=eN]</code>，直接 <code>click @eN</code> 即可。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 相关页面 ============ -->
+      <h2>接下来</h2>
+      <p>交互只是核心循环的一环，搭配这几页一起看：</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> 定位元素</div>
+          <p>ref 不好用时，改用 find role/text/label、CSS 或坐标。</p>
+        </a>
+        <a class="du-card" href="/waiting.html">
+          <div class="du-card-title"><span class="du-card-ico">⏳</span> 等待</div>
+          <p>操作前后等页面稳定，避免打在还没渲染的元素上。</p>
+        </a>
+        <a class="du-card" href="/canvas.html">
+          <div class="du-card-title"><span class="du-card-ico">🎮</span> Canvas 与游戏</div>
+          <p>没有可访问性树的画布应用，按坐标和 WebSocket 驱动。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

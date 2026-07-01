@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Login &amp; Credentials · chrome-use</title>
+  <meta name="description" content="Handle real-browser login with chrome-use: the snapshot → fill → click → wait form flow, the auth credential vault, Sign in with Google / OAuth, Bitwarden passwords and passkeys, plus security notes." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="login-auth" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 30 a10 10 0 1 1 20 0 v6 a4 4 0 0 1 -4 4 h-12 a4 4 0 0 1 -4 -4z"/>
+          <path d="M24 30 v-4 a6 6 0 0 1 12 0 v4"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Sessions &amp; Auth</p>
+
+      <div class="du-title-row">
+        <h1>Login &amp; Credentials</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Login is the step automation gets stuck on most often. This page lays out three reliable paths:
+        drive the login form directly with
+        <span class="mark">snapshot → fill → click → wait</span>, tuck accounts into the
+        <code>chrome-use auth</code> credential vault for one-command replay, and handle
+        <span class="mark">Sign in with Google / OAuth</span> plus Bitwarden passwords and passkeys.
+        The goal is to have the agent complete login in a real browser without leaving passwords in your shell history.
+      </p>
+
+      <!-- ============ Basic login flow ======= -->
+      <h2>The basic login flow</h2>
+      <p>
+        The most direct approach: open the login page, use <code>snapshot -i</code> to read the interactive
+        elements in the form, pick out the <code>@ref</code>s for the email, password, and submit button,
+        <code>fill</code> them one by one, <code>click</code>, and finally use <code>wait --url</code> to
+        confirm you've landed on the post-login page.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Form login</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://app.example.com/login
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># Pick the @ref for the email / password / submit button out of the snapshot, then:</span>
+<span class="du-prompt">$</span> chrome-use fill @e3 <span class="du-str">"user@example.com"</span>
+<span class="du-prompt">$</span> chrome-use fill @e4 <span class="du-str">"hunter2"</span>
+<span class="du-prompt">$</span> chrome-use click @e5
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/dashboard"</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Why snapshot first, every time</div>
+        A <code>@ref</code> is a handle to an element in the current snapshot — it can go stale the moment the
+        page changes. Get into the habit of
+        <strong>running <code>snapshot -i</code> to grab the current refs before acting</strong>; it's far more
+        stable than hardcoding selectors. The final <code>snapshot -i</code> is there to confirm login actually
+        succeeded (and you didn't stall on a login page showing an error).
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Plaintext passwords leak</div>
+        Writing a password straight into a command leaves it in your shell history, process list, and logs. Only do
+        this for throwaway local debugging; any sensitive account should switch to the
+        <strong>credential vault</strong> or <strong>Bitwarden</strong> below, so the password never touches the command line.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Credential vault ======= -->
+      <h2>Credential vault (auth save / login)</h2>
+      <p>
+        For sites you log into over and over, store the credential in the local vault once and then replay it with
+        a single command that auto-fills and submits.
+        <code>--password-stdin</code> reads the password from standard input, keeping it out of shell history.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">auth save + auth login</span>
+        </div>
+<pre><code><span class="du-cmt"># Save a credential (password read from stdin — press Ctrl+D when done)</span>
+<span class="du-prompt">$</span> chrome-use auth save my-app <span class="du-flag">--url</span> https://app.example.com/login \
+    <span class="du-flag">--username</span> user@example.com <span class="du-flag">--password-stdin</span>
+
+<span class="du-cmt"># From then on, one command: open the login page, fill, click, wait for the form to finish</span>
+<span class="du-prompt">$</span> chrome-use auth login my-app</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ How the vault and Bitwarden divide the work</div>
+        <code>auth save</code> tucks credentials into chrome-use's local vault; the <code>bwu</code> below instead
+        pulls them from Bitwarden. The two work together: keep the password in Bitwarden and fetch it just-in-time
+        at login, so the credential never lands on the command line.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Sign in with Google / OAuth ======= -->
+      <h2>Sign in with Google / OAuth</h2>
+      <p>
+        Click the site's own Google login button, then <code>snapshot -i</code>: even when the GSI
+        "Continue as &lt;user&gt;" button sits inside a cross-origin iframe, you'll still get a clickable
+        <code>@ref</code> (Chrome 125+). If a account-picker popup opens instead, just switch to that popup and
+        drive it — the relay follows the popup your click opened.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">OAuth redirect flow</span>
+        </div>
+<pre><code><span class="du-cmt"># Kick off the OAuth flow</span>
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/auth/google
+
+<span class="du-cmt"># Wait for the redirect to Google, then read a fresh snapshot</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/accounts.google.com**"</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># Fill in the Google account, step by step</span>
+<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"user@gmail.com"</span>
+<span class="du-prompt">$</span> chrome-use click @e2
+<span class="du-prompt">$</span> chrome-use wait 2000
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use fill @e3 <span class="du-str">"password"</span>
+<span class="du-prompt">$</span> chrome-use click @e4
+
+<span class="du-cmt"># Wait for the redirect back to the app site</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/app.example.com**"</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Reusing an already-logged-in browser is easiest</div>
+        If your local Chrome is already signed into Google / the target site, rather than re-running the whole
+        OAuth flow, just
+        <a href="/en/real-chrome.html">drive that real Chrome</a> directly, or save its session state for reuse —
+        see <a href="/en/sessions.html">Sessions &amp; persistence</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Bitwarden ======= -->
+      <h2>Pulling passwords and passkeys from Bitwarden</h2>
+      <p>
+        When you need a real username / password (or a passkey) rather than reusing a cookie, the sister tool
+        <a href="https://github.com/leeguooooo/bitwarden-use">bitwarden-use</a> (<code>bwu</code>)
+        can read them out of a Bitwarden / Vaultwarden vault, letting the agent log in with credentials instead of
+        only going through OAuth.
+        <code>bwu get &lt;item&gt;</code> returns the password (and a 2FA code), and <code>bwu fido2 get</code>
+        extracts a passkey private key for sites that accept FIDO2 / WebAuthn passkeys.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bwu · pipe password / passkey into a field</span>
+        </div>
+<pre><code><span class="du-cmt"># Install once</span>
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh
+
+<span class="du-cmt"># Fetch an item's password (and 2FA), pipe it straight into the input</span>
+<span class="du-prompt">$</span> bwu get github.com | chrome-use fill <span class="du-str">'#password'</span> <span class="du-flag">--stdin</span>
+
+<span class="du-cmt"># When the site needs a FIDO2 / WebAuthn passkey, extract the passkey private key</span>
+<span class="du-prompt">$</span> bwu fido2 get</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Use --stdin to feed the password into a field</div>
+        <code>chrome-use fill '#password' --stdin</code> reads the value to fill from standard input,
+        so when you pipe it in from <code>bwu</code>, the password never appears in command-line arguments and
+        never enters your history.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Two-factor ======= -->
+      <h2>Handling two-factor authentication (2FA)</h2>
+      <p>
+        When you hit a second step that needs SMS / TOTP / a hardware key, the least painful approach is to keep the
+        browser visible and let a human do that step, while the script just waits alongside for the redirect. Use
+        <code>--headed</code> to open a windowed session, then use a longer <code>--timeout</code> to wait for the
+        post-login URL.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">2FA: human completes the second step</span>
+        </div>
+<pre><code><span class="du-cmt"># Show the browser window, log in with credentials first</span>
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/login <span class="du-flag">--headed</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"user@example.com"</span>
+<span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"password123"</span>
+<span class="du-prompt">$</span> chrome-use click @e3
+
+<span class="du-cmt"># Complete 2FA by hand in the window; the script waits for the redirect (up to 120s)</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/dashboard"</span> <span class="du-flag">--timeout</span> 120000</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Other auth forms ======= -->
+      <h2>HTTP Basic and cookie auth</h2>
+      <p>
+        Not every site uses a form. For HTTP Basic Auth, set the credentials before navigating;
+        when you need to inject a session manually, you can set the cookie directly.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Basic Auth / cookie injection</span>
+        </div>
+<pre><code><span class="du-cmt"># HTTP Basic: set username / password before navigating</span>
+<span class="du-prompt">$</span> chrome-use set credentials username password
+<span class="du-prompt">$</span> chrome-use open https://protected.example.com/api
+
+<span class="du-cmt"># Set an auth cookie manually</span>
+<span class="du-prompt">$</span> chrome-use cookies set session_token <span class="du-str">"abc123xyz"</span>
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/dashboard</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Reusing login state ======= -->
+      <h2>Log in once, skip it afterward</h2>
+      <p>
+        Login is expensive — don't redo it every time. After a successful login, save the cookies and localStorage
+        to a state file, then load it later with <code>--state</code> to start up already "logged in." It's the most
+        practical trick for skipping the whole OAuth / 2FA dance.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">state save / --state reuse</span>
+        </div>
+<pre><code><span class="du-cmt"># Log in once, save cookies + localStorage</span>
+<span class="du-prompt">$</span> chrome-use state save ./auth.json
+
+<span class="du-cmt"># Later runs start up already logged in</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--state</span> ./auth.json open https://app.example.com</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Want automatic save / restore?</div>
+        Use <code>--session-name</code> (or <code>AGENT_BROWSER_SESSION_NAME</code>) to automatically save and load
+        a session by name, with no files to manage by hand. State files contain plaintext session tokens — the
+        details on encryption, gitignore, and named sessions are all in
+        <a href="/en/sessions.html">Sessions &amp; persistence</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ Security ======= -->
+      <h2>Security notes</h2>
+      <p>Login inevitably touches credentials and session tokens. A few baselines:</p>
+      <ul>
+        <li><strong>Don't commit state files to a repo</strong> — they hold plaintext session tokens; add them to <code>.gitignore</code> and delete them when you're done.</li>
+        <li><strong>Route credentials through env vars or a vault</strong> — use <code>auth save</code> / <code>bwu</code> / <code>--stdin</code> / environment variables instead of hardcoding the password in a command.</li>
+        <li><strong>Encrypt at rest</strong> — set <code>AGENT_BROWSER_ENCRYPTION_KEY</code> so saved session state is encrypted.</li>
+        <li><strong>Clean up when done</strong> — <code>chrome-use cookies clear</code> plus deleting the temporary state file; in CI, don't persist to disk at all and run <code>close</code> when the job finishes.</li>
+      </ul>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ A state file = a reusable key</div>
+        A saved auth state is equivalent to a live login session — anyone who gets it can impersonate you. Treat it
+        like a password: least privilege, encrypted, destroyed promptly. Don't use shared directories, and don't
+        dump it into logs.
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

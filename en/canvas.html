@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Canvas / WebGL / Games · chrome-use</title>
+  <meta name="description" content="Drive canvas / WebGL / game UIs that have no DOM or accessibility nodes: coordinate clicks, press --hold, batch timed sequences, and a real-time WebSocket stream — capture canvas pixels, read engine globals, send 60fps live input." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="canvas" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
+      </span>
+
+      <p class="du-eyebrow">Advanced</p>
+
+      <div class="du-title-row">
+        <h1>Canvas / WebGL / Games</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Game screens, voice-room mic seats, map tiles, 3D viewers, design canvases (Figma / Modao) —
+        these UIs paint everything onto a <code>&lt;canvas&gt;</code>, with
+        <span class="mark">no DOM nodes and no accessibility nodes behind them</span>.
+        <a href="/en/reading.html">snapshot</a> / find / eval querySelector will never get their <code>@ref</code>.
+        This isn't a missing feature — it's a hard limit. This page teaches a different playbook:
+        <span class="mark">look at pixels, act by coordinates</span>.
+      </p>
+
+      <h2>Why canvas has no ref</h2>
+      <p>
+        A <code>&lt;canvas&gt;</code> / WebGL hit area, and a <strong>closed</strong> shadow root, expose no DOM / AX node for the controls they paint.
+        So no matter how snapshot scans, it cannot fabricate a <code>@ref</code> — <span class="mark">coordinates are the only handle</span>. When snapshot detects such a page it prints a hint.
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ What actually is coordinate-only</div>
+        Only <strong>canvas</strong> and <strong>closed shadow roots</strong> require coordinates. Open shadow roots, and same-origin / cross-origin iframes,
+        are rendered normally by <code>snapshot -i</code> — prefer <code>@ref</code> for those.
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Coordinate clicks can drift over the relay</div>
+        Over the extension relay, a coordinate click can land on the user's <strong>foreground tab</strong>. Before doing a lot of canvas coordinate work, prefer
+        <code>--launch</code> or a tab you own, or bypass the canvas entirely and confirm the real state via the app's backend / API.
+        See <a href="/en/real-chrome.html">Driving real Chrome</a>.
+      </div>
+
+      <h2>Reading the screen: canvas capture and screenshot</h2>
+      <p>
+        On a canvas page, <code>eval</code> / <code>get text</code> mostly return nothing useful, so <strong>looking</strong> is your only read path.
+        Enumerate the canvases first, grab the rendered pixels, then let <em>you</em> interpret them:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Read canvas pixels</span>
+        </div>
+<pre><code><span class="du-cmt"># Enumerate the &lt;canvas&gt; elements on the page (size, type)</span>
+<span class="du-prompt">$</span> chrome-use canvas list
+
+<span class="du-cmt"># Save the canvas "rendered pixels" as PNG — toDataURL gets the full</span>
+<span class="du-cmt"># backing-store resolution (e.g. Figma's 2522x1904); for WebGL without</span>
+<span class="du-cmt"># preserveDrawingBuffer / tainted canvases it falls back to screenshot</span>
+<span class="du-prompt">$</span> chrome-use canvas capture out.png
+
+<span class="du-cmt"># Or just grab a region shot to "see" the current state</span>
+<span class="du-prompt">$</span> chrome-use screenshot /tmp/s.png</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ You get the "rendered result", not the source data</div>
+        <code>canvas capture</code> grabs the painted picture. Figma's source assets, a game's hidden state, and so on live in the app's binary storage / API,
+        not on the canvas. When you need the source data, go through that app's own interface.
+      </div>
+
+      <h3>Symptom: text shows in get text, but no @ref</h3>
+      <p>
+        Voice-room mic seats (Zego / Agora), prototype canvases (Modao / modao), game HUDs, and some Web Components <em>paint</em> their controls —
+        so the text appears in <code>get text</code> / read_page (e.g. a string of "Add Add Add…"), but <code>snapshot -i</code> lists nothing and
+        <code>querySelectorAll</code> returns 0. With no addressable node, <code>@ref</code> / find can't reach it. Drive by position:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Rule out closed shadow first, then click by coordinate</span>
+        </div>
+<pre><code><span class="du-cmt"># Try first: if it's just a "closed" shadow root (not canvas),</span>
+<span class="du-cmt"># this reads through it — cheap, worth trying first</span>
+<span class="du-prompt">$</span> chrome-use get text <span class="du-flag">--pierce</span>
+
+<span class="du-cmt"># Otherwise "look" for where the control is</span>
+<span class="du-prompt">$</span> chrome-use screenshot /tmp/s.png
+
+<span class="du-cmt"># Click that pixel (bare numbers = coordinates)</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">&lt;x&gt;</span> <span class="du-str">&lt;y&gt;</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Interact by coordinate: click and press --hold</h2>
+      <p>
+        On canvas, everything runs on coordinates. Compute the target point and <code>click x y</code> directly; when you first need a container's CSS-px box, use
+        <code>box @ref</code> to get its position and convert. Coordinates are the <span class="mark">right</span> tool here —
+        the snapshot-first rule explicitly makes this exception for canvas.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Coordinate click and hold-move</span>
+        </div>
+<pre><code><span class="du-cmt"># Interact by viewport coordinates</span>
+<span class="du-prompt">$</span> chrome-use click 640 360
+
+<span class="du-cmt"># Hold-move with precise timing (timed inside the daemon —</span>
+<span class="du-cmt"># not keydown + shell-sleep + keyup, which adds ~250ms of</span>
+<span class="du-cmt"># jitter on every round trip)</span>
+<span class="du-prompt">$</span> chrome-use press d <span class="du-flag">--hold</span> 800
+
+<span class="du-cmt"># Discrete actions (jump / attack / confirm)</span>
+<span class="du-prompt">$</span> chrome-use press Space</code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ press --hold instead of stitching sleeps</div>
+        For a sustained action use <code>press --hold &lt;ms&gt;</code> — the timing happens inside the daemon, far steadier than a shell-stitched keydown / sleep / keyup.
+        For more keys and input see <a href="/en/interacting.html">Interacting</a>.
+      </div>
+
+      <h2>batch: run a timed sequence in one round trip</h2>
+      <p>
+        <span class="mark">Don't drive frame-by-frame with one CLI call per action</span> — that's the slowest, lowest-fidelity approach, since every call is a process launch + round trip.
+        Use <code>batch</code> to pack a <em>timed sequence</em> into a single round trip: it sends each step to the already-running daemon, and
+        <code>press --hold</code> and <code>wait</code> both block inside the daemon, so the timing is accurate.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">A timed sequence in one round trip</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use batch <span class="du-str">"press d --hold 900"</span> <span class="du-str">"press j"</span> <span class="du-str">"press j"</span> <span class="du-str">"wait 200"</span> <span class="du-str">"press d --hold 500"</span></code></pre>
+      </div>
+
+      <h2>Read engine globals instead of guessing pixels</h2>
+      <p>
+        Rather than guessing from a screenshot, read the real state directly. <code>eval</code> runs in the page's main world,
+        so for framework / engine-based games you can often reach straight into its global object — a Phaser / PIXI / Three instance,
+        a store, or <code>window.__GAME__</code> — and read position / score directly, far better than guessing at a screenshot.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Read game state directly</span>
+        </div>
+<pre><code><span class="du-cmt"># eval runs in the main world, so it can read the engine instance on window</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"window.__GAME__.player.position"</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Real-time driving: the WebSocket stream</h2>
+      <p>
+        For truly <span class="mark">real-time</span> driving, drop the CLI entirely and use a WebSocket.
+        <code>chrome-use stream enable</code> opens a bidirectional WS (<code>stream status</code> prints
+        <code>ws://127.0.0.1:&lt;port&gt;</code>). Connect once and you get both a ~60fps live screencast and
+        <strong>the ability to send input on the same socket</strong> — no per-action process launch, no round trips, and it works across the extension relay.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Open the stream and read its address</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use stream enable
+<span class="du-prompt">$</span> chrome-use stream status   <span class="du-cmt"># prints ws://127.0.0.1:&lt;port&gt;</span></code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">node — live frames + locally-timed input</span>
+        </div>
+<pre><code><span class="du-cmt">// node (global WebSocket): live frames + locally-timed input</span>
+<span class="du-kw">const</span> ws = <span class="du-kw">new</span> WebSocket(<span class="du-str">"ws://127.0.0.1:PORT"</span>)
+ws.onmessage = e =&gt; { <span class="du-kw">const</span> m = JSON.parse(e.data); <span class="du-kw">if</span> (m.type===<span class="du-str">"frame"</span>) {<span class="du-cmt">/* base64 jpeg */</span>} }
+<span class="du-kw">const</span> k = (eventType,key,code,vk) =&gt; ws.send(JSON.stringify({type:<span class="du-str">"input_keyboard"</span>,eventType,key,code,windowsVirtualKeyCode:vk}))
+k(<span class="du-str">"keyDown"</span>,<span class="du-str">" "</span>,<span class="du-str">"Space"</span>,32); setTimeout(()=&gt;k(<span class="du-str">"keyUp"</span>,<span class="du-str">" "</span>,<span class="du-str">"Space"</span>,32), 80)   <span class="du-cmt">// one jump</span>
+<span class="du-cmt">// mouse works the same: {type:"input_mouse",eventType:"mousePressed",x,y,button:"left",clickCount:1}</span></code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ When to use WS vs a screenshot</div>
+        It's the difference between "flipping through slides" and "actually playing the game". Leave one-off checks to <code>screenshot</code>; use WS for any <strong>sustained real-time control</strong>.
+      </div>
+
+      <h2>Decision cheat sheet</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> Try snapshot first</div>
+          <p>Not sure it's canvas? Run snapshot -i / get text --pierce first — if you get a @ref, don't use coordinates.</p>
+        </a>
+        <a class="du-card" href="/en/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Coordinate interaction</div>
+          <p>click x y, press --hold, batch timed sequences — drive the painted controls.</p>
+        </a>
+        <a class="du-card" href="/en/media.html">
+          <div class="du-card-title"><span class="du-card-ico">🎬</span> Screenshots and recording</div>
+          <p>screenshot to see state, canvas capture to grab rendered pixels, record the viewport for playback.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>会话与持久化 · chrome-use 文档</title>
+  <meta name="description" content="用 --session 隔离多个浏览器、用 state save/load 与 --session-name 跨运行保存登录态，以及 daemon status/restart 复位卡住的会话守护进程。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="sessions" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">会话与登录 / Sessions &amp; Auth</p>
+
+      <div class="du-title-row">
+        <h1>会话与持久化</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        一次登录，<span class="mark">后续运行直接是登录态</span>；多个 agent 各开一个隔离浏览器，
+        <span class="mark">互不打架</span>。这一页讲三件事：把会话状态存下来跨运行复用、用
+        <code>--session</code> 并行跑多个浏览器、以及会话守护进程卡住时怎么干净地复位它。
+      </p>
+
+      <!-- ============ PERSIST ============ -->
+      <h2>跨运行保存登录态</h2>
+      <p>
+        登录一次，把 cookies 和 localStorage 存进一个文件，之后的运行加载它就直接是登录态——
+        不用每次都重新走一遍登录表单。用 <code>state save</code> 保存、<code>--state</code> 加载：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">保存 &amp; 复用状态</span>
+        </div>
+<pre><code><span class="du-cmt"># 登录一次，保存 cookies + localStorage</span>
+<span class="du-prompt">$</span> chrome-use state save ./auth.json
+
+<span class="du-cmt"># 之后的运行开局就是登录态</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--state</span> ./auth.json open https://app.example.com</code></pre>
+      </div>
+
+      <p>
+        也有显式的 <code>state load</code> 用来把已保存的状态注入当前会话，再继续操作：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">state save / load</span>
+        </div>
+<pre><code><span class="du-cmt"># 保存 cookies、storage 和登录状态</span>
+<span class="du-prompt">$</span> chrome-use state save /path/to/auth-state.json
+
+<span class="du-cmt"># 恢复已保存的状态</span>
+<span class="du-prompt">$</span> chrome-use state load /path/to/auth-state.json
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/dashboard</code></pre>
+      </div>
+
+      <p>状态文件是一份普通 JSON，包含 cookies、两种 storage 和来源列表：</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">auth-state.json</span>
+        </div>
+<pre><code>{
+  <span class="du-str">"cookies"</span>: [...],
+  <span class="du-str">"localStorage"</span>: {...},
+  <span class="du-str">"sessionStorage"</span>: {...},
+  <span class="du-str">"origins"</span>: [...]
+}</code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 状态文件是明文凭证</div>
+        <code>auth.json</code> 里装着可登录的 cookies 和 token——<strong>别提交进 Git</strong>
+        （<code>echo "*.auth-state.json" &gt;&gt; .gitignore</code>），用完及时删除，别放进任何会被打包分发的目录。
+      </div>
+
+      <h3>自动存取：--session-name</h3>
+      <p>
+        不想手动 save/load，就用 <code>--session-name</code>（或环境变量
+        <code>AGENT_BROWSER_SESSION_NAME</code>）——同名会话的状态会自动保存、并在后续运行时自动恢复：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">自动保存 / 恢复</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> AGENT_BROWSER_SESSION_NAME=my-app chrome-use open https://app.example.com
+<span class="du-cmt"># 之后用同一个 name 再跑，状态自动恢复</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Cloudflare 清关也能这样复用</div>
+        通过 Cloudflare 挑战拿到的 <code>cf_clearance</code> cookie 绑定在你的 IP + User-Agent 上。
+        对隔离会话，<code>--session-name</code> 的存取会连同它一起保存/恢复，只要出口 IP 和 UA 不变，就能跳过重复挑战。
+        更多登录与凭证细节见 <a href="/login-auth.html">登录与凭证</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ PARALLEL ============ -->
+      <h2>用 --session 并行跑多个浏览器</h2>
+      <p>
+        每个 <code>--session &lt;name&gt;</code> 是一个<strong>相互隔离</strong>的浏览器——各自独立的 cookies、
+        LocalStorage / SessionStorage、IndexedDB、缓存、历史记录和标签页。适合测多用户流程或并行抓取：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">两个隔离会话</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> a open https://app.example.com
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> b open https://app.example.com
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> a fill @e1 <span class="du-str">"alice@test.com"</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> b fill @e1 <span class="du-str">"bob@test.com"</span></code></pre>
+      </div>
+
+      <p>
+        想给当前 shell 设一个默认会话，用 <code>AGENT_BROWSER_SESSION=myapp</code>；省略
+        <code>--session</code> 时命令都落到默认会话。会话不需要时用 <code>close</code> 关掉，用
+        <code>session list</code> 看还有哪些活跃会话：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">默认会话 &amp; 清理</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> AGENT_BROWSER_SESSION=myapp chrome-use open https://example.com
+
+<span class="du-cmt"># 关掉指定会话</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> auth close
+
+<span class="du-cmt"># 列出活跃会话</span>
+<span class="du-prompt">$</span> chrome-use session list</code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 并发 agent 必须各用不同的 --session</div>
+        一个会话内，命令被钉在你打开的那个标签（按 target_id 锁定，外来标签不会把你的
+        <code>eval</code>/<code>screenshot</code> 带偏）。两个 agent 共用<strong>同一个</strong>会话
+        （比如都用裸默认会话）会共享一个守护进程和一个活跃标签，互相覆盖。给每个 agent 一个独立的
+        <code>--session &lt;name&gt;</code>。
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 真正的多 agent 隔离走扩展连接</div>
+        真正的多 agent 隔离需要<strong>扩展连接</strong>路径：每个 <code>--session</code> 拿到自己彩色的 Chrome 标签组，
+        会话之间从不碰彼此的标签。裸 <code>--cdp &lt;port&gt;</code> <strong>不隔离</strong>——每个会话都挂到同一个浏览器的现有目标上，
+        第二个会话的首次 <code>open</code> 可能导航到兄弟会话的标签。同一台真实 Chrome 上跑并发 agent，用扩展（各带一个不同的
+        <code>--session</code>），别用裸 <code>--cdp</code>。见 <a href="/real-chrome.html">真实 Chrome</a>。
+      </div>
+
+      <h3>跨会话拿指定标签：targetId 收养</h3>
+      <p>
+        每个会话有自己的标签组、各自分配 <code>t&lt;N&gt;</code> 序号（同一个物理标签在 A 会话是 <code>t8</code>、
+        在 B 会话是 <code>t1</code>），所以 <code>t&lt;N&gt;</code> <strong>不是</strong>跨会话稳定的句柄。要从另一个会话拿到某个<em>具体</em>标签
+        （比如某会话把表单填了一半、句柄却死了），用稳定的 CDP <code>targetId</code>：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">按 targetId 收养标签</span>
+        </div>
+<pre><code><span class="du-cmt"># 重新同步实时标签，每行打印 target: &lt;id&gt;</span>
+<span class="du-prompt">$</span> chrome-use tab list <span class="du-flag">--full</span> <span class="du-flag">--session</span> B
+
+<span class="du-cmt"># 收养那个确切的标签，不刷新，状态保留</span>
+<span class="du-prompt">$</span> chrome-use tab <span class="du-str">&lt;targetId&gt;</span> <span class="du-flag">--session</span> B</code></pre>
+      </div>
+
+      <p>
+        <code>tab list</code> 每次调用都重新发现实时标签集，所以新会话能看到别的会话开的标签（以及被重新挂上的标签），
+        而不只是自己的。按 <code>targetId</code> 收养会让 B 会话落到那个搁浅的标签上而<strong>不重新加载</strong>它，
+        半填的表单因此得以保留。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 用 --reuse-tab 避免重复标签</div>
+        重新绑定时如果又 <code>open</code> 同一个入口 URL，加 <code>--reuse-tab</code>：若已有标签正显示那个 URL
+        （按 origin+path 匹配），就切过去，而不是再开一个新标签堆起来。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ DAEMON ============ -->
+      <h2>复位卡住的守护进程状态</h2>
+      <p>
+        每个会话跑一个后台守护进程 worker 来持有页面句柄。如果某个会话开始出问题——命令打到错的标签、
+        refs/句柄看起来陈旧，或者你在会话中途升级了 <code>chrome-use</code> 导致旧 worker 残留——
+        直接重启守护进程，别去 <code>pgrep</code>/<code>kill</code> 手动找 PID：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">daemon status / restart</span>
+        </div>
+<pre><code><span class="du-cmt"># 列出运行中的会话守护进程（含 relay 状态）</span>
+<span class="du-prompt">$</span> chrome-use daemon status
+
+<span class="du-cmt"># 杀掉所有会话守护进程 worker</span>
+<span class="du-prompt">$</span> chrome-use daemon restart</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ restart 不动你的 Chrome 和标签</div>
+        <code>daemon restart</code> 不碰扩展的原生消息桥（<code>__nm-host</code>），所以到你实时 Chrome 的 relay
+        保持在线——下一条命令只是对同一个浏览器起一个干净的新守护进程。它<strong>不会</strong>关掉任何标签。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ NEXT ============ -->
+      <h2>相关页面</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/login-auth.html">
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> 登录与凭证</div>
+          <p>auth 凭证库、OAuth、密码从 stdin 传入——安全地完成登录再存会话。</p>
+        </a>
+        <a class="du-card" href="/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🔓</span> 真实 Chrome</div>
+          <p>扩展连接路径：复用你已登录的会话，每个 --session 拿到自己的彩色标签组。</p>
+        </a>
+        <a class="du-card" href="/install.html">
+          <div class="du-card-title"><span class="du-card-ico">🔌</span> 安装</div>
+          <p>装好 chrome-use、扩展与 agent 技能，让上面的会话流程跑起来。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

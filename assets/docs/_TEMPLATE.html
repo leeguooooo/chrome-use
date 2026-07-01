@@ -1,0 +1,159 @@
+<!doctype html>
+<!-- ==========================================================================
+     chrome-use docs — CANONICAL CONTENT PAGE TEMPLATE
+     --------------------------------------------------------------------------
+     Phase-2 authors: COPY this file to  /<slug>.html  (zh)  and  /en/<slug>.html
+     (en mirror). For the overview page the file is  /index.html  and
+     /en/index.html  with data-page="overview".
+
+     You ONLY edit:
+       1. <title> + <meta name="description">
+       2. <body data-page="SLUG" data-lang="zh|en">   (SLUG must be a NAV slug)
+       3. the <main class="du-main"> … </main> content
+     Everything else (topbar, sidebar, TOC, search, copy buttons, drawer) is
+     injected by /assets/docs/docs.js — do NOT hand-write nav.
+
+     The three placeholder hosts docs.js fills:
+       <div id="du-topbar"></div>   -> sticky top bar
+       <div id="du-sidebar"></div>  -> left grouped nav (active item from data-page)
+       <aside id="du-toc"></aside>  -> right "on this page" list (from your h2/h3)
+     ========================================================================== -->
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- EDIT per page -->
+  <title>页面标题 · chrome-use 文档</title>
+  <meta name="description" content="一句话描述这个页面讲什么，用于搜索与社交卡片。" />
+
+  <!-- SEO / social (optional but recommended) -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <!-- Google Fonts — REQUIRED, this is the design system's font stack.
+       Keep display=swap so text renders immediately on the cream bg. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<!-- data-page = NAV slug (drives active nav + squiggle). data-lang = zh | en -->
+<body data-page="overview" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <!-- decorative doodles (optional). Absolutely positioned, faint, behind
+           nothing readable. Use sparingly near the hero / section tops. -->
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <!-- eyebrow = group name (mono/marker). Sets context above the title. -->
+      <p class="du-eyebrow">开始 / Getting Started</p>
+
+      <!-- title row: big ZCOOL h1 + "Copy page" button top-right -->
+      <div class="du-title-row">
+        <h1>页面标题（ZCOOL 手写体）</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <!-- icon injected via CSS-agnostic markup; label swaps to 已复制 on click -->
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <!-- lede: one warm paragraph framing the page. -->
+      <p class="du-lede">
+        用一段话说明这个页面解决什么问题、读完能做什么。可以在关键词上加
+        <span class="mark">马克笔高亮</span>，让重点跳出来。
+      </p>
+
+      <!-- ============ SECTION (h2 becomes a TOC entry automatically) ======= -->
+      <h2>一个二级标题</h2>
+      <p>
+        正文保持干净清晰。行内代码用 <code>chrome-use snapshot</code>，
+        链接像 <a href="/install.html">这样</a>。段落之间留白充足。
+      </p>
+
+      <!-- callouts: .tip (green) / .warn (red) / .note (blue) -->
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 小贴士</div>
+        绿色左边栏用于最佳实践、推荐做法。
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 说明</div>
+        蓝色用于补充说明、背景信息、参考链接。
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 注意</div>
+        红色用于陷阱、破坏性操作、版本限制等需要警惕的内容。
+      </div>
+
+      <!-- code block: dark panel + mac dots + optional filename + copy button.
+           docs.js adds the copy button automatically. Wrap the shell prompt in
+           <span class="du-prompt">$</span>, comments in .du-cmt, flags in .du-flag. -->
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 读取当前页面的可访问性快照</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--interactive</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">"@ref=e42"</span></code></pre>
+      </div>
+
+      <!-- hand-drawn wavy divider between major blocks -->
+      <hr class="du-divider" />
+
+      <h2>卡片网格</h2>
+      <p>用卡片罗列并列的入口或要点。<code>.cols-3</code> 切换成三列。</p>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> 读取页面</div>
+          <p>snapshot 拿到结构化的页面视图。</p>
+        </a>
+        <a class="du-card" href="/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 交互操作</div>
+          <p>click、type、fill 驱动真实浏览器。</p>
+        </a>
+        <a class="du-card" href="/finding.html">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> 定位元素</div>
+          <p>find 与 @ref 精准锁定目标。</p>
+        </a>
+      </div>
+
+      <h3>一个三级标题</h3>
+      <p>h3 也会进入右侧目录（缩进一级）。适合把长章节拆成小节。</p>
+
+      <ul>
+        <li>无序列表项一</li>
+        <li>无序列表项二，可以放 <strong>加粗</strong> 重点</li>
+      </ul>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

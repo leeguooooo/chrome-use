@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Electron 桌面应用 · chrome-use 文档</title>
+  <meta name="description" content="用 chrome-use 通过 Chrome DevTools Protocol 自动化任意 Electron 桌面应用——Slack、VS Code、Discord、Figma、Notion、Spotify。启动带调试端口、connect 连接、snapshot 探索、按 ref 交互。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="electron" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">桌面应用 / Desktop Apps</p>
+
+      <div class="du-title-row">
+        <h1>Electron 桌面应用</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Slack、VS Code、Discord、Figma、Notion、Spotify 这些桌面应用其实都是 <span class="mark">Chromium 套壳</span>——它们都基于 Electron。
+        只要启动时带上 <code>--remote-debugging-port</code>，chrome-use 就能像操作网页一样接进去：
+        同样的 <a href="/core-loop.html">snapshot → 交互 → 再 snapshot</a> 循环，同样的 <code>@ref</code> 定位。
+      </p>
+
+      <h2>核心流程</h2>
+      <p>
+        自动化一个 Electron 应用只有五步：<strong>启动</strong>（带远程调试）→ <strong>连接</strong> CDP 端口 →
+        <strong>snapshot</strong> 发现可交互元素 → 用 ref <strong>交互</strong> → 状态变化后 <strong>重新 snapshot</strong>。
+        跟驱动一个普通网页几乎没有区别。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · 一次完整流程</span>
+        </div>
+<pre><code><span class="du-cmt"># 带远程调试端口启动 Electron 应用</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Slack"</span> --args <span class="du-flag">--remote-debugging-port</span>=9222
+
+<span class="du-cmt"># 把 chrome-use 连接到这个应用</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+
+<span class="du-cmt"># 之后就是标准工作流</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click @e5
+<span class="du-prompt">$</span> chrome-use screenshot slack-desktop.png</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>带 CDP 启动应用</h2>
+      <p>
+        每个 Electron 应用都支持 <code>--remote-debugging-port</code>，因为这是 Chromium 内建的能力。
+        下面是三大平台的启动方式——给不同应用分配不同端口，就能同时驱动多个。
+      </p>
+
+      <h3>macOS</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · macOS</span>
+        </div>
+<pre><code><span class="du-cmt"># Slack</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Slack"</span> --args <span class="du-flag">--remote-debugging-port</span>=9222
+
+<span class="du-cmt"># VS Code</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Visual Studio Code"</span> --args <span class="du-flag">--remote-debugging-port</span>=9223
+
+<span class="du-cmt"># Discord</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Discord"</span> --args <span class="du-flag">--remote-debugging-port</span>=9224
+
+<span class="du-cmt"># Figma</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Figma"</span> --args <span class="du-flag">--remote-debugging-port</span>=9225
+
+<span class="du-cmt"># Notion</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Notion"</span> --args <span class="du-flag">--remote-debugging-port</span>=9226
+
+<span class="du-cmt"># Spotify</span>
+<span class="du-prompt">$</span> open -a <span class="du-str">"Spotify"</span> --args <span class="du-flag">--remote-debugging-port</span>=9227</code></pre>
+      </div>
+
+      <h3>Linux</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · Linux</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> slack <span class="du-flag">--remote-debugging-port</span>=9222
+<span class="du-prompt">$</span> code <span class="du-flag">--remote-debugging-port</span>=9223
+<span class="du-prompt">$</span> discord <span class="du-flag">--remote-debugging-port</span>=9224</code></pre>
+      </div>
+
+      <h3>Windows</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · Windows</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> <span class="du-str">"C:\Users\%USERNAME%\AppData\Local\slack\slack.exe"</span> <span class="du-flag">--remote-debugging-port</span>=9222
+<span class="du-prompt">$</span> <span class="du-str">"C:\Users\%USERNAME%\AppData\Local\Programs\Microsoft VS Code\Code.exe"</span> <span class="du-flag">--remote-debugging-port</span>=9223</code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 应用已经在运行时</div>
+        <code>--remote-debugging-port</code> 必须在启动那一刻就存在。如果应用已经开着，先<strong>退出</strong>它，再带上这个 flag 重新启动，否则连不上。
+      </div>
+
+      <h2>连接</h2>
+      <p>
+        连接有三种方式：直接 <code>connect &lt;端口&gt;</code>、每条命令带 <code>--cdp</code>、或让它自动发现。
+        执行过 <code>connect</code> 之后，后续所有命令都会自动指向这个应用，不用再重复带端口。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · 三种连接方式</span>
+        </div>
+<pre><code><span class="du-cmt"># 连接到指定端口</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+
+<span class="du-cmt"># 或在每条命令上用 --cdp</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--cdp</span> 9222 snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># 自动发现一个正在运行的 Chromium 系应用</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--auto-connect</span> snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <h2>窗口与标签管理</h2>
+      <p>
+        Electron 应用常常有多个窗口或 webview。用 <code>tab</code> 命令列出并切换这些目标。
+        注意标签 id 是 <code>t1</code>、<code>t2</code> 这样的形式，<strong>不接受纯整数</strong>。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · tab</span>
+        </div>
+<pre><code><span class="du-cmt"># 列出所有可用目标（窗口、webview 等）</span>
+<span class="du-prompt">$</span> chrome-use tab
+
+<span class="du-cmt"># 按 id 切换到指定标签（t1、t2 …；不接受整数）</span>
+<span class="du-prompt">$</span> chrome-use tab t2
+
+<span class="du-cmt"># 按 URL 模式切换</span>
+<span class="du-prompt">$</span> chrome-use tab <span class="du-flag">--url</span> <span class="du-str">"*settings*"</span></code></pre>
+      </div>
+
+      <h2>Webview 支持</h2>
+      <p>
+        Electron 的 <code>&lt;webview&gt;</code> 元素会被自动发现，可以像普通页面一样操作。
+        它们在 <code>tab</code> 列表里以独立目标出现，类型为 <code>type: "webview"</code>。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · webview</span>
+        </div>
+<pre><code><span class="du-cmt"># 连接到正在运行的 Electron 应用</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+
+<span class="du-cmt"># 列出目标 —— webview 会和 page 一起出现</span>
+<span class="du-prompt">$</span> chrome-use tab
+<span class="du-cmt">#   0: [page]    Slack - Main Window     https://app.slack.com/</span>
+<span class="du-cmt">#   1: [webview] Embedded Content        https://example.com/widget</span>
+
+<span class="du-cmt"># 切换到某个 webview</span>
+<span class="du-prompt">$</span> chrome-use tab t1
+
+<span class="du-cmt"># 正常交互</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click @e3
+<span class="du-prompt">$</span> chrome-use screenshot webview.png</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 说明</div>
+        Webview 支持通过原始 CDP 连接实现——不需要额外配置，只要它出现在 <code>tab</code> 列表里就能驱动。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>常见模式</h2>
+      <p>下面是几种在桌面应用上反复用到的组合。全部沿用网页自动化里熟悉的动词。</p>
+
+      <h3>探索并导航</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · inspect + navigate</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> open -a <span class="du-str">"Slack"</span> --args <span class="du-flag">--remote-debugging-port</span>=9222
+<span class="du-prompt">$</span> sleep 3  <span class="du-cmt"># 等应用启动</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-cmt"># 读快照输出，识别 UI 元素</span>
+<span class="du-prompt">$</span> chrome-use click @e10  <span class="du-cmt"># 跳转到某个区域</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>  <span class="du-cmt"># 导航后重新 snapshot</span></code></pre>
+      </div>
+
+      <h3>截图</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · screenshot</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use screenshot app-state.png
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--full</span> full-app.png
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--annotate</span> annotated-app.png</code></pre>
+      </div>
+
+      <h3>提取数据</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · extract</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use get text @e5
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--json</span> &gt; app-state.json</code></pre>
+      </div>
+
+      <h3>填表单</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · fill</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use fill @e3 <span class="du-str">"search query"</span>
+<span class="du-prompt">$</span> chrome-use press Enter
+<span class="du-prompt">$</span> chrome-use wait 1000
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <h3>同时驱动多个应用</h3>
+      <p>
+        用<strong>命名会话</strong>就能同时控制多个 Electron 应用，彼此互不干扰。详见 <a href="/sessions.html">会话与并发</a>。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · --session</span>
+        </div>
+<pre><code><span class="du-cmt"># 连接 Slack</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> slack connect 9222
+
+<span class="du-cmt"># 连接 VS Code</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> vscode connect 9223
+
+<span class="du-cmt"># 各自独立交互</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> slack snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> vscode snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>配色方案（深色模式）</h2>
+      <p>
+        通过 CDP 连接时，默认配色方案可能是 <code>light</code>。如果想保留应用的深色模式，用 <code>--color-scheme dark</code>，
+        或用环境变量全局设置。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · color-scheme</span>
+        </div>
+<pre><code><span class="du-cmt"># 单条命令保留深色</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--color-scheme</span> dark snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># 或全局设置</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_COLOR_SCHEME=dark chrome-use connect 9222</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>排障</h2>
+
+      <h3>“Connection refused” / 连不上</h3>
+      <ul>
+        <li>确认应用是带 <code>--remote-debugging-port=NNNN</code> 启动的</li>
+        <li>如果应用之前已经在运行，先退出再带 flag 重启</li>
+        <li>检查端口没被别的进程占用：<code>lsof -i :9222</code></li>
+      </ul>
+
+      <h3>应用起来了但 connect 失败</h3>
+      <ul>
+        <li>启动后等几秒再连（<code>sleep 3</code>）</li>
+        <li>有些应用需要时间初始化它的 webview</li>
+      </ul>
+
+      <h3>元素没出现在 snapshot 里</h3>
+      <ul>
+        <li>应用可能用了多个 webview。用 <code>chrome-use tab</code> 列出目标，切到正确的那个</li>
+      </ul>
+
+      <h3>输入框里打不了字</h3>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 两个绕过技巧</div>
+        <ul style="margin:6px 0 0;">
+          <li>用 <code>chrome-use keyboard type "text"</code> 在当前焦点处直接打字，不用选择器</li>
+          <li>有些 Electron 应用用了自定义输入组件——用 <code>chrome-use keyboard inserttext "text"</code> 绕过按键事件</li>
+        </ul>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>支持的应用</h2>
+      <p>只要是用 Electron 构建的应用都支持 <code>--remote-debugging-port</code>，都能被 chrome-use 自动化。常见的包括：</p>
+
+      <div class="du-cards cols-3">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">💬</span> 通讯</div>
+          <p>Slack、Discord、Microsoft Teams、Signal、Telegram Desktop</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🛠️</span> 开发</div>
+          <p>VS Code、GitHub Desktop、Postman、Insomnia</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🎨</span> 设计</div>
+          <p>Figma、Notion、Obsidian</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🎵</span> 媒体</div>
+          <p>Spotify、Tidal</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">✅</span> 效率</div>
+          <p>Todoist、Linear、1Password</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> 继续阅读</div>
+          <p><a href="/reading.html">读取页面</a> · <a href="/core-loop.html">核心循环</a></p>
+        </div>
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

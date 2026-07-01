@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>命令参考 · chrome-use 文档</title>
+  <meta name="description" content="chrome-use 所有命令、别名与旗标的完整速查：导航、快照、交互、网络拦截、标签页、React/Web Vitals、全局选项与隐身开关。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="commands" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">参考 / Reference</p>
+
+      <div class="du-title-row">
+        <h1>命令参考</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        这是 chrome-use 全部命令、别名与旗标的<span class="mark">完整速查表</span>。按命令组组织，方便扫读与查证。
+        想先建立整体节奏，请看 <a href="/core-loop.html">核心循环</a>；命令跑不通时，翻
+        <a href="/troubleshooting.html">故障排查</a>。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 约定</div>
+        交互命令里的 <code>@e1</code>、<code>@e2</code> 是 <code>snapshot</code> 输出的元素引用（ref）。
+        先跑 <code>snapshot -i</code> 拿到 ref，再用 ref 操作。带 <code>@ref</code> 的命令始终作用在快照运行时的当前活动标签页。
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>导航</h2>
+      <p>
+        打开、跳转、前进后退与关闭浏览器。<code>open</code> 不带 URL 时只启动浏览器、停在
+        <code>about:blank</code>，便于在<strong>首次真正导航之前</strong>先注册网络拦截、Cookie 或 init 脚本。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">navigation</span>
+        </div>
+<pre><code><span class="du-cmt"># 只启动浏览器，不导航；停在 about:blank</span>
+<span class="du-prompt">$</span> chrome-use open
+<span class="du-cmt"># 启动并导航（别名：goto, navigate）；无协议时自动补 https://</span>
+<span class="du-prompt">$</span> chrome-use open <span class="du-str">&lt;url&gt;</span>
+<span class="du-prompt">$</span> chrome-use back                <span class="du-cmt"># 后退</span>
+<span class="du-prompt">$</span> chrome-use forward             <span class="du-cmt"># 前进</span>
+<span class="du-prompt">$</span> chrome-use reload              <span class="du-cmt"># 重新加载</span>
+<span class="du-cmt"># SPA 客户端导航：自动探测 Next.js router.push，回退 history.pushState</span>
+<span class="du-prompt">$</span> chrome-use pushstate <span class="du-str">&lt;url&gt;</span>
+<span class="du-prompt">$</span> chrome-use close               <span class="du-cmt"># 关闭浏览器（别名：quit, exit）</span>
+<span class="du-prompt">$</span> chrome-use connect 9222        <span class="du-cmt"># 通过 CDP 端口连接</span></code></pre>
+      </div>
+
+      <p>
+        导航前的准备可以用 <code>batch</code> 在一轮里排好队 —— 先干净启动，再依次注册拦截 / Cookie，最后导航。
+        适合 SSR-only 调试（只放行 <code>--resource-type script</code> 之外）、受保护来源鉴权，或抓取干净的
+        <code>react suspense</code> / <code>vitals</code> 状态。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">pre-navigation batch</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use batch \
+    <span class="du-str">'["open"]'</span> \
+    <span class="du-str">'["network","route","*","--abort","--resource-type","script"]'</span> \
+    <span class="du-str">'["cookies","set","--curl","cookies.curl","--domain","localhost"]'</span> \
+    <span class="du-str">'["navigate","http://localhost:3000/target"]'</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>快照（页面分析）</h2>
+      <p>
+        <code>snapshot</code> 拿到页面的结构化可访问性视图，是所有交互的起点。
+        推荐 <code>snapshot -i</code>：只列可交互元素，输出精简、ref 齐全。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">snapshot</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot            <span class="du-cmt"># 完整可访问性树</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>         <span class="du-cmt"># 仅可交互元素（推荐）</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-c</span>         <span class="du-cmt"># 精简输出</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-d</span> 3       <span class="du-cmt"># 限制深度为 3</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span> <span class="du-cmt"># 限定到 CSS 选择器范围</span></code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 小贴士</div>
+        <code>snapshot -i</code> 只呈现可见、可交互的元素 —— 它<strong>不</strong>显示隐藏输入或控件的实际提交值。
+        表单"看起来填好了"却过不了校验时，别对着快照猜，直接用 <a href="#javascript">eval</a> 查 DOM。
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>交互操作</h2>
+      <p>用 <code>snapshot</code> 拿到的 <code>@ref</code> 驱动真实浏览器：点击、输入、勾选、拖拽、上传。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">interactions</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e1           <span class="du-cmt"># 点击</span>
+<span class="du-prompt">$</span> chrome-use click @e1 <span class="du-flag">--new-tab</span> <span class="du-cmt"># 点击并在新标签打开</span>
+<span class="du-prompt">$</span> chrome-use dblclick @e1        <span class="du-cmt"># 双击</span>
+<span class="du-prompt">$</span> chrome-use focus @e1           <span class="du-cmt"># 聚焦元素</span>
+<span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># 清空后输入</span>
+<span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># 直接输入（不清空）</span>
+<span class="du-prompt">$</span> chrome-use press Enter         <span class="du-cmt"># 按键（别名：key）</span>
+<span class="du-prompt">$</span> chrome-use press Control+a     <span class="du-cmt"># 组合键</span>
+<span class="du-prompt">$</span> chrome-use keydown Shift       <span class="du-cmt"># 按住键</span>
+<span class="du-prompt">$</span> chrome-use keyup Shift         <span class="du-cmt"># 释放键</span>
+<span class="du-prompt">$</span> chrome-use hover @e1           <span class="du-cmt"># 悬停</span>
+<span class="du-prompt">$</span> chrome-use check @e1           <span class="du-cmt"># 勾选复选框</span>
+<span class="du-prompt">$</span> chrome-use uncheck @e1         <span class="du-cmt"># 取消勾选</span>
+<span class="du-prompt">$</span> chrome-use select @e1 <span class="du-str">"value"</span>   <span class="du-cmt"># 选择下拉项</span>
+<span class="du-prompt">$</span> chrome-use select @e1 <span class="du-str">"a"</span> <span class="du-str">"b"</span>   <span class="du-cmt"># 多选</span>
+<span class="du-prompt">$</span> chrome-use scroll down 500     <span class="du-cmt"># 滚动页面（默认 down 300px）</span>
+<span class="du-prompt">$</span> chrome-use scrollintoview @e1  <span class="du-cmt"># 滚动元素进入视口（别名：scrollinto）</span>
+<span class="du-prompt">$</span> chrome-use drag @e1 @e2        <span class="du-cmt"># 拖放</span>
+<span class="du-prompt">$</span> chrome-use upload @e1 file.pdf <span class="du-cmt"># 上传文件</span></code></pre>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 点击"成功但没反应"</div>
+        自动补全 / 菜单 <code>&lt;li&gt;</code> 项常在输入框失焦时关闭。若 <code>click</code> 报成功但页面没反应，
+        用 <code>AGENT_BROWSER_CLICK_MODE=dom</code> 重试该次点击 —— DOM 派发不会像真实指针那样移动焦点，选项仍会被选中。
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>读取信息</h2>
+      <p>从元素或页面读取文本、HTML、属性、值、包围盒与计算样式。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">get</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use get text @e1        <span class="du-cmt"># 元素文本</span>
+<span class="du-prompt">$</span> chrome-use get html @e1        <span class="du-cmt"># innerHTML</span>
+<span class="du-prompt">$</span> chrome-use get value @e1       <span class="du-cmt"># 输入框的值</span>
+<span class="du-prompt">$</span> chrome-use get attr @e1 href   <span class="du-cmt"># 属性</span>
+<span class="du-prompt">$</span> chrome-use get title           <span class="du-cmt"># 页面标题</span>
+<span class="du-prompt">$</span> chrome-use get url             <span class="du-cmt"># 当前 URL</span>
+<span class="du-prompt">$</span> chrome-use get cdp-url         <span class="du-cmt"># CDP WebSocket URL</span>
+<span class="du-prompt">$</span> chrome-use get count <span class="du-str">".item"</span>   <span class="du-cmt"># 匹配元素数量</span>
+<span class="du-prompt">$</span> chrome-use get box @e1         <span class="du-cmt"># 包围盒</span>
+<span class="du-prompt">$</span> chrome-use get styles @e1      <span class="du-cmt"># 计算样式（字体、颜色、背景等）</span></code></pre>
+      </div>
+
+      <h3>检查状态</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">is</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use is visible @e1      <span class="du-cmt"># 是否可见</span>
+<span class="du-prompt">$</span> chrome-use is enabled @e1      <span class="du-cmt"># 是否可用</span>
+<span class="du-prompt">$</span> chrome-use is checked @e1      <span class="du-cmt"># 是否勾选</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>截图与 PDF</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">screenshot / pdf</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use screenshot          <span class="du-cmt"># 保存到临时目录</span>
+<span class="du-prompt">$</span> chrome-use screenshot path.png <span class="du-cmt"># 保存到指定路径</span>
+<span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--full</span>   <span class="du-cmt"># 整页截图</span>
+<span class="du-prompt">$</span> chrome-use pdf output.pdf      <span class="du-cmt"># 保存为 PDF</span></code></pre>
+      </div>
+      <p>
+        无头 Chromium 截图会隐藏原生滚动条以获得一致的图像输出。启动时传
+        <code>--hide-scrollbars false</code> 可保留原生滚动条。
+      </p>
+
+      <!-- ============================================================ -->
+      <h2>录屏</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">record</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use record start ./demo.webm    <span class="du-cmt"># 开始录制</span>
+<span class="du-prompt">$</span> chrome-use click @e1                   <span class="du-cmt"># 执行操作</span>
+<span class="du-prompt">$</span> chrome-use record stop                 <span class="du-cmt"># 停止并保存</span>
+<span class="du-prompt">$</span> chrome-use record restart ./take2.webm <span class="du-cmt"># 停止当前 + 开始新录制</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>等待</h2>
+      <p>在断言状态前等待元素、文本、URL、网络空闲或任意 JS 条件。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">wait</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use wait @e1                     <span class="du-cmt"># 等待元素</span>
+<span class="du-prompt">$</span> chrome-use wait 2000                    <span class="du-cmt"># 等待毫秒数</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--text</span> <span class="du-str">"Success"</span>        <span class="du-cmt"># 等待文本（或 -t）</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--url</span> <span class="du-str">"**/dashboard"</span>    <span class="du-cmt"># 等待 URL 模式（或 -u）</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle       <span class="du-cmt"># 等待网络空闲（或 -l）</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--fn</span> <span class="du-str">"window.ready"</span>     <span class="du-cmt"># 等待 JS 条件（或 -f）</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>鼠标控制</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">mouse</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use mouse move 100 200      <span class="du-cmt"># 移动鼠标</span>
+<span class="du-prompt">$</span> chrome-use mouse down left         <span class="du-cmt"># 按下按键</span>
+<span class="du-prompt">$</span> chrome-use mouse up left           <span class="du-cmt"># 释放按键</span>
+<span class="du-prompt">$</span> chrome-use mouse wheel 100         <span class="du-cmt"># 滚轮</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>语义定位器</h2>
+      <p>
+        ref 之外的另一种定位方式：按角色、文本、标签、占位符、alt、title、testid 或位置定位，
+        并直接跟上要执行的动作。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">find</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use find role button click <span class="du-flag">--name</span> <span class="du-str">"Submit"</span>
+<span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
+<span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>      <span class="du-cmt"># 仅精确匹配</span>
+<span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
+<span class="du-prompt">$</span> chrome-use find placeholder <span class="du-str">"Search"</span> type <span class="du-str">"query"</span>
+<span class="du-prompt">$</span> chrome-use find alt <span class="du-str">"Logo"</span> click
+<span class="du-prompt">$</span> chrome-use find title <span class="du-str">"Close"</span> click
+<span class="du-prompt">$</span> chrome-use find testid <span class="du-str">"submit-btn"</span> click
+<span class="du-prompt">$</span> chrome-use find first <span class="du-str">".item"</span> click
+<span class="du-prompt">$</span> chrome-use find last <span class="du-str">".item"</span> click
+<span class="du-prompt">$</span> chrome-use find nth 2 <span class="du-str">"a"</span> hover</code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>浏览器设置</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">set</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use set viewport 1920 1080          <span class="du-cmt"># 视口尺寸</span>
+<span class="du-prompt">$</span> chrome-use set viewport 1920 1080 2        <span class="du-cmt"># 2x 视网膜（CSS 尺寸不变，截图分辨率更高）</span>
+<span class="du-prompt">$</span> chrome-use set device <span class="du-str">"iPhone 14"</span>          <span class="du-cmt"># 模拟设备</span>
+<span class="du-prompt">$</span> chrome-use set geo 37.7749 -122.4194       <span class="du-cmt"># 地理位置（别名：geolocation）</span>
+<span class="du-prompt">$</span> chrome-use set offline on                  <span class="du-cmt"># 离线模式开关</span>
+<span class="du-prompt">$</span> chrome-use set headers <span class="du-str">'{"X-Key":"v"}'</span>     <span class="du-cmt"># 额外 HTTP 头</span>
+<span class="du-prompt">$</span> chrome-use set credentials user pass       <span class="du-cmt"># HTTP 基本认证（别名：auth）</span>
+<span class="du-prompt">$</span> chrome-use set media dark                  <span class="du-cmt"># 模拟配色方案</span>
+<span class="du-prompt">$</span> chrome-use set media light reduced-motion  <span class="du-cmt"># 浅色 + 减少动效</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Cookie 与存储</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">cookies / storage</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use cookies                     <span class="du-cmt"># 获取所有 Cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies set name value      <span class="du-cmt"># 设置 Cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies clear               <span class="du-cmt"># 清空 Cookie</span>
+<span class="du-prompt">$</span> chrome-use storage local               <span class="du-cmt"># 全部 localStorage</span>
+<span class="du-prompt">$</span> chrome-use storage local key           <span class="du-cmt"># 指定键</span>
+<span class="du-prompt">$</span> chrome-use storage local set k v       <span class="du-cmt"># 设置值</span>
+<span class="du-prompt">$</span> chrome-use storage local clear         <span class="du-cmt"># 全部清空</span></code></pre>
+      </div>
+
+      <h3>从 cURL 导入 Cookie</h3>
+      <p>
+        自动识别格式：<code>{name, value}</code> 的 JSON 数组、DevTools → Network → Copy as cURL 的转储，
+        或裸 Cookie 头。出错时绝不回显 Cookie 值。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">cookies set --curl</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use cookies set <span class="du-flag">--curl</span> <span class="du-str">&lt;file&gt;</span>                       <span class="du-cmt"># 自动识别 JSON / cURL / Cookie 头</span>
+<span class="du-prompt">$</span> chrome-use cookies set <span class="du-flag">--curl</span> <span class="du-str">&lt;file&gt;</span> <span class="du-flag">--domain</span> example.com  <span class="du-cmt"># 限定域名</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>网络拦截</h2>
+      <p>
+        拦截、阻断、Mock 响应、改写请求，或编辑真实响应。深入用法见
+        <a href="/core-loop.html">核心循环</a> 中的网络章节。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">network</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span>              <span class="du-cmt"># 拦截请求</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span> <span class="du-flag">--abort</span>      <span class="du-cmt"># 阻断请求</span>
+<span class="du-cmt"># Mock 响应（fulfill）</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span> <span class="du-flag">--body</span> <span class="du-str">'{}'</span> <span class="du-flag">--status</span> 200 <span class="du-flag">--header</span> K=V <span class="du-flag">--content-type</span> application/json
+<span class="du-cmt"># 改写请求（continue）</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span> <span class="du-flag">--method</span> POST <span class="du-flag">--set-body</span> <span class="du-str">'{}'</span> <span class="du-flag">--set-header</span> K=V <span class="du-flag">--rewrite-url</span> <span class="du-str">&lt;u&gt;</span>
+<span class="du-cmt"># 编辑真实响应</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">&lt;url&gt;</span> <span class="du-flag">--edit-status</span> 503 <span class="du-flag">--edit-header</span> K=V <span class="du-flag">--replace</span> <span class="du-str">'from=&gt;to'</span>
+<span class="du-prompt">$</span> chrome-use network unroute [url]            <span class="du-cmt"># 移除路由</span>
+<span class="du-prompt">$</span> chrome-use network requests                 <span class="du-cmt"># 查看已跟踪的请求</span>
+<span class="du-prompt">$</span> chrome-use network requests <span class="du-flag">--filter</span> api    <span class="du-cmt"># 过滤请求</span></code></pre>
+      </div>
+
+      <h3>按资源类型拦截</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">network route --resource-type</span>
+        </div>
+<pre><code><span class="du-cmt"># 只阻断脚本（SSR-lock 模式）</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">'*'</span> <span class="du-flag">--abort</span> <span class="du-flag">--resource-type</span> script
+<span class="du-cmt"># 用空响应替换图片和字体</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">'*'</span> <span class="du-flag">--resource-type</span> image,font <span class="du-flag">--body</span> <span class="du-str">''</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>标签页与窗口</h2>
+      <p>
+        标签 id 是形如 <code>t1</code>、<code>t2</code> 的稳定字符串，会话内不重用。
+        位置整数<strong>不</strong>被接受 —— <code>tab 2</code> 会报错，请用 <code>t2</code>。
+        你也可以给标签起可读的 label（<code>docs</code>、<code>app</code>），与 id 通用。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">tab / window</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use tab                              <span class="du-cmt"># 列出标签（含 tabId 与 label）</span>
+<span class="du-prompt">$</span> chrome-use tab new [url]                    <span class="du-cmt"># 新标签</span>
+<span class="du-prompt">$</span> chrome-use tab new <span class="du-flag">--label</span> docs [url]       <span class="du-cmt"># 带可读 label 的新标签</span>
+<span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># 按 id 切换</span>
+<span class="du-prompt">$</span> chrome-use tab docs                         <span class="du-cmt"># 按 label 切换</span>
+<span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># 关闭当前标签</span>
+<span class="du-prompt">$</span> chrome-use tab close t2                     <span class="du-cmt"># 按 id 关闭</span>
+<span class="du-prompt">$</span> chrome-use tab close docs                   <span class="du-cmt"># 按 label 关闭</span>
+<span class="du-prompt">$</span> chrome-use window new                       <span class="du-cmt"># 新窗口</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ ref 属于快照时的活动标签</div>
+        守护进程只维护单个活动标签，<code>@eN</code> 归属于快照运行时的那个标签。要操作另一个标签，
+        <strong>先切过去再快照</strong>。label 永不自动生成、导航后不改写、会话内唯一。
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>框架（iframe）</h2>
+      <p>
+        快照时自动检测 iframe，其内容会内联在 iframe 元素下方（一层嵌套）。
+        iframe 内的 ref 可直接操作；也可切换框架上下文做限定快照。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">frame</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use frame <span class="du-str">"#iframe"</span>     <span class="du-cmt"># 按 CSS 选择器切换到 iframe</span>
+<span class="du-prompt">$</span> chrome-use frame @e3           <span class="du-cmt"># 按元素 ref 切换到 iframe</span>
+<span class="du-prompt">$</span> chrome-use frame main          <span class="du-cmt"># 返回主框架</span></code></pre>
+      </div>
+      <p>
+        <code>frame</code> 接受三种输入：<strong>元素 ref</strong>（<code>frame @e3</code>）、
+        <strong>CSS 选择器</strong>（<code>frame "#payment-iframe"</code>）、以及
+        <strong>框架 name / URL</strong>（匹配浏览器的框架树）。
+      </p>
+
+      <!-- ============================================================ -->
+      <h2>对话框</h2>
+      <p>
+        默认自动接受 <code>alert</code> 与 <code>beforeunload</code>，避免阻塞代理；
+        <code>confirm</code> 和 <code>prompt</code> 仍需显式处理。用 <code>--no-auto-dialog</code> 关闭该行为。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">dialog</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use dialog accept [text]  <span class="du-cmt"># 接受对话框</span>
+<span class="du-prompt">$</span> chrome-use dialog dismiss        <span class="du-cmt"># 取消对话框</span>
+<span class="du-prompt">$</span> chrome-use dialog status         <span class="du-cmt"># 检查是否有对话框打开</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2 id="javascript">执行 JavaScript</h2>
+      <p>
+        <code>eval</code> 在页面 <strong>MAIN world</strong> 中运行，状态会持久、处理器会触发。
+        含嵌套引号或特殊字符时，用 <code>-b</code> / <code>--stdin</code> 更可靠 —— Shell 转义很容易出错。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">eval</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use eval <span class="du-str">"document.title"</span>          <span class="du-cmt"># 仅限简单表达式</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-flag">-b</span> <span class="du-str">"&lt;base64&gt;"</span>             <span class="du-cmt"># 任意 JS（base64 编码）</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-flag">--stdin</span>                   <span class="du-cmt"># 从 stdin 读取脚本</span>
+
+<span class="du-cmt"># 多行脚本用 stdin + heredoc：</span>
+<span class="du-prompt">$</span> cat &lt;&lt;<span class="du-str">'EOF'</span> | chrome-use eval <span class="du-flag">--stdin</span>
+const links = document.querySelectorAll('a');
+Array.from(links).map(a =&gt; a.href);
+EOF</code></pre>
+      </div>
+
+      <h3>用 eval 调试表单 / 隐藏状态</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">form debugging</span>
+        </div>
+<pre><code><span class="du-cmt"># 导出每个字段 name → value，含隐藏输入与未选中的 radio</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"JSON.stringify([...document.forms[0].elements].map(e=&gt;({name:e.name,type:e.type,value:e.value,checked:e.checked})).filter(e=&gt;e.name))"</span>
+<span class="du-cmt"># 为什么提交不了？问浏览器自己的 validity API</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"[...document.forms[0].elements].filter(e=&gt;!e.validity?.valid).map(e=&gt;e.name+': '+e.validationMessage)"</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>状态管理</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">state</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use state save auth.json    <span class="du-cmt"># 保存 Cookie、存储与鉴权状态</span>
+<span class="du-prompt">$</span> chrome-use state load auth.json    <span class="du-cmt"># 恢复已保存的状态</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>Init 脚本</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">init scripts</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open <span class="du-flag">--init-script</span> <span class="du-str">&lt;path&gt;</span>       <span class="du-cmt"># 首次导航前注册（可重复）</span>
+<span class="du-prompt">$</span> chrome-use addinitscript <span class="du-str">&lt;js&gt;</span>            <span class="du-cmt"># 运行时注册（返回标识符）</span>
+<span class="du-prompt">$</span> chrome-use removeinitscript <span class="du-str">&lt;id&gt;</span>         <span class="du-cmt"># 移除已注册的 init 脚本</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>React / Web Vitals</h2>
+      <p>
+        <code>react ...</code> 命令需要启动时带 <code>--enable react-devtools</code>；
+        <code>vitals</code> 与 <code>pushstate</code> 与框架无关。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">react / vitals</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open <span class="du-flag">--enable</span> react-devtools <span class="du-str">&lt;url&gt;</span>    <span class="du-cmt"># 带 React hook 启动</span>
+<span class="du-prompt">$</span> chrome-use react tree                            <span class="du-cmt"># 完整组件树</span>
+<span class="du-prompt">$</span> chrome-use react inspect <span class="du-str">&lt;fiberId&gt;</span>               <span class="du-cmt"># props / hooks / state / source</span>
+<span class="du-prompt">$</span> chrome-use react renders start                   <span class="du-cmt"># 开始记录重渲染</span>
+<span class="du-prompt">$</span> chrome-use react renders stop [<span class="du-flag">--json</span>]           <span class="du-cmt"># 停止并打印渲染分析</span>
+<span class="du-prompt">$</span> chrome-use react suspense [<span class="du-flag">--only-dynamic</span>] [<span class="du-flag">--json</span>]  <span class="du-cmt"># Suspense 边界 + 分类器</span>
+<span class="du-prompt">$</span> chrome-use vitals [url] [<span class="du-flag">--json</span>]                 <span class="du-cmt"># LCP/CLS/TTFB/FCP/INP + hydration</span>
+<span class="du-prompt">$</span> chrome-use pushstate <span class="du-str">&lt;url&gt;</span>                       <span class="du-cmt"># SPA 客户端导航（自动探测 Next router）</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>调试</h2>
+      <p>
+        <code>console</code> / <code>errors</code> 的捕获<strong>默认关闭</strong> —— 活跃的 CDP
+        <code>Runtime</code> 域是可被探测的 bot 信号。需要时用
+        <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code> 启动会话。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">debugging</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--headed</span> open example.com   <span class="du-cmt"># 显示浏览器窗口</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--cdp</span> 9222 snapshot         <span class="du-cmt"># 通过 CDP 端口连接</span>
+<span class="du-prompt">$</span> chrome-use connect 9222                <span class="du-cmt"># 另一种：connect 命令</span>
+<span class="du-prompt">$</span> chrome-use console                     <span class="du-cmt"># 查看控制台消息（需 AGENT_BROWSER_CAPTURE_CONSOLE=1）</span>
+<span class="du-prompt">$</span> chrome-use console <span class="du-flag">--clear</span>             <span class="du-cmt"># 清空控制台</span>
+<span class="du-prompt">$</span> chrome-use errors                      <span class="du-cmt"># 查看页面错误（需 AGENT_BROWSER_CAPTURE_CONSOLE=1）</span>
+<span class="du-prompt">$</span> chrome-use errors <span class="du-flag">--clear</span>              <span class="du-cmt"># 清空错误</span>
+<span class="du-prompt">$</span> chrome-use highlight @e1               <span class="du-cmt"># 高亮元素</span>
+<span class="du-prompt">$</span> chrome-use inspect                     <span class="du-cmt"># 打开本会话的 DevTools</span>
+<span class="du-prompt">$</span> chrome-use trace start                 <span class="du-cmt"># 开始记录 trace</span>
+<span class="du-prompt">$</span> chrome-use trace stop trace.zip        <span class="du-cmt"># 停止并保存</span>
+<span class="du-prompt">$</span> chrome-use profiler start              <span class="du-cmt"># 开始性能分析</span>
+<span class="du-prompt">$</span> chrome-use profiler stop trace.json    <span class="du-cmt"># 停止并保存 profile</span></code></pre>
+      </div>
+
+      <h3>查找用户保存的页面（find-url）</h3>
+      <p>
+        按关键词搜索本地 Chrome/Edge <strong>书签</strong> —— 用于公共搜索够不到的内部系统或先前保存的页面。
+        本地读取，无需浏览器 / 守护进程。结果按最近添加排序，跳过 <code>javascript:</code> / <code>data:</code> 书签。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">find-url</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use find-url jira board          <span class="du-cmt"># 所有关键词都要命中（name 或 url）</span>
+<span class="du-prompt">$</span> chrome-use find-url <span class="du-flag">--limit</span> 10 invoices
+<span class="du-prompt">$</span> chrome-use find-url <span class="du-flag">--browser</span> edge <span class="du-flag">--profile</span> <span class="du-str">"Profile 1"</span> wiki
+<span class="du-prompt">$</span> chrome-use find-url grafana <span class="du-flag">--json</span>      <span class="du-cmt"># {results:[{name,url,folder}], count}</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>驱动你真实的登录态 Chrome（扩展）</h2>
+      <p>
+        Chrome 136 封锁了默认配置文件上的 <code>--remote-debugging-port</code>，所以要驱动用户<strong>现有的</strong>登录窗口，
+        chrome-use 走一个 Chrome <strong>扩展</strong> + 原生消息 —— 无端口、无令牌、无每次确认。
+        一次性安装写入原生消息宿主清单：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">extension</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use extension install        <span class="du-cmt"># 写入原生消息宿主清单（一次性）</span>
+<span class="du-prompt">$</span> chrome-use extension connect        <span class="du-cmt"># 自动挂接到真实的登录标签</span>
+<span class="du-prompt">$</span> chrome-use tab                      <span class="du-cmt"># 列出它现在控制的真实标签</span>
+<span class="du-prompt">$</span> chrome-use tab t3                   <span class="du-cmt"># 把会话切到其中一个</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>              <span class="du-cmt"># 像普通会话一样驱动它</span>
+<span class="du-prompt">$</span> chrome-use extension status         <span class="du-cmt"># 宿主是否已安装？</span>
+<span class="du-prompt">$</span> chrome-use extension uninstall      <span class="du-cmt"># 移除宿主清单</span></code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 推荐从 Chrome 应用商店安装</div>
+        商店版重启稳定、自动更新（store id <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>）。加载已解压的开发版可能在
+        Chrome 重启时被停用 / 丢弃，从而悄悄断掉中继 —— 无人值守场景请用商店版。
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 安全</div>
+        扩展↔宿主链路由 Chrome（扩展 id）认证；宿主↔chrome-use 的 CDP 链路用 0600 文件里的不可猜测 URL。
+        <code>--extension &lt;path&gt;</code> 无关 —— 那是把扩展加载进一个<em>新启动</em>的浏览器。
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============================================================ -->
+      <h2>全局选项</h2>
+      <p>
+        这些旗标放在命令前，作用于整个会话。注意：<strong>无头模式被禁止</strong>（bot 信号），
+        默认且始终有头（隐身）；无显示服务器上用 <code>AGENT_BROWSER_ALLOW_HEADLESS=1</code>。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">global options</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> <span class="du-str">&lt;name&gt;</span> ...    <span class="du-cmt"># 隔离的浏览器会话</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--json</span> ...              <span class="du-cmt"># JSON 输出，便于解析</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--headed</span> ...            <span class="du-cmt"># 默认且始终开启（隐身）</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--full</span> ...              <span class="du-cmt"># 整页截图（-f）</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--cdp</span> <span class="du-str">&lt;port&gt;</span> ...        <span class="du-cmt"># 通过 CDP 连接</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">-p</span> <span class="du-str">&lt;provider&gt;</span> ...        <span class="du-cmt"># 云浏览器提供商（--provider）</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--proxy</span> <span class="du-str">&lt;url&gt;</span> ...       <span class="du-cmt"># 使用代理服务器</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--proxy-bypass</span> <span class="du-str">&lt;hosts&gt;</span>   <span class="du-cmt"># 绕过代理的主机</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--headers</span> <span class="du-str">&lt;json&gt;</span> ...    <span class="du-cmt"># 限定到 URL 来源的 HTTP 头</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--executable-path</span> <span class="du-str">&lt;p&gt;</span>   <span class="du-cmt"># 自定义浏览器可执行文件</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--extension</span> <span class="du-str">&lt;path&gt;</span> ...  <span class="du-cmt"># 加载扩展（可重复）</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--ignore-https-errors</span>   <span class="du-cmt"># 忽略 SSL 证书错误</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--hide-scrollbars</span> false <span class="du-cmt"># 无头 Chromium 截图保留原生滚动条</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--help</span>                  <span class="du-cmt"># 帮助（-h）</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--version</span>               <span class="du-cmt"># 版本（-V）</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-str">&lt;command&gt;</span> <span class="du-flag">--help</span>       <span class="du-cmt"># 某个命令的详细帮助</span></code></pre>
+      </div>
+
+      <!-- ============================================================ -->
+      <h2>环境变量</h2>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">environment</span>
+        </div>
+<pre><code>AGENT_BROWSER_SESSION=<span class="du-str">"mysession"</span>            <span class="du-cmt"># 默认会话名</span>
+AGENT_BROWSER_EXECUTABLE_PATH=<span class="du-str">"/path/chrome"</span> <span class="du-cmt"># 自定义浏览器路径</span>
+AGENT_BROWSER_EXTENSIONS=<span class="du-str">"/ext1,/ext2"</span>       <span class="du-cmt"># 逗号分隔的扩展路径</span>
+AGENT_BROWSER_INIT_SCRIPTS=<span class="du-str">"/a.js,/b.js"</span>     <span class="du-cmt"># 逗号分隔的 init 脚本路径</span>
+AGENT_BROWSER_ENABLE=<span class="du-str">"react-devtools"</span>        <span class="du-cmt"># 逗号分隔的内置 init 特性</span>
+AGENT_BROWSER_HIDE_SCROLLBARS=<span class="du-str">"false"</span>        <span class="du-cmt"># 保留原生滚动条</span>
+AGENT_BROWSER_PROVIDER=<span class="du-str">"browserbase"</span>         <span class="du-cmt"># 云浏览器提供商</span>
+AGENT_BROWSER_STREAM_PORT=<span class="du-str">"9223"</span>             <span class="du-cmt"># 覆盖 WebSocket 流端口</span>
+AGENT_BROWSER_HOME=<span class="du-str">"/path/to/chrome-use"</span>     <span class="du-cmt"># 自定义安装位置</span>
+AGENT_BROWSER_CLICK_MODE=<span class="du-str">"dom"</span>               <span class="du-cmt"># 点击策略：""(默认) / "coord" / "dom"</span></code></pre>
+      </div>
+
+      <h3>隐身 / 反检测开关（fork）</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">stealth knobs</span>
+        </div>
+<pre><code>AGENT_BROWSER_CAPTURE_CONSOLE=<span class="du-str">"1"</span>     <span class="du-cmt"># 启用 console/errors 捕获（默认关，Runtime 域是 bot 信号）</span>
+AGENT_BROWSER_TIMEZONE=<span class="du-str">"Asia/Tokyo"</span>   <span class="du-cmt"># 仅 --launch。原生时区覆盖（IANA id 或 "auto"）</span>
+AGENT_BROWSER_BLOCK_WEBRTC=<span class="du-str">"1"</span>        <span class="du-cmt"># 仅 --launch。经 WebRTC 隐藏本地 IP</span>
+AGENT_BROWSER_HIDE_CANVAS=<span class="du-str">"1"</span>         <span class="du-cmt"># 仅 --launch。会话稳定的 canvas/audio 指纹噪声</span>
+AGENT_BROWSER_ADAPTIVE_REF=<span class="du-str">"0"</span>        <span class="du-cmt"># 关闭自适应 @ref 重定位（默认开）</span></code></pre>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ console / errors 默认返回空</div>
+        本隐身 fork 里，二者默认返回 <code>{"messages":[]}</code> / <code>{"errors":[]}</code> 加一条
+        <code>hint</code>，直到你用 <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code> 启动会话 —— 这样常见自动化路径下
+        CDP <code>Runtime</code> 域始终禁用。跑不通时可对照 <a href="/troubleshooting.html">故障排查</a>。
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

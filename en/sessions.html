@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Sessions &amp; Persistence · chrome-use</title>
+  <meta name="description" content="Isolate multiple browsers with --session, persist login state across runs with state save/load and --session-name, and cleanly reset a stuck session daemon with daemon status/restart." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="sessions" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Sessions &amp; Auth</p>
+
+      <div class="du-title-row">
+        <h1>Sessions &amp; Persistence</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Log in once and <span class="mark">every later run starts logged in</span>; give each agent its own
+        isolated browser so they <span class="mark">never fight over tabs</span>. This page covers three things:
+        persisting session state to reuse it across runs, running multiple browsers in parallel with
+        <code>--session</code>, and cleanly resetting the session daemon when it gets stuck.
+      </p>
+
+      <!-- ============ PERSIST ============ -->
+      <h2>Persist login state across runs</h2>
+      <p>
+        Log in once, save cookies and localStorage to a file, then load it on later runs to start already
+        logged in — no need to walk through the login form every time. Save with <code>state save</code>,
+        load with <code>--state</code>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Save &amp; reuse state</span>
+        </div>
+<pre><code><span class="du-cmt"># Log in once, save cookies + localStorage</span>
+<span class="du-prompt">$</span> chrome-use state save ./auth.json
+
+<span class="du-cmt"># Later runs start logged in</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--state</span> ./auth.json open https://app.example.com</code></pre>
+      </div>
+
+      <p>
+        There is also an explicit <code>state load</code> to inject already-saved state into the current
+        session and keep going:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">state save / load</span>
+        </div>
+<pre><code><span class="du-cmt"># Save cookies, storage, and login state</span>
+<span class="du-prompt">$</span> chrome-use state save /path/to/auth-state.json
+
+<span class="du-cmt"># Restore saved state</span>
+<span class="du-prompt">$</span> chrome-use state load /path/to/auth-state.json
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/dashboard</code></pre>
+      </div>
+
+      <p>The state file is a plain JSON document with cookies, both kinds of storage, and an origins list:</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">auth-state.json</span>
+        </div>
+<pre><code>{
+  <span class="du-str">"cookies"</span>: [...],
+  <span class="du-str">"localStorage"</span>: {...},
+  <span class="du-str">"sessionStorage"</span>: {...},
+  <span class="du-str">"origins"</span>: [...]
+}</code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ The state file is plaintext credentials</div>
+        <code>auth.json</code> holds login-capable cookies and tokens — <strong>don't commit it to Git</strong>
+        (<code>echo "*.auth-state.json" &gt;&gt; .gitignore</code>), delete it when you're done, and keep it out of
+        any directory that gets packaged and distributed.
+      </div>
+
+      <h3>Automatic save/restore: --session-name</h3>
+      <p>
+        If you'd rather not save/load by hand, use <code>--session-name</code> (or the environment variable
+        <code>AGENT_BROWSER_SESSION_NAME</code>) — state for a same-named session is saved automatically and
+        restored automatically on later runs:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Automatic save / restore</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> AGENT_BROWSER_SESSION_NAME=my-app chrome-use open https://app.example.com
+<span class="du-cmt"># Run again with the same name later and state is restored automatically</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Cloudflare clearance reuses the same way</div>
+        The <code>cf_clearance</code> cookie you get from passing a Cloudflare challenge is bound to your
+        IP + User-Agent. For an isolated session, the <code>--session-name</code> save/restore carries it
+        along, so as long as the egress IP and UA don't change, you skip the repeat challenge.
+        For more on login and credentials, see <a href="/en/login-auth.html">Login &amp; Credentials</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ PARALLEL ============ -->
+      <h2>Run multiple browsers in parallel with --session</h2>
+      <p>
+        Each <code>--session &lt;name&gt;</code> is a <strong>mutually isolated</strong> browser — its own
+        cookies, LocalStorage / SessionStorage, IndexedDB, cache, history, and tabs. Great for testing
+        multi-user flows or scraping in parallel:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Two isolated sessions</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> a open https://app.example.com
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> b open https://app.example.com
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> a fill @e1 <span class="du-str">"alice@test.com"</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> b fill @e1 <span class="du-str">"bob@test.com"</span></code></pre>
+      </div>
+
+      <p>
+        To set a default session for the current shell, use <code>AGENT_BROWSER_SESSION=myapp</code>; when you
+        omit <code>--session</code>, commands land on the default session. Close a session with <code>close</code>
+        when you no longer need it, and use <code>session list</code> to see which sessions are still active:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Default session &amp; cleanup</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> AGENT_BROWSER_SESSION=myapp chrome-use open https://example.com
+
+<span class="du-cmt"># Close a specific session</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> auth close
+
+<span class="du-cmt"># List active sessions</span>
+<span class="du-prompt">$</span> chrome-use session list</code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Concurrent agents must each use a different --session</div>
+        Within a session, commands are pinned to the tab you opened (locked by target_id, so a stray tab
+        won't drag your <code>eval</code>/<code>screenshot</code> off target). Two agents sharing
+        <strong>the same</strong> session (e.g. both on the bare default session) share one daemon and one
+        active tab, and overwrite each other. Give each agent its own <code>--session &lt;name&gt;</code>.
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Real multi-agent isolation goes through the extension connection</div>
+        Real multi-agent isolation needs the <strong>extension connection</strong> path: each
+        <code>--session</code> gets its own colored Chrome tab group, and sessions never touch each other's
+        tabs. Bare <code>--cdp &lt;port&gt;</code> is <strong>not isolated</strong> — every session attaches to the
+        same browser's existing targets, and a second session's first <code>open</code> can navigate a sibling
+        session's tab. To run concurrent agents on the same real Chrome, use the extension (each with a distinct
+        <code>--session</code>), not bare <code>--cdp</code>. See <a href="/en/real-chrome.html">Real Chrome</a>.
+      </div>
+
+      <h3>Grab a specific tab across sessions: targetId adoption</h3>
+      <p>
+        Each session has its own tab group with its own <code>t&lt;N&gt;</code> numbering (the same physical tab
+        is <code>t8</code> in session A and <code>t1</code> in session B), so <code>t&lt;N&gt;</code> is
+        <strong>not</strong> a stable handle across sessions. To grab a <em>specific</em> tab from another session
+        (say a session half-filled a form but its handle died), use the stable CDP <code>targetId</code>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Adopt a tab by targetId</span>
+        </div>
+<pre><code><span class="du-cmt"># Re-sync the live tabs, printing target: &lt;id&gt; on each line</span>
+<span class="du-prompt">$</span> chrome-use tab list <span class="du-flag">--full</span> <span class="du-flag">--session</span> B
+
+<span class="du-cmt"># Adopt that exact tab — no reload, state preserved</span>
+<span class="du-prompt">$</span> chrome-use tab <span class="du-str">&lt;targetId&gt;</span> <span class="du-flag">--session</span> B</code></pre>
+      </div>
+
+      <p>
+        <code>tab list</code> rediscovers the live tab set on every call, so a new session can see tabs opened by
+        other sessions (and re-attached tabs), not just its own. Adopting by <code>targetId</code> lands session B
+        on that stranded tab <strong>without reloading</strong> it, so the half-filled form survives.
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Use --reuse-tab to avoid duplicate tabs</div>
+        When re-binding, if you <code>open</code> the same entry URL again, add <code>--reuse-tab</code>: if a tab
+        is already showing that URL (matched by origin+path), it switches to it instead of stacking up a new tab.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ DAEMON ============ -->
+      <h2>Reset a stuck daemon state</h2>
+      <p>
+        Each session runs a background daemon worker to hold the page handles. If a session starts misbehaving —
+        commands hitting the wrong tab, refs/handles looking stale, or a stale worker left over because you
+        upgraded <code>chrome-use</code> mid-session — just restart the daemon; don't go hunting for the PID with
+        <code>pgrep</code>/<code>kill</code>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">daemon status / restart</span>
+        </div>
+<pre><code><span class="du-cmt"># List running session daemons (with relay status)</span>
+<span class="du-prompt">$</span> chrome-use daemon status
+
+<span class="du-cmt"># Kill all session daemon workers</span>
+<span class="du-prompt">$</span> chrome-use daemon restart</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ restart leaves your Chrome and tabs alone</div>
+        <code>daemon restart</code> doesn't touch the extension's native messaging bridge (<code>__nm-host</code>),
+        so the relay to your live Chrome stays online — the next command just spins up a clean new daemon against
+        the same browser. It does <strong>not</strong> close any tab.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ NEXT ============ -->
+      <h2>Related pages</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/login-auth.html">
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> Login &amp; Credentials</div>
+          <p>The auth credential store, OAuth, passwords piped from stdin — log in securely, then save the session.</p>
+        </a>
+        <a class="du-card" href="/en/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🔓</span> Real Chrome</div>
+          <p>The extension connection path: reuse your already-logged-in session, each --session getting its own colored tab group.</p>
+        </a>
+        <a class="du-card" href="/en/install.html">
+          <div class="du-card-title"><span class="du-card-ico">🔌</span> Install</div>
+          <p>Set up chrome-use, the extension, and the agent skill to get the session flows above running.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

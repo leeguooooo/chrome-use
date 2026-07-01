@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>定位元素 · chrome-use 文档</title>
+  <meta name="description" content="当 @ref 不好用、或你不想先 snapshot 时：用 find 语义定位器（role/text/label/placeholder/testid/first/nth）、原始 CSS、坐标点击，以及从 snapshot 到 eval 的升级阶梯。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="finding" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 34 q14 -22 26 -10 q10 10 20 -2 M46 22 l8 0 0 8"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">驱动页面 / Driving the Page</p>
+
+      <div class="du-title-row">
+        <h1>定位元素</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        大多数时候 <a href="/reading.html">snapshot</a> 拿到的 <code>@ref</code> 就够用了。但有时 ref
+        会<span class="mark">失效</span>、目标藏在隐藏状态里、或者你干脆<span class="mark">不想先截一次 snapshot</span>。
+        这一页讲另一套锁定目标的手段——<code>find</code> 语义定位器、原始 CSS、坐标点击——以及从结构化定位一路
+        <span class="mark">升级到 <code>eval</code></span> 的阶梯。
+      </p>
+
+      <h2>什么时候不用 @ref</h2>
+      <p>
+        <code>@ref</code> 是最快的路径，但它建立在每次 <code>snapshot</code> 之上，页面一变就会过期。
+        当你遇到下面这些情况，直接用语义定位器或 CSS 更省事：
+      </p>
+      <ul>
+        <li>页面结构简单，为定位一个按钮单独跑一次 snapshot 不划算；</li>
+        <li>refs 反复失效（导航、表单提交、动态重渲染之后）；</li>
+        <li>你已经知道元素的角色、可见文本、label 或一个稳定的选择器。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>find 语义定位器</h2>
+      <p>
+        <code>find</code> 按<strong>语义</strong>而不是 ref 来锁定元素：角色 + 名字、可见文本、表单
+        label、placeholder、<code>data-testid</code>，或者「第一个 / 第 N 个」匹配。命中后直接跟一个动作动词
+        （<code>click</code> / <code>fill</code> / <code>type</code> / <code>hover</code> …）。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">find — 语义定位器</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use find role button click <span class="du-flag">--name</span> <span class="du-str">"Submit"</span>
+<span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
+<span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>     <span class="du-cmt"># 仅精确匹配</span>
+<span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
+<span class="du-prompt">$</span> chrome-use find placeholder <span class="du-str">"Search"</span> type <span class="du-str">"query"</span>
+<span class="du-prompt">$</span> chrome-use find testid <span class="du-str">"submit-btn"</span> click
+<span class="du-prompt">$</span> chrome-use find first <span class="du-str">".card"</span> click
+<span class="du-prompt">$</span> chrome-use find nth 2 <span class="du-str">".card"</span> hover</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 先核对真实的标签文字</div>
+        翻译会坑你。真实案例：LinkedIn 的「Save」按钮标签是 <code>收藏</code> 而不是 <code>保存</code>，
+        所以 <code>find text "保存"</code> 什么都找不到，而 <code>snapshot -i</code> 一直显示
+        <code>button "收藏" [ref=eN]</code>——直接 <code>click @eN</code> 就行。下结论「元素不存在」之前，先确认它的确切标签。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>原始 CSS 选择器</h2>
+      <p>
+        任何动作动词都能直接吃一个 CSS 选择器，无需先 <code>find</code>：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">CSS 选择器</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click <span class="du-str">"#submit"</span>
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">"input[name=email]"</span> <span class="du-str">"user@test.com"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">"button.primary"</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>升级阶梯</h2>
+      <p>
+        定位一个元素有一条从<span class="mark">便宜到万能</span>的阶梯。按顺序往下走，别在某一档上死磕：
+      </p>
+
+      <div class="du-cards cols-2">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">①</span> snapshot + @eN</div>
+          <p>结构清晰的页面最快。拿到 ref 就 <code>click @eN</code>。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">②</span> find role/text/label</div>
+          <p>不想先截 snapshot 时，按语义直接命中。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">③</span> 原始 CSS</div>
+          <p>已有稳定选择器时直接传给动作动词。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">④</span> eval</div>
+          <p>上面任何一档一旦跟你较劲（ref 失效、隐藏状态、点击被遮挡），立刻落到 <code>eval</code> 直接操作 DOM。</p>
+        </div>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 别把一个不稳的定位器重试三遍</div>
+        遇到 ref 失效、隐藏状态、被遮挡的点击时，不要反复重试同一个结构化定位器——直接 <code>eval</code>
+        对 DOM 下手，这是查清「为什么失败」最快的路子。更多用法见 <a href="/extract.html">提取数据</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>click 的自动滚动与 DOM 回退</h2>
+      <p>
+        <code>click</code> 会先把元素<strong>滚动进视口</strong>；如果坐标点击被遮挡，它会自动回退到 DOM
+        的 <code>.click()</code>。如果一次 <code>click</code> <em>报告成功却什么都没发生</em>——典型的是
+        自动补全 / 菜单里那种一失焦就关掉的 <code>&lt;li&gt;</code>——用 DOM 点击模式重试那一下，或者干脆 <code>eval</code>：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">点击报成功却没反应</span>
+        </div>
+<pre><code><span class="du-cmt"># 用 DOM 点击模式重试这一下</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_CLICK_MODE=dom chrome-use click @e3
+
+<span class="du-cmt"># 或者直接用 JS 选中并点击那个条目</span>
+<span class="du-prompt">$</span> chrome-use eval <span class="du-str">"document.querySelector('#stubborn').click()"</span></code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>按坐标点击</h2>
+      <p>
+        当你手上唯一的把手就是一个坐标时——canvas、来自截图的标记、没有稳定选择器的目标——直接点像素点：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">坐标点击</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use click 449 320            <span class="du-cmt"># 点视口坐标 (x y)</span>
+<span class="du-prompt">$</span> chrome-use click 449,320            <span class="du-cmt"># 同上，逗号写法</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-flag">--coords</span> 449,320   <span class="du-cmt"># 同上，显式 flag</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 纯数字永远是坐标</div>
+        一个纯数字参数永远被当作坐标，绝不会被当成选择器。坐标点击是 canvas / WebGL 场景的<strong>正确</strong>工具；
+        表单字段和按钮请优先走 <a href="/reading.html">snapshot + @ref</a>，别拿截图去定位。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>find 触不到的地方</h2>
+      <p>
+        <code>find</code> 和 CSS 选择器都基于页面 DOM（<code>querySelectorAll</code>），所以对两类元素会报
+        「Element not found」——即使 <code>snapshot -i</code> 明明列出了它们（快照走的是 CDP 无障碍树，能穿透两者），
+        <code>get text</code> 也能读到它们：
+      </p>
+      <ul>
+        <li><strong>闭合（closed）shadow root</strong> 里的元素；</li>
+        <li><strong>跨源（cross-origin）iframe</strong> 里的元素。</li>
+      </ul>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 这两类元素改用 snapshot 的 @ref</div>
+        对闭合 shadow root 或跨源 iframe 里的元素，用它在 <code>snapshot</code> 里的 <code>@ref</code> 来定位，
+        而不是 <code>find</code>。需要坐标回退时，<code>box @ref</code> 会给出元素的坐标盒子。
+        参见 <a href="/interacting.html">交互操作</a> 里对跨源 iframe 的说明。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>下一步</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> 读取页面</div>
+          <p>snapshot 拿到结构化的 @ref 视图。</p>
+        </a>
+        <a class="du-card" href="/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 交互操作</div>
+          <p>click、fill、type 驱动真实浏览器。</p>
+        </a>
+        <a class="du-card" href="/extract.html">
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> 提取数据</div>
+          <p>eval 与 --schema 把页面抓成干净 JSON。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

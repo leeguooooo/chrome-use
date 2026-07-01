@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Cloud Browsers · chrome-use docs</title>
+  <meta name="description" content="Run chrome-use inside Vercel Sandbox microVMs and AWS Bedrock AgentCore cloud browsers: no binary size limits, persistent sessions, and commands that work exactly like they do locally." />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="cloud" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 40 q10 -22 22 -14 q6 4 12 -2 q10 -10 14 2 q4 12 -6 18 q-24 8 -42 -4z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Advanced</p>
+
+      <div class="du-title-row">
+        <h1>Cloud Browsers</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        No screen locally, no Chrome, not even an always-on server? chrome-use runs anyway.
+        There are two proven ways to move the browser into the cloud: <span class="mark">Vercel Sandbox</span>'s
+        on-demand microVMs, and <span class="mark">AWS Bedrock AgentCore</span>'s managed cloud browser sessions.
+        The command-line usage is <em>almost identical</em> to what you type locally — the only difference is
+        which machine the browser runs on.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ What this page solves</div>
+        Use this page when your automation needs to run in a headless environment — serverless functions, CI,
+        scheduled jobs, or the backend of a user-facing web app.
+        If what you want to drive is <strong>the Chrome you're actively using on your own machine</strong>, see
+        <a href="/en/real-chrome.html">Connect to real Chrome</a>.
+      </div>
+
+      <h2>Vercel Sandbox: on-demand microVMs</h2>
+      <p>
+        Vercel Sandbox spins up a Linux microVM on demand, runs your browser commands inside it, and destroys it
+        when you're done. It works with any framework deployed on Vercel (Next.js, SvelteKit, Nuxt, Remix, Astro,
+        and more), and it's <strong>not subject to the serverless binary size limit</strong> — because Chromium
+        lives inside the VM, not bundled into your function.
+      </p>
+
+      <h3>Install dependencies</h3>
+      <p>First, add the Sandbox SDK to your project:</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> pnpm add @vercel/sandbox</code></pre>
+      </div>
+      <p>
+        Inside the VM you need Chromium's system libraries, chrome-use itself, and the Chromium browser. On the
+        first run, install the system libraries via <code>dnf</code> (Amazon Linux), install chrome-use with npm,
+        and finally run <code>chrome-use install</code> to fetch the browser:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">withBrowser.ts</span>
+        </div>
+<pre><code><span class="du-kw">import</span> { Sandbox } <span class="du-kw">from</span> <span class="du-str">"@vercel/sandbox"</span>;
+
+<span class="du-cmt">// System libraries Chromium needs on the sandbox VM (Amazon Linux / dnf)</span>
+<span class="du-kw">const</span> CHROMIUM_SYSTEM_DEPS = [
+  <span class="du-str">"nss"</span>, <span class="du-str">"nspr"</span>, <span class="du-str">"libxkbcommon"</span>, <span class="du-str">"atk"</span>, <span class="du-str">"at-spi2-atk"</span>, <span class="du-str">"at-spi2-core"</span>,
+  <span class="du-str">"libXcomposite"</span>, <span class="du-str">"libXdamage"</span>, <span class="du-str">"libXrandr"</span>, <span class="du-str">"libXfixes"</span>, <span class="du-str">"libXcursor"</span>,
+  <span class="du-str">"libXi"</span>, <span class="du-str">"libXtst"</span>, <span class="du-str">"libXScrnSaver"</span>, <span class="du-str">"libXext"</span>, <span class="du-str">"mesa-libgbm"</span>, <span class="du-str">"libdrm"</span>,
+  <span class="du-str">"mesa-libGL"</span>, <span class="du-str">"mesa-libEGL"</span>, <span class="du-str">"cups-libs"</span>, <span class="du-str">"alsa-lib"</span>, <span class="du-str">"pango"</span>, <span class="du-str">"cairo"</span>,
+  <span class="du-str">"gtk3"</span>, <span class="du-str">"dbus-libs"</span>,
+];
+
+<span class="du-kw">async function</span> withBrowser&lt;T&gt;(
+  fn: (sandbox: InstanceType&lt;<span class="du-kw">typeof</span> Sandbox&gt;) =&gt; Promise&lt;T&gt;,
+): Promise&lt;T&gt; {
+  <span class="du-kw">const</span> snapshotId = process.env.AGENT_BROWSER_SNAPSHOT_ID;
+
+  <span class="du-kw">const</span> sandbox = snapshotId
+    ? <span class="du-kw">await</span> Sandbox.create({ source: { type: <span class="du-str">"snapshot"</span>, snapshotId }, timeout: <span class="du-num">120_000</span> })
+    : <span class="du-kw">await</span> Sandbox.create({ runtime: <span class="du-str">"node24"</span>, timeout: <span class="du-num">120_000</span> });
+
+  <span class="du-kw">if</span> (!snapshotId) {
+    <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"sh"</span>, [<span class="du-str">"-c"</span>,
+      <span class="du-str">`sudo dnf install -y --skip-broken ${CHROMIUM_SYSTEM_DEPS.join(" ")} && sudo ldconfig`</span>]);
+    <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"npm"</span>, [<span class="du-str">"install"</span>, <span class="du-str">"-g"</span>, <span class="du-str">"chrome-use"</span>]);
+    <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"npx"</span>, [<span class="du-str">"chrome-use"</span>, <span class="du-str">"install"</span>]);
+  }
+
+  <span class="du-kw">try</span> { <span class="du-kw">return await</span> fn(sandbox); }
+  <span class="du-kw">finally</span> { <span class="du-kw">await</span> sandbox.stop(); }
+}</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Commands match local</div>
+        Once the VM is up, what you run inside it is plain <code>chrome-use open</code>, <code>chrome-use snapshot</code>,
+        <code>chrome-use click</code>… no different from local. The sandbox just ferries those commands into the microVM
+        to execute.
+      </div>
+
+      <h3>Screenshots and snapshots</h3>
+      <p>
+        <code>screenshot --json</code> saves the image to a file and returns its path; read that file back as base64
+        to hand it to your frontend. To read the page structure, use <code>snapshot -i -c</code> (interactive elements +
+        compact output). The sandbox stays alive across multiple commands, so you can chain a complete flow:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">screenshotUrl.ts</span>
+        </div>
+<pre><code><span class="du-kw">return</span> withBrowser(<span class="du-kw">async</span> (sandbox) =&gt; {
+  <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"open"</span>, url]);
+
+  <span class="du-cmt">// Get the title</span>
+  <span class="du-kw">const</span> t = <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"get"</span>, <span class="du-str">"title"</span>, <span class="du-str">"--json"</span>]);
+  <span class="du-kw">const</span> title = JSON.parse(<span class="du-kw">await</span> t.stdout())?.data?.title || url;
+
+  <span class="du-cmt">// Screenshot → read file → base64</span>
+  <span class="du-kw">const</span> ss = <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"screenshot"</span>, <span class="du-str">"--json"</span>]);
+  <span class="du-kw">const</span> ssPath = JSON.parse(<span class="du-kw">await</span> ss.stdout())?.data?.path;
+  <span class="du-kw">const</span> b64 = <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"base64"</span>, [<span class="du-str">"-w"</span>, <span class="du-str">"0"</span>, ssPath]);
+
+  <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"close"</span>]);
+  <span class="du-kw">return</span> { title, screenshot: (<span class="du-kw">await</span> b64.stdout()).trim() };
+});</code></pre>
+      </div>
+
+      <h3>Multi-step form flows</h3>
+      <p>
+        Because the sandbox persists across commands, a full automation — fill → submit → wait for load → screenshot —
+        runs in one go. A typical sequence is <code>open</code> → <code>snapshot -i</code> to get element
+        <code>@ref</code>s → <code>fill</code> each one → <code>click</code> → <code>wait --load networkidle</code>:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">fillAndSubmitForm.ts</span>
+        </div>
+<pre><code><span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"open"</span>, url]);
+<span class="du-kw">const</span> snap = <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"snapshot"</span>, <span class="du-str">"-i"</span>]);
+<span class="du-cmt">// Parse the snapshot to get each field's ref…</span>
+
+<span class="du-kw">for</span> (<span class="du-kw">const</span> [ref, value] <span class="du-kw">of</span> Object.entries(data)) {
+  <span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"fill"</span>, ref, value]);
+}
+
+<span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"click"</span>, <span class="du-str">"@e5"</span>]);
+<span class="du-kw">await</span> sandbox.runCommand(<span class="du-str">"chrome-use"</span>, [<span class="du-str">"wait"</span>, <span class="du-str">"--load"</span>, <span class="du-str">"networkidle"</span>]);</code></pre>
+      </div>
+
+      <h3>Sandbox snapshots: sub-second cold starts</h3>
+      <p>
+        A <strong>sandbox snapshot</strong> is a VM image with the system libraries + chrome-use + Chromium already
+        installed, much like a Docker image: on boot it starts straight from the image instead of installing everything
+        from scratch each time. Without a snapshot, every run installs dependencies + chrome-use + Chromium (about 30
+        seconds); with a snapshot, startup drops into sub-second territory.
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Don't confuse the two "snapshots"</div>
+        A <strong>sandbox snapshot</strong> is a Vercel infrastructure concept, used to start VMs quickly;
+        it's an entirely different thing from chrome-use's <strong>accessibility snapshot</strong>
+        (<code>chrome-use snapshot</code>, which exports the page's a11y tree).
+      </div>
+
+      <p>Create a snapshot once, then store the returned ID in an environment variable:</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># The repo demo ships a ready-made creation script</span>
+<span class="du-prompt">$</span> npx tsx examples/environments/scripts/create-snapshot.ts
+
+<span class="du-cmt"># The script returns a snapshotId; write it into an env var</span>
+<span class="du-prompt">$</span> <span class="du-flag">AGENT_BROWSER_SNAPSHOT_ID</span>=snap_xxxxxxxxxxxx</code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Recommended for production</div>
+        Any production deployment on the Sandbox path should pre-build a snapshot to squeeze cold starts from 30 seconds
+        down to sub-second.
+      </div>
+
+      <h3>Authentication</h3>
+      <p>
+        When deployed on Vercel, the Sandbox SDK authenticates automatically via OIDC — no extra configuration needed.
+        For local development or when you need explicit control, set the following three variables; they're spread into
+        <code>Sandbox.create()</code>, and when absent the SDK falls back to the auto-injected
+        <code>VERCEL_OIDC_TOKEN</code>:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">.env (local development)</span>
+        </div>
+<pre><code><span class="du-flag">VERCEL_TOKEN</span>=&lt;personal-access-token&gt;
+<span class="du-flag">VERCEL_TEAM_ID</span>=&lt;team-id&gt;
+<span class="du-flag">VERCEL_PROJECT_ID</span>=&lt;project-id&gt;</code></pre>
+      </div>
+
+      <h3>Scheduled jobs (Cron)</h3>
+      <p>
+        Wire <code>withBrowser</code> into Vercel Cron Jobs to run periodic browser tasks — for example, scrape a
+        pricing page every morning at 9 and compare it for alerts:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">vercel.json</span>
+        </div>
+<pre><code>{ <span class="du-str">"crons"</span>: [{ <span class="du-str">"path"</span>: <span class="du-str">"/api/cron"</span>, <span class="du-str">"schedule"</span>: <span class="du-str">"0 9 * * *"</span> }] }</code></pre>
+      </div>
+
+      <h3>Vercel environment variables at a glance</h3>
+      <table>
+          <thead>
+            <tr><th>Variable</th><th>Required</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>AGENT_BROWSER_SNAPSHOT_ID</code></td><td>No (recommended)</td><td>Pre-built sandbox snapshot ID, for sub-second startup</td></tr>
+            <tr><td><code>VERCEL_TOKEN</code></td><td>No</td><td>Vercel personal access token (for local dev; automatic via OIDC on Vercel)</td></tr>
+            <tr><td><code>VERCEL_TEAM_ID</code></td><td>No</td><td>Vercel team ID (for local dev)</td></tr>
+            <tr><td><code>VERCEL_PROJECT_ID</code></td><td>No</td><td>Vercel project ID (for local dev)</td></tr>
+          </tbody>
+        </table>
+
+      <p>
+        The same pattern is written identically across frameworks — only the location of the server-side code differs:
+        Next.js uses server actions / route handlers, SvelteKit uses <code>+page.server.ts</code> / <code>+server.ts</code>,
+        Nuxt uses <code>server/api/</code>, Remix uses <code>loader</code> / <code>action</code>, and Astro uses
+        <code>.astro</code> frontmatter or API routes.
+        A full runnable example lives in the chrome-use repo under <code>examples/environments/</code>.
+      </p>
+
+      <hr class="du-divider" />
+
+      <h2>AWS Bedrock AgentCore: managed cloud browser</h2>
+      <p>
+        AgentCore runs the browser session as a managed service on AWS, and the usage of every chrome-use command is
+        completely unchanged — the only difference is that the browser runs on AWS. Just add a <code>-p agentcore</code>
+        and everything else stays the same:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Open a page on the AgentCore cloud browser</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">-p</span> agentcore open https://example.com
+
+<span class="du-cmt"># From here on, exactly like local Chrome</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e1</span>
+<span class="du-prompt">$</span> chrome-use screenshot page.png
+<span class="du-prompt">$</span> chrome-use close</code></pre>
+      </div>
+
+      <h3>Credential resolution</h3>
+      <p>AWS credentials are resolved automatically; when usable credentials already exist, no extra configuration is needed. The resolution order is:</p>
+      <ul>
+        <li>Environment variables <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code> (optionally <code>AWS_SESSION_TOKEN</code>)</li>
+        <li>AWS CLI fallback (<code>aws configure export-credentials</code>), supporting SSO, IAM roles, and named profiles</li>
+      </ul>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Explicit credentials (CI/CD, scripts)</span>
+<span class="du-prompt">$</span> export <span class="du-flag">AWS_ACCESS_KEY_ID</span>=AKIA...
+<span class="du-prompt">$</span> export <span class="du-flag">AWS_SECRET_ACCESS_KEY</span>=...
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">-p</span> agentcore open https://example.com
+
+<span class="du-cmt"># SSO (interactive)</span>
+<span class="du-prompt">$</span> aws sso login <span class="du-flag">--profile</span> my-profile
+<span class="du-prompt">$</span> <span class="du-flag">AWS_PROFILE</span>=my-profile chrome-use <span class="du-flag">-p</span> agentcore open https://example.com
+
+<span class="du-cmt"># IAM role / default credential chain</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">-p</span> agentcore open https://example.com</code></pre>
+      </div>
+
+      <h3>Persistent profiles: keep the login</h3>
+      <p>
+        Use <code>AGENTCORE_PROFILE_ID</code> to persist browser state (cookies, localStorage) across sessions —
+        perfect for keeping a login alive: run the login flow once, and every run after that is already logged in.
+        For a fuller take on login and session reuse, see <a href="/en/sessions.html">Sessions</a> and
+        <a href="/en/login-auth.html">Login &amp; auth</a>.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># First time: log in</span>
+<span class="du-prompt">$</span> <span class="du-flag">AGENTCORE_PROFILE_ID</span>=my-app chrome-use <span class="du-flag">-p</span> agentcore open https://app.example.com/login
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">@e1</span> <span class="du-str">"user@example.com"</span>
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">@e2</span> <span class="du-str">"password"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e3</span>
+<span class="du-prompt">$</span> chrome-use close
+
+<span class="du-cmt"># Later: already logged in</span>
+<span class="du-prompt">$</span> <span class="du-flag">AGENTCORE_PROFILE_ID</span>=my-app chrome-use <span class="du-flag">-p</span> agentcore open https://app.example.com/dashboard</code></pre>
+      </div>
+
+      <h3>Live View: watch it in the console in real time</h3>
+      <p>
+        When a session starts, AgentCore prints a Live View URL to stderr. Open it in a browser and you can watch this
+        session's screen live from the AWS console — especially handy when debugging headless flows:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">stderr</span>
+        </div>
+<pre><code>Session: abc123-def456
+Live View: https://us-east-1.console.aws.amazon.com/bedrock-agentcore/browser/aws.browser.v1/session/abc123-def456#</code></pre>
+      </div>
+
+      <h3>Pick a region / set the provider via env var</h3>
+      <p>
+        The default region is <code>us-east-1</code>; switch it explicitly with <code>AGENTCORE_REGION</code>.
+        If you don't want to add <code>-p agentcore</code> on every command, set <code>AGENT_BROWSER_PROVIDER</code>:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># Explicit region</span>
+<span class="du-prompt">$</span> <span class="du-flag">AGENTCORE_REGION</span>=eu-west-1 chrome-use <span class="du-flag">-p</span> agentcore open https://example.com
+
+<span class="du-cmt"># Pin the provider via env var so commands no longer need -p</span>
+<span class="du-prompt">$</span> export <span class="du-flag">AGENT_BROWSER_PROVIDER</span>=agentcore
+<span class="du-prompt">$</span> export <span class="du-flag">AGENTCORE_REGION</span>=us-east-2
+<span class="du-prompt">$</span> chrome-use open https://example.com
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use close</code></pre>
+      </div>
+
+      <h3>AgentCore environment variables at a glance</h3>
+      <table>
+          <thead>
+            <tr><th>Variable</th><th>Description</th><th>Default</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>AGENTCORE_REGION</code></td><td>AWS region</td><td><code>us-east-1</code></td></tr>
+            <tr><td><code>AGENTCORE_BROWSER_ID</code></td><td>Browser identifier</td><td><code>aws.browser.v1</code></td></tr>
+            <tr><td><code>AGENTCORE_PROFILE_ID</code></td><td>Persistent browser profile (cookies, localStorage)</td><td>(none)</td></tr>
+            <tr><td><code>AGENTCORE_SESSION_TIMEOUT</code></td><td>Session timeout (seconds)</td><td><code>3600</code></td></tr>
+            <tr><td><code>AWS_PROFILE</code></td><td>AWS CLI profile used for credential resolution</td><td><code>default</code></td></tr>
+          </tbody>
+        </table>
+
+      <h3>Common issues</h3>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Troubleshooting checklist</div>
+        <ul>
+          <li><strong>Failed to run aws CLI</strong>: the AWS CLI isn't installed or isn't on PATH. Install it, or just set <code>AWS_ACCESS_KEY_ID</code> and <code>AWS_SECRET_ACCESS_KEY</code>.</li>
+          <li><strong>AWS CLI failed: ... Run 'aws sso login'</strong>: SSO credentials expired; run <code>aws sso login</code> once to refresh.</li>
+          <li><strong>Session timeout</strong>: the default is 3600 seconds (1 hour). For long tasks, extend it with <code>AGENTCORE_SESSION_TIMEOUT=7200</code>.</li>
+        </ul>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>How to choose between the two paths</h2>
+      <div class="du-cards cols-2">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">▲</span> Vercel Sandbox</div>
+          <p>Choose it when you already deploy your app on Vercel, want on-demand microVMs that spin up and tear down, and don't want to be blocked by the serverless binary size limit. Use a sandbox snapshot for second-scale cold starts.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">☁︎</span> AWS Bedrock AgentCore</div>
+          <p>Choose it when you live in the AWS ecosystem, want a managed cloud browser session, need a persistent profile to keep a login alive, or want to watch a session live in the console via Live View. The command-line experience is no different from local.</p>
+        </div>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Related reading</div>
+        To drive local Chrome instead of the cloud, see <a href="/en/real-chrome.html">Connect to real Chrome</a>;
+        for the general approach to reusing a login across sessions, see <a href="/en/sessions.html">Sessions</a>.
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

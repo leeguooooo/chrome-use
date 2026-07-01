@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>测试与探索 · chrome-use 文档</title>
+  <meta name="description" content="用 chrome-use test 把重复的手动浏览器检查写成可复跑的 YAML 回归套件；用 dogfood 做探索式测试、QA 和 bug 挖掘，带完整复现证据。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="testing" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">进阶 / 工作流</p>
+
+      <div class="du-title-row">
+        <h1>测试与探索</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        同样是驱动浏览器，测试有两种截然不同的姿势：一种是把重复的手动检查
+        <span class="mark">固化成可复跑的回归套件</span>，像前端的单元测试；另一种是像真实用户一样
+        <span class="mark">系统地把应用逛一遍</span>，挖出 bug 与体验问题，并带上完整复现证据。
+        chrome-use 两样都能干 —— 前者用 <code>chrome-use test</code>，后者用 dogfood 探索式流程。
+      </p>
+
+      <h2>两种测试姿势</h2>
+      <p>先分清楚要做哪一件事，再往下选章节。它们的目标、产物和运行方式都不一样。</p>
+      <div class="du-cards">
+        <a class="du-card" href="#写可复跑的测试套件">
+          <div class="du-card-title"><span class="du-card-ico">🧷</span> 写可复跑的测试套件</div>
+          <p>把「打开它、点一点、看看对不对」固化成 <code>*.yaml</code> 套件，退出码可直接进 CI。</p>
+        </a>
+        <a class="du-card" href="#探索式测试与-bug-挖掘">
+          <div class="du-card-title"><span class="du-card-ico">🔬</span> 探索式测试 / 挖 bug</div>
+          <p>像用户一样系统地逛应用，边探索边记录，每个问题都留下截图、录像和复现步骤。</p>
+        </a>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2 id="写可复跑的测试套件">写可复跑的测试套件</h2>
+      <p>
+        把「打开它、点一点、确认对不对」这种反复的手工活变成
+        <strong>可复跑的套件</strong>，就像前端的单元测试。每发现一个回归就补一条用例 ——
+        用得越多，套件越值钱。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">运行一个套件</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use test <span class="du-str">&lt;suite.yaml&gt;</span> <span class="du-flag">[--launch | --session &lt;name&gt;]</span> <span class="du-flag">[--json]</span></code></pre>
+      </div>
+
+      <ul>
+        <li>全部用例通过退出码为 <strong>0</strong>，任一失败为 <strong>1</strong> —— 直接丢进 CI。</li>
+        <li>默认在一个 <code>cu-test</code> 会话里<strong>启动全新的隔离浏览器</strong>（确定、可复现），跑完即关。</li>
+        <li>传 <code>--session &lt;name&gt;</code> 可对着一个<strong>已连接的会话</strong>跑（比如通过 <code>chrome-use extension connect</code> 接上的真实 Chrome）。</li>
+        <li>失败的用例会自动把截图存到 <code>cu-test-artifacts/&lt;case&gt;.png</code>。</li>
+      </ul>
+
+      <h3>套件格式（YAML）</h3>
+      <p>
+        一个套件由可选的 <code>setup</code>（所有用例前跑一次）和一组 <code>cases</code> 组成。每条用例有
+        <code>steps</code>（要做的动作）和 <code>assert</code>（要成立的检查）。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">chatgpt-smoke.yaml</span>
+        </div>
+<pre><code><span class="du-cmt">suite: chatgpt smoke</span>               <span class="du-cmt"># 标签（可选）</span>
+<span class="du-cmt">setup:</span>                             <span class="du-cmt"># 所有用例前跑一次（可选）</span>
+  - account: chatgpt/huayue        <span class="du-cmt"># 注入一个 cookie-use 存好的登录（可选）</span>
+  - open: https://chatgpt.com/     <span class="du-cmt"># …或任意普通步骤</span>
+cases:
+  - name: home loads logged in
+    steps:                         <span class="du-cmt"># 步骤复用 chrome-use 自己的命令</span>
+      - open: https://chatgpt.com/
+      - wait: { load: networkidle }
+    assert:                        <span class="du-cmt"># 所有断言都成立，用例才通过</span>
+      - url: { contains: chatgpt.com }
+      - visible: <span class="du-str">"#prompt-textarea"</span>
+  - name: composer takes text
+    steps:
+      - fill: { sel: <span class="du-str">"#prompt-textarea"</span>, text: <span class="du-str">"hi"</span> }
+    assert:
+      - text: { sel: <span class="du-str">"#prompt-textarea"</span>, contains: hi }
+      - eval: <span class="du-str">"!!window.__NEXT_DATA__"</span></code></pre>
+      </div>
+
+      <h3>Steps —— 动作</h3>
+      <p>每个 step 是一个「单键映射」，键就是一个 chrome-use 命令。</p>
+      <table>
+        <thead><tr><th>Step</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><code>open: &lt;url&gt;</code></td><td>导航</td></tr>
+          <tr><td><code>click: &lt;selector|@ref&gt;</code></td><td>点击</td></tr>
+          <tr><td><code>fill: { sel: &lt;s&gt;, text: &lt;t&gt; }</code></td><td>清空后输入</td></tr>
+          <tr><td><code>type: { sel: &lt;s&gt;, text: &lt;t&gt; }</code></td><td>输入（不清空）</td></tr>
+          <tr><td><code>press: &lt;key&gt;</code></td><td>按键（如 <code>Enter</code>）</td></tr>
+          <tr><td><code>wait: &lt;ms&gt;</code> / <code>wait: { load: networkidle }</code> / <code>wait: &lt;selector&gt;</code></td><td>等待</td></tr>
+          <tr><td><code>scroll: &lt;up|down|...&gt;</code> 或 <code>{ dir: down, px: 500 }</code></td><td>滚动</td></tr>
+          <tr><td><code>eval: "&lt;js&gt;"</code></td><td>执行 JS</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Assertions —— 检查</h3>
+      <p>所有断言最终都编译成一个 truthy 的 <code>eval</code>。</p>
+      <table>
+        <thead><tr><th>Assert</th><th>通过条件</th></tr></thead>
+        <tbody>
+          <tr><td><code>url: { contains|equals|matches: &lt;v&gt; }</code></td><td>页面 URL 匹配</td></tr>
+          <tr><td><code>visible: &lt;selector&gt;</code></td><td>元素存在且已布局</td></tr>
+          <tr><td><code>hidden: &lt;selector&gt;</code></td><td>元素不存在 / 未布局</td></tr>
+          <tr><td><code>text: { sel: &lt;s&gt;, contains|equals|matches: &lt;v&gt; }</code></td><td>元素文本匹配</td></tr>
+          <tr><td><code>count: { sel: &lt;s&gt;, eq: &lt;n&gt; }</code></td><td>恰好 N 个元素匹配</td></tr>
+          <tr><td><code>eval: "&lt;js&gt;"</code></td><td>该 JS 表达式为真</td></tr>
+        </tbody>
+      </table>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 断言和步骤的关系</div>
+        <code>steps</code> 先按顺序全部跑完，<code>assert</code> 再逐条独立求值。想了解 <code>wait</code> 与断言的更多写法，见
+        <a href="/waiting.html">等待与断言</a>；步骤里用到的每个命令都在 <a href="/commands.html">命令参考</a> 里。
+      </div>
+
+      <h3>登录与多账号</h3>
+      <p>
+        <code>account: &lt;id&gt;</code> 会把一个
+        <a href="https://github.com/leeguooooo/cookie-use">cookie-use</a>
+        存好的登录注入测试会话。它可以用在<strong>两个</strong>地方：
+      </p>
+      <ul>
+        <li><strong><code>setup:</code></strong> —— 所有用例前注入一次，整个套件都以那个账号运行。</li>
+        <li><strong>用例的 <code>steps:</code> 里</strong> —— 在套件中途切换账号。新登录会在该用例的下一次 <code>open</code>／导航时生效，所以把 <code>account:</code> 放在 <code>open</code> 之前。这就是在一个套件里测「管理员看得到 X、普通成员看不到」，或在账号间来回横跳的办法。</li>
+      </ul>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">rbac.yaml —— 权限对比</span>
+        </div>
+<pre><code>setup:
+  - account: myapp/admin           <span class="du-cmt"># 以 admin 开场</span>
+cases:
+  - name: admin sees the settings tab
+    steps:
+      - open: https://app.example.com/
+    assert:
+      - visible: <span class="du-str">"#settings-tab"</span>
+  - name: member does NOT see it
+    steps:
+      - account: myapp/member      <span class="du-cmt"># 切账号，然后重新加载页面</span>
+      - open: https://app.example.com/
+    assert:
+      - hidden: <span class="du-str">"#settings-tab"</span>
+  - name: back to admin
+    steps:
+      - account: myapp/admin
+      - open: https://app.example.com/
+    assert:
+      - visible: <span class="du-str">"#settings-tab"</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 需要 cookie-use</div>
+        <code>account:</code> 依赖已安装的 <a href="https://github.com/leeguooooo/cookie-use">cookie-use</a>；不用它就直接省掉这一行。
+        一次失败的 <code>account:</code> 切换（id 写错、或没装 cookie-use）会让那条用例失败，并给出清晰的原因。
+        账号相关的更多细节见 <a href="/login-auth.html">登录与凭证</a>。
+      </div>
+
+      <h3>工作流</h3>
+      <ol>
+        <li>先用 <code>open</code>／<code>snapshot</code>／<code>eval</code> 手动做一遍，摸清选择器。</li>
+        <li>把它写成一条用例，放进 <code>*.yaml</code> 套件。</li>
+        <li><code>chrome-use test suite.yaml</code> —— 绿了就说明没问题；红了会显示失败的断言 + 一张截图。</li>
+        <li>之后又发现回归？补一条用例。在 CI 里跑整个套件。</li>
+      </ol>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ v1 的限制</div>
+        断言在步骤跑完后各自独立求值。暂时<strong>没有</strong>用例级重试、没有并行用例、也没有 snapshot／screenshot 的基线 diff（先用一个针对已知内容的 <code>eval</code> 断言代替）。步骤按顺序执行，某个步骤失败会立刻让该用例失败。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2 id="探索式测试与-bug-挖掘">探索式测试与 bug 挖掘（dogfood）</h2>
+      <p>
+        另一种测试不预设脚本，而是<strong>系统地把一个 Web 应用逛一遍</strong>，找出 bug、UX 问题和其它毛病，并为每个发现产出<strong>完整的复现证据</strong> —— 逐步截图、复现录像、详细复现步骤 —— 好让结果能直接交给对应团队。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 只有 Target URL 是必填</div>
+        其它都有合理默认值。会话名默认取域名的 slug（<code>vercel.com</code> → <code>vercel-com</code>），输出目录默认 <code>./dogfood-output/</code>，范围默认整个应用。用户说「dogfood vercel.com」就直接用默认值开跑，除非提到登录却没给凭据，否则不要反问。
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 用 chrome-use，别用 npx chrome-use</div>
+        始终直接调 <code>chrome-use</code> —— 直接二进制走的是快速的 Rust 客户端；<code>npx</code> 绕道 Node.js，明显更慢。
+      </div>
+
+      <h3>六步流程</h3>
+      <table>
+        <thead><tr><th>步骤</th><th>做什么</th></tr></thead>
+        <tbody>
+          <tr><td>1. Initialize</td><td>建会话、输出目录、报告文件</td></tr>
+          <tr><td>2. Authenticate</td><td>需要就登录，保存状态</td></tr>
+          <tr><td>3. Orient</td><td>导航到起点，拍第一张 snapshot</td></tr>
+          <tr><td>4. Explore</td><td>系统地访问页面、测试功能</td></tr>
+          <tr><td>5. Document</td><td>边发现边截图 + 记录每个问题</td></tr>
+          <tr><td>6. Wrap up</td><td>更新汇总计数，关闭会话</td></tr>
+        </tbody>
+      </table>
+
+      <h3>初始化与登录</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">初始化 + 起会话</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> mkdir -p {OUTPUT_DIR}/screenshots {OUTPUT_DIR}/videos
+
+<span class="du-cmt"># 起一个具名会话，导航到目标</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} open {TARGET_URL}
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} wait <span class="du-flag">--load</span> networkidle</code></pre>
+      </div>
+
+      <p>需要登录时，用 <code>snapshot -i</code> 找到表单的 <code>@ref</code>，填好后提交，再把状态存起来备用。OTP／邮箱验证码要向用户询问，等回复后再输入。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">登录并保存状态</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} snapshot <span class="du-flag">-i</span>
+<span class="du-cmt"># 找到登录表单的 ref，填入凭据</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} fill <span class="du-str">@e1</span> <span class="du-str">"{EMAIL}"</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} fill <span class="du-str">@e2</span> <span class="du-str">"{PASSWORD}"</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} click <span class="du-str">@e3</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} wait <span class="du-flag">--load</span> networkidle
+
+<span class="du-cmt"># 登录成功后保存状态，方便复用</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} state save {OUTPUT_DIR}/auth-state.json</code></pre>
+      </div>
+
+      <h3>探索与取证</h3>
+      <p>
+        从主导航开始，逐个访问顶层区块；在每个区块里测试可交互元素（点按钮、填表单、开下拉／弹窗）；检查空状态、错误处理、边界输入；跑真实的端到端流程（增删改）。
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ console / errors 默认是空的</div>
+        这个 stealth fork 默认<strong>关闭</strong>控制台与错误捕获。要用 <code>console</code>／<code>errors</code>，得在起会话时带上
+        <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code>，例如
+        <code>AGENT_BROWSER_CAPTURE_CONSOLE=1 chrome-use --session {SESSION} open &lt;url&gt;</code>，否则它们返回空。
+      </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">每个页面的四连击</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/{page-name}.png
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} errors
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} console</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 选对 snapshot 姿势</div>
+        <code>snapshot -i</code> —— 找可点击／可填写的元素（按钮、输入框、链接）；
+        <code>snapshot</code>（不带 flag）—— 读页面内容（文本、标题、数据列表）。
+      </div>
+
+      <h3>复现优先：交互型 vs 静态型</h3>
+      <p>探索和记录是<strong>同一趟</strong>完成的：发现问题就停下来立刻记录，再继续。按问题类型选取证据的粒度。</p>
+
+      <h3>交互 / 行为型问题</h3>
+      <p>需要用户交互才能复现（功能、UX、动作触发的控制台报错）—— 用带录像和逐步截图的完整复现：先开录像，再以人的节奏走一遍步骤，每步截图，最后拍下损坏状态。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">录像 + 逐步截图</span>
+        </div>
+<pre><code><span class="du-cmt"># 1. 复现前先开录像</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} record start {OUTPUT_DIR}/videos/issue-{NNN}-repro.webm
+
+<span class="du-cmt"># 2. 以人的节奏走步骤，动作间停 1-2 秒，每步截图</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot {OUTPUT_DIR}/screenshots/issue-{NNN}-step-1.png
+<span class="du-prompt">$</span> sleep 1
+<span class="du-cmt"># 执行动作（click / fill 等），再 sleep 1，再 step-2 截图……</span>
+
+<span class="du-cmt"># 3. 拍下损坏状态（先停顿让观者看清）</span>
+<span class="du-prompt">$</span> sleep 2
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/issue-{NNN}-result.png
+
+<span class="du-cmt"># 4. 停录像</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} record stop</code></pre>
+      </div>
+
+      <h3>静态 / 加载即可见问题</h3>
+      <p>无需交互就能看到（错别字、占位文本、截断文本、错位、加载即报的控制台错误）—— 一张标注截图就够，别录像、别多步复现，把「复现录像」设为 <code>N/A</code>。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">静态问题：一张标注截图</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/issue-{NNN}.png</code></pre>
+      </div>
+
+      <h3>收尾</h3>
+      <p>目标是找出 <strong>5–10 个有充分记录的问题</strong>就收工 —— 证据的深度比数量更重要，5 个带完整复现胜过 20 个语焉不详的。之后回读报告、更新汇总的严重度计数（每个 <code>### ISSUE-</code> 块都要反映在总数里），最后关闭会话。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">关闭会话</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} close</code></pre>
+      </div>
+
+      <h3>几条硬规矩</h3>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 别读被测应用的源码</div>
+        你是以用户身份测试，不是审计代码。不要读被测应用的 HTML／JS／配置。所有发现都必须来自你在浏览器里<strong>观察到的现象</strong>。
+      </div>
+      <ul>
+        <li><strong>复现是一切</strong>：每个问题都要有证据，但要匹配粒度 —— 交互型才需要录像和逐步截图，静态型只要一张标注截图。</li>
+        <li><strong>收证前先验证可复现</strong>：录像／截图之前，至少重试一次确认能稳定复现；复现不稳定就不算有效问题。</li>
+        <li><strong>增量写报告</strong>：一发现就追加进报告，别攒到最后。会话被打断也不丢发现。</li>
+        <li><strong>永不删输出</strong>：中途不要 <code>rm</code> 截图、录像或报告，也不要关掉会话再重启。只往前走。</li>
+        <li><strong>像人一样打字</strong>：录像时填表单用 <code>type</code>（逐字符），只有在不录像、追求速度时才用 <code>fill</code>。</li>
+        <li><strong>为人调节录像节奏</strong>：动作间加 <code>sleep 1</code>、最终结果截图前加 <code>sleep 2</code>，让录像在 1x 下可看。</li>
+        <li><strong>查控制台</strong>：很多问题在 UI 上看不见，却以 JS 报错或失败请求的形式出现。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>接下来</h2>
+      <div class="du-cards">
+        <a class="du-card" href="/waiting.html">
+          <div class="du-card-title"><span class="du-card-ico">⏳</span> 等待与断言</div>
+          <p>把 <code>wait</code> 和断言的写法吃透，套件才稳。</p>
+        </a>
+        <a class="du-card" href="/commands.html">
+          <div class="du-card-title"><span class="du-card-ico">📚</span> 命令参考</div>
+          <p>steps 里每个动词的完整用法都在这里。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Slack 自动化 · chrome-use 文档</title>
+  <meta name="description" content="用 chrome-use 驱动真实 Slack 网页会话：查未读、导航频道、搜索会话、抽取消息数据——纯浏览器自动化，无需 Slack API、OAuth 或机器人令牌。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="slack" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">专项能力 / Specialized</p>
+
+      <div class="du-title-row">
+        <h1>Slack 自动化</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Slack 的网页版就是一个大型 Web 应用——chrome-use 把它当成普通页面来驱动：
+        <span class="mark">连接已经登录的会话</span>，读可访问性快照拿到带 <code>@ref</code> 的元素，
+        然后查未读、跳频道、搜会话、抽消息。全程走真实浏览器，
+        <strong>不碰 Slack API、不需要 OAuth、webhook 或机器人令牌</strong>。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 本页只是速览</div>
+        下面归纳了最常用的几套操作配方。完整的 refs 约定、边界情况和调试细节，
+        随时用 <code>skills get slack</code> 拉出完整技能文档深入查阅。
+      </div>
+
+      <h2>快速开始</h2>
+      <p>
+        Slack 已经在浏览器里开着时，直接连它的调试端口是最快的做法——比新开一个浏览器省事得多。
+        没开的话就让 chrome-use 打开 Slack 网页版。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">connect-or-open.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># 连接已开着的 Slack 会话（9222 是常见调试端口）</span>
+<span class="du-prompt">$</span> chrome-use connect 9222
+
+<span class="du-cmt"># 或者从头打开 Slack 网页版</span>
+<span class="du-prompt">$</span> chrome-use open https://app.slack.com
+
+<span class="du-cmt"># 拿一张可交互快照，看看页面上有什么</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 核心循环</div>
+        连接 / 导航 → <code>snapshot -i</code> 拿到带 refs 的元素 → 点击标签页、展开分组或进入频道 →
+        读数据或执行动作 → 需要留证据时 <code>screenshot</code>。<strong>每次导航后都要重新快照</strong>，
+        因为 refs 会随页面变化。
+      </div>
+
+      <h2>查未读消息</h2>
+      <p>
+        未读散落在几个地方：侧边栏顶部的 “More unreads” 按钮、Activity 标签页里的未读汇总、
+        以及带加粗/角标的频道名。先快照定位 refs，再逐个查。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">check-unreads.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># 进 Activity 标签页看未读汇总（ref 每次可能不同）</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e14</span>
+<span class="du-prompt">$</span> chrome-use wait 1000
+<span class="du-prompt">$</span> chrome-use screenshot activity-unreads.png
+
+<span class="du-cmt"># 或者展开侧边栏的 “More unreads”</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e21</span>
+<span class="du-prompt">$</span> chrome-use wait 500
+<span class="du-prompt">$</span> chrome-use screenshot expanded-unreads.png</code></pre>
+      </div>
+
+      <p>想数一下未读频道有多少个，展开未读分组后按 treeitem 统计：</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">count-unreads.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># 展开未读后，每个带频道名的 treeitem 算一个未读</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> | grep -c <span class="du-str">"treeitem"</span></code></pre>
+      </div>
+
+      <h2>导航到频道</h2>
+      <p>
+        快照后在侧边栏列表里找频道名（如 <code>engineering</code>、<code>product-design</code>），
+        点它对应的 treeitem ref。进频道后用 <code>wait --load networkidle</code> 等内容加载完再操作。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">open-channel.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+
+<span class="du-cmt"># 点频道对应的 treeitem（示例 ref，以你的快照为准）</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e94</span>
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
+
+<span class="du-cmt"># 在消息区往下滚动加载更多历史</span>
+<span class="du-prompt">$</span> chrome-use scroll down 500
+<span class="du-prompt">$</span> chrome-use screenshot channel-messages.png</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 侧边栏很长时</div>
+        频道列表滚不动？在侧边栏容器里滚，别滚整页：
+        <code>chrome-use scroll down 300 --selector ".p-sidebar"</code>。
+      </div>
+
+      <h2>搜索会话</h2>
+      <p>
+        用 Slack 自带搜索最省事：点搜索按钮，填关键词，回车，等结果加载。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">search.sh</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e5</span>          <span class="du-cmt"># 搜索按钮</span>
+<span class="du-prompt">$</span> chrome-use fill <span class="du-str">@e_search</span> <span class="du-str">"keyword"</span>
+<span class="du-prompt">$</span> chrome-use press Enter
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
+<span class="du-prompt">$</span> chrome-use screenshot search-results.png</code></pre>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>抽取数据</h2>
+      <p>
+        要程序化解析时，用 JSON 快照拿机器可读的可访问性树；要单个元素的文字，用 <code>get text</code>。
+        更系统的抽取模式见 <a href="/extract.html">提取数据</a>。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">extract.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># 整棵可访问性树导出为 JSON，便于解析</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--json</span> &gt; slack-snapshot.json
+
+<span class="du-cmt"># 取某条消息 / 某个元素的纯文本</span>
+<span class="du-prompt">$</span> chrome-use get text <span class="du-str">@e_message_ref</span>
+
+<span class="du-cmt"># 当前页面的 URL 与标题，留作引用</span>
+<span class="du-prompt">$</span> chrome-use get url
+<span class="du-prompt">$</span> chrome-use get title</code></pre>
+      </div>
+
+      <p>解析 JSON 时留意这些字段的对应关系：</p>
+      <table>
+        <thead>
+          <tr><th>你要的东西</th><th>在快照里找</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>频道名</td><td><code>treeitem</code> 的 <code>name</code> 字段（子频道 <code>level=2</code>）</td></tr>
+          <tr><td>消息内容</td><td><code>listitem</code> / <code>document</code> 元素</td></tr>
+          <tr><td>用户名</td><td>带用户信息的 <code>button</code> 元素</td></tr>
+          <tr><td>时间戳</td><td>带时间信息的 <code>link</code> 元素</td></tr>
+        </tbody>
+      </table>
+
+      <h2>常用 refs 与侧边栏结构</h2>
+      <p>
+        Slack 侧边栏大致是：Threads / Huddles / Drafts &amp; sent / Directories，
+        接着是分组标题（Starred、Channels 等）下挂的频道 treeitem，然后是 Direct Messages、Apps，
+        底部有 “More unreads” 按钮。下面这些 ref 是常见位置，<strong>仅供参考，实际以你的快照为准</strong>。
+      </p>
+      <div class="du-cards cols-3">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🏠</span> @e12 · Home</div>
+          <p>主页标签页（通常）。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">✉️</span> @e13 · DMs</div>
+          <p>私信标签页。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔔</span> @e14 · Activity</div>
+          <p>动态标签页，显示未读数。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔎</span> @e5 · Search</div>
+          <p>搜索按钮。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">📥</span> @e21 · More unreads</div>
+          <p>展开未读频道列表（每次会变）。</p>
+        </div>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ refs 会漂移</div>
+        文档里写的 <code>@e14</code>、<code>@e21</code> 只是典型值，会随会话和页面状态变化。
+        <strong>永远先 <code>snapshot -i</code> 再点</strong>，不要硬编码 ref。
+      </div>
+
+      <h2>调试</h2>
+      <p>
+        本 stealth 分支默认关闭控制台/错误捕获——想用 <code>console</code> / <code>errors</code>，
+        得先带 <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code> 启动会话，否则返回空。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">debug.sh</span>
+        </div>
+<pre><code><span class="du-cmt"># 需要先以 AGENT_BROWSER_CAPTURE_CONSOLE=1 启动会话</span>
+<span class="du-prompt">$</span> chrome-use console
+<span class="du-prompt">$</span> chrome-use errors
+
+<span class="du-cmt"># 卡住时看看当前页面状态</span>
+<span class="du-prompt">$</span> chrome-use get url
+<span class="du-prompt">$</span> chrome-use get title
+<span class="du-prompt">$</span> chrome-use screenshot page-state.png</code></pre>
+      </div>
+
+      <h2>注意事项</h2>
+      <ul>
+        <li><strong>纯浏览器自动化</strong>：不走 Slack API，也就没有 OAuth、webhook、机器人令牌这些东西。</li>
+        <li><strong>会话绑定</strong>：截图和快照都绑在当前浏览器会话上。</li>
+        <li><strong>可能被限流</strong>：操作太密集时 Slack 会限流，命令之间加 <code>sleep 1</code> 或 <code>wait</code> 让 UI 跟上。</li>
+        <li><strong>只操作你自己的工作区</strong>：无法跨工作区自动化。</li>
+      </ul>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 相关页面</div>
+        Slack 网页版也是 Electron 桌面应用的一种——想驱动桌面客户端本身，见
+        <a href="/electron.html">Electron 桌面应用</a>。想连你日常在用的登录态浏览器，见
+        <a href="/real-chrome.html">驱动真实 Chrome</a>。基础动作和读取快照分别见
+        <a href="/interacting.html">交互操作</a> 与 <a href="/reading.html">读取页面</a>，
+        等待策略见 <a href="/waiting.html">等待与断言</a>。
+      </div>
+
+    </main>
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

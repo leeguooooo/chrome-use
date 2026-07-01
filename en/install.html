@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Installation · chrome-use</title>
+  <meta name="description" content="Install chrome-use: one install.sh line pulls the CLI from a GitHub Release (no npm, no token), install the Chrome extension and register the local bridge, add the agent skills, then run chrome-use doctor to self-check your setup." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="install" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
+      </span>
+
+      <p class="du-eyebrow">Getting Started</p>
+
+      <div class="du-title-row">
+        <h1>Installation</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Installing chrome-use is just three things: <span class="mark">install the CLI with one command</span>, add the Chrome extension and register the local bridge, and pull the agent skills into your project.
+        It ships as prebuilt binaries via <span class="mark">GitHub Releases</span>—<strong>no npm, no token</strong>—so neither the publisher nor you has to log into any account.
+        Once installed, run <code>chrome-use doctor</code> to self-check in one shot.
+      </p>
+
+      <!-- ============ 1. INSTALL CLI ============ -->
+      <h2>Install the CLI in one line</h2>
+      <p>
+        Download the prebuilt binary for your platform from the latest
+        <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Release</a>
+        to install <code>chrome-use</code> (plus the short alias <code>abs</code>). This is the primary distribution channel—it doesn't go through npm and needs no token.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">one-line install</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ One binary, two names</div>
+        <code>chrome-use</code> and <code>abs</code> are the <strong>same executable</strong>—<code>abs</code> is just a short alias.
+        There's no separate "stealth executable"; anti-detection is runtime behavior. Connecting to your real Chrome applies zero patches, and only <code>--launch</code> (opening a fresh browser) applies the full patch set. See
+        <a href="/en/real-chrome.html">Connecting to your real Chrome</a>.
+      </div>
+
+      <h3>Other install methods</h3>
+      <p>When you need a pinned version, a custom install directory, or manual placement on Windows:</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># pin a specific version</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+
+<span class="du-cmt"># install to a custom directory</span>
+<span class="du-prompt">$</span> AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+
+      <ul>
+        <li><strong>Windows:</strong> download <code>chrome-use-win32-x64.tar.gz</code> from the <a href="https://github.com/leeguooooo/chrome-use/releases">Releases page</a> and put <code>chrome-use.exe</code> on your PATH.</li>
+        <li><strong>npm (legacy):</strong> <code>npm install -g chrome-use</code> is still published, but GitHub Releases is the primary channel now.</li>
+      </ul>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Multiple installs can shadow each other</div>
+        If <code>which -a chrome-use</code> shows more than one install, an older <strong>npm / pnpm</strong> copy may be shadowing the newer build installed by <code>install.sh</code>
+        (the npm registry lags behind GitHub Releases). Remove the old copy—<code>npm rm -g chrome-use</code> or <code>pnpm rm -g chrome-use</code>—so the new build takes effect.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 2. EXTENSION + BRIDGE ============ -->
+      <h2>Install the extension, connect your real Chrome</h2>
+      <p>
+        To drive the real Chrome you're <em>already logged into</em> (reusing existing sessions, no confirmation prompts), install the browser extension and register the local bridge once. This is the recommended path.
+      </p>
+
+      <ol>
+        <li>
+          <a href="https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk">Install the <strong>chrome-use</strong> extension from the Chrome Web Store</a> with a one-click <em>Add to Chrome</em>.
+          The store build stays stable across restarts, which suits unattended use.
+        </li>
+        <li>Register the native-messaging host—one time:</li>
+      </ol>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">connect your real Chrome</span>
+        </div>
+<pre><code><span class="du-cmt"># register the local bridge (one time)</span>
+<span class="du-prompt">$</span> chrome-use extension install
+
+<span class="du-cmt"># after that, open drives your already-logged-in Chrome directly</span>
+<span class="du-prompt">$</span> chrome-use open https://x.com/home</code></pre>
+      </div>
+
+      <p>
+        From then on, <code>chrome-use open</code> drives your real, already-logged-in Chrome through <strong>native messaging</strong>—no debug port, no token,
+        and <strong>never an "Allow remote debugging?" prompt</strong>. The extension auto-updates and stays connected across restarts, for zero per-use confirmation. For how the connection works, see
+        <a href="/en/real-chrome.html">Connecting to your real Chrome</a>.
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Don't want to touch your real Chrome?</div>
+        Use <code>chrome-use --launch open &lt;url&gt;</code> to spin up a brand-new, isolated blank-profile browser (with the full anti-detection patch set),
+        no extension required—CI takes this path automatically. When you need real cookies / login state, use <code>--profile auto</code> instead.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ 3. SKILLS ============ -->
+      <h2>Pull the agent skills</h2>
+      <p>
+        The repo ships SKILL.md files for Claude Code, Cursor, and others. Pull them into the current project with <a href="https://skills.sh">skills.sh</a>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
+      </div>
+
+      <p>
+        This drops <code>skills/chrome-use</code> (plus the specialized <code>skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}</code>)
+        into your project, giving the AI agent the right usage patterns and pre-authorized bash permissions for <code>chrome-use</code> and <code>abs</code>. Once installed, it's worth reading
+        <a href="/en/core-loop.html">The core loop</a> first.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Self-heal when the skill can't run</div>
+        <code>skills add</code> only copies markdown; it doesn't bundle the ~20MB binary. If <code>chrome-use</code> isn't present in the skill environment,
+        just rerun the <code>install.sh</code> one-liner above to fill in the binary.
+      </div>
+
+      <hr class="du-divider" />
+
+      <!-- ============ QUICKSTART ============ -->
+      <h2>Run your first command</h2>
+      <p>
+        The browser stays running across commands, so the ones below feel like a single session. When you're done, wrap up with <code>chrome-use close</code> (or <code>close --all</code>).
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">quickstart</span>
+        </div>
+<pre><code><span class="du-cmt"># take a screenshot of a page</span>
+<span class="du-prompt">$</span> chrome-use open https://example.com
+<span class="du-prompt">$</span> chrome-use screenshot home.png
+<span class="du-prompt">$</span> chrome-use close
+
+<span class="du-cmt"># search, click a result, screenshot again</span>
+<span class="du-prompt">$</span> chrome-use open https://duckduckgo.com
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># find the ref for the search box</span>
+<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"chrome-use cli"</span>
+<span class="du-prompt">$</span> chrome-use press Enter
+<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># refs now map to the results</span>
+<span class="du-prompt">$</span> chrome-use click @e5                        <span class="du-cmt"># click a result</span>
+<span class="du-prompt">$</span> chrome-use screenshot result.png</code></pre>
+      </div>
+
+      <p>To get the fundamental <code>open → snapshot → click</code> rhythm, read <a href="/en/core-loop.html">The core loop</a> next.</p>
+
+      <hr class="du-divider" />
+
+      <!-- ============ DOCTOR ============ -->
+      <h2>Diagnose install problems</h2>
+      <p>
+        When a command fails unexpectedly (<code>Unknown command</code>, <code>Failed to connect</code>, a stuck daemon, a version mismatch after <code>upgrade</code>, Chrome not found, and so on),
+        run <code>doctor</code> before anything else.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">chrome-use doctor</span>
+        </div>
+<pre><code><span class="du-cmt"># full diagnostic: environment, Chrome, daemon, config, providers, network, launch self-test</span>
+<span class="du-prompt">$</span> chrome-use doctor
+<span class="du-prompt">$</span> chrome-use doctor <span class="du-flag">--offline --quick</span>   <span class="du-cmt"># fast, purely local</span>
+<span class="du-prompt">$</span> chrome-use doctor <span class="du-flag">--fix</span>               <span class="du-cmt"># run destructive fixes (reinstall Chrome, clear stale state…)</span>
+<span class="du-prompt">$</span> chrome-use doctor <span class="du-flag">--json</span>              <span class="du-cmt"># structured output for programmatic use</span></code></pre>
+      </div>
+
+      <p>
+        Every <code>doctor</code> run automatically cleans up stale socket / pid / version sidecar files; destructive operations only run when you add <code>--fix</code>.
+        Exit codes: <code>0</code> when everything passes (warnings included), <code>1</code> on any failure.
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Anti-detection self-check</div>
+        To confirm stealth status before a sensitive flow, use <code>chrome-use stealth status</code> (add <code>--json</code> for structured results)—
+        it runs live webdriver / chrome / plugins / UA probes and lists the applied overrides, which is more reliable than driving an external detector.
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Don't blindly retry after an "Allow remote debugging?" prompt</div>
+        Every retry pops it again. Either your <code>chrome-use</code> is too old (rerun <code>install.sh</code> to upgrade), or the extension / local bridge isn't up
+        (the prompt disappears for good once the store extension is installed). For more troubleshooting, see <a href="/en/troubleshooting.html">Troubleshooting</a>.
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

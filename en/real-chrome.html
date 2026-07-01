@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Real Chrome (Extension) · chrome-use</title>
+  <meta name="description" content="Connect to the user's currently open, already-logged-in real Chrome window via the extension relay: install once, auto-connect, pick between multiple profiles, self-heal drops, cross-process OAuth, strict multi-agent isolation, and the highest anti-detection tier of all." />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="real-chrome" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Connecting</p>
+
+      <div class="du-title-row">
+        <h1>Real Chrome (Extension)</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        When a task needs the exact window <strong>the user is looking at right now</strong>—their real,
+        <span class="mark">already-logged-in</span> session, not a fresh blank browser—use extension connect.
+        It takes over the user's real Chrome through a native-messaging relay: zero confirmations, zero tokens,
+        no headless fingerprint. It is the highest anti-detection tier of any connection method.
+      </p>
+
+      <h2>One-time install</h2>
+      <p>
+        Extension connect only needs to be set up once. First register the native-messaging host, then install the
+        <strong>chrome-use</strong> extension.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 1. Register the native-messaging host</span>
+<span class="du-prompt">$</span> chrome-use extension install</code></pre>
+      </div>
+
+      <p>
+        <strong>2. Install the chrome-use extension.</strong> The easiest way—and the one that stays stable across
+        restarts—is a one-click <em>Add to Chrome</em> from the <strong>Chrome Web Store</strong>:
+      </p>
+      <ul>
+        <li>
+          Store link: <a href="https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk">chromewebstore.google.com/detail/chrome-use</a>
+        </li>
+      </ul>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Dev-build fallback (Load unpacked)</div>
+        <code>chrome://extensions</code> → turn on <strong>Developer mode</strong> → <em>Load unpacked</em> →
+        pick <code>extensions/ab-connect</code>. Note: a load-unpacked extension may be disabled after Chrome restarts,
+        so prefer the store build for unattended scenarios.
+      </div>
+
+      <h2>Auto-connect: open takes over</h2>
+      <p>
+        Once the extension is installed, a plain <code>chrome-use open &lt;url&gt;</code> automatically connects through
+        the extension relay. <code>auto_connect_cdp</code> <strong>prefers the live relay over a bare
+        <code>--remote-debugging-port</code></strong>, so Chrome 136+'s "Allow remote debugging?" authorization prompt
+        <span class="mark">never appears</span>. <code>chrome-use extension connect</code> is the explicit form of the same path.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># With the extension installed, open takes over the real Chrome via the relay</span>
+<span class="du-prompt">$</span> chrome-use open <span class="du-str">"https://example.com"</span>
+
+<span class="du-cmt"># The explicit form of the same path</span>
+<span class="du-prompt">$</span> chrome-use extension connect</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ When not to use it</div>
+        If a fresh, isolated test browser is enough (no real login needed), use <code>--launch</code>—see below.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Multiple Chrome profiles: see which one, then pick it</h2>
+      <p>
+        The relay binds to the extension worker of <strong>the profile currently talking to the native host</strong>.
+        If a site comes back showing logged out, confirm you took over the right profile before concluding the login was lost.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># List every connected profile (shows email if identity permission is granted, else a stable id, with the default flagged)</span>
+<span class="du-prompt">$</span> chrome-use browsers
+
+<span class="du-cmt"># Pin "this session" to a specific profile — sticky per session, so different agents don't interfere</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--browser</span> <span class="du-str">"me@example.com"</span> snapshot
+
+<span class="du-cmt"># Check which profile you're currently driving</span>
+<span class="du-prompt">$</span> chrome-use extension status
+<span class="du-prompt">$</span> chrome-use doctor</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ sticky per session</div>
+        <code>--browser &lt;id|email&gt;</code> pins <strong>this session</strong> to a profile: the session's daemon
+        binds on first connect, <strong>each session can pick a different profile</strong>, so concurrent agents don't
+        fight over one. Logged out on the wrong profile ≠ login lost—run <code>browsers</code> first, then re-run with
+        the correct <code>--browser</code>.
+      </div>
+
+      <h2>--launch vs --profile auto</h2>
+      <p>
+        <code>--launch</code> opens an <strong>isolated blank test profile</strong>—no cookies, no logins, no extensions
+        (so the extension relay path is off). Its window is labeled <code>chrome-use (&lt;session&gt;)</code> in Chrome's
+        profile menu, so anyone watching the desktop can tell at a glance which session the window belongs to.
+        If a launched session needs more:
+      </p>
+
+      <div class="du-cards cols-2">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> Need real cookies / login / extensions</div>
+          <p>Drop <code>--launch</code> and use <code>--profile auto</code> instead (reuse the user's real Chrome profile),
+          or set <code>AGENT_BROWSER_PROFILE=auto</code> once to make every later call default to it.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🧩</span> Load an unpacked extension into the test profile</div>
+          <p><code>--launch --args "--load-extension=&lt;dir&gt;"</code>.</p>
+        </div>
+      </div>
+
+      <h2>If "Allow remote debugging?" really does pop up</h2>
+      <p>
+        <strong>Don't keep retrying</strong>—each retry pops it again. At that point there are only two possibilities:
+      </p>
+      <ol>
+        <li>
+          <strong>You're on an old version.</strong> The relay-preference logic that avoids this prompt shipped many
+          versions ago; if you still hit it, your <code>chrome-use</code> is too old—upgrade and retry:
+        </li>
+      </ol>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · upgrade</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> curl <span class="du-flag">-fsSL</span> https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+
+<span class="du-cmt"># If which shows multiple installs, an old npm/pnpm copy may be shadowing the new one</span>
+<span class="du-prompt">$</span> which <span class="du-flag">-a</span> chrome-use
+<span class="du-prompt">$</span> npm rm <span class="du-flag">-g</span> chrome-use   <span class="du-cmt"># or pnpm rm -g chrome-use, so the install.sh version wins</span></code></pre>
+      </div>
+
+      <ol start="2">
+        <li>
+          <strong>The extension / relay isn't up.</strong> Have the user install the store extension (the one-click link
+          above); once installed the relay stays online and this prompt never comes back.
+        </li>
+      </ol>
+
+      <hr class="du-divider" />
+
+      <h2>Relay drops: the CLI self-heals</h2>
+      <p>
+        If a command suddenly reports "couldn't reach your Chrome" / "relay … failed"—usually the MV3 service worker got
+        suspended, or two agents are sharing one relay—<strong>the CLI now self-heals</strong>: it waits for the worker's
+        keepalive to bring the relay back (about 25 seconds) and retries once, so most drops you never even notice. If a
+        command <strong>does</strong> surface the error:
+      </p>
+      <ol>
+        <li><strong>Just re-run the command</strong>—by then the relay has usually reconnected.</li>
+        <li>Still failing: <code>chrome-use status</code> (check) → <code>chrome-use extension connect</code> (re-attach) → retry.
+          The CLI registers the native host automatically, and opens the store page if the extension was never installed—you
+          don't have to run <code>extension install</code> by hand.</li>
+        <li><strong>Never</strong> have the user quit/restart Chrome with <code>--remote-debugging-port</code> to recover a
+          dropped relay—that loses all their tabs and completely breaks the extension path.</li>
+        <li><code>chrome-use reconnect</code> is a friendly alias for <code>extension connect</code>—it rebinds the session
+          to the running Chrome with no reinstall needed.</li>
+        <li><strong>Browser totally unrecoverable?</strong> Don't sit waiting on a screenshot—<strong>fall back to
+          non-visual verification</strong>: <code>get text</code> / <code>eval</code>, or read the deployed page with
+          <code>curl</code>/<code>WebFetch</code>. Confirm a change is <em>correct</em> via DOM/HTML or the live URL, not a
+          failure. Save screenshots for the visual checks you actually need to report to the user.</li>
+      </ol>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Don't serialize agents to dodge "fragility"</div>
+        A relay drop is transient and self-heals; it is <strong>not</strong> a signal that a shared browser can't be
+        driven concurrently. Concurrent multi-agent <strong>is</strong> supported—each <code>--session</code> has its own
+        tab group and drives only its own tabs. Give each agent a distinct <code>--session</code> and run them in parallel
+        instead of one at a time.
+      </div>
+
+      <h2>OAuth / SSO redirects just work now</h2>
+      <p>
+        A login handoff (GitHub/Google OAuth, SSO) navigates the tab <strong>across processes</strong>, which used to
+        orphan the old session and make the next read fail with "stale sessionId". The relay now <strong>re-attaches the
+        opener automatically across that cross-process navigation</strong> and briefly retries the read while the new
+        process stabilizes, so <code>snapshot</code>/<code>screenshot</code>/<code>eval</code>/<code>get</code> keep working
+        through the entire handoff, and "Sign in with Google" / OAuth popup login goes end-to-end.
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ One GSI iframe limitation</div>
+        The cross-origin Google GSI iframe (the "Continue as &lt;user&gt;" button) can only be pierced on Chrome 125+;
+        on older Chrome that one button alone may still be out of reach. For more login/auth scenarios see
+        <a href="/en/login-auth.html">Login &amp; Auth</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Strict multi-agent isolation</h2>
+      <p>
+        Every connected <code>--session</code> gets <strong>its own colored Chrome tab group</strong> (named after the
+        session) and drives only its own tabs—multiple agents share one real browser without crossing wires, and the
+        user's own tabs are never grouped. CDP doesn't move the user's mouse/keyboard while driving pages, so it never
+        fights them for control.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Per-agent isolation is automatic</div>
+        The session <strong>name</strong> is the isolation key: it maps to a dedicated tab group <strong>and a dedicated
+        daemon</strong> (the port is derived from the name). When you don't pass <code>--session</code> /
+        <code>AGENT_BROWSER_SESSION</code>, chrome-use <strong>auto-derives a per-agent default</strong>—
+        <code>cu-&lt;repo&gt;-&lt;id&gt;</code>, where <code>&lt;id&gt;</code> is a short hash of a stable per-agent
+        terminal/agent-environment id (<code>CMUX_SURFACE_ID</code>, <code>TERM_SESSION_ID</code>,
+        <code>ITERM_SESSION_ID</code>, <code>TMUX_PANE</code> …). So <strong>two agents in the same repo get different tab
+        groups by default</strong> and no longer step on each other's active tab. In a bare shell with none of those env
+        vars set, it falls back to the shared <code>default</code>. Override anytime: pass <code>--session &lt;name&gt;</code>,
+        or set it to the <strong>same</strong> value to deliberately have multiple agents <em>share</em> one tab group.
+      </div>
+
+      <p>
+        A session (over the relay) tracks and drives only <strong>the tabs it created itself</strong>. Popups opened by
+        <strong>your own actions</strong>—like the OAuth account picker that pops up when you click "Sign in with Google"—are
+        followed and can be driven as part of your session (switch over and drive that picker). But it <strong>does not</strong>
+        adopt the user's existing tabs, another agent's tabs, or <em>unrelated</em> popups (a login window the user opened is
+        the user's). Bottom line: <code>tab list</code> shows only <em>your session's</em> tabs; to drive a specific page,
+        navigate to it in one of your own tabs—don't expect an existing or popped-up tab to appear in the list.
+      </p>
+
+      <h2>No debugging banner on the user's pages</h2>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Seamless takeover</div>
+        The extension attaches Chrome's debugger <strong>only to agent-owned tabs</strong> (ones it created, or ones you
+        <code>adopt</code>), never to the user's own tabs—so Chrome's "chrome-use started debugging this browser" banner
+        never covers a page the user is using (it only shows on attached tabs, and the agent's are all background tabs).
+        No Chrome restart, fully seamless.
+      </div>
+
+      <h2>Read a tab the user already has open: adopt</h2>
+      <p>
+        Need to read a tab the user already has open? Use <code>chrome-use adopt &lt;url-substring|targetId&gt;</code>—it
+        finds that existing tab across tab groups (the user's own, or another session's) and drives it, <strong>without
+        opening a new tab</strong>. When nothing matches it errors and lists the tabs it can see. This is the explicit,
+        opt-in way to cross the isolation layer above (it tags the adopted tab into your session's tab group).
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · adopt</span>
+        </div>
+<pre><code><span class="du-cmt"># Adopt the tab the user is looking at, then do a read-only extraction on it</span>
+<span class="du-prompt">$</span> chrome-use adopt <span class="du-str">"claude.ai/design"</span>
+<span class="du-prompt">$</span> chrome-use snapshot
+<span class="du-prompt">$</span> chrome-use get text</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ After adopt, the banner appears on that tab</div>
+        Because it's exactly the one you explicitly asked to drive. That's expected, not a bug.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Anti-detection tier ranking</h2>
+      <p>
+        <strong>This real, logged-in Chrome (extension connect) &gt; a headed launched browser &gt; headless (forbidden).</strong>
+        A genuine human browser has no headless / automation tells at all, so prefer it for any anti-bot-sensitive task.
+      </p>
+
+      <h2>Silent by default</h2>
+      <p>
+        When driving the user's real Chrome, the agent works entirely in the <strong>background</strong>—new tabs open
+        unfocused, the agent never forces a tab to the front, and focus is emulated so background pages still render and
+        report <code>visibilityState: 'visible'</code>. You don't have to do anything; just don't expect the user's view to
+        follow you (only use an explicit <code>bringToFront</code> when you <strong>deliberately</strong> want to surface a tab).
+      </p>
+
+      <h2>Behavioral anti-bot: humanized input</h2>
+      <p>
+        Beyond fingerprint-layer stealth, <code>--humanize off|fast|human</code> (or <code>AGENT_BROWSER_HUMANIZE</code>)
+        makes clicks land along a curved, decelerating trajectory with in-element landing jitter, makes typing use a
+        variable cadence, and gives scroll/drag easing. Defaults to <code>off</code>; a per-navigation detector
+        auto-escalates pages guarded by Akamai/PerimeterX/DataDome to <code>human</code>. Just leave it on auto; force
+        <code>human</code> only when you already know the target scores behavior.
+      </p>
+
+      <h2>Getting past Cloudflare: solve once, reuse</h2>
+      <p>
+        Passing a Cloudflare challenge once mints a <code>cf_clearance</code> cookie (HttpOnly—invisible to
+        <code>eval</code>/<code>document.cookie</code>, read it with <code>chrome-use cookies</code>). It is bound to your
+        <strong>IP + User-Agent</strong>: reuse the same egress IP and UA to skip the challenge until it expires. Driving
+        the user's real Chrome (relay) persists it natively; for an isolated session, save/restore with
+        <code>--session-name &lt;name&gt;</code>. Before spending effort solving, run <code>chrome-use cf-status</code>
+        (aliases <code>cf</code>, <code>clearance</code>) as a preflight.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash · cf-status</span>
+        </div>
+<pre><code><span class="du-cmt"># Preflight: is the page currently a Cloudflare challenge? Is there already a valid cf_clearance?</span>
+<span class="du-prompt">$</span> chrome-use cf-status
+
+<span class="du-cmt"># Read the HttpOnly cf_clearance cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ cf-status gives a recommendation</div>
+        <code>proceed</code> (already through, don't re-solve), <code>solve</code> (challenge present, no clearance),
+        <code>reissue</code> (clearance exists but the page is still blocked → IP/UA drifted, re-solve). Treat it as a
+        preflight to avoid re-solving a challenge you already passed.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Related pages</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/sessions.html">
+          <div class="du-card-title"><span class="du-card-ico">🗂️</span> Sessions &amp; Isolation</div>
+          <p><code>--session</code>, tab groups, per-agent defaults, and concurrency.</p>
+        </a>
+        <a class="du-card" href="/en/login-auth.html">
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> Login &amp; Auth</div>
+          <p>OAuth/SSO handoff, reusing a real logged-in session.</p>
+        </a>
+        <a class="du-card" href="/en/troubleshooting.html">
+          <div class="du-card-title"><span class="du-card-ico">🩺</span> Troubleshooting</div>
+          <p>Self-checks for relay drops, the authorization prompt, and picking the wrong profile.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
