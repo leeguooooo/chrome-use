@@ -293,6 +293,22 @@ a screenshot. Assertions: `url` · `visible` · `hidden` · `text` · `count` ·
 [给前端写「单元测试」:chrome-use test 详解](https://blog.leeguoo.com/zh/posts/chrome-use-test-suite/).
 Found a regression? Add a case — the suite gets more valuable the more you use it.
 
+## Network interception (`chrome-use network route`)
+
+Mock a response, rewrite an outgoing request, or block one — right on the Chrome
+you're driving, over the CDP Fetch domain. No proxy, no CA cert, no JS injection,
+no extra extension permission.
+
+```bash
+chrome-use network route "*/api/me" --body '{"vip":true}' --status 200 --content-type application/json  # mock response
+chrome-use network route "*/api/save" --method POST --set-header Authorization="Bearer test"            # rewrite request
+chrome-use network route "*/v1/*" --rewrite-url https://staging.example.com/v1/thing                     # redirect
+chrome-use network route "*/analytics" --abort                                                           # block
+```
+
+Verbs/fields mirror Playwright's `route`/`fulfill`/`continue`/`abort`. Deep-dive
+writeup (中文): [改网络请求和响应:chrome-use network route 详解](https://blog.leeguoo.com/zh/posts/chrome-use-network-mock-rewrite/).
+
 ## Anti-detection
 
 <img src="assets/shield.png" alt="stealth shield" width="320" align="right" />
