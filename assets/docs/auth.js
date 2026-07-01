@@ -194,14 +194,16 @@
       var av = state.user.picture
         ? '<img class="du-account-av" src="' + state.user.picture + '" alt="" referrerpolicy="no-referrer">'
         : '<span class="du-account-av du-account-av-fallback">' + (state.user.name || '·').slice(0, 1) + '</span>';
-      var badge = state.member ? '<span class="du-account-badge">' + t('会员', 'Member') + '</span>' : '';
+      var badge = state.member ? '<img class="du-vip-badge" src="/assets/brand/vip-badge.webp" alt="VIP" title="' + t('VIP 会员', 'VIP member') + '">' : '';
       chip.innerHTML = av + '<span class="du-account-name">' + escapeHtml(state.user.name) + '</span>' + badge;
       var menu = document.createElement('div');
       menu.className = 'du-account-menu';
       menu.hidden = true;
       menu.innerHTML =
-        '<div class="du-account-menu-head">' + escapeHtml(state.user.email || state.user.name) +
-        (state.member ? ' · ' + t('会员', 'Member') : '') + '</div>' +
+        '<div class="du-account-menu-head">' + escapeHtml(state.user.email || state.user.name) + '</div>' +
+        (state.member
+          ? '<div class="du-account-menu-vip"><img class="du-vip-badge" src="/assets/brand/vip-badge.webp" alt=""> ' + t('VIP 会员', 'VIP member') + '</div>'
+          : '') +
         '<a class="du-account-menu-item" href="' + CFG.issuer + '/account" target="_blank" rel="noopener">' + t('账号中心', 'Account center') + '</a>' +
         '<button class="du-account-menu-item" type="button" data-logout>' + t('退出登录', 'Sign out') + '</button>';
       chip.addEventListener('click', function (e) { e.stopPropagation(); menu.hidden = !menu.hidden; });
