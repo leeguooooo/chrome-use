@@ -44,7 +44,7 @@
   --topbar-h:   58px;
   --sidebar-w:  264px;
   --toc-w:      212px;
-  --content-w:  760px;
+  --content-w:  860px;
   --gutter:     40px;
 
   --radius:     10px;
@@ -173,7 +173,9 @@ img { max-width: 100%; }
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--toc-w);
   align-items: start;
-  max-width: 1440px; margin: 0 auto;
+  /* fill wide screens: sidebar hugs the left edge, TOC the right; only very
+     wide (>2100px) monitors get a balanced side margin */
+  max-width: 2100px; margin: 0 auto;
 }
 
 /* ============================================================ SIDEBAR ==== */
