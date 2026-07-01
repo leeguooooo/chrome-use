@@ -14,6 +14,12 @@
 
 ![chrome-use](assets/hero.png)
 
+<p align="center">
+  <img src="assets/demo.gif" alt="chrome-use demo — open Hacker News in your real Chrome and pull the top stories as structured JSON in one command" width="820">
+  <br>
+  <sub>Point it at a page in your <b>real</b> Chrome → get structured data in one command. <a href="assets/demo.tape">(regenerate: <code>vhs assets/demo.tape</code>)</a></sub>
+</p>
+
 **chrome-use** drives your real, logged-in Chrome from any AI agent — it shares your existing login sessions and is undetectable by anti-bot systems because it *is* your real browser. Part of the `*-use` family ([iphone-use](https://github.com/leeguooooo) drives your real iPhone; [bitwarden-use](https://github.com/leeguooooo/bitwarden-use) pulls passwords/2FA/passkeys from your Bitwarden vault so an agent can log in with credentials; chrome-use drives your real Chrome).
 
 <sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); now a standalone project — the stealth/extension-relay architecture, anti-detection, humanize, multi-agent isolation, and CLI have diverged substantially.</sub>
