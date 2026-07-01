@@ -8,13 +8,50 @@
 //! Kept as raw strings rather than TS/JS files because the daemon is a single
 //! Rust binary with no filesystem vendor step at runtime.
 
+/// JS helper injected into every renderer-reading script via the `{{PICK_RI}}`
+/// placeholder. Defines `__abPickReactRendererId(hook)`, which returns the id of
+/// the renderer interface that actually holds the app's DOM tree.
+///
+/// We used to hardcode `rendererInterfaces.get(1)`, assuming the first renderer
+/// to call `hook.inject()` is react-dom. In Turbopack RSC apps (e.g. Next.js
+/// 16.3+) the `react-server-dom-*` Flight client registers first as id 1 with
+/// zero fiber roots, so `get(1)` read an empty tree and every `react` command
+/// silently reported nothing. Instead, pick the first non-Flight renderer that
+/// has mounted fiber roots, falling back to any renderer with roots, then any.
+/// (Ported from vercel-labs/agent-browser #1491.)
+pub const PICK_REACT_RENDERER: &str = r#"
+  function __abPickReactRendererId(hook) {
+    const ris = hook && hook.rendererInterfaces;
+    if (!ris || !ris.get || !ris.keys) return null;
+    const rootsOf = (id) => {
+      try { return hook.getFiberRoots ? hook.getFiberRoots(id).size : 0; } catch (e) { return 0; }
+    };
+    const isFlight = (id) => {
+      const r = hook.renderers && hook.renderers.get && hook.renderers.get(id);
+      return /react-server-dom/.test((r && r.rendererPackageName) || "");
+    };
+    let firstWithRoots = null, firstAny = null;
+    for (const id of ris.keys()) {
+      if (!ris.get(id)) continue;
+      if (firstAny === null) firstAny = id;
+      if (rootsOf(id) > 0) {
+        if (firstWithRoots === null) firstWithRoots = id;
+        if (!isFlight(id)) return id;
+      }
+    }
+    return firstWithRoots !== null ? firstWithRoots : firstAny;
+  }
+"#;
+
 /// Build a no-argument async IIFE page-eval that returns the component tree as
 /// JSON.
 pub const TREE_SNAPSHOT: &str = r#"
 (async () => {
   const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) throw new Error("React DevTools hook not installed - relaunch with --enable react-devtools");
-  const ri = hook.rendererInterfaces && hook.rendererInterfaces.get && hook.rendererInterfaces.get(1);
+{{PICK_RI}}
+  const __abRiId = __abPickReactRendererId(hook);
+  const ri = (__abRiId != null && hook.rendererInterfaces && hook.rendererInterfaces.get) ? hook.rendererInterfaces.get(__abRiId) : null;
   if (!ri) throw new Error("No React renderer attached - the page has not booted React yet");
 
   const batches = await new Promise((resolve) => {
@@ -100,7 +137,9 @@ pub const TREE_INSPECT: &str = r#"
 (() => {
   const id = {{ID}};
   const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  const ri = hook && hook.rendererInterfaces && hook.rendererInterfaces.get && hook.rendererInterfaces.get(1);
+{{PICK_RI}}
+  const __abRiId = __abPickReactRendererId(hook);
+  const ri = (__abRiId != null && hook.rendererInterfaces && hook.rendererInterfaces.get) ? hook.rendererInterfaces.get(__abRiId) : null;
   if (!ri) throw new Error("No React renderer attached");
   if (!ri.hasElementWithId(id)) throw new Error("element " + id + " not found (page reloaded?)");
   const result = ri.inspectElement(1, id, null, true);
@@ -431,7 +470,9 @@ pub const SUSPENSE_WALK: &str = r#"
 (async () => {
   const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) throw new Error("React DevTools hook not installed - relaunch with --enable react-devtools");
-  const ri = hook.rendererInterfaces && hook.rendererInterfaces.get && hook.rendererInterfaces.get(1);
+{{PICK_RI}}
+  const __abRiId = __abPickReactRendererId(hook);
+  const ri = (__abRiId != null && hook.rendererInterfaces && hook.rendererInterfaces.get) ? hook.rendererInterfaces.get(__abRiId) : null;
   if (!ri) throw new Error("No React renderer attached");
 
   const batches = await new Promise((resolve) => {
@@ -743,3 +784,43 @@ pub const PUSHSTATE: &str = r#"
   return location.href;
 })({{URL}})
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every renderer-reading script must inject the picker via `{{PICK_RI}}`
+    /// and, once injected, must not fall back to the old hardcoded
+    /// `rendererInterfaces.get(1)`. (Guards the vercel-labs/agent-browser #1491
+    /// port so a future edit can't silently reintroduce the Turbopack RSC bug.)
+    #[test]
+    fn renderer_reading_scripts_use_the_picker() {
+        for (name, script) in [
+            ("TREE_SNAPSHOT", TREE_SNAPSHOT),
+            ("TREE_INSPECT", TREE_INSPECT),
+            ("SUSPENSE_WALK", SUSPENSE_WALK),
+        ] {
+            assert!(
+                script.contains("{{PICK_RI}}"),
+                "{name} must inject the renderer picker via the {{{{PICK_RI}}}} placeholder"
+            );
+            let full = script.replace("{{PICK_RI}}", PICK_REACT_RENDERER);
+            assert!(
+                !full.contains("{{PICK_RI}}"),
+                "{name} still has an unresolved {{{{PICK_RI}}}} placeholder after injection"
+            );
+            assert!(
+                full.contains("function __abPickReactRendererId"),
+                "{name} did not inject the picker helper"
+            );
+            assert!(
+                full.contains("__abPickReactRendererId(hook)"),
+                "{name} did not call the picker"
+            );
+            assert!(
+                !full.contains(".get(1)"),
+                "{name} still hardcodes rendererInterfaces.get(1)"
+            );
+        }
+    }
+}
