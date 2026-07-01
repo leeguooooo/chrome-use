@@ -105,186 +105,35 @@ hand-constructed URL often doesn't.
 
 ### Driving the user's real, already-open Chrome (extension)
 
-When the task needs the user's *live* logged-in window (their real session, the
-window they're looking at — not a fresh browser), use the extension connect flow.
-One-time setup:
-1. `chrome-use extension install` — registers the native-messaging host.
-2. Install the **chrome-use** extension. Easiest (and restart-stable):
-   the **Chrome Web Store**, one-click *Add to Chrome*:
-   <https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk>
-   (Dev fallback: `chrome://extensions` → Developer mode → *Load unpacked* →
-   `extensions/ab-connect`. Load-unpacked can be disabled on Chrome restart, so
-   prefer the Store build for unattended setups.)
+Use the **extension connect** flow to drive the user's *live*, logged-in Chrome
+window (their real session) rather than a fresh browser. One-time setup:
+`chrome-use extension install` + install the **chrome-use** Web Store extension.
+After that, plain `chrome-use open <url>` auto-connects through the relay (so
+Chrome's "Allow remote debugging?" popup never fires); `chrome-use extension
+connect` (alias `reconnect`) is the explicit form, and the CLI self-heals
+transient relay drops — usually just retry the command.
 
-Once installed, plain `chrome-use open <url>` auto-connects through the
-extension relay — `auto_connect_cdp` **prefers the live relay over a raw
-`--remote-debugging-port`**, so Chrome 136+'s "Allow remote debugging?" consent
-popup never fires. `chrome-use extension connect` is the explicit form of the
-same path. Zero-confirmation, zero-token. Use `--launch` instead when a fresh,
-isolated browser is fine.
+- **`--launch`** opens an isolated, empty test profile (no cookies/login/extensions,
+  relay off) — use when a clean browser is fine.
+- **`--profile auto`** (or `AGENT_BROWSER_PROFILE=auto`) reuses the user's real
+  Chrome profile — real cookies, login, extensions.
+- Many profiles? `chrome-use browsers` lists connected ones; `--browser <id|email>`
+  pins this session to one (sticky per session).
 
-> **Many Chrome profiles? See which one — and pick it.** The relay binds to
-> whichever profile's extension worker is talking to the native host. If a site
-> comes back logged out, confirm it's the right profile before assuming the login
-> is gone:
-> - `chrome-use browsers` — lists every connected profile (email if the ext has
->   the optional `identity` permission, else a stable id; marks the default).
-> - `chrome-use --browser <id|email> <cmd>` — pins THIS session to that profile.
->   It's **sticky per session** (the session's daemon binds on first connect), and
->   each session can pick a different profile, so concurrent agents don't fight.
-> - `chrome-use extension status` / `doctor` also report the current driving profile.
->
-> A logged-out result on the *wrong* profile is not a missing login — run
-> `browsers`, then re-run with `--browser <the right one>`.
+**Per-agent isolation is automatic:** each `--session <name>` gets its own colored
+Chrome tab group + dedicated daemon and drives ONLY the tabs it created, so
+concurrent agents share one real Chrome without cross-talk and never touch the
+user's tabs; an unset session auto-derives a stable per-agent name. `adopt
+<url|targetId>` drives a pre-existing tab on demand; OAuth/SSO popups and
+cross-process redirects are followed automatically.
 
-`--launch` opens an **isolated, empty test profile** — no cookies, no login, no
-extensions (so the extension-relay path is off). Its window is labelled
-`chrome-use (<session>)` in Chrome's profile menu so a human watching the
-desktop knows which session owns it. If a launched session needs more:
+**Anti-detection ranking: real logged-in Chrome (extension connect) > headed launched
+browser > headless (forbidden).** **Silent by default** — new tabs open un-focused and
+the agent never force-fronts a tab (emulated focus keeps the page rendering).
+`--humanize` adds human-like input; `chrome-use cf-status` checks/reuses Cloudflare
+clearance.
 
-- **Real cookies / login / extensions** → drop `--launch`, use `--profile auto`
-  (reuses the user's real Chrome profile), or set `AGENT_BROWSER_PROFILE=auto`
-  once so every call does it by default.
-- **A specific unpacked extension in the test profile** →
-  `--launch --args "--load-extension=<dir>"`.
-
-**If you DO hit the "Allow remote debugging?" dialog**, don't keep retrying (every
-attempt re-pops it). One of two things is true:
-
-1. **You're on a stale build.** The relay-preference that avoids this dialog has
-   shipped for many releases — if you still hit it, your `chrome-use` is old.
-   Upgrade and retry:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
-   ```
-   If `which -a chrome-use` shows more than one install, an old **npm/pnpm**
-   copy (the npm registry lags behind — GitHub Releases are the source of truth)
-   may be shadowing the upgraded one; remove the stale copy
-   (`npm rm -g chrome-use` / `pnpm rm -g chrome-use`) so the `install.sh` build
-   wins. A tool that bundles its *own* pinned copy needs that copy upgraded too.
-2. **The extension/relay isn't live.** Tell the user to install the Store
-   extension (one click, above); after that the relay stays up and the dialog
-   never returns.
-
-**If the relay drops mid-session** (a command suddenly errors with "couldn't
-reach your Chrome" / "relay … failed" — usually the MV3 service worker got
-suspended, or two agents are sharing one relay): **the CLI now self-heals** — it
-waits for the worker's keepalive to revive the relay (~25s) and retries once, so
-most drops you never even see. If a command *does* surface the error:
-
-1. **Just retry the command** — the relay has usually reconnected by then.
-2. If it persists: `chrome-use status` (check), then `chrome-use extension connect`
-   (re-attach), then retry. The CLI auto-registers the native host and opens the
-   Web Store page itself if the extension was never set up — you don't run
-   `extension install` by hand.
-3. **Never** tell the user to quit/restart Chrome with `--remote-debugging-port`
-   to recover a dropped relay — that throws away their tabs and defeats the
-   extension path. (The old error text said this; it no longer does.)
-4. `chrome-use reconnect` is a friendly alias for `extension connect` — re-binds
-   the session to the running Chrome without any reinstall.
-
-> **Don't serialize agents to dodge fragility.** Relay drops are transient and
-> self-heal; they are *not* a sign that the shared browser can't be driven
-> concurrently. Concurrent multi-agent **is** supported — each `--session` gets
-> its own tab group and drives only its own tabs (see *Strict multi-agent
-> isolation* below). Give each agent a distinct `--session` and let them run in
-> parallel; you don't need to run them one at a time.
-5. **Can't restore the browser at all?** Don't stall waiting for a screenshot —
-   **fall back to non-visual verification**: `get text` / `eval` / read the
-   deployed page over `curl`/`WebFetch`. Confirming a change via the DOM/HTML or
-   the live URL is a *correct* result, not a failure. Reserve screenshots for a
-   genuine visual check you report to the user.
-
-> **OAuth/SSO popups and redirects now just work.** A login handoff
-> (GitHub/Google OAuth, SSO) navigates the tab *across processes*, which used to
-> orphan the old session and make the next read fail "stale sessionId". The relay
-> now **auto-reattaches the opener across that cross-process nav** and retries a
-> read briefly while the new process settles, so reads
-> (`snapshot`/`screenshot`/`eval`/`get`) keep working through the handoff and
-> "Sign in with Google" / OAuth-popup logins complete end-to-end. (The
-> cross-origin Google GSI iframe — the "Continue as <user>" button — is pierced
-> only on Chrome 125+; on older Chrome that one button may stay unreachable.)
-
-Each `--session` that connects gets its **own colored Chrome tab group** (named
-after the session) and drives only its own tabs — multiple agents share the one
-real browser without cross-talk, and the user's own tabs are never grouped. CDP
-drives the page without moving the user's mouse/keyboard, so it doesn't fight
-them for control.
-
-> **Per-agent isolation is automatic.** The session *name* is the isolation key:
-> it maps to a dedicated tab group **and a dedicated daemon** (the port is derived
-> from the name). When you don't pass `--session` / `AGENT_BROWSER_SESSION`,
-> chrome-use now **auto-derives a per-agent default** — `cu-<repo>-<id>`, where
-> `<id>` is a short hash of a stable per-agent terminal/agent env id
-> (`CMUX_SURFACE_ID`, `TERM_SESSION_ID`, `ITERM_SESSION_ID`, `TMUX_PANE`, … or
-> `AGENT_BROWSER_SESSION_ID` if a runner injects one). So **two agents in the same
-> repo get different tab groups by default** and no longer stomp each other's
-> active tab. The name is stable across that one agent's commands and unique per
-> agent. In a plain shell with none of those env vars it falls back to the shared
-> `default`. Override anytime: pass `--session <name>` / `AGENT_BROWSER_SESSION` to
-> pick an explicit name, or set them to the **same** value across agents to make
-> them deliberately *share* one tab group.
-
-**Strict multi-agent isolation.** A session over the relay tracks and drives
-**only the tabs it created** (its own group). A pop-up that **your own action
-opened** — e.g. the OAuth account-chooser window from a "Sign in with Google"
-click — is followed and drivable as part of your session (switch to it and drive
-the chooser). But it does **not** adopt the user's existing tabs, other agents'
-tabs, or *unrelated* pop-ups (a login window the user opened on their own is
-theirs), so several agents (and other tools opening tabs) can work in the same
-real Chrome concurrently without ever dropping or stealing each other's tabs —
-another agent's tab churn can't make your bound tab vanish or drift your commands
-onto the wrong page. Consequence: `tab list` shows only *your* session's tabs; to
-drive a specific page, navigate to it in your own tab instead of expecting a
-pre-existing or popped-up tab to appear in the list.
-
-> **No debugger banner on the user's pages.** The extension attaches Chrome's
-> debugger **only to tabs the agent owns** (ones it created, or that you `adopt`),
-> never to the user's own tabs — so Chrome's "chrome-use started debugging this
-> browser" bar never covers a page they're working in (it only appears on attached
-> tabs, and the agent's are background tabs). `adopt <url>` attaches that one tab
-> on demand (the bar then shows on *that* tab — it's the one you asked to drive).
-> No Chrome restart, fully seamless.
-
-> **Need to read a tab the user already has open?** Use `chrome-use adopt
-> <url-substring|targetId>` — it finds that pre-existing tab (the user's own, or
-> another session's) across groups and drives it **without opening a new tab**.
-> e.g. `adopt "claude.ai/design"` then `snapshot`/`eval`/`get text` on it. On no
-> match it errors and lists the tabs it can see. This is the explicit, opt-in way
-> through the isolation above (it tags the adopted tab into your group). Great for
-> "read/extract from the page I'm looking at" without disturbing it.
-
-**Anti-detection ranking: this real logged-in Chrome (extension
-connect) > a headed launched browser > headless (forbidden).** A genuine human
-browser has no headless/automation tells at all, so prefer it for anything
-anti-bot-sensitive.
-
-**Silent by default.** When driving the user's real Chrome the agent works
-entirely in the background — new tabs open un-focused, the agent never force-
-fronts a tab, and focus is emulated so the page still renders and reports
-`visibilityState: 'visible'`. You don't need to do anything; just don't expect
-the user's view to follow you (use the explicit `bringToFront` only if you
-deliberately want to surface a tab).
-
-**Human-like input for behavioural anti-bot.** Beyond fingerprint stealth,
-`--humanize off|fast|human` (or `AGENT_BROWSER_HUMANIZE`) makes clicks follow a
-curved, decelerating path with in-element landing jitter, typing use variable
-cadence, and scroll/drag ease. Default `off`; a per-navigation detector
-auto-escalates pages guarded by Akamai/PerimeterX/DataDome to `human`. Leave it
-on auto; force `human` only when you already know the target scores behaviour.
-
-**Cloudflare clearance — solve once, reuse.** Passing a Cloudflare challenge
-mints a `cf_clearance` cookie (HttpOnly — invisible to `eval`/`document.cookie`;
-read it via `chrome-use cookies`). It's bound to your **IP + User-Agent**: reuse
-the same exit IP and UA and you skip the challenge until it expires. Driving the
-user's real Chrome (relay) persists it natively; for isolated sessions,
-`--session-name <name>` save/restores it. Before spending effort solving, run
-`chrome-use cf-status` (aliases `cf`, `clearance`): it reports whether the page
-is *currently* a Cloudflare challenge and whether a still-valid `cf_clearance`
-exists, with a recommendation — `proceed` (already cleared, don't re-solve),
-`solve` (challenge up, no clearance), or `reissue` (clearance present but page
-still blocks → IP/UA drifted, re-solve). Use it as a preflight to avoid
-re-solving what you already cleared.
+Full detail: `chrome-use skills get real-chrome`
 
 ## Two ways to drive a page — and when to drop to `eval`
 
@@ -930,118 +779,31 @@ the same id keeps referring to the same tab across commands. Positional
 integers are **not** accepted — use `t2`, not `2`. After switching, refs from a
 prior snapshot on a different tab no longer apply — re-snapshot.
 
-### Run multiple browsers in parallel
+### Run multiple browsers in parallel / reset stuck daemons
 
-Each `--session <name>` is an isolated browser with its own cookies, tabs,
-and refs. Useful for testing multi-user flows or parallel scraping:
+Each `--session <name>` is an isolated browser (own cookies, tabs, refs), and
+concurrent agents MUST each use a distinct one; `AGENT_BROWSER_SESSION=myapp` sets
+the shell default. True multi-agent isolation needs the **extension-connect path**
+(per-session tab groups) — raw `--cdp <port>` does NOT isolate. Reach a specific tab
+across sessions via its stable CDP `targetId` (`tab list --full` → `tab <targetId>`,
+adopts without reload); `--reuse-tab` avoids duplicate tabs on rebind.
 
-```bash
-chrome-use --session a open https://app.example.com
-chrome-use --session b open https://app.example.com
-chrome-use --session a fill @e1 "alice@test.com"
-chrome-use --session b fill @e1 "bob@test.com"
-```
+Reset stuck state with `chrome-use daemon status` / `daemon restart` — restarts the
+session daemon workers without touching the relay or closing any tabs.
 
-`AGENT_BROWSER_SESSION=myapp` sets the default session for the current
-shell.
-
-**Concurrent agents MUST each use a distinct `--session <name>`.** Within one
-session, commands are pinned to the tab you opened (by target_id, so a foreign
-tab can't drift your `eval`/`screenshot`). Two agents sharing the *same* session
-(e.g. both on the bare default) share one daemon and one active tab and will
-clobber each other.
-
-True multi-agent isolation requires the **extension-connect path**: each
-`--session` gets its own colored Chrome tab group, so sessions never touch each
-other's tabs. **Raw `--cdp <port>` does NOT isolate** — every session attaches to
-the same browser's existing targets, so a second session's first `open` can
-navigate a sibling's tab. For concurrent agents on one real Chrome, use the
-extension (each with a distinct `--session`), not raw `--cdp`.
-
-Each session owns its own tab group and assigns its own `t<N>` indices (the same
-physical tab is `t8` in one session, `t1` in another), so `t<N>` is **not** a
-stable cross-session handle. To reach a *specific* tab from another session — e.g.
-a tab that was filled in a session whose handle later died — use the **stable CDP
-`targetId`**:
-
-```bash
-chrome-use tab list --full --session B   # re-syncs live tabs; prints `target: <id>` per row
-chrome-use tab <targetId> --session B    # adopt that exact tab, NO reload (state preserved)
-```
-
-`tab list` re-discovers the live tab set on every call, so a fresh session sees
-tabs other sessions opened (and re-attached ones), not just its own. Adopting by
-`targetId` lands session B on the stranded tab without reloading it, so a
-half-filled form survives. Still, the simplest recovery for a session whose own
-tab died is to recover *that* session (reload / re-`open` / `daemon restart`).
-
-To avoid piling up duplicate tabs when you re-`open` the same entry URL on
-rebind, pass **`--reuse-tab`**: if a tab already shows that URL (matched by
-origin+path), it switches to it instead of spawning a new one.
-
-### Reset stuck daemon state
-
-Each session runs a background daemon worker that holds the page handles. If a
-session starts misbehaving — commands hit the wrong tab, refs/handles look stale,
-or you upgraded `chrome-use` mid-session and old workers linger — restart the
-daemons instead of hunting PIDs with `pgrep`/`kill`:
-
-```bash
-chrome-use daemon status     # list running session daemons (+ relay state)
-chrome-use daemon restart    # kill every session daemon worker
-```
-
-`daemon restart` leaves the extension's native-messaging bridge (`__nm-host`)
-alone, so the relay to your live Chrome stays up — the next command just spins up
-a fresh, clean daemon against the same browser. It does **not** close any tabs.
+Full detail: `chrome-use skills get sessions`
 
 ### Mock responses & rewrite requests
 
-`network route` intercepts matching requests via the CDP Fetch domain (no proxy,
-no extension permission). Three modes, verbs/fields mirror Playwright:
+`network route <glob>` intercepts matching requests via the CDP Fetch domain (no
+proxy, no extension permission). Three modes: **mock** the response
+(`--body`/`--status`/`--header`/`--content-type` — short-circuits the request),
+**rewrite** the outgoing request (`--method`/`--set-body`/`--set-header`/`--rewrite-url`),
+or **edit** the real response (`--edit-status`/`--edit-header`/`--replace 'from=>to'`);
+`--abort` blocks entirely. Scope with `--resource-type xhr,fetch`; inspect/record via
+`network requests` and `network har start|stop`; `network unroute` drops all routes.
 
-```bash
-# Mock the RESPONSE (fulfill — the request never leaves the browser)
-chrome-use network route "**/api/users" --body '{"users":[]}' --status 200 --content-type application/json
-chrome-use network route "**/api/me" --body '{"vip":true}' --header X-From=mock
-
-# Rewrite the outgoing REQUEST (continue with overrides — real response returns)
-chrome-use network route "**/api/save" --method POST --set-header Authorization="Bearer test"
-chrome-use network route "**/api/save" --set-body '{"x":1}'          # replace the request body
-chrome-use network route "**/v1/*" --rewrite-url https://staging.example.com/v1/thing
-
-# Edit the REAL response (request goes out, response comes back, then tweak it)
-chrome-use network route "**/api/me" --edit-status 503                # override status
-chrome-use network route "**/api/me" --edit-header X-Env=test         # add/override a response header
-chrome-use network route "**/api/me" --replace 'prod=>staging'        # substring-replace in the real body (repeatable)
-
-# Block entirely
-chrome-use network route "**/analytics" --abort
-
-# Scope any rule to resource types, and inspect / record traffic
-chrome-use network route "**/*.json" --abort --resource-type xhr,fetch
-chrome-use network requests --clear        # start capturing fresh
-chrome-use network requests                # inspect what fired
-chrome-use network har start               # record all traffic
-# ... perform actions ...
-chrome-use network har stop /tmp/trace.har
-chrome-use network unroute                 # drop all routes
-```
-
-Three modes, distinguished by which flags you pass:
-- **Mock** (`--body` / `--status` / `--header` / `--content-type`): fulfill a fake
-  response, short-circuit the request (never hits the network).
-- **Rewrite request** (`--method` / `--set-body` / `--set-header` / `--rewrite-url`):
-  change the outgoing request, then let the real response come back.
-- **Edit real response** (`--edit-status` / `--edit-header` / `--replace 'from=>to'`):
-  let the request go out, then tweak the real response before the page sees it.
-  Great for forcing an error state or patching a field without a mock server.
-
-If both a mock and a rewrite are given on one rule, the mock wins. `--header` /
-`--set-header` / `--edit-header` / `--replace` are repeatable; request/response
-headers merge over the originals. Note: editing the **top-level document**
-navigation's status can confuse page load — scope response edits to API calls
-with `--resource-type xhr,fetch` when needed.
+Full detail: `chrome-use skills get network`
 
 ### Record a video of the workflow
 
@@ -1236,27 +998,21 @@ and [references/authentication.md](references/authentication.md).
   — turn repeated checks into a `chrome-use test <suite.yaml>` regression suite
 - **Vercel Sandbox microVMs**: `chrome-use skills get vercel-sandbox`
 - **AWS Bedrock AgentCore cloud browser**: `chrome-use skills get agentcore`
+- **User's real, already-open Chrome (extension connect)**: `chrome-use skills get real-chrome`
+- **Network interception (mock / rewrite / HAR)**: `chrome-use skills get network`
+- **Parallel browsers / multi-session**: `chrome-use skills get sessions`
+- **React / Web Vitals introspection**: `chrome-use skills get react`
 
 ## React / Web Vitals (built-in, any React app)
 
-chrome-use ships with first-class React introspection. Works on any
-React app — Next.js, Remix, Vite+React, CRA, TanStack Start, React Native
-Web, etc. The `react …` commands require the React DevTools hook to be
-installed at launch via `--enable react-devtools`:
+First-class React introspection on any React app (Next.js, Remix, Vite+React, CRA, …).
+Launch with `--enable react-devtools` to install the hook, then: `react tree`
+(component tree), `react inspect <fiberId>` (props/hooks/state/source), `react renders
+start|stop` (re-render profile), `react suspense` (boundaries + classifier). `vitals
+[url]` (LCP/CLS/TTFB/FCP/INP + hydration) and `pushstate <url>` (SPA nav) work on any
+site regardless of framework.
 
-```bash
-chrome-use open --enable react-devtools http://localhost:3000
-chrome-use react tree                         # component tree
-chrome-use react inspect <fiberId>            # props, hooks, state, source
-chrome-use react renders start                # begin re-render recording
-chrome-use react renders stop                 # print render profile
-chrome-use react suspense [--only-dynamic]    # Suspense boundaries + classifier
-chrome-use vitals [url]                       # LCP/CLS/TTFB/FCP/INP + hydration
-chrome-use pushstate <url>                    # SPA navigation (auto-detects Next router)
-```
-
-Without `--enable react-devtools`, the `react …` commands error. `vitals`
-and `pushstate` work on any site regardless of framework.
+Full detail: `chrome-use skills get react`
 
 ## Working safely
 
