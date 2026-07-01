@@ -13,8 +13,12 @@
  * Behaviour: WARN and continue (exit 0) — same spirit as the pre-push hook.
  *   SKIP_DOCS_CHECK=1     -> skip entirely
  *   DOCS_CHECK_STRICT=1   -> block the commit (exit 1) instead of warning
+ *   DOCS_CHECK_DIFF=<rng> -> diff a git range (e.g. "origin/main...HEAD")
+ *                           instead of the staged index — used by CI on PRs
+ *   DOCS_CHECK_GHA=1      -> emit GitHub Actions ::warning:: annotations
+ *                           (non-blocking) instead of the boxed reminder
  *
- * Wired from .husky/pre-commit.
+ * Wired from .husky/pre-commit (local) and .github/workflows/ci.yml (PR net).
  */
 
 import { execSync } from 'child_process';
@@ -47,12 +51,16 @@ const MAP = [
 const pageFiles = (slug) =>
   slug === 'overview' ? ['index.html', 'en/index.html'] : [`${slug}.html`, `en/${slug}.html`];
 
+const range = process.env.DOCS_CHECK_DIFF;
+const diffCmd = range
+  ? `git diff --name-only --diff-filter=ACMR ${range}`
+  : 'git diff --cached --name-only --diff-filter=ACMR';
 let staged;
 try {
-  staged = execSync('git diff --cached --name-only --diff-filter=ACMR', { encoding: 'utf8' })
+  staged = execSync(diffCmd, { encoding: 'utf8' })
     .split('\n').map((s) => s.trim()).filter(Boolean);
 } catch {
-  process.exit(0); // not a git context / nothing staged — don't get in the way
+  process.exit(0); // not a git context / nothing to diff — don't get in the way
 }
 const stagedSet = new Set(staged);
 
@@ -72,6 +80,19 @@ for (const { test, pages } of MAP) {
 if (findings.length === 0) process.exit(0);
 
 const stalePageSlugs = [...new Set(findings.flatMap((f) => f.pages))];
+
+// CI mode: emit non-blocking GitHub Actions annotations and stop.
+if (process.env.DOCS_CHECK_GHA === '1') {
+  for (const f of findings) {
+    const pages = f.pages.map((s) => (s === 'overview' ? 'index.html' : `${s}.html`)).join(', ');
+    for (const src of f.sources) {
+      console.log(
+        `::warning file=${src}::${src} changed but its docs page(s) were not — update ${pages} (and the /en/ mirror), or this may be intentional.`
+      );
+    }
+  }
+  process.exit(0);
+}
 const y = (s) => `\x1b[33m${s}\x1b[0m`;
 const b = (s) => `\x1b[1m${s}\x1b[0m`;
 

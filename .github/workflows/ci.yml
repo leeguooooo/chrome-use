@@ -23,6 +23,27 @@ jobs:
       - name: Check version sync
         run: node scripts/check-version-sync.js
 
+  docs-freshness:
+    name: Docs Freshness (advisory)
+    # Advisory net for the docs site (chrome-use.leeguoo.com): warns, never fails.
+    # PR-only so it doesn't spam direct pushes to main (the pre-commit hook
+    # already covers those locally).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Warn when doc sources change without their generated pages
+        run: DOCS_CHECK_GHA=1 DOCS_CHECK_DIFF="origin/${{ github.base_ref }}...HEAD" node scripts/check-docs-staleness.js
+
   rust:
     name: Rust
     runs-on: ubuntu-latest
