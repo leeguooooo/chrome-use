@@ -91,12 +91,13 @@ pub fn run_test(suite_path: &str, flags: &Flags) -> i32 {
         exe,
         base,
         artifacts_dir,
+        session: session.clone(),
     };
 
     // --- setup (runs once) ---
     if let Some(setup) = suite.get("setup").and_then(|s| s.as_array()) {
         for item in setup {
-            if let Err(e) = runner.run_setup_item(item, &session) {
+            if let Err(e) = runner.run_setup_item(item) {
                 eprintln!("{} setup failed: {}", err(), e);
                 if owns_session {
                     runner.close();
@@ -155,6 +156,7 @@ struct Runner {
     exe: String,
     base: Vec<String>,
     artifacts_dir: String,
+    session: String,
 }
 
 impl Runner {
@@ -192,25 +194,33 @@ impl Runner {
         let _ = self.cli(&["close".to_string()]);
     }
 
-    fn run_setup_item(&self, item: &Value, session: &str) -> Result<(), String> {
+    /// `account: <id>` swaps a stored cookie-use login into this session. Used
+    /// from `setup` (once, before all cases) AND from a case's `steps` (to
+    /// switch accounts mid-suite — the injected login takes effect on the next
+    /// `open`/navigation in that case).
+    fn inject_account(&self, acct: &str) -> Result<(), String> {
+        let target = format!("session:{}", self.session);
+        let out = Command::new("cookie-use")
+            .args(["use", acct, "--target", &target, "--no-open"])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => Ok(()),
+            Ok(o) => Err(format!(
+                "cookie-use use {} failed: {}",
+                acct,
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => Err(format!(
+                "cookie-use not available ({}); skip `account:` or install it",
+                e
+            )),
+        }
+    }
+
+    fn run_setup_item(&self, item: &Value) -> Result<(), String> {
         // `account: <id>` injects a stored cookie-use login into this session.
         if let Some(acct) = item.get("account").and_then(|a| a.as_str()) {
-            let target = format!("session:{}", session);
-            let out = Command::new("cookie-use")
-                .args(["use", acct, "--target", &target, "--no-open"])
-                .output();
-            return match out {
-                Ok(o) if o.status.success() => Ok(()),
-                Ok(o) => Err(format!(
-                    "cookie-use use {} failed: {}",
-                    acct,
-                    String::from_utf8_lossy(&o.stderr).trim()
-                )),
-                Err(e) => Err(format!(
-                    "cookie-use not available ({}); skip `account:` or install it",
-                    e
-                )),
-            };
+            return self.inject_account(acct);
         }
         // Otherwise it's a normal step.
         let args = step_to_args(item)?;
@@ -220,6 +230,14 @@ impl Runner {
     fn run_case(&self, case: &Value) -> Result<(), Failure> {
         if let Some(steps) = case.get("steps").and_then(|s| s.as_array()) {
             for step in steps {
+                // `account: <id>` as a step switches the logged-in account
+                // mid-suite (takes effect on the next open/navigation).
+                if let Some(acct) = step.get("account").and_then(|a| a.as_str()) {
+                    self.inject_account(acct).map_err(|e| Failure {
+                        reason: format!("account `{}` switch failed: {}", acct, e),
+                    })?;
+                    continue;
+                }
                 let args = step_to_args(step).map_err(|e| Failure {
                     reason: format!("bad step: {}", e),
                 })?;

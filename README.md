@@ -289,8 +289,9 @@ suite: chatgpt smoke  (session cu-test)
 Exit code is non-zero if any case fails (drop it into CI), and failed cases save
 a screenshot. Assertions: `url` · `visible` · `hidden` · `text` · `count` ·
 `eval`. Steps: `open` · `click` · `fill` · `type` · `press` · `wait` · `scroll`
-· `eval`. Full guide: `chrome-use skills get test`. Found a regression? Add a
-case — the suite gets more valuable the more you use it.
+· `eval`. Full guide: `chrome-use skills get test`. Deep-dive writeup (中文):
+[给前端写「单元测试」:chrome-use test 详解](https://blog.leeguoo.com/zh/posts/chrome-use-test-suite/).
+Found a regression? Add a case — the suite gets more valuable the more you use it.
 
 ## Anti-detection
 

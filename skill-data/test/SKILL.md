@@ -68,11 +68,43 @@ Each step is a one-key mapping; the key is a chrome-use command:
 | `count: { sel: <s>, eq: <n> }` | exactly N elements match |
 | `eval: "<js>"` | the JS expression is truthy |
 
-## Auth
+## Auth & multi-account
 
-`setup: - account: <id>` injects a [cookie-use](https://github.com/leeguooooo/cookie-use)
-stored login into the test session, so the suite runs authenticated. (Needs
-`cookie-use` installed; skip the line if you don't use it.)
+`account: <id>` injects a [cookie-use](https://github.com/leeguooooo/cookie-use)
+stored login into the test session. Use it in **two** places:
+
+- **`setup:`** — inject once before all cases, so the whole suite runs as that account.
+- **inside a case's `steps:`** — switch accounts mid-suite. The new login takes
+  effect on the next `open`/navigation in that case, so put `account:` before the
+  `open`. This is how you test "admin sees X, member doesn't" in one suite, or
+  bounce back and forth between accounts.
+
+```yaml
+setup:
+  - account: myapp/admin           # start as admin
+cases:
+  - name: admin sees the settings tab
+    steps:
+      - open: https://app.example.com/
+    assert:
+      - visible: "#settings-tab"
+  - name: member does NOT see it
+    steps:
+      - account: myapp/member      # switch account, then reload the page
+      - open: https://app.example.com/
+    assert:
+      - hidden: "#settings-tab"
+  - name: back to admin
+    steps:
+      - account: myapp/admin
+      - open: https://app.example.com/
+    assert:
+      - visible: "#settings-tab"
+```
+
+(Needs `cookie-use` installed — see https://github.com/leeguooooo/cookie-use;
+skip the line if you don't use it.) An `account:` switch that fails — bad id, or
+`cookie-use` missing — fails that case with a clear reason.
 
 ## Workflow
 
