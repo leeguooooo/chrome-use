@@ -660,15 +660,17 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // used to join every remaining arg into the text, so they leaked in
             // as literal characters. Parse them out here. (Ported from
             // vercel-labs/agent-browser #1432.)
-            let clear = rest.iter().any(|a| *a == "--clear");
+            let clear = rest.contains(&"--clear");
             let mut delay: Option<u64> = None;
             let type_usage =
                 "type <selector> <text>   (or: type --focused <text>) [--clear] [--delay <ms>] [--key-events] [--enter]";
             if let Some(i) = rest.iter().position(|a| *a == "--delay") {
-                let raw = rest.get(i + 1).ok_or_else(|| ParseError::MissingArguments {
-                    context: "type --delay".to_string(),
-                    usage: type_usage,
-                })?;
+                let raw = rest
+                    .get(i + 1)
+                    .ok_or_else(|| ParseError::MissingArguments {
+                        context: "type --delay".to_string(),
+                        usage: type_usage,
+                    })?;
                 delay = Some(raw.parse::<u64>().map_err(|_| ParseError::InvalidValue {
                     message: format!("--delay expects a number in ms, got '{}'", raw),
                     usage: type_usage,
@@ -4037,8 +4039,10 @@ fn parse_network(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             let status = val("--status").and_then(|s| s.parse::<u64>().ok());
             let content_type = val("--content-type");
             let resp_headers = kv_map("--header");
-            let has_response =
-                body.is_some() || status.is_some() || content_type.is_some() || !resp_headers.is_empty();
+            let has_response = body.is_some()
+                || status.is_some()
+                || content_type.is_some()
+                || !resp_headers.is_empty();
 
             // Request side (Fetch.continueRequest — rewrite the outgoing request).
             let set_body = val("--set-body");
@@ -5285,7 +5289,10 @@ mod tests {
         assert_eq!(cmd["action"], "read");
         assert_eq!(cmd["headers"]["Authorization"], "Bearer token");
         assert_eq!(cmd["headers"]["X-Trace"], "abc");
-        assert_eq!(cmd["allowedDomains"], json!(["example.com", "*.example.org"]));
+        assert_eq!(
+            cmd["allowedDomains"],
+            json!(["example.com", "*.example.org"])
+        );
     }
 
     #[test]
