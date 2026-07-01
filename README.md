@@ -303,6 +303,7 @@ no extra extension permission.
 chrome-use network route "*/api/me" --body '{"vip":true}' --status 200 --content-type application/json  # mock response
 chrome-use network route "*/api/save" --method POST --set-header Authorization="Bearer test"            # rewrite request
 chrome-use network route "*/v1/*" --rewrite-url https://staging.example.com/v1/thing                     # redirect
+chrome-use network route "*/api/me" --edit-status 503 --edit-header X-Env=test --replace 'prod=>staging' # edit the real response
 chrome-use network route "*/analytics" --abort                                                           # block
 ```
 
