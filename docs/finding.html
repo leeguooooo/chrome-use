@@ -70,6 +70,9 @@
         <code>find</code> 按<strong>语义</strong>而不是 ref 来锁定元素：角色 + 名字、可见文本、表单
         label、placeholder、<code>data-testid</code>，或者「第一个 / 第 N 个」匹配。命中后直接跟一个动作动词
         （<code>click</code> / <code>fill</code> / <code>type</code> / <code>hover</code> …）。
+        <code>find label</code> 不止匹配 <code>&lt;label&gt;</code> 元素——也会匹配
+        <code>aria-label</code> 和 <code>aria-labelledby</code>，所以只靠 ARIA 标注、没有
+        <code>&lt;label&gt;</code> 标签的图标按钮和自定义控件也能被找到。
       </p>
 
       <div class="du-code">
@@ -81,6 +84,7 @@
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>     <span class="du-cmt"># 仅精确匹配</span>
 <span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
+<span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Close"</span> click            <span class="du-cmt"># 命中只有 aria-label="Close" 的图标按钮</span>
 <span class="du-prompt">$</span> chrome-use find placeholder <span class="du-str">"Search"</span> type <span class="du-str">"query"</span>
 <span class="du-prompt">$</span> chrome-use find testid <span class="du-str">"submit-btn"</span> click
 <span class="du-prompt">$</span> chrome-use find first <span class="du-str">".card"</span> click

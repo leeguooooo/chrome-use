@@ -106,6 +106,7 @@
       { slug: "slack",    ico: "💬", zh: "Slack 自动化", en: "Slack", kw: "slack message unread 消息" },
       { slug: "testing",  ico: "🧷", zh: "测试与探索", en: "Testing & Dogfood", kw: "test dogfood qa expect 测试 探索" },
       { slug: "cloud",    ico: "☁️", zh: "云端浏览器", en: "Cloud Browsers", kw: "cloud bedrock agentcore vercel sandbox 云端" },
+      { slug: "mcp",      ico: "🔌", zh: "MCP 服务器", en: "MCP Server", kw: "mcp model context protocol claude desktop stdio json-rpc n8n dify chatgpt connector" },
     ]},
     { id: "ref", label: { zh: "参考", en: "Reference" }, items: [
       { slug: "commands",        ico: "📚", zh: "命令参考",   en: "Command Reference",  kw: "commands cli flags reference 命令 参考" },

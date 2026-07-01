@@ -197,6 +197,44 @@ URL: https://example.com/login
 
       <hr class="du-divider" />
 
+      <h2>read: pull a URL as agent-readable text</h2>
+      <p>
+        <code>read [url]</code> fetches a URL and does its best to hand back <strong>clean
+        markdown/text</strong>: it prefers a <code>.md</code> version and a nearby
+        <code>llms.txt</code>, and falls back to readable text extracted from the HTML when neither
+        exists. <span class="mark">Omit the URL</span> and it reads the rendered DOM of the
+        <strong>active tab</strong> instead. It has a different job from <code>snapshot</code>/<code>extract</code>:
+        <code>read</code> pulls human-facing <strong>prose/markdown</strong>, while
+        <code>snapshot</code>/<code>extract</code> pull interactive elements / structured data.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">read</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide         <span class="du-cmt"># read a URL</span>
+<span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide <span class="du-flag">--outline</span>  <span class="du-cmt"># just the heading outline</span>
+<span class="du-prompt">$</span> chrome-use read                                        <span class="du-cmt"># read the active tab</span></code></pre>
+      </div>
+
+      <p>
+        Common flags: <code>--raw</code> (return the response body untouched), <code>--require-md</code>
+        (fail unless the response is <code>text/markdown</code>), <code>--llms &lt;index|full&gt;</code>
+        (the nearest <code>llms.txt</code>'s index or full view), <code>--outline</code> (heading
+        outline only), <code>--filter &lt;text&gt;</code> (keep only matching sections/headings), and
+        <code>--timeout &lt;ms&gt;</code>. <code>--json</code> returns metadata alongside the content.
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ read vs. snapshot/extract</div>
+        Want <strong>readable prose</strong> (docs, a blog post, a guide)? Use <code>read</code>. Want
+        <strong>interactive elements</strong> to click or type into? Use the <code>snapshot</code> above.
+        Want <strong>structured JSON</strong>? Use <a href="/en/extract.html">extract</a>.
+      </div>
+
+      <hr class="du-divider" />
+
       <h2>eval: running inside a specific frame</h2>
       <p>
         <code>eval</code> runs in the <strong>main frame</strong> by default. It won't silently bind to whatever frame

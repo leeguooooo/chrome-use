@@ -99,6 +99,8 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"hello"</span>            <span class="du-cmt"># clear, then type</span>
 <span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">" world"</span>          <span class="du-cmt"># don't clear, just append</span>
+<span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"hello"</span> <span class="du-flag">--clear</span>   <span class="du-cmt"># type can clear the field first too</span>
+<span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"hello"</span> <span class="du-flag">--delay</span> 80  <span class="du-cmt"># 80ms between keystrokes</span>
 
 <span class="du-cmt"># real keystrokes (not insertText)—for autocomplete/combobox fields that</span>
 <span class="du-cmt"># only respond to key events, e.g. auto-filling city from a postcode (Google Places, etc.)</span>
@@ -115,6 +117,14 @@
         in a single step. If you'd rather <strong>pick one</strong> from a candidate list, first run
         <code>type … --key-events</code> to trigger the dropdown, then <code>snapshot -i</code> to find the candidate and
         <code>click @ref</code>.
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ --clear and --delay</div>
+        <code>--clear</code> lets <code>type</code> clear the field first too (no need to switch back to
+        <code>fill</code>); <code>--delay &lt;ms&gt;</code> inserts a fixed gap between keystrokes to mimic
+        a slower, more human typing cadence. Both are dedicated flags — neither leaks into the text
+        that actually gets typed.
       </div>
 
       <hr class="du-divider" />

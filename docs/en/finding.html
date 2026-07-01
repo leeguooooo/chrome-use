@@ -70,6 +70,9 @@
         <code>find</code> locates elements by <strong>semantics</strong> instead of a ref: role + name, visible text, form
         label, placeholder, <code>data-testid</code>, or "first / Nth" match. On a hit, chain an action verb directly
         (<code>click</code> / <code>fill</code> / <code>type</code> / <code>hover</code> …).
+        <code>find label</code> matches more than <code>&lt;label&gt;</code> elements — it also matches
+        <code>aria-label</code> and <code>aria-labelledby</code>, so icon buttons and custom controls
+        labeled only via ARIA can be found too.
       </p>
 
       <div class="du-code">
@@ -81,6 +84,7 @@
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>     <span class="du-cmt"># exact match only</span>
 <span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
+<span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Close"</span> click            <span class="du-cmt"># hits an icon button with only aria-label="Close"</span>
 <span class="du-prompt">$</span> chrome-use find placeholder <span class="du-str">"Search"</span> type <span class="du-str">"query"</span>
 <span class="du-prompt">$</span> chrome-use find testid <span class="du-str">"submit-btn"</span> click
 <span class="du-prompt">$</span> chrome-use find first <span class="du-str">".card"</span> click

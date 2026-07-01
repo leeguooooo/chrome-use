@@ -99,6 +99,8 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"hello"</span>            <span class="du-cmt"># 清空后输入</span>
 <span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">" world"</span>          <span class="du-cmt"># 不清空，直接追加</span>
+<span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"hello"</span> <span class="du-flag">--clear</span>   <span class="du-cmt"># type 也能先清空字段再输入</span>
+<span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"hello"</span> <span class="du-flag">--delay</span> 80  <span class="du-cmt"># 每个按键之间间隔 80ms</span>
 
 <span class="du-cmt"># 真实按键（非 insertText）——用于只认按键事件的联想/组合框，</span>
 <span class="du-cmt"># 例如输入邮编后自动补全市区（Google Places 一类）</span>
@@ -114,6 +116,13 @@
         如果只想<strong>确认一个标签</strong>、且单纯输入不弹下拉，用 <code>--enter</code> 一步到位。
         如果你更想从候选列表里<strong>挑一个</strong>，先 <code>type … --key-events</code> 触发下拉，
         再 <code>snapshot -i</code> 找到候选并 <code>click @ref</code>。
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ --clear 与 --delay</div>
+        <code>--clear</code> 让 <code>type</code> 也能先清空字段（不用再切回 <code>fill</code>）；
+        <code>--delay &lt;ms&gt;</code> 在按键之间插入固定间隔，模拟更慢、更真实的打字节奏。
+        两者都是各自独立的 flag，不会污染实际打进去的文本。
       </div>
 
       <hr class="du-divider" />

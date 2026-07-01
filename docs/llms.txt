@@ -6,6 +6,7 @@ chrome-use lets any AI agent (Claude Code, Cursor, Codex, or your own scripts) d
 - A CLI plus a one-click browser extension that drives your already-logged-in Chrome over native messaging — no remote debugging port, no token, no remote server; everything stays on your machine.
 - Works with any agent or CLI, not a single app.
 - Each `--session` gets its own colored Chrome tab group, so multiple agents share one real browser without conflict.
+- `chrome-use mcp` starts a stdio MCP server (12 core tools) for MCP-only hosts that can't run a shell command — Claude Desktop, ChatGPT connectors, n8n/Dify. Shell-capable coding agents should use the CLI directly instead.
 
 ## Why it is different
 - vs Playwright / Puppeteer / browser-use: those launch an empty browser, so you re-login, fight captchas, and still get flagged as automation. chrome-use reuses the session you already have.

@@ -50,6 +50,7 @@ const MAP = [
   { test: /^skill-data\/slack\//,          pages: ['slack'] },
   { test: /^skill-data\/(test|dogfood)\//, pages: ['testing'] },
   { test: /^skill-data\/(vercel-sandbox|agentcore)\//, pages: ['cloud'] },
+  { test: /^cli\/src\/mcp\.rs$/,            pages: ['mcp'] },
   { test: /^README\.md$/,                  pages: ['install', 'family', 'overview'] },
 ];
 

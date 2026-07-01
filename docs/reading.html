@@ -197,6 +197,43 @@ URL: https://example.com/login
 
       <hr class="du-divider" />
 
+      <h2>read：把 URL 拉成 agent 可读文本</h2>
+      <p>
+        <code>read [url]</code> 抓一个 URL，尽量给出<strong>干净的 markdown/文本</strong>：优先找
+        <code>.md</code> 版本和附近的 <code>llms.txt</code>，都没有就从 HTML 里提取可读正文。
+        <span class="mark">不传 URL</span> 时读的是<strong>当前活动标签页</strong>渲染后的 DOM。
+        它跟 <code>snapshot</code>/<code>extract</code> 的分工不同：<code>read</code> 拿的是给人看的
+        <strong>正文/markdown</strong>，<code>snapshot</code>/<code>extract</code> 拿的是可交互元素
+        / 结构化数据。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">read</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide         <span class="du-cmt"># 读一个 URL</span>
+<span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide <span class="du-flag">--outline</span>  <span class="du-cmt"># 只要标题大纲</span>
+<span class="du-prompt">$</span> chrome-use read                                        <span class="du-cmt"># 读当前活动标签页</span></code></pre>
+      </div>
+
+      <p>
+        常用 flag：<code>--raw</code>（原样返回响应体，不做任何加工）、<code>--require-md</code>
+        （响应不是 <code>text/markdown</code> 就直接失败）、<code>--llms &lt;index|full&gt;</code>
+        （读附近 <code>llms.txt</code> 的索引或完整版）、<code>--outline</code>（只要标题大纲）、
+        <code>--filter &lt;text&gt;</code>（只保留匹配的小节/标题）、<code>--timeout &lt;ms&gt;</code>。
+        <code>--json</code> 会连同元数据一起返回内容。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 什么时候用 read，什么时候用 snapshot/extract</div>
+        想要<strong>能读的正文</strong>（文档、博客、说明）——用 <code>read</code>；想找
+        <strong>可交互元素</strong>去点击/输入——用上面的 <code>snapshot</code>；
+        想要<strong>结构化 JSON</strong>——用 <a href="/extract.html">extract</a>。
+      </div>
+
+      <hr class="du-divider" />
+
       <h2>eval：在指定 frame 里执行</h2>
       <p>
         <code>eval</code> 默认跑在<strong>主 frame</strong>。它不会静默绑定到 Chrome 恰好返回的

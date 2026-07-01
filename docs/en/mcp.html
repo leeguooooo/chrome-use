@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>MCP Server · chrome-use docs</title>
+  <meta name="description" content="chrome-use mcp starts a stdio MCP server for hosts like Claude Desktop, ChatGPT connectors, and n8n/Dify that can't run a shell command; 12 core tools, each call delegating to the same binary." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="mcp" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="10" y="14" width="40" height="30" rx="4"/>
+          <path d="M20 24 h20 M20 32 h12"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Specialized</p>
+
+      <div class="du-title-row">
+        <h1>MCP Server</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        <code>chrome-use mcp</code> starts a <span class="mark">stdio Model Context Protocol server</span>
+        for hosts that only speak MCP and can't run a shell command — Claude Desktop, ChatGPT connectors,
+        n8n, Dify. <strong>Shell-capable coding agents (Claude Code, Cursor, Codex) should keep using the
+        skill + CLI</strong>: it's lighter, calling the binary directly instead of going through an extra
+        protocol layer. MCP exists specifically for hosts that speak MCP but won't shell out.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Which one to use</div>
+        For agents that can run terminal commands (Claude Code, Cursor, Codex, your own scripts) —
+        install the <a href="/en/install.html">CLI + skill</a> and run commands like
+        <code>chrome-use snapshot -i</code> directly. For hosts that only integrate over the MCP
+        protocol and have no shell (Claude Desktop, a ChatGPT connector, an n8n/Dify MCP node) —
+        use <code>chrome-use mcp</code> on this page.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>The 12 core tools</h2>
+      <p>
+        The MCP server exposes a lean <strong>core profile</strong>: 12 typed tools covering opening
+        pages, reading, snapshotting, interacting, and navigation. Every tool call is forwarded to the
+        same <code>chrome-use</code> binary running in <code>--json</code> mode — the underlying
+        capability is identical to the CLI.
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>Tool</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>chrome_use_open</code></td><td>Open a URL / new tab</td></tr>
+          <tr><td><code>chrome_use_read</code></td><td>Read the active tab or a URL as agent-readable text</td></tr>
+          <tr><td><code>chrome_use_snapshot</code></td><td>Pull a structured accessibility snapshot with <code>@ref</code>s</td></tr>
+          <tr><td><code>chrome_use_click</code></td><td>Click by selector / <code>@ref</code></td></tr>
+          <tr><td><code>chrome_use_fill</code></td><td>Clear and fill a form field</td></tr>
+          <tr><td><code>chrome_use_type</code></td><td>Type, appending after existing content</td></tr>
+          <tr><td><code>chrome_use_press</code></td><td>Press a key or key combo</td></tr>
+          <tr><td><code>chrome_use_eval</code></td><td>Run JavaScript on the page</td></tr>
+          <tr><td><code>chrome_use_wait</code></td><td>Wait for a condition or timeout</td></tr>
+          <tr><td><code>chrome_use_back</code></td><td>Go back one page</td></tr>
+          <tr><td><code>chrome_use_forward</code></td><td>Go forward one page</td></tr>
+          <tr><td><code>chrome_use_reload</code></td><td>Reload the current page</td></tr>
+        </tbody>
+      </table>
+
+      <hr class="du-divider" />
+
+      <h2>Starting the server</h2>
+      <p>
+        <code>mcp</code> is a subcommand of <code>chrome-use</code>, available on <code>PATH</code>
+        alongside every other command.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># start a stdio MCP server (the host spawns this process for you)</span>
+<span class="du-prompt">$</span> chrome-use mcp</code></pre>
+      </div>
+
+      <h2>Setting it up in Claude Desktop</h2>
+      <p>
+        Edit Claude Desktop's MCP config file and add a <code>chrome-use</code> server:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">json · claude_desktop_config.json</span>
+        </div>
+<pre><code>{
+  "mcpServers": {
+    "chrome-use": {
+      "command": "chrome-use",
+      "args": ["mcp"]
+    }
+  }
+}</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ chrome-use command not found?</div>
+        If <code>chrome-use</code> isn't on the <code>PATH</code> Claude Desktop sees at launch, swap
+        <code>command</code> for the binary's <strong>absolute path</strong> (the output of
+        <code>which chrome-use</code>). <strong>Restart Claude Desktop</strong> after editing the config
+        for it to take effect.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>How it works</h2>
+      <p>
+        The MCP server is hand-rolled <span class="mark">JSON-RPC over stdio</span>, with no extra
+        dependency pulled in. Each tool call is translated into a call to the same
+        <code>chrome-use</code> binary in <code>--json</code> mode, and the result is wrapped back into
+        an MCP response. Installation, the browser extension connection, and everything about driving
+        a real Chrome stay <strong>exactly the same</strong> — MCP just swaps in a different protocol
+        shell.
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ You still need to connect a real Chrome first</div>
+        <code>chrome-use mcp</code> doesn't solve "how do I connect to my browser" by itself — that
+        part still runs through the browser extension covered in <a href="/en/install.html">Install &amp; Setup</a>.
+        Get the extension working there and confirm <code>chrome-use snapshot -i</code> runs, then wire
+        the MCP server into your host.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Related pages</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/install.html">
+          <div class="du-card-title"><span class="du-card-ico">📦</span> Install &amp; Setup</div>
+          <p>Set up the CLI and browser extension — the MCP server reuses the same connection.</p>
+        </a>
+        <a class="du-card" href="/en/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🌐</span> Real Chrome (Extension)</div>
+          <p>What the MCP tools connect through under the hood: extension + native messaging.</p>
+        </a>
+        <a class="du-card" href="/en/commands.html">
+          <div class="du-card-title"><span class="du-card-ico">📚</span> Command Reference</div>
+          <p>The MCP server's 12 tools are a lean profile of the full command set.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

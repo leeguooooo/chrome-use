@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>MCP 服务器 · chrome-use 文档</title>
+  <meta name="description" content="chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；12 个核心工具，每次调用都转发给同一个二进制。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="mcp" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="10" y="14" width="40" height="30" rx="4"/>
+          <path d="M20 24 h20 M20 32 h12"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">专项能力 / Specialized</p>
+
+      <div class="du-title-row">
+        <h1>MCP 服务器</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        <code>chrome-use mcp</code> 起一个 <span class="mark">stdio Model Context Protocol 服务器</span>，
+        给那些只会说 MCP、不能跑 shell 命令的宿主用——Claude Desktop、ChatGPT connector、n8n、Dify。
+        <strong>能跑 shell 的编码 agent（Claude Code、Cursor、Codex）请继续用技能 + CLI</strong>：更轻量，
+        直接调用二进制不用绕一层协议。MCP 是专门留给「说 MCP 但不能 shell out」的那类宿主的。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 什么时候用哪个</div>
+        能跑终端命令的 agent（Claude Code、Cursor、Codex、你自己的脚本）——直接装
+        <a href="/install.html">CLI + 技能</a>，跑 <code>chrome-use snapshot -i</code> 这类命令。
+        只能通过 MCP 协议接入、没有 shell 的宿主（Claude Desktop、ChatGPT connector、n8n/Dify 的
+        MCP 节点）——用这一页的 <code>chrome-use mcp</code>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>12 个核心工具</h2>
+      <p>
+        MCP 服务器暴露一套精简的<strong>核心 profile</strong>：12 个有类型的工具，覆盖打开页面、
+        读取、快照、交互和导航。每一次工具调用都会转发给同一个 <code>chrome-use</code> 二进制的
+        <code>--json</code> 模式——底层能力和用 CLI 是完全一样的一套。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>工具</th><th>作用</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>chrome_use_open</code></td><td>打开一个 URL / 新标签</td></tr>
+          <tr><td><code>chrome_use_read</code></td><td>把当前标签或某个 URL 读成 agent 可读文本</td></tr>
+          <tr><td><code>chrome_use_snapshot</code></td><td>拉取结构化、带 <code>@ref</code> 的可访问性快照</td></tr>
+          <tr><td><code>chrome_use_click</code></td><td>按选择器 / <code>@ref</code> 点击</td></tr>
+          <tr><td><code>chrome_use_fill</code></td><td>清空后填入表单字段</td></tr>
+          <tr><td><code>chrome_use_type</code></td><td>在现有内容后追加输入</td></tr>
+          <tr><td><code>chrome_use_press</code></td><td>按一个键或组合键</td></tr>
+          <tr><td><code>chrome_use_eval</code></td><td>在页面里执行 JavaScript</td></tr>
+          <tr><td><code>chrome_use_wait</code></td><td>等待某个条件或超时</td></tr>
+          <tr><td><code>chrome_use_back</code></td><td>后退一页</td></tr>
+          <tr><td><code>chrome_use_forward</code></td><td>前进一页</td></tr>
+          <tr><td><code>chrome_use_reload</code></td><td>刷新当前页</td></tr>
+        </tbody>
+      </table>
+
+      <hr class="du-divider" />
+
+      <h2>启动服务器</h2>
+      <p>
+        <code>mcp</code> 是 <code>chrome-use</code> 的一个子命令，跟其他命令一样在 <code>PATH</code> 上就有。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 起一个 stdio MCP 服务器（宿主会替你拉起这个进程）</span>
+<span class="du-prompt">$</span> chrome-use mcp</code></pre>
+      </div>
+
+      <h2>在 Claude Desktop 里配置</h2>
+      <p>
+        编辑 Claude Desktop 的 MCP 配置文件，加一个 <code>chrome-use</code> server：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">json · claude_desktop_config.json</span>
+        </div>
+<pre><code>{
+  "mcpServers": {
+    "chrome-use": {
+      "command": "chrome-use",
+      "args": ["mcp"]
+    }
+  }
+}</code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 找不到 chrome-use 命令？</div>
+        如果 <code>chrome-use</code> 不在 Claude Desktop 启动时能看到的 <code>PATH</code> 上，把
+        <code>command</code> 换成二进制的<strong>绝对路径</strong>（例如 <code>which chrome-use</code>
+        的输出）。改完配置后<strong>重启 Claude Desktop</strong> 才会生效。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>工作原理</h2>
+      <p>
+        MCP 服务器是手写的 <span class="mark">JSON-RPC over stdio</span>，没有引入额外依赖。每个工具
+        调用被翻译成对同一个 <code>chrome-use</code> 二进制的 <code>--json</code> 模式调用，再把结果
+        包回 MCP 的响应格式。安装、浏览器扩展连接、真实 Chrome 的那一整套逻辑<strong>完全不变</strong>——
+        MCP 只是换了一层协议外壳。
+      </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 还是得先接上真实 Chrome</div>
+        <code>chrome-use mcp</code> 本身不解决「怎么连你的浏览器」——那部分仍然靠
+        <a href="/install.html">安装</a> 里的浏览器扩展。先按那一页把扩展装好、确认能跑通
+        <code>chrome-use snapshot -i</code>，再把 MCP 服务器接进宿主。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>相关页面</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/install.html">
+          <div class="du-card-title"><span class="du-card-ico">📦</span> 安装</div>
+          <p>装好 CLI 与浏览器扩展——MCP 服务器复用同一套连接。</p>
+        </a>
+        <a class="du-card" href="/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🌐</span> 驱动真实 Chrome</div>
+          <p>MCP 工具背后连的就是这条扩展 + 原生消息路径。</p>
+        </a>
+        <a class="du-card" href="/commands.html">
+          <div class="du-card-title"><span class="du-card-ico">📚</span> 命令参考</div>
+          <p>MCP 的 12 个工具是完整命令集的一个精简 profile。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
