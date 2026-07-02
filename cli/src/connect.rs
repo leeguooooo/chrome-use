@@ -608,7 +608,7 @@ fn run_install(args: &[String], json: bool) {
 }
 
 /// stdin+stderr are TTYs → a wait/confirm flow is safe (same rule as silence).
-fn interactive_tty() -> bool {
+pub fn interactive_tty() -> bool {
     use std::io::IsTerminal;
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
@@ -616,7 +616,7 @@ fn interactive_tty() -> bool {
 /// Chinese UI for the human-facing setup/guide text? Honors CHROME_USE_LANG
 /// (`zh`/`en` override), then the POSIX locale chain. JSON output stays
 /// English — it's for agents, and keys/values are contract, not prose.
-fn ui_zh() -> bool {
+pub fn ui_zh() -> bool {
     if let Ok(explicit) = std::env::var("CHROME_USE_LANG") {
         if !explicit.is_empty() {
             return explicit.to_lowercase().starts_with("zh");

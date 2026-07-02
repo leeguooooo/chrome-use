@@ -4310,6 +4310,8 @@ mod tests {
             init_scripts: Vec::new(),
             enable: Vec::new(),
             cdp: None,
+            as_account: None,
+            as_strict: false,
             browser: None,
             if_present: false,
             observe: false,

@@ -1,3 +1,4 @@
+mod account;
 mod chat;
 mod color;
 mod commands;
@@ -1275,6 +1276,19 @@ fn main() {
         return;
     }
 
+    // `whoami [filter]` — which vault account each site's live session belongs
+    // to (cookie-use fingerprint match). It needs the daemon + connection like
+    // any action, so it parses as a harmless `cookies get` to ride the normal
+    // bootstrap below, and takes over right before dispatch.
+    let whoami_filter: Option<Option<String>> =
+        if clean.first().map(|s| s.as_str()) == Some("whoami") {
+            let filter = clean.get(1).filter(|s| !s.starts_with("--")).cloned();
+            clean = vec!["cookies".to_string(), "get".to_string()];
+            Some(filter)
+        } else {
+            None
+        };
+
     let mut cmd = match parse_command(&clean, &flags) {
         Ok(c) => c,
         Err(e) => {
@@ -1907,6 +1921,29 @@ fn main() {
             Ok(_) => {
                 // Launch succeeded
             }
+        }
+    }
+
+    // `whoami` takes over here — daemon + connection are up, exactly like any
+    // other action; it does its own cookies_get round-trip(s) and renders.
+    if let Some(filter) = whoami_filter {
+        account::run_whoami(filter.as_deref(), &flags);
+        return;
+    }
+
+    // `--as <account>` guard (the wrong-account protection): verify the live
+    // session IS that cookie-use account before the command executes; on
+    // mismatch auto-apply its session (or fail under --as-strict). Runs on
+    // every guarded invocation — sessions drift (logouts, other agents,
+    // account choosers), so yesterday's verification proves nothing.
+    if let Some(acct) = flags.as_account.clone() {
+        if let Err(e) = account::enforce_as(&acct, flags.as_strict, &flags) {
+            if flags.json {
+                print_json_error(e);
+            } else {
+                eprintln!("{} {}", color::error_indicator(), e);
+            }
+            exit(1);
         }
     }
 

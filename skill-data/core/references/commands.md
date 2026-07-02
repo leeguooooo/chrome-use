@@ -182,6 +182,29 @@ chrome-use storage local set k v       # Set value
 chrome-use storage local clear         # Clear all
 ```
 
+## Account identity (whoami / --as) — never act as the wrong account
+
+Needs the [cookie-use](https://github.com/leeguooooo/cookie-use) vault (the
+multi-account session store). chrome-use never sees stored cookie values —
+identity is checked by comparing sha256 hashes of the LIVE cookies against
+`cookie-use fingerprint` exports.
+
+```bash
+chrome-use whoami                      # Which vault account each site's live session is
+chrome-use whoami cloudflare           # Filter by site or account-id substring
+chrome-use --as cloudflare/davian open dash.cloudflare.com
+                                       # Verify the session IS that account BEFORE acting;
+                                       # on mismatch auto-apply its stored session, re-verify, then act
+chrome-use --as cloudflare/davian --as-strict click @e5
+                                       # Strict: fail (exit 1) on mismatch instead of switching
+```
+
+With 10 logins on one site, `--as` on every action is the guard: sessions
+drift (logouts, other agents, account choosers), so each invocation re-verifies.
+`whoami` answering "(no vault account matches)" means logged out, an account
+not in the vault, or a stored session that has rotated — re-capture with
+`cookie-use add`.
+
 ## Network
 
 ```bash

@@ -306,6 +306,13 @@ pub struct Flags {
     /// `--browser <id|email-substr>`: pin this session to a specific connected
     /// Chrome profile's relay endpoint (issue #60). Resolved to a `relay-cdp-url-<id>`.
     pub browser: Option<String>,
+    /// `--as <vault-account-id>`: before executing the command, verify the
+    /// session's live cookies match this cookie-use account's fingerprint;
+    /// on mismatch auto-apply the account's session (or fail with --as-strict).
+    /// The wrong-account guard for people with 10 logins on one site.
+    pub as_account: Option<String>,
+    /// `--as-strict`: with `--as`, fail loudly on mismatch instead of switching.
+    pub as_strict: bool,
     pub extensions: Vec<String>,
     pub init_scripts: Vec<String>,
     pub enable: Vec<String>,
@@ -518,6 +525,8 @@ pub fn parse_flags(args: &[String]) -> Flags {
             .or(config.executable_path),
         cdp: config.cdp,
         browser: env::var("AGENT_BROWSER_BROWSER").ok(),
+        as_account: env::var("AGENT_BROWSER_AS").ok().filter(|s| !s.is_empty()),
+        as_strict: env_var_is_truthy("AGENT_BROWSER_AS_STRICT"),
         extensions,
         init_scripts,
         enable,
@@ -727,6 +736,15 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     flags.browser = Some(s.clone());
                     i += 1;
                 }
+            }
+            "--as" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.as_account = Some(s.clone());
+                    i += 1;
+                }
+            }
+            "--as-strict" => {
+                flags.as_strict = true;
             }
             "--profile" => {
                 if let Some(s) = args.get(i + 1) {
@@ -1010,6 +1028,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--if-present",
         "--optional",
         "--observe",
+        "--as-strict",
         "-v",
         "--verbose",
         "-q",
@@ -1026,6 +1045,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--executable-path",
         "--cdp",
         "--browser",
+        "--as",
         "--extension",
         "--init-script",
         "--enable",

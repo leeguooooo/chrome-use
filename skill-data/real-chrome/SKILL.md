@@ -41,6 +41,16 @@ isolated browser is fine.
 >
 > A logged-out result on the *wrong* profile is not a missing login — run
 > `browsers`, then re-run with `--browser <the right one>`.
+>
+> **Many ACCOUNTS on one site? Verify identity, don't assume it.** Profile
+> selection picks the browser; `whoami`/`--as` pick the *account* (backed by the
+> [cookie-use](https://github.com/leeguooooo/cookie-use) vault, hash-compare only —
+> no stored cookie values are read):
+> - `chrome-use whoami [site]` — which vault account each site's live session is.
+> - `chrome-use --as <site/acct> <cmd>` — verifies BEFORE acting; on mismatch
+>   auto-applies that account's stored session and re-verifies. `--as-strict`
+>   fails (exit 1) instead of switching. Re-verified on every invocation —
+>   sessions drift (logouts, other agents, account choosers).
 
 `--launch` opens an **isolated, empty test profile** — no cookies, no login, no
 extensions (so the extension-relay path is off). Its window is labelled
