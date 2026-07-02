@@ -54,66 +54,163 @@
       </div>
 
       <p class="du-lede">
-        每个版本改了什么、为什么改——这一页只留<span class="mark">最近这批有实际影响的变化</span>，
-        按新到旧排列。逐条 commit 级别的完整历史留在 GitHub Releases。
+        每个版本改了什么、为什么改——这一页是<span class="mark">完整的版本历史</span>，
+        按次版本号分组、新到旧排列。chrome-use 自己的功能开发都在 v1.x 系列；再往前，
+        还有重塑品牌前的 fork 阶段，以及定期从上游 agent-browser 合并进来的版本号。
       </p>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ 完整历史：GitHub Releases</div>
-        这一页只挑对日常使用有影响的条目。想看每个版本的完整 diff 和更早的历史，去
+        <div class="du-callout-title">ℹ️ 逐条 commit diff：GitHub Releases</div>
+        这一页按版本汇总了每次改动的要点。想看某个版本的完整 diff，去
         <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Releases</a>。
       </div>
 
       <hr class="du-divider" />
 
-      <h2>v1.5.66</h2>
-      <ul>
-        <li><code>select</code> 找不到匹配的 <code>&lt;option&gt;</code> 时不再默默选不中——现在会报错，并把所有可选项列出来。</li>
-        <li>默认操作超时从 30 秒降到 25 秒，能在触发底层 socket 读超时之前干净地失败，而不是拖到那之后才报错。</li>
+      <h2>v1.5.x</h2>
+      <ul class="du-changelog">
+        <li><strong>v1.5.66</strong>（2026-07-02）— <code>select</code> 找不到匹配的 <code>&lt;option&gt;</code> 时不再默默选不中，改为报错并列出所有可选项；默认操作超时从 30s 降到 25s。</li>
+        <li><strong>v1.5.65</strong>（2026-07-02）— <code>network route --set-json</code> 结构化编辑响应 JSON 字段；新增 <code>chrome-use report</code> 一键打包脱敏痛点日志为可粘贴 issue；MCP <code>--tools all</code>（24 工具）。</li>
+        <li><strong>v1.5.64</strong>（2026-07-01）— <code>chrome-use mcp</code>：给 Claude Desktop 这类只讲 MCP、不能跑 shell 命令的宿主起一个 stdio MCP 服务器（12 工具核心 profile）。</li>
+        <li><strong>v1.5.63</strong>（2026-07-01）— <code>read [url]</code>：把一个 URL（不传参数时是当前标签页）抓取成 agent 可读文本，支持 <code>--llms</code> / <code>--outline</code> / <code>--filter</code> / <code>--raw</code>。</li>
+        <li><strong>v1.5.62</strong>（2026-07-01）— 修复 <code>type --clear</code> / <code>--delay</code> 解析；<code>find label</code> 现在也匹配 <code>aria-label</code>/<code>aria-labelledby</code>。</li>
+        <li><strong>v1.5.61</strong>（2026-07-01）— React renderer 修复：挑选真正的 react-dom renderer，不再硬编码 id 1（此前在 Next.js 16.3 Turbopack RSC 应用上读到空树）。</li>
+        <li><strong>v1.5.60</strong>（2026-07-01）— <code>network route</code>：响应阶段编辑真实响应（状态码/响应头/响应体子串替换）。</li>
+        <li><strong>v1.5.59</strong>（2026-07-01）— <code>network route</code>：通过 CDP Fetch 域 mock 响应、改写请求——无需代理、无需证书、不注入 JS。</li>
+        <li><strong>v1.5.58</strong>（2026-07-01）— <code>chrome-use test</code>：多账号 YAML 用例支持按 case 切换账号（<code>account:</code>）。</li>
+        <li><strong>v1.5.55</strong>（2026-06-29）— 摩擦点自动上报（friction auto-reporting）。</li>
+        <li><strong>v1.5.54</strong>（2026-06-29）— form fill 支持按可见文本选中 select 选项；修复 self-heal 在 <code>--launch</code> 路径下失效的问题。</li>
+        <li><strong>v1.5.53</strong>（2026-06-29）— <code>form fill --map</code>：批量映射填表。</li>
+        <li><strong>v1.5.52</strong>（2026-06-29）— <code>--observe</code>：捕捉 action 前后的 a11y 树差异；补充 auto ref-heal 文档。</li>
+        <li><strong>v1.5.51</strong>（2026-06-29）— action 守卫 <code>--if-present</code> / <code>--optional</code>。</li>
+        <li><strong>v1.5.50</strong>（2026-06-29）— <code>extract --schema</code>：按 schema 结构化抓取为 JSON。</li>
+        <li><strong>v1.5.49</strong>（2026-06-29）— <code>expect</code>：断言 + 对应退出码。</li>
+        <li><strong>v1.5.48</strong>（2026-06-29）— ab-connect 0.5.7：休眠唤醒后通过 <code>chrome.idle</code> 自动重连。</li>
+        <li><strong>v1.5.47</strong>（2026-06-29）— ab-connect 0.5.6：adopt 不再持久化，清除卡住的 debugger 提示条。</li>
+        <li><strong>v1.5.46</strong>（2026-06-29）— relay 自愈：relay 掉线自动恢复，无需挂起等待或手动重连。</li>
+        <li><strong>v1.5.45</strong>（2026-06-28）— 修复 adopt-tab 命令解析回归（#68 引入）。</li>
+        <li><strong>v1.5.44</strong>（2026-06-28）— adopt 改为按需 attach（ext 0.5.5）：用户标签页不再出现 debugger 提示条。</li>
+        <li><strong>v1.5.43</strong>（2026-06-27）— #65 <code>snapshot --filter</code> + eval 顶层 await 提示。</li>
+        <li><strong>v1.5.42</strong>（2026-06-27）— #60 浏览器/profile 选择：<code>browsers</code> 列表 + <code>--browser</code>。</li>
+        <li><strong>v1.5.41</strong>（2026-06-26）— #60 驱动中 profile 可观测性 + #53 canvas/closed-shadow 技能文档。</li>
+        <li><strong>v1.5.40</strong>（2026-06-26）— #58 <code>eval --frame</code>、reconnect 别名、更可操作的 stale-target 报错。</li>
+        <li><strong>v1.5.39</strong>（2026-06-26）— <code>snapshot -i</code> 现在能暴露内联表单校验错误。</li>
+        <li><strong>v1.5.38</strong>（2026-06-26）— #52 标签页路由限定到会话分组内 + CI 格式修复。</li>
+        <li><strong>v1.5.37</strong>（2026-06-25）— solve-slider 健壮性（等待切片加载）+ 可插拔检测器 hook。</li>
+        <li><strong>v1.5.34</strong>（2026-06-25）— solve-slider（网易易盾滑块验证码）+ drag 偏移模式。</li>
+        <li><strong>v1.5.32</strong>（2026-06-24）— sunny 扩展体验优化：更友好的图标、精修 popup、options 页、agent 光标。</li>
+        <li><strong>v1.5.31</strong>（2026-06-24）— relay tab-drift 时改为大声报错，不再误点错误的标签页。</li>
+        <li><strong>v1.5.30</strong>（2026-06-24）— relay 掉线提示 + canvas/closed-shadow 技能手册。</li>
+        <li><strong>v1.5.29</strong>（2026-06-24）— 静音 <code>chrome.debugger</code> 提示条 + 修复残留的 about:blank scratch 标签页。</li>
+        <li><strong>v1.5.28</strong>（2026-06-22）— chrome-use 技能优先做真实联网检查。</li>
+        <li><strong>v1.5.27</strong>（2026-06-19）— 把 about:blank 清理逻辑限定在 relay 场景。</li>
+        <li><strong>v1.5.26</strong>（2026-06-18）— <code>session stop &lt;name&gt;</code> + <code>session prune</code> + 生命周期文档。</li>
+        <li><strong>v1.5.25</strong>（2026-06-18）— 默认空闲自动关闭 + <code>keep</code>：不再留下 scratch 标签页/分组垃圾。</li>
+        <li><strong>v1.5.24</strong>（2026-06-18）— 修复构建：补上 browser.rs 的 clear_viewport/via_relay + cargo fmt。</li>
+        <li><strong>v1.5.23</strong>（2026-06-17）— <code>adopt</code>：无需新开标签页即可驱动已存在的标签页。</li>
+        <li><strong>v1.5.22</strong>（2026-06-17）— relay 按分组限定 <code>Target.getTargets</code>：恢复弹窗跟随 + 隔离下的跨会话 adopt。</li>
+        <li><strong>v1.5.21</strong>（2026-06-17）— 富文本编辑器填充、box 中心点、截图降采样、disabled 处理 + 文档（#41-#45）。</li>
+        <li><strong>v1.5.20</strong>（2026-06-17）— <code>site</code>：适配器自动同步 + 自动建议触发。</li>
+        <li><strong>v1.5.19</strong>（2026-06-17）— <code>site</code>：bb-sites 适配器，把任意站点变成结构化数据 CLI。</li>
+        <li><strong>v1.5.18</strong>（2026-06-17）— 问题反馈指引 + relay 上 <code>data:</code> URL 的清晰报错。</li>
+        <li><strong>v1.5.17</strong>（2026-06-17）— 完善多 agent 隔离：点击不再误吞用户标签页/弹出页。</li>
+        <li><strong>v1.5.16</strong>（2026-06-17）— relay 上的严格多 agent 标签页隔离。</li>
+        <li><strong>v1.5.15</strong>（2026-06-17）— iframe 内按钮的可信激活。</li>
+        <li><strong>v1.5.14</strong>（2026-06-17）— 修复 eval await 回归（replMode）+ 默认滚动；CI 转绿（#36, #38）。</li>
+        <li><strong>v1.5.13</strong>（2026-06-17）— eval replMode（可重复声明 let/const）+ snapshot-first 技能规则（#37, #38）。</li>
+        <li><strong>v1.5.12</strong>（2026-06-17）— relay 安全的 hover/dblclick/drag、更深的 iframe snapshot、按键事件式输入。</li>
+        <li><strong>v1.5.11</strong>（2026-06-16）— 跨域 iframe 滚动/点击 + <code>open</code> 自动重新 attach（#35, #36）。</li>
+        <li><strong>v1.5.10</strong>（2026-06-16）— relay 在线时用 debug-port 启动会给出警告。</li>
+        <li><strong>v1.5.9</strong>（2026-06-16）— 去除标题里的零宽 unicode 字符 + <code>screenshot --clip/element</code>。</li>
+        <li><strong>v1.5.8</strong>（2026-06-16）— 通过扩展 relay 实现文件上传。</li>
+        <li><strong>v1.5.7</strong>（2026-06-16）— <code>cf-status</code>：Cloudflare 人机验证 clearance 预检。</li>
+        <li><strong>v1.5.6</strong>（2026-06-15）— 固定 adopt 的标签页，防止被短暂的 relay 快照误伤。</li>
+        <li><strong>v1.5.5</strong>（2026-06-15）— connect 模式下远程调试授权弹窗的诊断日志。</li>
+        <li><strong>v1.5.4</strong>（2026-06-15）— <code>get text --pierce</code>：穿透 closed shadow DOM（#30）。</li>
+        <li><strong>v1.5.3</strong>（2026-06-15）— <code>get text</code> 默认跨 frame；#29（sessions/did-you-mean/标签页存活检测）；CI changelog 修复。</li>
+        <li><strong>v1.5.1</strong>（2026-06-15）— 按 frame 提取文本（<code>get text --all-frames/--main</code>、<code>frames</code>）+ #27，ab-connect 0.4.9 targetId 恢复。</li>
+        <li><strong>v1.5.0</strong>（2026-06-15）— 文本选择器点击、<code>get text</code> 默认到 body、<code>tab --activate</code>、<code>click --follow/openedTab</code>；<code>fill</code> 触发 input/change/blur；<code>close</code> 提示文案 + <code>chrome-use current</code>。</li>
       </ul>
 
-      <h2>v1.5.65</h2>
-      <ul>
-        <li><code>network route --set-json &lt;dot.path&gt;=&lt;value&gt;</code>：对真实响应做结构化 JSON 字段编辑（创建或覆盖嵌套字段）；响应体不是 JSON 时自动退化为字符串替换。</li>
-        <li>新增 <code>chrome-use report [--open] [--json]</code>：把本地、已脱敏的痛点日志打包成一份可直接粘贴的 GitHub issue——默认不开启，也从不自动上传。</li>
-        <li>MCP <code>--tools all</code> profile：24 个工具（12 个核心工具 + hover/select/screenshot/scroll/tabs/extract/expect/find/network_route/site/upload/download）。</li>
+      <h2>v1.4.x</h2>
+      <ul class="du-changelog">
+        <li><strong>v1.4.1</strong>（2026-06-14）— hold-to-move（完整 keydown/keyup 描述符，#game）；要求 ab-connect 0.4.8（#23 重连加固）。</li>
+        <li><strong>v1.4.0</strong>（2026-06-13）— <code>open</code> 不再抢占用户焦点；<code>tab adopt-by-targetId</code>；keydown/keyup 文档；canvas 提示；<code>doctor</code> 检查各组件版本一致性。</li>
       </ul>
 
-      <h2>v1.5.64</h2>
-      <ul>
-        <li><code>chrome-use mcp</code>：给 Claude Desktop 这类只讲 MCP、不能跑 shell 命令的宿主起一个 stdio Model Context Protocol 服务器（12 工具核心 profile）。</li>
+      <h2>v1.3.x</h2>
+      <ul class="du-changelog">
+        <li><strong>v1.3.0</strong>（2026-06-13）— daemon restart/status（#20.2）+ 实时标签页重同步、adopt-by-targetId、<code>open --reuse-tab</code>。</li>
       </ul>
 
-      <h2>v1.5.63</h2>
-      <ul>
-        <li><code>read [url]</code>：把一个 URL（不传参数时是当前标签页）抓取成 agent 可读的 markdown/文本；支持 <code>--llms</code> / <code>--outline</code> / <code>--filter</code> / <code>--raw</code>。</li>
+      <h2>v1.0.x – v1.2.x</h2>
+      <ul class="du-changelog">
+        <li><strong>v1.2.3</strong>（2026-06-13）— <code>bringToFront</code> 命令 + <code>tab list --full</code> 显示完整 URL。</li>
+        <li><strong>v1.2.2</strong>（2026-06-12）— 非阻塞的“有更新”提示 + release changelog。</li>
+        <li><strong>v1.2.1</strong>（2026-06-12）— relay tab-drift 固定修复（#14/#18）+ 稳定的按标签页 relay session。</li>
+        <li><strong>v1.2.0</strong>（2026-06-12）— <code>chrome-use test</code>：浏览器测试套件。</li>
+        <li><strong>v1.1.0</strong>（2026-06-12）— 跨 profile cookie 导出/迁移。</li>
+        <li><strong>v1.0.0</strong>（2026-06-12）— 品牌重塑：agent-browser-stealth → chrome-use，去 fork 化，版本号重置为 1.0.0。</li>
       </ul>
 
-      <h2>v1.5.62</h2>
-      <ul>
-        <li><code>type --clear</code> / <code>--delay &lt;ms&gt;</code> 现在能被正确解析成 flag。</li>
-        <li><code>find label</code> 现在也匹配 <code>aria-label</code> 和 <code>aria-labelledby</code>（图标按钮、自定义控件不再找不到）。</li>
+      <h2>v0.27.0-fork.x（重塑品牌前的 fork 阶段）</h2>
+      <ul class="du-changelog">
+        <li><strong>v0.27.0-fork.51</strong>（2026-06-12）— rustfmt 修复 issue #7 回归测试（CI 格式检查）。</li>
+        <li><strong>v0.27.0-fork.50</strong>（2026-06-11）— 标签页标题截断 + 多 agent/eval/type 文档。</li>
+        <li><strong>v0.27.0-fork.49</strong>（2026-06-11）— 内嵌 stealth-status + 多 agent 技能指引。</li>
+        <li><strong>v0.27.0-fork.48</strong>（2026-06-11）— iframe-proxy 开关 + stealth status。</li>
+        <li><strong>v0.27.0-fork.47</strong>（2026-06-11）— tab-drift 固定、<code>snapshot -c</code> 保留可交互元素、stale-ref 处理指引。</li>
+        <li><strong>v0.27.0-fork.46</strong>（2026-06-11）— 限制 <code>--annotate</code> 图例数量。</li>
+        <li><strong>v0.27.0-fork.45</strong>（2026-06-11）— <code>pick</code> combobox 原子操作。</li>
+        <li><strong>v0.27.0-fork.44</strong>（2026-06-11）— eval 来源标记、<code>type --focused</code>、humanize 参数校验警告。</li>
+        <li><strong>v0.27.0-fork.43</strong>（2026-06-11）— 一批 issue/Hermes 反馈修复（静默点击、live 环境、<code>eval --file</code>、tab-list、文档）。</li>
+        <li><strong>v0.27.0-fork.42</strong>（2026-06-11）— 退出时关闭本会话拥有的标签页，不再遗留标签页。</li>
+        <li><strong>v0.27.0-fork.41</strong>（2026-06-11）— relay 静默自愈，异常时无需用户操作。</li>
+        <li><strong>v0.27.0-fork.40</strong>（2026-06-11）— 已安装扩展时不再回退到 consent 弹窗。</li>
+        <li><strong>v0.27.0-fork.39</strong>（2026-06-11）— <code>cookies set --curl</code> 保留完整 cookie 属性。</li>
+        <li><strong>v0.27.0-fork.38</strong>（2026-06-11）— 静默运行，不再抢占用户前台标签页。</li>
+        <li><strong>v0.27.0-fork.37</strong>（2026-06-11）— 完善 humanize（bbox 抖动 + 滚轮/拖拽缓动）。</li>
+        <li><strong>v0.27.0-fork.36</strong>（2026-06-11）— 类人输入 stealth（humanize）。</li>
+        <li><strong>v0.27.0-fork.35</strong>（2026-06-11）— 技能内嵌 Store 安装、反馈渠道、过期二进制提示。</li>
+        <li><strong>v0.27.0-fork.34</strong>（2026-06-11）— Chrome Web Store 上线：面向商店的强制安装 + 技能商店安装指引。</li>
+        <li><strong>v0.27.0-fork.33</strong>（2026-06-10）— 修复两处 Hermes 反馈的边角问题（非法选择器措辞、空 URL glob）。</li>
+        <li><strong>v0.27.0-fork.32</strong>（2026-06-10）— 修复 Hermes 发现的 CLI bug（<code>wait --url</code>、<code>find role</code>、非法选择器等）。</li>
+        <li><strong>v0.27.0-fork.31</strong>（2026-06-10）— Chrome Web Store 提审就绪 + 两条安装路径。</li>
+        <li><strong>v0.27.0-fork.30</strong>（2026-06-10）— stealth：navigator 覆写放到 prototype 上而非实例上。</li>
+        <li><strong>v0.27.0-fork.29</strong>（2026-06-10）— 修复插件 overflowTest、免弹窗自动连接、ab-connect 更名+图标、README。</li>
+        <li><strong>v0.27.0-fork.28</strong>（2026-06-10）— 技能文档：默认有头模式、标签页分组。</li>
+        <li><strong>v0.27.0-fork.27</strong>（2026-06-10）— 禁止无头模式（stealth 要求始终有头运行）。</li>
+        <li><strong>v0.27.0-fork.26</strong>（2026-06-10）— stealth：<code>navigator.platform</code> 修复为 MacIntel（反检测修复）。</li>
+        <li><strong>v0.27.0-fork.25</strong>（2026-06-10）— 修复 relay 活性检测（本地回答 <code>Browser.getVersion</code>），不再引发重连风暴导致漂移。</li>
+        <li><strong>v0.27.0-fork.24</strong>（2026-06-10）— 被动标签页发现不再抢占当前标签页（按会话隔离控制）。</li>
+        <li><strong>v0.27.0-fork.23</strong>（2026-06-10）— 容忍 relay 返回的最简 targetInfo（扩展 connect 的 getTargets）。</li>
+        <li><strong>v0.27.0-fork.22</strong>（2026-06-09）— 扩展 connect 改用 relay URL，修复 <code>--session connect</code> 挂起问题。</li>
+        <li><strong>v0.27.0-fork.21</strong>（2026-06-09）— 多客户端 relay（支持并发 agent）。</li>
+        <li><strong>v0.27.0-fork.20</strong>（2026-06-09）— 按会话分组标签页（ab-connect 0.4.0）。</li>
+        <li><strong>v0.27.0-fork.19</strong>（2026-06-09）— 新扩展 ID（Web Store 签名密钥）+ 商店感知安装。</li>
+        <li><strong>v0.27.0-fork.18</strong>（2026-06-09）— 扩展 connect：零 token 原生消息控制真实 Chrome + 点击可靠性 + eval-first/find-url/site-notes。</li>
+        <li><strong>v0.27.0-fork.17</strong>（2026-06-05）— eval-first 技能 + find-url（本地书签搜索）+ site-notes 约定。</li>
+        <li><strong>v0.27.0-fork.16</strong>（2026-06-05）— 点击可靠性（滚动到可视区 + DOM 回退）+ 技能文档（console 手动开启、CLICK_MODE、表单/隐藏输入 eval）。</li>
+        <li><strong>v0.27.0-fork.15</strong>（2026-06-04）— stealth 加固（惰性 <code>Runtime.enable</code>、原生时区/WebRTC、可选 canvas 噪声）+ 自适应 @ref 重定位。</li>
+        <li><strong>v0.27.0-fork.14</strong>（2026-06-01）— 升级修复 + CI 切到 Node 24。</li>
+        <li><strong>v0.27.0-fork.13</strong>（2026-06-01）— <code>--profile auto</code>。</li>
+        <li><strong>v0.27.0-fork.12</strong>（2026-06-01）— 内嵌技能文档。</li>
+        <li><strong>v0.27.0-fork.11</strong>（2026-06-01）— FullLaunch 路径下 stealth 完整生效（此前只在部分启动路径生效）。</li>
+        <li><strong>v0.27.0-fork.10</strong>（2026-06-01）— 一批体验优化 + stealth 覆盖率/webdriver 处理。</li>
+        <li><strong>v0.27.0-fork.9</strong>（2026-06-01）— 常规修复迭代。</li>
+        <li><strong>v0.27.0-fork.8</strong>（2026-05-09）— 内置重试机制，应对短暂的遮挡层。</li>
+        <li><strong>v0.27.0-fork.7</strong>（2026-05-09）— 误点前先捕捉短暂的遮挡层。</li>
+        <li><strong>v0.27.0-fork.6</strong>（2026-05-09）— 收紧防御性 CDP 超时上限，修复误导性的 chrome://inspect 提示。</li>
+        <li><strong>v0.27.0-fork.5</strong>（2026-05-09）— 修复误导性警告 + connect 活性探测 + <code>wait @ref</code>。</li>
+        <li><strong>v0.27.0-fork.4</strong>（2026-05-09）— 修复 SPA 点击竞态 + @ref 身份校验 + <code>wait --gone</code>。</li>
+        <li><strong>v0.27.0-fork.3</strong>（2026-05-09）— SPA 点击竞态修复 + <code>wait --gone</code> 原语。</li>
+        <li><strong>v0.27.0-fork.2</strong>（2026-05-09）— 更友好的 find 报错 + 版本不匹配重启后恢复 URL。</li>
+        <li><strong>v0.27.0-fork.1</strong>（2026-05-09）— 与上游 v0.27.0 同步，支持 skills.sh。</li>
       </ul>
 
-      <h2>v1.5.61</h2>
-      <ul>
-        <li>React renderer 修复：改成挑选真正的 react-dom renderer，不再硬编码 id 1——此前在 Next.js 16.3 Turbopack RSC 应用上会读到一棵空树。</li>
-      </ul>
-
-      <h2>v1.5.60</h2>
-      <ul>
-        <li><code>network route</code>：在响应阶段编辑真实响应（覆盖状态码/响应头，对响应体做子串替换）。</li>
-      </ul>
-
-      <h2>v1.5.59</h2>
-      <ul>
-        <li><code>network route</code>：通过 CDP 的 Fetch 域 mock 响应（fulfill）、改写发出去的请求（continue）——无需代理，无需证书，不注入 JS。</li>
-      </ul>
-
-      <h2>v1.5.58</h2>
-      <ul>
-        <li><code>chrome-use test</code>：多账号 YAML 用例里支持按 case 切换账号（在某个 case 的步骤里写 <code>account:</code>）。</li>
-      </ul>
+      <h2>更早历史</h2>
+      <p>chrome-use 会定期把上游 <a href="https://github.com/AgentDesk/agent-browser">agent-browser</a> 的版本合并进来（<code>v0.27</code>–<code>v0.31</code>，比如 v0.30.0 的 <code>--wait</code> glob 支持、v0.29.0 的 sandbox 包发布元数据修复）；chrome-use 自己在这之上做了大量独立开发，两条版本号并不同步。</p>
+      <p>更早的 v0.x 版本（v0.6.0 – v0.26.0，2026 年 1–4 月）继承自上游 agent-browser 基线，逐条列出意义不大，这里不再展开。</p>
 
       <hr class="du-divider" />
 

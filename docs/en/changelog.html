@@ -54,68 +54,164 @@
       </div>
 
       <p class="du-lede">
-        What changed in each release, and why — this page keeps only the
-        <span class="mark">recent changes that actually affect day-to-day use</span>, newest first.
-        The full commit-level history lives in GitHub Releases.
+        What changed in each release, and why — this page is the <span class="mark">full version history</span>,
+        grouped by minor version, newest first. chrome-use's own feature work lives in the v1.x
+        line; further back is the fork era that predates the rebrand, plus the version numbers
+        merged in periodically from upstream agent-browser.
       </p>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ Full history: GitHub Releases</div>
-        This page curates the entries that matter for everyday use. For the complete diff of every
-        release and older history, see
+        <div class="du-callout-title">ℹ️ Commit-level diffs: GitHub Releases</div>
+        This page rolls up the highlights per version. For the full diff of any single release, see
         <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Releases</a>.
       </div>
 
       <hr class="du-divider" />
 
-      <h2>v1.5.66</h2>
-      <ul>
-        <li><code>select</code> no longer silently selects nothing when no <code>&lt;option&gt;</code> matches — it now errors and lists every available option.</li>
-        <li>Default action timeout dropped from 30s to 25s, so it trips cleanly before the underlying socket read timeout instead of stalling past it.</li>
+      <h2>v1.5.x</h2>
+      <ul class="du-changelog">
+        <li><strong>v1.5.66</strong> (2026-07-02) — <code>select</code> no longer silently selects nothing when no <code>&lt;option&gt;</code> matches; it now errors and lists every available option. Default action timeout dropped from 30s to 25s.</li>
+        <li><strong>v1.5.65</strong> (2026-07-02) — <code>network route --set-json</code>: structured JSON-field edits on the real response; new <code>chrome-use report</code> packages a de-identified friction log into a paste-ready GitHub issue; MCP <code>--tools all</code> (24 tools).</li>
+        <li><strong>v1.5.64</strong> (2026-07-01) — <code>chrome-use mcp</code>: a stdio MCP server (12-tool core profile) for MCP-only hosts like Claude Desktop that can't run a shell command.</li>
+        <li><strong>v1.5.63</strong> (2026-07-01) — <code>read [url]</code>: fetch a URL — or, with no URL, the active tab — as agent-readable text; supports <code>--llms</code> / <code>--outline</code> / <code>--filter</code> / <code>--raw</code>.</li>
+        <li><strong>v1.5.62</strong> (2026-07-01) — fixed <code>type --clear</code> / <code>--delay</code> parsing; <code>find label</code> now also matches <code>aria-label</code>/<code>aria-labelledby</code>.</li>
+        <li><strong>v1.5.61</strong> (2026-07-01) — React renderer fix: pick the actual react-dom renderer instead of hardcoding id 1 (was reading an empty tree on Next.js 16.3 Turbopack RSC apps).</li>
+        <li><strong>v1.5.60</strong> (2026-07-01) — <code>network route</code>: edit the real response at the response stage (status/headers/body substring replace).</li>
+        <li><strong>v1.5.59</strong> (2026-07-01) — <code>network route</code>: mock responses and rewrite requests via the CDP Fetch domain — no proxy, no cert, no JS injection.</li>
+        <li><strong>v1.5.58</strong> (2026-07-01) — <code>chrome-use test</code>: per-case account switching for multi-account YAML suites (<code>account:</code>).</li>
+        <li><strong>v1.5.55</strong> (2026-06-29) — friction auto-reporting.</li>
+        <li><strong>v1.5.54</strong> (2026-06-29) — form fill can select by visible option text; fixed self-heal on the <code>--launch</code> path.</li>
+        <li><strong>v1.5.53</strong> (2026-06-29) — <code>form fill --map</code>: bulk-mapped form filling.</li>
+        <li><strong>v1.5.52</strong> (2026-06-29) — <code>--observe</code>: capture the a11y-tree delta around an action; auto ref-heal docs.</li>
+        <li><strong>v1.5.51</strong> (2026-06-29) — action guards <code>--if-present</code> / <code>--optional</code>.</li>
+        <li><strong>v1.5.50</strong> (2026-06-29) — <code>extract --schema</code>: schema-driven structured scrape to JSON.</li>
+        <li><strong>v1.5.49</strong> (2026-06-29) — <code>expect</code>: assertion verb with a matching exit code.</li>
+        <li><strong>v1.5.48</strong> (2026-06-29) — ab-connect 0.5.7: wake-from-sleep reconnect via <code>chrome.idle</code>.</li>
+        <li><strong>v1.5.47</strong> (2026-06-29) — ab-connect 0.5.6: adopt no longer persists; clears the stuck debugger banner.</li>
+        <li><strong>v1.5.46</strong> (2026-06-29) — relay self-heal: a dropped relay recovers on its own, no hang or manual reconnect.</li>
+        <li><strong>v1.5.45</strong> (2026-06-28) — fixed adopt-tab command resolution (a regression from #68).</li>
+        <li><strong>v1.5.44</strong> (2026-06-28) — adopt switched to on-demand attach (ext 0.5.5): no more debugger banner on user tabs.</li>
+        <li><strong>v1.5.43</strong> (2026-06-27) — #65 <code>snapshot --filter</code> + eval top-level-await hint.</li>
+        <li><strong>v1.5.42</strong> (2026-06-27) — #60 browser/profile selection: <code>browsers</code> listing + <code>--browser</code>.</li>
+        <li><strong>v1.5.41</strong> (2026-06-26) — #60 driving-profile observability + #53 canvas/closed-shadow skill docs.</li>
+        <li><strong>v1.5.40</strong> (2026-06-26) — #58 <code>eval --frame</code>, reconnect alias, actionable stale-target errors.</li>
+        <li><strong>v1.5.39</strong> (2026-06-26) — <code>snapshot -i</code> now surfaces inline form-validation errors.</li>
+        <li><strong>v1.5.38</strong> (2026-06-26) — #52 tab routing scoped to the session group + CI format fix.</li>
+        <li><strong>v1.5.37</strong> (2026-06-25) — solve-slider robustness (wait for slices) + pluggable detector hook.</li>
+        <li><strong>v1.5.34</strong> (2026-06-25) — solve-slider (NetEase Yidun slider captcha) + drag offset mode.</li>
+        <li><strong>v1.5.32</strong> (2026-06-24) — sunny extension UX: friendlier icon, polished popup, options page, agent cursor.</li>
+        <li><strong>v1.5.31</strong> (2026-06-24) — fail loudly on relay tab-drift instead of clicking the wrong tab.</li>
+        <li><strong>v1.5.30</strong> (2026-06-24) — relay-down guidance + canvas/closed-shadow skill playbook.</li>
+        <li><strong>v1.5.29</strong> (2026-06-24) — silenced the <code>chrome.debugger</code> banner + fixed a leftover about:blank scratch tab.</li>
+        <li><strong>v1.5.28</strong> (2026-06-22) — the chrome-use skill now prefers live web checks.</li>
+        <li><strong>v1.5.27</strong> (2026-06-19) — gated the about:blank cleanup to the relay case only.</li>
+        <li><strong>v1.5.26</strong> (2026-06-18) — <code>session stop &lt;name&gt;</code> + <code>session prune</code> + lifecycle docs.</li>
+        <li><strong>v1.5.25</strong> (2026-06-18) — default idle-shutdown + <code>keep</code>: stop leaving scratch tabs/groups behind.</li>
+        <li><strong>v1.5.24</strong> (2026-06-18) — build fix: include browser.rs's clear_viewport/via_relay + cargo fmt.</li>
+        <li><strong>v1.5.23</strong> (2026-06-17) — <code>adopt</code>: drive a pre-existing tab without opening a new one.</li>
+        <li><strong>v1.5.22</strong> (2026-06-17) — group-scoped <code>Target.getTargets</code> on the relay: restores follow-popup + cross-session adopt under isolation.</li>
+        <li><strong>v1.5.21</strong> (2026-06-17) — rich-editor fill, box centers, screenshot downscale, disabled handling + docs (#41-#45).</li>
+        <li><strong>v1.5.20</strong> (2026-06-17) — <code>site</code>: adapter auto-sync + auto-suggest.</li>
+        <li><strong>v1.5.19</strong> (2026-06-17) — <code>site</code>: bb-sites adapters — turn any site into a structured-data CLI.</li>
+        <li><strong>v1.5.18</strong> (2026-06-17) — issue-reporting guidance + a clear error for <code>data:</code> URLs over the relay.</li>
+        <li><strong>v1.5.17</strong> (2026-06-17) — complete multi-agent isolation: clicks no longer adopt foreign tabs/pop-ups.</li>
+        <li><strong>v1.5.16</strong> (2026-06-17) — strict multi-agent tab isolation on the relay.</li>
+        <li><strong>v1.5.15</strong> (2026-06-17) — trusted activation for in-iframe buttons.</li>
+        <li><strong>v1.5.14</strong> (2026-06-17) — fixed the eval-await regression (replMode) + default scroll; green CI (#36, #38).</li>
+        <li><strong>v1.5.13</strong> (2026-06-17) — eval replMode (re-declarable let/const) + the snapshot-first skill rule (#37, #38).</li>
+        <li><strong>v1.5.12</strong> (2026-06-17) — relay-safe hover/dblclick/drag, deeper iframe snapshot, key-events-based typing.</li>
+        <li><strong>v1.5.11</strong> (2026-06-16) — cross-origin iframe scroll/click + <code>open</code> auto-reattach (#35, #36).</li>
+        <li><strong>v1.5.10</strong> (2026-06-16) — warn when launching via debug-port while the relay is up.</li>
+        <li><strong>v1.5.9</strong> (2026-06-16) — strip zero-width unicode from titles + <code>screenshot --clip/element</code>.</li>
+        <li><strong>v1.5.8</strong> (2026-06-16) — file upload over the extension relay.</li>
+        <li><strong>v1.5.7</strong> (2026-06-16) — <code>cf-status</code>: a Cloudflare clearance preflight check.</li>
+        <li><strong>v1.5.6</strong> (2026-06-15) — pin the adopted tab against transient relay snapshots.</li>
+        <li><strong>v1.5.5</strong> (2026-06-15) — a diagnostic log for the remote-debugging consent modal in connect mode.</li>
+        <li><strong>v1.5.4</strong> (2026-06-15) — <code>get text --pierce</code>: pierce closed shadow DOM (#30).</li>
+        <li><strong>v1.5.3</strong> (2026-06-15) — <code>get text</code> now defaults to cross-frame; #29 (sessions/did-you-mean/tab liveness); CI changelog fix.</li>
+        <li><strong>v1.5.1</strong> (2026-06-15) — frame-aware text extraction (<code>get text --all-frames/--main</code>, <code>frames</code>) + #27, ab-connect 0.4.9 targetId recovery.</li>
+        <li><strong>v1.5.0</strong> (2026-06-15) — text-selector click, <code>get text</code> defaults to body, <code>tab --activate</code>, <code>click --follow/openedTab</code>; <code>fill</code> now fires input/change/blur; <code>close</code> wording + <code>chrome-use current</code>.</li>
       </ul>
 
-      <h2>v1.5.65</h2>
-      <ul>
-        <li><code>network route --set-json &lt;dot.path&gt;=&lt;value&gt;</code>: structured JSON-field edits on the real response (create or overwrite nested fields); falls back to a string replace if the body isn't JSON.</li>
-        <li>New <code>chrome-use report [--open] [--json]</code>: packages the local, de-identified friction log into a paste-ready GitHub issue — opt-in, never auto-uploads.</li>
-        <li>MCP <code>--tools all</code> profile: 24 tools (the 12-tool core plus hover/select/screenshot/scroll/tabs/extract/expect/find/network_route/site/upload/download).</li>
+      <h2>v1.4.x</h2>
+      <ul class="du-changelog">
+        <li><strong>v1.4.1</strong> (2026-06-14) — hold-to-move (full keydown/keyup descriptor, #game); requires ab-connect 0.4.8 (#23 reattach hardening).</li>
+        <li><strong>v1.4.0</strong> (2026-06-13) — <code>open</code> no longer hijacks focus; <code>tab adopt-by-targetId</code>; keydown/keyup docs; canvas hint; <code>doctor</code> checks version coherence across components.</li>
       </ul>
 
-      <h2>v1.5.64</h2>
-      <ul>
-        <li><code>chrome-use mcp</code>: a stdio Model Context Protocol server (12-tool core profile) for MCP-only hosts like Claude Desktop that can't run a shell command.</li>
+      <h2>v1.3.x</h2>
+      <ul class="du-changelog">
+        <li><strong>v1.3.0</strong> (2026-06-13) — daemon restart/status (#20.2) + live tab resync, adopt-by-targetId, <code>open --reuse-tab</code>.</li>
       </ul>
 
-      <h2>v1.5.63</h2>
-      <ul>
-        <li><code>read [url]</code>: fetch a URL — or, with no URL, the active tab — as agent-readable markdown/text; supports <code>--llms</code> / <code>--outline</code> / <code>--filter</code> / <code>--raw</code>.</li>
+      <h2>v1.0.x – v1.2.x</h2>
+      <ul class="du-changelog">
+        <li><strong>v1.2.3</strong> (2026-06-13) — <code>bringToFront</code> command + <code>tab list --full</code> shows untruncated URLs.</li>
+        <li><strong>v1.2.2</strong> (2026-06-12) — a non-blocking "update available" notice + release changelogs.</li>
+        <li><strong>v1.2.1</strong> (2026-06-12) — relay tab-drift pin on open (#14/#18) + a stable per-tab relay session.</li>
+        <li><strong>v1.2.0</strong> (2026-06-12) — <code>chrome-use test</code>: browser test suites.</li>
+        <li><strong>v1.1.0</strong> (2026-06-12) — cross-profile cookie export/transfer.</li>
+        <li><strong>v1.0.0</strong> (2026-06-12) — rebrand: agent-browser-stealth → chrome-use, de-fork, version reset to 1.0.0.</li>
       </ul>
 
-      <h2>v1.5.62</h2>
-      <ul>
-        <li><code>type --clear</code> / <code>--delay &lt;ms&gt;</code> are now parsed correctly as flags.</li>
-        <li><code>find label</code> now also matches <code>aria-label</code> and <code>aria-labelledby</code> — icon buttons and custom controls are no longer invisible to it.</li>
+      <h2>v0.27.0-fork.x (the fork era before the rebrand)</h2>
+      <ul class="du-changelog">
+        <li><strong>v0.27.0-fork.51</strong> (2026-06-12) — rustfmt fix for the issue #7 regression tests (CI format gate).</li>
+        <li><strong>v0.27.0-fork.50</strong> (2026-06-11) — tab-title truncation + multi-agent/eval/type docs.</li>
+        <li><strong>v0.27.0-fork.49</strong> (2026-06-11) — embedded stealth-status + multi-agent skill guidance.</li>
+        <li><strong>v0.27.0-fork.48</strong> (2026-06-11) — iframe-proxy toggle + stealth status.</li>
+        <li><strong>v0.27.0-fork.47</strong> (2026-06-11) — tab-drift pin, <code>snapshot -c</code> keeps interactive elements, stale-ref guidance.</li>
+        <li><strong>v0.27.0-fork.46</strong> (2026-06-11) — capped the <code>--annotate</code> legend.</li>
+        <li><strong>v0.27.0-fork.45</strong> (2026-06-11) — <code>pick</code> combobox as an atomic op.</li>
+        <li><strong>v0.27.0-fork.44</strong> (2026-06-11) — eval origin stamp, <code>type --focused</code>, humanize argument validation warning.</li>
+        <li><strong>v0.27.0-fork.43</strong> (2026-06-11) — a batch of issue/Hermes fixes (silent-click, live env, <code>eval --file</code>, tab-list, docs).</li>
+        <li><strong>v0.27.0-fork.42</strong> (2026-06-11) — close session-owned tabs on exit — no more tab leak.</li>
+        <li><strong>v0.27.0-fork.41</strong> (2026-06-11) — relay self-heals silently, no user action needed on a blip.</li>
+        <li><strong>v0.27.0-fork.40</strong> (2026-06-11) — no more consent-dialog fallback when the extension is installed.</li>
+        <li><strong>v0.27.0-fork.39</strong> (2026-06-11) — <code>cookies set --curl</code> preserves the full set of cookie attributes.</li>
+        <li><strong>v0.27.0-fork.38</strong> (2026-06-11) — silent operation — no foreground tab stealing.</li>
+        <li><strong>v0.27.0-fork.37</strong> (2026-06-11) — completed humanize (bbox jitter + wheel/drag easing).</li>
+        <li><strong>v0.27.0-fork.36</strong> (2026-06-11) — human-like input stealth (humanize).</li>
+        <li><strong>v0.27.0-fork.35</strong> (2026-06-11) — skill docs embed Store-install, feedback channel, and stale-binary guidance.</li>
+        <li><strong>v0.27.0-fork.34</strong> (2026-06-11) — Web Store live: store-targeted force-install + skill store-install guidance.</li>
+        <li><strong>v0.27.0-fork.33</strong> (2026-06-10) — polished two Hermes-found cosmetic issues (invalid-selector wording, empty-URL glob).</li>
+        <li><strong>v0.27.0-fork.32</strong> (2026-06-10) — resolved Hermes-found CLI bugs (<code>wait --url</code>, <code>find role</code>, invalid selector, and more).</li>
+        <li><strong>v0.27.0-fork.31</strong> (2026-06-10) — Web Store submission ready + two install paths.</li>
+        <li><strong>v0.27.0-fork.30</strong> (2026-06-10) — stealth: navigator overrides moved onto the prototype, not the instance.</li>
+        <li><strong>v0.27.0-fork.29</strong> (2026-06-10) — fixed the plugin overflowTest, popup-free auto-connect, ab-connect rebrand+icon, README.</li>
+        <li><strong>v0.27.0-fork.28</strong> (2026-06-10) — skill docs: headed-by-default, tab groups.</li>
+        <li><strong>v0.27.0-fork.27</strong> (2026-06-10) — forbid headless — always headed, for stealth.</li>
+        <li><strong>v0.27.0-fork.26</strong> (2026-06-10) — stealth: <code>navigator.platform</code> fixed to MacIntel (anti-detection fix).</li>
+        <li><strong>v0.27.0-fork.25</strong> (2026-06-10) — fixed the relay liveness check (answer <code>Browser.getVersion</code> locally) — stops the reconnect-storm drift.</li>
+        <li><strong>v0.27.0-fork.24</strong> (2026-06-10) — passive tab discovery no longer hijacks the active tab (per-session control).</li>
+        <li><strong>v0.27.0-fork.23</strong> (2026-06-10) — tolerate minimal targetInfo from the relay (extension connect's getTargets).</li>
+        <li><strong>v0.27.0-fork.22</strong> (2026-06-09) — extension connect uses the relay URL, fixing a <code>--session connect</code> hang.</li>
+        <li><strong>v0.27.0-fork.21</strong> (2026-06-09) — multi-client relay (concurrent agents).</li>
+        <li><strong>v0.27.0-fork.20</strong> (2026-06-09) — per-session tab groups (ab-connect 0.4.0).</li>
+        <li><strong>v0.27.0-fork.19</strong> (2026-06-09) — a new extension id (Web Store signing key) + store-aware install.</li>
+        <li><strong>v0.27.0-fork.18</strong> (2026-06-09) — extension connect: zero-token native-messaging control of real Chrome + click reliability + eval-first/find-url/site-notes.</li>
+        <li><strong>v0.27.0-fork.17</strong> (2026-06-05) — the eval-first skill + find-url (local bookmark search) + the site-notes convention.</li>
+        <li><strong>v0.27.0-fork.16</strong> (2026-06-05) — click reliability (scroll-into-view + DOM fallback) + skill docs (console opt-in, CLICK_MODE, form/hidden-input eval).</li>
+        <li><strong>v0.27.0-fork.15</strong> (2026-06-04) — stealth hardening (lazy <code>Runtime.enable</code>, native timezone/WebRTC, opt-in canvas noise) + adaptive @ref relocation.</li>
+        <li><strong>v0.27.0-fork.14</strong> (2026-06-01) — upgrade fix + CI on Node 24.</li>
+        <li><strong>v0.27.0-fork.13</strong> (2026-06-01) — <code>--profile auto</code>.</li>
+        <li><strong>v0.27.0-fork.12</strong> (2026-06-01) — embedded skill docs.</li>
+        <li><strong>v0.27.0-fork.11</strong> (2026-06-01) — stealth is now fully applied on the FullLaunch path (previously only on some launch paths).</li>
+        <li><strong>v0.27.0-fork.10</strong> (2026-06-01) — a UX batch + stealth coverage/webdriver handling.</li>
+        <li><strong>v0.27.0-fork.9</strong> (2026-06-01) — routine fix iteration.</li>
+        <li><strong>v0.27.0-fork.8</strong> (2026-05-09) — built-in retry for transient overlay occlusion.</li>
+        <li><strong>v0.27.0-fork.7</strong> (2026-05-09) — catch transient overlay occlusion before mis-clicking.</li>
+        <li><strong>v0.27.0-fork.6</strong> (2026-05-09) — capped defensive CDP timeouts, fixed a misleading chrome://inspect tip.</li>
+        <li><strong>v0.27.0-fork.5</strong> (2026-05-09) — fixed a misleading warning + a connect liveness probe + <code>wait @ref</code>.</li>
+        <li><strong>v0.27.0-fork.4</strong> (2026-05-09) — fixed the SPA click race + @ref identity verification + <code>wait --gone</code>.</li>
+        <li><strong>v0.27.0-fork.3</strong> (2026-05-09) — SPA click race fix + the <code>wait --gone</code> primitive.</li>
+        <li><strong>v0.27.0-fork.2</strong> (2026-05-09) — a friendlier find error + restore the URL after a version-mismatch restart.</li>
+        <li><strong>v0.27.0-fork.1</strong> (2026-05-09) — synced with upstream v0.27.0, added skills.sh support.</li>
       </ul>
 
-      <h2>v1.5.61</h2>
-      <ul>
-        <li>React renderer fix: pick the actual react-dom renderer instead of hardcoding id 1 — this was reading an empty tree on Next.js 16.3 Turbopack RSC apps.</li>
-      </ul>
-
-      <h2>v1.5.60</h2>
-      <ul>
-        <li><code>network route</code>: edit the real response at the response stage (override status/headers, substring-replace the body).</li>
-      </ul>
-
-      <h2>v1.5.59</h2>
-      <ul>
-        <li><code>network route</code>: mock responses (fulfill) and rewrite outgoing requests (continue) via the CDP Fetch domain — no proxy, no cert, no JS injection.</li>
-      </ul>
-
-      <h2>v1.5.58</h2>
-      <ul>
-        <li><code>chrome-use test</code>: per-case account switching for multi-account YAML suites (write <code>account:</code> inside a case's steps).</li>
-      </ul>
+      <h2>Earlier history</h2>
+      <p>chrome-use periodically merges in upstream <a href="https://github.com/AgentDesk/agent-browser">agent-browser</a> releases (<code>v0.27</code>–<code>v0.31</code>, e.g. glob support in <code>--wait</code> from v0.30.0, a sandbox-package publish-metadata fix from v0.29.0). chrome-use's own development sits on top of these and diverges heavily, so the two version lines aren't in lockstep.</p>
+      <p>Earlier v0.x releases (v0.6.0 – v0.26.0, January–April 2026) inherit from the upstream agent-browser base; they're not worth listing individually here.</p>
 
       <hr class="du-divider" />
 
