@@ -205,6 +205,78 @@ pub fn run_friction(args: &[String], json_out: bool) {
     println!("(local only; `chrome-use friction --json` for raw, `--clear` to reset)");
 }
 
+const ISSUES_NEW_URL: &str = "https://github.com/leeguooooo/chrome-use/issues/new";
+
+/// Build a paste-ready GitHub issue body from the local friction log + build
+/// metadata. De-identified (friction records only carry host, never full URLs).
+fn report_markdown(agg: &Value) -> String {
+    let total = agg.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+    let list = |key: &str| -> String {
+        agg.get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|it| {
+                        format!(
+                            "- {} × {}",
+                            it.get("count").and_then(|v| v.as_u64()).unwrap_or(0),
+                            it.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "- (none)".to_string())
+    };
+    format!(
+        "## What happened\n<!-- what you were doing, the exact command, expected vs actual -->\n\n\
+         ## Environment\n- chrome-use: {ver}\n- platform: {os}/{arch}\n<!-- run `chrome-use doctor` and paste its output here if the issue is about connect/send -->\n\n\
+         ## Local friction summary\n_{total} failed command(s) recorded locally (de-identified: command + error category + host only, never full URLs)._\n\n\
+         **By command**\n{by_cmd}\n\n**By category**\n{by_cat}\n\n**By host**\n{by_host}\n",
+        ver = env!("CARGO_PKG_VERSION"),
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+        total = total,
+        by_cmd = list("byCommand"),
+        by_cat = list("byCategory"),
+        by_host = list("byHost"),
+    )
+}
+
+/// `chrome-use report [--open] [--json]` — OPT-IN. Packages the local friction
+/// log + build metadata into a paste-ready GitHub issue. Never auto-uploads;
+/// `--open` just opens the (empty) new-issue page in the browser for you.
+pub fn run_report(args: &[String], json_out: bool) {
+    let records = read_records();
+    let agg = aggregate(&records);
+    let body = report_markdown(&agg);
+
+    if json_out {
+        println!(
+            "{}",
+            json!({ "success": true, "data": {
+                "issueUrl": ISSUES_NEW_URL,
+                "markdown": body,
+                "friction": agg,
+            }})
+        );
+        return;
+    }
+
+    println!("{}", body);
+    println!("─────────────────────────────────────────────");
+    println!("Copy the block above into a new issue: {ISSUES_NEW_URL}");
+    println!("(Nothing was uploaded. `--open` opens the new-issue page in your browser.)");
+
+    if args.iter().any(|a| a == "--open") {
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let _ = std::process::Command::new(opener)
+            .arg(ISSUES_NEW_URL)
+            .spawn();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

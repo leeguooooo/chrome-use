@@ -139,6 +139,50 @@ pub struct ResponseEdit {
     pub headers: Option<HashMap<String, String>>,
     /// Ordered `(from, to)` substring replacements applied to the real body.
     pub replacements: Vec<(String, String)>,
+    /// Structured JSON edits `(dot-path, value)` applied to the real body when it
+    /// parses as JSON (e.g. `data.user.vip` = `true`, `items.0.price` = `9.99`).
+    /// Applied before string replacements; skipped if the body isn't valid JSON.
+    pub json_sets: Vec<(String, Value)>,
+}
+
+/// Set a value at a dot-separated path inside a JSON value, creating intermediate
+/// objects as needed. Numeric segments index into arrays (in range only).
+fn set_json_path(root: &mut Value, path: &str, val: Value) {
+    let segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return;
+    }
+    let mut cur = root;
+    for (i, seg) in segments.iter().enumerate() {
+        let last = i == segments.len() - 1;
+        if let Ok(idx) = seg.parse::<usize>() {
+            // Array index (only if the current node is an array with that slot).
+            if let Some(arr) = cur.as_array_mut() {
+                if idx >= arr.len() {
+                    return; // out of range — leave untouched
+                }
+                if last {
+                    arr[idx] = val;
+                    return;
+                }
+                cur = &mut arr[idx];
+                continue;
+            }
+            return; // numeric segment but not an array
+        }
+        // Object key.
+        if !cur.is_object() {
+            *cur = Value::Object(serde_json::Map::new());
+        }
+        let map = cur.as_object_mut().unwrap();
+        if last {
+            map.insert((*seg).to_string(), val);
+            return;
+        }
+        cur = map
+            .entry((*seg).to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -10020,6 +10064,18 @@ async fn apply_response_edit(
         return;
     };
 
+    // Structured JSON edits first (only if the body parses as JSON).
+    if !edit.json_sets.is_empty() {
+        if let Ok(mut v) = serde_json::from_slice::<Value>(&bytes) {
+            for (path, val) in &edit.json_sets {
+                set_json_path(&mut v, path, val.clone());
+            }
+            if let Ok(reser) = serde_json::to_vec(&v) {
+                bytes = reser;
+            }
+        }
+    }
+
     if !edit.replacements.is_empty() {
         if let Ok(mut text) = String::from_utf8(bytes.clone()) {
             for (from, to) in &edit.replacements {
@@ -10447,6 +10503,23 @@ async fn handle_route(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        // jsonSets: array of [dot-path, valueString]; value parsed as JSON, else
+        // treated as a plain string.
+        let json_sets = v
+            .get("jsonSets")
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|pair| {
+                        let path = pair.get(0).and_then(|x| x.as_str())?;
+                        let raw = pair.get(1).and_then(|x| x.as_str())?;
+                        let parsed = serde_json::from_str::<Value>(raw)
+                            .unwrap_or_else(|_| Value::String(raw.to_string()));
+                        Some((path.to_string(), parsed))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         Some(ResponseEdit {
             status: v.get("status").and_then(|s| s.as_u64()).map(|s| s as u16),
             headers: v.get("headers").and_then(|h| {
@@ -10457,6 +10530,7 @@ async fn handle_route(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                 })
             }),
             replacements,
+            json_sets,
         })
     });
 
@@ -11499,6 +11573,20 @@ mod tests {
     use super::*;
     use crate::test_utils::EnvGuard;
     use std::fs;
+
+    #[test]
+    fn test_set_json_path() {
+        // object key, nested creation, array index (in range), out-of-range skip.
+        let mut v = json!({"data": {"vip": false}, "items": [{"price": 1}]});
+        set_json_path(&mut v, "data.vip", json!(true));
+        set_json_path(&mut v, "items.0.price", json!(9.99));
+        set_json_path(&mut v, "data.new.deep", json!("x")); // creates nested objects
+        set_json_path(&mut v, "items.5.price", json!(0)); // out of range → no-op
+        assert_eq!(v["data"]["vip"], true);
+        assert_eq!(v["items"][0]["price"], 9.99);
+        assert_eq!(v["data"]["new"]["deep"], "x");
+        assert_eq!(v["items"].as_array().unwrap().len(), 1); // unchanged
+    }
 
     #[test]
     fn test_auto_connect_failure_message_relay_installed() {

@@ -4059,6 +4059,8 @@ fn parse_network(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             let edit_headers = kv_map("--edit-header");
             // `--replace from=>to`, repeatable.
             let mut replacements: Vec<Value> = Vec::new();
+            // `--set-json <dot.path>=<value>`, repeatable (structured JSON edit).
+            let mut json_sets: Vec<Value> = Vec::new();
             for (i, &s) in rest.iter().enumerate() {
                 if s == "--replace" {
                     if let Some(&pair) = rest.get(i + 1) {
@@ -4066,10 +4068,18 @@ fn parse_network(rest: &[&str], id: &str) -> Result<Value, ParseError> {
                             replacements.push(json!([from, to]));
                         }
                     }
+                } else if s == "--set-json" {
+                    if let Some(&pair) = rest.get(i + 1) {
+                        if let Some((path, value)) = pair.split_once('=') {
+                            json_sets.push(json!([path, value]));
+                        }
+                    }
                 }
             }
-            let has_edit =
-                edit_status.is_some() || !edit_headers.is_empty() || !replacements.is_empty();
+            let has_edit = edit_status.is_some()
+                || !edit_headers.is_empty()
+                || !replacements.is_empty()
+                || !json_sets.is_empty();
 
             let rt_idx = rest
                 .iter()
@@ -4119,6 +4129,9 @@ fn parse_network(rest: &[&str], id: &str) -> Result<Value, ParseError> {
                 }
                 if !replacements.is_empty() {
                     ed.insert("replacements".into(), Value::Array(replacements));
+                }
+                if !json_sets.is_empty() {
+                    ed.insert("jsonSets".into(), Value::Array(json_sets));
                 }
                 cmd["responseEdit"] = Value::Object(ed);
             }
@@ -4679,6 +4692,22 @@ mod tests {
         // Response-edit is distinct from full mock and request override.
         assert!(cmd.get("response").is_none());
         assert!(cmd.get("requestOverride").is_none());
+    }
+
+    #[test]
+    fn test_network_route_set_json() {
+        let cmd = parse_command(
+            &args("network route **/api/me --set-json data.vip=true --set-json items.0.price=9.99"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "route");
+        let sets = cmd["responseEdit"]["jsonSets"].as_array().unwrap();
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0][0], "data.vip");
+        assert_eq!(sets[0][1], "true");
+        assert_eq!(sets[1][0], "items.0.price");
+        assert_eq!(sets[1][1], "9.99");
     }
 
     #[test]
