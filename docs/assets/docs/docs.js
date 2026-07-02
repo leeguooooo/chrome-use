@@ -431,6 +431,75 @@
     });
   }
 
+  /* ============================================ SEO: canonical + hreflang == */
+  // Canonical is hand-written on only one page (index.html) — everywhere else
+  // it's missing, so there's no established per-file convention to match.
+  // NAV already knows every slug and both zh/en hrefs (hrefFor), so it's the
+  // single source of truth for canonical + hreflang alternates on every page,
+  // the same way it already drives the topbar/sidebar/lang-toggle links.
+  var ORIGIN = "https://chrome-use.leeguoo.com";
+  function setSeoLink(rel, href, hreflang) {
+    var sel = 'link[rel="' + rel + '"]' + (hreflang ? '[hreflang="' + hreflang + '"]' : ":not([hreflang])");
+    var node = document.head.querySelector(sel);
+    if (!node) {
+      node = document.createElement("link");
+      node.rel = rel;
+      if (hreflang) node.hreflang = hreflang;
+      document.head.appendChild(node);
+    }
+    node.href = href;
+  }
+  // hrefFor() points the overview slug at /index.html (fine for nav links),
+  // but the canonical/SEO-facing URL should be the clean directory root
+  // ("/" / "/en/") to match og:url and how the homepage canonical already
+  // read before this pass — GitHub Pages serves index.html for either.
+  function seoHrefFor(slug, lng) {
+    if (slug === "overview") return ORIGIN + (lng === "en" ? "/en/" : "/");
+    return ORIGIN + hrefFor(slug, lng);
+  }
+  function addSeoLinks() {
+    var slug = currentSlug(), lng = lang();
+    setSeoLink("canonical", seoHrefFor(slug, lng));
+    setSeoLink("alternate", seoHrefFor(slug, "zh"), "zh-Hans");
+    setSeoLink("alternate", seoHrefFor(slug, "en"), "en");
+    setSeoLink("alternate", seoHrefFor(slug, "zh"), "x-default");
+  }
+
+  /* ================================================== PAGE FOOTER ========= */
+  // Social / outbound links + author byline, injected once at the end of
+  // <main> on every page — there's no static per-page footer to match, so
+  // this is the one place that guarantees zh/en parity across all 53 pages.
+  function buildFooter() {
+    var main = document.querySelector("main.du-main") || document.querySelector("main");
+    if (!main || main.querySelector(".du-page-footer")) return;
+    var lng = lang();
+
+    var footer = el("footer", "du-page-footer");
+
+    var social = el("div", "du-footer-social");
+    function link(href, label, title) {
+      var a = el("a", null, label);
+      a.href = href; a.target = "_blank"; a.rel = "noopener";
+      if (title) a.title = title;
+      social.appendChild(a);
+    }
+    link(GH, "GitHub", "leeguooooo/chrome-use");
+    link("https://github.com/leeguooooo", "@leeguooooo", lng === "en" ? "Author on GitHub" : "作者 GitHub 主页");
+    link("https://blog.leeguoo.com", lng === "en" ? "Blog" : "博客");
+    link("https://x.com/leeguooooo", "X", lng === "en" ? "Author on X" : "作者 X");
+    link("https://www.linkedin.com/in/li-guo-372ba1365/", "LinkedIn", lng === "en" ? "Author on LinkedIn" : "作者 LinkedIn");
+    footer.appendChild(social);
+
+    var byline = el("p", "du-footer-byline");
+    var a = el("a", null, "郭立 (leeguoo)");
+    a.href = "https://leeguoo.com"; a.target = "_blank"; a.rel = "noopener";
+    byline.appendChild(document.createTextNode(lng === "en" ? "Built by " : "作者 "));
+    byline.appendChild(a);
+    footer.appendChild(byline);
+
+    main.appendChild(footer);
+  }
+
   /* ================================================= GLOBAL KEYBINDINGS == */
   function wireKeys() {
     document.addEventListener("keydown", function (e) {
@@ -444,9 +513,11 @@
 
   /* ============================================================= BOOT ===== */
   function init() {
+    try { addSeoLinks(); } catch (e) { console.error("[docs] seo links", e); }
     try { buildTopbar(); } catch (e) { console.error("[docs] topbar", e); }
     try { buildSidebar(); } catch (e) { console.error("[docs] sidebar", e); }
     try { buildTOC(); } catch (e) { console.error("[docs] toc", e); }
+    try { buildFooter(); } catch (e) { console.error("[docs] footer", e); }
     try { wireCodeCopy(); } catch (e) { console.error("[docs] code copy", e); }
     try { wireCopyPage(); } catch (e) { console.error("[docs] copy page", e); }
     try { wireKeys(); } catch (e) { console.error("[docs] keys", e); }

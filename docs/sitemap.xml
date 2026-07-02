@@ -1,21 +1,478 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
     <loc>https://chrome-use.leeguoo.com/</loc>
-    <lastmod>2026-06-30</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/" />
+    <lastmod>2026-07-02</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
+    <loc>https://chrome-use.leeguoo.com/en/</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/install.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/install.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/install.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/install.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/install.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/install.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/install.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/install.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/core-loop.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/core-loop.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/core-loop.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/core-loop.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/core-loop.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/core-loop.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/core-loop.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/core-loop.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/reading.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/reading.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/reading.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/reading.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/reading.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/reading.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/reading.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/reading.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/interacting.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/interacting.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/interacting.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/interacting.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/interacting.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/interacting.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/interacting.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/interacting.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/finding.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/finding.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/finding.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/finding.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/finding.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/finding.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/finding.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/finding.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/waiting.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/waiting.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/waiting.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/waiting.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/waiting.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/waiting.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/waiting.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/waiting.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/extract.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/extract.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/extract.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/extract.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/extract.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/extract.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/extract.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/extract.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/site-adapters.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/site-adapters.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/site-adapters.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/site-adapters.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/site-adapters.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/site-adapters.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/site-adapters.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/site-adapters.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/login-auth.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/login-auth.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/login-auth.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/login-auth.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/login-auth.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/login-auth.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/login-auth.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/login-auth.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/sessions.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/sessions.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/sessions.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/sessions.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/sessions.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/sessions.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/sessions.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/sessions.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/real-chrome.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/real-chrome.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/real-chrome.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/real-chrome.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/real-chrome.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/real-chrome.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/real-chrome.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/real-chrome.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/stealth.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/stealth.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/stealth.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/stealth.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/stealth.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/stealth.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/stealth.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/stealth.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/canvas.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/canvas.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/canvas.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/canvas.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/canvas.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/canvas.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/canvas.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/canvas.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/network.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/network.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/network.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/network.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/network.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/network.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/network.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/network.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/react.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/react.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/react.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/react.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/react.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/react.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/react.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/react.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/media.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/media.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/media.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/media.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/media.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/media.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/media.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/media.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/electron.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/electron.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/electron.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/electron.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/electron.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/electron.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/electron.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/electron.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/slack.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/slack.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/slack.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/slack.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/slack.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/slack.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/slack.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/slack.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/testing.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/testing.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/testing.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/testing.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/testing.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/testing.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/testing.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/testing.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/cloud.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/cloud.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/cloud.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/cloud.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/cloud.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/cloud.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/cloud.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/cloud.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
     <loc>https://chrome-use.leeguoo.com/mcp.html</loc>
-    <lastmod>2026-07-01</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/mcp.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/mcp.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/mcp.html" />
+    <lastmod>2026-07-02</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/mcp.html</loc>
-    <lastmod>2026-07-01</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/mcp.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/mcp.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/mcp.html" />
+    <lastmod>2026-07-02</lastmod>
     <changefreq>weekly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/commands.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/commands.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/commands.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/commands.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/commands.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/commands.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/commands.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/commands.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/troubleshooting.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/troubleshooting.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/troubleshooting.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/troubleshooting.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/troubleshooting.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/troubleshooting.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/troubleshooting.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/troubleshooting.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/family.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/family.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/family.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/family.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/family.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/family.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/family.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/family.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/changelog.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/changelog.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/changelog.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/changelog.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/changelog.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/changelog.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/changelog.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/changelog.html" />
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/debugger-banner-silence.html</loc>
+    <lastmod>2026-07-02</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
   </url>
 </urlset>
