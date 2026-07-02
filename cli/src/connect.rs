@@ -252,12 +252,21 @@ pub fn run_connect(args: &[String], json: bool) {
         }
         // Per-profile coverage: with many profiles (one per account), the thing
         // that bites is "the extension is only in SOME of them".
+        let zh = ui_zh();
         let with_ext = profiles.iter().filter(|p| p.extension.is_some()).count();
-        println!(
-            "\n  Chrome profiles ({} found, {} with the extension):",
-            profiles.len(),
-            with_ext
-        );
+        if zh {
+            println!(
+                "\n  Chrome profile（找到 {} 个，{} 个已装扩展）：",
+                profiles.len(),
+                with_ext
+            );
+        } else {
+            println!(
+                "\n  Chrome profiles ({} found, {} with the extension):",
+                profiles.len(),
+                with_ext
+            );
+        }
         for p in &profiles {
             match &p.extension {
                 Some(ext) => println!(
@@ -265,32 +274,63 @@ pub fn run_connect(args: &[String], json: bool) {
                     p.label(),
                     ext.version.as_deref().unwrap_or("?")
                 ),
-                None => println!("    ✗ {}  —  missing", p.label()),
+                None => println!(
+                    "    ✗ {}  —  {}",
+                    p.label(),
+                    if zh { "未安装" } else { "missing" }
+                ),
             }
         }
         match &policy {
             PolicyState::Active => println!(
-                "  ✓ silent-install policy: active (missing profiles install on Chrome restart)"
+                "{}",
+                if zh {
+                    "  ✓ 静默安装策略：已生效（缺失的 profile 会在 Chrome 重启时装上）"
+                } else {
+                    "  ✓ silent-install policy: active (missing profiles install on Chrome restart)"
+                }
             ),
-            PolicyState::Stale(entry) => println!(
-                "  ! silent-install policy: STALE ({entry}) — approved but Chrome blocks it.\n\
-                 \x20   Run `chrome-use extension install` to fix."
-            ),
+            PolicyState::Stale(entry) => {
+                if zh {
+                    println!(
+                        "  ! 静默安装策略：已过期（{entry}）—— 虽已批准但被 Chrome 屏蔽。\n\
+                         \x20   运行 `chrome-use extension install` 修复。"
+                    );
+                } else {
+                    println!(
+                        "  ! silent-install policy: STALE ({entry}) — approved but Chrome blocks it.\n\
+                         \x20   Run `chrome-use extension install` to fix."
+                    );
+                }
+            }
             PolicyState::Absent => {
                 if with_ext < profiles.len() {
                     println!(
-                        "  Get the extension into the missing profiles: chrome-use extension install"
+                        "{}",
+                        if zh {
+                            "  给缺失的 profile 装上扩展：chrome-use extension install"
+                        } else {
+                            "  Get the extension into the missing profiles: chrome-use extension install"
+                        }
                     );
                 }
             }
             PolicyState::Unknown => {}
         }
         if !old_ids.is_empty() {
-            println!(
-                "  ! outdated policy profile(s) approved ({}) — remove in System Settings →\n\
-                 \x20   Privacy & Security → Profiles, or `profiles remove -identifier <id>`",
-                old_ids.join(", ")
-            );
+            if zh {
+                println!(
+                    "  ! 检测到已批准的过期策略描述文件（{}）—— 在 系统设置 → 隐私与安全性\n\
+                     \x20   → 描述文件 中删除，或 `profiles remove -identifier <id>`",
+                    old_ids.join(", ")
+                );
+            } else {
+                println!(
+                    "  ! outdated policy profile(s) approved ({}) — remove in System Settings →\n\
+                     \x20   Privacy & Security → Profiles, or `profiles remove -identifier <id>`",
+                    old_ids.join(", ")
+                );
+            }
         }
     } else {
         println!("✗ not installed. Run: chrome-use connect --install");
@@ -377,107 +417,216 @@ fn run_install(args: &[String], json: bool) {
         return;
     }
 
-    // -- The human-facing guide. --------------------------------------------
-    println!("chrome-use setup — connect your real Chrome\n");
-
-    println!("[1/3] native-messaging host (shared by every profile)");
-    println!("  ✓ installed ({} manifest(s))", host_paths.len());
-
-    println!(
-        "\n[2/3] your Chrome profiles ({} found, {} with the extension)",
-        profiles.len(),
-        with_ext
-    );
+    // -- The human-facing guide (localized to the user's locale). ------------
+    let zh = ui_zh();
+    if zh {
+        println!("chrome-use 安装向导 — 连接你的 Chrome\n");
+        println!("[1/3] native messaging host（所有 profile 共享）");
+        println!("  ✓ 已自动装好（{} 个 manifest）", host_paths.len());
+        println!(
+            "\n[2/3] 你的 Chrome profile（找到 {} 个，{} 个已装扩展）",
+            profiles.len(),
+            with_ext
+        );
+    } else {
+        println!("chrome-use setup — connect your real Chrome\n");
+        println!("[1/3] native-messaging host (shared by every profile)");
+        println!("  ✓ installed ({} manifest(s))", host_paths.len());
+        println!(
+            "\n[2/3] your Chrome profiles ({} found, {} with the extension)",
+            profiles.len(),
+            with_ext
+        );
+    }
     for p in &profiles {
         match &p.extension {
             Some(ext) => println!(
-                "  ✓ {}  —  extension {}",
+                "  ✓ {}  —  {}{}",
                 p.label(),
+                if zh { "扩展 " } else { "extension " },
                 ext.version.as_deref().unwrap_or("?")
             ),
-            None => println!("  ✗ {}  —  missing", p.label()),
+            None => println!(
+                "  ✗ {}  —  {}",
+                p.label(),
+                if zh { "未安装" } else { "missing" }
+            ),
         }
     }
     if profiles.is_empty() {
-        println!("  (no Chrome profiles found — is Chrome installed?)");
+        println!(
+            "  {}",
+            if zh {
+                "（没有找到 Chrome profile —— Chrome 装了吗？）"
+            } else {
+                "(no Chrome profiles found — is Chrome installed?)"
+            }
+        );
     }
 
-    println!("\n[3/3] get the extension into the missing profiles");
+    println!(
+        "\n[3/3] {}",
+        if zh {
+            "把扩展装进缺失的 profile"
+        } else {
+            "get the extension into the missing profiles"
+        }
+    );
     if !old_ids.is_empty() {
-        println!(
-            "  ! an OUTDATED policy profile from an earlier release is approved — Chrome\n\
-             \x20   blocks its install source, so it silently does nothing. Remove it first:\n\
-             \x20     System Settings → Privacy & Security → Profiles → \"chrome-use connect\" → −"
-        );
+        if zh {
+            println!(
+                "  ! 检测到旧版本留下的过期策略描述文件（已批准但被 Chrome 屏蔽，\n\
+                 \x20   装不上任何东西）。请先删除：\n\
+                 \x20     系统设置 → 隐私与安全性 → 描述文件 → \"chrome-use connect\" → −"
+            );
+        } else {
+            println!(
+                "  ! an OUTDATED policy profile from an earlier release is approved — Chrome\n\
+                 \x20   blocks its install source, so it silently does nothing. Remove it first:\n\
+                 \x20     System Settings → Privacy & Security → Profiles → \"chrome-use connect\" → −"
+            );
+        }
         for id in &old_ids {
             println!("     (or: profiles remove -identifier {id})");
         }
     }
     if all_profiles {
-        println!(
-            "  → opened the Web Store install page in {} profile(s): {}\n\
-             \x20   Press \"Add to Chrome\" in each window (Cmd+` cycles through them).",
-            opened.len(),
-            opened.join(", ")
-        );
-        if opened.len() < missing.len() {
+        if zh {
             println!(
-                "  ! {} profile(s) could not be opened automatically — visit\n\
-                 \x20   {STORE_URL} in them yourself.",
-                missing.len() - opened.len()
+                "  → 已在 {} 个 profile 里打开商店安装页：{}\n\
+                 \x20   在每个窗口点一次「加入 Chrome」即可（Cmd+` 在窗口间切换）。",
+                opened.len(),
+                opened.join(", ")
             );
+            if opened.len() < missing.len() {
+                println!(
+                    "  ! 有 {} 个 profile 没能自动打开 —— 请自行在其中访问\n\
+                     \x20   {STORE_URL}",
+                    missing.len() - opened.len()
+                );
+            }
+        } else {
+            println!(
+                "  → opened the Web Store install page in {} profile(s): {}\n\
+                 \x20   Press \"Add to Chrome\" in each window (Cmd+` cycles through them).",
+                opened.len(),
+                opened.join(", ")
+            );
+            if opened.len() < missing.len() {
+                println!(
+                    "  ! {} profile(s) could not be opened automatically — visit\n\
+                     \x20   {STORE_URL} in them yourself.",
+                    missing.len() - opened.len()
+                );
+            }
         }
     } else if policy == PolicyState::Active {
-        println!(
-            "  ✓ the silent-install policy is active. Restart Chrome once and every\n\
-             \x20   missing profile installs the extension automatically."
-        );
+        if zh {
+            println!(
+                "  ✓ 静默安装策略已生效。重启一次 Chrome，缺失的 profile 会全部自动装上。"
+            );
+        } else {
+            println!(
+                "  ✓ the silent-install policy is active. Restart Chrome once and every\n\
+                 \x20   missing profile installs the extension automatically."
+            );
+        }
     } else {
         match mobileconfig {
             Some(Ok(path)) => {
-                println!("  Pick ONE:");
-                println!(
-                    "  A) Silent, all profiles at once{}: approve the policy we just {}\n\
-                     \x20    ({})\n\
-                     \x20      System Settings → Privacy & Security → Profiles\n\
-                     \x20      → \"chrome-use connect\" (leeguoo.com) → double-click → Install…\n\
-                     \x20    Then restart Chrome: every profile — current and future — gets the\n\
-                     \x20    extension installed and auto-updated. Nothing else to click, ever.",
-                    if cfg!(target_os = "macos") { "" } else { " (macOS)" },
-                    if no_open { "wrote" } else { "opened" },
-                    path.display()
-                );
-                println!(
-                    "  B) One click per profile: chrome-use extension install --all-profiles\n\
-                     \x20    opens the Web Store page inside each missing profile — press\n\
-                     \x20    \"Add to Chrome\" in each."
-                );
+                if zh {
+                    println!("  二选一：");
+                    println!(
+                        "  A) 静默、一次覆盖全部 profile{}：批准我们刚{}的策略描述文件\n\
+                         \x20    （{}）\n\
+                         \x20      系统设置 → 隐私与安全性 → 描述文件\n\
+                         \x20      → 双击 \"chrome-use connect\"（leeguoo.com）→ 安装…\n\
+                         \x20    然后重启 Chrome：现有和将来新建的每个 profile 都会自动装上\n\
+                         \x20    并保持更新，之后再也不用点任何东西。",
+                        if cfg!(target_os = "macos") { "" } else { "（仅 macOS）" },
+                        if no_open { "写好" } else { "打开" },
+                        path.display()
+                    );
+                    println!(
+                        "  B) 每个 profile 点一下：chrome-use extension install --all-profiles\n\
+                         \x20    会在每个缺失的 profile 里打开商店安装页 —— 逐个点「加入 Chrome」。"
+                    );
+                } else {
+                    println!("  Pick ONE:");
+                    println!(
+                        "  A) Silent, all profiles at once{}: approve the policy we just {}\n\
+                         \x20    ({})\n\
+                         \x20      System Settings → Privacy & Security → Profiles\n\
+                         \x20      → \"chrome-use connect\" (leeguoo.com) → double-click → Install…\n\
+                         \x20    Then restart Chrome: every profile — current and future — gets the\n\
+                         \x20    extension installed and auto-updated. Nothing else to click, ever.",
+                        if cfg!(target_os = "macos") { "" } else { " (macOS)" },
+                        if no_open { "wrote" } else { "opened" },
+                        path.display()
+                    );
+                    println!(
+                        "  B) One click per profile: chrome-use extension install --all-profiles\n\
+                         \x20    opens the Web Store page inside each missing profile — press\n\
+                         \x20    \"Add to Chrome\" in each."
+                    );
+                }
                 if cfg!(target_os = "macos") && !no_open && interactive_tty() {
-                    guide_through_approval();
+                    guide_through_approval(zh);
                 }
             }
             Some(Err(e)) => {
-                println!("  ! could not write the policy profile: {e}");
-                println!(
-                    "  Fallback: chrome-use extension install --all-profiles (one click per\n\
-                     \x20 profile), or open {STORE_URL} in each profile yourself."
-                );
+                if zh {
+                    println!("  ! 策略描述文件写入失败：{e}");
+                    println!(
+                        "  退路：chrome-use extension install --all-profiles（每个 profile\n\
+                         \x20 点一下），或自行在各 profile 里打开 {STORE_URL}"
+                    );
+                } else {
+                    println!("  ! could not write the policy profile: {e}");
+                    println!(
+                        "  Fallback: chrome-use extension install --all-profiles (one click per\n\
+                         \x20 profile), or open {STORE_URL} in each profile yourself."
+                    );
+                }
             }
             None => {}
         }
     }
 
-    println!(
-        "\nverify:  chrome-use browsers\n\
-         (a profile appears there once one of its windows is open — the extension\n\
-         \x20only runs in profiles that are running)"
-    );
+    if zh {
+        println!(
+            "\n验证：chrome-use browsers\n\
+             （profile 开着窗口时才会出现在列表里 —— 扩展只在运行中的 profile 里活动）"
+        );
+    } else {
+        println!(
+            "\nverify:  chrome-use browsers\n\
+             (a profile appears there once one of its windows is open — the extension\n\
+             \x20only runs in profiles that are running)"
+        );
+    }
 }
 
 /// stdin+stderr are TTYs → a wait/confirm flow is safe (same rule as silence).
 fn interactive_tty() -> bool {
     use std::io::IsTerminal;
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Chinese UI for the human-facing setup/guide text? Honors CHROME_USE_LANG
+/// (`zh`/`en` override), then the POSIX locale chain. JSON output stays
+/// English — it's for agents, and keys/values are contract, not prose.
+fn ui_zh() -> bool {
+    if let Ok(explicit) = std::env::var("CHROME_USE_LANG") {
+        if !explicit.is_empty() {
+            return explicit.to_lowercase().starts_with("zh");
+        }
+    }
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|v| !v.is_empty())
+        .is_some_and(|v| v.to_lowercase().starts_with("zh"))
 }
 
 /// The closed loop around the ONE manual step — this is where users get lost:
@@ -488,20 +637,30 @@ fn interactive_tty() -> bool {
 /// restart Chrome for them (session preserved) so the policy applies NOW
 /// instead of "someday", and show the extension reaching their profiles until
 /// coverage is done. TTY-only; JSON/agent/`--no-open` runs skip it.
-fn guide_through_approval() {
+fn guide_through_approval(zh: bool) {
     use std::io::Write as _;
     use std::time::{Duration, Instant};
 
     // Deep-link straight to the pane the queued profile is sitting in.
     open_url("x-apple.systempreferences:com.apple.preferences.configurationprofiles");
 
-    eprintln!(
-        "\n  System Settings is open on the Profiles pane. Under \"Downloaded\",\n\
-         \x20 double-click \"chrome-use connect\" → Install… (macOS asks for your Mac\n\
-         \x20 password — that's Apple's approval step, not something we see).\n\
-         \x20 I'll wait here. (Ctrl-C to finish later; option B above also works.)"
-    );
-    eprint!("  waiting for the approval ");
+    if zh {
+        eprintln!(
+            "\n  系统设置已打开并停在「描述文件」面板。在「已下载」下面\n\
+             \x20 双击 \"chrome-use connect\" → 安装…（macOS 会要求输入 Mac 密码 ——\n\
+             \x20 这是 Apple 的批准步骤，我们看不到你的密码）。\n\
+             \x20 我在这里等你。（Ctrl-C 可以稍后再装；上面的 B 方案也随时可用。）"
+        );
+        eprint!("  等待批准 ");
+    } else {
+        eprintln!(
+            "\n  System Settings is open on the Profiles pane. Under \"Downloaded\",\n\
+             \x20 double-click \"chrome-use connect\" → Install… (macOS asks for your Mac\n\
+             \x20 password — that's Apple's approval step, not something we see).\n\
+             \x20 I'll wait here. (Ctrl-C to finish later; option B above also works.)"
+        );
+        eprint!("  waiting for the approval ");
+    }
     let deadline = Instant::now() + Duration::from_secs(300);
     let mut approved = false;
     while Instant::now() < deadline {
@@ -514,14 +673,21 @@ fn guide_through_approval() {
         std::thread::sleep(Duration::from_secs(2));
     }
     if !approved {
-        eprintln!(
-            "\n  ! not approved within 5 minutes — the queued profile may have expired\n\
-             \x20   (macOS drops it after ~8). Re-run `chrome-use extension install` to\n\
-             \x20   queue it again."
-        );
+        if zh {
+            eprintln!(
+                "\n  ! 5 分钟内没有等到批准 —— 待安装的描述文件可能已过期（macOS 约 8\n\
+                 \x20   分钟后丢弃）。重新运行 `chrome-use extension install` 再排一次即可。"
+            );
+        } else {
+            eprintln!(
+                "\n  ! not approved within 5 minutes — the queued profile may have expired\n\
+                 \x20   (macOS drops it after ~8). Re-run `chrome-use extension install` to\n\
+                 \x20   queue it again."
+            );
+        }
         return;
     }
-    eprintln!(" ✓ approved");
+    eprintln!("{}", if zh { " ✓ 已批准" } else { " ✓ approved" });
 
     // The approval lands in managed preferences asynchronously; confirm Chrome
     // will actually see it before promising anything.
@@ -530,16 +696,37 @@ fn guide_through_approval() {
         std::thread::sleep(Duration::from_secs(1));
     }
     if managed_policy_state() != PolicyState::Active {
-        eprintln!(
-            "  ! approved, but the policy hasn't reached Chrome's managed preferences\n\
-             \x20   yet — give it a minute, then restart Chrome yourself."
-        );
+        if zh {
+            eprintln!(
+                "  ! 批准成功，但策略还没同步到 Chrome 的受管配置 —— 等一两分钟后\n\
+                 \x20   自行重启 Chrome 即可。"
+            );
+        } else {
+            eprintln!(
+                "  ! approved, but the policy hasn't reached Chrome's managed preferences\n\
+                 \x20   yet — give it a minute, then restart Chrome yourself."
+            );
+        }
         return;
     }
-    eprintln!("  ✓ policy active — Chrome now installs the extension into every profile");
+    eprintln!(
+        "{}",
+        if zh {
+            "  ✓ 策略已生效 —— Chrome 会把扩展装进每一个 profile"
+        } else {
+            "  ✓ policy active — Chrome now installs the extension into every profile"
+        }
+    );
 
     // Apply it NOW instead of leaving a "restart Chrome later" chore.
-    eprint!("  Restart Chrome to apply it (your tabs are restored automatically)? [Y/n] ");
+    eprint!(
+        "{}",
+        if zh {
+            "  现在重启 Chrome 让它立即生效（标签页会自动恢复）？[Y/n] "
+        } else {
+            "  Restart Chrome to apply it (your tabs are restored automatically)? [Y/n] "
+        }
+    );
     let _ = std::io::stderr().flush();
     let mut input = String::new();
     let restart = std::io::stdin().read_line(&mut input).is_ok() && {
@@ -547,13 +734,27 @@ fn guide_through_approval() {
         a.is_empty() || a == "y" || a == "yes"
     };
     if !restart {
-        eprintln!("  OK — the extension installs on Chrome's next restart.");
+        eprintln!(
+            "{}",
+            if zh {
+                "  好的 —— 下次重启 Chrome 时扩展会自动装上。"
+            } else {
+                "  OK — the extension installs on Chrome's next restart."
+            }
+        );
         return;
     }
     match crate::silence::restart_chrome_preserving_session() {
         Ok(true) => {}
         Ok(false) => {
-            eprintln!("  Chrome isn't running — each profile picks the extension up when opened.");
+            eprintln!(
+                "{}",
+                if zh {
+                    "  Chrome 没在运行 —— 每个 profile 会在打开时自动装上扩展。"
+                } else {
+                    "  Chrome isn't running — each profile picks the extension up when opened."
+                }
+            );
             return;
         }
         Err(e) => {
@@ -564,7 +765,14 @@ fn guide_through_approval() {
 
     // Chrome applies the forcelist per profile as each profile session starts,
     // so restored profiles fill in over the next seconds — show it happening.
-    eprint!("  Chrome restarted; watching the extension reach your profiles ");
+    eprint!(
+        "{}",
+        if zh {
+            "  Chrome 已重启；正在看着扩展铺到各个 profile "
+        } else {
+            "  Chrome restarted; watching the extension reach your profiles "
+        }
+    );
     let deadline = Instant::now() + Duration::from_secs(60);
     let (mut done, mut total) = (0usize, 0usize);
     while Instant::now() < deadline {
@@ -580,7 +788,17 @@ fn guide_through_approval() {
     }
     eprintln!();
     if total > 0 && done == total {
-        eprintln!("  ✓ all {total} profiles have the extension. Setup complete.");
+        if zh {
+            eprintln!("  ✓ 全部 {total} 个 profile 都装上扩展了。安装完成。");
+        } else {
+            eprintln!("  ✓ all {total} profiles have the extension. Setup complete.");
+        }
+    } else if zh {
+        eprintln!(
+            "  ✓ 目前 {done}/{total} 个 profile 已装上。其余的会在你下次打开它们的\n\
+             \x20   瞬间自动装上（Chrome 按 profile 加载时应用策略）—— 之后再也不用\n\
+             \x20   点任何东西。"
+        );
     } else {
         eprintln!(
             "  ✓ {done}/{total} profiles have it so far. The rest install the moment you\n\
