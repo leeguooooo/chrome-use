@@ -1578,7 +1578,12 @@ fn main() {
     // Skip when the daemon was already running — it already holds the connection
     // from a previous auto-connect launch, so re-sending the launch command would
     // redundantly probe Chrome and may trigger repeated permission prompts (#962).
-    if flags.auto_connect && !daemon_result.already_running {
+    // Also skip when the command itself is `connect`: it establishes its own
+    // connection, and auto-connecting first (typically to the extension relay)
+    // made the fresh daemon hold a different endpoint the instant before the
+    // explicit one was requested.
+    let command_is_connect = clean.first().map(|s| s.as_str()) == Some("connect");
+    if flags.auto_connect && !daemon_result.already_running && !command_is_connect {
         let mut launch_cmd = json!({
             "id": gen_id(),
             "action": "launch",
@@ -1618,7 +1623,6 @@ fn main() {
 
     // Connect via CDP if --cdp flag is set
     // Accepts either a port number (e.g., "9222") or a full URL (e.g., "ws://..." or "wss://...")
-    // Skip when daemon already running — it already holds the CDP connection.
     if let Some(ref cdp_value) = flags.cdp {
         // Validate CDP value eagerly (even when daemon is already running) so
         // the user gets an immediate error for bad input instead of a silent no-op.
@@ -1678,7 +1682,11 @@ fn main() {
             })
         };
 
-        if !daemon_result.already_running {
+        // Send even when the daemon is already running: it may hold a DIFFERENT
+        // connection (e.g. the auto-connect relay), and the daemon-side reuse
+        // check compares endpoints — same endpoint is a cheap reuse, a different
+        // one rebinds. Skipping here made `--cdp <port>` a silent no-op.
+        {
             let mut launch_cmd = launch_cmd;
 
             if flags.ignore_https_errors {

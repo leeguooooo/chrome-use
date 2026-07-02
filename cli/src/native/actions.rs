@@ -2357,6 +2357,41 @@ async fn try_load_storage_state(state: &DaemonState, path: &Option<String>) {
 // Phase 1 handlers
 // ---------------------------------------------------------------------------
 
+/// Whether an explicitly requested CDP endpoint (`connect <port|url>` /
+/// `--cdp`) matches the endpoint of the connection the daemon already holds.
+/// Compared by host:port — discovery may rewrite the ws path, so a full URL
+/// compare would spuriously mismatch. Returns `true` when no explicit endpoint
+/// was requested (nothing to compare, e.g. plain auto-connect).
+///
+/// Without this check, `connect 9223` on a daemon that auto-connected to the
+/// extension relay reported "reused" and kept driving the relay browser — an
+/// explicit connect was a silent no-op whenever the relay was up.
+fn explicit_endpoint_matches(
+    current_ws_url: &str,
+    cdp_url: Option<&str>,
+    cdp_port: Option<u64>,
+) -> bool {
+    let Ok(current) = url::Url::parse(current_ws_url) else {
+        return false;
+    };
+    if let Some(port) = cdp_port {
+        // A bare port always means the local loopback.
+        return current.port() == Some(port as u16)
+            && matches!(
+                current.host_str(),
+                Some("127.0.0.1") | Some("localhost") | Some("[::1]") | Some("::1")
+            );
+    }
+    if let Some(requested) = cdp_url {
+        if let Ok(req) = url::Url::parse(requested) {
+            return req.host_str() == current.host_str()
+                && req.port_or_known_default() == current.port_or_known_default();
+        }
+        return false;
+    }
+    true
+}
+
 async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let headless = cmd
         .get("headless")
@@ -2459,7 +2494,12 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         let was_external = mgr.is_cdp_connection();
         let hash_changed = !is_external && state.launch_hash != Some(new_hash);
         let storage_state_requires_clean_launch = storage_state_owned.is_some() && !is_external;
+        // An explicit `connect <port|url>` must rebind when the held external
+        // connection points elsewhere (e.g. auto-connect grabbed the relay).
+        let endpoint_changed =
+            was_external && !explicit_endpoint_matches(mgr.ws_url(), cdp_url, cdp_port);
         is_external != was_external
+            || endpoint_changed
             || hash_changed
             || storage_state_requires_clean_launch
             || mgr.has_process_exited()
@@ -11589,6 +11629,49 @@ mod tests {
         assert_eq!(v["items"][0]["price"], 9.99);
         assert_eq!(v["data"]["new"]["deep"], "x");
         assert_eq!(v["items"].as_array().unwrap().len(), 1); // unchanged
+    }
+
+    #[test]
+    fn explicit_port_rebinds_off_a_different_endpoint() {
+        // The bug: daemon auto-connected to the relay (ws://127.0.0.1:50466/…),
+        // then `connect 9223` reported "reused" and kept driving the relay.
+        let relay = "ws://127.0.0.1:50466/4ce0fec0fcaea0037b9c3df18723a4e4";
+        assert!(!explicit_endpoint_matches(relay, None, Some(9223)));
+        // Same port → genuinely the same endpoint, reuse is correct.
+        let slack = "ws://127.0.0.1:9223/devtools/browser/abc";
+        assert!(explicit_endpoint_matches(slack, None, Some(9223)));
+        // localhost counts as loopback too.
+        let local = "ws://localhost:9223/devtools/browser/abc";
+        assert!(explicit_endpoint_matches(local, None, Some(9223)));
+    }
+
+    #[test]
+    fn explicit_url_compares_host_and_port() {
+        let relay = "ws://127.0.0.1:50466/4ce0fec0fcaea0037b9c3df18723a4e4";
+        assert!(!explicit_endpoint_matches(
+            relay,
+            Some("ws://127.0.0.1:9223/devtools/browser/abc"),
+            None
+        ));
+        // Same host:port with a different path (discovery rewrites it) → match.
+        assert!(explicit_endpoint_matches(
+            relay,
+            Some("ws://127.0.0.1:50466/other-token"),
+            None
+        ));
+        assert!(!explicit_endpoint_matches(
+            relay,
+            Some("ws://10.0.0.5:50466/other-token"),
+            None
+        ));
+    }
+
+    #[test]
+    fn no_explicit_endpoint_never_forces_a_rebind() {
+        // Plain auto-connect (no cdpUrl/cdpPort) has nothing to compare —
+        // reusing whatever external connection the daemon holds is correct.
+        let relay = "ws://127.0.0.1:50466/4ce0fec0fcaea0037b9c3df18723a4e4";
+        assert!(explicit_endpoint_matches(relay, None, None));
     }
 
     #[test]

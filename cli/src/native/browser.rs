@@ -1881,6 +1881,13 @@ impl BrowserManager {
         self.browser_process.is_none()
     }
 
+    /// The WebSocket URL this manager is connected to. Lets `handle_launch`
+    /// compare an explicitly requested `connect <port|url>` endpoint against
+    /// the connection it already holds (e.g. the auto-connect relay).
+    pub fn ws_url(&self) -> &str {
+        &self.ws_url
+    }
+
     /// Ensures the browser has at least one page. If `pages` is empty, creates a new
     /// about:blank page and attaches to it.
     pub async fn ensure_page(&mut self) -> Result<(), String> {
