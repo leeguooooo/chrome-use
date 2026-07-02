@@ -375,6 +375,9 @@ img { max-width: 100%; }
   border-radius: 6px 8px 7px 9px;
   box-decoration-break: clone; -webkit-box-decoration-break: clone;
   transform: rotate(-.4deg); display: inline-block;
+  /* Cap to the container so a long highlighted phrase wraps instead of forcing
+     the whole page wider than the viewport (was the main mobile-overflow bug). */
+  max-width: 100%;
 }
 
 /* ------------------------------------------------------------ divider hr */
@@ -559,6 +562,10 @@ img { max-width: 100%; }
 /* sidebar -> drawer below 960px */
 @media (max-width: 960px) {
   .du-shell { grid-template-columns: minmax(0, 1fr); }
+  /* The desktop `margin: 0 auto` centering makes .du-main an auto-margined grid
+     item, which disables stretch and shrink-to-fits it to max-content — wider
+     than the phone. Fill the single column instead so content wraps/scrolls. */
+  .du-main { margin-inline: 0; width: 100%; max-width: 100%; }
   .du-hamburger { display: inline-flex; }
   .du-tabs { display: none; }
   .du-sidebar {
