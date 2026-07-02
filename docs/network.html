@@ -136,14 +136,21 @@
 <pre><code><span class="du-cmt"># 编辑真实响应（请求发出、响应回来、再改）</span>
 <span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--edit-status</span> 503                <span class="du-cmt"># 覆盖状态码</span>
 <span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--edit-header</span> X-Env=test         <span class="du-cmt"># 新增/覆盖一个响应头</span>
-<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--replace</span> <span class="du-str">'prod=&gt;staging'</span>        <span class="du-cmt"># 在真实响应体里做子串替换（可重复）</span></code></pre>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--replace</span> <span class="du-str">'prod=&gt;staging'</span>        <span class="du-cmt"># 在真实响应体里做子串替换（可重复）</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--set-json</span> <span class="du-str">data.user.vip=true</span>     <span class="du-cmt"># 结构化编辑响应体里的一个 JSON 字段</span></code></pre>
       </div>
+
+      <p>
+        <code>--set-json &lt;dot.path&gt;=&lt;value&gt;</code> 按点号路径定位到响应体 JSON 里的一个字段，
+        创建或覆盖它——嵌套路径会自动补全中间的对象。响应体不是合法 JSON 时，
+        它会<strong>自动退化成字符串替换</strong>，跟 <code>--replace</code> 一样安全，不会因为解析失败而报错。
+      </p>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 优先级与可重复性</div>
         同一条规则同时给了 mock 和 rewrite 时，<strong>mock 胜出</strong>。
-        <code>--header</code> / <code>--set-header</code> / <code>--edit-header</code> / <code>--replace</code>
-        都是<strong>可重复</strong>的；请求/响应头会合并覆盖在原始头之上。
+        <code>--header</code> / <code>--set-header</code> / <code>--edit-header</code> / <code>--replace</code> /
+        <code>--set-json</code> 都是<strong>可重复</strong>的；请求/响应头会合并覆盖在原始头之上。
       </div>
 
       <div class="du-callout warn">

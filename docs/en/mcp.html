@@ -95,6 +95,24 @@
         </tbody>
       </table>
 
+      <h2>Extended profile: --tools all</h2>
+      <p>
+        The default 12 tools cover most tasks, but when a host needs more — hover, dropdown select,
+        screenshots, multi-tab, extraction, assertions, finding, network interception, site adapters,
+        upload/download — add <code>--tools all</code> to expand the profile from 12 to
+        <strong>24 tools</strong>: the core 12 plus hover / select / screenshot / scroll / tabs /
+        extract / expect / find / network_route / site / upload / download.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 24-tool extended profile</span>
+<span class="du-prompt">$</span> chrome-use mcp <span class="du-flag">--tools</span> all</code></pre>
+      </div>
+
       <hr class="du-divider" />
 
       <h2>Starting the server</h2>

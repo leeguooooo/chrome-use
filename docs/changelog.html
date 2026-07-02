@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>更新日志 · chrome-use 文档</title>
+  <meta name="description" content="chrome-use 版本更新日志：network route 的结构化 JSON 编辑、chrome-use report 一键提 issue、MCP --tools all、chrome-use mcp、read、select 报错行为等近期版本要点。" />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="changelog" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="10" y="8" width="34" height="44" rx="3"/>
+          <path d="M18 20 h18 M18 28 h18 M18 36 h10"/>
+          <circle cx="46" cy="42" r="8"/>
+          <path d="M43 42 l2 2 4-5"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">参考 / Reference</p>
+
+      <div class="du-title-row">
+        <h1>更新日志</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        每个版本改了什么、为什么改——这一页只留<span class="mark">最近这批有实际影响的变化</span>，
+        按新到旧排列。逐条 commit 级别的完整历史留在 GitHub Releases。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 完整历史：GitHub Releases</div>
+        这一页只挑对日常使用有影响的条目。想看每个版本的完整 diff 和更早的历史，去
+        <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Releases</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>v1.5.66</h2>
+      <ul>
+        <li><code>select</code> 找不到匹配的 <code>&lt;option&gt;</code> 时不再默默选不中——现在会报错，并把所有可选项列出来。</li>
+        <li>默认操作超时从 30 秒降到 25 秒，能在触发底层 socket 读超时之前干净地失败，而不是拖到那之后才报错。</li>
+      </ul>
+
+      <h2>v1.5.65</h2>
+      <ul>
+        <li><code>network route --set-json &lt;dot.path&gt;=&lt;value&gt;</code>：对真实响应做结构化 JSON 字段编辑（创建或覆盖嵌套字段）；响应体不是 JSON 时自动退化为字符串替换。</li>
+        <li>新增 <code>chrome-use report [--open] [--json]</code>：把本地、已脱敏的痛点日志打包成一份可直接粘贴的 GitHub issue——默认不开启，也从不自动上传。</li>
+        <li>MCP <code>--tools all</code> profile：24 个工具（12 个核心工具 + hover/select/screenshot/scroll/tabs/extract/expect/find/network_route/site/upload/download）。</li>
+      </ul>
+
+      <h2>v1.5.64</h2>
+      <ul>
+        <li><code>chrome-use mcp</code>：给 Claude Desktop 这类只讲 MCP、不能跑 shell 命令的宿主起一个 stdio Model Context Protocol 服务器（12 工具核心 profile）。</li>
+      </ul>
+
+      <h2>v1.5.63</h2>
+      <ul>
+        <li><code>read [url]</code>：把一个 URL（不传参数时是当前标签页）抓取成 agent 可读的 markdown/文本；支持 <code>--llms</code> / <code>--outline</code> / <code>--filter</code> / <code>--raw</code>。</li>
+      </ul>
+
+      <h2>v1.5.62</h2>
+      <ul>
+        <li><code>type --clear</code> / <code>--delay &lt;ms&gt;</code> 现在能被正确解析成 flag。</li>
+        <li><code>find label</code> 现在也匹配 <code>aria-label</code> 和 <code>aria-labelledby</code>（图标按钮、自定义控件不再找不到）。</li>
+      </ul>
+
+      <h2>v1.5.61</h2>
+      <ul>
+        <li>React renderer 修复：改成挑选真正的 react-dom renderer，不再硬编码 id 1——此前在 Next.js 16.3 Turbopack RSC 应用上会读到一棵空树。</li>
+      </ul>
+
+      <h2>v1.5.60</h2>
+      <ul>
+        <li><code>network route</code>：在响应阶段编辑真实响应（覆盖状态码/响应头，对响应体做子串替换）。</li>
+      </ul>
+
+      <h2>v1.5.59</h2>
+      <ul>
+        <li><code>network route</code>：通过 CDP 的 Fetch 域 mock 响应（fulfill）、改写发出去的请求（continue）——无需代理，无需证书，不注入 JS。</li>
+      </ul>
+
+      <h2>v1.5.58</h2>
+      <ul>
+        <li><code>chrome-use test</code>：多账号 YAML 用例里支持按 case 切换账号（在某个 case 的步骤里写 <code>account:</code>）。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>相关阅读</h2>
+      <div class="du-cards">
+        <a class="du-card" href="/network.html">
+          <div class="du-card-title"><span class="du-card-ico">🛰️</span> 网络拦截与改写</div>
+          <p><code>--set-json</code> 的完整用法，以及 mock / 改写请求 / 编辑响应三种模式。</p>
+        </a>
+        <a class="du-card" href="/mcp.html">
+          <div class="du-card-title"><span class="du-card-ico">🔌</span> MCP 服务器</div>
+          <p>核心 12 工具 profile，以及 <code>--tools all</code> 的 24 工具扩展 profile。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -52,6 +52,10 @@ const MAP = [
   { test: /^skill-data\/(vercel-sandbox|agentcore)\//, pages: ['cloud'] },
   { test: /^cli\/src\/mcp\.rs$/,            pages: ['mcp'] },
   { test: /^README\.md$/,                  pages: ['install', 'family', 'overview'] },
+  // A version bump (package.json) is a release — the in-site changelog page
+  // (chrome-use.leeguoo.com/changelog) should get a matching entry. Skipped
+  // automatically until docs/changelog.html exists (pageFiles filters on existsSync).
+  { test: /^package\.json$/,               pages: ['changelog'] },
 ];
 
 const pageFiles = (slug) =>

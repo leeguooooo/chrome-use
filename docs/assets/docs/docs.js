@@ -119,7 +119,7 @@
   var TABS = [
     { slug: "overview", zh: "文档", en: "Documentation" },
     { slug: "commands", zh: "命令参考", en: "Reference" },
-    { slug: "changelog", href: "https://github.com/leeguooooo/chrome-use/releases", zh: "更新", en: "Changelog" },
+    { slug: "changelog", zh: "更新", en: "Changelog" },
   ];
 
   var GH = "https://github.com/leeguooooo/chrome-use";

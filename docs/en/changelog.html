@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Changelog · chrome-use docs</title>
+  <meta name="description" content="chrome-use release notes: structured JSON edits in network route, chrome-use report for one-command issue filing, MCP --tools all, chrome-use mcp, read, the new select failure behavior, and other recent highlights." />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- The one and only stylesheet -->
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="changelog" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="10" y="8" width="34" height="44" rx="3"/>
+          <path d="M18 20 h18 M18 28 h18 M18 36 h10"/>
+          <circle cx="46" cy="42" r="8"/>
+          <path d="M43 42 l2 2 4-5"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Reference</p>
+
+      <div class="du-title-row">
+        <h1>Changelog</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        What changed in each release, and why — this page keeps only the
+        <span class="mark">recent changes that actually affect day-to-day use</span>, newest first.
+        The full commit-level history lives in GitHub Releases.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Full history: GitHub Releases</div>
+        This page curates the entries that matter for everyday use. For the complete diff of every
+        release and older history, see
+        <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Releases</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>v1.5.66</h2>
+      <ul>
+        <li><code>select</code> no longer silently selects nothing when no <code>&lt;option&gt;</code> matches — it now errors and lists every available option.</li>
+        <li>Default action timeout dropped from 30s to 25s, so it trips cleanly before the underlying socket read timeout instead of stalling past it.</li>
+      </ul>
+
+      <h2>v1.5.65</h2>
+      <ul>
+        <li><code>network route --set-json &lt;dot.path&gt;=&lt;value&gt;</code>: structured JSON-field edits on the real response (create or overwrite nested fields); falls back to a string replace if the body isn't JSON.</li>
+        <li>New <code>chrome-use report [--open] [--json]</code>: packages the local, de-identified friction log into a paste-ready GitHub issue — opt-in, never auto-uploads.</li>
+        <li>MCP <code>--tools all</code> profile: 24 tools (the 12-tool core plus hover/select/screenshot/scroll/tabs/extract/expect/find/network_route/site/upload/download).</li>
+      </ul>
+
+      <h2>v1.5.64</h2>
+      <ul>
+        <li><code>chrome-use mcp</code>: a stdio Model Context Protocol server (12-tool core profile) for MCP-only hosts like Claude Desktop that can't run a shell command.</li>
+      </ul>
+
+      <h2>v1.5.63</h2>
+      <ul>
+        <li><code>read [url]</code>: fetch a URL — or, with no URL, the active tab — as agent-readable markdown/text; supports <code>--llms</code> / <code>--outline</code> / <code>--filter</code> / <code>--raw</code>.</li>
+      </ul>
+
+      <h2>v1.5.62</h2>
+      <ul>
+        <li><code>type --clear</code> / <code>--delay &lt;ms&gt;</code> are now parsed correctly as flags.</li>
+        <li><code>find label</code> now also matches <code>aria-label</code> and <code>aria-labelledby</code> — icon buttons and custom controls are no longer invisible to it.</li>
+      </ul>
+
+      <h2>v1.5.61</h2>
+      <ul>
+        <li>React renderer fix: pick the actual react-dom renderer instead of hardcoding id 1 — this was reading an empty tree on Next.js 16.3 Turbopack RSC apps.</li>
+      </ul>
+
+      <h2>v1.5.60</h2>
+      <ul>
+        <li><code>network route</code>: edit the real response at the response stage (override status/headers, substring-replace the body).</li>
+      </ul>
+
+      <h2>v1.5.59</h2>
+      <ul>
+        <li><code>network route</code>: mock responses (fulfill) and rewrite outgoing requests (continue) via the CDP Fetch domain — no proxy, no cert, no JS injection.</li>
+      </ul>
+
+      <h2>v1.5.58</h2>
+      <ul>
+        <li><code>chrome-use test</code>: per-case account switching for multi-account YAML suites (write <code>account:</code> inside a case's steps).</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Related reading</h2>
+      <div class="du-cards">
+        <a class="du-card" href="/en/network.html">
+          <div class="du-card-title"><span class="du-card-ico">🛰️</span> Network Interception</div>
+          <p>The full story on <code>--set-json</code>, plus the mock / rewrite-request / edit-response modes.</p>
+        </a>
+        <a class="du-card" href="/en/mcp.html">
+          <div class="du-card-title"><span class="du-card-ico">🔌</span> MCP Server</div>
+          <p>The 12-tool core profile, and the 24-tool <code>--tools all</code> extended profile.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

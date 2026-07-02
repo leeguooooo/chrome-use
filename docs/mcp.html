@@ -92,6 +92,23 @@
         </tbody>
       </table>
 
+      <h2>扩展 profile：--tools all</h2>
+      <p>
+        默认的 12 个工具够大多数任务用了，但需要更多能力时（悬停、下拉选择、截图、多标签、抓取、
+        断言、定位、网络拦截、站点适配器、上传/下载）——加 <code>--tools all</code>，
+        把 profile 从 12 个扩到<strong>24 个工具</strong>：核心 12 个之外再加上 hover / select /
+        screenshot / scroll / tabs / extract / expect / find / network_route / site / upload / download。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 24 工具扩展 profile</span>
+<span class="du-prompt">$</span> chrome-use mcp <span class="du-flag">--tools</span> all</code></pre>
+      </div>
+
       <hr class="du-divider" />
 
       <h2>启动服务器</h2>

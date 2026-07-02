@@ -139,14 +139,23 @@
 <pre><code><span class="du-cmt"># Edit the real response (request sent, response returns, then modified)</span>
 <span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--edit-status</span> 503                <span class="du-cmt"># override the status code</span>
 <span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--edit-header</span> X-Env=test         <span class="du-cmt"># add/override a response header</span>
-<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--replace</span> <span class="du-str">'prod=&gt;staging'</span>        <span class="du-cmt"># substring replace in the real response body (repeatable)</span></code></pre>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--replace</span> <span class="du-str">'prod=&gt;staging'</span>        <span class="du-cmt"># substring replace in the real response body (repeatable)</span>
+<span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--set-json</span> <span class="du-str">data.user.vip=true</span>     <span class="du-cmt"># structured edit of one JSON field in the response body</span></code></pre>
       </div>
+
+      <p>
+        <code>--set-json &lt;dot.path&gt;=&lt;value&gt;</code> locates a field in the response body's JSON by a
+        dot-separated path and creates or overwrites it — nested paths fill in the intermediate objects
+        automatically. If the body isn't valid JSON, it <strong>falls back to a plain string replace</strong>,
+        the same safe behavior as <code>--replace</code>, instead of failing on the parse error.
+      </p>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Precedence and repeatability</div>
         When one rule specifies both a mock and a rewrite, <strong>mock wins</strong>.
-        <code>--header</code> / <code>--set-header</code> / <code>--edit-header</code> / <code>--replace</code>
-        are all <strong>repeatable</strong>; request/response headers are merged and layered on top of the originals.
+        <code>--header</code> / <code>--set-header</code> / <code>--edit-header</code> / <code>--replace</code> /
+        <code>--set-json</code> are all <strong>repeatable</strong>; request/response headers are merged and
+        layered on top of the originals.
       </div>
 
       <div class="du-callout warn">
