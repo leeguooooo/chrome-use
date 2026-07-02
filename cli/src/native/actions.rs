@@ -399,10 +399,13 @@ impl DaemonState {
             stream_server: None,
             launch_hash: None,
             engine: env::var("AGENT_BROWSER_ENGINE").unwrap_or_else(|_| "chrome".to_string()),
+            // 25s (< the CLI's fixed 30s socket read timeout) so an action that
+            // hits the default budget times out cleanly at the daemon instead of
+            // racing the socket read. (Ported from vercel-labs/agent-browser #1432.)
             default_timeout_ms: env::var("AGENT_BROWSER_DEFAULT_TIMEOUT")
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(30_000),
+                .unwrap_or(25_000),
             viewport: None,
         }
     }
@@ -12363,19 +12366,21 @@ mod tests {
 
     #[test]
     fn test_default_timeout_ms_from_env() {
-        // When AGENT_BROWSER_DEFAULT_TIMEOUT is set, DaemonState should use it
-        env::set_var("AGENT_BROWSER_DEFAULT_TIMEOUT", "3000");
+        // When AGENT_BROWSER_DEFAULT_TIMEOUT is set, DaemonState should use it.
+        // EnvGuard serializes + restores so this can't race the fallback test.
+        let guard = EnvGuard::new(&["AGENT_BROWSER_DEFAULT_TIMEOUT"]);
+        guard.set("AGENT_BROWSER_DEFAULT_TIMEOUT", "3000");
         let state = DaemonState::new();
         assert_eq!(state.default_timeout_ms, 3000);
-        env::remove_var("AGENT_BROWSER_DEFAULT_TIMEOUT");
     }
 
     #[test]
     fn test_default_timeout_ms_fallback() {
-        // When AGENT_BROWSER_DEFAULT_TIMEOUT is unset, DaemonState uses 30000
-        env::remove_var("AGENT_BROWSER_DEFAULT_TIMEOUT");
+        // When AGENT_BROWSER_DEFAULT_TIMEOUT is unset, DaemonState uses 25000.
+        let guard = EnvGuard::new(&["AGENT_BROWSER_DEFAULT_TIMEOUT"]);
+        guard.remove("AGENT_BROWSER_DEFAULT_TIMEOUT");
         let state = DaemonState::new();
-        assert_eq!(state.default_timeout_ms, 30_000);
+        assert_eq!(state.default_timeout_ms, 25_000);
     }
 
     #[tokio::test]

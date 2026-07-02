@@ -1128,16 +1128,25 @@ pub async fn select_option(
     )
     .await?;
 
+    // Count matches so an unmatched value is a loud error (with the available
+    // options) instead of a silent no-op. (Ported from vercel-labs/agent-browser #1432.)
     let js = r#"function(vals) {
             const options = Array.from(this.options);
+            let matched = 0;
             for (const opt of options) {
-                opt.selected = vals.includes(opt.value) || vals.includes(opt.textContent.trim());
+                const hit = vals.includes(opt.value) || vals.includes(opt.textContent.trim());
+                opt.selected = hit;
+                if (hit) matched++;
+            }
+            if (matched === 0) {
+                return { ok: false, available: options.map(o => ({ value: o.value, label: o.textContent.trim() })) };
             }
             this.dispatchEvent(new Event('change', { bubbles: true }));
+            return { ok: true, matched };
         }"#
     .to_string();
 
-    client
+    let resp = client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
@@ -1153,6 +1162,38 @@ pub async fn select_option(
             Some(&effective_session_id),
         )
         .await?;
+
+    let result = resp.get("result").and_then(|r| r.get("value"));
+    let ok = result
+        .and_then(|v| v.get("ok"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    if !ok {
+        let avail = result
+            .and_then(|v| v.get("available"))
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|o| {
+                        let val = o.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                        let label = o.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                        if val.is_empty() && label.is_empty() {
+                            None
+                        } else if label.is_empty() || label == val {
+                            Some(val.to_string())
+                        } else {
+                            Some(format!("{} ({})", val, label))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        return Err(format!(
+            "no <option> matched {:?}. available options: {}",
+            values, avail
+        ));
+    }
 
     Ok(())
 }
