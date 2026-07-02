@@ -151,6 +151,27 @@ pub fn ensure_banner_silenced(mode: SilenceMode) -> SilenceOutcome {
     SilenceOutcome::Restarted
 }
 
+/// Restart the user's real Chrome preserving the session. Used by the guided
+/// extension setup right after a policy approval, so the force-install applies
+/// immediately instead of "whenever the user next restarts Chrome". Returns
+/// Ok(true) if a restart happened, Ok(false) if Chrome wasn't running (nothing
+/// to do — the policy applies on next start).
+pub fn restart_chrome_preserving_session() -> Result<bool, String> {
+    let Some(rc) = detect() else {
+        return Ok(false);
+    };
+    if rc.instances > 1 {
+        return Err(format!(
+            "{} Chrome instances are running — quitting would close all of them. \
+             Restart Chrome yourself when convenient",
+            rc.instances
+        ));
+    }
+    graceful_quit(&rc)?;
+    relaunch(&rc)?;
+    Ok(true)
+}
+
 /// Both stdin and stderr are TTYs, so a confirm prompt is safe.
 fn interactive() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()

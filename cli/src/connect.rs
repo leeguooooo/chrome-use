@@ -452,6 +452,9 @@ fn run_install(args: &[String], json: bool) {
                      \x20    opens the Web Store page inside each missing profile — press\n\
                      \x20    \"Add to Chrome\" in each."
                 );
+                if cfg!(target_os = "macos") && !no_open && interactive_tty() {
+                    guide_through_approval();
+                }
             }
             Some(Err(e)) => {
                 println!("  ! could not write the policy profile: {e}");
@@ -469,6 +472,122 @@ fn run_install(args: &[String], json: bool) {
          (a profile appears there once one of its windows is open — the extension\n\
          \x20only runs in profiles that are running)"
     );
+}
+
+/// stdin+stderr are TTYs → a wait/confirm flow is safe (same rule as silence).
+fn interactive_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// The closed loop around the ONE manual step — this is where users get lost:
+/// `open <file>.mobileconfig` only QUEUES the profile. No window appears,
+/// System Settings does not open itself, and the queued item silently EXPIRES
+/// after ~8 minutes. Left alone, most people never find it. So: land the user
+/// on the exact Settings pane, wait right here for the approval to appear,
+/// restart Chrome for them (session preserved) so the policy applies NOW
+/// instead of "someday", and show the extension reaching their profiles until
+/// coverage is done. TTY-only; JSON/agent/`--no-open` runs skip it.
+fn guide_through_approval() {
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+
+    // Deep-link straight to the pane the queued profile is sitting in.
+    open_url("x-apple.systempreferences:com.apple.preferences.configurationprofiles");
+
+    eprintln!(
+        "\n  System Settings is open on the Profiles pane. Under \"Downloaded\",\n\
+         \x20 double-click \"chrome-use connect\" → Install… (macOS asks for your Mac\n\
+         \x20 password — that's Apple's approval step, not something we see).\n\
+         \x20 I'll wait here. (Ctrl-C to finish later; option B above also works.)"
+    );
+    eprint!("  waiting for the approval ");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut approved = false;
+    while Instant::now() < deadline {
+        if approved_config_profiles().0 {
+            approved = true;
+            break;
+        }
+        eprint!(".");
+        let _ = std::io::stderr().flush();
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    if !approved {
+        eprintln!(
+            "\n  ! not approved within 5 minutes — the queued profile may have expired\n\
+             \x20   (macOS drops it after ~8). Re-run `chrome-use extension install` to\n\
+             \x20   queue it again."
+        );
+        return;
+    }
+    eprintln!(" ✓ approved");
+
+    // The approval lands in managed preferences asynchronously; confirm Chrome
+    // will actually see it before promising anything.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && managed_policy_state() != PolicyState::Active {
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    if managed_policy_state() != PolicyState::Active {
+        eprintln!(
+            "  ! approved, but the policy hasn't reached Chrome's managed preferences\n\
+             \x20   yet — give it a minute, then restart Chrome yourself."
+        );
+        return;
+    }
+    eprintln!("  ✓ policy active — Chrome now installs the extension into every profile");
+
+    // Apply it NOW instead of leaving a "restart Chrome later" chore.
+    eprint!("  Restart Chrome to apply it (your tabs are restored automatically)? [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let mut input = String::new();
+    let restart = std::io::stdin().read_line(&mut input).is_ok() && {
+        let a = input.trim().to_lowercase();
+        a.is_empty() || a == "y" || a == "yes"
+    };
+    if !restart {
+        eprintln!("  OK — the extension installs on Chrome's next restart.");
+        return;
+    }
+    match crate::silence::restart_chrome_preserving_session() {
+        Ok(true) => {}
+        Ok(false) => {
+            eprintln!("  Chrome isn't running — each profile picks the extension up when opened.");
+            return;
+        }
+        Err(e) => {
+            eprintln!("  ! {e}");
+            return;
+        }
+    }
+
+    // Chrome applies the forcelist per profile as each profile session starts,
+    // so restored profiles fill in over the next seconds — show it happening.
+    eprint!("  Chrome restarted; watching the extension reach your profiles ");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (mut done, mut total) = (0usize, 0usize);
+    while Instant::now() < deadline {
+        let profiles = chrome_profiles();
+        total = profiles.len();
+        done = profiles.iter().filter(|p| p.extension.is_some()).count();
+        if total > 0 && done == total {
+            break;
+        }
+        eprint!(".");
+        let _ = std::io::stderr().flush();
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    eprintln!();
+    if total > 0 && done == total {
+        eprintln!("  ✓ all {total} profiles have the extension. Setup complete.");
+    } else {
+        eprintln!(
+            "  ✓ {done}/{total} profiles have it so far. The rest install the moment you\n\
+             \x20   next open them (Chrome applies the policy per profile as it loads) —\n\
+             \x20   nothing more to click, ever."
+        );
+    }
 }
 
 /// Write the launcher script + native-messaging host manifest(s).
