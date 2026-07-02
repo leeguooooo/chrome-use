@@ -1,6 +1,6 @@
 {
   "name": "chrome-use",
-  "version": "1.5.67",
+  "version": "1.5.68",
   "description": "chrome-use — drive your real, logged-in Chrome from any AI agent, stealth by default",
   "type": "module",
   "packageManager": "pnpm@11.1.3",
