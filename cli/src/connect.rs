@@ -60,9 +60,22 @@ pub const STORE_INSTALL_URL: &str = STORE_URL;
 
 /// Stable identifiers for the generated Chrome configuration profile, so a
 /// re-install replaces (rather than duplicates) it in System Settings.
-const PROFILE_ID: &str = "work.pwtk.chrome-use.ab-connect";
-const PROFILE_UUID: &str = "A1B2C3D4-AB00-4CCE-9E10-AAAABBBBCCCC";
-const PROFILE_PAYLOAD_UUID: &str = "A1B2C3D4-AB01-4CCE-9E10-DDDDEEEEFFFF";
+/// Reverse-DNS of leeguoo.com, the product's home. Earlier releases shipped
+/// pwtk-branded ids ([`OLD_PROFILE_IDS`]); the UUIDs are fresh too, so macOS
+/// treats this as a new profile instead of an update to the stale one.
+const PROFILE_ID: &str = "com.leeguoo.chrome-use.connect";
+const PROFILE_UUID: &str = "5EE60001-AB00-4CCE-9E10-AAAABBBBCC01";
+const PROFILE_PAYLOAD_UUID: &str = "5EE60001-AB01-4CCE-9E10-AAAABBBBCC02";
+
+/// Configuration-profile identifiers shipped by earlier releases: the
+/// agent-browser era and the pwtk-branded chrome-use era. The old payloads
+/// force-installed the dev extension id from a self-hosted update URL, which
+/// Chrome 149+ blocks on unmanaged machines — so an approved copy sits there
+/// silently doing nothing. Setup detects them and tells the user to remove.
+const OLD_PROFILE_IDS: &[&str] = &[
+    "work.pwtk.agent-browser.ab-connect",
+    "work.pwtk.chrome-use.ab-connect",
+];
 
 /// `chrome-use browsers` — list the Chrome profiles whose ab-connect worker is
 /// currently connected to the relay, so an agent/user can pin a session to one
@@ -141,66 +154,17 @@ pub fn run_connect(args: &[String], json: bool) {
                     "  To fully remove the extension, delete the \"chrome-use connect\" profile\n\
                      in System Settings → Profiles (or run: profiles remove -identifier {PROFILE_ID})."
                 );
+                let (approved, old_ids) = approved_config_profiles();
+                let _ = approved;
+                for id in old_ids {
+                    println!("  Also remove the older one: profiles remove -identifier {id}");
+                }
             }
         }
         return;
     }
     if install {
-        let no_open = args.iter().any(|a| a == "--no-open");
-        match install_native_host() {
-            Ok(paths) => {
-                let profile = install_force_install_profile(no_open);
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::json!({
-                            "success": true,
-                            "data": {
-                                "installed": paths,
-                                "extensionId": EXTENSION_ID,
-                                "profile": profile.as_ref().ok().map(|p| p.display().to_string()),
-                                "profileError": profile.as_ref().err(),
-                                "updateUrl": UPDATE_URL,
-                            }
-                        }))
-                        .unwrap_or_default()
-                    );
-                } else {
-                    println!("✓ native-messaging host installed:");
-                    for p in &paths {
-                        println!("  {p}");
-                    }
-                    match profile {
-                        Ok(path) => {
-                            println!(
-                                "\n✓ Chrome force-install profile written:\n  {}",
-                                path.display()
-                            );
-                            if cfg!(target_os = "macos") {
-                                println!(
-                                    "\nGet the extension into Chrome (one-time). Either:\n\
-                                     A) One click: open {STORE_URL}\n   and press \"Add to Chrome\".\n\
-                                     B) Silent: approve the profile, then restart Chrome —\n   \
-                                     System Settings → General → Device Management → double-click\n   \
-                                     \"chrome-use connect\" → Install. Chrome then force-installs +\n   \
-                                     auto-updates it (no token, no per-use confirmation).\n\
-                                     Both need the extension published to the Web Store; until then use\n   \
-                                     chrome://extensions → Developer mode → Load unpacked → extensions/ab-connect."
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            println!("\n! could not write the force-install profile: {e}");
-                            println!(
-                                "  Fallback: load extensions/ab-connect via chrome://extensions →\n\
-                                 Developer mode → Load unpacked."
-                            );
-                        }
-                    }
-                }
-            }
-            Err(e) => report(json, false, &format!("install failed: {e}")),
-        }
+        run_install(args, json);
         return;
     }
 
@@ -212,6 +176,9 @@ pub fn run_connect(args: &[String], json: bool) {
     let live_extension_version = relay_ext_version();
     let expected_extension_version = env!("AB_CONNECT_VERSION");
     let driving_profile = relay_ext_profile();
+    let profiles = chrome_profiles();
+    let policy = managed_policy_state();
+    let (_, old_ids) = approved_config_profiles();
     if json {
         println!(
             "{}",
@@ -234,6 +201,13 @@ pub fn run_connect(args: &[String], json: bool) {
                     "chromeExtension": extension_status,
                     "drivingProfileId": driving_profile.as_ref().map(|(id, _)| id.clone()),
                     "drivingProfileEmail": driving_profile.as_ref().and_then(|(_, e)| e.clone()),
+                    "profiles": profiles,
+                    "policy": {
+                        "state": policy.as_str(),
+                        "staleEntry": match &policy { PolicyState::Stale(e) => Some(e.clone()), _ => None },
+                        "staleProfileIds": old_ids,
+                        "profileId": PROFILE_ID,
+                    },
                 }
             }))
             .unwrap_or_default()
@@ -274,11 +248,227 @@ pub fn run_connect(args: &[String], json: bool) {
         if let Some(status) = extension_status {
             print_chrome_extension_status(&status, expected_extension_version);
         } else {
-            println!("  Chrome profile extension status: not found in the default Chrome profile");
+            println!("  Chrome profile extension status: not found in any Chrome profile");
+        }
+        // Per-profile coverage: with many profiles (one per account), the thing
+        // that bites is "the extension is only in SOME of them".
+        let with_ext = profiles.iter().filter(|p| p.extension.is_some()).count();
+        println!(
+            "\n  Chrome profiles ({} found, {} with the extension):",
+            profiles.len(),
+            with_ext
+        );
+        for p in &profiles {
+            match &p.extension {
+                Some(ext) => println!(
+                    "    ✓ {}  —  {}",
+                    p.label(),
+                    ext.version.as_deref().unwrap_or("?")
+                ),
+                None => println!("    ✗ {}  —  missing", p.label()),
+            }
+        }
+        match &policy {
+            PolicyState::Active => println!(
+                "  ✓ silent-install policy: active (missing profiles install on Chrome restart)"
+            ),
+            PolicyState::Stale(entry) => println!(
+                "  ! silent-install policy: STALE ({entry}) — approved but Chrome blocks it.\n\
+                 \x20   Run `chrome-use extension install` to fix."
+            ),
+            PolicyState::Absent => {
+                if with_ext < profiles.len() {
+                    println!(
+                        "  Get the extension into the missing profiles: chrome-use extension install"
+                    );
+                }
+            }
+            PolicyState::Unknown => {}
+        }
+        if !old_ids.is_empty() {
+            println!(
+                "  ! outdated policy profile(s) approved ({}) — remove in System Settings →\n\
+                 \x20   Privacy & Security → Profiles, or `profiles remove -identifier <id>`",
+                old_ids.join(", ")
+            );
         }
     } else {
         println!("✗ not installed. Run: chrome-use connect --install");
     }
+}
+
+/// `extension install [--no-open] [--all-profiles]` — the guided setup.
+///
+/// Everything that CAN be automatic is: the native-messaging host (user-level,
+/// shared by every profile) is written outright, and the state of every Chrome
+/// profile + the install policy is detected and reported. What remains is the
+/// one action Chrome's security model reserves for the human, and the guide
+/// makes that a single decision:
+///   A) approve the policy profile once → Chrome silently installs the
+///      extension into EVERY profile, current and future (macOS), or
+///   B) `--all-profiles` → the Web Store page opens inside each missing
+///      profile and the user clicks "Add to Chrome" in each.
+fn run_install(args: &[String], json: bool) {
+    let no_open = args.iter().any(|a| a == "--no-open");
+    let all_profiles = args.iter().any(|a| a == "--all-profiles");
+
+    let host = install_native_host();
+    if let Err(e) = &host {
+        report(json, false, &format!("install failed: {e}"));
+        return;
+    }
+    let host_paths = host.unwrap_or_default();
+
+    let profiles = chrome_profiles();
+    let missing: Vec<&ChromeProfileInfo> = profiles
+        .iter()
+        .filter(|p| p.extension.is_none())
+        .collect();
+    let with_ext = profiles.len() - missing.len();
+    let policy = managed_policy_state();
+    let (_, old_ids) = approved_config_profiles();
+
+    // Path B: open the Store page inside each profile that lacks the extension.
+    let mut opened: Vec<String> = Vec::new();
+    if all_profiles {
+        for (i, p) in missing.iter().enumerate() {
+            if i > 0 {
+                // Chrome races when many windows spawn at once; pace the opens.
+                std::thread::sleep(std::time::Duration::from_millis(900));
+            }
+            if open_store_in_profile(p) {
+                opened.push(p.dir.clone());
+            }
+        }
+    }
+
+    // Path A: write + open the policy profile, unless it's already doing its
+    // job or the user explicitly chose the per-profile route.
+    let policy_needed = policy != PolicyState::Active && !all_profiles;
+    let mobileconfig = if policy_needed {
+        Some(install_force_install_profile(no_open))
+    } else {
+        None
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "success": true,
+                "data": {
+                    "installed": host_paths,
+                    "extensionId": STORE_EXTENSION_ID,
+                    "updateUrl": UPDATE_URL,
+                    "policy": {
+                        "state": policy.as_str(),
+                        "staleEntry": match &policy { PolicyState::Stale(e) => Some(e.clone()), _ => None },
+                        "staleProfileIds": old_ids,
+                        "profileId": PROFILE_ID,
+                    },
+                    "profile": mobileconfig.as_ref().and_then(|r| r.as_ref().ok().map(|p| p.display().to_string())),
+                    "profileError": mobileconfig.as_ref().and_then(|r| r.as_ref().err().cloned()),
+                    "profiles": profiles,
+                    "openedStorePageIn": opened,
+                }
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+
+    // -- The human-facing guide. --------------------------------------------
+    println!("chrome-use setup — connect your real Chrome\n");
+
+    println!("[1/3] native-messaging host (shared by every profile)");
+    println!("  ✓ installed ({} manifest(s))", host_paths.len());
+
+    println!(
+        "\n[2/3] your Chrome profiles ({} found, {} with the extension)",
+        profiles.len(),
+        with_ext
+    );
+    for p in &profiles {
+        match &p.extension {
+            Some(ext) => println!(
+                "  ✓ {}  —  extension {}",
+                p.label(),
+                ext.version.as_deref().unwrap_or("?")
+            ),
+            None => println!("  ✗ {}  —  missing", p.label()),
+        }
+    }
+    if profiles.is_empty() {
+        println!("  (no Chrome profiles found — is Chrome installed?)");
+    }
+
+    println!("\n[3/3] get the extension into the missing profiles");
+    if !old_ids.is_empty() {
+        println!(
+            "  ! an OUTDATED policy profile from an earlier release is approved — Chrome\n\
+             \x20   blocks its install source, so it silently does nothing. Remove it first:\n\
+             \x20     System Settings → Privacy & Security → Profiles → \"chrome-use connect\" → −"
+        );
+        for id in &old_ids {
+            println!("     (or: profiles remove -identifier {id})");
+        }
+    }
+    if all_profiles {
+        println!(
+            "  → opened the Web Store install page in {} profile(s): {}\n\
+             \x20   Press \"Add to Chrome\" in each window (Cmd+` cycles through them).",
+            opened.len(),
+            opened.join(", ")
+        );
+        if opened.len() < missing.len() {
+            println!(
+                "  ! {} profile(s) could not be opened automatically — visit\n\
+                 \x20   {STORE_URL} in them yourself.",
+                missing.len() - opened.len()
+            );
+        }
+    } else if policy == PolicyState::Active {
+        println!(
+            "  ✓ the silent-install policy is active. Restart Chrome once and every\n\
+             \x20   missing profile installs the extension automatically."
+        );
+    } else {
+        match mobileconfig {
+            Some(Ok(path)) => {
+                println!("  Pick ONE:");
+                println!(
+                    "  A) Silent, all profiles at once{}: approve the policy we just {}\n\
+                     \x20    ({})\n\
+                     \x20      System Settings → Privacy & Security → Profiles\n\
+                     \x20      → \"chrome-use connect\" (leeguoo.com) → double-click → Install…\n\
+                     \x20    Then restart Chrome: every profile — current and future — gets the\n\
+                     \x20    extension installed and auto-updated. Nothing else to click, ever.",
+                    if cfg!(target_os = "macos") { "" } else { " (macOS)" },
+                    if no_open { "wrote" } else { "opened" },
+                    path.display()
+                );
+                println!(
+                    "  B) One click per profile: chrome-use extension install --all-profiles\n\
+                     \x20    opens the Web Store page inside each missing profile — press\n\
+                     \x20    \"Add to Chrome\" in each."
+                );
+            }
+            Some(Err(e)) => {
+                println!("  ! could not write the policy profile: {e}");
+                println!(
+                    "  Fallback: chrome-use extension install --all-profiles (one click per\n\
+                     \x20 profile), or open {STORE_URL} in each profile yourself."
+                );
+            }
+            None => {}
+        }
+    }
+
+    println!(
+        "\nverify:  chrome-use browsers\n\
+         (a profile appears there once one of its windows is open — the extension\n\
+         \x20only runs in profiles that are running)"
+    );
 }
 
 /// Write the launcher script + native-messaging host manifest(s).
@@ -391,8 +581,8 @@ fn force_install_mobileconfig() -> String {
   <key>PayloadIdentifier</key><string>{PROFILE_ID}</string>
   <key>PayloadUUID</key><string>{PROFILE_UUID}</string>
   <key>PayloadDisplayName</key><string>chrome-use connect</string>
-  <key>PayloadDescription</key><string>Force-installs the chrome-use connect extension so chrome-use can drive your logged-in Chrome. No token, no per-use confirmation.</string>
-  <key>PayloadOrganization</key><string>chrome-use</string>
+  <key>PayloadDescription</key><string>Installs the chrome-use connect extension into every Chrome profile (current and future) so chrome-use can drive your logged-in Chrome. No token, no per-use confirmation.</string>
+  <key>PayloadOrganization</key><string>leeguoo.com</string>
   <key>PayloadScope</key><string>User</string>
   <key>PayloadRemovalDisallowed</key><false/>
 </dict>
@@ -520,18 +710,244 @@ fn chrome_profile_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn chrome_extension_status() -> Option<ChromeExtensionStatus> {
+/// One real Chrome profile, from `Local State`'s `profile.info_cache`, with the
+/// per-profile extension install status. This is what "did the extension reach
+/// every profile?" is answered from — a person routinely has 10+ profiles
+/// (one per account), and only profiles WITH the extension can be driven.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChromeProfileInfo {
+    /// Browser data root, e.g. `…/Google/Chrome`.
+    root: String,
+    /// Profile directory name: `Default`, `Profile 2`, …
+    dir: String,
+    /// Human name shown in Chrome's profile switcher.
+    name: Option<String>,
+    /// Signed-in Google account, when the profile has one.
+    email: Option<String>,
+    extension: Option<ChromeExtensionStatus>,
+}
+
+impl ChromeProfileInfo {
+    /// `Default` first, then `Profile N` numerically, then anything else.
+    fn sort_key(&self) -> (u8, u64, String) {
+        if self.dir == "Default" {
+            (0, 0, String::new())
+        } else if let Some(n) = self
+            .dir
+            .strip_prefix("Profile ")
+            .and_then(|s| s.parse().ok())
+        {
+            (1, n, String::new())
+        } else {
+            (2, 0, self.dir.clone())
+        }
+    }
+
+    fn label(&self) -> String {
+        let mut parts = vec![self.dir.clone()];
+        if let Some(n) = &self.name {
+            parts.push(n.clone());
+        }
+        if let Some(e) = &self.email {
+            parts.push(e.clone());
+        }
+        parts.join("  ")
+    }
+}
+
+/// Every profile of every installed Chrome-family browser, enumerated from
+/// `Local State` (the authoritative registry — profile dirs are NOT guessable:
+/// deleting Profile 3 leaves a numbering gap, and this user-visible bug shipped
+/// once as a hardcoded `Profile 1..3` scan that missed Profile 4-14).
+fn chrome_profiles() -> Vec<ChromeProfileInfo> {
+    let mut out = Vec::new();
     for root in chrome_profile_roots() {
-        for profile in ["Default", "Profile 1", "Profile 2", "Profile 3"] {
-            for file in ["Secure Preferences", "Preferences"] {
-                let path = root.join(profile).join(file);
-                if let Some(status) = chrome_extension_status_from_file(&path) {
-                    return Some(status);
-                }
-            }
+        let Ok(text) = std::fs::read_to_string(root.join("Local State")) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(cache) = value
+            .pointer("/profile/info_cache")
+            .and_then(|v| v.as_object())
+        else {
+            continue;
+        };
+        for (dir, info) in cache {
+            out.push(ChromeProfileInfo {
+                root: root.display().to_string(),
+                dir: dir.clone(),
+                name: info
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(ToString::to_string),
+                email: info
+                    .get("user_name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(ToString::to_string),
+                extension: profile_extension_status(&root, dir),
+            });
+        }
+    }
+    out.sort_by_key(|p| p.sort_key());
+    out
+}
+
+fn profile_extension_status(root: &Path, dir: &str) -> Option<ChromeExtensionStatus> {
+    for file in ["Secure Preferences", "Preferences"] {
+        if let Some(status) = chrome_extension_status_from_file(&root.join(dir).join(file)) {
+            return Some(status);
         }
     }
     None
+}
+
+fn chrome_extension_status() -> Option<ChromeExtensionStatus> {
+    chrome_profiles().into_iter().find_map(|p| p.extension)
+}
+
+/// State of the ExtensionInstallForcelist policy Chrome actually sees (merged
+/// managed preferences), which decides whether the silent all-profiles install
+/// path is live.
+#[derive(Debug, Clone, PartialEq)]
+enum PolicyState {
+    /// Forcelist carries the Web Store id + Web Store update URL — Chrome
+    /// installs the extension into every profile on its own.
+    Active,
+    /// A forcelist entry for OUR extension exists but is wrong (old dev id, or
+    /// a self-hosted update URL Chrome 149+ blocks). Approved yet inert — the
+    /// worst state, because it LOOKS done. Carries the offending entry.
+    Stale(String),
+    /// No forcelist entry for our extension.
+    Absent,
+    /// Not macOS, or managed preferences unreadable.
+    Unknown,
+}
+
+impl PolicyState {
+    fn as_str(&self) -> &'static str {
+        match self {
+            PolicyState::Active => "active",
+            PolicyState::Stale(_) => "stale",
+            PolicyState::Absent => "absent",
+            PolicyState::Unknown => "unknown",
+        }
+    }
+}
+
+/// Read the forcelist Chrome sees from macOS managed preferences (user scope,
+/// then device scope). `defaults read` fails when the key is absent, which maps
+/// to `Absent`; corporate forcelists for OTHER extensions are ignored.
+fn managed_policy_state() -> PolicyState {
+    if !cfg!(target_os = "macos") {
+        return PolicyState::Unknown;
+    }
+    let expected = format!("{STORE_EXTENSION_ID};{UPDATE_URL}");
+    let user = std::env::var("USER").unwrap_or_default();
+    let domains = [
+        format!("/Library/Managed Preferences/{user}/com.google.Chrome"),
+        "/Library/Managed Preferences/com.google.Chrome".to_string(),
+    ];
+    let mut stale: Option<String> = None;
+    for domain in domains {
+        let Ok(out) = std::process::Command::new("defaults")
+            .args(["read", &domain, "ExtensionInstallForcelist"])
+            .output()
+        else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        if text.contains(&expected) {
+            return PolicyState::Active;
+        }
+        for line in text.lines() {
+            let entry = line.trim().trim_matches(|c| c == '"' || c == ',' || c == ';');
+            let is_ours = entry.contains(EXTENSION_ID)
+                || entry.contains(STORE_EXTENSION_ID)
+                || entry.contains("agent-browser");
+            if is_ours && entry.contains(';') {
+                stale = Some(entry.trim_matches('"').to_string());
+            }
+        }
+    }
+    match stale {
+        Some(entry) => PolicyState::Stale(entry),
+        None => PolicyState::Absent,
+    }
+}
+
+/// Which of our configuration profiles the user has APPROVED in System
+/// Settings (macOS `profiles list`): (current id approved, old ids present).
+fn approved_config_profiles() -> (bool, Vec<&'static str>) {
+    if !cfg!(target_os = "macos") {
+        return (false, Vec::new());
+    }
+    let Ok(out) = std::process::Command::new("profiles").arg("list").output() else {
+        return (false, Vec::new());
+    };
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let approved = text.contains(PROFILE_ID);
+    let old = OLD_PROFILE_IDS
+        .iter()
+        .copied()
+        .filter(|id| text.contains(id))
+        .collect();
+    (approved, old)
+}
+
+/// Open the Web Store install page inside one specific Chrome profile, so the
+/// user's only remaining action is "Add to Chrome" in that window. (The Store
+/// button itself cannot be automated: Chrome detaches debuggers on
+/// chromewebstore pages, and off-store force-install is blocked — this
+/// one-click-per-profile flow is the floor the browser's security model allows.)
+fn open_store_in_profile(profile: &ChromeProfileInfo) -> bool {
+    let root = Path::new(&profile.root);
+    let profile_arg = format!("--profile-directory={}", profile.dir);
+    #[cfg(target_os = "macos")]
+    {
+        let app = match root.file_name().and_then(|s| s.to_str()) {
+            Some("Chrome") => "Google Chrome",
+            Some("Chrome Beta") => "Google Chrome Beta",
+            Some("Chrome Canary") => "Google Chrome Canary",
+            Some("Chromium") => "Chromium",
+            _ => return false,
+        };
+        std::process::Command::new("open")
+            .args(["-na", app, "--args", &profile_arg, STORE_URL])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let bin = match root.file_name().and_then(|s| s.to_str()) {
+            Some("google-chrome") => "google-chrome",
+            Some("google-chrome-beta") => "google-chrome-beta",
+            Some("google-chrome-unstable") => "google-chrome-unstable",
+            Some("chromium") => "chromium",
+            _ => return false,
+        };
+        std::process::Command::new(bin)
+            .args([&profile_arg, STORE_URL])
+            .spawn()
+            .is_ok()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (root, profile_arg);
+        false
+    }
 }
 
 fn chrome_extension_status_from_file(path: &Path) -> Option<ChromeExtensionStatus> {
@@ -707,6 +1123,8 @@ pub fn extension_not_installed_message() -> String {
         "chrome-use couldn't reach your Chrome — the browser extension isn't connected yet.\n\n\
          I registered the native-messaging host for you and opened the Chrome Web Store install \
          page. Click \"Add to Chrome\" there, then re-run your command:\n  {STORE_INSTALL_URL}\n\n\
+         Use several Chrome profiles? `chrome-use extension install` sets it up for ALL of \
+         them at once (one policy approval instead of a click per profile).\n\n\
          Prefer a throwaway browser instead? `chrome-use --launch --profile auto open <url>` \
          launches a separate Chrome that keeps your login."
     )
@@ -1363,6 +1781,36 @@ mod tests {
         assert_eq!(parse_ext_profile(r#"{"email":"x@y.z"}"#), None);
         assert_eq!(parse_ext_profile(r#"{"id":"   "}"#), None);
         assert_eq!(parse_ext_profile("not json"), None);
+    }
+
+    #[test]
+    fn profile_id_is_leeguoo_branded_and_distinct_from_the_stale_ones() {
+        // The product is leeguoo.com's; the pwtk-era ids live ONLY in
+        // OLD_PROFILE_IDS so cleanup keeps recognizing them.
+        assert!(PROFILE_ID.starts_with("com.leeguoo."));
+        assert!(!PROFILE_ID.contains("pwtk"));
+        for old in OLD_PROFILE_IDS {
+            assert_ne!(PROFILE_ID, *old);
+            // substring collisions would corrupt `profiles list` detection
+            assert!(!old.contains(PROFILE_ID) && !PROFILE_ID.contains(old));
+        }
+        // Fresh UUIDs: reusing the pwtk-era ones made macOS treat the fixed
+        // payload as the already-approved (broken) one.
+        assert!(!force_install_mobileconfig().contains("A1B2C3D4"));
+    }
+
+    #[test]
+    fn mobileconfig_forcelist_uses_the_store_id_and_store_update_url() {
+        let cfg = force_install_mobileconfig();
+        // Chrome 149 blocks off-store force-installs on unmanaged machines; the
+        // ONLY working silent path is Web Store id + Web Store update URL. The
+        // stale shipped profile broke exactly this way (dev id + self-hosted
+        // updates.xml).
+        assert!(cfg.contains(&format!("{STORE_EXTENSION_ID};{UPDATE_URL}")));
+        assert!(!cfg.contains(EXTENSION_ID), "dev id must not be force-installed");
+        assert!(!cfg.contains("updates.xml"), "no self-hosted update feed");
+        assert!(cfg.contains(PROFILE_ID));
+        assert!(cfg.contains("leeguoo.com"));
     }
 
     #[test]
