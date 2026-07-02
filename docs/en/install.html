@@ -143,7 +143,21 @@
       <!-- ============ 3. SKILLS ============ -->
       <h2>Pull the agent skills</h2>
       <p>
-        The repo ships SKILL.md files for Claude Code, Cursor, and others. Pull them into the current project with <a href="https://skills.sh">skills.sh</a>:
+        <strong>Claude Code — plugin marketplace (recommended)</strong>: installs the skill globally (all projects), auto-updates, and lists the rest of the
+        <a href="https://github.com/leeguooooo/plugins"><code>*-use</code> family</a>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Claude Code</span>
+        </div>
+<pre><code><span class="du-prompt">&gt;</span> /plugin marketplace add leeguooooo/plugins
+<span class="du-prompt">&gt;</span> /plugin install chrome-use@leeguooooo-plugins</code></pre>
+      </div>
+
+      <p>
+        Other agent runners (Cursor, Codex, custom scripts): pull the SKILL.md files into the current project with <a href="https://skills.sh">skills.sh</a>:
       </p>
 
       <div class="du-code">
@@ -155,15 +169,16 @@
       </div>
 
       <p>
-        This drops <code>skills/chrome-use</code> (plus the specialized <code>skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}</code>)
-        into your project, giving the AI agent the right usage patterns and pre-authorized bash permissions for <code>chrome-use</code> and <code>abs</code>. Once installed, it's worth reading
+        Either way the AI agent gets the right usage patterns and pre-authorized bash permissions for <code>chrome-use</code> and <code>abs</code>;
+        the specialized guides (electron / slack / agentcore / …) are served by the binary itself via <code>chrome-use skills get &lt;name&gt;</code>,
+        so they always match the installed version. Once installed, it's worth reading
         <a href="/en/core-loop.html">The core loop</a> first.
       </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Self-heal when the skill can't run</div>
-        <code>skills add</code> only copies markdown; it doesn't bundle the ~20MB binary. If <code>chrome-use</code> isn't present in the skill environment,
-        just rerun the <code>install.sh</code> one-liner above to fill in the binary.
+        Both the plugin and <code>skills add</code> only carry markdown; neither bundles the ~20MB binary. If <code>chrome-use</code> isn't present in the skill environment,
+        just rerun the <code>install.sh</code> one-liner above to fill in the binary (the skill also teaches the agent to self-heal).
       </div>
 
       <hr class="du-divider" />

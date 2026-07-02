@@ -109,13 +109,17 @@
 <pre><code><span class="du-cmt"># 从最新 GitHub Release 下载对应平台的预编译二进制</span>
 <span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
       </div>
-      <p>把技能包装进任意 agent 运行器：</p>
+      <p>把技能包装进任意 agent 运行器（Claude Code 推荐 plugin marketplace——整个 <code>*-use</code> 家族都在 <a href="https://github.com/leeguooooo/plugins">leeguooooo/plugins</a> 一个市场里）：</p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">skill</span>
         </div>
-<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
+<pre><code><span class="du-cmt"># Claude Code</span>
+<span class="du-prompt">&gt;</span> /plugin marketplace add leeguooooo/plugins
+<span class="du-prompt">&gt;</span> /plugin install chrome-use@leeguooooo-plugins
+<span class="du-cmt"># 其他 runner</span>
+<span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
       </div>
       <p>
         装上 Chrome Web Store 扩展后，一次性注册原生消息宿主，然后就能接管你真实的浏览器：

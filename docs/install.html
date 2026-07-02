@@ -142,7 +142,21 @@
       <!-- ============ 3. SKILLS ============ -->
       <h2>拉 agent 技能</h2>
       <p>
-        仓库为 Claude Code、Cursor 等准备了 SKILL.md。用 <a href="https://skills.sh">skills.sh</a> 拉进当前项目：
+        <strong>Claude Code 推荐走 plugin marketplace</strong>：全局生效（所有项目）、自动更新，还能顺带发现
+        <a href="https://github.com/leeguooooo/plugins"><code>*-use</code> 全家桶</a>里的其他工具：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Claude Code</span>
+        </div>
+<pre><code><span class="du-prompt">&gt;</span> /plugin marketplace add leeguooooo/plugins
+<span class="du-prompt">&gt;</span> /plugin install chrome-use@leeguooooo-plugins</code></pre>
+      </div>
+
+      <p>
+        其他 agent runner（Cursor、Codex、自研脚本）用 <a href="https://skills.sh">skills.sh</a> 把 SKILL.md 拉进当前项目：
       </p>
 
       <div class="du-code">
@@ -154,15 +168,15 @@
       </div>
 
       <p>
-        这会把 <code>skills/chrome-use</code>（以及专门化的 <code>skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}</code>）
-        放进你的项目，让 AI agent 拿到正确的用法模式和对 <code>chrome-use</code>、<code>abs</code> 预授权的 bash 权限。装好后建议先读一遍
-        <a href="/core-loop.html">核心循环</a>。
+        两种装法都让 AI agent 拿到正确的用法模式和对 <code>chrome-use</code>、<code>abs</code> 预授权的 bash 权限；
+        专门化指南（electron / slack / agentcore …）由二进制经 <code>chrome-use skills get &lt;name&gt;</code> 提供，
+        永远和已装版本一致。装好后建议先读一遍 <a href="/core-loop.html">核心循环</a>。
       </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 技能装不上时自愈</div>
-        <code>skills add</code> 只拷贝 markdown，不会附带 ~20MB 的二进制。如果技能环境里没有 <code>chrome-use</code>，
-        重新跑一次上面的 <code>install.sh</code> 一行命令即可补齐二进制。
+        plugin 和 <code>skills add</code> 都只带 markdown，不附带 ~20MB 的二进制。如果技能环境里没有 <code>chrome-use</code>，
+        重新跑一次上面的 <code>install.sh</code> 一行命令即可补齐二进制（技能本身也会教 agent 自愈）。
       </div>
 
       <hr class="du-divider" />

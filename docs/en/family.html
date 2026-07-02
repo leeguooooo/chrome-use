@@ -110,13 +110,17 @@
 <pre><code><span class="du-cmt"># Download the prebuilt binary for your platform from the latest GitHub Release</span>
 <span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
       </div>
-      <p>Wrap the skill into any agent runner:</p>
+      <p>Wrap the skill into any agent runner (Claude Code: prefer the plugin marketplace — the whole <code>*-use</code> family lives in <a href="https://github.com/leeguooooo/plugins">leeguooooo/plugins</a>):</p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">skill</span>
         </div>
-<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
+<pre><code><span class="du-cmt"># Claude Code</span>
+<span class="du-prompt">&gt;</span> /plugin marketplace add leeguooooo/plugins
+<span class="du-prompt">&gt;</span> /plugin install chrome-use@leeguooooo-plugins
+<span class="du-cmt"># other runners</span>
+<span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
       </div>
       <p>
         After installing the Chrome Web Store extension, register the native-messaging host once, and then you can take over your real browser:

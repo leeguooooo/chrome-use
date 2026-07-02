@@ -131,15 +131,22 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 - **npm (legacy):** `npm install -g chrome-use` — still published, but GitHub Releases is the primary channel now.
 </details>
 
-### Install the AI agent skills
+### Install the AI agent skill
 
-The repo ships SKILL.md files for Claude Code, Cursor, etc. Pull them into the current project with [skills.sh](https://skills.sh):
+**Claude Code — plugin marketplace (recommended):** installs the skill globally (all projects), auto-updates, and lists the rest of the [`*-use` family](https://github.com/leeguooooo/plugins):
+
+```
+/plugin marketplace add leeguooooo/plugins
+/plugin install chrome-use@leeguooooo-plugins
+```
+
+**Other agent runners (Cursor, Codex, custom):** pull the SKILL.md files into the current project with [skills.sh](https://skills.sh):
 
 ```bash
 npx skills add leeguooooo/chrome-use
 ```
 
-This drops `skills/chrome-use` (and the specialized `skill-data/{core,electron,slack,dogfood,agentcore,vercel-sandbox}`) into your project so your AI agent gets the right usage patterns and pre-approved bash permissions for `chrome-use`, `chrome-use`, and `abs`.
+Either way the agent gets the right usage patterns and pre-approved bash permissions for `chrome-use` and `abs`; the skill self-heals a missing binary by re-running the `install.sh` one-liner above. Specialized guides (`electron`, `slack`, `agentcore`, …) are served by the binary itself via `chrome-use skills get <name>`, so instructions always match the installed version.
 
 ### Use from an MCP client (Claude Desktop, etc.)
 
