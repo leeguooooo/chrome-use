@@ -1013,6 +1013,13 @@ fn main() {
         return;
     }
 
+    // `report` (no daemon, OPT-IN): package the local friction log + build info
+    // into a paste-ready GitHub issue. Never auto-uploads.
+    if clean.first().map(|s| s.as_str()) == Some("report") {
+        friction::run_report(&clean[1..], flags.json);
+        return;
+    }
+
     // `browsers` (no daemon): list the connected Chrome profiles so an agent can
     // pin a session to one with `--browser <id|email>` (issue #60).
     if clean.first().map(|s| s.as_str()) == Some("browsers") {

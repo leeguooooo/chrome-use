@@ -3079,15 +3079,23 @@ Examples:
             r##"
 chrome-use mcp - Run a stdio MCP server
 
-Usage: chrome-use mcp
+Usage: chrome-use mcp [--tools <core|all>]
 
 Runs a Model Context Protocol server over stdio (JSON-RPC, newline-delimited)
-so MCP-only hosts (Claude Desktop, etc.) can drive chrome-use. Exposes a CORE
-profile of ~12 tools (chrome_use_open, chrome_use_read, chrome_use_snapshot,
-chrome_use_click, chrome_use_fill, chrome_use_type, chrome_use_press,
-chrome_use_eval, chrome_use_wait, chrome_use_back, chrome_use_forward,
-chrome_use_reload) — not full CLI parity. Each tool call delegates to this
-same binary in `--json` mode, so behavior matches the normal CLI surface.
+so MCP-only hosts (Claude Desktop, etc.) can drive chrome-use. Each tool call
+delegates to this same binary in `--json` mode, so behavior matches the
+normal CLI surface.
+
+Profiles (--tools, default core):
+  core   ~12 tools: chrome_use_open, chrome_use_read, chrome_use_snapshot,
+         chrome_use_click, chrome_use_fill, chrome_use_type, chrome_use_press,
+         chrome_use_eval, chrome_use_wait, chrome_use_back, chrome_use_forward,
+         chrome_use_reload
+  all    core + an extended set: chrome_use_hover, chrome_use_select,
+         chrome_use_screenshot, chrome_use_scroll, chrome_use_tabs,
+         chrome_use_extract, chrome_use_expect, chrome_use_find,
+         chrome_use_network_route, chrome_use_site, chrome_use_upload,
+         chrome_use_download — still not exhaustive CLI parity.
 
 Claude Desktop config (claude_desktop_config.json):
   {
@@ -3096,8 +3104,12 @@ Claude Desktop config (claude_desktop_config.json):
     }
   }
 
+  # extended tool profile
+  { "mcpServers": { "chrome-use": { "command": "chrome-use", "args": ["mcp", "--tools", "all"] } } }
+
 Examples:
   chrome-use mcp
+  chrome-use mcp --tools all
 "##
         }
 
@@ -3621,7 +3633,7 @@ Network:  chrome-use network <action>
   route <url> [--abort]
         [--body <s> --status <n> --header K=V --content-type <ct>]   # mock response
         [--method <M> --set-body <s> --set-header K=V --rewrite-url <u>]  # rewrite request
-        [--edit-status <n> --edit-header K=V --replace 'from=>to']   # edit the real response
+        [--edit-status <n> --edit-header K=V --replace 'from=>to' --set-json path=value]  # edit the real response
         [--resource-type <csv>]
   unroute [url]
   requests [--clear] [--filter <pattern>]
@@ -3745,6 +3757,9 @@ MCP:
   mcp                         Run a stdio MCP server (JSON-RPC) exposing a
                               core ~12-tool profile for MCP-only hosts
                               (Claude Desktop, etc.)
+  mcp --tools all             Extended profile: core + hover/select/screenshot/
+                              scroll/tabs/extract/expect/find/network_route/
+                              site/upload/download
 
 Setup:
   install                    Install browser binaries
