@@ -27,6 +27,7 @@
 > 📚 **Documentation:** **[chrome-use.leeguoo.com](https://chrome-use.leeguoo.com)** — full guides, workflows & command reference (中文 · English).
 >
 > 📖 **Deep dive:** [Letting an agent click into cross-origin iframes — how chrome-use solves the hardest part of browser control](https://blog.leeguoo.com/en/posts/chrome-use-cross-origin-iframe/)
+> · [Driving your already-logged-in real Chrome (CreepJS scores it 0% bot) — 中文](https://blog.leeguoo.com/zh/posts/chrome-use-drive-your-real-chrome/)
 
 ## Give your AI agent the browser you already live in
 
@@ -442,4 +443,4 @@ We deliberately **don't ship our own bot detector** — the strongest, most hone
 Apache-2.0
 ---
 
-> Built by **leeguooooo** — field notes on AI agents, reverse engineering & Cloudflare Workers at **[blog.misonote.com](https://blog.misonote.com)** · follow on **[X @leeguooooo](https://x.com/leeguooooo)**
+> Built by **leeguooooo** — field notes on AI agents, reverse engineering & Cloudflare Workers at **[blog.leeguoo.com](https://blog.leeguoo.com)** · follow on **[X @leeguooooo](https://x.com/leeguooooo)**
