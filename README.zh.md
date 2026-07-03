@@ -9,6 +9,8 @@
 <sub>最初基于 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)（Apache-2.0）；现已是独立项目 —— 隐身/扩展中继架构、反检测、humanize、多 agent 隔离与 CLI 都已大幅分化。</sub>
 
 > 📚 **文档站：** **[chrome-use.leeguoo.com](https://chrome-use.leeguoo.com)** —— 完整指南、工作流与命令参考（中文 · English）。
+>
+> 📖 **深入原理：** [让任何 AI Agent 直接驱动你已登录的真实 Chrome，CreepJS 给它打 0% bot](https://blog.leeguoo.com/zh/posts/chrome-use-drive-your-real-chrome/)
 
 ## 把你**已经登录好**的浏览器，交给你的 AI agent
 
@@ -319,4 +321,4 @@ Apache-2.0
 
 ---
 
-> 由 **leeguooooo** 打造 —— AI agent、逆向工程与 Cloudflare Workers 的实战笔记见 **[blog.misonote.com](https://blog.misonote.com)** · 关注 **[X @leeguooooo](https://x.com/leeguooooo)**
+> 由 **leeguooooo** 打造 —— AI agent、逆向工程与 Cloudflare Workers 的实战笔记见 **[blog.leeguoo.com](https://blog.leeguoo.com)** · 关注 **[X @leeguooooo](https://x.com/leeguooooo)**
