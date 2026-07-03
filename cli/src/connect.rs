@@ -107,9 +107,27 @@ pub fn run_browsers(json: bool) {
         return;
     }
     if profiles.is_empty() {
+        // A stale native-host launcher (its target binary moved/deleted) makes
+        // Chrome's connectNative fail instantly, so the relay never connects and
+        // this list is empty for a reason that has nothing to do with the
+        // extension version. Surface that cause instead of only blaming ab-connect.
+        let host = native_host_report();
+        if !host.manifests.is_empty() && !host.is_healthy() {
+            let bin = host.target_bin.as_deref().unwrap_or("<unresolved>");
+            println!(
+                "no connected Chrome profiles.\n\
+                 The native-messaging host is broken: its launcher points at a binary that is \
+                 missing or not executable ({bin}).\n\
+                 Chrome can't start the host, so the relay can't connect. Fix it:\n  \
+                 chrome-use extension connect      (repoints the host at this binary)\n  \
+                 chrome-use doctor                 (full diagnosis)"
+            );
+            return;
+        }
         println!(
             "no connected Chrome profiles.\n\
-             (needs ab-connect \u{2265}0.5.3; if Chrome is running, try `chrome-use reconnect`.)"
+             (needs ab-connect \u{2265}0.5.3; if Chrome is running, try `chrome-use reconnect` \
+             or `chrome-use doctor`.)"
         );
         return;
     }
@@ -990,6 +1008,118 @@ fn native_messaging_dirs() -> Vec<PathBuf> {
         }
     }
     dirs_out
+}
+
+/// Health of the native-messaging host launcher — the `nm-host.sh` that Chrome
+/// execs to reach the CLI. The classic silent failure: the launcher is
+/// generated with `exec "<current binary>"` at install time, so if that binary
+/// later moves or is deleted (e.g. a `cargo clean` on a dev build, or an
+/// installer that relocated the release), Chrome's `connectNative` fails
+/// instantly and the relay never connects — while `browsers` only reports
+/// "no connected profiles", giving no hint of the real cause.
+#[derive(Debug, Clone, Default)]
+pub struct NativeHostReport {
+    /// Installed `*.json` host manifests (empty ⇒ host not registered at all).
+    pub manifests: Vec<PathBuf>,
+    /// Launcher script path the manifests point at (`~/.chrome-use/nm-host.sh`).
+    pub launcher: Option<PathBuf>,
+    pub launcher_exists: bool,
+    /// Binary the launcher `exec`s, parsed from its script body.
+    pub target_bin: Option<String>,
+    pub target_exists: bool,
+    pub target_executable: bool,
+    /// The launcher points into a `target/debug|release` build tree — fragile:
+    /// a `cargo clean`/rebuild elsewhere will delete it out from under Chrome.
+    pub target_is_dev_build: bool,
+}
+
+impl NativeHostReport {
+    /// The launcher resolves to a runnable binary.
+    pub fn is_healthy(&self) -> bool {
+        self.launcher_exists && self.target_exists && self.target_executable
+    }
+}
+
+/// Extract the binary path from a native-host launcher script body, i.e. the
+/// `<path>` in `exec "<path>" __nm-host "$@"`. Pure so it can be unit-tested.
+pub fn parse_launcher_target(script: &str) -> Option<String> {
+    for line in script.lines() {
+        let line = line.trim();
+        let rest = match line.strip_prefix("exec ") {
+            Some(r) => r.trim(),
+            None => continue,
+        };
+        // Quoted form: exec "…/chrome-use" __nm-host "$@"
+        if let Some(after) = rest.strip_prefix('"') {
+            if let Some(end) = after.find('"') {
+                return Some(after[..end].to_string());
+            }
+        }
+        // Unquoted fallback: exec /path/chrome-use __nm-host "$@"
+        if let Some(tok) = rest.split_whitespace().next() {
+            return Some(tok.to_string());
+        }
+    }
+    None
+}
+
+fn path_is_executable(p: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
+}
+
+/// Inspect the native-messaging host launcher and the binary it targets.
+/// Drives the `chrome-use doctor` native-host check.
+pub fn native_host_report() -> NativeHostReport {
+    let mut report = NativeHostReport {
+        manifests: installed_host_manifests(),
+        ..Default::default()
+    };
+
+    // The launcher path is authoritative from the manifest (not assumed), so a
+    // manifest that points somewhere unexpected is still diagnosed correctly.
+    let launcher = report
+        .manifests
+        .iter()
+        .find_map(|m| {
+            let body = std::fs::read_to_string(m).ok()?;
+            let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+            v.get("path")?.as_str().map(PathBuf::from)
+        })
+        .or_else(|| dirs::home_dir().map(|h| h.join(".chrome-use").join("nm-host.sh")));
+
+    if let Some(launcher) = launcher {
+        report.launcher_exists = launcher.exists();
+        if let Ok(script) = std::fs::read_to_string(&launcher) {
+            if let Some(bin) = parse_launcher_target(&script) {
+                let bin_path = Path::new(&bin);
+                report.target_exists = bin_path.exists();
+                report.target_executable = path_is_executable(bin_path);
+                report.target_is_dev_build =
+                    bin.contains("/target/debug/") || bin.contains("/target/release/");
+                report.target_bin = Some(bin);
+            }
+        }
+        report.launcher = Some(launcher);
+    }
+
+    report
+}
+
+/// Rewrite the native-messaging host launcher + manifests to point at the
+/// CURRENTLY running binary. Public repair entry point for `doctor --fix` and
+/// self-heal paths. Returns the manifest paths written.
+pub fn reinstall_native_host() -> Result<Vec<String>, String> {
+    install_native_host()
 }
 
 fn installed_host_manifests() -> Vec<PathBuf> {
@@ -2050,6 +2180,60 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn parse_launcher_target_quoted() {
+        let script = "#!/bin/sh\n# comment\nexec \"/Users/leo/.local/bin/chrome-use\" __nm-host \"$@\"\n";
+        assert_eq!(
+            parse_launcher_target(script).as_deref(),
+            Some("/Users/leo/.local/bin/chrome-use")
+        );
+    }
+
+    #[test]
+    fn parse_launcher_target_handles_spaces_in_path() {
+        let script = "exec \"/Users/leo/Application Support/chrome-use\" __nm-host \"$@\"";
+        assert_eq!(
+            parse_launcher_target(script).as_deref(),
+            Some("/Users/leo/Application Support/chrome-use")
+        );
+    }
+
+    #[test]
+    fn parse_launcher_target_unquoted_fallback() {
+        let script = "#!/bin/sh\nexec /opt/bin/chrome-use __nm-host \"$@\"\n";
+        assert_eq!(
+            parse_launcher_target(script).as_deref(),
+            Some("/opt/bin/chrome-use")
+        );
+    }
+
+    #[test]
+    fn parse_launcher_target_none_without_exec() {
+        assert_eq!(parse_launcher_target("#!/bin/sh\necho hi\n"), None);
+    }
+
+    #[test]
+    fn parse_launcher_target_detects_dev_build_path() {
+        // The exact shape that stranded the agent: a deleted debug build.
+        let script =
+            "exec \"/Users/leo/github.com/agent-browser-stealth/cli/target/debug/chrome-use\" __nm-host \"$@\"";
+        let bin = parse_launcher_target(script).unwrap();
+        assert!(bin.contains("/target/debug/"));
+    }
+
+    #[test]
+    fn native_host_report_is_healthy_requires_all_three() {
+        let mut r = NativeHostReport {
+            launcher_exists: true,
+            target_exists: true,
+            target_executable: true,
+            ..Default::default()
+        };
+        assert!(r.is_healthy());
+        r.target_exists = false;
+        assert!(!r.is_healthy());
+    }
 
     #[test]
     fn match_browser_resolves_by_id_email_prefix_and_errors() {

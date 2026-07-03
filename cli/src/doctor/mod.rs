@@ -15,6 +15,7 @@ mod environment;
 mod fix;
 mod helpers;
 mod launch;
+mod native_host;
 mod network;
 mod providers;
 mod security;
@@ -100,6 +101,7 @@ pub fn run_doctor(opts: DoctorOptions) -> i32 {
     environment::check(&mut checks);
     versions::check(&mut checks);
     chrome::check(&mut checks);
+    native_host::check(&mut checks);
     daemon::check(&mut checks);
     config::check(&mut checks);
     security::check(&mut checks);

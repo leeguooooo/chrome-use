@@ -57,6 +57,17 @@ pub(super) fn run(checks: &mut [Check], fixed: &mut Vec<String>) {
                     c.fix = None;
                 }
             }
+            "native_host.launcher" | "native_host.target" if c.status == Status::Fail => {
+                // Re-inspect after the repoint: only clear if it actually resolved.
+                if crate::connect::reinstall_native_host().is_ok()
+                    && crate::connect::native_host_report().is_healthy()
+                {
+                    fixed.push("Repointed native-messaging host at the current binary".to_string());
+                    c.status = Status::Pass;
+                    c.message = format!("{} (fixed by --fix)", c.message);
+                    c.fix = None;
+                }
+            }
             "security.encryption_key" if c.status == Status::Info => {
                 let generated = create_encryption_key();
                 if generated {
