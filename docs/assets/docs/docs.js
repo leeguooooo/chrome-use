@@ -23,13 +23,16 @@
   if (!document.querySelector('script[src*="visitor-beacon.js"]')) {
     var beacon = document.createElement('script');
     beacon.defer = true;
-    beacon.src = 'https://blog.leeguoo.com/scripts/visitor-beacon.js?v=20260629-2';
+    beacon.src = 'https://blog.leeguoo.com/scripts/visitor-beacon.js?v=20260703-2';
     head.appendChild(beacon);
   }
 
-  // Google Analytics 4 — same measurement IDs leeguoo.com fires, so docs
-  // traffic lands in the same properties ("counted together with leeguoo.com").
-  var GA_IDS = ['G-1PPMNQSBQ5', 'G-RCV0Z432Y8'];
+  // Google Analytics 4 — the unified root-domain stream only (G-RCV0Z432Y8,
+  // property 542876134; segment by hostname). Firing a second stream of the
+  // same property (the old G-1PPMNQSBQ5 here) double-counted this site's PVs.
+  // This host is GitHub Pages (not proxied by Cloudflare), so the zone-wide
+  // analytics-leeguoo injector can't reach it — this manual embed stays.
+  var GA_IDS = ['G-RCV0Z432Y8'];
   if (!window.__cuGtag) {
     window.__cuGtag = true;
     var ga = document.createElement('script');
