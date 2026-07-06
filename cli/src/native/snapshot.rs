@@ -555,6 +555,29 @@ async fn take_snapshot_at_depth(
 
     promote_hidden_inputs(&mut tree_nodes, &cursor_elements);
 
+    // Name unlabeled interactive controls from their placeholder / nearest label
+    // (issue #90): el-select and custom comboboxes leave the AX name empty, so
+    // `snapshot -i` otherwise shows bare, indistinguishable `combobox [ref=eN]`.
+    // One batched scan, main frame only; applied ONLY where the AX name is empty,
+    // so named nodes are untouched (zero regression).
+    if options.interactive && depth == 0 {
+        let label_fallbacks = find_control_label_fallbacks(client, session_id)
+            .await
+            .unwrap_or_default();
+        if !label_fallbacks.is_empty() {
+            for node in tree_nodes.iter_mut() {
+                if node.name.is_empty() && INTERACTIVE_ROLES.contains(&node.role.as_str()) {
+                    if let Some(label) = node
+                        .backend_node_id
+                        .and_then(|bid| label_fallbacks.get(&bid))
+                    {
+                        node.name = label.clone();
+                    }
+                }
+            }
+        }
+    }
+
     for (idx, node) in tree_nodes.iter().enumerate() {
         let role = node.role.as_str();
         let mut should_ref = if INTERACTIVE_ROLES.contains(&role) {
@@ -1223,6 +1246,103 @@ async fn find_error_elements(
             })
         })
         .collect())
+}
+
+/// Derive a fallback accessible name for interactive controls that have none in
+/// the AX tree (issue #90): Element-Plus `el-select` / custom comboboxes render
+/// their label as a placeholder span or a sibling form-item label, so the AX
+/// name is empty and `snapshot -i` shows a bare, indistinguishable
+/// `combobox [ref=eN]`. One batched scan tags each such control and computes a
+/// label from (in order) its placeholder, an inner input's placeholder, an
+/// associated `<label>`, the nearest `.el-form-item__label` / `.ant-form-item`
+/// label, or leading sibling text. Returns backendNodeId → label; the caller
+/// applies it only where the AX name is actually empty.
+async fn find_control_label_fallbacks(
+    client: &CdpClient,
+    session_id: &str,
+) -> Result<HashMap<i64, String>, String> {
+    let js = r#"
+(function() {
+    var results = [];
+    if (!document.body) return results;
+    var SEL = 'input:not([type=hidden]):not([type=submit]):not([type=button]),' +
+              'select,textarea,[contenteditable="true"],' +
+              '[role=combobox],[role=textbox],[role=searchbox],[role=listbox],[role=spinbutton]';
+    function clean(s){ return (s||'').replace(/\s+/g,' ').trim(); }
+    function labelFor(el){
+        // 1. own / inner placeholder
+        var ph = el.getAttribute && el.getAttribute('placeholder');
+        if (ph) return ph;
+        var inner = el.querySelector && el.querySelector('input[placeholder],textarea[placeholder],[placeholder]');
+        if (inner) { var ip = inner.getAttribute('placeholder'); if (ip) return ip; }
+        var phSpan = el.querySelector && el.querySelector('.el-select__placeholder,.el-input__inner');
+        if (phSpan) { var t = clean(phSpan.getAttribute && phSpan.getAttribute('placeholder')) || clean(phSpan.textContent); if (t) return t; }
+        // 2. associated <label>
+        try { if (el.labels && el.labels[0]) { var lt = clean(el.labels[0].textContent); if (lt) return lt; } } catch(e){}
+        if (el.id) { var lf = document.querySelector('label[for="'+CSS.escape(el.id)+'"]'); if (lf) { var lft = clean(lf.textContent); if (lft) return lft; } }
+        var wrapLabel = el.closest && el.closest('label');
+        if (wrapLabel) { var wt = clean(wrapLabel.textContent); if (wt) return wt; }
+        // 3. framework form-item label (Element Plus / Ant Design / generic)
+        var fi = el.closest && el.closest('.el-form-item,.ant-form-item,.el-form-item__content,.form-item');
+        if (fi) { var lbl = fi.querySelector('.el-form-item__label,.ant-form-item-label,label,.form-item__label'); if (lbl) { var flt = clean(lbl.textContent); if (flt) return flt; } }
+        // 4. aria-label on the element itself (AX sometimes still misses it)
+        var al = el.getAttribute && el.getAttribute('aria-label'); if (al) return al;
+        return '';
+    }
+    var matched = document.body.querySelectorAll(SEL);
+    for (var i = 0; i < matched.length; i++) {
+        var el = matched[i];
+        if (el.closest && el.closest('[hidden],[aria-hidden="true"]')) continue;
+        var rect = el.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) continue;
+        var label = clean(labelFor(el));
+        if (!label) continue;
+        if (label.length > 40) label = label.slice(0, 40) + '…';
+        el.setAttribute('data-__ab-lbl', String(results.length));
+        results.push({ label: label });
+    }
+    return results;
+})()
+"#
+    .to_string();
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: js,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+
+    let elements: Vec<Value> = result
+        .result
+        .value
+        .and_then(|v| serde_json::from_value::<Vec<Value>>(v).ok())
+        .unwrap_or_default();
+
+    if elements.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let idx_to_backend = resolve_tagged_backend_ids(client, session_id, "data-__ab-lbl").await;
+
+    let mut out: HashMap<i64, String> = HashMap::new();
+    for (i, elem) in elements.iter().enumerate() {
+        if let (Some(bid), Some(label)) = (
+            idx_to_backend.get(&i).copied(),
+            elem.get("label").and_then(|v| v.as_str()),
+        ) {
+            let label = label.trim();
+            if !label.is_empty() {
+                out.insert(bid, label.to_string());
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Resolve the `backendNodeId` for every element previously tagged with a
