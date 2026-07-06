@@ -185,15 +185,16 @@
       <table class="cmp-table">
         <thead><tr><th>页面</th><th>chrome-use <code>snapshot -i</code></th><th>ego <code>snapshotText</code></th><th>谁更省</th></tr></thead>
         <tbody>
-          <tr class="me"><th>example.com</th><td class="cmp-win">101 字节</td><td>456 字节</td><td>省 ~4.5×</td></tr>
-          <tr class="me"><th>Hacker News</th><td class="cmp-win">12.9 KB</td><td>46.7 KB</td><td>省 ~3.6×</td></tr>
-          <tr class="me"><th>GitHub 仓库页</th><td class="cmp-win">18.6 KB</td><td>33.6 KB</td><td>省 ~1.8×</td></tr>
+          <tr class="me"><th>example.com</th><td class="cmp-win">102 字节</td><td>438 字节</td><td>省 ~4.3×</td></tr>
+          <tr class="me"><th>Hacker News</th><td class="cmp-win">12.6 KB</td><td>46.7 KB</td><td>省 ~3.7×</td></tr>
+          <tr class="me"><th>GitHub 仓库页<br><span class="cmp-mut">（两边都登录态）</span></th><td class="cmp-win">26.6 KB</td><td>112 KB</td><td>省 ~4.2×</td></tr>
         </tbody>
       </table>
       </div>
+      <p class="cmp-mut" style="font-size:.82rem; margin-top:6px;">两边工具于同一时刻、同一登录态各自默认设置下实测（2026-07 复现）：example.com / HN 均为登出态，GitHub 两边都登录同一账号。此前的 456 / 33.6K 等数字为旧值或状态错配，已用独立复现值替换。</p>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ "更省 token" 恰好说反了</div>
-        chrome-use 默认 <code>snapshot -i</code> 只列交互元素，比 ego 默认的全结构树 <strong>省 1.8–4.5×</strong>。token 是 agent 真正花钱的地方——是我们更省。
+        chrome-use 默认 <code>snapshot -i</code> 只列交互元素，比 ego 默认的全结构树 <strong>省 ~3.7–4.3×</strong>（同登录态独立复现）。token 是 agent 真正花钱的地方——是我们更省。
       </div>
 
       <h3>性能（墙钟时间）</h3>
@@ -226,8 +227,8 @@
           </tr>
           <tr class="me">
             <td>"<strong>Same automation, fewer tokens</strong>"</td>
-            <td>同页默认快照体量：chrome-use <code>snapshot -i</code> <strong>101 / 12.9K / 18.6K 字节</strong> vs ego <code>snapshotText</code> 456 / 46.7K / 33.6K。</td>
-            <td><span class="cmp-win">反了</span>——默认工作流下<strong>我们省 1.8–4.5×</strong>。</td>
+            <td>同页默认快照体量（同登录态独立复现）：chrome-use <code>snapshot -i</code> <strong>102 B / 12.6K / 26.6K</strong> vs ego <code>snapshotText</code> 438 B / 46.7K / 112K。</td>
+            <td><span class="cmp-win">反了</span>——默认工作流下<strong>我们省 ~3.7–4.3×</strong>。</td>
           </tr>
           <tr>
             <td>"not a JS shim on stock Chrome … reach into <strong>cross-origin iframes, shadow DOM, third-party SDK widgets</strong> like Stripe, Salesforce, Intercom, React portals … <strong>JS shims usually give up</strong> … burning tokens for nothing"</td>

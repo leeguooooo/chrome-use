@@ -186,15 +186,16 @@
       <table class="cmp-table">
         <thead><tr><th>Page</th><th>chrome-use <code>snapshot -i</code></th><th>ego <code>snapshotText</code></th><th>Leaner</th></tr></thead>
         <tbody>
-          <tr class="me"><th>example.com</th><td class="cmp-win">101 bytes</td><td>456 bytes</td><td>~4.5×</td></tr>
-          <tr class="me"><th>Hacker News</th><td class="cmp-win">12.9 KB</td><td>46.7 KB</td><td>~3.6×</td></tr>
-          <tr class="me"><th>GitHub repo page</th><td class="cmp-win">18.6 KB</td><td>33.6 KB</td><td>~1.8×</td></tr>
+          <tr class="me"><th>example.com</th><td class="cmp-win">102 bytes</td><td>438 bytes</td><td>~4.3×</td></tr>
+          <tr class="me"><th>Hacker News</th><td class="cmp-win">12.6 KB</td><td>46.7 KB</td><td>~3.7×</td></tr>
+          <tr class="me"><th>GitHub repo page<br><span class="cmp-mut">(both logged in)</span></th><td class="cmp-win">26.6 KB</td><td>112 KB</td><td>~4.2×</td></tr>
         </tbody>
       </table>
       </div>
+      <p class="cmp-mut" style="font-size:.82rem; margin-top:6px;">Both tools measured back-to-back in the same login state, each on its own defaults (re-run 2026-07): example.com / HN logged out, GitHub logged into the same account on both. Earlier figures (456 / 33.6K, etc.) were stale or captured in a mismatched login state; replaced with independently reproduced values.</p>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ "fewer tokens" is backwards</div>
-        chrome-use's default <code>snapshot -i</code> lists interactive elements only — <strong>1.8–4.5× leaner</strong> than ego's default full tree. Tokens are what an agent actually pays for, so we save more.
+        chrome-use's default <code>snapshot -i</code> lists interactive elements only — <strong>~3.7–4.3× leaner</strong> than ego's default full tree (independently reproduced, same login state). Tokens are what an agent actually pays for, so we save more.
       </div>
 
       <h3>Performance (wall-clock)</h3>
@@ -227,8 +228,8 @@
           </tr>
           <tr class="me">
             <td>"<strong>Same automation, fewer tokens</strong>"</td>
-            <td>Default snapshot size, same pages: chrome-use <code>snapshot -i</code> <strong>101 / 12.9K / 18.6K bytes</strong> vs ego <code>snapshotText</code> 456 / 46.7K / 33.6K.</td>
-            <td><span class="cmp-win">Backwards</span> — in the default workflow <strong>we're 1.8–4.5× leaner</strong>.</td>
+            <td>Default snapshot size, same pages (independently reproduced, same login state): chrome-use <code>snapshot -i</code> <strong>102 B / 12.6K / 26.6K</strong> vs ego <code>snapshotText</code> 438 B / 46.7K / 112K.</td>
+            <td><span class="cmp-win">Backwards</span> — in the default workflow <strong>we're ~3.7–4.3× leaner</strong>.</td>
           </tr>
           <tr>
             <td>"not a JS shim on stock Chrome … reach into <strong>cross-origin iframes, shadow DOM, third-party SDK widgets</strong> like Stripe, Salesforce, Intercom, React portals … <strong>JS shims usually give up</strong> … burning tokens for nothing"</td>
