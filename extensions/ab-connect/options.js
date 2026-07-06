@@ -108,11 +108,15 @@ el('copyCmd').addEventListener('click', () => {
   }).catch(() => {})
 })
 
-const repo = el('repo')
-repo.addEventListener('click', (e) => {
-  e.preventDefault()
-  if (hasChrome && chrome.tabs) chrome.tabs.create({ url: repo.dataset.href })
-  else window.open(repo.dataset.href, '_blank')
+// Open external links (docs / repo / site) in a real tab. Every [data-href]
+// anchor is wired the same way.
+document.querySelectorAll('[data-href]').forEach((a) => {
+  a.addEventListener('click', (e) => {
+    e.preventDefault()
+    const url = a.dataset.href
+    if (hasChrome && chrome.tabs) chrome.tabs.create({ url })
+    else window.open(url, '_blank')
+  })
 })
 
 queryStatus()

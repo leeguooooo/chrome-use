@@ -56,17 +56,18 @@ function queryStatus() {
   }
 }
 
-// Open the repo in a real tab (no inline handlers under MV3 CSP).
-const repo = document.getElementById('repo')
-if (repo) {
-  repo.addEventListener('click', () => {
+// Open external links (docs / repo / site) in a real tab (no inline handlers
+// under MV3 CSP). Every [data-href] anchor is wired the same way.
+document.querySelectorAll('[data-href]').forEach((a) => {
+  a.addEventListener('click', () => {
+    const url = a.dataset.href
     if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
-      chrome.tabs.create({ url: repo.dataset.href })
+      chrome.tabs.create({ url })
     } else {
-      window.open(repo.dataset.href, '_blank')
+      window.open(url, '_blank')
     }
   })
-}
+})
 
 // Query now, then once more shortly after — opening the popup also nudges the
 // service worker to (re)connect the host, which may complete a beat later.

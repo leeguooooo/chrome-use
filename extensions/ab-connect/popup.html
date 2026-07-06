@@ -115,9 +115,10 @@
   footer {
     margin-top: 12px; padding: 11px 18px 15px;
     border-top: 1.5px solid var(--border);
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 7px;
   }
   footer .privacy { color: var(--muted); font-size: 11px; font-weight: 600; }
+  footer .links { display: flex; gap: 14px; flex-wrap: wrap; }
   footer a {
     color: var(--gold-deep); text-decoration: none; font-size: 11.5px;
     font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 3px;
@@ -164,7 +165,11 @@
 
     <footer class="anim d4">
       <span class="privacy">No tracking · local only</span>
-      <a id="repo" data-href="https://github.com/leeguooooo/chrome-use">GitHub ↗</a>
+      <span class="links">
+        <a data-href="https://chrome-use.leeguoo.com">Docs ↗</a>
+        <a id="repo" data-href="https://github.com/leeguooooo/chrome-use">GitHub ↗</a>
+        <a data-href="https://leeguoo.com">leeguoo.com ↗</a>
+      </span>
     </footer>
   </div>
 
