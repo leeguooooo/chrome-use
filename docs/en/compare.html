@@ -214,6 +214,51 @@
         So a task with <strong>many tiny ops</strong> is where ego pulls ahead ("3×" most likely comes from that shape). But a typical task (open + snapshot + extract) measured ~3s on both, and chrome-use's <code>batch</code> (one round-trip to the persistent daemon) does 6 ops in 0.19s ≈ ego, plus a WebSocket stream for real-time driving.
       </p>
 
+      <h3>Their site's claims vs our evidence</h3>
+      <p>Verbatim from <a href="https://lite.ego.app/">lite.ego.app</a>, each claim fact-checked with evidence. Method is in the workflow below — reproducible.</p>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>ego's claim (verbatim)</th><th>Our evidence</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>"<strong>3.45x faster</strong>" · "Fastest browser for AI agents"</td>
+            <td>HN extract task ~3s on both; 6 micro-ops: chrome-use 1.00s per-process, <code>batch</code> 0.19s, ego persistent runtime ≈0s.</td>
+            <td><span class="cmp-mut">Half-true</span> — only for <strong>micro-op-heavy</strong> tasks (their persistent runtime skips process spawn); typical tasks equal, <code>batch</code>/stream closes it.</td>
+          </tr>
+          <tr class="me">
+            <td>"<strong>Same automation, fewer tokens</strong>"</td>
+            <td>Default snapshot size, same pages: chrome-use <code>snapshot -i</code> <strong>101 / 12.9K / 18.6K bytes</strong> vs ego <code>snapshotText</code> 456 / 46.7K / 33.6K.</td>
+            <td><span class="cmp-win">Backwards</span> — in the default workflow <strong>we're 1.8–4.5× leaner</strong>.</td>
+          </tr>
+          <tr>
+            <td>"not a JS shim on stock Chrome … reach into <strong>cross-origin iframes, shadow DOM, third-party SDK widgets</strong> like Stripe, Salesforce, Intercom, React portals … <strong>JS shims usually give up</strong> … burning tokens for nothing"</td>
+            <td>chrome-use uses <strong>CDP</strong> (not a JS shim). reCAPTCHA demo, measured: <code>frames</code> lists all 5 cross-origin frames; <code>eval --frame 1</code> read the checkbox <code>role=checkbox</code> "I'm not a robot". <strong>But</strong> the default <code>snapshot -i</code> didn't merge it while ego's did (fixing in <a href="https://github.com/leeguooooo/chrome-use/issues/92">#92</a>).</td>
+            <td><span class="cmp-mut">Half wrong, half right</span> — we're <strong>not a JS shim and do reach</strong> OOPIF/SDK widgets; but the default snapshot did miss this reCAPTCHA case — that part is fair.</td>
+          </tr>
+          <tr>
+            <td>"your AI agents will <strong>never get stuck on captchas, 2FA, and SSO redirects</strong>" (because you're logged into it)</td>
+            <td>chrome-use also drives your <strong>real, logged-in</strong> Chrome → SSO/2FA already done. Captchas need a human on both — we have <code>session handoff</code> for that.</td>
+            <td><span class="cmp-mut">Parity</span> — same logged-in advantage (we're zero-install on your existing Chrome).</td>
+          </tr>
+          <tr>
+            <td>"<strong>Zero cost, zero config</strong> (yes, free)"</td>
+            <td>chrome-use is also free &amp; open source: one <code>curl … | sh</code> + a one-time extension install.</td>
+            <td><span class="cmp-mut">Parity</span> — both free; they have you download a new browser, we use yours.</td>
+          </tr>
+          <tr>
+            <td>"<strong>Take over</strong> / Stop" (their handoff UI)</td>
+            <td>chrome-use ships <code>session handoff</code> / <code>resume</code> / <code>status</code> / <code>list</code>.</td>
+            <td><span class="cmp-mut">Parity</span> — matched.</td>
+          </tr>
+          <tr>
+            <td>"installs as a skill in <strong>every agent</strong> (Claude Code / Codex / Cursor / Kiro / Hermes / OpenClaw)"</td>
+            <td>chrome-use is a native CLI/skill usable by <strong>any agent that runs a shell</strong> (Claude Code / Cursor / Codex / Continue / Windsurf…).</td>
+            <td><span class="cmp-mut">Parity</span>.</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
       <h3>What we learned from ego-lite &amp; ported</h3>
       <p>After trialing each item, we ported the real gaps the chrome-use way (progress in <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>):</p>
       <ul>

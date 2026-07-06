@@ -213,6 +213,51 @@
         所以<strong>微操作特别多</strong>的任务里 ego 更快（"快 3 倍"多半来自这种形状）。但典型任务（open+快照+抽取）实测两边都 ~3s，chrome-use 用 <code>batch</code>（一次往返、常驻守护进程）6 操作 0.19s 基本追平，还有 WebSocket 流做实时驱动。
       </p>
 
+      <h3>他们官网的宣传语 vs 我们的证据</h3>
+      <p>取自 <a href="https://lite.ego.app/">lite.ego.app</a> 的原文（英文照录），逐条给证据。方法见页末 workflow，可复现。</p>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>ego 官网原文</th><th>我们的证据</th><th>结论</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>"<strong>3.45x faster</strong>" · "Fastest browser for AI agents"</td>
+            <td>HN 抽取任务两边都 ~3s；6 微操作：chrome-use 各自进程 1.00s，<code>batch</code> 0.19s，ego 常驻运行时 ≈0s。</td>
+            <td><span class="cmp-mut">半真</span>——只在<strong>微操作密集</strong>时成立（源于常驻运行时省进程启动）；典型任务持平，<code>batch</code>/流即可追平。</td>
+          </tr>
+          <tr class="me">
+            <td>"<strong>Same automation, fewer tokens</strong>"</td>
+            <td>同页默认快照体量：chrome-use <code>snapshot -i</code> <strong>101 / 12.9K / 18.6K 字节</strong> vs ego <code>snapshotText</code> 456 / 46.7K / 33.6K。</td>
+            <td><span class="cmp-win">反了</span>——默认工作流下<strong>我们省 1.8–4.5×</strong>。</td>
+          </tr>
+          <tr>
+            <td>"not a JS shim on stock Chrome … reach into <strong>cross-origin iframes, shadow DOM, third-party SDK widgets</strong> like Stripe, Salesforce, Intercom, React portals … <strong>JS shims usually give up</strong> … burning tokens for nothing"</td>
+            <td>chrome-use 走 <strong>CDP</strong>（非 JS shim）。reCAPTCHA demo 实测：<code>frames</code> 列出全部 5 个跨域 frame；<code>eval --frame 1</code> 读到勾选框 <code>role=checkbox</code>「I'm not a robot」。<strong>但</strong>默认 <code>snapshot -i</code> 没把它并进顶层，ego 快照并了（已开 <a href="https://github.com/leeguooooo/chrome-use/issues/92">#92</a> 修）。</td>
+            <td><span class="cmp-mut">一半假一半真</span>——我们<strong>不是 JS shim、也能触达</strong> OOPIF/SDK widget；但默认快照确实漏并了 reCAPTCHA 这类，这点它对。</td>
+          </tr>
+          <tr>
+            <td>"your AI agents will <strong>never get stuck on captchas, 2FA, and SSO redirects</strong>"（因为你登录态用它）</td>
+            <td>chrome-use 也驱动你<strong>真实已登录</strong>的 Chrome → SSO/2FA 天然已完成。验证码两边都需人工——我们有 <code>session handoff</code> 兜底。</td>
+            <td><span class="cmp-mut">持平</span>——同样的登录态优势（我们零安装用你现有的）。</td>
+          </tr>
+          <tr>
+            <td>"<strong>Zero cost, zero config</strong> (yes, free)"</td>
+            <td>chrome-use 也免费开源，一条 <code>curl … | sh</code> 装好 + 一次扩展安装。</td>
+            <td><span class="cmp-mut">持平</span>——都免费；它要你下一个新浏览器，我们用你现有的。</td>
+          </tr>
+          <tr>
+            <td>"<strong>Take over</strong> / Stop"（它的交接 UI）</td>
+            <td>chrome-use 已实现 <code>session handoff</code> / <code>resume</code> / <code>status</code> / <code>list</code>。</td>
+            <td><span class="cmp-mut">持平</span>——已对齐。</td>
+          </tr>
+          <tr>
+            <td>"installs as a skill in <strong>every agent</strong>（Claude Code / Codex / Cursor / Kiro / Hermes / OpenClaw）"</td>
+            <td>chrome-use 是原生 CLl/skill，<strong>任何能跑 shell 的 agent</strong> 都能用（Claude Code / Cursor / Codex / Continue / Windsurf…）。</td>
+            <td><span class="cmp-mut">持平</span>。</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
       <h3>我们从 ego-lite 学到 &amp; 已搬的</h3>
       <p>逐项试用对比后，把真缺口用 chrome-use 原生的方式搬过来（进度在 <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>）：</p>
       <ul>
