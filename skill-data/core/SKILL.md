@@ -537,6 +537,45 @@ k("keyDown"," ","Space",32); setTimeout(()=>k("keyUp"," ","Space",32), 80)   // 
 This is the difference between watching a slideshow and playing the game. Reserve
 screenshots for one-off checks; use the WS for any sustained real-time control.
 
+### Virtualized rich editors (Google Docs/Sheets, Notion, Figma, Lark/Feishu)
+
+Unlike canvas, these DO have a DOM — but it **lies**. The editing surface is a
+virtualized layer, and the DOM around it is littered with decoys: a hidden
+`<textarea>` mirror, an offscreen input, a toolbar/search box, a title field.
+`fill @ref` / `type @ref` on a ref plucked from `snapshot -i` often lands your
+text in one of those decoys — the title bar, a find box — not the document. The
+snapshot-first rule still holds for *navigation* (menus, buttons, dialogs), but
+for the **main editing surface**, prove where your keystrokes go before you
+commit a paragraph:
+
+```bash
+# 1. WRITE PROBE — type one throwaway token, don't dump the whole payload yet
+chrome-use click 520 300                # click into the document body by coordinate
+chrome-use keyboard type "zzprobe"      # a real keystroke sequence (not fill/insertText)
+
+# 2. VERIFY it landed in the document — not the title/toolbar/a hidden input
+chrome-use screenshot /tmp/probe.png    # SEE where "zzprobe" actually appeared
+#    (or read it back through the app's export/API path if it has one)
+
+# 3a. Probe landed in the doc  → continue with real keystrokes
+chrome-use keyboard type "the real content…"
+# 3b. Probe landed in the wrong field → STOP using DOM/fill for this surface.
+#     Drive it visually: click the body by coordinate, then real keyboard only.
+```
+
+Rules of thumb for these apps:
+
+- **Don't trust `fill @ref` / `type @ref` for the document surface** until a probe
+  proves the target. Toolbars, menus, comment boxes, the share dialog — those are
+  real DOM and `@ref` is fine. The canvas/grid itself is the trap.
+- **Prefer real keystrokes** (`keyboard type` / `keyboard press`) over
+  `fill`/`insertText` — virtualized editors listen for key events, and CDP
+  `insertText` silently no-ops or writes to the mirror.
+- **Verify by readback, not assumption** — screenshot the region, or use the app's
+  export/download/API to confirm the content actually landed, before reporting done.
+- A one-token probe costs one round-trip and saves the classic failure of a whole
+  document typed into the title bar.
+
 ## Waiting (read this)
 
 Agents fail more often from bad waits than from bad selectors. Pick the
