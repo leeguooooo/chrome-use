@@ -120,6 +120,49 @@
         <li>快照内联 <code>url=</code> / 按名复用会话 / token 经济——<span class="cmp-win">已基本具备</span>（<code>--urls</code>、<code>--session-name</code>）。</li>
       </ul>
 
+      <h2>基准实测：性能与 token（核对"快 3 倍、更省 token"的说法）</h2>
+      <p>
+        ego 宣传"更快、更省 token"，坊间传成"快 3 倍"。我们实测同样的页面、同样的操作。结论：<strong>一个半真、一个恰好相反</strong>。
+      </p>
+
+      <h3>Token（喂给大模型的观察体量——真正花钱的地方）</h3>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>页面</th><th>chrome-use <code>snapshot -i</code></th><th>ego <code>snapshotText</code></th><th>谁更省</th></tr></thead>
+        <tbody>
+          <tr><td>example.com</td><td class="cmp-win">101 字节</td><td>456 字节</td><td>chrome-use 省 ~4.5×</td></tr>
+          <tr><td>Hacker News</td><td class="cmp-win">12.9 KB</td><td>46.7 KB</td><td>chrome-use 省 ~3.6×</td></tr>
+          <tr><td>GitHub 仓库页</td><td class="cmp-win">18.6 KB</td><td>33.6 KB</td><td>chrome-use 省 ~1.8×</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ "更省 token" 恰好说反了</div>
+        chrome-use 默认的 <code>snapshot -i</code> 只列交互元素，比 ego 默认的全结构树 <strong>省 1.8–4.5×</strong>。token 是 agent 真正花钱的地方——<strong>是我们更省，不是它</strong>。
+      </div>
+
+      <h3>性能（墙钟时间）</h3>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>场景</th><th>chrome-use</th><th>ego</th></tr></thead>
+        <tbody>
+          <tr><td>导航 open / 单次快照</td><td class="cmp-win">≈ 持平</td><td>≈ 持平（都受页面加载 + CDP 限制）</td></tr>
+          <tr><td>6 个微操作 · 每条一个 CLI 进程</td><td>1.00s（0.17s/op，进程启动开销）</td><td>—</td></tr>
+          <tr><td>6 个微操作 · chrome-use <code>batch</code></td><td class="cmp-win">0.19s</td><td>—</td></tr>
+          <tr><td>6 个微操作 · ego 常驻运行时</td><td>—</td><td class="cmp-win">≈0.00s</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        原始浏览器操作（导航、CDP）两边一样快。ego 的优势是<strong>常驻运行时</strong>：一个进程连续跑多个操作，没有每条命令的进程启动开销。
+        chrome-use 默认「一条命令一个进程」，每条约 0.15–0.17s 启动开销——所以<strong>微操作特别多</strong>的任务里 ego 会明显更快（"快 3 倍"多半来自这种形状）。
+        但典型任务（open + 快照 + 抽取）实测两边都 ~3s；而且 chrome-use 用 <code>batch</code>（一次往返、常驻守护进程）6 个操作 0.19s，基本追平 ego——还有 WebSocket 流做实时驱动。
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 一句话</div>
+        <strong>"快 3 倍"</strong>：只在「大量微操作 + 你天真地一条命令一个进程」时成立；典型任务持平，用 <code>batch</code>/流即可追平。<strong>"更省 token"</strong>：反了，默认工作流下我们省 1.8–4.5×。
+      </div>
+
       <h2>对比 workflow</h2>
       <p>这一页是活文档。每学一个竞品能力，我们走同一套流程，保证对比诚实、可复现：</p>
       <ol>

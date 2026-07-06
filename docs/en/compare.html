@@ -120,6 +120,50 @@
         <li>Inline <code>url=</code> in snapshots / reuse-by-name / token economy — <span class="cmp-win">already covered</span> (<code>--urls</code>, <code>--session-name</code>).</li>
       </ul>
 
+      <h2>Benchmark: performance &amp; tokens (fact-checking "3× faster, fewer tokens")</h2>
+      <p>
+        ego markets itself as "faster on fewer tokens," which travels as "3× faster." We measured the same pages and the same operations.
+        Verdict: <strong>one is half-true, the other is exactly backwards</strong>.
+      </p>
+
+      <h3>Tokens (the observation fed to the model — what actually costs money)</h3>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>Page</th><th>chrome-use <code>snapshot -i</code></th><th>ego <code>snapshotText</code></th><th>Leaner</th></tr></thead>
+        <tbody>
+          <tr><td>example.com</td><td class="cmp-win">101 bytes</td><td>456 bytes</td><td>chrome-use ~4.5× leaner</td></tr>
+          <tr><td>Hacker News</td><td class="cmp-win">12.9 KB</td><td>46.7 KB</td><td>chrome-use ~3.6× leaner</td></tr>
+          <tr><td>GitHub repo page</td><td class="cmp-win">18.6 KB</td><td>33.6 KB</td><td>chrome-use ~1.8× leaner</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ "fewer tokens" is backwards</div>
+        chrome-use's default <code>snapshot -i</code> lists interactive elements only — <strong>1.8–4.5× leaner</strong> than ego's default full structural tree. Tokens are what an agent actually pays for, so <strong>we save more, not ego</strong>.
+      </div>
+
+      <h3>Performance (wall-clock)</h3>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>Scenario</th><th>chrome-use</th><th>ego</th></tr></thead>
+        <tbody>
+          <tr><td>Navigate open / single snapshot</td><td class="cmp-win">≈ equal</td><td>≈ equal (both bound by page load + CDP)</td></tr>
+          <tr><td>6 micro-ops · one CLI process each</td><td>1.00s (0.17s/op, process-spawn cost)</td><td>—</td></tr>
+          <tr><td>6 micro-ops · chrome-use <code>batch</code></td><td class="cmp-win">0.19s</td><td>—</td></tr>
+          <tr><td>6 micro-ops · ego persistent runtime</td><td>—</td><td class="cmp-win">≈0.00s</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        Raw browser operations (navigation, CDP) are equally fast on both. ego's edge is its <strong>persistent runtime</strong>: one process runs many ops with no per-command spawn.
+        chrome-use defaults to one-process-per-command (~0.15–0.17s spawn each), so a task with <strong>many tiny ops</strong> is where ego pulls ahead ("3×" most likely comes from that task shape).
+        But a typical task (open + snapshot + extract) measured ~3s on both, and chrome-use's <code>batch</code> (one round-trip to the persistent daemon) does 6 ops in 0.19s — essentially matching ego — plus a WebSocket stream for real-time driving.
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ In one line</div>
+        <strong>"3× faster"</strong>: only when it's many micro-ops AND you naively spawn one CLI process per op; typical tasks are equal, and <code>batch</code>/stream closes it. <strong>"fewer tokens"</strong>: backwards — our default workflow is 1.8–4.5× leaner.
+      </div>
+
       <h2>The comparison workflow</h2>
       <p>This page is a living document. For every competitor capability we study, we run the same loop so the comparison stays honest and reproducible:</p>
       <ol>
