@@ -105,6 +105,7 @@ chrome-use is checked @e1      # Check if checked
 chrome-use screenshot          # Save to temporary directory
 chrome-use screenshot path.png # Save to specific path
 chrome-use screenshot --full   # Full page
+chrome-use screenshot --tab t2 shot.png  # Capture a specific tab (ref from `tab list`) instead of the active one
 chrome-use pdf output.pdf      # Save as PDF
 ```
 

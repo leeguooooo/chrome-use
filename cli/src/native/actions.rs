@@ -3659,8 +3659,23 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // Without this, a screenshot resolves that stale scratch pin and captures
     // `about:blank` even though `snapshot`/`eval`/`tab list` see the real tab.
     // Best-effort: a stale pin still beats erroring the command.
+    //
+    // An explicit `--tab <ref>` (issue #88) switches to that tab first, so the
+    // shot targets it regardless of the active pin — resolved exactly like
+    // `tab <id>` (targetId, then `t<N>`/label).
     if let Some(mgr) = state.browser.as_mut() {
         mgr.resync_targets().await.ok();
+        if let Some(tab_ref_str) = cmd.get("tab").and_then(|v| v.as_str()) {
+            let tab_id = match mgr.tab_id_for_target(tab_ref_str) {
+                Some(id) => id,
+                None => {
+                    let tab_ref = super::browser::TabRef::parse(tab_ref_str)?;
+                    mgr.resolve_tab_ref(&tab_ref)?
+                }
+            };
+            mgr.tab_switch_by_id(tab_id).await?;
+            state.ref_map.clear();
+        }
     }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
