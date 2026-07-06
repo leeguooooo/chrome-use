@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Troubleshooting · chrome-use docs</title>
-  <meta name="description" content="Diagnose and fix common chrome-use failures: dead @ref, elements missing from the snapshot, swallowed clicks, stale sessionId, reading the wrong page, fill/type not working, cross-origin iframes, expired logins — plus the doctor self-check and safe-operation rules." />
+  <meta name="description" content="Diagnose and fix common chrome-use failures: dead @ref, elements missing from the snapshot, swallowed clicks, stale sessionId, the debugger bar, reading the wrong page, fill/type not working, cross-origin iframes, expired logins — plus the doctor self-check and safe-operation rules." />
 
   <!-- SEO / social -->
   <meta name="theme-color" content="#fcfbf4" />
@@ -189,6 +189,33 @@
         For multi-hop SSO flows, re-open the <strong>stable entry URL</strong> (not some intermediate redirect address),
         then <code>wait</code> a few seconds for the SPA to settle, then snapshot. Related:
         <a href="/en/real-chrome.html">Driving real Chrome</a>, <a href="/en/sessions.html">Sessions &amp; concurrency</a>.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>The "chrome-use started debugging this browser" bar keeps popping up</h2>
+      <p>
+        That top bar comes from extension relay mode: whenever the ab-connect extension calls
+        <code>chrome.debugger.attach()</code>, Chrome forcibly shows
+        <code>"chrome-use" started debugging this browser</code> to tell you an extension is operating the browser
+        with debugger privileges (it is <em>not</em> the "Chrome is being controlled by automated test software"
+        yellow bar). The <strong>× can't dismiss it—that's deliberate Chrome design</strong>. The only working button
+        is Cancel, which severs the automation connection.
+      </p>
+      <p>
+        <strong>Fix: just upgrade.</strong> With extension 0.5.5+ and CLI 1.5.44+, the extension only attaches to
+        <em>tabs the agent itself created</em>—your own browsing tabs never trigger it, and the bar stays away
+        whenever no agent is actively working. The extension auto-updates via the Chrome Web Store; to force it,
+        enable Developer mode on <code>chrome://extensions</code> and hit "Update". Re-run the install script once
+        to bring the CLI up to date.
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Note</div>
+        After upgrading, the bar still appears briefly while an agent is actively driving its own tabs (inherent to
+        the <code>chrome.debugger</code> API) and disappears once the session detaches. To silence even that window,
+        run <code>chrome-use extension connect --silent</code> once—after a confirmation it restarts Chrome with
+        <code>--silent-debugger-extension-api</code>; tabs and logins are restored by Chrome itself, and the bar is
+        gone for good. Background and trade-offs in <a href="/debugger-banner-silence.html">the deep-dive (Chinese)</a>.
       </div>
 
       <h2>You read the wrong page</h2>

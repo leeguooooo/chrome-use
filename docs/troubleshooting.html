@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>故障排查 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 常见故障的定位与修复：@ref 失效、元素不在快照里、点击被吞、stale sessionId、读到错误页面、fill/type 无效、跨域 iframe、登录过期，以及 doctor 自检和安全操作准则。" />
+  <meta name="description" content="chrome-use 常见故障的定位与修复：@ref 失效、元素不在快照里、点击被吞、stale sessionId、debugger 提示条、读到错误页面、fill/type 无效、跨域 iframe、登录过期，以及 doctor 自检和安全操作准则。" />
 
   <!-- SEO / social -->
   <meta name="theme-color" content="#fcfbf4" />
@@ -182,6 +182,31 @@
         多重跳转的 SSO 流程，重开<strong>稳定的入口 URL</strong>（不是中途某个 redirect 地址），
         再 <code>wait</code> 几秒让 SPA 稳定下来，然后再快照。相关：
         <a href="/real-chrome.html">驱动真实 Chrome</a>、<a href="/sessions.html">会话与并发</a>。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>「chrome-use started debugging this browser」提示条老弹出来</h2>
+      <p>
+        这条顶栏提示来自扩展中继模式：ab-connect 扩展调用 <code>chrome.debugger.attach()</code> 时，
+        Chrome 强制显示 <code>"chrome-use" started debugging this browser</code>，告知你有扩展正以调试器权限
+        操作浏览器（它不是「Chrome 正受自动化测试软件控制」那条黄条）。
+        右上角的 <strong>× 关不掉是 Chrome 的刻意设计</strong>——唯一有效的按钮是 Cancel，
+        但点了会直接断开自动化连接。
+      </p>
+      <p>
+        <strong>解法：升级即可。</strong>扩展 0.5.5+ 与 CLI 1.5.44+ 之后，扩展只 attach
+        <em>agent 自己创建的标签页</em>——你自己浏览的标签页永远不会触发它，agent 没在干活时提示条也不出现。
+        扩展由 Chrome Web Store 自动更新；等不及可在 <code>chrome://extensions</code> 开「开发者模式」点「更新」。
+        CLI 侧运行一次安装脚本即可升到最新。
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 说明</div>
+        升级后 agent 主动驱动自己的标签页时，提示条仍会短暂出现（这是 <code>chrome.debugger</code> API 的固有行为），
+        任务结束 detach 后自动消失。若想连这一段也静音，跑一次
+        <code>chrome-use extension connect --silent</code>——它会在确认后重启 Chrome 并带上
+        <code>--silent-debugger-extension-api</code>，标签页和登录态由 Chrome 自动恢复，之后彻底无提示条。
+        背景与方案取舍见 <a href="/debugger-banner-silence.html">深入：静音 debugger 提示条</a>。
       </div>
 
       <h2>读到了错误的页面</h2>
