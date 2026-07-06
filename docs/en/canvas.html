@@ -211,6 +211,37 @@ k(<span class="du-str">"keyDown"</span>,<span class="du-str">" "</span>,<span cl
         It's the difference between "flipping through slides" and "actually playing the game". Leave one-off checks to <code>screenshot</code>; use WS for any <strong>sustained real-time control</strong>.
       </div>
 
+      <h2>Virtualized rich editors: probe before you commit</h2>
+      <p>
+        Unlike canvas, Google Docs/Sheets, Notion, Figma, and Lark/Feishu <strong>do have a DOM — but it lies</strong>.
+        The editing surface is a virtualized layer, and the DOM around it is littered with decoys: a hidden
+        <code>&lt;textarea&gt;</code> mirror, an offscreen input, a toolbar/search box, a title field.
+        <code>fill</code> / <code>type</code> on a ref plucked from <code>snapshot -i</code> often lands your text in one of those
+        decoys — the title bar, a find box — not the document. Snapshot-first still holds for <em>navigation</em> (menus,
+        buttons, dialogs); but for the <strong>main editing surface</strong>, prove where your keystrokes go before you commit a paragraph.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">write probe → verify → then the real content</span>
+        </div>
+<pre><code><span class="du-cmt"># 1. WRITE PROBE — one throwaway token via real keystrokes, don't dump the payload yet</span>
+<span class="du-prompt">$</span> chrome-use click 520 300              <span class="du-cmt"># click into the document body by coordinate</span>
+<span class="du-prompt">$</span> chrome-use keyboard type <span class="du-str">"zzprobe"</span>    <span class="du-cmt"># real keydown/keypress/keyup, not fill/insertText</span>
+<span class="du-cmt"># 2. VERIFY it landed in the document — not the title/toolbar/a hidden input</span>
+<span class="du-prompt">$</span> chrome-use screenshot /tmp/probe.png  <span class="du-cmt"># SEE where "zzprobe" appeared (or read it back via the app's export/API)</span>
+<span class="du-cmt"># 3a. landed in the doc  → continue with real keystrokes</span>
+<span class="du-cmt"># 3b. landed in the wrong field → stop using DOM/fill here: click the body by coordinate, real keyboard only</span></code></pre>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Three rules of thumb</div>
+        Don't trust <code>fill @ref</code> / <code>type @ref</code> for the document surface until a probe proves the target
+        (toolbars, menus, comment boxes, the share dialog are real DOM — <code>@ref</code> is fine; the canvas/grid itself is the trap);
+        prefer <strong>real keystrokes</strong> (<code>keyboard type</code> / <code>keyboard press</code>) over <code>fill</code>/<code>insertText</code>
+        (virtualized editors listen for key events; <code>insertText</code> silently no-ops or writes to the mirror);
+        <strong>verify by readback</strong>, not assumption — screenshot or use the app's export/API to confirm the content landed before reporting done.
+      </div>
+
       <h2>Decision cheat sheet</h2>
       <div class="du-cards cols-3">
         <a class="du-card" href="/en/reading.html">

@@ -209,6 +209,33 @@ k(<span class="du-str">"keyDown"</span>,<span class="du-str">" "</span>,<span cl
         这是「看幻灯片」和「真正玩游戏」的区别。一次性检查留给 <code>screenshot</code>；任何<strong>持续的实时控制</strong>都用 WS。
       </div>
 
+      <h2>虚拟化富文本编辑器：先探针，再落笔</h2>
+      <p>
+        Google Docs / Sheets、Notion、Figma、飞书文档——这些和 canvas 不同，<strong>有 DOM，但 DOM 会骗你</strong>：
+        真正的编辑面是虚拟化层，周围散落着一堆诱饵——隐藏的 <code>&lt;textarea&gt;</code> 镜像、屏外输入框、工具栏 / 搜索框、标题输入。
+        对着 <code>snapshot -i</code> 挑出来的 ref 直接 <code>fill</code> / <code>type</code>，文字常常落进标题栏或某个隐藏框，而不是文档里。
+        导航（菜单、按钮、对话框）照旧 snapshot-first；但对<strong>主编辑面</strong>，落一整段之前先证明键盘落在哪。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">写探针 → 核对 → 再落正文</span>
+        </div>
+<pre><code><span class="du-cmt"># 1. 写探针：真实按键打一个丢弃 token，别一上来就灌整段</span>
+<span class="du-prompt">$</span> chrome-use click 520 300              <span class="du-cmt"># 按坐标点进正文</span>
+<span class="du-prompt">$</span> chrome-use keyboard type <span class="du-str">"zzprobe"</span>    <span class="du-cmt"># 真实 keydown/keypress/keyup，不是 fill/insertText</span>
+<span class="du-cmt"># 2. 核对它落在文档里，而不是标题 / 工具栏 / 隐藏输入</span>
+<span class="du-prompt">$</span> chrome-use screenshot /tmp/probe.png  <span class="du-cmt"># 看 "zzprobe" 到底出现在哪（或走 App 的导出/API 回读）</span>
+<span class="du-cmt"># 3a. 落在文档里 → 用真实按键继续打正文</span>
+<span class="du-cmt"># 3b. 落错了 → 这个面别再用 DOM/fill：按坐标点正文，之后只用真实键盘</span></code></pre>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 三条经验</div>
+        主编辑面别信 <code>fill @ref</code> / <code>type @ref</code>，先探针证明目标（工具栏、菜单、评论框、分享弹窗是真 DOM，@ref 没问题，坑在画布 / 表格本身）；
+        优先<strong>真实按键</strong>（<code>keyboard type</code> / <code>keyboard press</code>）而不是 <code>fill</code>/<code>insertText</code>（虚拟化编辑器只听 key 事件，insertText 常静默失败或写进镜像）；
+        用<strong>回读核对</strong>而不是假设——截图或走 App 导出 / API 确认内容真落下了，再报完成。
+      </div>
+
       <h2>决策速查</h2>
       <div class="du-cards cols-3">
         <a class="du-card" href="/reading.html">
