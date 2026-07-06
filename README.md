@@ -438,6 +438,14 @@ We deliberately **don't ship our own bot detector** — the strongest, most hone
 
 <sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); the projects have since diverged substantially.</sub>
 
+## Contributors
+
+Thanks to everyone who has contributed to chrome-use!
+
+<a href="https://github.com/leeguooooo/chrome-use/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=leeguooooo/chrome-use" alt="Contributors" />
+</a>
+
 ## License
 
 Apache-2.0
