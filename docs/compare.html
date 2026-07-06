@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>对比其他方案 · chrome-use 文档</title>
+  <meta name="description" content="chrome-use 与 ego-lite、browser-use 等 AI 浏览器方案的实测对比：架构、零安装、隔离模型、登录继承、快照 token、隐身能力，以及我们持续「试用→对比→搬优点」的 workflow。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+  <style>
+    .cmp-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: .92rem; }
+    .cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 9px 11px; text-align: left; vertical-align: top; }
+    .cmp-table th { background: var(--paper-2); font-weight: 700; }
+    .cmp-table td:first-child { font-weight: 600; white-space: nowrap; }
+    .cmp-win { color: var(--green, #2a8a4a); font-weight: 700; }
+    .cmp-scroll { overflow-x: auto; }
+  </style>
+</head>
+
+<body data-page="compare" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
+      </span>
+
+      <p class="du-eyebrow">对比 / Comparison</p>
+
+      <div class="du-title-row">
+        <h1>对比其他方案</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        AI 浏览器方案越来越多。这一页<span class="mark">诚实对比</span> chrome-use 和最有代表性的两个——
+        <a href="https://github.com/citrolabs/ego-lite">ego-lite</a>（自建 Chromium 浏览器）和
+        browser-use（自动化框架）——并公开我们持续「<span class="mark">试用 → 对比 → 把好的搬过来</span>」的 workflow。
+        对比是活的：结论会随每一轮实测更新。
+      </p>
+
+      <h2>一句话定位</h2>
+      <p>
+        <strong>chrome-use 驱动你<span class="mark">现有的真 Chrome</span></strong>——你的 profile、你的扩展、你的登录，什么都不用装。
+        ego-lite 是一个<strong>全新的浏览器</strong>：架构上很干净（agent 有自己的隔离 Space），但要你安装并信任一个新 App。
+        这就是核心取舍——<strong>零切换成本 vs 结构性隔离</strong>。我们的立场：把「真 Chrome 里的隔离」做到极致，而不是去 fork 一个浏览器。
+      </p>
+
+      <h2>能力对比</h2>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead>
+          <tr><th>维度</th><th>chrome-use</th><th>ego-lite</th><th>browser-use</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>形态</td><td class="cmp-win">扩展 + CLI 驱动你现有的 Chrome</td><td>自建 Chromium 浏览器</td><td>自动化框架（自带浏览器）</td></tr>
+          <tr><td>安装成本</td><td class="cmp-win">零——用你已有的 Chrome</td><td>装一个新浏览器</td><td>装框架 + 一个受控浏览器</td></tr>
+          <tr><td>隔离模型</td><td>每会话彩色标签组 + 多 agent 隔离</td><td class="cmp-win">一等公民 Space（独立上下文）</td><td>独立浏览器实例</td></tr>
+          <tr><td>登录态</td><td>用你真 Chrome 的登录；跨账号用 cookie-use vault</td><td class="cmp-win">Space 自动继承登录</td><td>登录搬不干净（需重新登录）</td></tr>
+          <tr><td>所有权 / 交接</td><td>不关不扰用户标签；keep / adopt</td><td class="cmp-win">显式 owner 状态 + handoff 协议</td><td>无</td></tr>
+          <tr><td>快照 token</td><td class="cmp-win">snapshot -i 只列交互元素（更省）</td><td>全结构树（更全但更重）</td><td>DOM / AX 树</td></tr>
+          <tr><td>接口</td><td class="cmp-win">离散 shell 命令（任意 agent 可用）</td><td>Node.js 运行时 + JS helper</td><td>Python API</td></tr>
+          <tr><td>隐身 / 反检测</td><td class="cmp-win">核心能力（反爬、指纹、humanize）</td><td>不主打</td><td>不主打</td></tr>
+          <tr><td>广度</td><td class="cmp-win">Electron / Slack / 云浏览器 / 录屏 / MCP</td><td>聚焦共享浏览器核心</td><td>通用自动化</td></tr>
+          <tr><td>许可</td><td>开源</td><td>MIT 开源</td><td>MIT 开源</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 读法</div>
+        绿色不代表「赢」，代表「在这一维度更强」。没有全能方案——选型看你更在意<strong>零安装</strong>还是<strong>结构性隔离</strong>。
+      </div>
+
+      <h2>实测：同一任务，两边各跑一遍</h2>
+      <p>
+        任务：打开 Hacker News，抽取前 5 条标题 + 分数为 JSON。<strong>两边结果完全一致，都约 3 秒</strong>——
+        原始能力持平，差别全在架构和接口。
+      </p>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th></th><th>chrome-use</th><th>ego-lite</th></tr></thead>
+        <tbody>
+          <tr><td>命令</td><td><code>open</code> + <code>eval</code></td><td>heredoc + <code>js()</code></td></tr>
+          <tr><td>结果 / 耗时</td><td>5 条 JSON / ~3s</td><td>一致 / ~3s</td></tr>
+          <tr><td>同页快照</td><td class="cmp-win"><code>snapshot -i</code> = 318 行（只列交互元素）</td><td><code>snapshotText</code> = 941 行（全结构树，内联 loc/url）</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h2>我们在学它什么（并搬过来）</h2>
+      <p>
+        ego-lite 有几个想法确实值得学。我们逐项<strong>试用、对比、搬进 chrome-use 的方式</strong>（前提：始终驱动你的真 Chrome，绝不 fork 浏览器）。
+        进度和每一轮结论都记录在追踪 issue 里：
+        <a href="https://github.com/leeguooooo/chrome-use/issues/89">#89 Learn from ego-lite</a>。
+      </p>
+      <ul>
+        <li><strong>一等公民隔离上下文</strong>（对标 Space）——把 session 升成带独立标签的隔离上下文。</li>
+        <li><strong>所有权 + 交接状态机</strong>——显式 <code>owner: agent | user | handed-off</code> + <code>handoff</code>/<code>resume</code>，登录/2FA/验证码时干净地把控制权交还用户。<em>（最高价值，优先做）</em></li>
+        <li><strong>登录继承</strong>——继承当前 profile 登录态的隔离模式，常见场景无需搬 cookie。</li>
+        <li>富文本编辑器 <strong>write-probe 纪律</strong>——<span class="cmp-win">已搬</span>，见 <a href="/canvas.html">Canvas / WebGL</a> 页末。</li>
+        <li>快照内联 <code>url=</code> / 按名复用会话 / token 经济——<span class="cmp-win">已基本具备</span>（<code>--urls</code>、<code>--session-name</code>）。</li>
+      </ul>
+
+      <h2>对比 workflow</h2>
+      <p>这一页是活文档。每学一个竞品能力，我们走同一套流程，保证对比诚实、可复现：</p>
+      <ol>
+        <li><strong>试用</strong>——同一个真实任务，两边各跑一遍，记录命令、结果、耗时、token。</li>
+        <li><strong>对比</strong>——判断是「我们已有」「基本持平」还是「真缺口」；持平就如实标注，不硬搬。</li>
+        <li><strong>搬</strong>——真缺口就用 chrome-use 原生的方式实现（守住零安装护城河），落地后回填 issue #89 并更新本页表格。</li>
+      </ol>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 原则</div>
+        只搬能在<strong>你的真 Chrome</strong> 里实现的优点。任何要求「装一个新浏览器」的路径都不搬——那正是我们的护城河。
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

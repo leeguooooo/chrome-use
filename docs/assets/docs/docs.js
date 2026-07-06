@@ -111,6 +111,9 @@
       { slug: "cloud",    ico: "☁️", zh: "云端浏览器", en: "Cloud Browsers", kw: "cloud bedrock agentcore vercel sandbox 云端" },
       { slug: "mcp",      ico: "🔌", zh: "MCP 服务器", en: "MCP Server", kw: "mcp model context protocol claude desktop stdio json-rpc n8n dify chatgpt connector" },
     ]},
+    { id: "compare", label: { zh: "对比", en: "Comparison" }, items: [
+      { slug: "compare", ico: "⚖️", zh: "对比其他方案", en: "vs Other Tools", kw: "compare comparison ego-lite ego lite browser-use vs alternatives competitor 对比 竞品 比较" },
+    ] },
     { id: "ref", label: { zh: "参考", en: "Reference" }, items: [
       { slug: "commands",        ico: "📚", zh: "命令参考",   en: "Command Reference",  kw: "commands cli flags reference 命令 参考" },
       { slug: "troubleshooting", ico: "🩹", zh: "故障排查",   en: "Troubleshooting",    kw: "troubleshoot debug relay error 故障 排查" },

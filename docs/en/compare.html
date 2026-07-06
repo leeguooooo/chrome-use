@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>vs Other Tools · chrome-use docs</title>
+  <meta name="description" content="Firsthand comparison of chrome-use with ego-lite and browser-use: architecture, zero-install, isolation model, login inheritance, snapshot token economy, stealth — plus our ongoing trial → compare → port workflow." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+  <style>
+    .cmp-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: .92rem; }
+    .cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 9px 11px; text-align: left; vertical-align: top; }
+    .cmp-table th { background: var(--paper-2); font-weight: 700; }
+    .cmp-table td:first-child { font-weight: 600; white-space: nowrap; }
+    .cmp-win { color: var(--green, #2a8a4a); font-weight: 700; }
+    .cmp-scroll { overflow-x: auto; }
+  </style>
+</head>
+
+<body data-page="compare" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
+      </span>
+
+      <p class="du-eyebrow">Comparison</p>
+
+      <div class="du-title-row">
+        <h1>vs Other Tools</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        AI-browser tools are multiplying. This page is an <span class="mark">honest comparison</span> of chrome-use with the two
+        most representative ones — <a href="https://github.com/citrolabs/ego-lite">ego-lite</a> (a purpose-built Chromium browser)
+        and browser-use (an automation framework) — and it publishes our ongoing
+        <span class="mark">trial → compare → port the good parts</span> workflow. The comparison is living: verdicts update as we run more trials.
+      </p>
+
+      <h2>Positioning in one line</h2>
+      <p>
+        <strong>chrome-use drives your <span class="mark">existing, real Chrome</span></strong> — your profile, your extensions, your logins, nothing to install.
+        ego-lite is a <strong>whole new browser</strong>: architecturally clean (the agent gets its own isolated Space), but it asks you to install and trust a new app.
+        That's the core trade-off — <strong>zero switching cost vs structural isolation</strong>. Our stance: make "isolation inside your real Chrome" as clean as possible, rather than fork a browser.
+      </p>
+
+      <h2>Capability comparison</h2>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead>
+          <tr><th>Dimension</th><th>chrome-use</th><th>ego-lite</th><th>browser-use</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Form factor</td><td class="cmp-win">Extension + CLI driving your existing Chrome</td><td>Purpose-built Chromium browser</td><td>Automation framework (own browser)</td></tr>
+          <tr><td>Install cost</td><td class="cmp-win">Zero — uses the Chrome you already have</td><td>Install a new browser</td><td>Install framework + a driven browser</td></tr>
+          <tr><td>Isolation model</td><td>Per-session colored tab groups + multi-agent isolation</td><td class="cmp-win">First-class Spaces (isolated contexts)</td><td>Separate browser instances</td></tr>
+          <tr><td>Login state</td><td>Uses your real Chrome logins; cookie-use vault for cross-account</td><td class="cmp-win">Spaces inherit login automatically</td><td>Logins don't carry cleanly (re-login)</td></tr>
+          <tr><td>Ownership / handoff</td><td>Never closes/disturbs user tabs; keep / adopt</td><td class="cmp-win">Explicit owner state + handoff protocol</td><td>None</td></tr>
+          <tr><td>Snapshot tokens</td><td class="cmp-win">snapshot -i lists interactive elements only (leaner)</td><td>Full structural tree (fuller but heavier)</td><td>DOM / AX tree</td></tr>
+          <tr><td>Interface</td><td class="cmp-win">Discrete shell verbs (any agent)</td><td>Node.js runtime + JS helpers</td><td>Python API</td></tr>
+          <tr><td>Stealth / anti-detection</td><td class="cmp-win">Core capability (anti-bot, fingerprint, humanize)</td><td>Not a focus</td><td>Not a focus</td></tr>
+          <tr><td>Breadth</td><td class="cmp-win">Electron / Slack / cloud browsers / video / MCP</td><td>Focused on the shared-browser core</td><td>General automation</td></tr>
+          <tr><td>License</td><td>Open source</td><td>MIT</td><td>MIT</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ How to read this</div>
+        Green means "stronger on this axis," not "wins." No tool is best at everything — the choice comes down to whether you value <strong>zero-install</strong> or <strong>structural isolation</strong>.
+      </div>
+
+      <h2>Firsthand: same task, run on both</h2>
+      <p>
+        Task: open Hacker News, extract the top-5 story titles + points as JSON. <strong>Identical results, both ~3s</strong> —
+        raw capability is at parity; the difference is architecture and interface.
+      </p>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th></th><th>chrome-use</th><th>ego-lite</th></tr></thead>
+        <tbody>
+          <tr><td>Command</td><td><code>open</code> + <code>eval</code></td><td>heredoc + <code>js()</code></td></tr>
+          <tr><td>Result / time</td><td>5-item JSON / ~3s</td><td>identical / ~3s</td></tr>
+          <tr><td>Snapshot, same page</td><td class="cmp-win"><code>snapshot -i</code> = 318 lines (interactive only)</td><td><code>snapshotText</code> = 941 lines (full tree, inline loc/url)</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h2>What we're learning from it (and porting)</h2>
+      <p>
+        A few of ego-lite's ideas are genuinely worth adopting. We trial each one, compare, and port it <strong>the chrome-use way</strong>
+        (always driving your real Chrome, never forking a browser). Progress and per-round verdicts live in the tracking issue:
+        <a href="https://github.com/leeguooooo/chrome-use/issues/89">#89 Learn from ego-lite</a>.
+      </p>
+      <ul>
+        <li><strong>First-class isolated context</strong> (their Spaces) — promote <code>session</code> to an isolated context with its own tabs.</li>
+        <li><strong>Ownership + handoff state machine</strong> — explicit <code>owner: agent | user | handed-off</code> + <code>handoff</code>/<code>resume</code>, to cleanly hand control back for login / 2FA / captcha. <em>(highest value, doing first)</em></li>
+        <li><strong>Login inheritance</strong> — an isolated mode that inherits the current profile's logins, no cookie transfer for the common case.</li>
+        <li>Rich-editor <strong>write-probe discipline</strong> — <span class="cmp-win">ported</span>, see the end of the <a href="/en/canvas.html">Canvas / WebGL</a> page.</li>
+        <li>Inline <code>url=</code> in snapshots / reuse-by-name / token economy — <span class="cmp-win">already covered</span> (<code>--urls</code>, <code>--session-name</code>).</li>
+      </ul>
+
+      <h2>The comparison workflow</h2>
+      <p>This page is a living document. For every competitor capability we study, we run the same loop so the comparison stays honest and reproducible:</p>
+      <ol>
+        <li><strong>Trial</strong> — the same real task on both tools; record commands, result, time, tokens.</li>
+        <li><strong>Compare</strong> — decide "already have it," "at parity," or "real gap"; if parity, say so — don't force-port.</li>
+        <li><strong>Port</strong> — for a real gap, implement it the chrome-use-native way (keep the zero-install moat), then update issue #89 and this page's table.</li>
+      </ol>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ The principle</div>
+        Only port advantages we can deliver inside <strong>your real Chrome</strong>. Any path that requires installing a new browser is a non-port — that's exactly our moat.
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
