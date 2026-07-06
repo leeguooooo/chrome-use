@@ -175,6 +175,11 @@ pub fn cleanup_stale_files(session: &str) {
     let _ = fs::remove_file(&version_path);
     let stream_path = get_socket_dir().join(format!("{}.stream", session));
     let _ = fs::remove_file(&stream_path);
+    // Drop the ownership sidecar too (issue #89): a dead session's handoff
+    // state must not leak into a fresh same-named session, which would start
+    // silently blocked. Absence ⇒ agent-owned, the right default.
+    let owner_path = get_socket_dir().join(format!("{}.owner", session));
+    let _ = fs::remove_file(&owner_path);
     // Note: the .restore-url sidecar is intentionally NOT removed here —
     // it lives across the brief window between killing the old daemon
     // and the new daemon reading it back. The new daemon deletes it after
@@ -872,6 +877,15 @@ fn connect(session: &str) -> Result<Connection, String> {
 }
 
 pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
+    // Ownership guard (issue #89, ego-lite handoff model): a session handed off
+    // to the user with `session handoff` is off-limits to the agent until
+    // `session resume`. Zero-impact by default — no `.owner` sidecar ⇒
+    // agent-owned ⇒ this returns Ok immediately.
+    {
+        let action = cmd.get("action").and_then(|a| a.as_str());
+        crate::ownership::guard(session, crate::ownership::owner_of(session), action)?;
+    }
+
     // Forward per-invocation env to the daemon. The daemon's environment is
     // frozen at spawn, so settings like AGENT_BROWSER_CLICK_MODE /
     // AGENT_BROWSER_HUMANIZE (incl. the --humanize flag, which sets the latter)

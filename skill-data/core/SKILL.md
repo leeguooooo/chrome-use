@@ -692,6 +692,24 @@ tool [`bitwarden-use`](https://github.com/leeguooooo/bitwarden-use) (`bwu`):
 the passkey private key — so an agent can log in with credentials, not just OAuth.
 e.g. `bwu get github.com | chrome-use fill '#password' --stdin`.
 
+**Hand the session to the human — `session handoff` / `session resume`.** When a
+step genuinely needs the *user* (a captcha, an SMS/2FA code you can't read, a
+"is this you?" confirmation), don't guess or loop — hand control over and wait:
+
+```bash
+chrome-use session handoff        # marks the session user-owned; tell the user exactly what to do
+# … the human logs in / solves the captcha in that tab …
+chrome-use session resume         # take control back — ONLY after they confirm they're done
+```
+
+While handed off, **any browser-driving command on that session is refused**
+(loud error with the exact `session resume` line), so the agent physically
+can't fight the user for the tab — the same human-in-the-loop model as a real
+pair-driving handoff. It's zero-impact until you call `handoff`. Check state with
+`chrome-use session status` (agent | handed off), and `chrome-use session list`
+shows every session with its owner. Do **not** call `session resume` on your own
+to grab control back mid-handoff — wait for the user to say they're done.
+
 ### Persist session across runs
 
 ```bash

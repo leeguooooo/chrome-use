@@ -13,6 +13,7 @@ mod install;
 mod mcp;
 mod native;
 mod output;
+mod ownership;
 mod read;
 mod silence;
 mod site;
@@ -147,6 +148,149 @@ fn parse_proxy(proxy_str: &str) -> ParsedProxy {
         server,
         username,
         password,
+    }
+}
+
+/// `session <handoff|resume|status|list>` — ownership + human handoff (#89,
+/// ported from ego-lite). CLI-local: only touches the `.owner` sidecar.
+fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
+    use ownership::{hand_off, owner_of, resume, session_flag_suffix, Owner};
+    let zh = connect::ui_zh();
+    match sub {
+        Some("handoff") => {
+            if let Err(e) = hand_off(session) {
+                if json_mode {
+                    print_json_error(format!("handoff failed: {e}"));
+                } else {
+                    eprintln!("{}", color::red(&format!("handoff failed: {e}")));
+                }
+                exit(1);
+            }
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({"ok": true, "session": session, "owner": "user"})
+                );
+            } else if zh {
+                println!("✓ 会话 '{session}' 已交接给用户——你现在可以登录 / 过验证码 / 手动操作。");
+                println!(
+                    "  期间 agent 不会驱动这个会话。完事后跑：chrome-use session resume{}",
+                    session_flag_suffix(session)
+                );
+            } else {
+                println!("✓ Session '{session}' handed off to you — log in / solve the captcha / do the manual step.");
+                println!(
+                    "  The agent won't drive this session meanwhile. When done: chrome-use session resume{}",
+                    session_flag_suffix(session)
+                );
+            }
+        }
+        Some("resume") | Some("takeover") => {
+            if let Err(e) = resume(session) {
+                if json_mode {
+                    print_json_error(format!("resume failed: {e}"));
+                } else {
+                    eprintln!("{}", color::red(&format!("resume failed: {e}")));
+                }
+                exit(1);
+            }
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({"ok": true, "session": session, "owner": "agent"})
+                );
+            } else if zh {
+                println!("✓ 会话 '{session}' 已由 agent 接管，可以继续自动化了。");
+            } else {
+                println!("✓ Session '{session}' resumed by the agent — automation can continue.");
+            }
+        }
+        Some("list") => {
+            let inv = walk_daemons();
+            if json_mode {
+                let rows: Vec<_> = inv
+                    .sessions
+                    .iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "name": s.name,
+                            "pid": s.pid,
+                            "owner": owner_of(&s.name).as_str(),
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::json!({"ok": true, "sessions": rows}));
+            } else if inv.sessions.is_empty() {
+                println!(
+                    "{}",
+                    if zh {
+                        "没有活动会话。"
+                    } else {
+                        "No active sessions."
+                    }
+                );
+            } else {
+                for s in &inv.sessions {
+                    let owner = owner_of(&s.name);
+                    let tag = match owner {
+                        Owner::User => {
+                            if zh {
+                                "已交接给用户"
+                            } else {
+                                "handed off to user"
+                            }
+                        }
+                        Owner::Agent => "agent",
+                    };
+                    println!("- {}  (pid {})  —  {}", s.name, s.pid, tag);
+                }
+            }
+        }
+        None | Some("status") => {
+            let owner = owner_of(session);
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({"ok": true, "session": session, "owner": owner.as_str()})
+                );
+            } else {
+                match owner {
+                    Owner::User => {
+                        if zh {
+                            println!("会话 '{session}'：已交接给用户（agent 暂不驱动）。");
+                            println!(
+                                "  取回控制：chrome-use session resume{}",
+                                session_flag_suffix(session)
+                            );
+                        } else {
+                            println!("Session '{session}': handed off to the user (agent paused).");
+                            println!(
+                                "  Take it back: chrome-use session resume{}",
+                                session_flag_suffix(session)
+                            );
+                        }
+                    }
+                    Owner::Agent => {
+                        if zh {
+                            println!("会话 '{session}'：由 agent 控制。");
+                        } else {
+                            println!("Session '{session}': owned by the agent.");
+                        }
+                    }
+                }
+            }
+        }
+        Some(other) => {
+            let msg = format!(
+                "unknown `session` subcommand '{other}'. Use: handoff | resume | status | list"
+            );
+            if json_mode {
+                print_json_error(&msg);
+            } else {
+                eprintln!("{}", color::red(&msg));
+            }
+            exit(1);
+        }
     }
 }
 
@@ -1034,6 +1178,15 @@ fn main() {
     // pin a session to one with `--browser <id|email>` (issue #60).
     if clean.first().map(|s| s.as_str()) == Some("browsers") {
         connect::run_browsers(flags.json);
+        return;
+    }
+
+    // `session <handoff|resume|status|list>` — ownership + human handoff
+    // (issue #89, ego-lite model). CLI-local: reads/writes the `.owner`
+    // sidecar, never touches the daemon, so it works even while a session is
+    // handed off (the guard in send_command only blocks browser-driving).
+    if clean.first().map(|s| s.as_str()) == Some("session") {
+        run_session_ownership(clean.get(1).map(|s| s.as_str()), &flags.session, flags.json);
         return;
     }
 
