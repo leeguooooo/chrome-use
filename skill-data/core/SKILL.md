@@ -692,23 +692,31 @@ tool [`bitwarden-use`](https://github.com/leeguooooo/bitwarden-use) (`bwu`):
 the passkey private key — so an agent can log in with credentials, not just OAuth.
 e.g. `bwu get github.com | chrome-use fill '#password' --stdin`.
 
-**Hand the session to the human — `session handoff` / `session resume`.** When a
-step genuinely needs the *user* (a captcha, an SMS/2FA code you can't read, a
-"is this you?" confirmation), don't guess or loop — hand control over and wait:
+**Log in autonomously first — this is the default and the goal.** chrome-use is
+built to log in *by itself*: pull credentials from the auth vault or Bitwarden
+(`bwu get … | chrome-use fill … --stdin`), read TOTP/2FA codes, drive OAuth, and
+persist the session (`state save` / `--session-name`) so later runs start already
+logged in. Do NOT hand a login to the human just because it has a password or a
+2FA step — solve it. See **Log in** above and **Persist session across runs** below.
+
+**`session handoff` is a rare escape hatch, NOT how you log in.** Reach for it
+*only* when a step is genuinely impossible for the agent — an image/behavioral
+captcha you can't solve, an SMS/authenticator code you have no access to, a
+hardware-key tap, a bank's "approve on your phone" prompt. Try autonomously
+first; hand off only as a last resort:
 
 ```bash
-chrome-use session handoff        # marks the session user-owned; tell the user exactly what to do
-# … the human logs in / solves the captcha in that tab …
+chrome-use session handoff        # last resort: mark user-owned; tell the user exactly what to do
+# … the human does the one thing the agent truly can't …
 chrome-use session resume         # take control back — ONLY after they confirm they're done
 ```
 
 While handed off, **any browser-driving command on that session is refused**
-(loud error with the exact `session resume` line), so the agent physically
-can't fight the user for the tab — the same human-in-the-loop model as a real
-pair-driving handoff. It's zero-impact until you call `handoff`. Check state with
-`chrome-use session status` (agent | handed off), and `chrome-use session list`
-shows every session with its owner. Do **not** call `session resume` on your own
-to grab control back mid-handoff — wait for the user to say they're done.
+(loud error with the exact `session resume` line), so the agent can't fight the
+user for the tab. It's **zero-impact until you call `handoff`** — the agent owns
+and drives every session by default, autonomous login included. Check state with
+`chrome-use session status`; `chrome-use session list` shows every session's owner.
+Never call `session resume` on your own to grab control back — wait for the user.
 
 ### Persist session across runs
 

@@ -217,7 +217,7 @@
       <h3>What we learned from ego-lite &amp; ported</h3>
       <p>After trialing each item, we ported the real gaps the chrome-use way (progress in <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>):</p>
       <ul>
-        <li><strong>Ownership + handoff</strong> — <span class="cmp-win">implemented</span> <code>session handoff/resume/status/list</code>: once handed off, every browser-driving command on that session is refused (for login / 2FA / captcha).</li>
+        <li><strong>Ownership + handoff</strong> — <span class="cmp-win">implemented</span> <code>session handoff/resume/status/list</code>: once handed off, every browser-driving command on that session is refused. It's an <strong>escape hatch</strong> for the rare step the agent truly can't do (e.g. an unsolvable captcha) — it <strong>does not change autonomous login</strong>; by default the agent logs in and drives itself, zero-impact.</li>
         <li><strong>Rich-editor write-probe discipline</strong> — <span class="cmp-win">ported</span> (see the end of <a href="/en/canvas.html">Canvas / WebGL</a>).</li>
         <li><strong>Login inheritance / isolated contexts / reuse-by-name / token economy</strong> — <span class="cmp-win">already covered</span> (relay carries logins, per-session tab groups, <code>session list</code>, <code>--session-name</code>, leaner tokens).</li>
       </ul>

@@ -247,22 +247,26 @@
 
       <hr class="du-divider" />
 
-      <h2>把会话交接给用户：session handoff / resume</h2>
+      <h2>极少数情况：把会话交接给用户（session handoff / resume）</h2>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 先自主登录——这是默认，也是目标</div>
+        chrome-use 的设计就是让 agent <strong>自己登录</strong>：从凭证库 / Bitwarden 取账号密码（<code>bwu get … | chrome-use fill … --stdin</code>）、读 TOTP/2FA 验证码、走 OAuth、用 <code>state save</code> / <code>--session-name</code> 存会话让下次直接登录态。<strong>别因为有密码或 2FA 就把登录交给用户——自己解决。</strong>见 <a href="/login-auth.html">登录与凭证</a>。
+      </div>
       <p>
-        有些步骤只能<strong>用户本人</strong>来（验证码、读不到的短信/2FA、"是你本人吗"确认）。别猜、别死循环——把控制权交出去，等人做完再取回：
+        <code>session handoff</code> 是<strong>逃生口，不是登录方式</strong>。只在某一步 agent <strong>真的做不到</strong>时才用——解不了的图形/行为验证码、拿不到的短信/验证器码、硬件密钥轻触、银行"在手机上确认"。先尝试自主完成，实在不行才交接：
       </p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">交接 → 用户操作 → 取回</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use session handoff   <span class="du-cmt"># 标记会话归用户；告诉用户具体要做什么</span>
-<span class="du-cmt"># …… 用户在那个标签页里登录 / 过验证码 ……</span>
+<pre><code><span class="du-prompt">$</span> chrome-use session handoff   <span class="du-cmt"># 最后手段：标记会话归用户；告诉用户具体要做什么</span>
+<span class="du-cmt"># …… 用户做那件 agent 真做不了的事 ……</span>
 <span class="du-prompt">$</span> chrome-use session resume    <span class="du-cmt"># 取回控制——务必等用户确认做完再执行</span></code></pre>
       </div>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 交接期间 agent 被挡在门外</div>
-        会话交接后，agent 对它的<strong>任何驱动命令都会被拒绝</strong>（大声报错并给出 <code>session resume</code> 的原命令），所以 agent 不会和用户抢标签页——就是真人结对时的 human-in-the-loop。默认零影响，只有你显式 <code>handoff</code> 才生效。
+        会话交接后，agent 对它的<strong>任何驱动命令都会被拒绝</strong>（大声报错并给出 <code>session resume</code> 的原命令），所以 agent 不会和用户抢标签页。<strong>默认零影响——不调 <code>handoff</code> 时 agent 一直拥有并自主驱动每个会话（含自主登录）。</strong>
         <code>session status</code> 看归属，<code>session list</code> 列出每个会话及其归属。别自己 <code>resume</code> 抢回来——等用户说做完了。
       </div>
 

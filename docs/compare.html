@@ -216,7 +216,7 @@
       <h3>我们从 ego-lite 学到 &amp; 已搬的</h3>
       <p>逐项试用对比后，把真缺口用 chrome-use 原生的方式搬过来（进度在 <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>）：</p>
       <ul>
-        <li><strong>所有权 + 交接</strong>——<span class="cmp-win">已实现</span> <code>session handoff/resume/status/list</code>：交接给用户后 agent 对该会话的驱动命令全被拒绝（登录/2FA/验证码用）。</li>
+        <li><strong>所有权 + 交接</strong>——<span class="cmp-win">已实现</span> <code>session handoff/resume/status/list</code>：交接给用户后 agent 对该会话的驱动命令全被拒绝。这是<strong>逃生口</strong>（agent 真做不了的一步，如解不了的验证码），<strong>不改变自主登录</strong>——默认 agent 自己登录、自己驱动，零影响。</li>
         <li><strong>富文本 write-probe 纪律</strong>——<span class="cmp-win">已搬</span>（见 <a href="/canvas.html">Canvas / WebGL</a> 页末）。</li>
         <li><strong>登录继承 / 隔离上下文 / 按名复用 / token 经济</strong>——<span class="cmp-win">已具备</span>（relay 天然带登录、每会话标签组隔离、<code>session list</code>、<code>--session-name</code>、更省 token）。</li>
       </ul>
