@@ -65,7 +65,7 @@
 
       <h2>In one line</h2>
       <p>
-        <strong>chrome-use drives your <span class="mark">existing, real Chrome</span></strong> — your profile, your extensions, your logins, nothing to install.
+        <strong>chrome-use drives your <span class="mark">existing, real Chrome</span></strong> — your profile, your extensions, your logins, no new browser to install.
         It's a <strong>native CLI for AI agents</strong>: accessibility-tree snapshots + compact <code>@ref</code>s, usable by any agent that can run a shell, with stealth / anti-detection built in.
         Most tools either spin up a separate browser or ask you to switch browsers; chrome-use uses the one you already have.
       </p>
@@ -94,13 +94,13 @@
             <td>Purpose-built Chromium browser</td>
             <td>Install a new browser</td>
             <td class="cmp-win">Spaces inherit login</td>
-            <td>Node.js runtime</td>
+            <td>in-page JS runtime</td>
             <td class="cmp-mut">Not a focus</td>
             <td>MIT</td>
           </tr>
           <tr>
             <th>browser-use</th>
-            <td>Python framework (Playwright under the hood)</td>
+            <td>Python framework (CDP under the hood, cdp-use)</td>
             <td>Framework + a driven browser</td>
             <td class="cmp-mut">Fresh by default, re-login</td>
             <td>Python API</td>
@@ -123,7 +123,7 @@
             <td class="cmp-mut">Fresh profile, no login</td>
             <td>JS / many languages</td>
             <td class="cmp-mut">Easily detected</td>
-            <td>Apache / BSD</td>
+            <td>Apache-2.0</td>
           </tr>
           <tr>
             <th>Browserbase / Stagehand</th>
@@ -211,7 +211,7 @@
       </div>
       <p>
         Raw browser operations are equally fast. ego's edge is its <strong>persistent runtime</strong> — no per-command process spawn; chrome-use defaults to one-process-per-command (~0.15–0.17s each).
-        So a task with <strong>many tiny ops</strong> is where ego pulls ahead ("3×" most likely comes from that shape). But a typical task (open + snapshot + extract) measured ~3s on both, and chrome-use's <code>batch</code> (one round-trip to the persistent daemon) does 6 ops in 0.19s ≈ ego, plus a WebSocket stream for real-time driving.
+        So a task with <strong>many tiny ops</strong> is where ego pulls ahead ("3×" most likely comes from that shape). But a typical task (open + snapshot + extract) measured ~3s on both, and chrome-use's <code>batch</code> (one process reusing the persistent daemon) does 6 ops in 0.19s ≈ ego, plus a WebSocket stream for real-time driving.
       </p>
 
       <h3>Their site's claims vs our evidence</h3>
@@ -272,7 +272,7 @@
       <table class="cmp-table">
         <thead><tr><th>Your situation</th><th>Pick</th></tr></thead>
         <tbody>
-          <tr class="me"><th>Use your real logged-in accounts, install nothing, beat anti-bot</th><td class="cmp-win">chrome-use</td></tr>
+          <tr class="me"><th>Use your real logged-in accounts, install no new browser, beat anti-bot</th><td class="cmp-win">chrome-use</td></tr>
           <tr><th>Willing to switch to an agent-native browser, want the cleanest isolation</th><td>ego-lite</td></tr>
           <tr><th>Write classic automation scripts, cross-language, run in CI</th><td>Playwright / Puppeteer</td></tr>
           <tr><th>Stateless large-scale cloud scraping</th><td>Browserbase / Steel</td></tr>

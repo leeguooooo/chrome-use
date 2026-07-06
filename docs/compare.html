@@ -64,7 +64,7 @@
 
       <h2>一句话</h2>
       <p>
-        <strong>chrome-use 驱动你<span class="mark">现有的真 Chrome</span></strong>——你的 profile、你的扩展、你的登录，什么都不用装。
+        <strong>chrome-use 驱动你<span class="mark">现有的真 Chrome</span></strong>——你的 profile、你的扩展、你的登录，不用装新浏览器。
         它是给 AI agent 用的<strong>原生 CLI</strong>：无障碍树快照 + 紧凑 <code>@ref</code>，任何能跑 shell 的 agent 都能用，还带隐身反检测。
         大多数方案要么另开一个浏览器、要么要你换浏览器；chrome-use 直接用你手上这个。
       </p>
@@ -93,13 +93,13 @@
             <td>自建 Chromium 浏览器</td>
             <td>装一个新浏览器</td>
             <td class="cmp-win">Space 继承登录</td>
-            <td>Node.js 运行时</td>
+            <td>页面内 JS 运行时</td>
             <td class="cmp-mut">非重点</td>
             <td>MIT</td>
           </tr>
           <tr>
             <th>browser-use</th>
-            <td>Python 框架（底层 Playwright）</td>
+            <td>Python 框架（底层 CDP，cdp-use）</td>
             <td>框架 + 受控浏览器</td>
             <td class="cmp-mut">默认另开，需重登</td>
             <td>Python API</td>
@@ -122,7 +122,7 @@
             <td class="cmp-mut">全新 profile，无登录</td>
             <td>JS / 多语言</td>
             <td class="cmp-mut">易被检测</td>
-            <td>Apache / BSD</td>
+            <td>Apache-2.0</td>
           </tr>
           <tr>
             <th>Browserbase / Stagehand</th>
@@ -210,7 +210,7 @@
       </div>
       <p>
         原始浏览器操作两边一样快。ego 的优势是<strong>常驻运行时</strong>，没有每条命令的进程启动开销；chrome-use 默认「一命令一进程」，每条约 0.15–0.17s。
-        所以<strong>微操作特别多</strong>的任务里 ego 更快（"快 3 倍"多半来自这种形状）。但典型任务（open+快照+抽取）实测两边都 ~3s，chrome-use 用 <code>batch</code>（一次往返、常驻守护进程）6 操作 0.19s 基本追平，还有 WebSocket 流做实时驱动。
+        所以<strong>微操作特别多</strong>的任务里 ego 更快（"快 3 倍"多半来自这种形状）。但典型任务（open+快照+抽取）实测两边都 ~3s，chrome-use 用 <code>batch</code>（一个进程复用常驻守护进程）6 操作 0.19s 基本追平，还有 WebSocket 流做实时驱动。
       </p>
 
       <h3>他们官网的宣传语 vs 我们的证据</h3>
@@ -271,7 +271,7 @@
       <table class="cmp-table">
         <thead><tr><th>你的情况</th><th>选</th></tr></thead>
         <tbody>
-          <tr class="me"><th>要用你已登录的真账号、什么都不想装、要过反爬</th><td class="cmp-win">chrome-use</td></tr>
+          <tr class="me"><th>要用你已登录的真账号、不想装新浏览器、要过反爬</th><td class="cmp-win">chrome-use</td></tr>
           <tr><th>愿意换一个专为 agent 做的新浏览器、要最干净的隔离</th><td>ego-lite</td></tr>
           <tr><th>写传统自动化脚本、跨语言、CI 里跑</th><td>Playwright / Puppeteer</td></tr>
           <tr><th>无状态大规模云抓取</th><td>Browserbase / Steel</td></tr>

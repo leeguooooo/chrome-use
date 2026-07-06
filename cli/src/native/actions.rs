@@ -3119,7 +3119,7 @@ async fn handle_content(state: &DaemonState) -> Result<Value, String> {
     Ok(json!({ "html": html, "origin": url }))
 }
 
-async fn handle_evaluate(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+async fn handle_evaluate(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     if let Some(ref wb) = state.webdriver_backend {
         if state.browser.is_none() {
             let script = cmd
@@ -3130,6 +3130,14 @@ async fn handle_evaluate(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
             let url = wb.get_url().await.unwrap_or_default();
             return Ok(json!({ "result": result, "origin": url }));
         }
+    }
+    // Re-sync the active-tab pin before resolving it (issue #88; same drift the
+    // `screenshot`/`snapshot` fix closes). A stale about:blank scratch tab left
+    // pinned by relay auto-connect would otherwise make `evaluate` run against
+    // `about:blank` instead of the real tab. Best-effort: a stale pin still
+    // beats erroring the command.
+    if let Some(mgr) = state.browser.as_mut() {
+        mgr.resync_targets().await.ok();
     }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let script = cmd
@@ -3509,6 +3517,17 @@ async fn handle_close(state: &mut DaemonState) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    // Re-sync the active-tab pin before resolving it, mirroring `tab list` and
+    // `screenshot` (issue #88). On relay auto-connect a background about:blank
+    // scratch tab can stay pinned as the active target; the read handlers share
+    // one resolver (`active_session_id`), but only handlers that resync escape a
+    // stale pin. Without this, `snapshot` resolves the scratch pin and reports
+    // `about:blank` (empty page / "no interactive elements") even though a real
+    // tab is open — the same drift #88 fixed for `screenshot`. Best-effort: a
+    // stale pin still beats erroring the command.
+    if let Some(mgr) = state.browser.as_mut() {
+        mgr.resync_targets().await.ok();
+    }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
@@ -8744,7 +8763,14 @@ async fn handle_find(cmd: &Value, state: &DaemonState) -> Result<Value, String> 
 // Evaluate a JS expression in the active page and return its value by value.
 // Sibling to `evalhandle` (which returns a remote object handle instead). Used
 // e.g. to read DOM state after an action (`document.querySelector(...).disabled`).
-async fn handle_eval(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+async fn handle_eval(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    // Re-sync the active-tab pin before resolving it (issue #88; same drift the
+    // `screenshot`/`snapshot` fix closes). A stale about:blank scratch pin left
+    // by relay auto-connect would otherwise make `eval` read from `about:blank`
+    // instead of the real tab. Best-effort: a stale pin still beats erroring.
+    if let Some(mgr) = state.browser.as_mut() {
+        mgr.resync_targets().await.ok();
+    }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
     // Accept `expression` (canonical) or `script` (alias, matching evalhandle).
@@ -8779,7 +8805,14 @@ async fn handle_eval(cmd: &Value, state: &DaemonState) -> Result<Value, String> 
     Ok(json!({ "result": result.result.value.unwrap_or(Value::Null) }))
 }
 
-async fn handle_evalhandle(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+async fn handle_evalhandle(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    // Re-sync the active-tab pin before resolving it (issue #88; same drift the
+    // `screenshot`/`snapshot`/`eval` fix closes). A stale about:blank scratch pin
+    // left by relay auto-connect would otherwise target `about:blank` instead of
+    // the real tab. Best-effort: a stale pin still beats erroring.
+    if let Some(mgr) = state.browser.as_mut() {
+        mgr.resync_targets().await.ok();
+    }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
     let script = cmd
