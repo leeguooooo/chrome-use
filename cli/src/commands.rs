@@ -1148,6 +1148,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let mut max_width: Option<u32> = None;
             let mut max_height: Option<u32> = None;
             let mut scale: Option<f64> = None;
+            let mut tab: Option<String> = None;
             let mut positional: Vec<&str> = Vec::new();
             let mut i = 0;
             // Parse a numeric value for a downscale flag (issue #42).
@@ -1179,6 +1180,19 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                             message: format!("--max-height expects a number, got '{v}'"),
                             usage: "screenshot --max-height <px>",
                         })?);
+                    }
+                    // Capture a specific tab (issue #88): `--tab t2` / `--tab <targetId>`.
+                    // Without it, screenshot always uses the active tab, which can
+                    // drift onto a background scratch pin.
+                    "--tab" => {
+                        let v = rest
+                            .get(i + 1)
+                            .ok_or_else(|| ParseError::MissingArguments {
+                                context: "screenshot --tab".to_string(),
+                                usage: "screenshot --tab <ref> [selector] [path]",
+                            })?;
+                        tab = Some(v.to_string());
+                        i += 1;
                     }
                     "--scale" => {
                         let v = parse_num(&mut i, "--scale")?;
@@ -1264,6 +1278,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             }
             if let Some(s) = scale {
                 cmd["scale"] = json!(s);
+            }
+            if let Some(t) = tab {
+                cmd["tab"] = json!(t);
             }
             if let Some(ref fmt) = flags.screenshot_format {
                 cmd["format"] = json!(fmt);
