@@ -800,6 +800,67 @@ async fn take_snapshot_at_depth(
         }
     }
 
+    // Additive pass (issue #92): iframes with `role="presentation"`/`none` are
+    // stripped from the AX tree, so the loop above (keyed on AX `Iframe` nodes)
+    // misses them — reCAPTCHA / hCaptcha anchor frames, some SDK widgets. Find
+    // `<iframe>`s via the DOM, recurse into any the AX pass didn't already
+    // handle, and append their content (ref-less header line; the inner controls
+    // still earn real refs from the child frame's AX tree).
+    //
+    // Main frame only: `find_dom_iframes` runs `DOM.getDocument` on the session,
+    // which always returns the top document — it is not frame-scoped, so running
+    // it at depth > 0 would re-scan the main frame's iframes and recurse
+    // redundantly. Nested presentation iframes are rare; the AX-`Iframe` loop
+    // above still handles nested a11y-visible iframes at every depth.
+    if depth == 0 {
+        let handled: std::collections::HashSet<i64> = tree_nodes
+            .iter()
+            .filter(|n| n.role == "Iframe")
+            .filter_map(|n| n.backend_node_id)
+            .collect();
+        for (bid, title) in find_dom_iframes(client, session_id).await {
+            if handled.contains(&bid) {
+                continue;
+            }
+            let Ok(child_fid) = resolve_iframe_frame_id(client, session_id, bid).await else {
+                continue;
+            };
+            let Ok(child_text) = Box::pin(take_snapshot_at_depth(
+                client,
+                session_id,
+                options,
+                ref_map,
+                Some(&child_fid),
+                iframe_sessions,
+                depth + 1,
+            ))
+            .await
+            else {
+                continue;
+            };
+            if child_text.is_empty()
+                || child_text == "(empty page)"
+                || child_text == "(no interactive elements)"
+            {
+                continue;
+            }
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&if title.is_empty() {
+                "- iframe".to_string()
+            } else {
+                format!("- iframe \"{title}\"")
+            });
+            output.push('\n');
+            for line in child_text.lines() {
+                output.push_str("  ");
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+    }
+
     // Append inline validation/error messages as top-level `alert` lines (issue
     // #57). Done after iframe recursion so the byte-offset insertion above isn't
     // disturbed, and before compaction so the `[ref=...]` markers survive `-c`.
@@ -861,6 +922,86 @@ async fn resolve_iframe_frame_id(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "Could not resolve iframe frame ID".to_string())
+}
+
+/// Find every `<iframe>` element via the DOM (not the AX tree), returning
+/// `(backendNodeId, title)`. Unlike the AX `Iframe` role nodes the main
+/// recursion keys off, this also catches iframes stripped from the
+/// accessibility tree by `role="presentation"` — e.g. reCAPTCHA / hCaptcha
+/// anchor frames and some third-party SDK widgets (issue #92) — so their
+/// content can still be merged into `snapshot -i`.
+async fn find_dom_iframes(client: &CdpClient, session_id: &str) -> Vec<(i64, String)> {
+    let mut out = Vec::new();
+    let Ok(doc) = client
+        .send_command(
+            "DOM.getDocument",
+            Some(serde_json::json!({ "depth": 0 })),
+            Some(session_id),
+        )
+        .await
+    else {
+        return out;
+    };
+    let Some(root) = doc
+        .get("root")
+        .and_then(|r| r.get("nodeId"))
+        .and_then(|v| v.as_i64())
+    else {
+        return out;
+    };
+    let Ok(q) = client
+        .send_command(
+            "DOM.querySelectorAll",
+            Some(serde_json::json!({ "nodeId": root, "selector": "iframe" })),
+            Some(session_id),
+        )
+        .await
+    else {
+        return out;
+    };
+    let node_ids: Vec<i64> = q
+        .get("nodeIds")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+    if node_ids.is_empty() {
+        return out;
+    }
+    let futs: Vec<_> = node_ids
+        .iter()
+        .map(|&nid| {
+            client.send_command(
+                "DOM.describeNode",
+                Some(serde_json::json!({ "nodeId": nid })),
+                Some(session_id),
+            )
+        })
+        .collect();
+    for desc in futures_util::future::join_all(futs)
+        .await
+        .into_iter()
+        .flatten()
+    {
+        let Some(node) = desc.get("node") else {
+            continue;
+        };
+        let Some(bid) = node.get("backendNodeId").and_then(|v| v.as_i64()) else {
+            continue;
+        };
+        // attributes is a flat [name, value, name, value, ...] array.
+        let mut title = String::new();
+        if let Some(attrs) = node.get("attributes").and_then(|a| a.as_array()) {
+            let mut it = attrs.iter();
+            while let (Some(n), Some(v)) = (it.next(), it.next()) {
+                if n.as_str() == Some("title") {
+                    title = v.as_str().unwrap_or("").to_string();
+                    break;
+                }
+            }
+        }
+        out.push((bid, title));
+    }
+    out
 }
 
 async fn find_cursor_interactive_elements(
