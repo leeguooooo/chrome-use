@@ -113,9 +113,9 @@
         <a href="https://github.com/leeguooooo/chrome-use/issues/89">#89 Learn from ego-lite</a>.
       </p>
       <ul>
-        <li><strong>First-class isolated context</strong> (their Spaces) — promote <code>session</code> to an isolated context with its own tabs.</li>
-        <li><strong>Ownership + handoff state machine</strong> — explicit <code>owner: agent | user | handed-off</code> + <code>handoff</code>/<code>resume</code>, to cleanly hand control back for login / 2FA / captcha. <em>(highest value, doing first)</em></li>
-        <li><strong>Login inheritance</strong> — an isolated mode that inherits the current profile's logins, no cookie transfer for the common case.</li>
+        <li><strong>Ownership + handoff state machine</strong> — <span class="cmp-win">implemented</span>: <code>session handoff</code> / <code>resume</code> / <code>status</code> / <code>list</code>; once handed off, every browser-driving command on that session is refused, so control passes cleanly to the human for login / 2FA / captcha.</li>
+        <li><strong>First-class isolated context</strong> (their Spaces) — existing per-session colored tab groups + multi-agent isolation already provide isolation; the new <code>session list</code> surfaces each isolated session with its owner.</li>
+        <li><strong>Login inheritance</strong> — <span class="cmp-win">inherent to the architecture</span>: in relay mode chrome-use drives your real Chrome, so agent tabs live in your profile and carry your logins for free; cookie-use is only for cross-account.</li>
         <li>Rich-editor <strong>write-probe discipline</strong> — <span class="cmp-win">ported</span>, see the end of the <a href="/en/canvas.html">Canvas / WebGL</a> page.</li>
         <li>Inline <code>url=</code> in snapshots / reuse-by-name / token economy — <span class="cmp-win">already covered</span> (<code>--urls</code>, <code>--session-name</code>).</li>
       </ul>

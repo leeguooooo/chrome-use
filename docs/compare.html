@@ -113,9 +113,9 @@
         <a href="https://github.com/leeguooooo/chrome-use/issues/89">#89 Learn from ego-lite</a>。
       </p>
       <ul>
-        <li><strong>一等公民隔离上下文</strong>（对标 Space）——把 session 升成带独立标签的隔离上下文。</li>
-        <li><strong>所有权 + 交接状态机</strong>——显式 <code>owner: agent | user | handed-off</code> + <code>handoff</code>/<code>resume</code>，登录/2FA/验证码时干净地把控制权交还用户。<em>（最高价值，优先做）</em></li>
-        <li><strong>登录继承</strong>——继承当前 profile 登录态的隔离模式，常见场景无需搬 cookie。</li>
+        <li><strong>所有权 + 交接状态机</strong>——<span class="cmp-win">已实现</span>：<code>session handoff</code> / <code>resume</code> / <code>status</code> / <code>list</code>；交接给用户后，agent 对该会话的一切驱动命令被拒绝（登录/2FA/验证码时干净地把控制权交还用户）。</li>
+        <li><strong>一等公民隔离上下文</strong>（对标 Space）——现有每会话彩色标签组 + 多 agent 隔离已提供隔离；新增 <code>session list</code> 把隔离会话（含所有权）显式列出。</li>
+        <li><strong>登录继承</strong>——<span class="cmp-win">架构固有</span>：relay 模式驱动你的真 Chrome，agent 标签就在你的 profile 里，天然带你的登录；跨账号才用 cookie-use。</li>
         <li>富文本编辑器 <strong>write-probe 纪律</strong>——<span class="cmp-win">已搬</span>，见 <a href="/canvas.html">Canvas / WebGL</a> 页末。</li>
         <li>快照内联 <code>url=</code> / 按名复用会话 / token 经济——<span class="cmp-win">已基本具备</span>（<code>--urls</code>、<code>--session-name</code>）。</li>
       </ul>

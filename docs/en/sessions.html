@@ -259,6 +259,27 @@
 
       <hr class="du-divider" />
 
+      <h2>Hand a session to the user: session handoff / resume</h2>
+      <p>
+        Some steps genuinely need the <strong>human</strong> (a captcha, an SMS/2FA code you can't read, an "is this you?" confirmation). Don't guess or loop — hand control over and wait until they're done:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">handoff → user acts → resume</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use session handoff   <span class="du-cmt"># marks the session user-owned; tell the user exactly what to do</span>
+<span class="du-cmt"># … the human logs in / solves the captcha in that tab …</span>
+<span class="du-prompt">$</span> chrome-use session resume    <span class="du-cmt"># take control back — ONLY after they confirm they're done</span></code></pre>
+      </div>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ The agent is locked out during handoff</div>
+        While handed off, <strong>any browser-driving command on that session is refused</strong> (loud error with the exact <code>session resume</code> line), so the agent can't fight the user for the tab — the same human-in-the-loop model as real pair-driving. Zero-impact until you call <code>handoff</code>.
+        <code>session status</code> shows the owner; <code>session list</code> lists every session with its owner. Don't <code>resume</code> on your own to grab control back — wait for the user to say they're done.
+      </div>
+
+      <hr class="du-divider" />
+
       <!-- ============ NEXT ============ -->
       <h2>Related pages</h2>
       <div class="du-cards cols-3">
