@@ -270,12 +270,35 @@
     var ul = el("ul");
     var links = [];
 
+    var usedIds = {};
     heads.forEach(function (h, i) {
-      if (!h.id) h.id = "sec-" + ((h.textContent || "").trim().toLowerCase().replace(/[^\w一-龥]+/g, "-").replace(/^-+|-+$/g, "") || i);
-      // add hover anchor link on the heading itself
+      if (!h.id) {
+        var base = "sec-" + ((h.textContent || "").trim().toLowerCase().replace(/[^\w一-龥]+/g, "-").replace(/^-+|-+$/g, "") || i);
+        var uid = base, n = 2;
+        while (usedIds[uid] || document.getElementById(uid)) uid = base + "-" + (n++);
+        h.id = uid;
+      }
+      usedIds[h.id] = true;
+      // add hover anchor: click copies a shareable deep-link + smooth-scrolls
       if (!h.querySelector(".du-anchor")) {
         var anc = el("a", "du-anchor", "#");
-        anc.href = "#" + h.id; anc.setAttribute("aria-hidden", "true");
+        anc.href = "#" + h.id;
+        anc.setAttribute("aria-label", lng === "en" ? "Copy link to this section" : "复制本节链接");
+        anc.title = anc.getAttribute("aria-label");
+        (function (hid, a) {
+          a.addEventListener("click", function (e) {
+            e.preventDefault();
+            var t = document.getElementById(hid);
+            if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+            // replaceState puts the deep-link in the address bar synchronously,
+            // so the URL is always shareable even if the async clipboard write
+            // hangs or is blocked. Fire the copy, confirm optimistically.
+            try { history.replaceState(null, "", "#" + hid); } catch (_) {}
+            var url = location.origin + location.pathname + "#" + hid;
+            copyText(url, a, "", true);
+            toast(lng === "en" ? "Section link copied" : "已复制章节链接");
+          });
+        })(h.id, anc);
         h.appendChild(anc);
       }
       var li = el("li");
@@ -386,6 +409,45 @@
   }
   function closeSearch() { if (searchState.overlay) searchState.overlay.classList.remove("open"); }
 
+  /* ============================================ DEEP-LINK / TOAST ======= */
+  // Headings get their ids at runtime (buildTOC), so a cold load on
+  // page.html#sec-xxx can't be scrolled by the browser's native :target jump —
+  // the id doesn't exist yet at parse time. Re-run the jump once ids exist.
+  var _userScrolled = false;
+  ["wheel", "touchstart", "keydown"].forEach(function (ev) {
+    window.addEventListener(ev, function () { _userScrolled = true; }, { passive: true });
+  });
+  function currentHashId() {
+    var raw = (location.hash || "").replace(/^#/, "");
+    if (!raw) return "";
+    try { return decodeURIComponent(raw); } catch (_) { return raw; }
+  }
+  function focusHash(smooth) {
+    var id = currentHashId();
+    if (!id) return false;
+    var t = document.getElementById(id);
+    if (!t) return false;
+    t.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+    return true;
+  }
+  function wireDeepLinks() {
+    // cold-load jump (ids now assigned)
+    focusHash(false);
+    // correct for late layout shift (images/fonts) unless the user already moved
+    window.addEventListener("load", function () { if (!_userScrolled) focusHash(false); });
+    // manual hash edits / back-forward across sections
+    window.addEventListener("hashchange", function () { focusHash(true); });
+  }
+
+  var _toastEl = null, _toastTimer = null;
+  function toast(msg) {
+    if (!_toastEl) { _toastEl = el("div", "du-toast"); document.body.appendChild(_toastEl); }
+    _toastEl.textContent = msg;
+    _toastEl.classList.add("show");
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(function () { _toastEl.classList.remove("show"); }, 1600);
+  }
+
   /* ================================================== COPY BUTTONS ======= */
   function copyText(text, btn, doneLabel, isIcon) {
     var write = navigator.clipboard && navigator.clipboard.writeText
@@ -401,6 +463,7 @@
       if (!isIcon) btn.textContent = doneLabel;
       setTimeout(function () { btn.classList.remove("copied"); if (!isIcon) btn.innerHTML = prev; }, 1400);
     }).catch(function () {});
+    return write;
   }
 
   function wireCodeCopy() {
@@ -524,6 +587,7 @@
     try { wireCodeCopy(); } catch (e) { console.error("[docs] code copy", e); }
     try { wireCopyPage(); } catch (e) { console.error("[docs] copy page", e); }
     try { wireKeys(); } catch (e) { console.error("[docs] keys", e); }
+    try { wireDeepLinks(); } catch (e) { console.error("[docs] deep links", e); }
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();

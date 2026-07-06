@@ -353,12 +353,30 @@ img { max-width: 100%; }
 .du-main a { color: var(--blue); text-decoration: underline; text-decoration-color: var(--blue-soft); text-underline-offset: 2px; }
 .du-main a:hover { text-decoration-color: var(--blue); }
 
-/* anchor link that appears on heading hover */
+/* anchor link that appears on heading hover — click copies a shareable link */
 .du-anchor {
   opacity: 0; margin-left: 8px; font-size: .7em; color: var(--ink-faint);
-  text-decoration: none; font-family: var(--font-mono);
+  text-decoration: none; font-family: var(--font-mono); cursor: pointer;
+  transition: color .15s, opacity .15s;
 }
 .du-main h2:hover .du-anchor, .du-main h3:hover .du-anchor { opacity: 1; }
+.du-anchor:hover { color: var(--accent, var(--purple)); opacity: 1; }
+.du-anchor:focus-visible { opacity: 1; outline: 2px solid var(--accent, var(--purple)); outline-offset: 2px; border-radius: 3px; }
+/* keep the anchor visible + checked briefly after a copy */
+.du-anchor.copied { opacity: 1; color: var(--green, #2a8a4a); }
+.du-anchor.copied::after { content: "✓"; margin-left: 3px; }
+
+/* transient confirmation toast (shared-link copied, etc.) */
+.du-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 12px);
+  z-index: 1000; pointer-events: none;
+  background: var(--ink, #1a1a1a); color: var(--paper, #fff);
+  font-size: .82rem; font-weight: 500; letter-spacing: .01em;
+  padding: 9px 15px; border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.22);
+  opacity: 0; transition: opacity .18s ease, transform .18s ease;
+}
+.du-toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 /* inline code */
 .du-main :not(pre) > code {
