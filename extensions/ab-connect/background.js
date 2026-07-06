@@ -289,6 +289,11 @@ function connectHost() {
   }
   port.onMessage.addListener((msg) => void whenReady(() => onHostMessage(msg)))
   port.onDisconnect.addListener(() => {
+    // Read (acknowledge) lastError so Chrome doesn't log an "Unchecked
+    // runtime.lastError: Native host has exited." warning to the error page.
+    // A disconnect is expected whenever the local host exits (e.g. the CLI
+    // isn't actively driving); we reconnect on demand, nothing is wrong.
+    void chrome.runtime.lastError
     port = null
     hostConnected = false
     notifyConnChange(false)
