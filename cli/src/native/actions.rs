@@ -3652,6 +3652,16 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
             return Ok(json!({ "path": tmp }));
         }
     }
+    // Re-sync with the live browser before resolving the active tab, mirroring
+    // `tab list` (issue #88). On relay auto-connect a background about:blank
+    // scratch tab can stay pinned as the active target; the read handlers share
+    // one resolver (`active_session_id`), but only `tab list` re-syncs the pin.
+    // Without this, a screenshot resolves that stale scratch pin and captures
+    // `about:blank` even though `snapshot`/`eval`/`tab list` see the real tab.
+    // Best-effort: a stale pin still beats erroring the command.
+    if let Some(mgr) = state.browser.as_mut() {
+        mgr.resync_targets().await.ok();
+    }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
