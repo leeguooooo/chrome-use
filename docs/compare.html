@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>对比其他方案 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 与 ego-lite、browser-use 等 AI 浏览器方案的实测对比：架构、零安装、隔离模型、登录继承、快照 token、隐身能力，以及我们持续「试用→对比→搬优点」的 workflow。" />
+  <meta name="description" content="chrome-use 与整个 AI 浏览器 / 自动化格局的对比：ego-lite、Playwright、Puppeteer、Selenium、browser-use、Stagehand、Browserbase、消费级 agent 浏览器。全景矩阵 + 最接近对手的实测（token、性能）+ 选型指南 + 持续对比的 workflow。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -17,12 +17,18 @@
 
   <link rel="stylesheet" href="/assets/docs/docs.css" />
   <style>
-    .cmp-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: .92rem; }
-    .cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 9px 11px; text-align: left; vertical-align: top; }
-    .cmp-table th { background: var(--paper-2); font-weight: 700; }
-    .cmp-table td:first-child { font-weight: 600; white-space: nowrap; }
+    .cmp-scroll { overflow-x: auto; margin: 14px 0; }
+    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 640px; }
+    .cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
+    .cmp-table thead th { background: var(--paper-2); font-weight: 700; position: sticky; top: 0; }
+    .cmp-table tbody th { background: var(--paper-2); font-weight: 700; white-space: nowrap; }
+    .cmp-table tr.me td, .cmp-table tr.me th { background: color-mix(in srgb, var(--green, #2a8a4a) 9%, transparent); }
     .cmp-win { color: var(--green, #2a8a4a); font-weight: 700; }
-    .cmp-scroll { overflow-x: auto; }
+    .cmp-mut { color: var(--ink-faint); }
+    .cmp-cat { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 14px 0; }
+    .cmp-cat .du-card { margin: 0; }
+    .cmp-cat h3 { margin: 0 0 4px; font-size: 1rem; }
+    .cmp-cat .tools { font-family: var(--font-mono); font-size: .82rem; color: var(--ink-faint); }
   </style>
 </head>
 
@@ -52,93 +58,142 @@
       </div>
 
       <p class="du-lede">
-        AI 浏览器方案越来越多。这一页<span class="mark">诚实对比</span> chrome-use 和最有代表性的两个——
-        <a href="https://github.com/citrolabs/ego-lite">ego-lite</a>（自建 Chromium 浏览器）和
-        browser-use（自动化框架）——并公开我们持续「<span class="mark">试用 → 对比 → 把好的搬过来</span>」的 workflow。
-        对比是活的：结论会随每一轮实测更新。
+        浏览器自动化 / AI 浏览器方案很多。这一页把它们放在一起<span class="mark">诚实对比</span>——从传统框架到 agent 浏览器，
+        再到云端和消费级产品。数据能实测的就实测；对比是活的，结论随每一轮更新。
       </p>
 
-      <h2>一句话定位</h2>
+      <h2>一句话</h2>
       <p>
         <strong>chrome-use 驱动你<span class="mark">现有的真 Chrome</span></strong>——你的 profile、你的扩展、你的登录，什么都不用装。
-        ego-lite 是一个<strong>全新的浏览器</strong>：架构上很干净（agent 有自己的隔离 Space），但要你安装并信任一个新 App。
-        这就是核心取舍——<strong>零切换成本 vs 结构性隔离</strong>。我们的立场：把「真 Chrome 里的隔离」做到极致，而不是去 fork 一个浏览器。
+        它是给 AI agent 用的<strong>原生 CLI</strong>：无障碍树快照 + 紧凑 <code>@ref</code>，任何能跑 shell 的 agent 都能用，还带隐身反检测。
+        大多数方案要么另开一个浏览器、要么要你换浏览器；chrome-use 直接用你手上这个。
       </p>
 
-      <h2>能力对比</h2>
+      <h2>全景矩阵</h2>
+      <p>横轴是对 AI agent 最要紧的几个维度，纵轴是有代表性的方案。绿=在该维度更强。</p>
       <div class="cmp-scroll">
       <table class="cmp-table">
         <thead>
-          <tr><th>维度</th><th>chrome-use</th><th>ego-lite</th><th>browser-use</th></tr>
+          <tr>
+            <th>方案</th><th>形态</th><th>装什么</th><th>用谁的登录</th><th>接口</th><th>隐身</th><th>开源</th>
+          </tr>
         </thead>
         <tbody>
-          <tr><td>形态</td><td class="cmp-win">扩展 + CLI 驱动你现有的 Chrome</td><td>自建 Chromium 浏览器</td><td>自动化框架（自带浏览器）</td></tr>
-          <tr><td>安装成本</td><td class="cmp-win">零——用你已有的 Chrome</td><td>装一个新浏览器</td><td>装框架 + 一个受控浏览器</td></tr>
-          <tr><td>隔离模型</td><td>每会话彩色标签组 + 多 agent 隔离</td><td class="cmp-win">一等公民 Space（独立上下文）</td><td>独立浏览器实例</td></tr>
-          <tr><td>登录态</td><td>用你真 Chrome 的登录；跨账号用 cookie-use vault</td><td class="cmp-win">Space 自动继承登录</td><td>登录搬不干净（需重新登录）</td></tr>
-          <tr><td>所有权 / 交接</td><td>不关不扰用户标签；keep / adopt</td><td class="cmp-win">显式 owner 状态 + handoff 协议</td><td>无</td></tr>
-          <tr><td>快照 token</td><td class="cmp-win">snapshot -i 只列交互元素（更省）</td><td>全结构树（更全但更重）</td><td>DOM / AX 树</td></tr>
-          <tr><td>接口</td><td class="cmp-win">离散 shell 命令（任意 agent 可用）</td><td>Node.js 运行时 + JS helper</td><td>Python API</td></tr>
-          <tr><td>隐身 / 反检测</td><td class="cmp-win">核心能力（反爬、指纹、humanize）</td><td>不主打</td><td>不主打</td></tr>
-          <tr><td>广度</td><td class="cmp-win">Electron / Slack / 云浏览器 / 录屏 / MCP</td><td>聚焦共享浏览器核心</td><td>通用自动化</td></tr>
-          <tr><td>许可</td><td>开源</td><td>MIT 开源</td><td>MIT 开源</td></tr>
+          <tr class="me">
+            <th>chrome-use</th>
+            <td class="cmp-win">扩展 + CLI 驱动你现有的 Chrome</td>
+            <td class="cmp-win">零（用你已有的 Chrome）</td>
+            <td class="cmp-win">你真 Chrome 的登录</td>
+            <td>shell 命令（任意 agent）</td>
+            <td class="cmp-win">核心能力</td>
+            <td>是</td>
+          </tr>
+          <tr>
+            <th>ego-lite</th>
+            <td>自建 Chromium 浏览器</td>
+            <td>装一个新浏览器</td>
+            <td class="cmp-win">Space 继承登录</td>
+            <td>Node.js 运行时</td>
+            <td class="cmp-mut">非重点</td>
+            <td>MIT</td>
+          </tr>
+          <tr>
+            <th>browser-use</th>
+            <td>Python 框架（底层 Playwright）</td>
+            <td>框架 + 受控浏览器</td>
+            <td class="cmp-mut">默认另开，需重登</td>
+            <td>Python API</td>
+            <td class="cmp-mut">非重点</td>
+            <td>MIT</td>
+          </tr>
+          <tr>
+            <th>Playwright / MCP</th>
+            <td>自动化框架（+ agent MCP）</td>
+            <td>框架 + 一个受控浏览器</td>
+            <td class="cmp-mut">全新 context，无登录</td>
+            <td>JS/Py/.NET/Java（MCP）</td>
+            <td class="cmp-mut">易被检测</td>
+            <td>Apache-2.0</td>
+          </tr>
+          <tr>
+            <th>Puppeteer / Selenium</th>
+            <td>经典自动化框架</td>
+            <td>框架 + 一个受控浏览器</td>
+            <td class="cmp-mut">全新 profile，无登录</td>
+            <td>JS / 多语言</td>
+            <td class="cmp-mut">易被检测</td>
+            <td>Apache / BSD</td>
+          </tr>
+          <tr>
+            <th>Browserbase / Stagehand</th>
+            <td>云端 headless 浏览器（+ AI 动作）</td>
+            <td>云服务（付费）</td>
+            <td class="cmp-mut">云端会话，需自己带登录</td>
+            <td>SDK / API</td>
+            <td>反检测（付费）</td>
+            <td class="cmp-mut">SaaS / 部分开源</td>
+          </tr>
+          <tr>
+            <th>消费级 agent 浏览器<br><span class="cmp-mut">(ChatGPT Atlas · Comet)</span></th>
+            <td>厂商自己的浏览器 / 内置 agent</td>
+            <td>换浏览器</td>
+            <td class="cmp-win">你在该浏览器里的登录</td>
+            <td>自然语言（无 API）</td>
+            <td class="cmp-mut">非重点</td>
+            <td class="cmp-mut">闭源</td>
+          </tr>
         </tbody>
       </table>
       </div>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 读法</div>
-        绿色不代表「赢」，代表「在这一维度更强」。没有全能方案——选型看你更在意<strong>零安装</strong>还是<strong>结构性隔离</strong>。
+        绿=在该维度更强，不代表整体"赢"。没有全能方案——选型看你更在意<strong>零安装 / 用真登录 / 隐身</strong>，还是<strong>纯云端 / 跨语言 / 内置对话</strong>。
       </div>
 
-      <h2>实测：同一任务，两边各跑一遍</h2>
-      <p>
-        任务：打开 Hacker News，抽取前 5 条标题 + 分数为 JSON。<strong>两边结果完全一致，都约 3 秒</strong>——
-        原始能力持平，差别全在架构和接口。
-      </p>
-      <div class="cmp-scroll">
-      <table class="cmp-table">
-        <thead><tr><th></th><th>chrome-use</th><th>ego-lite</th></tr></thead>
-        <tbody>
-          <tr><td>命令</td><td><code>open</code> + <code>eval</code></td><td>heredoc + <code>js()</code></td></tr>
-          <tr><td>结果 / 耗时</td><td>5 条 JSON / ~3s</td><td>一致 / ~3s</td></tr>
-          <tr><td>同页快照</td><td class="cmp-win"><code>snapshot -i</code> = 318 行（只列交互元素）</td><td><code>snapshotText</code> = 941 行（全结构树，内联 loc/url）</td></tr>
-        </tbody>
-      </table>
+      <h2>按类型选</h2>
+      <div class="cmp-cat">
+        <div class="du-card">
+          <h3>🌐 驱动你的真浏览器</h3>
+          <p class="tools">chrome-use · ego-lite</p>
+          <p>用你已登录的会话，不必重新登录。chrome-use 用<strong>你现有的</strong> Chrome（零安装）；ego-lite 让你<strong>换成它的</strong>浏览器（结构性隔离）。</p>
+        </div>
+        <div class="du-card">
+          <h3>🧰 自动化框架</h3>
+          <p class="tools">Playwright · Puppeteer · Selenium · browser-use · Stagehand</p>
+          <p>另开一个受控浏览器来驱动。成熟、跨语言，但登录搬不干净、默认易被反爬识别，需要自己拼 LLM 循环。</p>
+        </div>
+        <div class="du-card">
+          <h3>☁️ 云端浏览器</h3>
+          <p class="tools">Browserbase · Steel · Hyperbrowser</p>
+          <p>浏览器跑在云上，适合无状态大规模抓取。要按量付费，登录态要自己注入，本机的真实会话用不上。</p>
+        </div>
+        <div class="du-card">
+          <h3>💬 消费级 agent 浏览器</h3>
+          <p class="tools">ChatGPT Atlas · Perplexity Comet · Gemini-in-Chrome</p>
+          <p>厂商把 agent 内建进浏览器，面向终端用户、对话驱动，没有给开发者的可编程 API，也不做隐身。</p>
+        </div>
       </div>
 
-      <h2>我们在学它什么（并搬过来）</h2>
+      <h2>最接近的对手：chrome-use vs ego-lite（实测深挖）</h2>
       <p>
-        ego-lite 有几个想法确实值得学。我们逐项<strong>试用、对比、搬进 chrome-use 的方式</strong>（前提：始终驱动你的真 Chrome，绝不 fork 浏览器）。
-        进度和每一轮结论都记录在追踪 issue 里：
-        <a href="https://github.com/leeguooooo/chrome-use/issues/89">#89 Learn from ego-lite</a>。
-      </p>
-      <ul>
-        <li><strong>所有权 + 交接状态机</strong>——<span class="cmp-win">已实现</span>：<code>session handoff</code> / <code>resume</code> / <code>status</code> / <code>list</code>；交接给用户后，agent 对该会话的一切驱动命令被拒绝（登录/2FA/验证码时干净地把控制权交还用户）。</li>
-        <li><strong>一等公民隔离上下文</strong>（对标 Space）——现有每会话彩色标签组 + 多 agent 隔离已提供隔离；新增 <code>session list</code> 把隔离会话（含所有权）显式列出。</li>
-        <li><strong>登录继承</strong>——<span class="cmp-win">架构固有</span>：relay 模式驱动你的真 Chrome，agent 标签就在你的 profile 里，天然带你的登录；跨账号才用 cookie-use。</li>
-        <li>富文本编辑器 <strong>write-probe 纪律</strong>——<span class="cmp-win">已搬</span>，见 <a href="/canvas.html">Canvas / WebGL</a> 页末。</li>
-        <li>快照内联 <code>url=</code> / 按名复用会话 / token 经济——<span class="cmp-win">已基本具备</span>（<code>--urls</code>、<code>--session-name</code>）。</li>
-      </ul>
-
-      <h2>基准实测：性能与 token（核对"快 3 倍、更省 token"的说法）</h2>
-      <p>
-        ego 宣传"更快、更省 token"，坊间传成"快 3 倍"。我们实测同样的页面、同样的操作。结论：<strong>一个半真、一个恰好相反</strong>。
+        ego-lite 的定位和我们最像（都"用真登录、不抢用户标签"），它的 README 也<strong>直接点名 agent-browser</strong>。
+        所以我们两边各跑同一任务，实测了性能和 token。核对它"更快、更省 token"的说法——<strong>一个半真，一个恰好相反</strong>。
       </p>
 
-      <h3>Token（喂给大模型的观察体量——真正花钱的地方）</h3>
+      <h3>Token（喂给大模型的观察——真正花钱的地方）</h3>
       <div class="cmp-scroll">
       <table class="cmp-table">
         <thead><tr><th>页面</th><th>chrome-use <code>snapshot -i</code></th><th>ego <code>snapshotText</code></th><th>谁更省</th></tr></thead>
         <tbody>
-          <tr><td>example.com</td><td class="cmp-win">101 字节</td><td>456 字节</td><td>chrome-use 省 ~4.5×</td></tr>
-          <tr><td>Hacker News</td><td class="cmp-win">12.9 KB</td><td>46.7 KB</td><td>chrome-use 省 ~3.6×</td></tr>
-          <tr><td>GitHub 仓库页</td><td class="cmp-win">18.6 KB</td><td>33.6 KB</td><td>chrome-use 省 ~1.8×</td></tr>
+          <tr class="me"><th>example.com</th><td class="cmp-win">101 字节</td><td>456 字节</td><td>省 ~4.5×</td></tr>
+          <tr class="me"><th>Hacker News</th><td class="cmp-win">12.9 KB</td><td>46.7 KB</td><td>省 ~3.6×</td></tr>
+          <tr class="me"><th>GitHub 仓库页</th><td class="cmp-win">18.6 KB</td><td>33.6 KB</td><td>省 ~1.8×</td></tr>
         </tbody>
       </table>
       </div>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ "更省 token" 恰好说反了</div>
-        chrome-use 默认的 <code>snapshot -i</code> 只列交互元素，比 ego 默认的全结构树 <strong>省 1.8–4.5×</strong>。token 是 agent 真正花钱的地方——<strong>是我们更省，不是它</strong>。
+        chrome-use 默认 <code>snapshot -i</code> 只列交互元素，比 ego 默认的全结构树 <strong>省 1.8–4.5×</strong>。token 是 agent 真正花钱的地方——是我们更省。
       </div>
 
       <h3>性能（墙钟时间）</h3>
@@ -146,29 +201,46 @@
       <table class="cmp-table">
         <thead><tr><th>场景</th><th>chrome-use</th><th>ego</th></tr></thead>
         <tbody>
-          <tr><td>导航 open / 单次快照</td><td class="cmp-win">≈ 持平</td><td>≈ 持平（都受页面加载 + CDP 限制）</td></tr>
-          <tr><td>6 个微操作 · 每条一个 CLI 进程</td><td>1.00s（0.17s/op，进程启动开销）</td><td>—</td></tr>
-          <tr><td>6 个微操作 · chrome-use <code>batch</code></td><td class="cmp-win">0.19s</td><td>—</td></tr>
-          <tr><td>6 个微操作 · ego 常驻运行时</td><td>—</td><td class="cmp-win">≈0.00s</td></tr>
+          <tr><th>导航 / 单次快照</th><td class="cmp-win">≈ 持平</td><td>≈ 持平（受页面加载 + CDP 限制）</td></tr>
+          <tr><th>6 微操作 · 每条一个 CLI 进程</th><td>1.00s（0.17s/op 启动开销）</td><td>—</td></tr>
+          <tr class="me"><th>6 微操作 · chrome-use <code>batch</code></th><td class="cmp-win">0.19s</td><td>—</td></tr>
+          <tr><th>6 微操作 · ego 常驻运行时</th><td>—</td><td class="cmp-win">≈0.00s</td></tr>
         </tbody>
       </table>
       </div>
       <p>
-        原始浏览器操作（导航、CDP）两边一样快。ego 的优势是<strong>常驻运行时</strong>：一个进程连续跑多个操作，没有每条命令的进程启动开销。
-        chrome-use 默认「一条命令一个进程」，每条约 0.15–0.17s 启动开销——所以<strong>微操作特别多</strong>的任务里 ego 会明显更快（"快 3 倍"多半来自这种形状）。
-        但典型任务（open + 快照 + 抽取）实测两边都 ~3s；而且 chrome-use 用 <code>batch</code>（一次往返、常驻守护进程）6 个操作 0.19s，基本追平 ego——还有 WebSocket 流做实时驱动。
+        原始浏览器操作两边一样快。ego 的优势是<strong>常驻运行时</strong>，没有每条命令的进程启动开销；chrome-use 默认「一命令一进程」，每条约 0.15–0.17s。
+        所以<strong>微操作特别多</strong>的任务里 ego 更快（"快 3 倍"多半来自这种形状）。但典型任务（open+快照+抽取）实测两边都 ~3s，chrome-use 用 <code>batch</code>（一次往返、常驻守护进程）6 操作 0.19s 基本追平，还有 WebSocket 流做实时驱动。
       </p>
-      <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ 一句话</div>
-        <strong>"快 3 倍"</strong>：只在「大量微操作 + 你天真地一条命令一个进程」时成立；典型任务持平，用 <code>batch</code>/流即可追平。<strong>"更省 token"</strong>：反了，默认工作流下我们省 1.8–4.5×。
+
+      <h3>我们从 ego-lite 学到 &amp; 已搬的</h3>
+      <p>逐项试用对比后，把真缺口用 chrome-use 原生的方式搬过来（进度在 <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>）：</p>
+      <ul>
+        <li><strong>所有权 + 交接</strong>——<span class="cmp-win">已实现</span> <code>session handoff/resume/status/list</code>：交接给用户后 agent 对该会话的驱动命令全被拒绝（登录/2FA/验证码用）。</li>
+        <li><strong>富文本 write-probe 纪律</strong>——<span class="cmp-win">已搬</span>（见 <a href="/canvas.html">Canvas / WebGL</a> 页末）。</li>
+        <li><strong>登录继承 / 隔离上下文 / 按名复用 / token 经济</strong>——<span class="cmp-win">已具备</span>（relay 天然带登录、每会话标签组隔离、<code>session list</code>、<code>--session-name</code>、更省 token）。</li>
+      </ul>
+
+      <h2>怎么选</h2>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>你的情况</th><th>选</th></tr></thead>
+        <tbody>
+          <tr class="me"><th>要用你已登录的真账号、什么都不想装、要过反爬</th><td class="cmp-win">chrome-use</td></tr>
+          <tr><th>愿意换一个专为 agent 做的新浏览器、要最干净的隔离</th><td>ego-lite</td></tr>
+          <tr><th>写传统自动化脚本、跨语言、CI 里跑</th><td>Playwright / Puppeteer</td></tr>
+          <tr><th>无状态大规模云抓取</th><td>Browserbase / Steel</td></tr>
+          <tr><th>只是终端用户想让浏览器帮点忙</th><td>ChatGPT Atlas / Comet</td></tr>
+        </tbody>
+      </table>
       </div>
 
       <h2>对比 workflow</h2>
-      <p>这一页是活文档。每学一个竞品能力，我们走同一套流程，保证对比诚实、可复现：</p>
+      <p>这一页是活文档。每评估一个方案，走同一套流程，保证对比诚实、可复现：</p>
       <ol>
         <li><strong>试用</strong>——同一个真实任务，两边各跑一遍，记录命令、结果、耗时、token。</li>
-        <li><strong>对比</strong>——判断是「我们已有」「基本持平」还是「真缺口」；持平就如实标注，不硬搬。</li>
-        <li><strong>搬</strong>——真缺口就用 chrome-use 原生的方式实现（守住零安装护城河），落地后回填 issue #89 并更新本页表格。</li>
+        <li><strong>对比</strong>——判断「已有」「持平」还是「真缺口」；持平就如实标注，不硬搬。</li>
+        <li><strong>搬</strong>——真缺口就用 chrome-use 原生方式实现（守住零安装护城河），回填 issue #89 并更新本页。</li>
       </ol>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 原则</div>
