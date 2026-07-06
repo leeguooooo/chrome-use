@@ -64,7 +64,9 @@ pub const STORE_INSTALL_URL: &str = STORE_URL;
 /// pwtk-branded ids ([`OLD_PROFILE_IDS`]); the UUIDs are fresh too, so macOS
 /// treats this as a new profile instead of an update to the stale one.
 const PROFILE_ID: &str = "com.leeguoo.chrome-use.connect";
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 const PROFILE_UUID: &str = "5EE60001-AB00-4CCE-9E10-AAAABBBBCC01";
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 const PROFILE_PAYLOAD_UUID: &str = "5EE60001-AB01-4CCE-9E10-AAAABBBBCC02";
 
 /// Configuration-profile identifiers shipped by earlier releases: the
@@ -367,15 +369,77 @@ pub fn run_connect(args: &[String], json: bool) {
 ///   B) `--all-profiles` → the Web Store page opens inside each missing
 ///      profile and the user clicks "Add to Chrome" in each.
 fn run_install(args: &[String], json: bool) {
-    let no_open = args.iter().any(|a| a == "--no-open");
-    let all_profiles = args.iter().any(|a| a == "--all-profiles");
-
     let host = install_native_host();
     if let Err(e) = &host {
         report(json, false, &format!("install failed: {e}"));
         return;
     }
     let host_paths = host.unwrap_or_default();
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = args;
+        run_install_windows(json, &host_paths);
+    }
+    #[cfg(not(target_os = "windows"))]
+    run_install_unix(args, json, host_paths);
+}
+
+/// Windows `extension install`: the native-messaging host is registered in the
+/// registry above; there's no macOS-style force-install policy, so guide the
+/// user to add the extension from the Chrome Web Store once.
+#[cfg(target_os = "windows")]
+fn run_install_windows(json: bool, host_paths: &[String]) {
+    let store_url = format!("https://chromewebstore.google.com/detail/{STORE_EXTENSION_ID}");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "success": true,
+                "data": {
+                    "installed": host_paths,
+                    "extensionId": STORE_EXTENSION_ID,
+                    "storeUrl": store_url,
+                    "platform": "windows",
+                    "note": "native-messaging host registered in the Windows registry; \
+                             add the extension from the Chrome Web Store (Windows has no \
+                             managed-policy force-install path).",
+                }
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    let zh = ui_zh();
+    if zh {
+        println!("chrome-use 安装向导（Windows）\n");
+        println!("[1/2] native-messaging host（注册到 Windows 注册表）");
+        println!("  ✓ 已注册（{} 项浏览器注册表键）", host_paths.len());
+        println!("\n[2/2] 安装扩展");
+        println!("  Windows 没有 macOS 那套静默强制安装，请手动从 Chrome 应用商店安装一次：");
+        println!("  {store_url}");
+        println!("\n装好扩展后，回终端跑 `chrome-use open <url>` 就能驱动你的 Chrome。");
+    } else {
+        println!("chrome-use setup — connect your real Chrome (Windows)\n");
+        println!("[1/2] native-messaging host (registered in the Windows registry)");
+        println!(
+            "  ✓ registered ({} browser registry {})",
+            host_paths.len(),
+            if host_paths.len() == 1 { "key" } else { "keys" }
+        );
+        println!("\n[2/2] install the extension");
+        println!("  Windows has no silent force-install policy — add the extension once from the Chrome Web Store:");
+        println!("  {store_url}");
+        println!("\nThen run `chrome-use open <url>` to drive your Chrome.");
+    }
+}
+
+/// macOS/Linux `extension install`: native host written, then force-install
+/// policy (macOS) or per-profile Web Store opens are guided.
+#[cfg(not(target_os = "windows"))]
+fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
+    let no_open = args.iter().any(|a| a == "--no-open");
+    let all_profiles = args.iter().any(|a| a == "--all-profiles");
 
     let profiles = chrome_profiles();
     let missing: Vec<&ChromeProfileInfo> =
@@ -655,6 +719,7 @@ pub fn ui_zh() -> bool {
 /// restart Chrome for them (session preserved) so the policy applies NOW
 /// instead of "someday", and show the extension reaching their profiles until
 /// coverage is done. TTY-only; JSON/agent/`--no-open` runs skip it.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn guide_through_approval(zh: bool) {
     use std::io::Write as _;
     use std::time::{Duration, Instant};
@@ -833,16 +898,34 @@ fn guide_through_approval(zh: bool) {
     }
 }
 
-/// Write the launcher script + native-messaging host manifest(s).
+/// Write the launcher script + native-messaging host manifest(s) (macOS/Linux),
+/// or register the host in the Windows registry (Windows).
 fn install_native_host() -> Result<Vec<String>, String> {
     let home = dirs::home_dir().ok_or("no home dir")?;
     let ab_dir = home.join(".chrome-use");
     std::fs::create_dir_all(&ab_dir).map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
 
+    #[cfg(target_os = "windows")]
+    {
+        install_native_host_windows(&ab_dir, &exe)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        install_native_host_unix(&ab_dir, &exe)
+    }
+}
+
+/// macOS/Linux: write an `nm-host.sh` launcher and drop a host manifest into
+/// every Chromium-family `NativeMessagingHosts` directory that exists.
+#[cfg(not(target_os = "windows"))]
+fn install_native_host_unix(
+    ab_dir: &std::path::Path,
+    exe: &std::path::Path,
+) -> Result<Vec<String>, String> {
     // Chrome execs the manifest `path` directly with the calling extension's
     // origin as argv[1]; a launcher lets us run the binary in __nm-host mode
     // regardless of how/where chrome-use is installed.
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let launcher = ab_dir.join("nm-host.sh");
     let script = format!(
         "#!/bin/sh\n# chrome-use native-messaging host launcher (auto-generated)\nexec \"{}\" __nm-host \"$@\"\n",
@@ -889,10 +972,91 @@ fn install_native_host() -> Result<Vec<String>, String> {
     Ok(written)
 }
 
+/// Windows: write host manifest(s) under `~/.chrome-use` whose `path` points
+/// straight at `chrome-use.exe` (Chrome runs it directly, and main() enters
+/// __nm-host mode when argv[1] is a `chrome-extension://…` origin), then
+/// register each manifest under every Chromium-family browser's per-user
+/// `NativeMessagingHosts` registry key.
+#[cfg(target_os = "windows")]
+fn install_native_host_windows(
+    ab_dir: &std::path::Path,
+    exe: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    let mut registered = Vec::new();
+    for host in HOST_NAMES {
+        let manifest = serde_json::json!({
+            "name": host,
+            "description": "chrome-use connect — native messaging host",
+            "path": exe.display().to_string(),
+            "type": "stdio",
+            "allowed_origins": [
+                format!("chrome-extension://{EXTENSION_ID}/"),
+                format!("chrome-extension://{STORE_EXTENSION_ID}/"),
+            ],
+        });
+        let body = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+        let manifest_path = ab_dir.join(format!("{host}.json"));
+        std::fs::write(&manifest_path, &body).map_err(|e| e.to_string())?;
+        let mp = manifest_path.display().to_string();
+        for key in win_browser_nmh_keys(host) {
+            if win_reg_add(&key, &mp) {
+                registered.push(format!("{key} -> {mp}"));
+            }
+        }
+    }
+    if registered.is_empty() {
+        return Err(
+            "failed to register the native-messaging host in the Windows registry \
+                    (reg.exe returned an error for every browser key)"
+                .into(),
+        );
+    }
+    Ok(registered)
+}
+
+/// Per-user (HKCU) `NativeMessagingHosts` registry keys for the Chromium-family
+/// browsers, for one host name. Writing to a browser that isn't installed is
+/// harmless — the key is simply never read.
+#[cfg(target_os = "windows")]
+fn win_browser_nmh_keys(host: &str) -> Vec<String> {
+    [
+        r"Software\Google\Chrome\NativeMessagingHosts",
+        r"Software\Chromium\NativeMessagingHosts",
+        r"Software\Microsoft\Edge\NativeMessagingHosts",
+        r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts",
+    ]
+    .iter()
+    .map(|base| format!(r"HKCU\{base}\{host}"))
+    .collect()
+}
+
+/// `reg add "<key>" /ve /t REG_SZ /d "<manifest path>" /f` — set the key's
+/// default value to the manifest path. Returns whether reg.exe succeeded.
+#[cfg(target_os = "windows")]
+fn win_reg_add(key: &str, manifest_path: &str) -> bool {
+    std::process::Command::new("reg")
+        .args(["add", key, "/ve", "/t", "REG_SZ", "/d", manifest_path, "/f"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// `reg delete "<key>" /f`. Returns whether reg.exe succeeded (missing key also
+/// reports failure, which the caller ignores).
+#[cfg(target_os = "windows")]
+fn win_reg_delete(key: &str) -> bool {
+    std::process::Command::new("reg")
+        .args(["delete", key, "/f"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Write a Chrome configuration profile that force-installs `ab-connect` from
 /// [`UPDATE_URL`], and (unless `no_open`) `open` it so the user approves it once
 /// in System Settings. Returns the profile path. macOS only — elsewhere it
 /// returns an error and the caller prints the manual fallback.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn install_force_install_profile(no_open: bool) -> Result<PathBuf, String> {
     if !cfg!(target_os = "macos") {
         return Err("force-install profile is macOS-only; on Linux set Chrome's \
@@ -916,6 +1080,7 @@ fn install_force_install_profile(no_open: bool) -> Result<PathBuf, String> {
 /// just a one-time approval click. Must use the STORE id (the Web Store update
 /// server serves the published extension under the id it assigned, not the local
 /// Load-unpacked id).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn force_install_mobileconfig() -> String {
     let forcelist = format!("{STORE_EXTENSION_ID};{UPDATE_URL}");
     format!(
@@ -965,7 +1130,15 @@ fn remove_force_install_profile() -> bool {
 
 fn remove_host_manifests() -> usize {
     let mut n = 0;
-    for dir in native_messaging_dirs() {
+    // Windows keeps the manifests under ~/.chrome-use (pointed at by registry
+    // keys); Unix keeps them in each browser's NativeMessagingHosts dir.
+    #[cfg(target_os = "windows")]
+    let dirs: Vec<PathBuf> = dirs::home_dir()
+        .map(|h| vec![h.join(".chrome-use")])
+        .unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
+    let dirs: Vec<PathBuf> = native_messaging_dirs();
+    for dir in dirs {
         for host in HOST_NAMES {
             let path = dir.join(format!("{host}.json"));
             if path.exists() && std::fs::remove_file(&path).is_ok() {
@@ -973,10 +1146,20 @@ fn remove_host_manifests() -> usize {
             }
         }
     }
+    // Windows: also drop the registry keys that pointed at those manifests.
+    #[cfg(target_os = "windows")]
+    for host in HOST_NAMES {
+        for key in win_browser_nmh_keys(host) {
+            let _ = win_reg_delete(&key);
+        }
+    }
     n
 }
 
-/// Per-OS NativeMessagingHosts directories for Chrome + Chromium-family browsers.
+/// Per-OS NativeMessagingHosts directories for Chrome + Chromium-family
+/// browsers. Windows registers hosts in the registry instead, so this is
+/// unused there.
+#[cfg(not(target_os = "windows"))]
 fn native_messaging_dirs() -> Vec<PathBuf> {
     let mut dirs_out = Vec::new();
     #[cfg(target_os = "macos")]
@@ -1042,6 +1225,7 @@ impl NativeHostReport {
 
 /// Extract the binary path from a native-host launcher script body, i.e. the
 /// `<path>` in `exec "<path>" __nm-host "$@"`. Pure so it can be unit-tested.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn parse_launcher_target(script: &str) -> Option<String> {
     for line in script.lines() {
         let line = line.trim();
@@ -1063,6 +1247,7 @@ pub fn parse_launcher_target(script: &str) -> Option<String> {
     None
 }
 
+#[cfg(not(target_os = "windows"))]
 fn path_is_executable(p: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -1099,6 +1284,18 @@ pub fn native_host_report() -> NativeHostReport {
 
     if let Some(launcher) = launcher {
         report.launcher_exists = launcher.exists();
+        // Windows: the manifest `path` IS the target binary (chrome-use.exe) —
+        // there is no shell launcher to parse, so treat it as the target.
+        #[cfg(target_os = "windows")]
+        {
+            let bin = launcher.display().to_string();
+            report.target_exists = launcher.exists();
+            report.target_executable = launcher.is_file();
+            report.target_is_dev_build =
+                bin.contains(r"\target\debug\") || bin.contains(r"\target\release\");
+            report.target_bin = Some(bin);
+        }
+        #[cfg(not(target_os = "windows"))]
         if let Ok(script) = std::fs::read_to_string(&launcher) {
             if let Some(bin) = parse_launcher_target(&script) {
                 let bin_path = Path::new(&bin);
@@ -1124,7 +1321,13 @@ pub fn reinstall_native_host() -> Result<Vec<String>, String> {
 
 fn installed_host_manifests() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for dir in native_messaging_dirs() {
+    #[cfg(target_os = "windows")]
+    let dirs: Vec<PathBuf> = dirs::home_dir()
+        .map(|h| vec![h.join(".chrome-use")])
+        .unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
+    let dirs: Vec<PathBuf> = native_messaging_dirs();
+    for dir in dirs {
         for host in HOST_NAMES {
             let path = dir.join(format!("{host}.json"));
             if path.exists() {
@@ -1387,6 +1590,7 @@ fn approved_config_profiles() -> (bool, Vec<&'static str>) {
 /// button itself cannot be automated: Chrome detaches debuggers on
 /// chromewebstore pages, and off-store force-install is blocked — this
 /// one-click-per-profile flow is the floor the browser's security model allows.)
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn open_store_in_profile(profile: &ChromeProfileInfo) -> bool {
     let root = Path::new(&profile.root);
     let profile_arg = format!("--profile-directory={}", profile.dir);
@@ -1553,7 +1757,15 @@ fn print_chrome_extension_status(status: &ChromeExtensionStatus, expected_versio
 /// service worker; this manifest is the durable signal that the extension is
 /// the chosen path.
 pub fn host_installed() -> bool {
-    native_messaging_dirs().into_iter().any(|d| {
+    // Windows keeps the manifests under ~/.chrome-use (registry keys point at
+    // them); Unix keeps them in each browser's NativeMessagingHosts dir.
+    #[cfg(target_os = "windows")]
+    let dirs: Vec<PathBuf> = dirs::home_dir()
+        .map(|h| vec![h.join(".chrome-use")])
+        .unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
+    let dirs: Vec<PathBuf> = native_messaging_dirs();
+    dirs.into_iter().any(|d| {
         HOST_NAMES
             .iter()
             .any(|h| d.join(format!("{h}.json")).exists())
@@ -2183,7 +2395,8 @@ mod tests {
 
     #[test]
     fn parse_launcher_target_quoted() {
-        let script = "#!/bin/sh\n# comment\nexec \"/Users/leo/.local/bin/chrome-use\" __nm-host \"$@\"\n";
+        let script =
+            "#!/bin/sh\n# comment\nexec \"/Users/leo/.local/bin/chrome-use\" __nm-host \"$@\"\n";
         assert_eq!(
             parse_launcher_target(script).as_deref(),
             Some("/Users/leo/.local/bin/chrome-use")

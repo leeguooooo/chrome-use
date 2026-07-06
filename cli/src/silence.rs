@@ -156,6 +156,7 @@ pub fn ensure_banner_silenced(mode: SilenceMode) -> SilenceOutcome {
 /// immediately instead of "whenever the user next restarts Chrome". Returns
 /// Ok(true) if a restart happened, Ok(false) if Chrome wasn't running (nothing
 /// to do — the policy applies on next start).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn restart_chrome_preserving_session() -> Result<bool, String> {
     let Some(rc) = detect() else {
         return Ok(false);

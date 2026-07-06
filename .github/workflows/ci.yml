@@ -187,6 +187,21 @@ jobs:
         shell: pwsh
         timeout-minutes: 10
 
+      - name: Test chrome-use extension install (Windows registry native host)
+        run: |
+          $env:PATH = "$pwd\bin;$env:PATH"
+          # Registers the native-messaging host in HKCU and writes the manifests;
+          # must succeed on Windows (regression guard for #86).
+          bin/chrome-use-win32-x64.exe extension install --json
+          if ($LASTEXITCODE -ne 0) { Write-Host "extension install failed"; exit 1 }
+          # The registry key must now point at a manifest that exists.
+          $key = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.agent_browser.connect"
+          $manifest = (Get-ItemProperty -Path $key -ErrorAction Stop).'(default)'
+          if (-not (Test-Path $manifest)) { Write-Host "manifest missing: $manifest"; exit 1 }
+          Write-Host "OK: registered host manifest at $manifest"
+        shell: pwsh
+        timeout-minutes: 5
+
       - name: Test daemon lifecycle (open, snapshot, close)
         run: |
           $env:PATH = "$pwd\bin;$env:PATH"

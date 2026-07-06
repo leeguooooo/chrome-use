@@ -718,7 +718,16 @@ fn main() {
     // Native-messaging host mode: Chrome launches `chrome-use __nm-host
     // <extension-origin> [...]` for the ab-connect extension. Must run before
     // ANY stdout write — stdout is the Chrome native-messaging channel.
-    if env::args().nth(1).as_deref() == Some("__nm-host") {
+    // On Windows the manifest points straight at chrome-use.exe (no shell
+    // launcher), so Chrome runs it with the extension origin as argv[1] and
+    // no `__nm-host` marker — detect that origin too and enter the same mode.
+    let nm_arg1 = env::args().nth(1);
+    if nm_arg1.as_deref() == Some("__nm-host")
+        || nm_arg1
+            .as_deref()
+            .map(|a| a.starts_with("chrome-extension://"))
+            .unwrap_or(false)
+    {
         connect::run_nm_host();
         return;
     }
