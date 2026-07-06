@@ -12,6 +12,7 @@
 //!   - `all`: `core` plus an extended set (hover/select/screenshot/scroll/
 //!     tabs/extract/expect/find/network_route/site/upload/download) — closer
 //!     to full CLI parity, still not exhaustive.
+//!
 //! Tool argument names/flags are adapted from `commands.rs`'s parse arms for
 //! each command, which have diverged from the upstream agent-browser CLI.
 
@@ -71,9 +72,9 @@ impl Profile {
         while i < args.len() {
             match args[i].as_str() {
                 "--tools" => {
-                    let value = args.get(i + 1).ok_or_else(|| {
-                        "--tools requires a value: core or all".to_string()
-                    })?;
+                    let value = args
+                        .get(i + 1)
+                        .ok_or_else(|| "--tools requires a value: core or all".to_string())?;
                     profile = match value.as_str() {
                         "core" => Profile::Core,
                         "all" => Profile::All,
@@ -1367,8 +1368,9 @@ fn optional_number_string(arguments: &Value, key: &str) -> Result<Option<String>
 }
 
 fn required_u64(arguments: &Value, key: &str) -> Result<u64, ProtocolError> {
-    optional_u64(arguments, key)?
-        .ok_or_else(|| ProtocolError::invalid_params(format!("{} must be a non-negative integer", key)))
+    optional_u64(arguments, key)?.ok_or_else(|| {
+        ProtocolError::invalid_params(format!("{} must be a non-negative integer", key))
+    })
 }
 
 fn optional_f64(arguments: &Value, key: &str) -> Result<Option<f64>, ProtocolError> {
@@ -1418,7 +1420,10 @@ fn required_string_array(arguments: &Value, key: &str) -> Result<Vec<String>, Pr
 
 /// A JSON object of string→string, defaulting to empty when the key is
 /// absent — used for repeatable `--flag K=V` CLI options (headers, etc.).
-fn optional_string_map(arguments: &Value, key: &str) -> Result<Vec<(String, String)>, ProtocolError> {
+fn optional_string_map(
+    arguments: &Value,
+    key: &str,
+) -> Result<Vec<(String, String)>, ProtocolError> {
     match optional_value(arguments, key) {
         Some(Value::Null) | None => Ok(Vec::new()),
         Some(Value::Object(map)) => map
@@ -1427,10 +1432,7 @@ fn optional_string_map(arguments: &Value, key: &str) -> Result<Vec<(String, Stri
                 v.as_str()
                     .map(|v| (k.clone(), v.to_string()))
                     .ok_or_else(|| {
-                        ProtocolError::invalid_params(format!(
-                            "{}.{} must be a string",
-                            key, k
-                        ))
+                        ProtocolError::invalid_params(format!("{}.{} must be a string", key, k))
                     })
             })
             .collect(),

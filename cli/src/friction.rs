@@ -270,7 +270,11 @@ pub fn run_report(args: &[String], json_out: bool) {
     println!("(Nothing was uploaded. `--open` opens the new-issue page in your browser.)");
 
     if args.iter().any(|a| a == "--open") {
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
         let _ = std::process::Command::new(opener)
             .arg(ISSUES_NEW_URL)
             .spawn();

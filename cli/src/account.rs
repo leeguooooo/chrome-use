@@ -89,9 +89,9 @@ pub fn load_fingerprints(id: Option<&str>) -> Result<Vec<Fingerprint>, String> {
     let fps: Vec<Fingerprint> = arr.iter().filter_map(parse_fingerprint).collect();
     if fps.is_empty() {
         return Err(match id {
-            Some(one) => format!(
-                "no vault account matches \"{one}\" — see `cookie-use list` for the ids"
-            ),
+            Some(one) => {
+                format!("no vault account matches \"{one}\" — see `cookie-use list` for the ids")
+            }
             None => "the cookie-use vault has no fingerprinted accounts yet — run \
                      `cookie-use fingerprint <id>` once per account"
                 .to_string(),
@@ -216,7 +216,9 @@ const ROTATING_INFRA_COOKIES: &[&str] = &[
 ];
 
 fn is_rotating_infra(name: &str) -> bool {
-    ROTATING_INFRA_COOKIES.iter().any(|r| name.eq_ignore_ascii_case(r))
+    ROTATING_INFRA_COOKIES
+        .iter()
+        .any(|r| name.eq_ignore_ascii_case(r))
 }
 
 /// Score one account's fingerprint against the live hashes. Auth cookies only
@@ -488,9 +490,7 @@ mod tests {
         }
     }
 
-    fn live(
-        entries: &[(&str, &str, &str)],
-    ) -> std::collections::HashMap<(String, String), String> {
+    fn live(entries: &[(&str, &str, &str)]) -> std::collections::HashMap<(String, String), String> {
         entries
             .iter()
             .map(|(n, d, h)| ((n.to_string(), d.to_string()), h.to_string()))

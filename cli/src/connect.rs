@@ -360,10 +360,8 @@ fn run_install(args: &[String], json: bool) {
     let host_paths = host.unwrap_or_default();
 
     let profiles = chrome_profiles();
-    let missing: Vec<&ChromeProfileInfo> = profiles
-        .iter()
-        .filter(|p| p.extension.is_none())
-        .collect();
+    let missing: Vec<&ChromeProfileInfo> =
+        profiles.iter().filter(|p| p.extension.is_none()).collect();
     let with_ext = profiles.len() - missing.len();
     let policy = managed_policy_state();
     let (_, old_ids) = approved_config_profiles();
@@ -522,9 +520,7 @@ fn run_install(args: &[String], json: bool) {
         }
     } else if policy == PolicyState::Active {
         if zh {
-            println!(
-                "  ✓ 静默安装策略已生效。重启一次 Chrome，缺失的 profile 会全部自动装上。"
-            );
+            println!("  ✓ 静默安装策略已生效。重启一次 Chrome，缺失的 profile 会全部自动装上。");
         } else {
             println!(
                 "  ✓ the silent-install policy is active. Restart Chrome once and every\n\
@@ -543,7 +539,11 @@ fn run_install(args: &[String], json: bool) {
                          \x20      → 双击 \"chrome-use connect\"（leeguoo.com）→ 安装…\n\
                          \x20    然后重启 Chrome：现有和将来新建的每个 profile 都会自动装上\n\
                          \x20    并保持更新，之后再也不用点任何东西。",
-                        if cfg!(target_os = "macos") { "" } else { "（仅 macOS）" },
+                        if cfg!(target_os = "macos") {
+                            ""
+                        } else {
+                            "（仅 macOS）"
+                        },
                         if no_open { "写好" } else { "打开" },
                         path.display()
                     );
@@ -687,7 +687,14 @@ fn guide_through_approval(zh: bool) {
         }
         return;
     }
-    eprintln!("{}", if zh { " ✓ 已批准" } else { " ✓ approved" });
+    eprintln!(
+        "{}",
+        if zh {
+            " ✓ 已批准"
+        } else {
+            " ✓ approved"
+        }
+    );
 
     // The approval lands in managed preferences asynchronously; confirm Chrome
     // will actually see it before promising anything.
@@ -1205,7 +1212,9 @@ fn managed_policy_state() -> PolicyState {
             return PolicyState::Active;
         }
         for line in text.lines() {
-            let entry = line.trim().trim_matches(|c| c == '"' || c == ',' || c == ';');
+            let entry = line
+                .trim()
+                .trim_matches(|c| c == '"' || c == ',' || c == ';');
             let is_ours = entry.contains(EXTENSION_ID)
                 || entry.contains(STORE_EXTENSION_ID)
                 || entry.contains("agent-browser");
@@ -2144,7 +2153,10 @@ mod tests {
         // stale shipped profile broke exactly this way (dev id + self-hosted
         // updates.xml).
         assert!(cfg.contains(&format!("{STORE_EXTENSION_ID};{UPDATE_URL}")));
-        assert!(!cfg.contains(EXTENSION_ID), "dev id must not be force-installed");
+        assert!(
+            !cfg.contains(EXTENSION_ID),
+            "dev id must not be force-installed"
+        );
         assert!(!cfg.contains("updates.xml"), "no self-hosted update feed");
         assert!(cfg.contains(PROFILE_ID));
         assert!(cfg.contains("leeguoo.com"));
