@@ -69,6 +69,8 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>ab-connect 0.5.10</strong>（2026-07-06）— 扩展 popup / options 页脚新增 <code>Docs</code>（chrome-use.leeguoo.com）与 <code>leeguoo.com</code> 链接；消除 native host 断开时打到错误页的 <code>Unchecked runtime.lastError: Native host has exited</code> 警告（断开本就预期，按需重连，纯观感清理）。</li>
+        <li><strong>ab-connect 0.5.9</strong>（2026-07-02）— 新增 <code>identity</code> / <code>identity.email</code> 权限：hello 握手带上当前 Chrome profile 的登录邮箱，<code>chrome-use browsers</code> 能标出每条连接属于哪个账号（多账号下区分"登出" vs "错账号"）。邮箱仅走本地 native messaging，不外传。</li>
         <li><strong>v1.5.66</strong>（2026-07-02）— <code>select</code> 找不到匹配的 <code>&lt;option&gt;</code> 时不再默默选不中，改为报错并列出所有可选项；默认操作超时从 30s 降到 25s。</li>
         <li><strong>v1.5.65</strong>（2026-07-02）— <code>network route --set-json</code> 结构化编辑响应 JSON 字段；新增 <code>chrome-use report</code> 一键打包脱敏痛点日志为可粘贴 issue；MCP <code>--tools all</code>（24 工具）。</li>
         <li><strong>v1.5.64</strong>（2026-07-01）— <code>chrome-use mcp</code>：给 Claude Desktop 这类只讲 MCP、不能跑 shell 命令的宿主起一个 stdio MCP 服务器（12 工具核心 profile）。</li>
