@@ -232,8 +232,8 @@
           </tr>
           <tr>
             <td>"not a JS shim on stock Chrome … reach into <strong>cross-origin iframes, shadow DOM, third-party SDK widgets</strong> like Stripe, Salesforce, Intercom, React portals … <strong>JS shims usually give up</strong> … burning tokens for nothing"</td>
-            <td>chrome-use 走 <strong>CDP</strong>（非 JS shim）。reCAPTCHA demo 实测：<code>frames</code> 列出全部 5 个跨域 frame；<code>eval --frame 1</code> 读到勾选框 <code>role=checkbox</code>「I'm not a robot」。<strong>但</strong>默认 <code>snapshot -i</code> 没把它并进顶层，ego 快照并了（已开 <a href="https://github.com/leeguooooo/chrome-use/issues/92">#92</a> 修）。</td>
-            <td><span class="cmp-mut">一半假一半真</span>——我们<strong>不是 JS shim、也能触达</strong> OOPIF/SDK widget；但默认快照确实漏并了 reCAPTCHA 这类，这点它对。</td>
+            <td>chrome-use 走 <strong>CDP</strong>（非 JS shim）。reCAPTCHA demo 实测：<code>frames</code> 列出全部 5 个跨域 frame；<code>eval --frame 1</code> 读到勾选框 <code>role=checkbox</code>「I'm not a robot」。默认 <code>snapshot -i</code> 此前没把它并进顶层——<strong>现已修复</strong>（<a href="https://github.com/leeguooooo/chrome-use/issues/92">#92</a> 已合并 presentation-role / AX-stripped 跨域 iframe）。</td>
+            <td><span class="cmp-win">已追平</span>——我们<strong>不是 JS shim、能触达</strong> OOPIF/SDK widget，且默认快照现在也把它们并入了（#92 已修）。ego 说的是通用 JS shim 的毛病，不适用于我们。</td>
           </tr>
           <tr>
             <td>"your AI agents will <strong>never get stuck on captchas, 2FA, and SSO redirects</strong>"（因为你登录态用它）</td>
