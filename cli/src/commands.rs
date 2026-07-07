@@ -2342,7 +2342,17 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         }
         "console" => {
             let clear = rest.contains(&"--clear");
-            Ok(json!({ "id": id, "action": "console", "clear": clear }))
+            // `--limit N` tails the last N console entries (#110).
+            let limit = rest
+                .iter()
+                .position(|a| *a == "--limit")
+                .and_then(|i| rest.get(i + 1))
+                .and_then(|v| v.parse::<usize>().ok());
+            let mut cmd = json!({ "id": id, "action": "console", "clear": clear });
+            if let Some(n) = limit {
+                cmd["limit"] = json!(n);
+            }
+            Ok(cmd)
         }
         "errors" => {
             let clear = rest.contains(&"--clear");

@@ -2887,12 +2887,13 @@ Examples:
             r##"
 chrome-use console - View console logs
 
-Usage: chrome-use console [--clear]
+Usage: chrome-use console [--clear] [--limit N]
 
 View browser console output (log, warn, error, info).
 
 Options:
   --clear              Clear console log buffer
+  --limit N            Show only the last N entries (newest kept)
 
 Global Options:
   --json               Output as JSON
@@ -2900,6 +2901,7 @@ Global Options:
 
 Examples:
   chrome-use console
+  chrome-use console --limit 20
   chrome-use console --clear
 "##
         }
@@ -3670,7 +3672,7 @@ Debug:
   profiler start|stop [path] Record Chrome DevTools profile
   record start <path> [url]  Start video recording (WebM)
   record stop                Stop and save video
-  console [--clear]          View console logs
+  console [--clear] [--limit N]  View console logs (--limit tails last N)
   errors [--clear]           View page errors
   highlight <sel>            Highlight element
   inspect                    Open Chrome DevTools for the active page
