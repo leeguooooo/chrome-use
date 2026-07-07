@@ -1487,6 +1487,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "wait" => handle_wait(cmd, state).await,
             "gettext" => handle_gettext(cmd, state).await,
             "frames" => handle_frames(cmd, state).await,
+            "diagnose" => handle_diagnose(cmd, state).await,
             "getattribute" => handle_getattribute(cmd, state).await,
             "isvisible" => handle_isvisible(cmd, state).await,
             "isenabled" => handle_isenabled(cmd, state).await,
@@ -5488,6 +5489,145 @@ fn console_capture_active(state: &DaemonState) -> bool {
 const CONSOLE_DISABLED_HINT: &str =
     "console/error capture is disabled for stealth (Runtime.enable is a detectable CDP \
      signal). Restart the session with AGENT_BROWSER_CAPTURE_CONSOLE=1 to capture page output.";
+
+/// `diagnose` — "why is this page blank?" (issue #90.5). For an SPA that renders
+/// nothing, the single most useful signal is *which* asset failed and *how*.
+/// Non-destructive: fetches every `<script src>` / stylesheet and checks its
+/// status + content-type — a `.js`/`.css` served as `text/html` is the classic
+/// wrong-base-path / SPA-fallback (server returned `index.html` for an asset
+/// request), which loads "6 scripts" yet never mounts. Also reports whether the
+/// app root actually populated, and flags that console capture is off by default
+/// (so the page's own mount-time errors weren't recorded — the reason
+/// `console --level error` came back empty).
+async fn handle_diagnose(_cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+
+    let js = r#"(async () => {
+    var out = { url: location.href, bodyTextLen: 0, rootSelector: null, rootEmpty: null,
+                scripts: 0, styles: 0, assets: [] };
+    out.bodyTextLen = ((document.body && document.body.innerText) || '').trim().length;
+    var root = document.querySelector('#app,#root,[data-reactroot],[data-v-app],main');
+    if (root) { out.rootSelector = root.id ? ('#'+root.id) : root.tagName.toLowerCase(); out.rootEmpty = root.children.length === 0; }
+    var srcs = [];
+    document.querySelectorAll('script[src]').forEach(function(s){ srcs.push({ url: s.src, kind: 'script' }); });
+    document.querySelectorAll('link[rel="stylesheet"][href]').forEach(function(l){ srcs.push({ url: l.href, kind: 'style' }); });
+    out.scripts = document.querySelectorAll('script[src]').length;
+    out.styles = document.querySelectorAll('link[rel="stylesheet"]').length;
+    var checks = await Promise.all(srcs.slice(0, 40).map(async function(s){
+        try {
+            var r = await fetch(s.url, { method: 'GET', cache: 'no-store' });
+            var ct = (r.headers.get('content-type') || '').split(';')[0].trim();
+            var isHtml = /text\/html/i.test(ct);
+            var mimeMismatch = (s.kind === 'script' && isHtml) || (s.kind === 'style' && isHtml);
+            if (!r.ok || mimeMismatch)
+                return { url: s.url, status: r.status, contentType: ct, kind: s.kind, mimeMismatch: mimeMismatch };
+            return null;
+        } catch (e) {
+            return { url: s.url, status: 0, contentType: '(fetch failed: ' + e.message + ')', kind: s.kind, mimeMismatch: false };
+        }
+    }));
+    out.assets = checks.filter(Boolean);
+    return out;
+})()"#
+        .to_string();
+
+    let resp = mgr
+        .client
+        .send_command_typed::<_, Value>(
+            "Runtime.evaluate",
+            &super::cdp::types::EvaluateParams {
+                expression: js,
+                return_by_value: Some(true),
+                await_promise: Some(true),
+            },
+            Some(&session_id),
+        )
+        .await?;
+
+    if let Some(ex) = resp.get("exceptionDetails") {
+        let text = ex
+            .get("exception")
+            .and_then(|e| e.get("description"))
+            .and_then(|d| d.as_str())
+            .or_else(|| ex.get("text").and_then(|t| t.as_str()))
+            .unwrap_or("evaluation failed");
+        return Err(format!("diagnose failed: {}", text));
+    }
+    let scan = resp
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    let body_len = scan.get("bodyTextLen").and_then(|v| v.as_i64()).unwrap_or(0);
+    let root_empty = scan.get("rootEmpty").and_then(|v| v.as_bool());
+    let empty_assets = Vec::new();
+    let assets = scan
+        .get("assets")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty_assets);
+    let mime_mismatch = assets
+        .iter()
+        .any(|a| a.get("mimeMismatch").and_then(|m| m.as_bool()) == Some(true));
+    let failed = assets.iter().any(|a| {
+        matches!(a.get("status").and_then(|s| s.as_i64()), Some(s) if s == 0 || s >= 400)
+    });
+    let blank = body_len < 16 && root_empty != Some(false);
+    let console_on = console_capture_active(state);
+
+    // Plain-language verdict, most-actionable first.
+    let mut verdict = Vec::new();
+    if mime_mismatch {
+        verdict.push(
+            "an asset (JS/CSS) was served as text/html — almost always a wrong base path or \
+             SPA fallback returning index.html for asset requests; fix the base path / deploy path."
+                .to_string(),
+        );
+    }
+    if failed && !mime_mismatch {
+        verdict.push(
+            "one or more scripts/stylesheets failed to load (see `assets` — status 0 = blocked/network, \
+             4xx/5xx = missing); the app can't mount without them."
+                .to_string(),
+        );
+    }
+    if blank && assets.is_empty() {
+        // Assets all loaded but nothing rendered → JS threw during mount.
+        verdict.push(if console_on {
+            "assets all loaded but the page is blank — the JS likely threw during mount; \
+             check `console --level error`."
+                .to_string()
+        } else {
+            "assets all loaded but the page is blank — the JS likely threw during mount, but \
+             console capture is OFF by default (that's why `console --level error` was empty). \
+             Re-run the session with AGENT_BROWSER_CAPTURE_CONSOLE=1 to see the throw."
+                .to_string()
+        });
+    }
+    if verdict.is_empty() {
+        verdict.push(if blank {
+            "page looks blank but assets and mount root are inconclusive — inspect `assets` and \
+             re-run with AGENT_BROWSER_CAPTURE_CONSOLE=1 for mount-time errors."
+                .to_string()
+        } else {
+            "page appears to have rendered content; no failed assets detected.".to_string()
+        });
+    }
+
+    Ok(json!({
+        "url": scan.get("url"),
+        "blank": blank,
+        "bodyTextLen": body_len,
+        "rootSelector": scan.get("rootSelector"),
+        "rootEmpty": root_empty,
+        "scripts": scan.get("scripts"),
+        "styles": scan.get("styles"),
+        "assets": assets,
+        "consoleCapture": console_on,
+        "diagnosis": verdict,
+    }))
+}
 
 /// `expect <condition>` — assertion verb. Polls the condition until it holds or
 /// the timeout elapses (unless --no-wait), then returns {pass, actual, ...}.

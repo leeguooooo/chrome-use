@@ -102,6 +102,10 @@ struct TreeNode {
     depth: usize,
     cursor_info: Option<CursorElementInfo>,
     url: Option<String>,
+    // True when this node lives inside the topmost open modal/drawer (issue #90):
+    // rendered as a `modal` attr so drawer controls are distinguishable from the
+    // still-present background page controls that `snapshot -i` also lists.
+    in_top_layer: bool,
 }
 
 impl TreeNode {
@@ -125,6 +129,7 @@ impl TreeNode {
             depth: 0,
             cursor_info: None,
             url: None,
+            in_top_layer: false,
         }
     }
 
@@ -573,6 +578,25 @@ async fn take_snapshot_at_depth(
                     {
                         node.name = label.clone();
                     }
+                }
+            }
+        }
+
+        // Tag nodes inside the topmost open modal/drawer (issue #90). When a drawer
+        // or dialog is open, `snapshot -i` otherwise lists its controls flat next to
+        // the still-present background page controls — identical `link "编辑"` lines
+        // from both, with no way to tell which is the drawer's. Marking the top-layer
+        // subtree with a `modal` attr makes the boundary greppable.
+        let top_layer = find_top_layer_backend_ids(client, session_id)
+            .await
+            .unwrap_or_default();
+        if !top_layer.is_empty() {
+            for node in tree_nodes.iter_mut() {
+                if node
+                    .backend_node_id
+                    .is_some_and(|bid| top_layer.contains(&bid))
+                {
+                    node.in_top_layer = true;
                 }
             }
         }
@@ -1486,6 +1510,88 @@ async fn find_control_label_fallbacks(
     Ok(out)
 }
 
+/// Find the `backendNodeId`s of every element inside the topmost open
+/// modal/drawer (issue #90), so `snapshot -i` can mark them with a `modal` attr.
+///
+/// Element-Plus / Ant / native `<dialog>` all leave the background page mounted
+/// and interactive underneath an open overlay, so the AX tree (and thus the flat
+/// snapshot) mixes drawer controls with background controls. We pick the topmost
+/// visible modal container by effective z-index (DOM order breaks ties — a later
+/// popup stacks on top), tag its whole subtree, and resolve the backend ids with
+/// the same batch dance the label/cursor scans use. Best-effort: any CDP failure
+/// yields an empty set (snapshot just omits the marker).
+async fn find_top_layer_backend_ids(
+    client: &CdpClient,
+    session_id: &str,
+) -> Result<std::collections::HashSet<i64>, String> {
+    let js = r#"
+(function() {
+    if (!document.body) return 0;
+    var SEL = '[role=dialog],[aria-modal="true"],dialog[open],' +
+              '.el-dialog,.el-drawer,.el-message-box,.ant-modal,.ant-drawer';
+    function vis(el){
+        var r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) return false;
+        var cs = getComputedStyle(el);
+        return cs.visibility !== 'hidden' && cs.display !== 'none';
+    }
+    var cands = [].slice.call(document.querySelectorAll(SEL)).filter(vis);
+    try {
+        var modals = [].slice.call(document.querySelectorAll(':modal'));
+        for (var m = 0; m < modals.length; m++)
+            if (cands.indexOf(modals[m]) < 0 && vis(modals[m])) cands.push(modals[m]);
+    } catch (e) {}
+    if (!cands.length) return 0;
+    function zed(el){
+        var z = 0, n = el;
+        while (n && n !== document.body) {
+            var v = parseInt(getComputedStyle(n).zIndex, 10);
+            if (!isNaN(v)) z = Math.max(z, v);
+            n = n.parentElement;
+        }
+        return z;
+    }
+    // Topmost = highest effective z-index; ties resolve to the later candidate
+    // (DOM order ≈ stacking order for equal z-index), so a nested dialog opened
+    // inside a drawer wins over the drawer.
+    var top = cands[0], topZ = zed(cands[0]);
+    for (var i = 1; i < cands.length; i++) {
+        var z = zed(cands[i]);
+        if (z >= topZ) { topZ = z; top = cands[i]; }
+    }
+    var all = [top].concat([].slice.call(top.querySelectorAll('*')));
+    var n = 0;
+    for (var j = 0; j < all.length; j++) all[j].setAttribute('data-__ab-top', String(n++));
+    return n;
+})()
+"#
+    .to_string();
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: js,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+
+    let count = result
+        .result
+        .value
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if count == 0 {
+        return Ok(std::collections::HashSet::new());
+    }
+
+    let idx_to_backend = resolve_tagged_backend_ids(client, session_id, "data-__ab-top").await;
+    Ok(idx_to_backend.into_values().collect())
+}
+
 /// Resolve the `backendNodeId` for every element previously tagged with a
 /// numeric-indexed data attribute (e.g. `data-__ab-err="3"`), then strip the
 /// attribute. Returns a map from that index to its `backendNodeId`.
@@ -1666,6 +1772,7 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
             depth: 0,
             cursor_info: None,
             url: None,
+            in_top_layer: false,
         });
         id_to_idx.insert(node.node_id.clone(), i);
     }
@@ -1860,6 +1967,12 @@ fn render_tree(
 
     if let Some(ref ref_id) = node.ref_id {
         attrs.push(format!("ref={}", ref_id));
+    }
+
+    // Top-layer marker (issue #90): distinguishes controls inside the open
+    // modal/drawer from the background page controls `snapshot -i` also lists.
+    if node.in_top_layer {
+        attrs.push("modal".to_string());
     }
 
     if let Some(ref url) = node.url {

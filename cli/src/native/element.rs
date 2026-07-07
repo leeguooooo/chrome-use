@@ -466,11 +466,118 @@ pub async fn resolve_element_object_id(
         ));
     }
 
-    let object_id = result
-        .result
-        .object_id
-        .ok_or_else(|| format!("Element not found: {}", selector_or_ref))?;
+    let Some(object_id) = result.result.object_id else {
+        // Element not found. If the selector carries a quoted text — most often a
+        // `[placeholder="…"]` — Element-Plus-style widgets render that text on an
+        // inner <span>, not the real <input>, so the CSS selector matches nothing
+        // and the generic "closed shadow root / cross-origin iframe" hint sends
+        // people down the wrong path (#90.4). Point at the closest textual match.
+        if let Some(hint) = suggest_textual_match(client, session_id, selector_or_ref).await {
+            return Err(format!("Element not found: {}. {}", selector_or_ref, hint));
+        }
+        return Err(format!("Element not found: {}", selector_or_ref));
+    };
     Ok((object_id, session_id.to_string()))
+}
+
+/// On a CSS-selector miss, if the selector carries a quoted string (usually a
+/// `placeholder`), scan the page for the closest textual match and describe it,
+/// so the error nudges toward `snapshot -i` + `@ref` instead of the misleading
+/// shadow/iframe explanation (#90.4). Best-effort: returns None on any failure
+/// or when the selector has no quoted text to look for.
+async fn suggest_textual_match(
+    client: &CdpClient,
+    session_id: &str,
+    selector: &str,
+) -> Option<String> {
+    // Pull the first quoted literal out of the selector (e.g. the value of a
+    // `placeholder="…"` clause). No quoted text → nothing to search for.
+    let want = extract_quoted(selector)?;
+    if want.chars().count() < 2 {
+        return None;
+    }
+
+    let js = format!(
+        r#"
+(function() {{
+    var want = {want};
+    function clean(s){{ return (s||'').replace(/\s+/g,' ').trim(); }}
+    function vis(el){{ var r = el.getBoundingClientRect(); return r.width>0 || r.height>0; }}
+    // 1. An element whose placeholder attribute holds the text (the common case:
+    //    Element Plus mirrors it onto an inner span, not the <input>).
+    var all = document.querySelectorAll('[placeholder]');
+    for (var i = 0; i < all.length; i++) {{
+        var p = all[i].getAttribute('placeholder') || '';
+        if (p.indexOf(want) >= 0 && vis(all[i]))
+            return {{ tag: all[i].tagName.toLowerCase(), via: 'placeholder', input: all[i].tagName === 'INPUT' || all[i].tagName === 'TEXTAREA' }};
+    }}
+    // 2. Any visible leaf element whose text equals/contains the wanted string.
+    var leaves = document.querySelectorAll('span, div, label, button, a, p');
+    for (var j = 0; j < leaves.length; j++) {{
+        var el = leaves[j];
+        if (el.children.length) continue;
+        if (clean(el.textContent).indexOf(want) >= 0 && vis(el))
+            return {{ tag: el.tagName.toLowerCase(), via: 'text', input: false }};
+    }}
+    return null;
+}})()
+"#,
+        want = serde_json::to_string(&want).unwrap_or_default(),
+    );
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: js,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+
+    let v = result.result.value?;
+    if v.is_null() {
+        return None;
+    }
+    let tag = v.get("tag").and_then(|t| t.as_str()).unwrap_or("element");
+    let via = v.get("via").and_then(|t| t.as_str()).unwrap_or("text");
+    let is_input = v.get("input").and_then(|b| b.as_bool()).unwrap_or(false);
+    if via == "placeholder" && !is_input {
+        Some(format!(
+            "No <input> matched, but a <{}> carries that placeholder \
+             (Element Plus and similar render the placeholder on an inner element, \
+             not the <input>). Run `snapshot -i` and act on the @ref instead of a CSS selector.",
+            tag
+        ))
+    } else {
+        Some(format!(
+            "No element matched that selector, but a <{}> contains that text. \
+             Run `snapshot -i` and act on the @ref (it names controls by placeholder/label).",
+            tag
+        ))
+    }
+}
+
+/// Extract the first single- or double-quoted literal from a selector string,
+/// e.g. `input[placeholder="请选择"]` → `请选择`. Returns None if unquoted.
+fn extract_quoted(selector: &str) -> Option<String> {
+    let bytes = selector.as_bytes();
+    for (i, &c) in bytes.iter().enumerate() {
+        if c == b'"' || c == b'\'' {
+            let rest = &selector[i + 1..];
+            if let Some(end) = rest.find(c as char) {
+                let inner = &rest[..end];
+                if !inner.is_empty() {
+                    return Some(inner.to_string());
+                }
+            }
+            return None;
+        }
+    }
+    None
 }
 
 /// Determine which CDP session and parameters to use for an AX tree query.
@@ -1743,6 +1850,27 @@ mod tests {
     fn test_parse_ref_at_prefix() {
         assert_eq!(parse_ref("@e1"), Some("e1".to_string()));
         assert_eq!(parse_ref("@e123"), Some("e123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_quoted() {
+        // double- and single-quoted placeholder values (the #90.4 case)
+        assert_eq!(
+            extract_quoted(r#"input[placeholder="请选择试听名字"]"#),
+            Some("请选择试听名字".to_string())
+        );
+        assert_eq!(
+            extract_quoted("input[placeholder='hello world']"),
+            Some("hello world".to_string())
+        );
+        // first literal wins when several are present
+        assert_eq!(
+            extract_quoted(r#"[data-x="a"][title="b"]"#),
+            Some("a".to_string())
+        );
+        // no quotes / empty literal → nothing to search for
+        assert_eq!(extract_quoted("div.foo > span"), None);
+        assert_eq!(extract_quoted(r#"input[value=""]"#), None);
     }
 
     #[test]
