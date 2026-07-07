@@ -158,6 +158,31 @@ chrome-use eval "[...document.forms[0].elements].filter(e=>!e.validity.valid).ma
 chrome-use eval "document.querySelector('#stubborn').click()"   # direct DOM click, bypasses overlays
 ```
 
+> **`eval` shows you *why*; the verb *does the thing*.** The snippets above are
+> for introspection (`.validity`, hidden inputs, `form.elements`) and the cases
+> no verb covers — that's exactly where `eval` shines. But for a **standard
+> operation**, don't hand-roll JS: there's a dedicated command that's shorter and
+> smarter (it heals stale refs, pierces cross-origin iframes, fires the events
+> React/Vue listen for, and returns structured output — raw `eval` gets none of
+> that). Reach for the verb first:
+>
+> | Instead of `eval …` | Use |
+> |---|---|
+> | `querySelector('article,main').innerText` | `read` / `get text --main` |
+> | `querySelector('#x').click()` | `click @ref` / `click <sel>` (DOM-dispatch bypasses overlays) |
+> | `el.value = …` on an input | `fill @ref <v>` (native setter → React/Vue register it) |
+> | clicking a `<select>` / combobox option | `select @ref <text>` / `pick` (portal-aware) |
+> | `querySelector('[name=x]').value` | `get value @ref` |
+> | `querySelectorAll('.x').length` | `get count <sel>` |
+> | `getAttribute('href')` | `get attr @ref href` |
+> | `el.scrollIntoView()` | `scroll --selector <sel>` |
+> | polling a condition in a loop | `wait --text` / `--selector` / `--function`, or `expect` |
+> | scraping a repeating list into JSON | `extract --schema` |
+> | reading a whole article / docs page | `read` (see the reading section) |
+>
+> Drop to `eval` when the verb genuinely doesn't fit (custom widget, closed
+> shadow, a page global) — not as the default for things a verb already does.
+
 ## Site adapters — the cheapest path for "read structured data from site X"
 
 Before you `open` + `snapshot` + click your way through GitHub/Reddit/Bilibili/etc.,
@@ -261,7 +286,18 @@ lines instead of guessing why.
 
 For unstructured reading (no refs needed):
 
+**Reading an article / docs / prose page? Reach for `read` — not `eval` +
+`querySelector`.** `chrome-use read` runs a readability pass on the active tab
+(strips nav/header/sidebar/ads, returns clean main content); `chrome-use read
+<url>` skips rendering entirely and HTTP-fetches with markdown negotiation /
+`llms.txt` / outline. One command, and it beats `open` + `eval
+"document.querySelector('article,main,.prose').innerText"` — that hand-rolled
+snippet is just a worse reimplementation of what `read` already does (no
+readability, no markdown, no `llms.txt`, no boilerplate stripping).
+
 ```bash
+chrome-use read <url>                  # fetch + markdownify (llms.txt / outline aware) — no render needed
+chrome-use read                        # readability extract of the ACTIVE tab (clean main content)
 chrome-use get text                    # WHOLE PAGE — all frames by default (see below)
 chrome-use get text @e1                # visible text of one element (or a CSS selector)
 chrome-use get text --main             # main content only — skip nav/header/sidebar
