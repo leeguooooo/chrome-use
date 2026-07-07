@@ -69,6 +69,11 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.71</strong>（2026-07-07）— 文档：新增「<a href="/how-it-works.html">它怎么工作</a>」（含 SVG 架构图）、「<a href="/lineage.html">血统与上游</a>」、「<a href="/script.html">单次成型脚本</a>」三章，并对整站文档做了一轮审计修订。无功能改动。</li>
+        <li><strong>v1.5.70</strong>（2026-07-07）— <code>chrome-use script</code> <a href="/script.html">单次成型脚本</a>（#101）：JSON op-list（值总线 + 循环 + 断言）与同步 JS（<code>cu.*</code> 助手）两种写法，守护进程内 boa 引擎扛硬跳转，一次 tool call 跑完多步。另：connect 检测企业策略拦截扩展并引导逃生口；后台自动更新（<code>CHROME_USE_AUTO_UPGRADE=1</code>）；一键 Web Store 安装。</li>
+        <li><strong>v1.5.69</strong>（2026-07-07）— <code>snapshot -i</code> 合并 presentation-role / AX-stripped 跨域 iframe（reCAPTCHA 这类，#92）；snapshot/eval 先 resync 防漂到 about:blank（#93）；未命名交互控件按 placeholder / 邻近 label 命名（#90.2）；screenshot resync 抓活动标签（#91）。</li>
+        <li><strong>v1.5.68</strong>（2026-07-02）— 会话所有权 + 人工接管：<code>session handoff/resume/status/list</code>（#89，从 ego-lite 搬）；<code>whoami</code> 每站身份 + 全局 <code>--as</code> 账号守卫。</li>
+        <li><strong>v1.5.67</strong>（2026-07-02）— 扩展多 profile 引导安装：枚举所有 profile、检测过期策略、深链设置页 + 等审批 + 自动重启；安装向导 zh/en 本地化；<code>connect &lt;port&gt;</code> / <code>--cdp</code> 换端点时重绑。</li>
         <li><strong>ab-connect 0.5.10</strong>（2026-07-06）— 扩展 popup / options 页脚新增 <code>Docs</code>（chrome-use.leeguoo.com）与 <code>leeguoo.com</code> 链接；消除 native host 断开时打到错误页的 <code>Unchecked runtime.lastError: Native host has exited</code> 警告（断开本就预期，按需重连，纯观感清理）。</li>
         <li><strong>ab-connect 0.5.9</strong>（2026-07-02）— 新增 <code>identity</code> / <code>identity.email</code> 权限：hello 握手带上当前 Chrome profile 的登录邮箱，<code>chrome-use browsers</code> 能标出每条连接属于哪个账号（多账号下区分"登出" vs "错账号"）。邮箱仅走本地 native messaging，不外传。</li>
         <li><strong>v1.5.66</strong>（2026-07-02）— <code>select</code> 找不到匹配的 <code>&lt;option&gt;</code> 时不再默默选不中，改为报错并列出所有可选项；默认操作超时从 30s 降到 25s。</li>
