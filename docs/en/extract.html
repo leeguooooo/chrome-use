@@ -221,6 +221,16 @@ EOF</code></pre>
         For a long schema, pass it via <code>--schema-file &lt;path&gt;</code> or <code>--stdin</code> (heredoc).
       </div>
 
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ v1.5.73: no more silent []</div>
+        <code>rows</code> and field selectors are <strong>CSS</strong>. If <code>rows</code> isn't valid CSS or
+        matches nothing, extract <strong>auto-detects the page's dominant repeating container</strong>
+        (<code>li</code>/<code>tr</code>/a repeated class) as a fallback; if there genuinely is none, it returns a
+        <code>diagnostic</code> listing the repeating containers that ARE present
+        (<code>li×3, a[href*=pulls]×3</code>) instead of a signal-less <code>[]</code>. An array-shaped schema
+        works too: <code>{"items":[{"title":"…","url":"@href"}]}</code>.
+      </div>
+
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Multi-page / paginated crawls</div>
         <code>extract --schema</code> is one call over one page. To accumulate across pages and filter by condition, wrap

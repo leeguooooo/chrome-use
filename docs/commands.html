@@ -555,9 +555,11 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use <span class="du-flag">--cdp</span> 9222 snapshot         <span class="du-cmt"># 通过 CDP 端口连接</span>
 <span class="du-prompt">$</span> chrome-use connect 9222                <span class="du-cmt"># 另一种：connect 命令</span>
 <span class="du-prompt">$</span> chrome-use console                     <span class="du-cmt"># 查看控制台消息（需 AGENT_BROWSER_CAPTURE_CONSOLE=1）</span>
+<span class="du-prompt">$</span> chrome-use console <span class="du-flag">--limit</span> 20          <span class="du-cmt"># 只看最近 20 条控制台消息</span>
 <span class="du-prompt">$</span> chrome-use console <span class="du-flag">--clear</span>             <span class="du-cmt"># 清空控制台</span>
 <span class="du-prompt">$</span> chrome-use errors                      <span class="du-cmt"># 查看页面错误（需 AGENT_BROWSER_CAPTURE_CONSOLE=1）</span>
 <span class="du-prompt">$</span> chrome-use errors <span class="du-flag">--clear</span>              <span class="du-cmt"># 清空错误</span>
+<span class="du-prompt">$</span> chrome-use diagnose                    <span class="du-cmt"># 页面为何空白：查资源 404/MIME、挂载状态</span>
 <span class="du-prompt">$</span> chrome-use highlight @e1               <span class="du-cmt"># 高亮元素</span>
 <span class="du-prompt">$</span> chrome-use inspect                     <span class="du-cmt"># 打开本会话的 DevTools</span>
 <span class="du-prompt">$</span> chrome-use trace start                 <span class="du-cmt"># 开始记录 trace</span>

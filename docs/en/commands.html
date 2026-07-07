@@ -566,9 +566,11 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use <span class="du-flag">--cdp</span> 9222 snapshot         <span class="du-cmt"># connect over a CDP port</span>
 <span class="du-prompt">$</span> chrome-use connect 9222                <span class="du-cmt"># alternative: the connect command</span>
 <span class="du-prompt">$</span> chrome-use console                     <span class="du-cmt"># view console messages (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)</span>
+<span class="du-prompt">$</span> chrome-use console <span class="du-flag">--limit</span> 20          <span class="du-cmt"># only the last 20 console messages</span>
 <span class="du-prompt">$</span> chrome-use console <span class="du-flag">--clear</span>             <span class="du-cmt"># clear the console</span>
 <span class="du-prompt">$</span> chrome-use errors                      <span class="du-cmt"># view page errors (needs AGENT_BROWSER_CAPTURE_CONSOLE=1)</span>
 <span class="du-prompt">$</span> chrome-use errors <span class="du-flag">--clear</span>              <span class="du-cmt"># clear errors</span>
+<span class="du-prompt">$</span> chrome-use diagnose                    <span class="du-cmt"># why is the page blank: checks asset 404/MIME + mount state</span>
 <span class="du-prompt">$</span> chrome-use highlight @e1               <span class="du-cmt"># highlight an element</span>
 <span class="du-prompt">$</span> chrome-use inspect                     <span class="du-cmt"># open DevTools for this session</span>
 <span class="du-prompt">$</span> chrome-use trace start                 <span class="du-cmt"># start recording a trace</span>

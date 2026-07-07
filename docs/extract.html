@@ -214,6 +214,15 @@ EOF</code></pre>
         schema 较长时用 <code>--schema-file &lt;path&gt;</code> 或 <code>--stdin</code>（heredoc）喂进去。
       </div>
 
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ v1.5.73：不再静默返回 []</div>
+        <code>rows</code> 和字段的选择器是 <strong>CSS</strong>。若 <code>rows</code> 不是合法 CSS
+        或没匹配到，会<strong>自动探测页面主导的重复容器</strong>（<code>li</code>/<code>tr</code>/重复 class）兜底；
+        真的一个都没有时，返回 <code>diagnostic</code> 列出页面上有哪些重复容器（<code>li×3, a[href*=pulls]×3</code>），
+        而不是一个没信息的 <code>[]</code>。也接受数组形状的 schema：
+        <code>{"items":[{"title":"…","url":"@href"}]}</code>。
+      </div>
+
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 多页 / 翻页采集</div>
         <code>extract --schema</code> 是单页单次调用。要跨多页累积、按条件筛选，把它包进 <code>script</code> 循环：

@@ -69,6 +69,8 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.73</strong>（2026-07-07）— 四个 issue 修复：<code>extract --schema</code> 对普通重复列表不再静默返回 <code>[]</code>（自动探测重复容器 + 未命中给诊断 + 接受数组 schema，#96）；<code>site</code> 适配器运行前注入家族 <code>_helper</code>（twitter/* 等不再 <code>ReferenceError</code>，#99）；<code>console --limit N</code> 只看最近 N 条（#110）；skill 真分层（<code>&lt;!-- full --&gt;</code> 标记，默认精简、<code>--full</code> 全量）+ 去重 + <code>session handoff</code> 同步进 sessions skill（#100）。</li>
+        <li><strong>v1.5.72</strong>（2026-07-07）— 原生命令扛 shadow-DOM 重站：<code>select</code>/<code>fill</code> 现在能处理 react-select、模块作用域内的 Monaco、@ref 落在包裹元素的受控输入（#105）；对 Element-Plus 弹窗更利落——<code>snapshot -i</code> 给顶层 modal/drawer 内控件加 <code>modal</code> 标记、选择器未命中给最接近文本匹配提示、新增 <code>diagnose</code> 排查空白 SPA（#90）。<code>curl … | sh</code> 一条命令装扩展并处理调试横幅（装机时征得同意 → 运行时自动静默）。skill 引导 agent 优先用 <code>read</code>/<code>click</code>/<code>fill</code> 等命令而非手搓 <code>eval</code>。</li>
         <li><strong>v1.5.71</strong>（2026-07-07）— 文档：新增「<a href="/how-it-works.html">它怎么工作</a>」（含 SVG 架构图）、「<a href="/lineage.html">血统与上游</a>」、「<a href="/script.html">单次成型脚本</a>」三章，并对整站文档做了一轮审计修订。无功能改动。</li>
         <li><strong>v1.5.70</strong>（2026-07-07）— <code>chrome-use script</code> <a href="/script.html">单次成型脚本</a>（#101）：JSON op-list（值总线 + 循环 + 断言）与同步 JS（<code>cu.*</code> 助手）两种写法，守护进程内 boa 引擎扛硬跳转，一次 tool call 跑完多步。另：connect 检测企业策略拦截扩展并引导逃生口；后台自动更新（<code>CHROME_USE_AUTO_UPGRADE=1</code>）；一键 Web Store 安装。</li>
         <li><strong>v1.5.69</strong>（2026-07-07）— <code>snapshot -i</code> 合并 presentation-role / AX-stripped 跨域 iframe（reCAPTCHA 这类，#92）；snapshot/eval 先 resync 防漂到 about:blank（#93）；未命名交互控件按 placeholder / 邻近 label 命名（#90.2）；screenshot resync 抓活动标签（#91）。</li>
