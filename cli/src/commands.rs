@@ -1518,7 +1518,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 }
             }
             let mapped = crate::site::map_args(&adapter, &positional, &named);
-            let script = crate::site::build_eval(&adapter, &mapped);
+            // Inject the family's shared `_helper` (e.g. twitter/_helper's
+            // findGraphQLQueryId) so adapters that call it don't ReferenceError (#99).
+            let family = spec.split('/').next().unwrap_or("");
+            let helper = crate::site::load_family_helper(family);
+            let script = crate::site::build_eval(&adapter, &mapped, helper.as_deref());
             Ok(json!({ "id": id, "action": "site", "domain": domain, "script": script }))
         }
 
