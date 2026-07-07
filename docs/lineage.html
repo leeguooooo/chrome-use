@@ -91,16 +91,34 @@
         <code>session handoff</code> 所有权与人工接管、<a href="/script.html">单次成型脚本</a>、以及围绕真实 Chrome 的一整套命令面。
       </p>
 
-      <h2>这不是替代品</h2>
+      <h2>为什么选 chrome-use</h2>
       <p>
-        两个项目回答的问题不同。上游给 agent 一个干净的浏览器；chrome-use 让 agent 用你已登录的那个浏览器，
-        共享你的会话，站点把它读成真人。所以别把 chrome-use 当上游的换壳：命令面、连接方式、默认行为都已分开演进，
-        本站文档只描述 chrome-use，不能反过来套用到 agent-browser 上。
+        上游给 agent 起一个干净的新浏览器；chrome-use 让 agent 用<strong>你正在用、已经登录了一切</strong>的那个真 Chrome。
+        大多数真实任务里，这一步之差正好省掉最痛的三件事：重新登录、被反爬封号、每次连接都弹调试确认框。逐项看：
       </p>
-      <ul>
-        <li>需要给 agent 起一个隔离的全新浏览器实例、且不在意登录态 → 上游 agent-browser 是干净的选择。</li>
-        <li>需要复用真实登录、绕开反爬弹窗、多个 agent 在同一个 Chrome 里并发干活 → 这是 chrome-use 存在的理由。</li>
-      </ul>
+      <div class="cmp-scroll" style="overflow-x:auto; margin:14px 0;">
+      <table>
+        <thead><tr><th></th><th>agent-browser（上游）</th><th>chrome-use</th></tr></thead>
+        <tbody>
+          <tr><th>用哪个浏览器</th><td>为 agent 新起一个浏览器实例</td><td>你正在用、已登录一切的真 Chrome</td></tr>
+          <tr><th>登录</th><td>每个站点重新登录，或自己注入 cookie</td><td>现成复用，SSO / 2FA 天然已过</td></tr>
+          <tr><th>反爬</th><td>默认带自动化特征，容易被识别、被封号</td><td>本来就是真浏览器，CreepJS <strong>0% bot</strong>；<code>--humanize</code> 再过行为检测</td></tr>
+          <tr><th>连接方式</th><td><code>--remote-debugging-port</code>：Chrome 136+ 每次连接弹「Allow remote debugging?」</td><td>扩展 + 原生消息，<strong>零确认弹窗</strong></td></tr>
+          <tr><th>多 agent</th><td>各起各的浏览器实例</td><td>一个真 Chrome 里彩色标签组隔离，互不打架</td></tr>
+          <tr><th>复杂多步流程</th><td>逐条命令</td><td><a href="/script.html">单次成型脚本</a>：一次 tool call 跑完多步、扛硬跳转</td></tr>
+          <tr><th>平台</th><td>—</td><td>单一二进制，macOS / Linux / Windows</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        一句话：需要复用真实登录、绕开反爬和调试弹窗、多个 agent 在同一个 Chrome 里并发干活——这就是 chrome-use 存在的理由。
+        逐项实测（含 token、性能、vs ego-lite）见 <a href="/compare.html">对比其他方案</a>。
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 什么时候用上游就够了</div>
+        如果你要的只是给 agent 起一个隔离的全新浏览器实例、且完全不在意登录态和反爬，上游 agent-browser 是干净的选择。
+        两个项目命令面、连接方式、默认行为都已分开演进，本站文档只描述 chrome-use，不能反过来套用到 agent-browser 上。
+      </div>
       <p>两边独立发版，互不承诺兼容。逐项能力对比见 <a href="/compare.html">对比其他方案</a>。</p>
 
       <h2>锁定版本</h2>

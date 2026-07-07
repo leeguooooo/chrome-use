@@ -91,17 +91,34 @@
         <code>session handoff</code> ownership and human takeover, <a href="/en/script.html">single-pass scripting</a>, and a whole command surface built around real Chrome.
       </p>
 
-      <h2>Not a drop-in replacement</h2>
+      <h2>Why choose chrome-use</h2>
       <p>
-        The two projects answer different questions. Upstream gives the agent a clean browser; chrome-use lets the agent use the browser you're already logged into,
-        sharing your sessions, so sites read it as a real person. So don't treat chrome-use as a re-skin of upstream: the command surface, connection method, and default
-        behavior have evolved apart, and this site documents chrome-use only — it can't be applied back to agent-browser.
+        Upstream spins up a clean new browser for the agent; chrome-use lets the agent use the real Chrome <strong>you're already using, already logged into everything</strong>.
+        In most real tasks that one difference removes the three most painful things: re-logging in, getting banned by anti-bot, and a debug-permission prompt on every connect. Point by point:
       </p>
-      <ul>
-        <li>Need an isolated, brand-new browser instance for the agent and don't care about logins → upstream agent-browser is the clean choice.</li>
-        <li>Need to reuse real logins, dodge anti-bot prompts, run several agents concurrently in one Chrome → that's what chrome-use is for.</li>
-      </ul>
-      <p>The two ship independently and promise no compatibility. Item-by-item comparison on <a href="/en/compare.html">how chrome-use compares</a>.</p>
+      <div class="cmp-scroll" style="overflow-x:auto; margin:14px 0;">
+      <table>
+        <thead><tr><th></th><th>agent-browser (upstream)</th><th>chrome-use</th></tr></thead>
+        <tbody>
+          <tr><th>which browser</th><td>a new instance launched for the agent</td><td>the real Chrome you use, already logged in</td></tr>
+          <tr><th>logins</th><td>re-login per site, or inject cookies yourself</td><td>reused as-is; SSO / 2FA already done</td></tr>
+          <tr><th>anti-bot</th><td>automation signals by default; easy to flag and ban</td><td>it's a real browser: CreepJS <strong>0% bot</strong>; <code>--humanize</code> beats behavioral checks too</td></tr>
+          <tr><th>connection</th><td><code>--remote-debugging-port</code>: Chrome 136+ prompts "Allow remote debugging?" on every connect</td><td>extension + native messaging, <strong>zero prompts</strong></td></tr>
+          <tr><th>multi-agent</th><td>a separate browser instance each</td><td>colored tab-group isolation inside one real Chrome</td></tr>
+          <tr><th>complex flows</th><td>one command at a time</td><td><a href="/en/script.html">single-pass scripting</a>: many steps in one tool call, survives hard navigations</td></tr>
+          <tr><th>platforms</th><td>—</td><td>a single binary — macOS / Linux / Windows</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        In one line: reuse real logins, dodge anti-bot and debug prompts, run several agents concurrently in one Chrome — that's what chrome-use is for.
+        Item-by-item measurements (tokens, performance, vs ego-lite) are on <a href="/en/compare.html">how chrome-use compares</a>.
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ When upstream is enough</div>
+        If all you need is an isolated, brand-new browser instance for the agent and you don't care about logins or anti-bot, upstream agent-browser is the clean choice.
+        The command surface, connection method, and default behavior have evolved apart; this site documents chrome-use only and can't be applied back to agent-browser.
+      </div>
 
       <h2>Pinning a version</h2>
       <p>

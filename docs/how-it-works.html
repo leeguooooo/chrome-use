@@ -54,23 +54,46 @@
 
       <h2>一条命令走过的四站</h2>
       <p>以 <code>chrome-use open https://example.com</code> 为例，完整链路是：</p>
-<pre><code>chrome-use open &lt;url&gt;                    CLI，执行完即退出
-        │  一行 JSON 请求，一行 JSON 响应
-        │  Unix 域套接字 ~/.chrome-use/&lt;session&gt;.sock
-        ▼
-守护进程 (daemon)                         每个 --session 一个，常驻后台
-持有 CDP 连接、@ref 映射、脚本引擎
-        │  标准 CDP over WebSocket
-        │  ws://127.0.0.1:&lt;随机端口&gt;/&lt;随机 guid&gt;
-        ▼
-中继 (chrome-use __nm-host)               Chrome 为扩展拉起的进程
-本地应答 Target.* 发现命令，其余转发
-        │  Chrome 原生消息 (stdio，4 字节长度前缀 + JSON 帧)
-        ▼
-ab-connect 扩展                           MV3，装一次
-        │  chrome.debugger，按标签页附加
-        ▼
-你已登录的真实 Chrome 标签页</code></pre>
+<div style="overflow-x:auto; margin:16px 0;">
+      <svg viewBox="0 0 700 660" role="img" aria-label="chrome-use 四站管线图：CLI 到守护进程到中继到扩展到真实 Chrome" style="width:100%; max-width:680px; height:auto; font-family:'JetBrains Mono', ui-monospace, monospace;">
+        <defs>
+          <marker id="hw-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--ink-faint)"/></marker>
+        </defs>
+        <!-- box 1: CLI -->
+        <rect x="40" y="14" width="620" height="66" rx="10" fill="var(--paper-2)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="64" y="42" fill="var(--ink)" font-size="15" font-weight="700">chrome-use open &lt;url&gt;</text>
+        <text x="64" y="63" fill="var(--ink-faint)" font-size="12">CLI · 执行完即退出</text>
+        <!-- arrow 1→2 -->
+        <text x="350" y="102" fill="var(--ink-faint)" font-size="11.5" text-anchor="middle">Unix 域套接字 ~/.chrome-use/&lt;session&gt;.sock · 一行 JSON 往返</text>
+        <line x1="350" y1="110" x2="350" y2="138" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#hw-arrow)"/>
+        <!-- box 2: daemon -->
+        <rect x="40" y="146" width="620" height="80" rx="10" fill="var(--paper-2)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="64" y="176" fill="var(--ink)" font-size="15" font-weight="700">守护进程 daemon</text>
+        <text x="64" y="197" fill="var(--ink-faint)" font-size="12">每个 --session 一个 · 常驻后台</text>
+        <text x="64" y="215" fill="var(--ink-faint)" font-size="12">持有 CDP 连接 · @ref 映射 · 脚本引擎</text>
+        <!-- arrow 2→3 -->
+        <text x="350" y="250" fill="var(--ink-faint)" font-size="11.5" text-anchor="middle">标准 CDP over WebSocket · ws://127.0.0.1:&lt;port&gt;/&lt;guid&gt;</text>
+        <line x1="350" y1="258" x2="350" y2="286" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#hw-arrow)"/>
+        <!-- box 3: relay -->
+        <rect x="40" y="294" width="620" height="80" rx="10" fill="var(--paper-2)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="64" y="324" fill="var(--ink)" font-size="15" font-weight="700">中继 chrome-use __nm-host</text>
+        <text x="64" y="345" fill="var(--ink-faint)" font-size="12">Chrome 为扩展拉起的进程</text>
+        <text x="64" y="363" fill="var(--ink-faint)" font-size="12">本地应答 Target.* 发现命令 · 其余转发</text>
+        <!-- arrow 3→4 -->
+        <text x="350" y="398" fill="var(--ink-faint)" font-size="11.5" text-anchor="middle">Chrome 原生消息 · stdio（4 字节长度前缀 + JSON 帧）</text>
+        <line x1="350" y1="406" x2="350" y2="434" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#hw-arrow)"/>
+        <!-- box 4: extension -->
+        <rect x="40" y="442" width="620" height="66" rx="10" fill="var(--paper-2)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="64" y="470" fill="var(--ink)" font-size="15" font-weight="700">ab-connect 扩展</text>
+        <text x="64" y="491" fill="var(--ink-faint)" font-size="12">MV3，装一次 · chrome.debugger 按标签页附加</text>
+        <!-- arrow 4→5 -->
+        <line x1="350" y1="516" x2="350" y2="562" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#hw-arrow)"/>
+        <!-- box 5: real chrome -->
+        <rect x="40" y="570" width="620" height="66" rx="10" fill="var(--accent)" fill-opacity="0.10" stroke="var(--accent)" stroke-width="1.8"/>
+        <text x="64" y="598" fill="var(--ink)" font-size="15" font-weight="700">你已登录的真实 Chrome 标签页</text>
+        <text x="64" y="619" fill="var(--ink-faint)" font-size="12">真实 cookie · 真实指纹 · 站点读成真人</text>
+      </svg>
+      </div>
       <p>
         每一段都是标准协议，没有私有魔法：CLI 到守护进程是本机套接字，守护进程到中继是普通 CDP，
         中继到扩展是 Chrome 原生消息，扩展到页面是 <code>chrome.debugger</code>（和 DevTools 同一套）。
