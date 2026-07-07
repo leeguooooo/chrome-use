@@ -52,6 +52,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "text",
     "html",
     "frames",
+    "diagnose",
     "find",
     "wait",
     "scroll",
@@ -1823,6 +1824,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         // frames + out-of-process iframes), with a text-length per frame so you
         // can see where a listing's description actually lives (issue #27).
         "frames" => Ok(json!({ "id": id, "action": "frames" })),
+
+        // `diagnose` — why is this page blank? Fetches each script/stylesheet to
+        // catch 404s + MIME mismatches (a .js served as text/html = wrong base
+        // path), checks the app root mounted, flags console-capture-off (#90.5).
+        "diagnose" => Ok(json!({ "id": id, "action": "diagnose" })),
 
         // Top-level shortcuts for `get <x>` status reads — users naturally type
         // `chrome-use url` / `cdp-url` / `title` without the `get` prefix
