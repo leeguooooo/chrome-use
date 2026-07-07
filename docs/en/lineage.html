@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Lineage &amp; Upstream · chrome-use docs</title>
+  <meta name="description" content="chrome-use started as a fork of vercel-labs/agent-browser (Apache-2.0) and is now a standalone project. Who the upstream is, what diverged after the fork, how to think about the relationship, version pinning, and Apache-2.0 obligations." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="lineage" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 54V30M30 30C30 20 22 16 14 14M30 30c0-8 8-12 16-14M30 22c0-6 4-10 10-12"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Reference</p>
+
+      <div class="du-title-row">
+        <h1>Lineage &amp; Upstream</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        chrome-use started from <a href="https://github.com/vercel-labs/agent-browser" target="_blank" rel="noopener">vercel-labs/agent-browser</a> (Apache-2.0)
+        and is now a standalone project. This page covers who the upstream is, what path each took after the fork, and how to think about the relationship:
+        it's <span class="mark">not a variant of upstream</span> — it's a different product, built to drive your already-logged-in real Chrome.
+      </p>
+
+      <h2>Upstream: vercel-labs/agent-browser</h2>
+      <p>
+        chrome-use's first line of code came from Vercel Labs' agent-browser: a Rust browser-automation CLI for AI agents.
+        The daemon model, the snapshot-plus-<code>@ref</code> interaction paradigm, and the overall Rust CLI skeleton are inherited from it.
+        There'd be no chrome-use without that upstream, and the credit belongs here.
+      </p>
+      <p>The lineage is still visible in the repo:</p>
+      <ul>
+        <li><code>git remote</code>'s <code>upstream</code> still points at <code>vercel-labs/agent-browser</code>;</li>
+        <li>the environment-variable prefix is still <code>AGENT_BROWSER_*</code>;</li>
+        <li>the <code>abs</code> command alias comes from the old repo name agent-browser-stealth;</li>
+        <li>early Release tags carried a <code>-fork.N</code> suffix (like <code>v0.27.0-fork.12</code>); current tags are an independent <code>v1.x.y</code> series.</li>
+      </ul>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ From the README</div>
+        “Originally based on vercel-labs/agent-browser (Apache-2.0); now a standalone project — the stealth/extension-relay
+        architecture, anti-detection, humanize, multi-agent isolation, and CLI have diverged substantially.”
+      </div>
+
+      <h2>What changed after the fork</h2>
+      <p>
+        The core divergence is the connection method. Upstream's classic path launches a browser instance for the agent; chrome-use's default path takes over the real Chrome
+        where you're already logged into everything, and the whole chain was rebuilt for that:
+      </p>
+      <p>
+        <strong>Extension-relay architecture.</strong> The CLI talks to a per-session background daemon over a Unix domain socket; the daemon connects to the ab-connect browser
+        extension over Chrome native messaging; the extension drives target tabs with CDP via <code>chrome.debugger</code>. No <code>--remote-debugging-port</code> anywhere,
+        so it never trips the "Allow remote debugging?" dialog Chrome 136+ pops on every connection. Install is one <code>curl … | sh</code> plus a one-time extension install.
+        The full pipeline is on <a href="/en/how-it-works.html">How It Works</a>.
+      </p>
+      <p>
+        <strong>Anti-detection.</strong> On the extension path to real Chrome, nothing is JS-injected — it is your real browser, and CreepJS reads 0% bot.
+        The <code>--launch</code> path opens a separate stealth Chromium disguised with native CDP- and flag-level overrides, not leak-prone JS patches.
+        See <a href="/en/stealth.html">Stealth &amp; Anti-detection</a> and <a href="/en/real-chrome.html">Real Chrome</a>.
+      </p>
+      <p>
+        <strong>Also brought in:</strong> <code>--humanize</code> behavioral evasion, multi-agent isolation via per-session colored tab groups,
+        <code>session handoff</code> ownership and human takeover, <a href="/en/script.html">single-pass scripting</a>, and a whole command surface built around real Chrome.
+      </p>
+
+      <h2>Not a drop-in replacement</h2>
+      <p>
+        The two projects answer different questions. Upstream gives the agent a clean browser; chrome-use lets the agent use the browser you're already logged into,
+        sharing your sessions, so sites read it as a real person. So don't treat chrome-use as a re-skin of upstream: the command surface, connection method, and default
+        behavior have evolved apart, and this site documents chrome-use only — it can't be applied back to agent-browser.
+      </p>
+      <ul>
+        <li>Need an isolated, brand-new browser instance for the agent and don't care about logins → upstream agent-browser is the clean choice.</li>
+        <li>Need to reuse real logins, dodge anti-bot prompts, run several agents concurrently in one Chrome → that's what chrome-use is for.</li>
+      </ul>
+      <p>The two ship independently and promise no compatibility. Item-by-item comparison on <a href="/en/compare.html">how chrome-use compares</a>.</p>
+
+      <h2>Pinning a version</h2>
+      <p>
+        The default install pulls the latest GitHub Release. For production or CI, pin a specific tag with <code>AGENT_BROWSER_VERSION</code>
+        (the variable name is itself part of the lineage):
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code><span class="du-cmt"># latest</span>
+$ curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+
+<span class="du-cmt"># pin a version</span>
+$ AGENT_BROWSER_VERSION=v1.5.70 \
+    curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">💡 Old tags</div>
+        <code>v0.27.0-fork.12</code>-style tags with a <code>-fork.N</code> suffix in old docs or scripts belong to the early fork series;
+        the same variable pins them too. New projects should just use <code>v1.x.y</code>.
+      </div>
+
+      <h2>License</h2>
+      <p>Upstream agent-browser is Apache-2.0, and chrome-use ships under Apache-2.0 as well; the full text is in <code>LICENSE</code> at the repo root.</p>
+      <p>
+        Apache-2.0 permits free use, modification, and distribution (commercial included), on the condition that you keep the copyright and license notices.
+        chrome-use credits upstream in the README. If you redistribute based on chrome-use, keep the <code>LICENSE</code> and carry forward the attribution chain to vercel-labs/agent-browser.
+      </p>
+
+      <hr class="du-divider" />
+
+      <div class="du-cards">
+        <a class="du-card" href="/en/how-it-works.html">
+          <div class="du-card-title"><span class="du-card-ico">⚙️</span> How It Works</div>
+          <p>The extension-relay chain rebuilt after the fork, hop by hop.</p>
+        </a>
+        <a class="du-card" href="/en/compare.html">
+          <div class="du-card-title"><span class="du-card-ico">⚖️</span> How chrome-use compares</div>
+          <p>chrome-use vs agent-browser, ego-lite, Playwright and more, measured.</p>
+        </a>
+        <a class="du-card" href="https://github.com/vercel-labs/agent-browser" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🌱</span> Upstream repo</div>
+          <p>vercel-labs/agent-browser (Apache-2.0).</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

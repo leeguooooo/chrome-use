@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>血统与上游 · chrome-use 文档</title>
+  <meta name="description" content="chrome-use 起源于 vercel-labs/agent-browser（Apache-2.0），现在是独立项目。上游是谁、分叉之后各自走了哪条路、该怎么理解这层关系，以及版本锁定和 Apache-2.0 许可证义务。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="lineage" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M30 54V30M30 30C30 20 22 16 14 14M30 30c0-8 8-12 16-14M30 22c0-6 4-10 10-12"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">参考 / Reference</p>
+
+      <div class="du-title-row">
+        <h1>血统与上游</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        chrome-use 起源于 <a href="https://github.com/vercel-labs/agent-browser" target="_blank" rel="noopener">vercel-labs/agent-browser</a>（Apache-2.0），
+        现在是独立项目。这一页交代上游是谁、分叉之后各自走了哪条路、以及该怎么理解这层关系：它<span class="mark">不是上游的替代版本</span>，
+        是一个目标不同的产品，专门驱动你已登录的真实 Chrome。
+      </p>
+
+      <h2>上游：vercel-labs/agent-browser</h2>
+      <p>
+        chrome-use 的第一行代码来自 Vercel Labs 的 agent-browser：一个用 Rust 写的、给 AI agent 用的浏览器自动化 CLI。
+        守护进程模型、快照加 <code>@ref</code> 引用的交互范式、Rust CLI 的整体骨架都继承自它。没有这个上游就没有 chrome-use，
+        这份功劳记在这里。
+      </p>
+      <p>仓库里的血统痕迹至今可查：</p>
+      <ul>
+        <li><code>git remote</code> 的 <code>upstream</code> 仍指向 <code>vercel-labs/agent-browser</code>；</li>
+        <li>环境变量前缀沿用 <code>AGENT_BROWSER_*</code>；</li>
+        <li><code>abs</code> 命令别名来自仓库旧名 agent-browser-stealth；</li>
+        <li>早期 Release tag 带 <code>-fork.N</code> 后缀（如 <code>v0.27.0-fork.12</code>），现行 tag 已是独立的 <code>v1.x.y</code> 序列。</li>
+      </ul>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ README 原话</div>
+        “Originally based on vercel-labs/agent-browser (Apache-2.0); now a standalone project — the stealth/extension-relay
+        architecture, anti-detection, humanize, multi-agent isolation, and CLI have diverged substantially.”
+      </div>
+
+      <h2>分叉之后加了什么</h2>
+      <p>
+        分歧的核心是连接方式。上游的经典路径是为 agent 启动一个浏览器实例；chrome-use 的默认路径是接管你已经登录一切的
+        那个真实 Chrome，整条链路为此重造：
+      </p>
+      <p>
+        <strong>扩展中继架构。</strong>CLI 与每个会话的后台守护进程之间走 Unix domain socket；守护进程经 Chrome 原生消息连接
+        ab-connect 浏览器扩展；扩展再用 <code>chrome.debugger</code> 发 CDP 命令驱动目标标签页。全程没有
+        <code>--remote-debugging-port</code>，因此不会触发 Chrome 136+ 每次连接都弹的「Allow remote debugging?」对话框。
+        安装只需一条 <code>curl … | sh</code> 加一次性的扩展安装。整条链路见 <a href="/how-it-works.html">它怎么工作</a>。
+      </p>
+      <p>
+        <strong>反检测。</strong>走扩展连真实 Chrome 时不注入任何 JS 补丁，因为它就是你的真实浏览器，CreepJS 实测 0% bot。
+        <code>--launch</code> 路径另开一个隔离的隐身 Chromium，用 CDP 与启动参数级的原生覆盖做伪装，不靠容易泄漏的 JS 打补丁。
+        详见 <a href="/stealth.html">反检测与隐身</a> 与 <a href="/real-chrome.html">驱动真实 Chrome</a>。
+      </p>
+      <p>
+        <strong>还搬进来的：</strong><code>--humanize</code> 行为级过检测、每会话彩色标签组的多 agent 隔离、
+        <code>session handoff</code> 所有权与人工接管、<a href="/script.html">单次成型脚本</a>、以及围绕真实 Chrome 的一整套命令面。
+      </p>
+
+      <h2>这不是替代品</h2>
+      <p>
+        两个项目回答的问题不同。上游给 agent 一个干净的浏览器；chrome-use 让 agent 用你已登录的那个浏览器，
+        共享你的会话，站点把它读成真人。所以别把 chrome-use 当上游的换壳：命令面、连接方式、默认行为都已分开演进，
+        本站文档只描述 chrome-use，不能反过来套用到 agent-browser 上。
+      </p>
+      <ul>
+        <li>需要给 agent 起一个隔离的全新浏览器实例、且不在意登录态 → 上游 agent-browser 是干净的选择。</li>
+        <li>需要复用真实登录、绕开反爬弹窗、多个 agent 在同一个 Chrome 里并发干活 → 这是 chrome-use 存在的理由。</li>
+      </ul>
+      <p>两边独立发版，互不承诺兼容。逐项能力对比见 <a href="/compare.html">对比其他方案</a>。</p>
+
+      <h2>锁定版本</h2>
+      <p>
+        默认安装拉取最新 GitHub Release。生产环境或 CI 建议用 <code>AGENT_BROWSER_VERSION</code> 锁定具体 tag
+        （这个变量名本身就是血统的一部分）：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code><span class="du-cmt"># 装最新版</span>
+$ curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+
+<span class="du-cmt"># 锁定到指定版本</span>
+$ AGENT_BROWSER_VERSION=v1.5.70 \
+    curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+      </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">💡 老 tag</div>
+        旧文档或旧脚本里出现的 <code>v0.27.0-fork.12</code> 这类带 <code>-fork.N</code> 后缀的 tag 属于分叉早期的版本序列，
+        同一个变量照样能锁定；新项目直接用 <code>v1.x.y</code>。
+      </div>
+
+      <h2>许可证</h2>
+      <p>
+        上游 agent-browser 采用 Apache-2.0，chrome-use 同样以 Apache-2.0 发布，许可证全文见仓库根目录 <code>LICENSE</code>。
+      </p>
+      <p>
+        Apache-2.0 允许自由使用、修改、分发（含商用），条件是保留版权与许可声明。chrome-use 在 README 中署名上游。
+        如果你基于 chrome-use 再分发，需要保留 <code>LICENSE</code>，并延续对 vercel-labs/agent-browser 的署名链。
+      </p>
+
+      <hr class="du-divider" />
+
+      <div class="du-cards">
+        <a class="du-card" href="/how-it-works.html">
+          <div class="du-card-title"><span class="du-card-ico">⚙️</span> 它怎么工作</div>
+          <p>分叉后重造的那条扩展中继链路，一站一站拆开讲。</p>
+        </a>
+        <a class="du-card" href="/compare.html">
+          <div class="du-card-title"><span class="du-card-ico">⚖️</span> 对比其他方案</div>
+          <p>chrome-use vs agent-browser、ego-lite、Playwright 等，逐项实测。</p>
+        </a>
+        <a class="du-card" href="https://github.com/vercel-labs/agent-browser" target="_blank" rel="noopener">
+          <div class="du-card-title"><span class="du-card-ico">🌱</span> 上游仓库</div>
+          <p>vercel-labs/agent-browser（Apache-2.0）。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

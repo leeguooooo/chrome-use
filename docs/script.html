@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>单次成型脚本 · chrome-use 文档</title>
+  <meta name="description" content="chrome-use script：把整个观察→判断→动作→验证流程一次交给守护进程执行，一次 tool call 拿回结构化结果。JSON op-list（值总线 + 循环 + 断言）和同步 JS（cu.* 助手）两种写法，引擎跑在守护进程里，扛得住硬跳转。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="script" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M32 6 L14 34 h14 l-4 20 20-30 h-14 z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">进阶 / Advanced</p>
+
+      <div class="du-title-row">
+        <h1>单次成型脚本</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        逐条命令驱动浏览器时，模型卡在循环里：每走一步都要读结果、想下一步、再发一条命令。
+        <code>chrome-use script</code> 把整个<span class="mark">观察、判断、动作、验证</span>流程一次交给守护进程执行，
+        决策逻辑贴着浏览器跑，一次 tool call 拿回结构化结果。两种写法：<strong>JSON op-list</strong>（可机器生成、可 dry-run）
+        和真正的<strong>同步 JS</strong>（<code>cu.*</code> 助手函数）。实测 HN 翻 3 页采集高分故事，从 13+ 次调用降到 1 次。
+      </p>
+
+      <h2>逐条命令的循环有多贵</h2>
+      <p>
+        chrome-use 的基本用法是一条命令一个动作：<code>snapshot</code> 看页面，<code>click @e8</code> 点按钮，
+        <code>eval</code> 读数据。每条命令都是一次完整往返：进程启动、Unix socket 到守护进程、扩展 relay 到浏览器、
+        结果原路返回，然后 agent 的模型读输出、决定下一步。单步任务这样没问题，代价在多步流程上：翻页采集、
+        按条件重试、拿上一步结果决定下一步，模型被迫留在循环里，<strong>每一步花一次推理，每一步一次 tool call</strong>。
+      </p>
+      <p>
+        固定的动作序列已经有 <code>batch</code> 可以一次往返跑完（<code>press --hold</code> 和 <code>wait</code>
+        在守护进程内阻塞，时序精确），但 batch 的步骤之间不能传值，也没有循环和条件。<code>script</code> 补的就是这一层。
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">🪜 四层阶梯</div>
+        单条 verb（一步一往返）→ <code>batch</code>（固定序列，一次往返）→ <code>script</code>（步骤间传值 +
+        循环 + 条件 + 断言，一次往返）→ <code>stream</code> WebSocket（持续实时驱动）。往下每一层能表达的逻辑更多，
+        往返和 tool call 更少；选到刚好够用的那层就行。
+      </div>
+
+      <h2>JSON op-list 形式</h2>
+      <p>
+        第一种写法是 JSON 语句数组，适合让模型直接生成、让程序拼装。后面的 op 通过 <code>{{name.path}}</code>
+        值总线读前面 op 的结果：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use script - &lt;&lt;'JSON'
+[
+  {"do":"navigate","url":"https://example.com"},
+  {"do":"evaluate","script":"document.title","bind":"t"},
+  {"assert":{"contains":["{{t.result}}","Example"]},"msg":"wrong page"},
+  {"return":"{{t.result}}"}
+]
+JSON</code></pre>
+      </div>
+      <p>语句一共八种（<code>cli/src/native/script.rs</code>）：</p>
+<pre><code>{ "do": "&lt;action&gt;", ...params, "bind"?: "name", "optional"?: bool }   // 跑一个命令，结果存进变量
+{ "waitUntil": &lt;cond&gt;, "timeoutMs"?: n, "pollMs"?: n }                 // 轮询到条件成立
+{ "forEach": "{{list}}", "as"?: "item", "max": n, "body": [ ... ] }   // 循环（max 必填，硬上限）
+{ "assert": &lt;cond&gt;, "msg"?: "..." }                                   // 断言，失败即止损（退出码 1）
+{ "set": "name", "value": &lt;v|"{{expr}}"&gt; }                            // 赋值
+{ "push": "name", "value": &lt;v|"{{expr}}"&gt; }                           // 往数组追加
+{ "return": &lt;v|"{{expr}}"&gt; }                                          // 返回并结束
+{ "log": &lt;v|"...{{expr}}..."&gt; }                                       // 记一行进度</code></pre>
+      <p>
+        条件（<code>&lt;cond&gt;</code>）有 <code>{"eq":[a,b]}</code>、<code>{"ne"}</code>、<code>{"contains"}</code>、
+        <code>{"matches":[a,rx]}</code>、<code>{"exists":"&lt;selector&gt;"}</code>、<code>{"gone"}</code>。
+        <code>{{expr}}</code> 值总线：整串就是 <code>{{x}}</code> 时取到原类型的值（数字还是数字），嵌在文本里
+        <code>...{{x}}...</code> 时做字符串插值；路径带下标，如 <code>rows.0.ref</code>、<code>rows[0].url</code>。
+      </p>
+      <div class="du-callout tip">
+        <div class="du-callout-title">💡 提示</div>
+        <code>evaluate</code> 的返回值裹在 <code>.result</code> 里，所以引用页面求值结果写 <code>{{t.result}}</code> 而不是 <code>{{t}}</code>。
+        用 <code>--dry-run</code> 只校验程序结构、不碰浏览器；用 <code>--arg k=v</code> 预置变量。退出码：0 成功、1 运行失败或断言不过、2 程序非法。
+      </div>
+
+      <h2>JS 程序形式</h2>
+      <p>
+        第二种写法是一段真正的 JavaScript，用 <code>cu.*</code> 助手函数直接驱动你已登录的真 Chrome。
+        这是 ego-lite 的 code base 写法，控制流就是 JS 本身的 <code>for</code> / <code>if</code> / <code>break</code>。
+        <strong>不用 <code>await</code></strong>：每个 <code>cu.*</code> 调用会阻塞到浏览器返回，脚本是同步的。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use script --timeout 120000 &lt;&lt;'JS'
+  cu.open('https://news.ycombinator.com');
+  const out = [];
+  for (let page = 0; page &lt; 3; page++) {
+    const rows = cu.eval("[...document.querySelectorAll('.athing')].map(r=&gt;({id:r.id,title:r.querySelector('.titleline a')?.innerText}))");
+    for (const r of rows) {
+      const pts = cu.eval(`+(document.querySelector('#score_${r.id}')?.innerText.match(/\\d+/)?.[0] ?? 0)`);
+      if (pts &gt;= 100) out.push({ title: r.title, points: pts });
+    }
+    if (!cu.visible('a.morelink')) break;
+    cu.click('a.morelink');       // 整页硬跳转，脚本状态不丢
+    cu.waitFor('.athing', 8000);
+  }
+  return { count: out.length, top: out.slice(0, 5) };
+JS</code></pre>
+      </div>
+      <p>
+        助手函数一览：<code>cu.snapshot</code> / <code>cu.eval</code> / <code>cu.open</code> / <code>cu.click</code> /
+        <code>cu.fill</code> / <code>cu.type</code> / <code>cu.press</code> / <code>cu.hover</code> / <code>cu.select</code> /
+        <code>cu.check</code> / <code>cu.scroll</code> / <code>cu.find</code> / <code>cu.visible</code> / <code>cu.waitFor</code> /
+        <code>cu.wait</code> / <code>cu.extract</code> / <code>cu.text</code> / <code>cu.log</code>。<code>cu.eval</code>
+        直接返回页面里的值；其余失败即抛异常，脚本快速失败。程序的返回值就是命令的返回值，<code>cu.log(...)</code> 收集进度行。
+      </p>
+
+      <h2>引擎跑在守护进程里</h2>
+      <p>ego 也能写一段 JS 跑完整个任务，chrome-use script 反超它的点在<strong>引擎的位置</strong>。</p>
+      <p>
+        <strong>扛得住硬跳转。</strong>注入到页面世界的运行时，页面一跳转整个执行环境就没了，多页流程正好死在翻页那一下。
+        chrome-use 的 JS 引擎跑在守护进程里、页面外面：上面例子里 <code>cu.click('a.morelink')</code> 触发整页导航，
+        脚本状态（<code>out</code> 数组、循环计数）原地不动，等 <code>cu.waitFor</code> 确认新页加载完继续跑。
+      </p>
+      <p>
+        <strong>纯 Rust 引擎，全平台。</strong>JS 引擎是 boa，纯 Rust 实现，编译进 chrome-use 二进制本体，
+        不依赖 Node 也不依赖系统 V8。macOS / Linux / Windows 都能跑；ego 只有 macOS。
+      </p>
+      <p>
+        <strong>每个 op 走同一条正门。</strong>script 的每一步（两种形式都是）重新进入守护进程的
+        <code>execute_command</code>，和你手敲单条命令走完全相同的路径：策略检查、隐身传输、<code>--humanize</code>、
+        <code>@ref</code> 自愈、跨进程会话恢复。没有任何东西被重新实现，所以脚本里的行为和命令行里一模一样。
+        整条链路怎么走见 <a href="/how-it-works.html">它怎么工作</a>。
+      </p>
+
+      <h2>实测：HN 翻 3 页</h2>
+      <p>
+        基准任务：Hacker News 翻 3 页，收集所有 ≥100 分的故事，输出 JSON。上一节的 JS 程序就是完整题解，
+        已在真 Chrome 上跑通（3 页、34 条、约 4.8 秒）。
+      </p>
+      <div class="cmp-scroll" style="overflow-x:auto; margin:14px 0;">
+      <table>
+        <thead><tr><th></th><th>逐条 verb</th><th>chrome-use script</th></tr></thead>
+        <tbody>
+          <tr><th>tool call 次数</th><td>13+</td><td><strong>1</strong></td></tr>
+          <tr><th>模型推理次数</th><td>每步一次，翻页、逐条判分都要回模型</td><td>2 次：写程序 + 读结果</td></tr>
+          <tr><th>中间输出</th><td>每步的 snapshot / eval 结果都进上下文</td><td>只有 <code>return</code> 的最终 JSON</td></tr>
+          <tr><th>翻页（硬跳转）</th><td>天然没问题（每步独立）</td><td>没问题，引擎在守护进程里</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        「≥100 分」这类判断在脚本里用一行 <code>if</code> 解决，旧写法里每条故事都要把分数带回模型判一次。
+        步数越多、判断越密，差距越大。全景对比和 ego-lite 逐项实测见 <a href="/compare.html">对比其他方案</a>。
+      </p>
+
+      <h2>该用哪一层</h2>
+      <p>script 不取代单条命令，它是多步流程的上层。选择标准：</p>
+      <ul>
+        <li><strong>一两步的任务</strong>：单条 verb 就好，加 <a href="/waiting.html"><code>expect</code></a> 或 <code>--observe</code> 收尾验证。</li>
+        <li><strong>固定序列、步骤间不传值</strong>：<code>batch</code>，时序精确、开销最小。</li>
+        <li><strong>要用上一步的结果、要循环或条件、要断言中途止损</strong>：<code>script</code>。模型来生成程序就用 JSON 形式（可 <code>--dry-run</code> 预验）；人写或逻辑复杂就用 JS 形式。</li>
+        <li><strong>持续实时驱动</strong>（游戏、逐帧交互）：<code>stream</code> WebSocket，见 <a href="/canvas.html">Canvas / WebGL</a>。</li>
+      </ul>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 先看这些</div>
+        纯抓数据的任务先看 <a href="/extract.html"><code>extract --schema</code></a>（一次调用把页面结构化成 JSON）；
+        要在多页之间累积、按条件筛选，再用 <code>script</code> 把 extract 包进循环。
+      </div>
+
+      <hr class="du-divider" />
+
+      <div class="du-cards">
+        <a class="du-card" href="/how-it-works.html">
+          <div class="du-card-title"><span class="du-card-ico">⚙️</span> 它怎么工作</div>
+          <p>守护进程、relay、boa 引擎跑在哪一站；script 扛硬跳转的原因就在这条链路上。</p>
+        </a>
+        <a class="du-card" href="/compare.html">
+          <div class="du-card-title"><span class="du-card-ico">⚖️</span> 对比其他方案</div>
+          <p>chrome-use script vs ego-lite 的 code base 写法，逐项实测。</p>
+        </a>
+        <a class="du-card" href="/waiting.html">
+          <div class="du-card-title"><span class="du-card-ico">⏳</span> 等待与断言</div>
+          <p><code>expect</code> / <code>--observe</code>：单条命令的收尾验证，script 里对应 <code>assert</code> / <code>waitUntil</code>。</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

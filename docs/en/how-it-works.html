@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>How It Works · chrome-use docs</title>
+  <meta name="description" content="One chrome-use command crosses four processes before it touches the page: the CLI, a per-session daemon, a relay Chrome launches for the extension, and the ab-connect extension. Each hop, its protocol, where state lives, and why an extension instead of a debug port." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="how-it-works" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="30" cy="30" r="10"/><path d="M30 4v8M30 48v8M4 30h8M48 30h8M11 11l6 6M43 43l6 6M49 11l-6 6M17 43l-6 6"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Getting Started</p>
+
+      <div class="du-title-row">
+        <h1>How It Works</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        One chrome-use command leaves the terminal and crosses <span class="mark">four processes</span> before it touches a page: the CLI itself, a per-session daemon,
+        a relay process Chrome launches for the extension, and the ab-connect extension inside the browser. This page takes the chain apart: which process each hop lives in,
+        what protocol it speaks, and who holds the state. By the end you can explain what the <code>relay-cdp-url</code> file is, why an <code>@ref</code> goes stale,
+        and why it's an extension rather than a debug port.
+      </p>
+
+      <h2>The four hops of one command</h2>
+      <p>Take <code>chrome-use open https://example.com</code>. The full chain:</p>
+<pre><code>chrome-use open &lt;url&gt;                    the CLI, exits when done
+        │  one JSON request line, one JSON response line
+        │  Unix domain socket ~/.chrome-use/&lt;session&gt;.sock
+        ▼
+daemon                                   one per --session, stays resident
+holds the CDP connection, @ref map, script engine
+        │  standard CDP over WebSocket
+        │  ws://127.0.0.1:&lt;random port&gt;/&lt;random guid&gt;
+        ▼
+relay (chrome-use __nm-host)             a process Chrome launches for the extension
+answers Target.* discovery locally, forwards the rest
+        │  Chrome native messaging (stdio, 4-byte length prefix + JSON frame)
+        ▼
+ab-connect extension                     MV3, installed once
+        │  chrome.debugger, attached per tab
+        ▼
+your already-logged-in real Chrome tab</code></pre>
+      <p>
+        Every hop is a standard protocol, no private magic: CLI to daemon is a local socket, daemon to relay is plain CDP,
+        relay to extension is Chrome native messaging, extension to page is <code>chrome.debugger</code> (the same one DevTools uses).
+      </p>
+
+      <h2>The CLI is thin; state lives in the daemon</h2>
+      <p>
+        In CLI mode the <code>chrome-use</code> binary holds no browser state. It serializes the command to one JSON line, writes it to a Unix domain socket,
+        reads one JSON line back, prints it, and exits. The socket path is <code>~/.chrome-use/&lt;session&gt;.sock</code>
+        (with <code>XDG_RUNTIME_DIR</code> set it uses <code>$XDG_RUNTIME_DIR/chrome-use/</code>, see <code>get_daemon_socket_dir</code> in <code>cli/src/native/daemon.rs</code>).
+        Windows has no Unix sockets, so it uses a TCP port on 127.0.0.1 hashed from the session name.
+      </p>
+      <p>
+        The first command to a session finds no socket, so the CLI forks the daemon and retries. Beside the daemon sit a few sidecar files:
+        <code>&lt;session&gt;.pid</code>, <code>&lt;session&gt;.version</code>, <code>&lt;session&gt;.stream</code> (the real-time stream server's port).
+      </p>
+      <p>The daemon holds three things across commands:</p>
+      <ol>
+        <li>the CDP connection to the browser (<code>CdpClient</code>)</li>
+        <li>the @ref → DOM-node map (<code>RefMap</code>, see the snapshot section below)</li>
+        <li>the JS engine for <code>chrome-use script</code> (boa, pure Rust). It runs in the daemon, not the page, so script state survives a hard navigation — see <a href="/en/script.html">Single-pass Scripting</a>.</li>
+      </ol>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Why the daemon stays resident</div>
+        The CDP connection and @ref map are built once and reused, saving a reconnect and re-snapshot per command. This is also the base that lets
+        <code>batch</code> and <code>script</code> "run many steps in one round-trip." The daemon exits after ~10 minutes idle, cleaning up the tabs it opened.
+      </div>
+
+      <h2>The relay is a process Chrome launches</h2>
+      <p>The third hop is the confusing one: you don't start the relay — Chrome does.</p>
+      <p>
+        At install time, <code>chrome-use extension install</code> writes a manifest into Chrome's native-messaging host directory
+        (host name <code>com.leeguoo.chrome_use</code>, compatible with the old <code>com.agent_browser.connect</code>) that registers the chrome-use binary's path and the extension ids allowed to talk to it.
+        When the ab-connect extension calls <code>connectNative</code>, Chrome launches chrome-use in a hidden <code>__nm-host</code> mode (<code>run_nm_host</code> in <code>cli/src/connect.rs</code>),
+        and the two speak the native-messaging protocol over stdio: a 4-byte little-endian length prefix plus one JSON frame.
+      </p>
+      <p>This nm-host process does two things:</p>
+      <ol>
+        <li>binds a random port on 127.0.0.1, opens a WebSocket endpoint <code>ws://127.0.0.1:&lt;port&gt;/&lt;guid&gt;</code>, and writes the URL into <code>~/.chrome-use/relay-cdp-url</code> at mode 0600. The guid is unguessable and the file is readable only by the current user, so no other local process gets the entry point. The daemon reads this file and connects to it as if it were an ordinary Chrome CDP endpoint.</li>
+        <li>translates between the extension protocol and standard CDP, answering discovery commands like <code>Target.getTargets</code> locally instead of round-tripping to the extension every time (<code>cli/src/native/relay.rs</code>).</li>
+      </ol>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Debug anchors</div>
+        A missing <code>~/.chrome-use/relay-cdp-url</code> usually means the relay never came up (the extension didn't connect);
+        <code>stdin EOF</code> in <code>nm-host.log</code> usually means Chrome reclaimed the MV3 background worker. Details on <a href="/en/troubleshooting.html">Troubleshooting</a>.
+      </div>
+
+      <h2>The extension does one thing</h2>
+      <p>
+        ab-connect is an MV3 extension whose core job is to run CDP commands per tab via <code>chrome.debugger</code> and hand results back to the relay over native messaging.
+        Its permission footprint is 7 items, with no <code>&lt;all_urls&gt;</code>. Two properties that matter for fingerprinting:
+      </p>
+      <ol>
+        <li>it <strong>attaches only to the agent's own tabs</strong>. The page you're looking at is never attached, so you never see the "chrome-use has started debugging this browser" banner (since extension 0.5.5, it attaches only agent-owned tabs).</li>
+        <li>this path <strong>injects no JS patches</strong>. The page sees your real Chrome, real cookies, real fingerprint, so CreepJS reads 0% bot. The anti-detection isn't disguise; there's simply nothing to disguise (see <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>).</li>
+      </ol>
+      <p>In other words, the extension is the only process in the chain that touches the page, and it touches it with the same protocol as DevTools.</p>
+
+      <h2>Why an extension, not --remote-debugging-port</h2>
+      <p>
+        The classic way to drive a real Chrome is <code>--remote-debugging-port=9222</code> and a direct CDP connection. Chrome 136 broke half of that:
+        every time a client connects, Chrome pops a blocking "Allow remote debugging?" dialog. One click per connection means no automation.
+        The port also has to be opened before Chrome starts, which asks the user to launch their daily browser a different way.
+      </p>
+      <p>
+        Native messaging avoids this because the trust runs the other way: an outside process doesn't knock on Chrome's port — Chrome launches and authenticates the host
+        by the extension id registered in the host manifest. You click "Add to Chrome" once, then zero confirmations forever. Local safety rests on two things:
+        only extensions listed in the manifest can start the host; and the relay's WebSocket URL carries an unguessable guid written to a 0600 file.
+      </p>
+
+      <h2>Two modes</h2>
+      <p>The four-hop chain above is the default mode: connect to your real, logged-in Chrome. There's a second path, <code>--launch</code>:</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code><span class="du-cmt"># default: extension relay, your real Chrome</span>
+$ chrome-use open https://example.com
+<span class="du-cmt"># launch a separate isolated stealth Chromium</span>
+$ chrome-use --launch open https://example.com</code></pre>
+      </div>
+      <div class="cmp-scroll" style="overflow-x:auto; margin:14px 0;">
+      <table>
+        <thead><tr><th></th><th>extension relay (default)</th><th><code>--launch</code></th></tr></thead>
+        <tbody>
+          <tr><th>browser</th><td>the Chrome you're already using</td><td>a separate Chromium the daemon launches</td></tr>
+          <tr><th>logins</th><td>all already there</td><td>an empty temp profile (<code>--profile</code> for a persistent one)</td></tr>
+          <tr><th>chain</th><td>daemon → relay → extension → chrome.debugger</td><td>daemon connects CDP directly, no relay or extension</td></tr>
+          <tr><th>anti-detection</th><td>not needed: it's a real browser, zero injection</td><td>native overrides (UA, timezone, webdriver, etc., see <code>stealth.rs</code>), no JS patches</td></tr>
+          <tr><th>fits</th><td>need logins, need to beat anti-bot, user takes over anytime</td><td>clean-environment testing, parallel one-off tasks</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Both modes share the same daemon architecture and the same commands; the only difference is who the daemon connects to.</p>
+
+      <h2>One colored tab group per --session</h2>
+      <p>When several agents share one real Chrome, isolation is by tab group:</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code>$ chrome-use --session research open https://a.com   <span class="du-cmt"># research group</span>
+$ chrome-use --session shopping open https://b.com   <span class="du-cmt"># shopping group, mutually invisible</span></code></pre>
+      </div>
+      <p>
+        When the daemon starts it records the session name in <code>DAEMON_SESSION</code>, and every tab it opens lands in that session's own colored Chrome tab group.
+        Isolation is enforced at the relay layer (<code>client_groups</code> in <code>relay.rs</code>): after connecting, the daemon declares its group, and from then on its
+        <code>Target.getTargets</code> returns only tabs in that group. It can't see your tabs or other agents' tabs, so it can't click them either.
+      </p>
+      <p>
+        Ownership rules cover the details: a new tab is tagged with its creator's group; a pop-up inherits the opener's group, so cross-process jumps (an OAuth pop-up) don't get lost;
+        <code>chrome-use adopt</code> is the only cross-group channel — after adoption that one tab is re-tagged into the adopter's group, the rest stay invisible. Session details on <a href="/en/sessions.html">Sessions &amp; Persistence</a>.
+      </p>
+
+      <h2>Where snapshot and @ref come from</h2>
+      <p>
+        The text tree that <code>chrome-use snapshot -i</code> prints isn't HTML — it's the accessibility tree. The daemon pulls the full AX tree via CDP's
+        <code>Accessibility.getFullAXTree</code> (<code>cli/src/native/snapshot.rs</code>), filters for interactive roles like button, link, textbox, and renders indented text:
+      </p>
+<pre><code>button "Submit" [ref=e12]
+textbox "Email" [ref=e13]</code></pre>
+      <p>
+        Each <code>[ref=eN]</code> is a number the daemon assigns while building the snapshot, backed by the <code>RefMap</code> (<code>cli/src/native/element.rs</code>):
+        a ref maps to CDP's <code>backend_node_id</code>, the stable handle for that DOM node in the browser process. On <code>chrome-use click @e12</code>,
+        the daemon looks up the node id and acts on the node directly — no CSS selector, no coordinates. Two usage rules follow:
+      </p>
+      <ol>
+        <li>a ref is daemon memory state. After the daemon restarts (e.g. an idle exit) all old refs are void; just <code>snapshot</code> again.</li>
+        <li>after a big page change a ref may point at a node that's gone. The <code>RefMap</code> stores each ref's role, name, and other fingerprints, and <code>--heal</code> relocates the ref to the closest node. Locating details on <a href="/en/finding.html">Finding Elements</a>.</li>
+      </ol>
+
+      <h2>Lineage</h2>
+      <p>
+        chrome-use is originally based on vercel-labs/agent-browser (Apache-2.0). The CLI skeleton and some command semantics come from upstream, but the stealth and
+        extension-relay architecture, anti-detection, humanize, multi-agent isolation, and the whole nm-host chain on this page grew here. It's a standalone project now.
+        The full fork story is on <a href="/en/lineage.html">Lineage &amp; Upstream</a>.
+      </p>
+      <div class="du-callout tip">
+        <div class="du-callout-title">🔧 See it yourself</div>
+        <code>AGENT_BROWSER_DEBUG=1</code> makes the daemon log to <code>~/.chrome-use/&lt;session&gt;.log</code>;
+        <code>cat ~/.chrome-use/relay-cdp-url</code> shows the relay's live endpoint; <code>chrome-use doctor</code> reports the health of every hop.
+        Troubleshooting on <a href="/en/troubleshooting.html">Troubleshooting</a>, extension install on <a href="/en/real-chrome.html">Real Chrome</a>, anti-detection data on <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>.
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
