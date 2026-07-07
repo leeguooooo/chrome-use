@@ -382,7 +382,16 @@ fn run_install(args: &[String], json: bool) {
         run_install_windows(json, &host_paths);
     }
     #[cfg(not(target_os = "windows"))]
-    run_install_unix(args, json, host_paths);
+    {
+        run_install_unix(args, json, host_paths);
+        // With a real terminal (install.sh wires /dev/tty in), ask once whether
+        // chrome-use may auto-restart Chrome to remove the debugging banner and
+        // remember the answer for later agent-driven connects (#banner). No-op
+        // in --json / piped / CI installs.
+        if !json {
+            crate::silence::offer_install_time_consent();
+        }
+    }
 }
 
 /// Windows `extension install`: the native-messaging host is registered in the

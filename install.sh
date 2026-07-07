@@ -99,6 +99,19 @@ mv "$tmp/${BIN_NAME}" "$bindir/${BIN_NAME}"
 info "installed -> ${bindir}/${BIN_NAME}"
 "$bindir/${BIN_NAME}" --version 2>/dev/null || true
 
+# --- guided setup: install the Chrome extension + banner preference -----------
+# When a real terminal is available (works even under `curl … | sh`, whose stdin
+# is the piped script — we borrow /dev/tty), run the guided native-host +
+# extension install and ask once whether chrome-use may auto-restart Chrome to
+# remove the "started debugging this browser" banner. Non-fatal: a declined or
+# failed setup never breaks the binary install. Skip with AGENT_BROWSER_NO_SETUP=1.
+if [ -e /dev/tty ] && [ -z "${AGENT_BROWSER_NO_SETUP:-}" ]; then
+  info "setting up the Chrome extension + debugging-banner preference..."
+  "$bindir/${BIN_NAME}" extension install < /dev/tty > /dev/tty 2>&1 || true
+else
+  info "skipped extension setup (no terminal). Run \`${BIN_NAME} extension install\` later."
+fi
+
 case ":$PATH:" in
   *":$bindir:"*) : ;;
   *) printf '\033[33mnote:\033[0m %s is not on your PATH. Add:\n  export PATH="%s:$PATH"\n' "$bindir" "$bindir" >&2 ;;
