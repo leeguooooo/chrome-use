@@ -175,6 +175,20 @@
         </div>
       </div>
 
+      <h2>Which to pick</h2>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>Your situation</th><th>Pick</th></tr></thead>
+        <tbody>
+          <tr class="me"><th>Use your real logged-in accounts, install no new browser, beat anti-bot</th><td class="cmp-win">chrome-use</td></tr>
+          <tr><th>Willing to switch to an agent-native browser, want the cleanest isolation</th><td>ego-lite</td></tr>
+          <tr><th>Write classic automation scripts, cross-language, run in CI</th><td>Playwright / Puppeteer</td></tr>
+          <tr><th>Stateless large-scale cloud scraping</th><td>Browserbase / Steel</td></tr>
+          <tr><th>Just an end user who wants the browser to help</th><td>ChatGPT Atlas / Comet</td></tr>
+        </tbody>
+      </table>
+      </div>
+
       <h2>The closest rival: chrome-use vs ego-lite (measured)</h2>
       <p>
         ego-lite is positioned closest to us (both "use real logins, don't fight for the user's tabs"), and its README <strong>names agent-browser directly</strong>.
@@ -260,6 +274,22 @@
       </table>
       </div>
 
+
+      <h3>Where we're ahead: single-pass scripting (chrome-use script)</h3>
+      <p>
+        ego's core pitch is “code base, not CLI base”: write one JS program that runs the whole task in one pass.
+        This one is <span class="cmp-win">shipped and ahead</span>: <code>chrome-use script</code> runs a real JS program
+        (ego's exact idiom) driving the page via <code>cu.snapshot/eval/click/fill/find/waitFor/extract</code>, with control
+        flow, returning structured results in one round-trip; a JSON op-list form is also available (dry-runnable, machine-generatable).
+      </p>
+      <p>
+        The decisive edge is where the engine lives: in the <strong>daemon, not the page</strong>, so it
+        <strong>survives hard navigations</strong> — the multi-page flows that are exactly where ego wins and a page-world
+        runtime breaks. Measured: crawl 3 HN pages collecting every ≥100-point story = <strong>one tool call</strong>
+        (the old per-verb way needs 13+), on your <strong>already-logged-in real Chrome</strong> over the stealth transport,
+        <strong>cross-platform</strong> (ego is macOS-only).
+      </p>
+
       <h3>What we learned from ego-lite &amp; ported</h3>
       <p>After trialing each item, we ported the real gaps the chrome-use way (progress in <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>):</p>
       <ul>
@@ -268,22 +298,7 @@
         <li><strong>Login inheritance / isolated contexts / reuse-by-name / token economy</strong> — <span class="cmp-win">already covered</span> (relay carries logins, per-session tab groups, <code>session list</code>, <code>--session-name</code>, leaner tokens).</li>
         <li><strong>Locating</strong> — <span class="cmp-win">covered · parity</span>: <code>@ref</code> (backendNodeId-stable across calls) + CSS + XPath + coordinates + semantic <code>find role button --name</code> + <code>box</code> geometry + <code>-s</code> scoping, matching ego's <code>loc=</code> / <code>@N</code>.</li>
         <li><strong>Groups</strong> — <span class="cmp-win">covered · parity</span>: each <code>--session</code> maps to a colored Chrome tab group, group-scoped isolation (<a href="https://github.com/leeguooooo/chrome-use/issues/40">#40</a>), agents never cross tabs, a session owns only the tabs it created — equivalent to ego's Task Space, except it happens in your real Chrome instead of a separate browser.</li>
-        <li><strong>Single-pass complex scripting</strong> (ego's “code base, not CLI base” edge) — <span class="cmp-win">shipped, ahead</span>: <code>chrome-use script</code> runs a real JS program (ego's exact idiom) that drives the page via <code>cu.snapshot/eval/click/fill/find/waitFor/extract</code>, with control flow, returning structured results in one round-trip. <strong>The decisive edge</strong>: the JS engine lives in the <strong>daemon, not the page</strong>, so it <strong>survives hard navigations</strong> — the multi-page flows that are exactly where ego wins and a page-world runtime breaks. Measured: crawl 3 HN pages collecting every ≥100-point story = <strong>one tool call</strong> (the old per-verb way needs 13+), on your <strong>already-logged-in real Chrome</strong> over the stealth transport, <strong>cross-platform</strong> (ego is macOS-only). A JSON op-list form is also available (dry-runnable, machine-generatable).</li>
       </ul>
-
-      <h2>Which to pick</h2>
-      <div class="cmp-scroll">
-      <table class="cmp-table">
-        <thead><tr><th>Your situation</th><th>Pick</th></tr></thead>
-        <tbody>
-          <tr class="me"><th>Use your real logged-in accounts, install no new browser, beat anti-bot</th><td class="cmp-win">chrome-use</td></tr>
-          <tr><th>Willing to switch to an agent-native browser, want the cleanest isolation</th><td>ego-lite</td></tr>
-          <tr><th>Write classic automation scripts, cross-language, run in CI</th><td>Playwright / Puppeteer</td></tr>
-          <tr><th>Stateless large-scale cloud scraping</th><td>Browserbase / Steel</td></tr>
-          <tr><th>Just an end user who wants the browser to help</th><td>ChatGPT Atlas / Comet</td></tr>
-        </tbody>
-      </table>
-      </div>
 
       <h2>The comparison workflow</h2>
       <p>This page is a living document. For every tool we evaluate, the same loop keeps the comparison honest and reproducible:</p>
