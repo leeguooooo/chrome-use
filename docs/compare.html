@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>对比其他方案 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 与整个 AI 浏览器 / 自动化格局的对比：ego-lite、Playwright、Puppeteer、Selenium、browser-use、Stagehand、Browserbase、消费级 agent 浏览器。全景矩阵 + 最接近对手的实测（token、性能）+ 选型指南 + 持续对比的 workflow。" />
+  <meta name="description" content="chrome-use 与整个 AI 浏览器 / 自动化格局的对比：ego-lite、browser-relay、Playwright、Puppeteer、Selenium、browser-use、Stagehand、Browserbase、消费级 agent 浏览器。全景矩阵 + 最接近对手的实测（token、性能）+ 选型指南 + 持续对比的 workflow。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -98,6 +98,15 @@
             <td>MIT</td>
           </tr>
           <tr>
+            <th>browser-relay</th>
+            <td class="cmp-win">扩展 + 本地 relay 驱动你现有的 Chrome</td>
+            <td>npm 全局 + 加载解压扩展（开发者模式）</td>
+            <td class="cmp-win">你真 Chrome 的登录</td>
+            <td>CLI / MCP / HTTP</td>
+            <td class="cmp-mut">非重点</td>
+            <td>MIT</td>
+          </tr>
+          <tr>
             <th>browser-use</th>
             <td>Python 框架（底层 CDP，cdp-use）</td>
             <td>框架 + 受控浏览器</td>
@@ -154,8 +163,8 @@
       <div class="cmp-cat">
         <div class="du-card">
           <h3>🌐 驱动你的真浏览器</h3>
-          <p class="tools">chrome-use · ego-lite</p>
-          <p>用你已登录的会话，不必重新登录。chrome-use 用<strong>你现有的</strong> Chrome（不装新浏览器）；ego-lite 让你<strong>换成它的</strong>浏览器（结构性隔离）。</p>
+          <p class="tools">chrome-use · ego-lite · browser-relay</p>
+          <p>用你已登录的会话，不必重新登录。chrome-use 和 browser-relay 都用<strong>你现有的</strong> Chrome（扩展 + relay）；ego-lite 让你<strong>换成它的</strong>浏览器（结构性隔离）。chrome-use 与 browser-relay 的逐项对比见下。</p>
         </div>
         <div class="du-card">
           <h3>🧰 自动化框架</h3>
@@ -181,6 +190,7 @@
         <tbody>
           <tr class="me"><th>要用你已登录的真账号、不想装新浏览器、要过反爬</th><td class="cmp-win">chrome-use</td></tr>
           <tr><th>愿意换一个专为 agent 做的新浏览器、要最干净的隔离</th><td>ego-lite</td></tr>
+          <tr><th>也要用真登录的 Chrome，但需要从<strong>另一台机器</strong>远程驱动</th><td>browser-relay（跨机远程）</td></tr>
           <tr><th>写传统自动化脚本、跨语言、CI 里跑</th><td>Playwright / Puppeteer</td></tr>
           <tr><th>无状态大规模云抓取</th><td>Browserbase / Steel</td></tr>
           <tr><th>只是终端用户想让浏览器帮点忙</th><td>ChatGPT Atlas / Comet</td></tr>
@@ -296,6 +306,32 @@
         <li><strong>定位（locating）</strong>（<span class="cmp-win">持平</span>）：<code>@ref</code>（backendNodeId 跨调用稳定）+ CSS + XPath + 坐标 + 语义 <code>find role button --name</code> + <code>box</code> 几何 + <code>-s</code> 作用域，对齐 ego 的 <code>loc=</code> / <code>@N</code>。</li>
         <li><strong>群组（groups）</strong>（<span class="cmp-win">持平</span>）：每个 <code>--session</code> 一个彩色 Chrome 标签组、group-scoped 隔离（<a href="https://github.com/leeguooooo/chrome-use/issues/40">#40</a>）、多 agent 互不串、只拥有自己建的标签。等价 ego 的 Task Space，只是发生在你的真 Chrome 里，不用换浏览器。</li>
       </ul>
+
+      <h2>另一个近亲：browser-relay</h2>
+      <p>
+        <a href="https://github.com/reliefeai/browser-relay" target="_blank" rel="noopener">browser-relay</a>（<code>@linsoai/browser-relay</code>，MIT）架构上和我们几乎是同一个思路：
+        <strong>扩展 + 本地 relay 驱动你真实已登录的 Chrome</strong>，走 <code>chrome.debugger</code> / CDP，本地绑 <code>127.0.0.1</code>，
+        提供 CLI + MCP + HTTP，快照带交互元素标注，不开新浏览器、不用一次性 profile。核心理念持平。差异在这几处：
+      </p>
+      <div class="cmp-scroll" style="overflow-x:auto; margin:14px 0;">
+      <table>
+        <thead><tr><th>维度</th><th>browser-relay</th><th>chrome-use</th></tr></thead>
+        <tbody>
+          <tr class="me"><th>跨机远程</th><td class="cmp-win">Remote Relay：浏览器往外连公共/自建（Cloudflare）relay，Device ID 鉴权，从另一台机器驱动</td><td>纯本地（127.0.0.1 relay + WebSocket 流）</td></tr>
+          <tr class="me"><th>安装</th><td>npm 全局 + <strong>开发者模式加载解压扩展</strong>（不走商店，不自动更新）</td><td class="cmp-win">一条 <code>curl … | sh</code> + <strong>Web Store 一键</strong>「添加至 Chrome」</td></tr>
+          <tr class="me"><th>调试横幅</th><td>会显示；靠 10 分钟空闲自动解绑缓解，或用 <code>--silent-debugger-extension-api</code> 启动（削弱<em>所有</em> debugger 扩展的安全防护）</td><td class="cmp-win">只 attach agent 自己的标签，<strong>你的标签永不弹横幅</strong>，无安全折衷</td></tr>
+          <tr class="me"><th>隐身 / 反检测</th><td>非重点</td><td class="cmp-win">核心能力：CreepJS 0% bot、<code>--humanize</code> 过行为检测、<code>--launch</code> 原生覆盖</td></tr>
+          <tr class="me"><th>多 agent</th><td>按 <code>--tab</code> id 定位，无会话隔离模型</td><td class="cmp-win">每 <code>--session</code> 一个彩色标签组，多 agent 互不串</td></tr>
+          <tr class="me"><th>复杂多步</th><td>逐条 verb + <code>eval</code> + stdin</td><td class="cmp-win"><a href="/script.html">单次成型脚本</a>：值总线 + 循环 + 断言，一次往返</td></tr>
+          <tr class="me"><th>定位</th><td>CSS 选择器 + 快照标注</td><td class="cmp-win">AX 树 <code>@ref</code>（backendNodeId 稳定）+ 语义 <code>find role/name</code> + <code>--heal</code></td></tr>
+          <tr class="me"><th>运行时</th><td>Node（npm 包 + launchd/systemd 服务）</td><td class="cmp-win">单一 Rust 二进制，无需 Node，macOS/Linux/Windows</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 诚实结论</div>
+        browser-relay 在<strong>跨机远程控制</strong>上确实领先（我们目前是纯本地）。其余维度——一键商店安装、无调试横幅、隐身/humanize、多 agent 隔离、单次成型脚本、AX 树定位、无 Node 单二进制——是 chrome-use 更强。两者血统不同：browser-relay 源自 openclaw-browser-relay，chrome-use 源自 <a href="/lineage.html">vercel-labs/agent-browser</a>。
+      </div>
 
       <h2>对比 workflow</h2>
       <p>这一页是活文档。每评估一个方案，走同一套流程，保证对比诚实、可复现：</p>
