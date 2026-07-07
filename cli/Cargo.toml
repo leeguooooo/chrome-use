@@ -18,6 +18,11 @@ path = "src/main.rs"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex-lite = "0.1"
+# Pure-Rust JS engine for `chrome-use script <<'JS'` (single-pass scripting).
+# Chosen over rquickjs specifically to keep zero C toolchain in cross-builds
+# (Windows-msvc / aarch64 / zigbuild) — preserving the single-binary, any-platform
+# moat that ego lite (macOS-only) can't match.
+boa_engine = "0.20"
 dirs = "5.0"
 include_dir = "0.7"
 base64 = "0.22"

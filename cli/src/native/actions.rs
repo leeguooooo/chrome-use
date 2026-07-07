@@ -1465,6 +1465,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "content" => handle_content(state).await,
             "evaluate" => handle_evaluate(cmd, state).await,
             "site" => handle_site(cmd, state).await,
+            "script" => super::script::handle_script(cmd, state).await,
             "close" => handle_close(state).await,
             "keep" => handle_keep(state).await,
             "stealth_status" => handle_stealth_status(state).await,
