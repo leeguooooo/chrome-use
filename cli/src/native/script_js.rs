@@ -140,7 +140,11 @@ fn cu_native(
     let action = arg_str(0);
     let params_str = {
         let s = arg_str(1);
-        if s.is_empty() { "{}".to_string() } else { s }
+        if s.is_empty() {
+            "{}".to_string()
+        } else {
+            s
+        }
     };
     let mut cmd: Value = serde_json::from_str(&params_str).unwrap_or_else(|_| json!({}));
     if let Some(obj) = cmd.as_object_mut() {
@@ -150,9 +154,12 @@ fn cu_native(
 
     let (reply_tx, reply_rx) = stdmpsc::channel::<Value>();
     let send_result = CU_TX.with(|c| {
-        c.borrow()
-            .as_ref()
-            .map(|tx| tx.blocking_send(CuRequest { cmd, reply: reply_tx }))
+        c.borrow().as_ref().map(|tx| {
+            tx.blocking_send(CuRequest {
+                cmd,
+                reply: reply_tx,
+            })
+        })
     });
     match send_result {
         Some(Ok(())) => {}

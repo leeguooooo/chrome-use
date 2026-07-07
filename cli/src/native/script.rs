@@ -543,7 +543,10 @@ mod tests {
     fn exact_placeholder_preserves_type() {
         // `{{n}}` alone → the number 3, not the string "3".
         assert_eq!(resolve_str("{{n}}", &vars()), json!(3));
-        assert_eq!(resolve_str("{{rows}}", &vars()), json!([{"ref":"e1"},{"ref":"e2"}]));
+        assert_eq!(
+            resolve_str("{{rows}}", &vars()),
+            json!([{"ref":"e1"},{"ref":"e2"}])
+        );
     }
 
     #[test]
