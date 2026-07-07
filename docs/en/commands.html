@@ -478,6 +478,33 @@ EOF</code></pre>
       </div>
 
       <!-- ============================================================ -->
+      <h2>Single-pass scripting (batch / script)</h2>
+      <p>
+        Multi-step flows don't need one round-trip per command. <code>batch</code> runs a fixed sequence in one round-trip;
+        <code>script</code> adds values between steps, loops, conditions, and asserts. See <a href="/en/script.html">Single-pass Scripting</a>.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">script</span>
+        </div>
+<pre><code><span class="du-cmt"># JSON op-list: value bus {{name.path}} + waitUntil/forEach/assert/return, --dry-run to validate</span>
+<span class="du-prompt">$</span> chrome-use script prog.json
+<span class="du-prompt">$</span> chrome-use script - <span class="du-flag">--dry-run</span> &lt; prog.json
+
+<span class="du-cmt"># JS form: a synchronous JS program driven by cu.* helpers (ego's code-base idiom)</span>
+<span class="du-prompt">$</span> chrome-use script <span class="du-flag">--timeout</span> 120000 &lt;&lt;'JS'
+  cu.open('https://news.ycombinator.com');
+  const rows = cu.eval("[...document.querySelectorAll('.athing')].length");
+  return { count: rows };
+JS</code></pre>
+      </div>
+      <p class="cmp-mut" style="font-size:.85rem;">
+        Options: <code>--timeout &lt;ms&gt;</code>, <code>--dry-run</code> (validate the JSON program only), <code>--yes</code> (auto-confirm inside the script),
+        <code>--arg k=v</code> (seed a variable). Exit codes: 0 ok, 1 runtime failure or failed assert, 2 invalid program.
+      </p>
+
+      <!-- ============================================================ -->
       <h2>State management</h2>
       <div class="du-code">
         <div class="du-code-head">

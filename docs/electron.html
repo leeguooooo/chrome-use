@@ -191,11 +191,11 @@
 
 <span class="du-cmt"># 列出目标 —— webview 会和 page 一起出现</span>
 <span class="du-prompt">$</span> chrome-use tab
-<span class="du-cmt">#   0: [page]    Slack - Main Window     https://app.slack.com/</span>
-<span class="du-cmt">#   1: [webview] Embedded Content        https://example.com/widget</span>
+<span class="du-cmt">#   [t1] [page]    Slack - Main Window     https://app.slack.com/</span>
+<span class="du-cmt">#   [t2] [webview] Embedded Content        https://example.com/widget</span>
 
 <span class="du-cmt"># 切换到某个 webview</span>
-<span class="du-prompt">$</span> chrome-use tab t1
+<span class="du-prompt">$</span> chrome-use tab t2
 
 <span class="du-cmt"># 正常交互</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>

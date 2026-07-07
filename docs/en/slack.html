@@ -59,8 +59,8 @@
 
       <h2>Quick start</h2>
       <p>
-        When Slack is already open in the browser, connecting straight to its debug port is fastest — far less hassle than spinning up a new browser.
-        If it isn't open, have chrome-use open the Slack web app.
+        chrome-use drives your already-logged-in real Chrome through the extension, so Slack's login is reused and you never open a debug port
+        (Chrome 136+ pops "Allow remote debugging?" on every connect to one — see <a href="/en/how-it-works.html">How It Works</a>). Just have it open the Slack web app.
       </p>
 
       <div class="du-code">
@@ -68,10 +68,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">connect-or-open.sh</span>
         </div>
-<pre><code><span class="du-cmt"># Connect to an already-open Slack session (9222 is the common debug port)</span>
-<span class="du-prompt">$</span> chrome-use connect 9222
-
-<span class="du-cmt"># Or open the Slack web app from scratch</span>
+<pre><code><span class="du-cmt"># Drive your logged-in real Chrome via the extension; open the Slack web app (login reused)</span>
 <span class="du-prompt">$</span> chrome-use open https://app.slack.com
 
 <span class="du-cmt"># Grab an interactive snapshot to see what's on the page</span>
@@ -96,7 +93,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">check-unreads.sh</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<pre><code><span class="du-cmt"># Continuing on the Slack tab opened above</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
 
 <span class="du-cmt"># Open the Activity tab to see the unread roundup (ref may differ each time)</span>

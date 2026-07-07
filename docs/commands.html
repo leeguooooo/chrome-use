@@ -467,6 +467,33 @@ EOF</code></pre>
       </div>
 
       <!-- ============================================================ -->
+      <h2>单次成型脚本（batch / script）</h2>
+      <p>
+        多步流程不必一条命令一次往返。<code>batch</code> 把固定序列一次跑完；<code>script</code> 再加上
+        步骤间传值、循环、条件、断言。详见 <a href="/script.html">单次成型脚本</a>。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">script</span>
+        </div>
+<pre><code><span class="du-cmt"># JSON op-list：值总线 {{name.path}} + waitUntil/forEach/assert/return，--dry-run 可预验</span>
+<span class="du-prompt">$</span> chrome-use script prog.json
+<span class="du-prompt">$</span> chrome-use script - <span class="du-flag">--dry-run</span> &lt; prog.json
+
+<span class="du-cmt"># JS 形式：一段同步 JS，用 cu.* 助手驱动（ego 的 code base 写法）</span>
+<span class="du-prompt">$</span> chrome-use script <span class="du-flag">--timeout</span> 120000 &lt;&lt;'JS'
+  cu.open('https://news.ycombinator.com');
+  const rows = cu.eval("[...document.querySelectorAll('.athing')].length");
+  return { count: rows };
+JS</code></pre>
+      </div>
+      <p class="cmp-mut" style="font-size:.85rem;">
+        选项：<code>--timeout &lt;ms&gt;</code>、<code>--dry-run</code>（仅校验 JSON 程序）、<code>--yes</code>（脚本内自动确认）、
+        <code>--arg k=v</code>（预置变量）。退出码：0 成功、1 运行失败或断言不过、2 程序非法。
+      </p>
+
+      <!-- ============================================================ -->
       <h2>状态管理</h2>
       <div class="du-code">
         <div class="du-code-head">

@@ -59,8 +59,8 @@
 
       <h2>快速开始</h2>
       <p>
-        Slack 已经在浏览器里开着时，直接连它的调试端口是最快的做法——比新开一个浏览器省事得多。
-        没开的话就让 chrome-use 打开 Slack 网页版。
+        chrome-use 走扩展驱动你已登录的真实 Chrome，Slack 的登录直接复用，不用开调试端口
+        （Chrome 136+ 连调试端口每次都弹「Allow remote debugging?」，见 <a href="/how-it-works.html">它怎么工作</a>）。让它打开 Slack 网页版就行。
       </p>
 
       <div class="du-code">
@@ -68,10 +68,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">connect-or-open.sh</span>
         </div>
-<pre><code><span class="du-cmt"># 连接已开着的 Slack 会话（9222 是常见调试端口）</span>
-<span class="du-prompt">$</span> chrome-use connect 9222
-
-<span class="du-cmt"># 或者从头打开 Slack 网页版</span>
+<pre><code><span class="du-cmt"># 走扩展连你已登录的真实 Chrome，打开 Slack 网页版（登录直接复用）</span>
 <span class="du-prompt">$</span> chrome-use open https://app.slack.com
 
 <span class="du-cmt"># 拿一张可交互快照，看看页面上有什么</span>
@@ -96,7 +93,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">check-unreads.sh</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use connect 9222
+<pre><code><span class="du-cmt"># 接着上面打开的 Slack 标签</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>
 
 <span class="du-cmt"># 进 Activity 标签页看未读汇总（ref 每次可能不同）</span>
