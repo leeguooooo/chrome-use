@@ -418,10 +418,17 @@ impl EventTracker {
         self.console_entries.clear();
     }
 
-    pub fn get_console_json(&self) -> Value {
+    pub fn get_console_json(&self, limit: Option<usize>) -> Value {
+        // `--limit N` tails the last N entries (newest kept), for a quick peek at
+        // what just happened without dumping a long session (#110).
+        let start = match limit {
+            Some(n) => self.console_entries.len().saturating_sub(n),
+            None => 0,
+        };
         let messages: Vec<Value> = self
             .console_entries
             .iter()
+            .skip(start)
             .map(|e| {
                 let mut msg = json!({ "type": e.level, "text": e.text });
                 if !e.args.is_empty() {
@@ -512,7 +519,7 @@ mod tests {
         ];
         tracker.add_console("log", "hello 42", raw_args);
 
-        let result = tracker.get_console_json();
+        let result = tracker.get_console_json(None);
         let messages = result.get("messages").unwrap().as_array().unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].get("text").unwrap(), "hello 42");
@@ -527,9 +534,45 @@ mod tests {
         let mut tracker = EventTracker::new();
         tracker.add_console("log", "text only", vec![]);
 
-        let result = tracker.get_console_json();
+        let result = tracker.get_console_json(None);
         let messages = result.get("messages").unwrap().as_array().unwrap();
         assert!(messages[0].get("args").is_none());
+    }
+
+    #[test]
+    fn test_console_json_limit_tails_newest() {
+        let mut tracker = EventTracker::new();
+        for i in 0..5 {
+            tracker.add_console("log", &format!("m{i}"), vec![]);
+        }
+        // limit keeps the last N (newest), in order
+        let msgs = tracker.get_console_json(Some(2));
+        let arr = msgs.get("messages").unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].get("text").unwrap(), "m3");
+        assert_eq!(arr[1].get("text").unwrap(), "m4");
+        // limit larger than the buffer returns everything
+        assert_eq!(
+            tracker
+                .get_console_json(Some(99))
+                .get("messages")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+        // None returns everything
+        assert_eq!(
+            tracker
+                .get_console_json(None)
+                .get("messages")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
     }
 
     // -- format_console_arg: primitives --

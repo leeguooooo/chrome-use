@@ -5466,7 +5466,11 @@ async fn handle_console(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
         state.event_tracker.clear_console();
         Ok(json!({ "cleared": true }))
     } else {
-        let mut result = state.event_tracker.get_console_json();
+        let limit = cmd
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let mut result = state.event_tracker.get_console_json(limit);
         if !console_capture_active(state) {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("hint".to_string(), json!(CONSOLE_DISABLED_HINT));
