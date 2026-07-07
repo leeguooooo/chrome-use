@@ -33,7 +33,7 @@
 
       <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+          <use href="/assets/docs/doodles.svg#star"/>
         </svg>
       </span>
 
@@ -48,10 +48,9 @@
       </div>
 
       <p class="du-lede">
-        读取是每一次浏览器操作的起点。<code>snapshot</code> 把页面变成一棵
+        <code>snapshot</code> 把页面变成一棵
         <span class="mark">带 ref 的可访问性树</span>——你据此点击、输入；<code>get text</code>
-        则跨所有 frame 抓取正文，连 closed shadow DOM 都能穿透。这一页讲清楚
-        「怎么看懂页面」，让后续的交互有的放矢。
+        则跨所有 frame 抓取正文，连 closed shadow DOM 都能穿透。
       </p>
 
       <!-- ============ SECTION ======= -->
@@ -183,7 +182,7 @@ URL: https://example.com/login
         不带选择器的 <code>chrome-use get text</code> 会聚合<strong>每一个</strong> frame 的可见文本
         ——顶层文档、同进程子 frame、以及跨源 iframe——所以你<span class="mark">不会静默漏掉</span>
         藏在 iframe 里的内容（Yahoo 拍卖 / 乐天 / Mercari 的商品描述、内嵌的结算 / 规格 frame）。
-        每个子 frame 用 <code>----- frame [kind] url -----</code> 标记分隔。你不需要记任何 flag,
+        每个子 frame 用 <code>----- frame [kind] url -----</code> 标记分隔。你不需要记任何 flag，
         默认就已经读全部 frame（<code>--all-frames</code> 仍作为显式别名保留）。
       </p>
 
@@ -224,6 +223,15 @@ URL: https://example.com/login
         <code>--filter &lt;text&gt;</code>（只保留匹配的小节/标题）、<code>--timeout &lt;ms&gt;</code>。
         <code>--json</code> 会连同元数据一起返回内容。
       </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 一个查文档的流程</div>
+        面对陌生文档站，先 <code>read https://site/docs/ --llms index</code>
+        列出它 <code>llms.txt</code> 收录的页面清单（就近向上找 <code>llms.txt</code>），
+        挑中目标页后用 <code>read &lt;page&gt; --require-md</code> 强制要 markdown 版；
+        不带 <code>--require-md</code> 时会回退到从 HTML 提取的正文。
+        <code>--llms</code> 不能和 <code>--outline</code> 同用。
+      </div>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 什么时候用 read，什么时候用 snapshot/extract</div>

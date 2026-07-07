@@ -236,7 +236,8 @@
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 说明</div>
         <code>chrome-use extension install</code> 现在会自动检测这种被屏蔽的托管 Chrome（macOS）并直接给出上面这三条出路，
-        不会再把你送到一个装不上的商店页。CDP 路径（B）不依赖扩展，最省事——见
+        不会再把你送到一个装不上的商店页。CDP 路径（B）不依赖扩展，最省事——
+        <code>--launch</code> 的完整用法见 <a href="/commands.html">命令参考</a>，扩展与中继背景见
         <a href="/real-chrome.html">驱动真实 Chrome</a>。
       </div>
 
@@ -363,7 +364,8 @@ EOF</code></pre>
 
       <h2>卡住的守护进程</h2>
       <p>
-        每个会话都跑着一个后台守护进程 worker 持有页面句柄。如果会话开始乱来——命令打到错误标签页、
+        每个会话都跑着一个后台守护进程 worker 持有页面句柄（这条命令链路怎么走，见
+        <a href="/how-it-works.html">它怎么工作</a>）。如果会话开始乱来——命令打到错误标签页、
         refs/句柄看起来陈旧、或你在会话中途升级了 <code>chrome-use</code> 导致旧 worker 残留——
         重启守护进程，别去 <code>pgrep</code>/<code>kill</code> 猎杀 PID。
       </p>
@@ -413,7 +415,7 @@ EOF</code></pre>
         用户给了 dev 服务器 URL，就待在那个源上：把 dev-only 端点打到真实生产主机上，要么失败、
         要么行为异常，还会暴露攻击面。<code>network route</code>、<code>har start/stop</code>、截图/录像
         都可能捕获或改动敏感流量——对非 dev 服务器使用前先跟用户确认，共享 HAR/截图前先脱敏。
-        完整规则见 <code>references/trust-boundaries.md</code>。
+        上面这三条框就是驱动真实浏览器时必须守住的完整红线。
       </div>
 
       <hr class="du-divider" />

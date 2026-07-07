@@ -53,8 +53,15 @@
       <p class="du-lede">
         When a task needs the exact window <strong>the user is looking at right now</strong>—their real,
         <span class="mark">already-logged-in</span> session, not a fresh blank browser—use extension connect.
-        It takes over the user's real Chrome through a native-messaging relay: zero confirmations, zero tokens,
-        no headless fingerprint. It is the highest anti-detection tier of any connection method.
+        It takes over the user's real Chrome: zero confirmations, zero tokens, no headless fingerprint. It is the
+        highest anti-detection tier of any connection method.
+      </p>
+
+      <p>
+        The link has just four stops: the <code>chrome-use</code> CLI → a per-session daemon → the relay Chrome launches
+        for the extension → the <strong>ab-connect</strong> extension in the browser. The extension drives pages over
+        Chrome's own debugging protocol, so no remote-debugging port is opened. What each stop speaks and where the
+        state lives is in <a href="/en/how-it-works.html">How It Works</a>.
       </p>
 
       <h2>One-time install</h2>
@@ -239,8 +246,8 @@
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ One GSI iframe limitation</div>
         The cross-origin Google GSI iframe (the "Continue as &lt;user&gt;" button) can only be pierced on Chrome 125+;
-        on older Chrome that one button alone may still be out of reach. For more login/auth scenarios see
-        <a href="/en/login-auth.html">Login &amp; Auth</a>.
+        on older Chrome that one button alone may still be out of reach. For more login/credential scenarios see
+        <a href="/en/login-auth.html">Login &amp; Credentials</a>.
       </div>
 
       <hr class="du-divider" />
@@ -264,6 +271,7 @@
         groups by default</strong> and no longer step on each other's active tab. In a bare shell with none of those env
         vars set, it falls back to the shared <code>default</code>. Override anytime: pass <code>--session &lt;name&gt;</code>,
         or set it to the <strong>same</strong> value to deliberately have multiple agents <em>share</em> one tab group.
+        (The <code>AGENT_BROWSER_*</code> prefix is inherited from the upstream project—see <a href="/en/lineage.html">Lineage</a> for the history.)
       </div>
 
       <p>
@@ -325,52 +333,37 @@
 
       <h2>Behavioral anti-bot: humanized input</h2>
       <p>
-        Beyond fingerprint-layer stealth, <code>--humanize off|fast|human</code> (or <code>AGENT_BROWSER_HUMANIZE</code>)
-        makes clicks land along a curved, decelerating trajectory with in-element landing jitter, makes typing use a
-        variable cadence, and gives scroll/drag easing. Defaults to <code>off</code>; a per-navigation detector
-        auto-escalates pages guarded by Akamai/PerimeterX/DataDome to <code>human</code>. Just leave it on auto; force
-        <code>human</code> only when you already know the target scores behavior.
+        <code>--humanize off|fast|human</code> (or <code>AGENT_BROWSER_HUMANIZE</code>) gives clicks, typing, and scrolling
+        a human cadence; defaults to <code>off</code>, and a per-navigation detector auto-escalates pages guarded by
+        Akamai/PerimeterX/DataDome to <code>human</code>. Trajectory parameters, cadence, and tuning are covered in
+        <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>.
       </p>
 
       <h2>Getting past Cloudflare: solve once, reuse</h2>
       <p>
-        Passing a Cloudflare challenge once mints a <code>cf_clearance</code> cookie (HttpOnly—invisible to
-        <code>eval</code>/<code>document.cookie</code>, read it with <code>chrome-use cookies</code>). It is bound to your
-        <strong>IP + User-Agent</strong>: reuse the same egress IP and UA to skip the challenge until it expires. Driving
-        the user's real Chrome (relay) persists it natively; for an isolated session, save/restore with
-        <code>--session-name &lt;name&gt;</code>. Before spending effort solving, run <code>chrome-use cf-status</code>
-        (aliases <code>cf</code>, <code>clearance</code>) as a preflight.
+        Passing a Cloudflare challenge once mints a <code>cf_clearance</code> cookie bound to your
+        <strong>IP + User-Agent</strong>; reuse the same egress IP and UA to skip the challenge until it expires, and
+        driving the user's real Chrome (relay) persists it natively. Before spending effort solving, run
+        <code>chrome-use cf-status</code> (aliases <code>cf</code>, <code>clearance</code>) as a preflight to avoid
+        re-solving a challenge you already passed. The full flow, the <code>reissue</code> verdict, and reading the
+        cookie are covered in <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>.
       </p>
-
-      <div class="du-code">
-        <div class="du-code-head">
-          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">bash · cf-status</span>
-        </div>
-<pre><code><span class="du-cmt"># Preflight: is the page currently a Cloudflare challenge? Is there already a valid cf_clearance?</span>
-<span class="du-prompt">$</span> chrome-use cf-status
-
-<span class="du-cmt"># Read the HttpOnly cf_clearance cookie</span>
-<span class="du-prompt">$</span> chrome-use cookies</code></pre>
-      </div>
-      <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ cf-status gives a recommendation</div>
-        <code>proceed</code> (already through, don't re-solve), <code>solve</code> (challenge present, no clearance),
-        <code>reissue</code> (clearance exists but the page is still blocked → IP/UA drifted, re-solve). Treat it as a
-        preflight to avoid re-solving a challenge you already passed.
-      </div>
 
       <hr class="du-divider" />
 
       <h2>Related pages</h2>
-      <div class="du-cards cols-3">
+      <div class="du-cards cols-2">
         <a class="du-card" href="/en/sessions.html">
           <div class="du-card-title"><span class="du-card-ico">🗂️</span> Sessions &amp; Isolation</div>
           <p><code>--session</code>, tab groups, per-agent defaults, and concurrency.</p>
         </a>
         <a class="du-card" href="/en/login-auth.html">
-          <div class="du-card-title"><span class="du-card-ico">🔐</span> Login &amp; Auth</div>
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> Login &amp; Credentials</div>
           <p>OAuth/SSO handoff, reusing a real logged-in session.</p>
+        </a>
+        <a class="du-card" href="/en/compare.html">
+          <div class="du-card-title"><span class="du-card-ico">⚖️</span> How chrome-use compares</div>
+          <p>Extension connect vs other browser-automation approaches.</p>
         </a>
         <a class="du-card" href="/en/troubleshooting.html">
           <div class="du-card-title"><span class="du-card-ico">🩺</span> Troubleshooting</div>

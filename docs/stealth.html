@@ -53,9 +53,8 @@
 
       <p class="du-lede">
         很多网站会<strong>主动拦截浏览器自动化</strong>——轻则挑战、验证码，重则<span class="mark">直接封号</span>。
-        绝大多数自动化工具都在往一个空白浏览器上「打补丁」冒充真人，而每一个补丁都是反-bot 系统的破绽。
-        chrome-use 的答案不一样：它<strong>不去模拟真人，它本身就是你那个真实、已登录的浏览器</strong>——
-        没有可被抓的谎言，也就没有被封的理由。
+        <a href="/compare.html">Playwright/Puppeteer 加 stealth 插件那一类</a>工具，都是在一个空白浏览器上「打补丁」冒充真人，而每个补丁都是反-bot 系统的破绽。
+        chrome-use 的答案不一样：它<strong>不去模拟真人，它本身就是你那个真实、已登录的浏览器</strong>。
       </p>
 
       <h2>为什么反检测是核心能力</h2>
@@ -266,6 +265,10 @@ Cloudflare Turnstile (nowsecure.nl)  passed</code></pre>
         <a class="du-card" href="/finding.html">
           <div class="du-card-title"><span class="du-card-ico">🔎</span> 定位元素</div>
           <p>find 与 @ref 精准锁定目标，配合 humanize 的拟人点击落点。</p>
+        </a>
+        <a class="du-card" href="/compare.html">
+          <div class="du-card-title"><span class="du-card-ico">⚖️</span> 对比其他方案</div>
+          <p>chrome-use vs Playwright、Puppeteer、ego-lite，反检测逐项实测。</p>
         </a>
       </div>
 

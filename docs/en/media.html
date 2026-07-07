@@ -188,9 +188,10 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Output format and limits</div>
-        The default output is <strong>WebM</strong> (VP8/VP9 codec), which every modern browser and player can play. Recording adds slight overhead to automation,
-        long recordings take a lot of disk, and some headless environments may have codec restrictions. For codec options, GIF export, and more, see
-        <code>references/video-recording.md</code>.
+        Recording pipes CDP frame captures through <strong>ffmpeg</strong>, so ffmpeg must be installed. The output format is chosen by the <strong>file extension</strong>:
+        <code>.webm</code> encodes with VP8 (<code>libvpx</code>), any other extension (e.g. <code>.mp4</code>) uses H.264 (<code>libx264</code>) — there's no GIF export.
+        Recording adds slight overhead to automation, long recordings take a lot of disk, and some headless environments may lack the codec.
+        More recording recipes live in <code>references/video-recording.md</code> inside the skill package (a repo file — the doc site doesn't link to it).
       </div>
 
       <hr class="du-divider" />

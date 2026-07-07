@@ -54,7 +54,7 @@
       <h2>同一个思路：驱动真实设备</h2>
       <p>
         模拟环境总有裂缝：全新的浏览器指纹、没有登录态的会话、被反爬系统识别的自动化痕迹。
-        家族里的每件工具都换了个前提——它 <em>就是</em> 你本来在用的那台设备，所以 cookie、session、
+        家族里的每件工具都换了个前提：它 <em>就是</em> 你本来在用的那台设备，所以 cookie、session、
         登录态、指纹全都是天然真实的，agent 只是替你按下按钮而已。
       </p>
       <div class="du-callout tip">
@@ -89,8 +89,8 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 更多工具</div>
-        家族还在生长。更多 *-use 工具与背后的文章都在
-        <a href="https://leeguoo.com" target="_blank" rel="noopener">leeguoo.com</a>。
+        完整的 *-use 家族都在同一个插件市场
+        <a href="https://github.com/leeguooooo/plugins" target="_blank" rel="noopener">leeguooooo/plugins</a>，9 个 *-use 仓库都在里面。
       </div>
 
       <hr class="du-divider" />
@@ -137,6 +137,7 @@
         <div class="du-callout-title">✅ 想深入 chrome-use</div>
         从 <a href="/index.html">概览</a> 开始，或直接看
         <a href="/real-chrome.html">驱动真实 Chrome（扩展）</a> 了解扩展 + 原生消息的接管原理。
+        想知道为什么要这么做，看 <a href="/compare.html">和无头方案的对比</a> 与 <a href="/stealth.html">反检测原理</a>。
       </div>
 
       <hr class="du-divider" />
@@ -145,7 +146,7 @@
       <p>
         两件与登录相关的工具，正好补上 chrome-use 的上游与下游。
         <code>bitwarden-use</code> 从你的 Bitwarden 密码库取出密码、2FA 和 passkey，
-        交给 agent 完成真正的账号密码登录；<code>cookie-use</code> 则把登录态本身当成资产——
+        交给 agent 完成真正的账号密码登录；<code>cookie-use</code> 则把登录态本身当成资产：
         加密存进本地保险库，随时切换、跨 Chrome profile 注入。
       </p>
       <p>

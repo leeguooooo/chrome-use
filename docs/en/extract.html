@@ -55,7 +55,7 @@
       <p>
         Driving a real browser is heavy work. chrome-use is only worth starting up when you genuinely need
         <strong>a logged-in session, interaction, JS rendering, or an anti-bot page</strong>. To read a piece of public,
-        static text, don't open a browser at all. The table below helps you find your case.
+        static text, don't open a browser at all. Use the table below to decide whether to open a browser at all.
       </p>
 
       <table>
@@ -169,13 +169,6 @@ EOF</code></pre>
         <code>(() =&gt; { const x = …; return x; })()</code>.
       </p>
 
-      <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ type/fill don't fire key events</div>
-        <code>type</code>/<code>fill</code> go through CDP <code>insertText</code> — the value lands, but no
-        <code>keydown</code>/<code>keyup</code> is fired. Some type-to-search widgets that depend on key events won't
-        respond; when you need real keystrokes, switch to <code>keyboard type</code> (or key-by-key <code>press</code>).
-      </div>
-
       <hr class="du-divider" />
 
       <h2>Site adapters: the cheapest path to "structured data from site X"</h2>
@@ -203,12 +196,44 @@ EOF</code></pre>
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-cmt"># any page: give a {rows, fields} shape, get clean JSON in one call</span>
-<span class="du-prompt">$</span> chrome-use extract <span class="du-flag">--schema</span> <span class="du-str">'{rows,fields}'</span></code></pre>
+<pre><code><span class="du-cmt"># rows = selector for the repeating container; fields = what to pull per row</span>
+<span class="du-cmt"># a field is either shorthand CSS (text by default) or { "sel": "…", "get": "text|@attr|html|value" }</span>
+<span class="du-prompt">$</span> chrome-use extract <span class="du-flag">--schema</span> <span class="du-str">'{"rows":".product","fields":{"name":".name","price":".price","href":{"sel":"a","get":"@href"}}}'</span></code></pre>
+      </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">stdout · JSON</span>
+        </div>
+<pre><code><span class="du-cmt"># with rows, you get a JSON array — one object per matched container</span>
+[
+  {<span class="du-str">"name"</span>: <span class="du-str">"Widget A"</span>, <span class="du-str">"price"</span>: <span class="du-str">"$12.00"</span>, <span class="du-str">"href"</span>: <span class="du-str">"/p/a"</span>},
+  {<span class="du-str">"name"</span>: <span class="du-str">"Widget B"</span>, <span class="du-str">"price"</span>: <span class="du-str">"$8.50"</span>, <span class="du-str">"href"</span>: <span class="du-str">"/p/b"</span>}
+]</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Omit rows to get a single object for the whole page</div>
+        With no <code>rows</code>, <code>fields</code> read against the whole document and return one object — handy for
+        page-header / metadata:
+        <code>extract --schema '{"fields":{"title":"h1","canonical":{"sel":"link[rel=canonical]","get":"@href"}}}'</code>.
+        For a long schema, pass it via <code>--schema-file &lt;path&gt;</code> or <code>--stdin</code> (heredoc).
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Multi-page / paginated crawls</div>
+        <code>extract --schema</code> is one call over one page. To accumulate across pages and filter by condition, wrap
+        it in a <code>script</code> loop: paginate → extract → merge. Measured: crawling 3 HN pages for high-score stories
+        drops from 13+ calls to one. See <a href="/en/script.html">Scripting &amp; Batching</a>.
       </div>
 
       <h2>How to choose: a cheat card</h2>
-      <p>The same page of data often has several routes; roughly from cheap to expensive, this is the order.</p>
+      <p>
+        The same page of data often has several routes; roughly from cheap to expensive, this is the order. The full
+        "which extraction tool" decision table (with a "why" column) is maintained on the
+        <a href="/en/site-adapters.html">Site Adapters</a> page.
+      </p>
       <div class="du-cards cols-3">
         <a class="du-card" href="/en/reading.html">
           <div class="du-card-title"><span class="du-card-ico">📖</span> snapshot --json</div>
@@ -218,9 +243,9 @@ EOF</code></pre>
           <div class="du-card-title"><span class="du-card-ico">🔎</span> get text / attr</div>
           <p>Already have an @ref → grabbing a single value is the least effort.</p>
         </a>
-        <a class="du-card" href="/en/extract.html">
-          <div class="du-card-title"><span class="du-card-ico">🧪</span> eval / extract</div>
-          <p>Custom shape → use eval; too lazy to write it → extract --schema.</p>
+        <a class="du-card" href="/en/script.html">
+          <div class="du-card-title"><span class="du-card-ico">🔁</span> script loop</div>
+          <p>Accumulate across pages, filter, loop → wrap extract in a script.</p>
         </a>
       </div>
 

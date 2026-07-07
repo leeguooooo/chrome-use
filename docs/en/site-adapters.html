@@ -88,7 +88,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># one-time: pull the adapter pack (~145 commands)</span>
+<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># one-time: pull the adapter pack (count grows with bb-sites)</span>
 <span class="du-prompt">$</span> chrome-use site list                              <span class="du-cmt"># what's installed (github/issues, reddit/search…)</span>
 <span class="du-prompt">$</span> chrome-use site info github/issues                <span class="du-cmt"># an adapter's params + which domain it runs on</span>
 <span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># run → JSON (navigates there for you)</span></code></pre>
@@ -100,6 +100,45 @@
         <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>: shows which params an adapter declares and which domain it runs on — check this before calling, and you'll know what to pass.</li>
         <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>: actually runs it. Add <code>--json</code> for one line of parseable structured output.</li>
       </ul>
+
+      <p>
+        With <code>--json</code>, that last command returns the site's own data, already cleaned into a parseable structure
+        (excerpted and indented below):
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">what site github/issues epiral/bb-sites --json returns</span>
+        </div>
+<pre><code>{
+  <span class="du-str">"success"</span>: true,
+  <span class="du-str">"data"</span>: {
+    <span class="du-str">"domain"</span>: <span class="du-str">"github.com"</span>,
+    <span class="du-str">"origin"</span>: <span class="du-str">"https://github.com/"</span>,
+    <span class="du-str">"result"</span>: {
+      <span class="du-str">"count"</span>: 30,
+      <span class="du-str">"repo"</span>: <span class="du-str">"epiral/bb-sites"</span>,
+      <span class="du-str">"state"</span>: <span class="du-str">"open"</span>,
+      <span class="du-str">"issues"</span>: [
+        {
+          <span class="du-str">"number"</span>: 85,
+          <span class="du-str">"title"</span>: <span class="du-str">"feat(youtube/transcript): migrate to API-based subtitles"</span>,
+          <span class="du-str">"author"</span>: <span class="du-str">"kerrmoulton"</span>,
+          <span class="du-str">"state"</span>: <span class="du-str">"open"</span>,
+          <span class="du-str">"is_pr"</span>: true,
+          <span class="du-str">"comments"</span>: 0,
+          <span class="du-str">"labels"</span>: [],
+          <span class="du-str">"created_at"</span>: <span class="du-str">"2026-06-16T07:54:47Z"</span>,
+          <span class="du-str">"url"</span>: <span class="du-str">"https://github.com/epiral/bb-sites/pull/85"</span>
+        }
+        <span class="du-cmt">// … 29 more with the same shape; count is the total returned</span>
+      ]
+    }
+  },
+  <span class="du-str">"error"</span>: null
+}</code></pre>
+      </div>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ info first, then run</div>
@@ -129,9 +168,9 @@
 
       <p>
         When it runs, it <span class="mark">navigates to the domain the adapter declares</span> — and if your current tab is already on that
-        domain, it <strong>reuses the current tab</strong> instead of opening a new one. Because the request happens inside the tab you're
-        logged into, feeds visible only when signed in — like <code>bilibili/feed</code> or <code>twitter/…</code> — return normally:
-        they run <strong>as you</strong>.
+        domain, it <strong>reuses the current tab</strong> instead of opening a new one. The request still happens inside the tab you're
+        logged into, so signed-in feeds like <code>bilibili/feed</code> or <code>twitter/…</code> return normally (why they do is covered under
+        "What it is" above).
       </p>
 
       <div class="du-callout note">

@@ -54,7 +54,7 @@
       <h2>先选最省的工具</h2>
       <p>
         驱动一个真实浏览器是重活。只有当你确实需要<strong>登录态、交互、JS 渲染或反爬页面</strong>时，
-        chrome-use 才值得启动。读一段公开静态文本，别开浏览器。下面这张表帮你对号入座。
+        chrome-use 才值得启动。读一段公开静态文本，别开浏览器。先按这张表判断要不要开浏览器。
       </p>
 
       <table>
@@ -164,12 +164,6 @@ EOF</code></pre>
         <code>(() =&gt; { const x = …; return x; })()</code>。
       </p>
 
-      <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ type/fill 不触发按键事件</div>
-        <code>type</code>/<code>fill</code> 走 CDP <code>insertText</code>——值会落进去，但不发 <code>keydown</code>/<code>keyup</code>。
-        某些依赖按键事件的“边打边搜”控件不会响应；需要真实按键时改用 <code>keyboard type</code>（或逐键 <code>press</code>）。
-      </div>
-
       <hr class="du-divider" />
 
       <h2>站点适配器：读“站点 X 结构化数据”的最省路径</h2>
@@ -196,12 +190,42 @@ EOF</code></pre>
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-cmt"># 任意页面：给出 {rows, fields} 形状，一次拿到干净 JSON</span>
-<span class="du-prompt">$</span> chrome-use extract <span class="du-flag">--schema</span> <span class="du-str">'{rows,fields}'</span></code></pre>
+<pre><code><span class="du-cmt"># rows = 重复容器的选择器；fields = 每行要取的字段</span>
+<span class="du-cmt"># 字段可简写成 CSS（默认取文本），或写成 { "sel": "…", "get": "text|@attr|html|value" }</span>
+<span class="du-prompt">$</span> chrome-use extract <span class="du-flag">--schema</span> <span class="du-str">'{"rows":".product","fields":{"name":".name","price":".price","href":{"sel":"a","get":"@href"}}}'</span></code></pre>
+      </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">stdout · JSON</span>
+        </div>
+<pre><code><span class="du-cmt"># 有 rows 时返回一个 JSON 数组，每个匹配的容器一行</span>
+[
+  {<span class="du-str">"name"</span>: <span class="du-str">"Widget A"</span>, <span class="du-str">"price"</span>: <span class="du-str">"$12.00"</span>, <span class="du-str">"href"</span>: <span class="du-str">"/p/a"</span>},
+  {<span class="du-str">"name"</span>: <span class="du-str">"Widget B"</span>, <span class="du-str">"price"</span>: <span class="du-str">"$8.50"</span>, <span class="du-str">"href"</span>: <span class="du-str">"/p/b"</span>}
+]</code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 省掉 rows 就对整页取一个对象</div>
+        不写 <code>rows</code> 时，<code>fields</code> 直接对整个文档取值、返回单个对象——适合抓页头/元信息：
+        <code>extract --schema '{"fields":{"title":"h1","canonical":{"sel":"link[rel=canonical]","get":"@href"}}}'</code>。
+        schema 较长时用 <code>--schema-file &lt;path&gt;</code> 或 <code>--stdin</code>（heredoc）喂进去。
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 多页 / 翻页采集</div>
+        <code>extract --schema</code> 是单页单次调用。要跨多页累积、按条件筛选，把它包进 <code>script</code> 循环：
+        翻页 → extract → 合并。实测 HN 翻 3 页采集高分故事，从 13+ 次调用降到 1 次。见
+        <a href="/script.html">脚本与批处理</a>。
       </div>
 
       <h2>怎么选：一张速查卡</h2>
-      <p>同一页数据往往有多条路，从便宜到贵大致是这个顺序。</p>
+      <p>
+        同一页数据往往有多条路，从便宜到贵大致是这个顺序。完整的「选哪个抽取工具」决策表（带「为什么」一列）
+        由 <a href="/site-adapters.html">站点适配器</a> 一页维护。
+      </p>
       <div class="du-cards cols-3">
         <a class="du-card" href="/reading.html">
           <div class="du-card-title"><span class="du-card-ico">📖</span> snapshot --json</div>
@@ -211,9 +235,9 @@ EOF</code></pre>
           <div class="du-card-title"><span class="du-card-ico">🔎</span> get text / attr</div>
           <p>已有 @ref，定点取单个值最省事。</p>
         </a>
-        <a class="du-card" href="/extract.html">
-          <div class="du-card-title"><span class="du-card-ico">🧪</span> eval / extract</div>
-          <p>自定义形状用 eval；懒得写就 extract --schema。</p>
+        <a class="du-card" href="/script.html">
+          <div class="du-card-title"><span class="du-card-ico">🔁</span> script 循环</div>
+          <p>多页累积、条件筛选、循环 → 把 extract 包进 script。</p>
         </a>
       </div>
 

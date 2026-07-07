@@ -52,8 +52,14 @@
 
       <p class="du-lede">
         当任务需要用户<strong>此刻正看着的那个窗口</strong>——他们真实的、<span class="mark">已登录的</span>
-        会话，而不是一个全新的空白浏览器时，走扩展连接（extension connect）。它通过一个原生消息 relay
-        接管用户的真实 Chrome：零确认、零 token、无 headless 痕迹，是所有连接方式里反检测等级最高的一档。
+        会话，而不是一个全新的空白浏览器时，走扩展连接（extension connect）。它接管用户真实的 Chrome：
+        零确认、零 token、无 headless 痕迹，是所有连接方式里反检测等级最高的一档。
+      </p>
+
+      <p>
+        连接链路只有四站：<code>chrome-use</code> CLI → 每会话一个的守护进程 → Chrome 为扩展拉起的中继（relay）
+        → 浏览器里的 <strong>ab-connect</strong> 扩展。扩展用 Chrome 自带的调试协议驱动页面，所以不必开远程调试端口。
+        每一站说什么协议、状态放在谁手上，见 <a href="/how-it-works.html">它怎么工作</a>。
       </p>
 
       <h2>一次性安装</h2>
@@ -231,8 +237,8 @@
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ GSI iframe 的一个限制</div>
         跨域的 Google GSI iframe（那个「Continue as &lt;user&gt;」按钮）只在 Chrome 125+ 上能被穿透；
-        更老的 Chrome 上，唯独那一个按钮可能仍然够不到。更多登录/鉴权场景见
-        <a href="/login-auth.html">登录与鉴权</a>。
+        更老的 Chrome 上，唯独那一个按钮可能仍然够不到。更多登录/凭证场景见
+        <a href="/login-auth.html">登录与凭证</a>。
       </div>
 
       <hr class="du-divider" />
@@ -247,11 +253,12 @@
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 每 agent 隔离是自动的</div>
         session <strong>名字</strong>就是隔离键：它映射到一个专属标签组<strong>和一个专属 daemon</strong>（端口从名字派生）。
-        不传 <code>--session</code> / <code>AGENT_BROWSER_SESSION</code> 时，chrome-use 会<strong>自动派生一个每-agent 默认值</strong>——
-        <code>cu-&lt;repo&gt;-&lt;id&gt;</code>，其中 <code>&lt;id&gt;</code> 是稳定的每-agent 终端/agent 环境 id
+        不传 <code>--session</code> / <code>AGENT_BROWSER_SESSION</code> 时，chrome-use 会<strong>自动派生一个按 agent 区分的默认值</strong>——
+        <code>cu-&lt;repo&gt;-&lt;id&gt;</code>，其中 <code>&lt;id&gt;</code> 是稳定的、按 agent 区分的终端/agent 环境 id
         （<code>CMUX_SURFACE_ID</code>、<code>TERM_SESSION_ID</code>、<code>ITERM_SESSION_ID</code>、<code>TMUX_PANE</code> …）的短哈希。
         所以<strong>同一个 repo 里的两个 agent 默认拿到不同的标签组</strong>，不再互踩活动标签页。纯 shell 里没有这些环境变量时，
         回退到共享的 <code>default</code>。随时可覆盖：传 <code>--session &lt;name&gt;</code>，或把它设成<strong>相同</strong>的值让多个 agent 刻意<em>共享</em>一个标签组。
+        （<code>AGENT_BROWSER_*</code> 这套前缀沿用自上游项目，来历见 <a href="/lineage.html">血统与上游</a>。）
       </div>
 
       <p>
@@ -305,53 +312,39 @@
       <p>
         驱动用户的真实 Chrome 时，agent 完全在<strong>后台</strong>工作——新标签页开出来时不聚焦，agent 从不强制把某个标签页顶到前台，
         并且焦点是模拟的，所以后台页面仍然会渲染、并报告 <code>visibilityState: 'visible'</code>。你什么都不用做；
-        只是别指望用户的视图跟着你跑（只有当你<strong>刻意</strong>想把某个标签页surface出来时，才用显式的 <code>bringToFront</code>）。
+        只是别指望用户的视图跟着你跑（只有当你<strong>刻意</strong>想让用户看到某个标签页时，才用显式的 <code>bringToFront</code> 把它顶到前台）。
       </p>
 
       <h2>行为层反-bot：拟人化输入</h2>
       <p>
-        除了指纹层的 stealth，<code>--humanize off|fast|human</code>（或 <code>AGENT_BROWSER_HUMANIZE</code>）让点击沿一条
-        弯曲、减速的轨迹落点并带元素内落点抖动，让打字用可变节奏，让滚动/拖拽带缓动。默认 <code>off</code>；
-        一个每-导航的检测器会把被 Akamai/PerimeterX/DataDome 守卫的页面自动升到 <code>human</code>。
-        让它保持 auto 就好；只有当你已经知道目标在给行为打分时，才强制 <code>human</code>。
+        <code>--humanize off|fast|human</code>（或 <code>AGENT_BROWSER_HUMANIZE</code>）给点击、打字、滚动加上拟人节奏；默认 <code>off</code>，
+        一个每次导航都会跑的检测器会把被 Akamai/PerimeterX/DataDome 守卫的页面自动升到 <code>human</code>。
+        轨迹参数、节奏与调优见 <a href="/stealth.html">反检测与隐身</a>。
       </p>
 
       <h2>Cloudflare 通关：solve 一次，复用</h2>
       <p>
-        通过一次 Cloudflare 挑战会铸出一个 <code>cf_clearance</code> cookie（HttpOnly——对 <code>eval</code>/<code>document.cookie</code>
-        不可见，用 <code>chrome-use cookies</code> 读它）。它绑定你的 <strong>IP + User-Agent</strong>：复用同一个出口 IP 和 UA，
-        就能在它过期前跳过挑战。驱动用户真实 Chrome（relay）会原生持久化它；隔离 session 用 <code>--session-name &lt;name&gt;</code> 保存/恢复。
-        在花力气去解之前，先跑 <code>chrome-use cf-status</code>（别名 <code>cf</code>、<code>clearance</code>）做预检。
+        通过一次 Cloudflare 挑战会铸出一个绑定 <strong>IP + User-Agent</strong> 的 <code>cf_clearance</code> cookie，复用同一出口 IP 和 UA
+        就能在过期前跳过挑战；驱动用户真实 Chrome（relay）会原生持久化它。解之前先跑 <code>chrome-use cf-status</code>
+        （别名 <code>cf</code>、<code>clearance</code>）做预检，避免重复解已经过了的挑战。完整流程、<code>reissue</code> 判定与 cookie 读取见
+        <a href="/stealth.html">反检测与隐身</a>。
       </p>
-
-      <div class="du-code">
-        <div class="du-code-head">
-          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">bash · cf-status</span>
-        </div>
-<pre><code><span class="du-cmt"># 预检：页面当前是否是 Cloudflare 挑战？是否已有有效的 cf_clearance？</span>
-<span class="du-prompt">$</span> chrome-use cf-status
-
-<span class="du-cmt"># 读取 HttpOnly 的 cf_clearance cookie</span>
-<span class="du-prompt">$</span> chrome-use cookies</code></pre>
-      </div>
-      <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ cf-status 会给出建议</div>
-        <code>proceed</code>（已通关，别再解）、<code>solve</code>（挑战在、无 clearance）、
-        <code>reissue</code>（有 clearance 但页面仍被挡 → IP/UA 漂移了，重新解）。把它当预检，避免重复解已经过了的挑战。
-      </div>
 
       <hr class="du-divider" />
 
       <h2>相关页面</h2>
-      <div class="du-cards cols-3">
+      <div class="du-cards cols-2">
         <a class="du-card" href="/sessions.html">
           <div class="du-card-title"><span class="du-card-ico">🗂️</span> 会话与隔离</div>
-          <p><code>--session</code>、标签组、每-agent 默认与并发。</p>
+          <p><code>--session</code>、标签组、按 agent 默认与并发。</p>
         </a>
         <a class="du-card" href="/login-auth.html">
-          <div class="du-card-title"><span class="du-card-ico">🔐</span> 登录与鉴权</div>
+          <div class="du-card-title"><span class="du-card-ico">🔐</span> 登录与凭证</div>
           <p>OAuth/SSO handoff、复用真实登录会话。</p>
+        </a>
+        <a class="du-card" href="/compare.html">
+          <div class="du-card-title"><span class="du-card-ico">⚖️</span> 对比其他方案</div>
+          <p>扩展连接 vs 其他浏览器自动化方案的取舍。</p>
         </a>
         <a class="du-card" href="/troubleshooting.html">
           <div class="du-card-title"><span class="du-card-ico">🩺</span> 疑难排查</div>

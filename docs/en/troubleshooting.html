@@ -249,7 +249,9 @@
         <code>chrome-use extension install</code> now detects a managed Chrome that blocks the
         extension (macOS) and prints these three ways out directly, instead of sending you to a Web
         Store page that can't install. The CDP path (B) needs no extension and is the least
-        friction — see <a href="/en/real-chrome.html">Driving real Chrome</a>.
+        friction — see <a href="/en/commands.html">Command reference</a> for the full
+        <code>--launch</code> usage, and <a href="/en/real-chrome.html">Driving real Chrome</a> for the
+        extension/relay background.
       </div>
 
       <h2>You read the wrong page</h2>
@@ -379,7 +381,8 @@ EOF</code></pre>
 
       <h2>A stuck daemon</h2>
       <p>
-        Each session runs a background daemon worker that holds page handles. If a session starts misbehaving—commands
+        Each session runs a background daemon worker that holds page handles (for how a command actually travels this path,
+        see <a href="/en/how-it-works.html">How It Works</a>). If a session starts misbehaving—commands
         hitting the wrong tab, refs/handles looking stale, or you upgraded <code>chrome-use</code> mid-session leaving an old
         worker behind—restart the daemon; don't <code>pgrep</code>/<code>kill</code> hunt for PIDs.
       </p>
@@ -431,8 +434,8 @@ EOF</code></pre>
         the user's explicit task. If the user gave a dev server URL, stay on that origin: hitting a real production host with a
         dev-only endpoint either fails or misbehaves, and it exposes attack surface. <code>network route</code>,
         <code>har start/stop</code>, and screenshots/recordings can all capture or alter sensitive traffic—confirm with the
-        user before using them against a non-dev server, and redact before sharing a HAR/screenshot. See
-        <code>references/trust-boundaries.md</code> for the full rules.
+        user before using them against a non-dev server, and redact before sharing a HAR/screenshot. These three callouts
+        are the full set of red lines to hold when driving a real browser.
       </div>
 
       <hr class="du-divider" />

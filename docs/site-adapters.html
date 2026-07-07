@@ -86,7 +86,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># 一次性：拉取适配器包（约 145 条命令）</span>
+<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># 一次性：拉取适配器包（命令数随 bb-sites 同步增长）</span>
 <span class="du-prompt">$</span> chrome-use site list                              <span class="du-cmt"># 已装了哪些（github/issues、reddit/search…）</span>
 <span class="du-prompt">$</span> chrome-use site info github/issues                <span class="du-cmt"># 某适配器的参数 + 在哪个域名上跑</span>
 <span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># 运行 → JSON（自动帮你导航过去）</span></code></pre>
@@ -98,6 +98,44 @@
         <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>：查一个适配器声明了哪些参数、以及它会在哪个域名上运行——调之前先看这个，就知道该传什么。</li>
         <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>：真正运行。加 <code>--json</code> 拿一行可解析的结构化输出。</li>
       </ul>
+
+      <p>
+        加了 <code>--json</code>，最后一条命令返回的就是站点自己的数据，已经清洗成可解析的结构（下面为节选、缩进过）：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">site github/issues epiral/bb-sites --json 的返回</span>
+        </div>
+<pre><code>{
+  <span class="du-str">"success"</span>: true,
+  <span class="du-str">"data"</span>: {
+    <span class="du-str">"domain"</span>: <span class="du-str">"github.com"</span>,
+    <span class="du-str">"origin"</span>: <span class="du-str">"https://github.com/"</span>,
+    <span class="du-str">"result"</span>: {
+      <span class="du-str">"count"</span>: 30,
+      <span class="du-str">"repo"</span>: <span class="du-str">"epiral/bb-sites"</span>,
+      <span class="du-str">"state"</span>: <span class="du-str">"open"</span>,
+      <span class="du-str">"issues"</span>: [
+        {
+          <span class="du-str">"number"</span>: 85,
+          <span class="du-str">"title"</span>: <span class="du-str">"feat(youtube/transcript): migrate to API-based subtitles"</span>,
+          <span class="du-str">"author"</span>: <span class="du-str">"kerrmoulton"</span>,
+          <span class="du-str">"state"</span>: <span class="du-str">"open"</span>,
+          <span class="du-str">"is_pr"</span>: true,
+          <span class="du-str">"comments"</span>: 0,
+          <span class="du-str">"labels"</span>: [],
+          <span class="du-str">"created_at"</span>: <span class="du-str">"2026-06-16T07:54:47Z"</span>,
+          <span class="du-str">"url"</span>: <span class="du-str">"https://github.com/epiral/bb-sites/pull/85"</span>
+        }
+        <span class="du-cmt">// … 其余 29 条同构，count 是本次返回的总数</span>
+      ]
+    }
+  },
+  <span class="du-str">"error"</span>: null
+}</code></pre>
+      </div>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 先 info，再 run</div>
@@ -127,8 +165,8 @@
 
       <p>
         运行时它会<span class="mark">导航到适配器声明的域名</span>——如果你当前标签页已经在那个域名上，就<strong>复用当前标签页</strong>，
-        不新开。正因为请求发生在你登录态的那个标签页里，所以像 <code>bilibili/feed</code>、<code>twitter/…</code>
-        这类登录才可见的信息流能正常返回：它们<strong>以你的身份</strong>运行。
+        不新开。请求仍发生在你登录态的那个标签页里，所以 <code>bilibili/feed</code>、<code>twitter/…</code>
+        这类登录才可见的信息流照常返回（为什么能，见上面「是什么」）。
       </p>
 
       <div class="du-callout note">

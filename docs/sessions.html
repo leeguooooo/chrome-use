@@ -51,41 +51,38 @@
         <code>--session</code> 并行跑多个浏览器、以及会话守护进程卡住时怎么干净地复位它。
       </p>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 先分清哪条路径</div>
+        <code>state save</code> / <code>--state</code> / <code>--session-name</code> 是给 chrome-use <strong>自己启动的浏览器</strong>和 <code>--session</code> <strong>隔离浏览器</strong>用的——它们开局没有登录态，得靠状态文件跨运行续上。走<strong>扩展连接</strong>驱动你<strong>真实 Chrome</strong> 时用不到这些：登录态本来就在你真实 profile 里、原生持久化，重启也还在。见 <a href="/real-chrome.html">真实 Chrome</a>。
+      </div>
+
       <!-- ============ PERSIST ============ -->
       <h2>跨运行保存登录态</h2>
       <p>
         登录一次，把 cookies 和 localStorage 存进一个文件，之后的运行加载它就直接是登录态——
-        不用每次都重新走一遍登录表单。用 <code>state save</code> 保存、<code>--state</code> 加载：
+        不用每次都重新走一遍登录表单。用 <code>state save</code> 保存；启动时用 <code>--state</code> 带上，
+        或用 <code>state load</code> 把状态注入当前会话再继续：
       </p>
 
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">保存 &amp; 复用状态</span>
+          <span class="du-code-name">state save / load / 复用</span>
         </div>
-<pre><code><span class="du-cmt"># 登录一次，保存 cookies + localStorage</span>
+<pre><code><span class="du-cmt"># 登录一次，保存 cookies + localStorage + 登录状态</span>
 <span class="du-prompt">$</span> chrome-use state save ./auth.json
 
-<span class="du-cmt"># 之后的运行开局就是登录态</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--state</span> ./auth.json open https://app.example.com</code></pre>
+<span class="du-cmt"># 启动时带上状态，开局就是登录态</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--state</span> ./auth.json open https://app.example.com
+
+<span class="du-cmt"># 或把已保存的状态注入当前会话，再继续操作</span>
+<span class="du-prompt">$</span> chrome-use state load ./auth.json
+<span class="du-prompt">$</span> chrome-use open https://app.example.com/dashboard</code></pre>
       </div>
 
       <p>
-        也有显式的 <code>state load</code> 用来把已保存的状态注入当前会话，再继续操作：
+        怎么先干净地登录、再把会话存下来，见 <a href="/login-auth.html">登录与凭证</a>——那一页从登录流程的角度讲了同一个 <code>state save</code>。
       </p>
-
-      <div class="du-code">
-        <div class="du-code-head">
-          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">state save / load</span>
-        </div>
-<pre><code><span class="du-cmt"># 保存 cookies、storage 和登录状态</span>
-<span class="du-prompt">$</span> chrome-use state save /path/to/auth-state.json
-
-<span class="du-cmt"># 恢复已保存的状态</span>
-<span class="du-prompt">$</span> chrome-use state load /path/to/auth-state.json
-<span class="du-prompt">$</span> chrome-use open https://app.example.com/dashboard</code></pre>
-      </div>
 
       <p>状态文件是一份普通 JSON，包含 cookies、两种 storage 和来源列表：</p>
 
@@ -222,7 +219,9 @@
       <!-- ============ DAEMON ============ -->
       <h2>复位卡住的守护进程状态</h2>
       <p>
-        每个会话跑一个后台守护进程 worker 来持有页面句柄。如果某个会话开始出问题——命令打到错的标签、
+        每个会话跑一个后台守护进程 worker 来持有页面句柄。这个守护进程也是 boa JS 引擎的落脚点——
+        引擎跑在页面外面，<a href="/script.html"><code>script</code></a> 才能扛住整页硬跳转不丢状态。
+        如果某个会话开始出问题——命令打到错的标签、
         refs/句柄看起来陈旧，或者你在会话中途升级了 <code>chrome-use</code> 导致旧 worker 残留——
         直接重启守护进程，别去 <code>pgrep</code>/<code>kill</code> 手动找 PID：
       </p>

@@ -80,16 +80,18 @@
           <span class="du-code-name">bash</span>
         </div>
 <pre><code><span class="du-cmt"># 固定某个版本</span>
-<span class="du-prompt">$</span> AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+<span class="du-prompt">$</span> AGENT_BROWSER_VERSION=v1.5.70 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 
 <span class="du-cmt"># 装到自定义目录</span>
 <span class="du-prompt">$</span> AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
       </div>
 
       <ul>
-        <li><strong>Windows：</strong>从 <a href="https://github.com/leeguooooo/chrome-use/releases">Releases 页面</a> 下载 <code>chrome-use-win32-x64.tar.gz</code>，把 <code>chrome-use.exe</code> 放进 PATH。</li>
+        <li><strong>Windows：</strong>从 <a href="https://github.com/leeguooooo/chrome-use/releases">Releases 页面</a> 下载 <code>chrome-use-win32-x64.tar.gz</code>，把 <code>chrome-use.exe</code> 放进 PATH。连接真实 Chrome 的扩展路径 Windows 同样支持，见下一节。</li>
         <li><strong>npm（遗留）：</strong><code>npm install -g chrome-use</code> 仍在发布，但 GitHub Releases 是现在的主渠道。</li>
       </ul>
+
+      <p>可选的版本 tag 见 <a href="/lineage.html">版本沿革</a>——从 <code>agent-browser</code> fork（早期 <code>v0.x-fork.N</code> tag）到今天 <code>chrome-use</code> 的 <code>v1.5.x</code> tag 演进。</p>
 
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 装了多份会互相遮盖</div>
@@ -108,7 +110,7 @@
       <ol>
         <li>
           从 <a href="https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk">Chrome 应用商店安装 <strong>chrome-use</strong> 扩展</a>，一键 <em>Add to Chrome</em>。
-          商店版重启后依然稳定，适合无人值守。
+          商店版重启后依然稳定，适合无人值守。认准商店名 <strong>chrome-use</strong>、扩展 ID <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>（仓库内部代号 <code>ab-connect</code>），确认没装错。
         </li>
         <li>注册原生消息（native-messaging）主机——一次性：</li>
       </ol>
@@ -127,9 +129,15 @@
 
       <p>
         此后 <code>chrome-use open</code> 通过 <strong>原生消息</strong>驱动你真实、已登录的 Chrome——无调试端口、无 token，
-        <strong>也永远不弹「Allow remote debugging?」确认框</strong>。扩展会自动更新、重启后依然连着，做到零per-use确认。想深入了解连接原理见
+        <strong>也永远不弹「Allow remote debugging?」确认框</strong>。扩展会自动更新、重启后依然连着，之后每次调用都不用再点确认。想深入了解连接原理见
         <a href="/real-chrome.html">连接真实 Chrome</a>。
       </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Windows 也走这条扩展路径</div>
+        <code>chrome-use extension install</code> 在 Windows 上同样可用：它把 native-messaging host 注册进 <strong>HKCU 注册表</strong>，
+        再从应用商店手动装一次扩展即可（Windows 没有 macOS 那套静默强制安装）。之后 <code>chrome-use open</code> 一样驱动你已登录的 Chrome。
+      </div>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 不想碰你的真实 Chrome？</div>
@@ -195,20 +203,13 @@
 <pre><code><span class="du-cmt"># 截一张页面图</span>
 <span class="du-prompt">$</span> chrome-use open https://example.com
 <span class="du-prompt">$</span> chrome-use screenshot home.png
-<span class="du-prompt">$</span> chrome-use close
-
-<span class="du-cmt"># 搜索、点结果、再截图</span>
-<span class="du-prompt">$</span> chrome-use open https://duckduckgo.com
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># 找到搜索框的 ref</span>
-<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"chrome-use cli"</span>
-<span class="du-prompt">$</span> chrome-use press Enter
-<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># refs 现在对应结果</span>
-<span class="du-prompt">$</span> chrome-use click @e5                        <span class="du-cmt"># 点一个结果</span>
-<span class="du-prompt">$</span> chrome-use screenshot result.png</code></pre>
+<span class="du-prompt">$</span> chrome-use close</code></pre>
       </div>
 
-      <p>想理解 <code>open → snapshot → click</code> 这个基本节奏，接着读 <a href="/core-loop.html">核心循环</a>。</p>
+      <p>
+        想看 <code>open → snapshot -i → fill → click</code> 的完整走查（搜索、点结果、再截图），读 <a href="/core-loop.html">核心循环</a>；
+        每条命令和参数见 <a href="/commands.html">命令参考</a>。
+      </p>
 
       <hr class="du-divider" />
 

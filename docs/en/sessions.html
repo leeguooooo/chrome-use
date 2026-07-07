@@ -52,43 +52,45 @@
         <code>--session</code>, and cleanly resetting the session daemon when it gets stuck.
       </p>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Know which path you're on</div>
+        <code>state save</code> / <code>--state</code> / <code>--session-name</code> are for the browsers chrome-use
+        <strong>launches itself</strong> and for <code>--session</code> <strong>isolated browsers</strong> — those
+        start with no login, so a state file is how you carry it across runs. Driving your <strong>real Chrome</strong>
+        over the <strong>extension connection</strong> needs none of this: the login already lives in your real
+        profile and persists natively, surviving restarts. See <a href="/en/real-chrome.html">Real Chrome</a>.
+      </div>
+
       <!-- ============ PERSIST ============ -->
       <h2>Persist login state across runs</h2>
       <p>
         Log in once, save cookies and localStorage to a file, then load it on later runs to start already
-        logged in — no need to walk through the login form every time. Save with <code>state save</code>,
-        load with <code>--state</code>:
-      </p>
-
-      <div class="du-code">
-        <div class="du-code-head">
-          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">Save &amp; reuse state</span>
-        </div>
-<pre><code><span class="du-cmt"># Log in once, save cookies + localStorage</span>
-<span class="du-prompt">$</span> chrome-use state save ./auth.json
-
-<span class="du-cmt"># Later runs start logged in</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--state</span> ./auth.json open https://app.example.com</code></pre>
-      </div>
-
-      <p>
-        There is also an explicit <code>state load</code> to inject already-saved state into the current
+        logged in — no need to walk through the login form every time. Save with <code>state save</code>; pass
+        <code>--state</code> at launch, or use <code>state load</code> to inject the state into the current
         session and keep going:
       </p>
 
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">state save / load</span>
+          <span class="du-code-name">state save / load / reuse</span>
         </div>
-<pre><code><span class="du-cmt"># Save cookies, storage, and login state</span>
-<span class="du-prompt">$</span> chrome-use state save /path/to/auth-state.json
+<pre><code><span class="du-cmt"># Log in once, save cookies + localStorage + login state</span>
+<span class="du-prompt">$</span> chrome-use state save ./auth.json
 
-<span class="du-cmt"># Restore saved state</span>
-<span class="du-prompt">$</span> chrome-use state load /path/to/auth-state.json
+<span class="du-cmt"># Pass the state at launch — start already logged in</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--state</span> ./auth.json open https://app.example.com
+
+<span class="du-cmt"># Or inject saved state into the current session and keep going</span>
+<span class="du-prompt">$</span> chrome-use state load ./auth.json
 <span class="du-prompt">$</span> chrome-use open https://app.example.com/dashboard</code></pre>
       </div>
+
+      <p>
+        For how to log in cleanly first and then save the session, see
+        <a href="/en/login-auth.html">Login &amp; Credentials</a> — that page covers the same <code>state save</code>
+        from the login-flow angle.
+      </p>
 
       <p>The state file is a plain JSON document with cookies, both kinds of storage, and an origins list:</p>
 
@@ -232,7 +234,10 @@
       <!-- ============ DAEMON ============ -->
       <h2>Reset a stuck daemon state</h2>
       <p>
-        Each session runs a background daemon worker to hold the page handles. If a session starts misbehaving —
+        Each session runs a background daemon worker to hold the page handles. This daemon is also where the boa
+        JS engine lives — the engine runs outside the page, which is why
+        <a href="/en/script.html"><code>script</code></a> survives whole-page hard navigations without losing
+        state. If a session starts misbehaving —
         commands hitting the wrong tab, refs/handles looking stale, or a stale worker left over because you
         upgraded <code>chrome-use</code> mid-session — just restart the daemon; don't go hunting for the PID with
         <code>pgrep</code>/<code>kill</code>:

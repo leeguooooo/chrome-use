@@ -161,6 +161,13 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use batch <span class="du-str">"press d --hold 900"</span> <span class="du-str">"press j"</span> <span class="du-str">"press j"</span> <span class="du-str">"wait 200"</span> <span class="du-str">"press d --hold 500"</span></code></pre>
       </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">🪜 batch is a fixed sequence only</div>
+        batch steps can't pass values between each other, and there are no loops or conditions — it's a hard-coded run of actions.
+        To decide the next step from the last one, or to loop or branch, use <a href="/en/script.html">script</a> (values between steps +
+        loops + conditions + assertions, still one round trip); for continuous real-time driving, use the <code>stream</code> WebSocket below.
+        Pick the layer that's just enough.
+      </div>
 
       <h2>Read engine globals instead of guessing pixels</h2>
       <p>

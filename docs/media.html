@@ -188,9 +188,10 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 输出格式与限制</div>
-        默认输出 <strong>WebM</strong>（VP8/VP9 编码），所有现代浏览器与播放器都能放。录制会给自动化带来轻微开销，
-        长录像很占磁盘，个别无头环境可能有编解码限制。编解码选项、GIF 导出等更多细节见
-        <code>references/video-recording.md</code>。
+        录制通过 <strong>ffmpeg</strong> 把 CDP 截帧编码成视频，所以机器上得装好 ffmpeg。输出格式由<strong>文件扩展名</strong>决定：
+        <code>.webm</code> 走 VP8（<code>libvpx</code>），其它扩展名（比如 <code>.mp4</code>）走 H.264（<code>libx264</code>）——没有 GIF 导出。
+        录制会给自动化带来轻微开销，长录像很占磁盘，个别无头环境可能缺编解码器。
+        skill 包里的 <code>references/video-recording.md</code> 有更多录制范例（仓库内文件，文档站不提供跳转）。
       </div>
 
       <hr class="du-divider" />

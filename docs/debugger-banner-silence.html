@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>方案 · 静音 "chrome-use started debugging this browser" 提示条</title>
+<title>静音 "chrome-use started debugging this browser" 提示条</title>
 <style>
   :root {
     --fg: #1a1a1a;
@@ -55,6 +55,7 @@
     padding: 12px 16px; margin: 18px 0; border-radius: 0 8px 8px 0;
   }
   aside.note { border-left-color: var(--warn); background: #fbf6e9; }
+  aside.now { border-left-color: var(--ok); background: #eef8f1; }
   aside p:first-child { margin-top: 0; } aside p:last-child { margin-bottom: 0; }
   .tag { display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
     border-radius: 99px; border: 1px solid var(--border); background: var(--soft); color: var(--muted); }
@@ -66,6 +67,19 @@
     color: var(--muted); font-size: 0.8rem; }
   .kbd { font-family: ui-monospace, monospace; font-size: 0.8em; border: 1px solid var(--border);
     border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: #fff; }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e8e6e1; --muted: #9a978f; --bg: #16150f; --soft: #201f18;
+      --border: #35332b; --accent: #e0885f; --accent-soft: #2a1f18;
+      --ok: #6bbf8a; --warn: #d0a860; --code-bg: #201f18;
+    }
+    aside.note { background: #2a2413; }
+    aside.now { background: #182619; }
+    .kbd { background: #201f18; }
+    .lede { color: var(--muted); }
+    .tag.rec { background: #182619; border-color: #2f5a3f; }
+  }
 </style>
 </head>
 <body>
@@ -73,53 +87,74 @@
   <header class="doc">
     <h1>静音 <code>"chrome-use" started debugging this browser</code> 提示条</h1>
     <div class="meta">
-      <span><b>类型</b> 调研 + 方案</span>
-      <span><b>状态</b> 已解决:扩展 0.5.5+ 只 attach agent 自建标签页(用户标签页不再触发);方案 A 已落地为 <code>extension connect --silent</code></span>
-      <span><b>关联</b> ab-connect relay 路径 · 用户反馈 · <a href="/troubleshooting.html">故障排查 Q&amp;A</a></span>
-      <span><b>日期</b> 2026-06-24(调研) · 2026-07-06(更新为已解决)</span>
+      <span><b>类型</b> 调研 + 方案（已落地）</span>
+      <span><b>状态</b> 已解决：扩展 0.5.5+ 只 attach agent 自建标签页（用户标签页不再触发）；方案 A 已落地为 <code>extension connect --silent</code></span>
+      <span><b>关联</b> ab-connect relay 路径 · <a href="/how-it-works.html">它怎么工作</a> · <a href="/troubleshooting.html">故障排查 Q&amp;A</a></span>
+      <span><b>日期</b> 2026-06-24（调研）· 2026-07-06（更新为已解决）</span>
     </div>
   </header>
 
-  <p class="lede">用户想在 relay(扩展 connect)模式下驱动自己已登录的真实 Chrome,但每次都被
+  <p class="lede">用户想在 relay（扩展 connect）模式下驱动自己已登录的真实 Chrome，但每次都被
   Chrome 顶部那条 <code>"chrome-use" started debugging this browser&nbsp;[Cancel]&nbsp;[×]</code>
-  提示条打扰,且右上角的 <span class="kbd">×</span> 关不掉。本文说明它的本质、为什么关不掉,以及三个落地方案的取舍。</p>
+  提示条打扰，且右上角的 <span class="kbd">×</span> 关不掉。本文说明它的本质、为什么关不掉，以及三个落地方案的取舍。</p>
+
+  <h2>现在怎么做</h2>
+  <aside class="now">
+    <p><strong>大多数人根本不用管这条提示条。</strong> 扩展 0.5.5 起，agent 只 attach 自己新建的标签页，
+    你正在看的标签页不会被 attach，也就不会弹这条横幅（链路原理见 <a href="/how-it-works.html">它怎么工作</a>）。</p>
+  </aside>
+  <p>万一你确实撞见它（某个 agent 标签页被 attach、横幅碍事），跑一次下面这条，在提示处按回车即可：</p>
+  <pre><code>chrome-use extension connect
+# 提示：Restart Chrome now? [Y/n]  ← 直接回车 = 重启
+# Chrome 一次性重启（约 2 秒），标签和登录自动恢复，这台 Chrome 整段会话不再有横幅</code></pre>
+  <ul>
+    <li><code>chrome-use extension connect --silent</code>：跳过确认，直接重启。</li>
+    <li><code>chrome-use extension connect --keep-banner</code>：完全不碰浏览器，保留横幅。</li>
+    <li>默认（不带 flag）在交互终端里会先问一句 <code>Restart Chrome now? [Y/n]</code>，回车即同意；非交互环境不动浏览器，只打印一行提示。</li>
+  </ul>
+  <p>实现见 <span class="path">cli/src/silence.rs</span>。</p>
+
+  <aside class="note">
+    <p><strong>以下是当时（2026-06-24）的原始调研</strong>，记录这条提示条的本质、为什么关不掉，
+    以及在落地成上面这条命令之前对三个方案的取舍推演。结论已落地，下文只为解释「为什么是这样」。</p>
+  </aside>
 
   <h2>1 · 这条提示条是什么</h2>
   <p>它<strong>不是</strong>常见的「Chrome 正受自动化测试软件控制」黄条。那条由 <code>enable-automation</code>
-  开关触发;这条来自 <strong><code>chrome.debugger</code> 扩展 API</strong> —— 任何扩展调用
-  <code>chrome.debugger.attach()</code> 时,Chrome 都会强制弹出
-  <code>&lt;扩展名&gt; started debugging this browser</code>,以此告知用户「有扩展正在以调试器权限读写本浏览器」。</p>
+  开关触发；这条来自 <strong><code>chrome.debugger</code> 扩展 API</strong> —— 任何扩展调用
+  <code>chrome.debugger.attach()</code> 时，Chrome 都会强制弹出
+  <code>&lt;扩展名&gt; started debugging this browser</code>，以此告知用户「有扩展正在以调试器权限读写本浏览器」。</p>
 
-  <p>在本项目里,这条提示由 relay 链路触发:</p>
+  <p>在本项目里，这条提示由 relay 链路触发：</p>
   <table>
     <tr><th>位置</th><th>行为</th></tr>
     <tr><td><span class="path">extensions/ab-connect/background.js:401</span></td>
         <td><code>chrome.debugger.attach(dbg, '1.3')</code> —— 提示条的直接来源</td></tr>
     <tr><td><span class="path">extensions/ab-connect/background.js:268 / 412</span></td>
-        <td>之后所有 CDP 命令走 <code>chrome.debugger.sendCommand(...)</code>,提示条全程驻留</td></tr>
+        <td>之后所有 CDP 命令走 <code>chrome.debugger.sendCommand(...)</code>，提示条全程驻留</td></tr>
   </table>
 
-  <h2>2 · 为什么 × 关不掉(这是 Chrome 的设计)</h2>
+  <h2>2 · 为什么 × 关不掉（这是 Chrome 的设计）</h2>
   <ul>
-    <li>这条 infobar 唯一<strong>有效</strong>的动作是 <code>Cancel</code> —— 点了会 <code>detach</code> 调试器,
+    <li>这条 infobar 唯一<strong>有效</strong>的动作是 <code>Cancel</code> —— 点了会 <code>detach</code> 调试器，
         也就是直接断开我们的自动化。</li>
-    <li>右上角的 <span class="kbd">×</span> 顶多视觉上收一下,只要调试会话还在,Chrome 会再弹回来。</li>
-    <li><strong>不存在「保留自动化 + 隐藏提示」的运行时手段</strong>:JS、CDP、扩展 API 都改不了一个已经在运行的
-        Chrome 进程的这条提示。这是安全设计,刻意如此。</li>
+    <li>右上角的 <span class="kbd">×</span> 顶多视觉上收一下，只要调试会话还在，Chrome 会再弹回来。</li>
+    <li><strong>不存在「保留自动化 + 隐藏提示」的运行时手段</strong>：JS、CDP、扩展 API 都改不了一个已经在运行的
+        Chrome 进程的这条提示。这是安全设计，刻意如此。</li>
   </ul>
 
-  <h2>3 · 唯一干净的抑制方式:启动开关</h2>
-  <p>Chrome 有一个命令行开关 <code>--silent-debugger-extension-api</code>,专门静音这条
-  <code>chrome.debugger</code> 提示条。关键约束:</p>
+  <h2>3 · 唯一干净的抑制方式：启动开关</h2>
+  <p>Chrome 有一个命令行开关 <code>--silent-debugger-extension-api</code>，专门静音这条
+  <code>chrome.debugger</code> 提示条。关键约束：</p>
   <aside class="note">
-    <p><strong>它必须在 Chrome 启动那一刻就带上,无法注入到已经运行的 Chrome。</strong>
-    而 relay 路径恰恰是 attach 到「用户自己已经开着的」普通 Chrome —— 所以要静音,就得让那个 Chrome
+    <p><strong>它必须在 Chrome 启动那一刻就带上，无法注入到已经运行的 Chrome。</strong>
+    而 relay 路径恰恰是 attach 到「用户自己已经开着的」普通 Chrome —— 所以要静音，就得让那个 Chrome
     带着这个 flag <strong>冷启动一次</strong>。</p>
   </aside>
 
-  <h3>对照:为什么 <code>--profile</code> / <code>--launch</code> 自启路径没有这条</h3>
-  <p>项目里 chrome-use 自己拉起 Chrome 的路径走的是 <code>--remote-debugging-port</code>(CDP 直连,见
-  <span class="path">cli/src/native/cdp/chrome.rs:209</span>),根本不用 <code>chrome.debugger</code> 扩展 API,
+  <h3>对照：为什么 <code>--profile</code> / <code>--launch</code> 自启路径没有这条</h3>
+  <p>项目里 chrome-use 自己拉起 Chrome 的路径走的是 <code>--remote-debugging-port</code>（CDP 直连，见
+  <span class="path">cli/src/native/cdp/chrome.rs:209</span>），根本不用 <code>chrome.debugger</code> 扩展 API，
   因此天然没有这条提示条。问题只发生在 relay 路径。</p>
 
   <h2>4 · 三个方案及取舍</h2>
@@ -127,94 +162,94 @@
     <tr><th style="width:13%">方案</th><th>做法</th><th>体验</th><th>代价</th></tr>
     <tr>
       <td><b>A</b> <span class="tag rec">推荐</span></td>
-      <td>在 <code>extension connect</code> 加「静音模式」:检测到真实 Chrome 在跑就提示用户,确认后
-          <span class="kbd">Cmd-Q</span> 全退,再带 <code>--silent-debugger-extension-api</code>
+      <td>在 <code>extension connect</code> 加「静音模式」：检测到真实 Chrome 在跑就提示用户，确认后
+          <span class="kbd">Cmd-Q</span> 全退，再带 <code>--silent-debugger-extension-api</code>
           冷启动<strong>同一个 user-data-dir</strong>。</td>
-      <td>一次重启后<strong>彻底无提示条</strong>;profile 不变 → 所有登录态保留。最贴合「想用但不想被提示」。</td>
-      <td>需整体退出 + 冷启一次,打断用户当下窗口状态(标签页由 Chrome 自身恢复)。</td>
+      <td>一次重启后<strong>彻底无提示条</strong>；profile 不变 → 所有登录态保留。最贴合「想用但不想被提示」。</td>
+      <td>需整体退出 + 冷启一次，打断用户当下窗口状态（标签页由 Chrome 自身恢复）。</td>
     </tr>
     <tr>
       <td><b>B</b></td>
-      <td>永久设置:让用户固定用带 flag 的方式开 Chrome(LaunchAgent / shell alias / 改快捷方式),
+      <td>永久设置：让用户固定用带 flag 的方式开 Chrome（LaunchAgent / shell alias / 改快捷方式），
           例如 <code>open -a "Google Chrome" --args --silent-debugger-extension-api</code>。</td>
-      <td>装一次,之后<strong>每个 session 都无提示</strong>。</td>
-      <td>macOS 上 <code>--args</code> 只在<strong>冷启动</strong>生效;从 Dock 正常点开就不带 flag 了。安装有门槛、易踩坑。</td>
+      <td>装一次，之后<strong>每个 session 都无提示</strong>。</td>
+      <td>macOS 上 <code>--args</code> 只在<strong>冷启动</strong>生效；从 Dock 正常点开就不带 flag 了。安装有门槛、易踩坑。</td>
     </tr>
     <tr>
       <td><b>C</b></td>
-      <td>不动提示条,只把文案讲清楚(在 skill / connect 输出里说明「这条是 Chrome 安全提示,× 关不掉,
-          点 Cancel 会断开」)。</td>
+      <td>不动提示条，只把文案讲清楚（在 skill / connect 输出里说明「这条是 Chrome 安全提示，× 关不掉，
+          点 Cancel 会断开」）。</td>
       <td>零改动、零风险。</td>
-      <td>没解决用户诉求,每次仍被打扰。</td>
+      <td>没解决用户诉求，每次仍被打扰。</td>
     </tr>
   </table>
 
-  <h2>5 · 推荐:方案 A(为小白设计)</h2>
+  <h2>5 · 推荐：方案 A（为小白设计）</h2>
   <aside>
-    <p><strong>设计第一原则:用户什么 flag 都不碰。</strong> 不是教用户敲 <code>Cmd-Q</code> + <code>open --args</code>(那是开发者操作,小白做不到),
-    而是 <strong>chrome-use 自己检测、自己重启、自己恢复</strong>。用户的全部操作 = 看到一句大白话,<strong>按一下回车</strong>。</p>
+    <p><strong>设计第一原则：用户什么 flag 都不碰。</strong> 不是教用户敲 <code>Cmd-Q</code> + <code>open --args</code>（那是开发者操作，小白做不到），
+    而是 <strong>chrome-use 自己检测、自己重启、自己恢复</strong>。用户的全部操作 = 看到一句大白话，<strong>按一下回车</strong>。</p>
   </aside>
 
-  <h3>用户视角:从 4 步降到 0 步</h3>
+  <h3>用户视角：从 4 步降到 0 步</h3>
   <table>
-    <tr><th style="width:50%">手动方案(开发者级 · ❌ 小白做不到)</th><th>方案 A(工具代劳 · ✅ 小白可用)</th></tr>
+    <tr><th style="width:50%">手动方案（开发者级 · ❌ 小白做不到）</th><th>方案 A（工具代劳 · ✅ 小白可用）</th></tr>
     <tr>
       <td>① <code>Cmd-Q</code> 彻底退出 Chrome<br>② 终端敲 <code>open -a "Google Chrome" --args --silent-debugger-extension-api</code><br>③ 担心标签页丢了<br>④ 再手动 <code>extension connect</code></td>
-      <td>① 照常用 chrome-use →<br>工具弹一句:「需要重启 Chrome 去掉提示,标签和登录都会自动恢复。现在重启?[回车=好]」<br>② 按回车。完。</td>
+      <td>① 照常用 chrome-use →<br>工具弹一句：「需要重启 Chrome 去掉提示，标签和登录都会自动恢复。现在重启？[回车=好]」<br>② 按回车。完。</td>
     </tr>
   </table>
 
-  <h3>交互形态(默认回车=同意)</h3>
-  <pre><code># chrome-use 检测到:真实 Chrome 在跑 + 未带 flag + 会弹提示条 → 自动提示:
+  <h3>交互形态（默认回车=同意）</h3>
+  <pre><code># chrome-use 检测到：真实 Chrome 在跑 + 未带 flag + 会弹提示条 → 自动提示：
 
-  为去掉 Chrome 顶部那条「调试提示」,需要把 Chrome 重启一次。
-  你的标签页和登录都会自动恢复,大约 2 秒。现在重启?[回车=好 / n=不用]
+  为去掉 Chrome 顶部那条「调试提示」，需要把 Chrome 重启一次。
+  你的标签页和登录都会自动恢复，大约 2 秒。现在重启？[回车=好 / n=不用]
 
-# 回车 → 工具全自动:
-#   1. 优雅退出 Chrome(AppleScript `quit`,让 Chrome 自己存会话)
-#   2. 冷启动同一 profile,附带:
+# 回车 → 工具全自动：
+#   1. 优雅退出 Chrome（AppleScript `quit`，让 Chrome 自己存会话）
+#   2. 冷启动同一 profile，附带：
 #        --silent-debugger-extension-api   ← 静音提示条
 #        --restore-last-session            ← 强制恢复刚才的标签页
 #   3. 重新连上 relay
-# 结果:Chrome 闪一下,标签 + 登录原样回来,顶部提示条消失。</code></pre>
+# 结果：Chrome 闪一下，标签 + 登录原样回来，顶部提示条消失。</code></pre>
 
-  <h3>实现要点(留给落地阶段)</h3>
+  <h3>实现要点（已落地，见 <code>cli/src/silence.rs</code>）</h3>
   <ul>
-    <li><strong>标签不能丢(小白最在意的)</strong>:重启时加 <code>--restore-last-session</code>,<strong>强制</strong>恢复上次会话,
+    <li><strong>标签不能丢（小白最在意的）</strong>：重启时加 <code>--restore-last-session</code>，<strong>强制</strong>恢复上次会话，
         不依赖用户有没有把「启动时」设成「继续浏览上次打开的网页」。这是把自动重启变安全的关键一招。</li>
-    <li><strong>定位 profile</strong>:复用 <code>get_chrome_user_data_dirs()</code>(<span class="path">cli/src/native/cdp/chrome.rs:901</span>),
-        重启时带回原 <code>--user-data-dir</code> 与原 <code>--profile-directory</code>,确保是同一份登录态。</li>
-    <li><strong>优雅退出而非 kill</strong>:用 AppleScript <code>tell application "Google Chrome" to quit</code>(等价 <span class="kbd">Cmd-Q</span>),
-        让 Chrome 落盘保存会话;轮询确认进程真的退出后再冷启。绝不 <code>kill -9</code>(会丢会话)。</li>
-    <li><strong>幂等 / 不打扰</strong>:若检测到 Chrome 已带 flag(进程 cmdline 里有它)→ 直接跳过,不重启、不提示。</li>
-    <li><strong>opt-in + 记住选择</strong>:必须显式确认才重启,绝不静默退用户浏览器;同意后写入配置,后续同一 Chrome 会话不再追问
-        (flag 随进程存活,Chrome 不关就一直无提示,正常用户开着 Chrome 数天 → 实际只重启一次)。</li>
-    <li><strong>不要叠加 <code>--remote-debugging-port</code></strong>:relay 路径靠扩展 + native messaging,不需要也不应开放 raw CDP 端口
-        (会触发另一个「Allow remote debugging?」弹窗,见 <span class="path">cli/src/native/cdp/chrome.rs:895-897</span>)。本方案只加上面两个 flag。</li>
+    <li><strong>定位 profile</strong>：复用 <code>get_chrome_user_data_dirs()</code>（<span class="path">cli/src/native/cdp/chrome.rs:901</span>），
+        重启时带回原 <code>--user-data-dir</code> 与原 <code>--profile-directory</code>，确保是同一份登录态。</li>
+    <li><strong>优雅退出而非 kill</strong>：用 AppleScript <code>tell application "Google Chrome" to quit</code>（等价 <span class="kbd">Cmd-Q</span>），
+        让 Chrome 落盘保存会话；轮询确认进程真的退出后再冷启。绝不 <code>kill -9</code>（会丢会话）。</li>
+    <li><strong>幂等 / 不打扰</strong>：若检测到 Chrome 已带 flag（进程 cmdline 里有它）→ 直接跳过，不重启、不提示。</li>
+    <li><strong>opt-in + 记住选择</strong>：必须显式确认才重启，绝不静默退用户浏览器；同意后写入配置，后续同一 Chrome 会话不再追问
+        （flag 随进程存活，Chrome 不关就一直无提示，正常用户开着 Chrome 数天 → 实际只重启一次）。</li>
+    <li><strong>不要叠加 <code>--remote-debugging-port</code></strong>：relay 路径靠扩展 + native messaging，不需要也不应开放 raw CDP 端口
+        （会触发另一个「Allow remote debugging?」弹窗，见 <span class="path">cli/src/native/cdp/chrome.rs:895-897</span>）。本方案只加上面两个 flag。</li>
   </ul>
 
   <aside>
-    <p><strong>诚实声明</strong>:<code>--silent-debugger-extension-api</code> 移除的是 Chrome 出于安全考量、
-    刻意展示的「有扩展在调试本浏览器」提示。对「用户在自己机器上、用自己的 agent 驱动自己的 Chrome」这一第一方自用场景是合理的;
-    但这一点应在文档与 <code>--silent</code> 的确认语里讲明,而不是悄悄抹掉。</p>
+    <p><strong>诚实声明</strong>：<code>--silent-debugger-extension-api</code> 移除的是 Chrome 出于安全考量、
+    刻意展示的「有扩展在调试本浏览器」提示。对「用户在自己机器上、用自己的 agent 驱动自己的 Chrome」这一第一方自用场景是合理的；
+    但这一点应在文档与 <code>--silent</code> 的确认语里讲明，而不是悄悄抹掉。</p>
   </aside>
 
-  <h2>6 · 跨平台(Windows / macOS / Linux)</h2>
-  <p>用户不只在 Mac。<strong>两个 flag 本身是跨平台的 Chromium 开关,各平台都认</strong> ——
+  <h2>6 · 跨平台（Windows / macOS / Linux）</h2>
+  <p>用户不只在 Mac。<strong>两个 flag 本身是跨平台的 Chromium 开关，各平台都认</strong> ——
   需要分平台处理的只是「找 Chrome、优雅退出、冷启」这层 OS 管道。flag 拼接共用。</p>
   <table>
     <tr><th style="width:16%">步骤</th><th>macOS</th><th>Windows</th><th>Linux</th></tr>
     <tr>
       <td><strong>找 Chrome</strong></td>
       <td><code>/Applications/Google&nbsp;Chrome.app/…</code></td>
-      <td>注册表 App Paths <code>chrome.exe</code>,或 <code>%ProgramFiles%\Google\Chrome\Application\chrome.exe</code></td>
+      <td>注册表 App Paths <code>chrome.exe</code>，或 <code>%ProgramFiles%\Google\Chrome\Application\chrome.exe</code></td>
       <td><code>which google-chrome / chromium</code></td>
     </tr>
     <tr>
-      <td><strong>优雅退出<br>(存会话)</strong></td>
+      <td><strong>优雅退出<br>（存会话）</strong></td>
       <td><code>osascript -e 'tell application "Google Chrome" to quit'</code></td>
-      <td><code>taskkill /IM chrome.exe</code><br>(<strong>不带 <code>/F</code></strong>)</td>
-      <td><code>pkill -TERM chrome</code><br>(<strong>SIGTERM,非 SIGKILL</strong>)</td>
+      <td><code>taskkill /IM chrome.exe</code><br>（<strong>不带 <code>/F</code></strong>）</td>
+      <td><code>pkill -TERM chrome</code><br>（<strong>SIGTERM，非 SIGKILL</strong>）</td>
     </tr>
     <tr>
       <td><strong>确认已退出</strong></td>
@@ -229,28 +264,28 @@
       <td><code>google-chrome &lt;flags&gt; &amp;</code></td>
     </tr>
   </table>
-  <p style="margin-top:6px"><strong>flags 全平台一致</strong>:<code>--silent-debugger-extension-api --restore-last-session</code></p>
+  <p style="margin-top:6px"><strong>flags 全平台一致</strong>：<code>--silent-debugger-extension-api --restore-last-session</code></p>
 
-  <h3>各平台的坑(都关系到「会话别丢」)</h3>
+  <h3>各平台的坑（都关系到「会话别丢」）</h3>
   <ul>
-    <li><strong>Windows 最关键</strong>:绝不用 <code>taskkill /F</code> 或 PowerShell <code>Stop-Process</code> —— 那是强杀,
-        Chrome 当成崩溃,<code>--restore-last-session</code> 会退化成弹「恢复」气泡甚至丢标签。必须用<strong>不带 <code>/F</code></strong>的
-        <code>taskkill</code>,让 Chrome 正常落盘 last session,再配 <code>--restore-last-session</code> 才稳。</li>
-    <li><strong>macOS</strong>:<code>open --args</code> 只在<strong>冷启</strong>生效,所以必须先确认完全退出再启。</li>
-    <li><strong>全平台共有</strong>:某页带 <code>beforeunload</code>(「确定离开?」)会卡住优雅退出 → 实现里要<strong>超时后提示用户</strong>,
+    <li><strong>Windows 最关键</strong>：绝不用 <code>taskkill /F</code> 或 PowerShell <code>Stop-Process</code> —— 那是强杀，
+        Chrome 当成崩溃，<code>--restore-last-session</code> 会退化成弹「恢复」气泡甚至丢标签。必须用<strong>不带 <code>/F</code></strong>的
+        <code>taskkill</code>，让 Chrome 正常落盘 last session，再配 <code>--restore-last-session</code> 才稳。</li>
+    <li><strong>macOS</strong>：<code>open --args</code> 只在<strong>冷启</strong>生效，所以必须先确认完全退出再启。</li>
+    <li><strong>全平台共有</strong>：某页带 <code>beforeunload</code>（「确定离开？」）会卡住优雅退出 → 实现里要<strong>超时后提示用户</strong>，
         而不是超时就强杀丢会话。</li>
   </ul>
-  <p>CLI 里 <span class="path">cli/src/native/cdp/chrome.rs</span> 已有按 OS 解析 Chrome 路径的逻辑,退出/冷启层照同样的
+  <p>CLI 里 <span class="path">cli/src/native/cdp/chrome.rs</span> 已有按 OS 解析 Chrome 路径的逻辑，退出/冷启层照同样的
   <code>#[cfg(target_os)]</code> 分支写即可。</p>
 
   <h2>7 · 一句话结论</h2>
-  <p>提示条来自 <code>chrome.debugger</code>,× 关不掉是 Chrome 故意的;运行时无解。唯一干净的静音是用
+  <p>提示条来自 <code>chrome.debugger</code>，× 关不掉是 Chrome 故意的；运行时无解。唯一干净的静音是用
   <code>--silent-debugger-extension-api</code> <strong>冷启动用户的 Chrome</strong>。但别让用户自己敲命令 ——
-  让 <strong>chrome-use 自己检测、自己优雅重启、自己恢复标签</strong>(<code>--restore-last-session</code>),
-  用户只需<strong>按一下回车</strong>:标签和登录原样回来,提示条消失。一次重启换这台 Chrome 整段会话无打扰。</p>
+  让 <strong>chrome-use 自己检测、自己优雅重启、自己恢复标签</strong>（<code>--restore-last-session</code>），
+  用户只需<strong>按一下回车</strong>：标签和登录原样回来，提示条消失。一次重启换这台 Chrome 整段会话无打扰。</p>
 
   <footer>
-    chrome-use / agent-browser-stealth · 调研 + 方案 · 已落地 <code>extension connect</code>(<code>--silent</code> / <code>--keep-banner</code>,默认交互确认;<code>cli/src/silence.rs</code>) · 2026-06-24
+    chrome-use / agent-browser-stealth · 调研 + 方案 · 已落地 <code>extension connect</code>（<code>--silent</code> / <code>--keep-banner</code>，默认交互确认；<code>cli/src/silence.rs</code>）· 2026-06-24
   </footer>
 </main>
 </body>

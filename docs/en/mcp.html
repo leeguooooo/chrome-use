@@ -97,12 +97,30 @@
 
       <h2>Extended profile: --tools all</h2>
       <p>
-        The default 12 tools cover most tasks, but when a host needs more — hover, dropdown select,
-        screenshots, multi-tab, extraction, assertions, finding, network interception, site adapters,
-        upload/download — add <code>--tools all</code> to expand the profile from 12 to
-        <strong>24 tools</strong>: the core 12 plus hover / select / screenshot / scroll / tabs /
-        extract / expect / find / network_route / site / upload / download.
+        The default 12 tools cover most tasks. When a host needs more, add <code>--tools all</code> to
+        expand the profile from 12 to <strong>24 tools</strong> — the core 12 plus the ones below
+        (still not full CLI parity):
       </p>
+
+      <table>
+        <thead>
+          <tr><th>Tool</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>chrome_use_hover</code></td><td>Hover the pointer over an element</td></tr>
+          <tr><td><code>chrome_use_select</code></td><td>Pick an option in a <code>&lt;select&gt;</code> dropdown</td></tr>
+          <tr><td><code>chrome_use_screenshot</code></td><td>Capture a screenshot (output only, not for reading)</td></tr>
+          <tr><td><code>chrome_use_scroll</code></td><td>Scroll the page or a container</td></tr>
+          <tr><td><code>chrome_use_tabs</code></td><td>List / switch this session's tabs</td></tr>
+          <tr><td><code>chrome_use_extract</code></td><td>Scrape the page into structured JSON by schema</td></tr>
+          <tr><td><code>chrome_use_expect</code></td><td>Assert a condition, erroring if it fails</td></tr>
+          <tr><td><code>chrome_use_find</code></td><td>Locate an element or tab by text / URL</td></tr>
+          <tr><td><code>chrome_use_network_route</code></td><td>Intercept / rewrite network requests</td></tr>
+          <tr><td><code>chrome_use_site</code></td><td>Run a community site adapter for structured extraction</td></tr>
+          <tr><td><code>chrome_use_upload</code></td><td>Upload a file to a file input</td></tr>
+          <tr><td><code>chrome_use_download</code></td><td>Trigger and capture a download</td></tr>
+        </tbody>
+      </table>
 
       <div class="du-code">
         <div class="du-code-head">
@@ -158,6 +176,58 @@
         for it to take effect.
       </div>
 
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Know your transport: stdio vs HTTP</div>
+        <code>chrome-use mcp</code> speaks <strong>stdio only</strong> — the host spawns the process and
+        talks to it over stdin/stdout. Hosts that can launch a local process from a <code>command</code>
+        + <code>args</code> (Claude Desktop, n8n) wire it up directly. But <strong>ChatGPT connectors and
+        Dify only accept a remote HTTP/SSE MCP endpoint</strong> — they won't spawn a local process, so
+        they can't reach a bare stdio server. You bridge stdio to HTTP/SSE first (below).
+      </div>
+
+      <h2>Wiring up n8n</h2>
+      <p>
+        n8n's MCP Client node can launch a stdio server by command, configured just like Claude Desktop —
+        set the command to <code>chrome-use</code> (or its absolute path) and the arguments to
+        <code>mcp</code>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">n8n · MCP Client (STDIO)</span>
+        </div>
+<pre><code><span class="du-cmt"># Command</span>
+chrome-use
+<span class="du-cmt"># Arguments (use "mcp --tools all" for the extended profile)</span>
+mcp</code></pre>
+      </div>
+
+      <h2>Wiring up ChatGPT connectors / Dify (needs an HTTP bridge)</h2>
+      <p>
+        These hosts only accept a URL to a remote MCP endpoint; they don't spawn a local process. Run a
+        stdio→SSE bridge (such as <code>supergateway</code>) to wrap <code>chrome-use mcp</code> as an
+        HTTP/SSE endpoint, then paste that URL into the host's MCP / connector config:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># expose the stdio server as a local SSE endpoint</span>
+<span class="du-prompt">$</span> npx -y supergateway <span class="du-flag">--stdio</span> <span class="du-str">"chrome-use mcp"</span> <span class="du-flag">--port</span> 8000
+<span class="du-cmt"># endpoint: http://localhost:8000/sse — paste into the connector / Dify MCP config</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ The bridge isn't part of chrome-use</div>
+        <code>supergateway</code> is a third-party general-purpose tool; chrome-use doesn't bundle it.
+        ChatGPT connectors also require the endpoint to be publicly reachable (tunnel the local address
+        first), and the machine running the bridge must be able to reach your real Chrome — the actual
+        work still happens through the local extension + native-messaging path.
+      </div>
+
       <hr class="du-divider" />
 
       <h2>How it works</h2>
@@ -176,6 +246,30 @@
         part still runs through the browser extension covered in <a href="/en/install.html">Install &amp; Setup</a>.
         Get the extension working there and confirm <code>chrome-use snapshot -i</code> runs, then wire
         the MCP server into your host.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>Session isolation: the session argument</h2>
+      <p>
+        Every tool takes an optional <code>session</code> argument that maps to the CLI's
+        <code>--session &lt;name&gt;</code>. <strong>Omit it and every call shares one default
+        session</strong> — successive calls from the same host reuse one background daemon and one set of
+        tabs, so a navigation or login from an earlier call is still there on the next. To run parallel,
+        non-interfering flows, pass a distinct <code>session</code> name per flow; each gets its own
+        daemon and tab group. A daemon auto-exits after 10 minutes idle and closes the tabs it created
+        (<code>AGENT_BROWSER_IDLE_TIMEOUT_MS</code> overrides, 0 disables).
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">🪜 Don't drive multi-step flows one action per round-trip</div>
+        Over MCP, every tool call costs a model inference, so driving one verb at a time is the most
+        expensive way to run a multi-step flow. A fixed sequence collapses into one round-trip with
+        <code>batch</code>; passing values between steps plus loops and conditions is what
+        <a href="/en/script.html">single-pass scripting (script)</a> adds — it's currently a CLI verb,
+        not yet an MCP tool, but inside MCP you can push multi-step logic into one call with
+        <code>chrome_use_eval</code> running JavaScript on the page. See
+        <a href="/en/script.html">Single-pass Scripting</a> for the reasoning.
       </div>
 
       <hr class="du-divider" />

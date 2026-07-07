@@ -33,7 +33,7 @@
 
       <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
+          <use href="/assets/docs/doodles.svg#star"/>
         </svg>
       </span>
 
@@ -48,10 +48,9 @@
       </div>
 
       <p class="du-lede">
-        Reading is the starting point of every browser operation. <code>snapshot</code> turns the page into
+        <code>snapshot</code> turns the page into
         <span class="mark">an accessibility tree with refs</span> — you click and type based on it; <code>get text</code>
-        grabs body text across every frame, piercing even closed shadow DOM. This page makes clear
-        "how to understand a page" so that the interactions that follow are well-aimed.
+        grabs body text across every frame, piercing even closed shadow DOM.
       </p>
 
       <!-- ============ SECTION ======= -->
@@ -225,6 +224,15 @@ URL: https://example.com/login
         outline only), <code>--filter &lt;text&gt;</code> (keep only matching sections/headings), and
         <code>--timeout &lt;ms&gt;</code>. <code>--json</code> returns metadata alongside the content.
       </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ A doc-lookup workflow</div>
+        For an unfamiliar docs site, start with <code>read https://site/docs/ --llms index</code>
+        to list the pages its <code>llms.txt</code> advertises (it walks up to the nearest
+        <code>llms.txt</code>), then <code>read &lt;page&gt; --require-md</code> to demand the
+        markdown version; without <code>--require-md</code> it falls back to HTML-extracted prose.
+        <code>--llms</code> can't be combined with <code>--outline</code>.
+      </div>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ read vs. snapshot/extract</div>

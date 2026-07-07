@@ -159,6 +159,12 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use batch <span class="du-str">"press d --hold 900"</span> <span class="du-str">"press j"</span> <span class="du-str">"press j"</span> <span class="du-str">"wait 200"</span> <span class="du-str">"press d --hold 500"</span></code></pre>
       </div>
+      <div class="du-callout tip">
+        <div class="du-callout-title">🪜 batch 只跑固定序列</div>
+        batch 的步骤之间不能传值，也没有循环和条件——它就是一串定死的动作。要按上一步结果决定下一步、要循环或条件，
+        用 <a href="/script.html">script</a>（步骤间传值 + 循环 + 条件 + 断言，仍是一次往返）；要持续实时驱动，用下面的
+        <code>stream</code> WebSocket。选到刚好够用的那层就行。
+      </div>
 
       <h2>读引擎全局变量，而不是猜像素</h2>
       <p>

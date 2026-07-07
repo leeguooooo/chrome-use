@@ -81,16 +81,18 @@
           <span class="du-code-name">bash</span>
         </div>
 <pre><code><span class="du-cmt"># pin a specific version</span>
-<span class="du-prompt">$</span> AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+<span class="du-prompt">$</span> AGENT_BROWSER_VERSION=v1.5.70 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 
 <span class="du-cmt"># install to a custom directory</span>
 <span class="du-prompt">$</span> AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
       </div>
 
       <ul>
-        <li><strong>Windows:</strong> download <code>chrome-use-win32-x64.tar.gz</code> from the <a href="https://github.com/leeguooooo/chrome-use/releases">Releases page</a> and put <code>chrome-use.exe</code> on your PATH.</li>
+        <li><strong>Windows:</strong> download <code>chrome-use-win32-x64.tar.gz</code> from the <a href="https://github.com/leeguooooo/chrome-use/releases">Releases page</a> and put <code>chrome-use.exe</code> on your PATH. The extension path for connecting to your real Chrome works on Windows too—see the next section.</li>
         <li><strong>npm (legacy):</strong> <code>npm install -g chrome-use</code> is still published, but GitHub Releases is the primary channel now.</li>
       </ul>
+
+      <p>For the list of pinnable tags, see <a href="/en/lineage.html">Lineage</a>—how the tags evolved from the <code>agent-browser</code> fork (early <code>v0.x-fork.N</code> tags) to today's <code>chrome-use</code> <code>v1.5.x</code> tags.</p>
 
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ Multiple installs can shadow each other</div>
@@ -109,7 +111,7 @@
       <ol>
         <li>
           <a href="https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk">Install the <strong>chrome-use</strong> extension from the Chrome Web Store</a> with a one-click <em>Add to Chrome</em>.
-          The store build stays stable across restarts, which suits unattended use.
+          The store build stays stable across restarts, which suits unattended use. Confirm you got the right one by the listing name <strong>chrome-use</strong> and extension ID <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code> (its repo codename is <code>ab-connect</code>).
         </li>
         <li>Register the native-messaging host—one time:</li>
       </ol>
@@ -128,9 +130,15 @@
 
       <p>
         From then on, <code>chrome-use open</code> drives your real, already-logged-in Chrome through <strong>native messaging</strong>—no debug port, no token,
-        and <strong>never an "Allow remote debugging?" prompt</strong>. The extension auto-updates and stays connected across restarts, for zero per-use confirmation. For how the connection works, see
+        and <strong>never an "Allow remote debugging?" prompt</strong>. The extension auto-updates and stays connected across restarts, so you never confirm again on later calls. For how the connection works, see
         <a href="/en/real-chrome.html">Connecting to your real Chrome</a>.
       </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Windows uses this extension path too</div>
+        <code>chrome-use extension install</code> works on Windows: it registers the native-messaging host in the <strong>HKCU registry</strong>,
+        then you add the extension once from the Web Store (Windows has no macOS-style silent force-install). After that, <code>chrome-use open</code> drives your logged-in Chrome the same way.
+      </div>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Don't want to touch your real Chrome?</div>
@@ -197,20 +205,13 @@
 <pre><code><span class="du-cmt"># take a screenshot of a page</span>
 <span class="du-prompt">$</span> chrome-use open https://example.com
 <span class="du-prompt">$</span> chrome-use screenshot home.png
-<span class="du-prompt">$</span> chrome-use close
-
-<span class="du-cmt"># search, click a result, screenshot again</span>
-<span class="du-prompt">$</span> chrome-use open https://duckduckgo.com
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># find the ref for the search box</span>
-<span class="du-prompt">$</span> chrome-use fill @e1 <span class="du-str">"chrome-use cli"</span>
-<span class="du-prompt">$</span> chrome-use press Enter
-<span class="du-prompt">$</span> chrome-use wait <span class="du-flag">--load</span> networkidle
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                      <span class="du-cmt"># refs now map to the results</span>
-<span class="du-prompt">$</span> chrome-use click @e5                        <span class="du-cmt"># click a result</span>
-<span class="du-prompt">$</span> chrome-use screenshot result.png</code></pre>
+<span class="du-prompt">$</span> chrome-use close</code></pre>
       </div>
 
-      <p>To get the fundamental <code>open → snapshot → click</code> rhythm, read <a href="/en/core-loop.html">The core loop</a> next.</p>
+      <p>
+        For the full <code>open → snapshot -i → fill → click</code> walkthrough (search, click a result, screenshot again), read <a href="/en/core-loop.html">The core loop</a>;
+        for every command and flag, see <a href="/en/commands.html">Commands</a>.
+      </p>
 
       <hr class="du-divider" />
 

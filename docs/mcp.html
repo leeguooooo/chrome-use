@@ -94,11 +94,30 @@
 
       <h2>扩展 profile：--tools all</h2>
       <p>
-        默认的 12 个工具够大多数任务用了，但需要更多能力时（悬停、下拉选择、截图、多标签、抓取、
-        断言、定位、网络拦截、站点适配器、上传/下载）——加 <code>--tools all</code>，
-        把 profile 从 12 个扩到<strong>24 个工具</strong>：核心 12 个之外再加上 hover / select /
-        screenshot / scroll / tabs / extract / expect / find / network_route / site / upload / download。
+        默认的 12 个工具够大多数任务用了。需要更多能力时加 <code>--tools all</code>，
+        把 profile 从 12 个扩到<strong>24 个工具</strong>——核心 12 个之外，再加上下面这些
+        （仍不是完整的 CLI 全集）：
       </p>
+
+      <table>
+        <thead>
+          <tr><th>工具</th><th>作用</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>chrome_use_hover</code></td><td>把鼠标悬停到某个元素上</td></tr>
+          <tr><td><code>chrome_use_select</code></td><td>选中 <code>&lt;select&gt;</code> 下拉项</td></tr>
+          <tr><td><code>chrome_use_screenshot</code></td><td>截图（仅作输出，不作为读取手段）</td></tr>
+          <tr><td><code>chrome_use_scroll</code></td><td>滚动页面或某个容器</td></tr>
+          <tr><td><code>chrome_use_tabs</code></td><td>列出 / 切换本会话的标签</td></tr>
+          <tr><td><code>chrome_use_extract</code></td><td>按 schema 把页面抓成结构化 JSON</td></tr>
+          <tr><td><code>chrome_use_expect</code></td><td>断言某个条件，不满足即报错</td></tr>
+          <tr><td><code>chrome_use_find</code></td><td>按文本 / URL 定位元素或标签</td></tr>
+          <tr><td><code>chrome_use_network_route</code></td><td>拦截 / 改写网络请求</td></tr>
+          <tr><td><code>chrome_use_site</code></td><td>跑社区站点适配器做结构化提取</td></tr>
+          <tr><td><code>chrome_use_upload</code></td><td>给文件输入框上传文件</td></tr>
+          <tr><td><code>chrome_use_download</code></td><td>触发并抓取一次下载</td></tr>
+        </tbody>
+      </table>
 
       <div class="du-code">
         <div class="du-code-head">
@@ -152,6 +171,55 @@
         的输出）。改完配置后<strong>重启 Claude Desktop</strong> 才会生效。
       </div>
 
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 先分清传输方式：stdio vs HTTP</div>
+        <code>chrome-use mcp</code> 只说 <strong>stdio</strong>——宿主拉起这个进程、用标准输入输出通信。
+        能按 <code>command</code> + <code>args</code> 拉起本地进程的宿主（Claude Desktop、n8n）直接接就行。
+        但 <strong>ChatGPT 的 connector 和 Dify 只认远程 HTTP/SSE 的 MCP 端点</strong>，不会替你拉起本地进程——
+        它们连不了裸的 stdio 服务器，得先用一层桥把 stdio 转成 HTTP/SSE（见下）。
+      </div>
+
+      <h2>接入 n8n</h2>
+      <p>
+        n8n 的 MCP Client 节点能按命令拉起一个 stdio server，配置和 Claude Desktop 是同一套——
+        命令填 <code>chrome-use</code>（或它的绝对路径），参数填 <code>mcp</code>：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">n8n · MCP Client (STDIO)</span>
+        </div>
+<pre><code><span class="du-cmt"># Command</span>
+chrome-use
+<span class="du-cmt"># Arguments（扩展 profile 就写 mcp --tools all）</span>
+mcp</code></pre>
+      </div>
+
+      <h2>接入 ChatGPT connector / Dify（需要 HTTP 桥）</h2>
+      <p>
+        这两个宿主只接受一个远程 MCP 端点的 URL，不会拉起本地进程。用一个 stdio→SSE 的桥
+        （比如 <code>supergateway</code>）把 <code>chrome-use mcp</code> 包成一个 HTTP/SSE 端点，
+        再把那个 URL 填进宿主的 MCP / connector 配置：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># 把 stdio 服务器暴露成本机的 SSE 端点</span>
+<span class="du-prompt">$</span> npx -y supergateway <span class="du-flag">--stdio</span> <span class="du-str">"chrome-use mcp"</span> <span class="du-flag">--port</span> 8000
+<span class="du-cmt"># 端点：http://localhost:8000/sse —— 填进 connector / Dify 的 MCP 配置</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 桥不是 chrome-use 的一部分</div>
+        <code>supergateway</code> 是第三方通用工具，chrome-use 不捆绑它。ChatGPT connector 还要求端点
+        可被公网访问（本机地址得先过一层隧道），并且桥所在的机器要能连上你真实的 Chrome——
+        因为最终干活的还是本机那套扩展 + 原生消息路径。
+      </div>
+
       <hr class="du-divider" />
 
       <h2>工作原理</h2>
@@ -167,6 +235,26 @@
         <code>chrome-use mcp</code> 本身不解决「怎么连你的浏览器」——那部分仍然靠
         <a href="/install.html">安装</a> 里的浏览器扩展。先按那一页把扩展装好、确认能跑通
         <code>chrome-use snapshot -i</code>，再把 MCP 服务器接进宿主。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>会话隔离：session 参数</h2>
+      <p>
+        每个工具都收一个可选的 <code>session</code> 参数，映射到 CLI 的 <code>--session &lt;name&gt;</code>。
+        <strong>不传就都走同一个默认会话</strong>——同一个宿主里连续几次调用共享一个后台守护进程、
+        一组标签页，上一步的导航和登录状态下一步还在。要并行跑互不干扰的流程，就给不同的流程传不同的
+        <code>session</code> 名，各自拿到独立的守护进程和标签组。守护进程空闲 10 分钟自动退出并关掉自己
+        建的标签页（<code>AGENT_BROWSER_IDLE_TIMEOUT_MS</code> 可调，0 关闭）。
+      </p>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">🪜 多步流程别一个动作一个来回</div>
+        MCP 下每次工具调用都要模型推理一轮，逐个动词地驱动最费 token。固定序列可以用 <code>batch</code>
+        一个来回跑完；要在步骤之间传值、加循环和条件判断，用
+        <a href="/script.html">单次脚本（script）</a>——目前它是 CLI 动词、还没进 MCP 的工具集，
+        但在 MCP 里如果想把多步逻辑压进一次调用，可以走 <code>chrome_use_eval</code> 在页面里跑一段
+        JavaScript。原理见 <a href="/script.html">单次脚本</a>。
       </div>
 
       <hr class="du-divider" />

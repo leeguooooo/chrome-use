@@ -158,6 +158,15 @@ cases:
         <a href="/waiting.html">等待与断言</a>；步骤里用到的每个命令都在 <a href="/commands.html">命令参考</a> 里。
       </div>
 
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 套件之外：<code>expect</code> 动词</div>
+        不想写整套 YAML，只想在一串命令里断言？<code>chrome-use expect &lt;条件&gt;</code> 是套件 <code>assert:</code> 的命令行同胞 ——
+        同一套契约，成立退出 <strong>0</strong>、不成立退出 <strong>1</strong>，可直接串进 shell：
+        <code>chrome-use click @save &amp;&amp; chrome-use expect "#toast" visible</code>。
+        它默认轮询到条件成立或超时。想把一整段「点这、填那、断言」写成单趟脚本，见
+        <a href="/script.html">单趟脚本化</a>。
+      </div>
+
       <h3>登录与多账号</h3>
       <p>
         <code>account: &lt;id&gt;</code> 会把一个
@@ -184,7 +193,7 @@ cases:
       - visible: <span class="du-str">"#settings-tab"</span>
   - name: member does NOT see it
     steps:
-      - account: myapp/member      <span class="du-cmt"># 切账号，然后重新加载页面</span>
+      - account: myapp/member      <span class="du-cmt"># 切账号，下一次 open 时生效</span>
       - open: https://app.example.com/
     assert:
       - hidden: <span class="du-str">"#settings-tab"</span>
@@ -224,8 +233,8 @@ cases:
       </p>
 
       <div class="du-callout tip">
-        <div class="du-callout-title">✅ 只有 Target URL 是必填</div>
-        其它都有合理默认值。会话名默认取域名的 slug（<code>vercel.com</code> → <code>vercel-com</code>），输出目录默认 <code>./dogfood-output/</code>，范围默认整个应用。用户说「dogfood vercel.com」就直接用默认值开跑，除非提到登录却没给凭据，否则不要反问。
+        <div class="du-callout-title">✅ 只有目标 URL 是必填</div>
+        其它都可以走默认：会话名取域名的 slug（<code>vercel.com</code> → <code>vercel-com</code>），输出目录用 <code>./dogfood-output/</code>，范围就是整个应用。选定一个目标 URL 就能开跑；只有需要登录的站点才额外准备账号凭据。下面的示例统一用会话 <code>dogfood</code>、目录 <code>dogfood-output/</code>、目标 <code>https://vercel.com</code>，照着替换成你自己的即可。
       </div>
 
       <div class="du-callout warn">
@@ -252,11 +261,11 @@ cases:
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">初始化 + 起会话</span>
         </div>
-<pre><code><span class="du-prompt">$</span> mkdir -p {OUTPUT_DIR}/screenshots {OUTPUT_DIR}/videos
+<pre><code><span class="du-prompt">$</span> mkdir -p dogfood-output/screenshots dogfood-output/videos
 
 <span class="du-cmt"># 起一个具名会话，导航到目标</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} open {TARGET_URL}
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} wait <span class="du-flag">--load</span> networkidle</code></pre>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood open https://vercel.com
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood wait <span class="du-flag">--load</span> networkidle</code></pre>
       </div>
 
       <p>需要登录时，用 <code>snapshot -i</code> 找到表单的 <code>@ref</code>，填好后提交，再把状态存起来备用。OTP／邮箱验证码要向用户询问，等回复后再输入。</p>
@@ -265,15 +274,15 @@ cases:
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">登录并保存状态</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} snapshot <span class="du-flag">-i</span>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood snapshot <span class="du-flag">-i</span>
 <span class="du-cmt"># 找到登录表单的 ref，填入凭据</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} fill <span class="du-str">@e1</span> <span class="du-str">"{EMAIL}"</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} fill <span class="du-str">@e2</span> <span class="du-str">"{PASSWORD}"</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} click <span class="du-str">@e3</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} wait <span class="du-flag">--load</span> networkidle
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood fill <span class="du-str">@e1</span> <span class="du-str">"you@example.com"</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood fill <span class="du-str">@e2</span> <span class="du-str">"your-password"</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood click <span class="du-str">@e3</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood wait <span class="du-flag">--load</span> networkidle
 
 <span class="du-cmt"># 登录成功后保存状态，方便复用</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} state save {OUTPUT_DIR}/auth-state.json</code></pre>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood state save dogfood-output/auth-state.json</code></pre>
       </div>
 
       <h3>探索与取证</h3>
@@ -285,7 +294,7 @@ cases:
         <div class="du-callout-title">⚠️ console / errors 默认是空的</div>
         这个 stealth fork 默认<strong>关闭</strong>控制台与错误捕获。要用 <code>console</code>／<code>errors</code>，得在起会话时带上
         <code>AGENT_BROWSER_CAPTURE_CONSOLE=1</code>，例如
-        <code>AGENT_BROWSER_CAPTURE_CONSOLE=1 chrome-use --session {SESSION} open &lt;url&gt;</code>，否则它们返回空。
+        <code>AGENT_BROWSER_CAPTURE_CONSOLE=1 chrome-use --session dogfood open &lt;url&gt;</code>，否则它们返回空。
       </div>
 
       <div class="du-code">
@@ -293,10 +302,10 @@ cases:
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">每个页面的四连击</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} snapshot <span class="du-flag">-i</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/{page-name}.png
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} errors
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} console</code></pre>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood snapshot <span class="du-flag">-i</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood screenshot <span class="du-flag">--annotate</span> dogfood-output/screenshots/dashboard.png
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood errors
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood console</code></pre>
       </div>
 
       <div class="du-callout tip">
@@ -316,19 +325,19 @@ cases:
           <span class="du-code-name">录像 + 逐步截图</span>
         </div>
 <pre><code><span class="du-cmt"># 1. 复现前先开录像</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} record start {OUTPUT_DIR}/videos/issue-{NNN}-repro.webm
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood record start dogfood-output/videos/issue-001-repro.webm
 
 <span class="du-cmt"># 2. 以人的节奏走步骤，动作间停 1-2 秒，每步截图</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot {OUTPUT_DIR}/screenshots/issue-{NNN}-step-1.png
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood screenshot dogfood-output/screenshots/issue-001-step-1.png
 <span class="du-prompt">$</span> sleep 1
 <span class="du-cmt"># 执行动作（click / fill 等），再 sleep 1，再 step-2 截图……</span>
 
 <span class="du-cmt"># 3. 拍下损坏状态（先停顿让观者看清）</span>
 <span class="du-prompt">$</span> sleep 2
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/issue-{NNN}-result.png
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood screenshot <span class="du-flag">--annotate</span> dogfood-output/screenshots/issue-001-result.png
 
 <span class="du-cmt"># 4. 停录像</span>
-<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} record stop</code></pre>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood record stop</code></pre>
       </div>
 
       <h3>静态 / 加载即可见问题</h3>
@@ -338,17 +347,45 @@ cases:
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">静态问题：一张标注截图</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} screenshot <span class="du-flag">--annotate</span> {OUTPUT_DIR}/screenshots/issue-{NNN}.png</code></pre>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood screenshot <span class="du-flag">--annotate</span> dogfood-output/screenshots/issue-002.png</code></pre>
+      </div>
+
+      <h3>报告长什么样</h3>
+      <p>所有发现都汇进一份 Markdown 报告（比如 <code>dogfood-output/report.md</code>）：顶部一段按严重度分类的汇总计数，下面每个问题一个 <code>### ISSUE-</code> 块，块里带上严重度、页面、复现步骤和证据文件路径。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">dogfood-output/report.md</span>
+        </div>
+<pre><code><span class="du-cmt"># Dogfood 报告 · vercel.com</span>
+
+<span class="du-cmt">## 汇总</span>
+- Critical: 0
+- Major: 1
+- Minor: 1
+
+<span class="du-cmt">### ISSUE-001 · [Major] 保存后 Toast 一直不消失</span>
+- 页面: /dashboard/settings
+- 复现步骤:
+  1. 打开 Settings，改名后点 Save
+  2. 等待 5 秒
+- 期望: Toast 约 3 秒后消失
+- 实际: Toast 一直停留
+- 证据: screenshots/issue-001-result.png, videos/issue-001-repro.webm
+
+<span class="du-cmt">### ISSUE-002 · [Minor] 页脚版权年份仍是 2019</span>
+- 页面: /
+- 证据: screenshots/issue-002.png（复现录像: N/A）</code></pre>
       </div>
 
       <h3>收尾</h3>
-      <p>目标是找出 <strong>5–10 个有充分记录的问题</strong>就收工 —— 证据的深度比数量更重要，5 个带完整复现胜过 20 个语焉不详的。之后回读报告、更新汇总的严重度计数（每个 <code>### ISSUE-</code> 块都要反映在总数里），最后关闭会话。</p>
+      <p>目标是找出 <strong>5–10 个有充分记录的问题</strong>就收工 —— 证据的深度比数量更重要，5 个带完整复现胜过 20 个语焉不详的。之后回读报告、更新顶部的严重度计数（每个 <code>### ISSUE-</code> 块都要反映在汇总总数里），最后关闭会话。</p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">关闭会话</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> {SESSION} close</code></pre>
+<pre><code><span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> dogfood close</code></pre>
       </div>
 
       <h3>几条硬规矩</h3>
