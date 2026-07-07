@@ -177,11 +177,39 @@ fn arg_order_from_meta(meta_json: &str) -> Vec<String> {
     keys
 }
 
+/// Load a family's shared `_helper.js` if present. It's plain function
+/// declarations (no `@meta`) that adapters call as if in scope — e.g.
+/// `twitter/_helper` defines `findGraphQLQueryId`, which every `twitter/*`
+/// adapter uses. bb-browser auto-loads it before each adapter; so must we (#99).
+pub fn load_family_helper(family: &str) -> Option<String> {
+    if family.is_empty() || family.contains("..") || family.contains('/') {
+        return None;
+    }
+    let dir = sites_dir()?;
+    let src = std::fs::read_to_string(dir.join(family).join("_helper.js")).ok()?;
+    if src.trim().is_empty() {
+        None
+    } else {
+        Some(src)
+    }
+}
+
 /// Build the JS to eval: `(<adapter function>)(<args JSON>)`. The adapter's
-/// `async function(args)` returns a promise; chrome-use's eval awaits it.
-pub fn build_eval(adapter: &Adapter, args: &Value) -> String {
+/// `async function(args)` returns a promise; chrome-use's eval awaits it. When
+/// the family ships a `_helper` module, define it in an enclosing scope the
+/// adapter expression closes over, so helper calls resolve instead of throwing
+/// `ReferenceError: findGraphQLQueryId is not defined` (#99).
+pub fn build_eval(adapter: &Adapter, args: &Value, helper_src: Option<&str>) -> String {
     let args_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
-    format!("({})({})", adapter.func_src, args_json)
+    match helper_src {
+        Some(h) if !h.trim().is_empty() => format!(
+            "(() => {{\n{h}\n;\nreturn ({func})({args});\n}})()",
+            h = h,
+            func = adapter.func_src,
+            args = args_json,
+        ),
+        _ => format!("({})({})", adapter.func_src, args_json),
+    }
 }
 
 /// List installed adapters as `name/cmd` strings (sorted).
@@ -431,10 +459,30 @@ async function(args) { return { repo: args.repo }; }"#;
             &["owner/repo".into()],
             &[("state".into(), "closed".into())],
         );
-        let js = build_eval(&a, &args);
+        let js = build_eval(&a, &args, None);
         assert!(js.contains("async function(args)"));
         assert!(js.contains("\"repo\":\"owner/repo\""));
         assert!(js.contains("\"state\":\"closed\""));
+    }
+
+    #[test]
+    fn build_eval_injects_family_helper() {
+        // With a `_helper` source, the adapter runs inside a scope where the helper
+        // declarations are visible, so calls like findGraphQLQueryId resolve (#99).
+        let a = parse_adapter(SAMPLE, "twitter/thread").unwrap();
+        let args = map_args(&a, &["123".into()], &[]);
+        let helper = "function findGraphQLQueryId(){ return 'x'; }";
+        let js = build_eval(&a, &args, Some(helper));
+        assert!(js.contains("function findGraphQLQueryId()"));
+        assert!(js.contains("return ("));
+        assert!(js.contains("async function(args)"));
+        // Helper is defined before the adapter expression that closes over it.
+        assert!(js.find("findGraphQLQueryId").unwrap() < js.find("return (").unwrap());
+        // Empty/None helper keeps the plain wrapper.
+        assert_eq!(
+            build_eval(&a, &args, Some("   ")),
+            build_eval(&a, &args, None)
+        );
     }
 
     #[test]
