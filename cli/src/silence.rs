@@ -39,6 +39,37 @@ const RESTORE_FLAG: &str = "--restore-last-session";
 /// while to flush to disk, and quitting too eagerly would leave Chrome down.
 const QUIT_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// Marker file recording the user's one-time consent for chrome-use to restart
+/// their Chrome to remove the debugging banner. Captured interactively at
+/// install time (real TTY), then honoured at runtime so agent-driven connects —
+/// which have no TTY to prompt on — can silence the banner without asking again.
+fn consent_path() -> PathBuf {
+    crate::connection::config_home().join("silence-consent")
+}
+
+/// Record (or clear) the install-time consent to auto-restart Chrome for the
+/// banner. Best-effort: a write failure just means we'll ask again next time.
+pub fn store_silence_consent(granted: bool) {
+    let path = consent_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if granted {
+        let _ = std::fs::write(&path, "1\n");
+    } else {
+        // Persist an explicit denial so we don't re-prompt on every install.
+        let _ = std::fs::write(&path, "0\n");
+    }
+}
+
+/// Whether the user granted consent to auto-restart Chrome for the banner.
+pub fn has_silence_consent() -> bool {
+    match std::fs::read_to_string(consent_path()) {
+        Ok(s) => s.trim() == "1",
+        Err(_) => false,
+    }
+}
+
 /// How to treat the banner during `extension connect`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SilenceMode {
@@ -110,6 +141,10 @@ pub fn ensure_banner_silenced(mode: SilenceMode) -> SilenceOutcome {
         SilenceMode::Auto => {
             if interactive() {
                 confirm_restart()
+            } else if has_silence_consent() {
+                // No TTY to ask on (agent-driven), but the user already granted
+                // consent at install time — proceed to restart silently.
+                true
             } else {
                 eprintln!(
                     "{} Chrome will show a \"started debugging this browser\" banner. Run \
@@ -171,6 +206,55 @@ pub fn restart_chrome_preserving_session() -> Result<bool, String> {
     graceful_quit(&rc)?;
     relaunch(&rc)?;
     Ok(true)
+}
+
+/// Called at the tail of `extension install`. install.sh wires the real
+/// terminal in (`chrome-use extension install < /dev/tty > /dev/tty`), so this
+/// is the one moment a human is present to answer. Ask once whether chrome-use
+/// may restart Chrome to remove the debugging banner, persist the answer (so
+/// later agent-driven connects — which have no TTY — silence without asking),
+/// and if granted + Chrome is up, silence it right now. No-op without a TTY
+/// (piped/CI installs), leaving consent unset.
+pub fn offer_install_time_consent() {
+    if !interactive() {
+        return;
+    }
+    eprintln!(
+        "\n  Chrome shows a \"…started debugging this browser\" banner while chrome-use drives it."
+    );
+    eprintln!(
+        "  Removing it needs a one-time Chrome restart whenever chrome-use connects — your tabs \
+         and logins are restored automatically (~2s)."
+    );
+    eprint!("  Let chrome-use handle this for you from now on? [Y/n] ");
+    let _ = io::stderr().flush();
+
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_err() {
+        return;
+    }
+    let a = input.trim().to_lowercase();
+    let granted = a.is_empty() || a == "y" || a == "yes";
+    store_silence_consent(granted);
+
+    if !granted {
+        eprintln!(
+            "  ok — leaving the banner. Run `chrome-use extension connect --silent` anytime to remove it."
+        );
+        return;
+    }
+    eprintln!("  ✓ saved — chrome-use will silence the banner automatically from now on.");
+    // Consent is now stored; do the first silence immediately if Chrome is up.
+    // Use Force (not Auto) so we don't re-prompt — the user just said yes.
+    match ensure_banner_silenced(SilenceMode::Force) {
+        SilenceOutcome::Restarted => eprintln!("  ✓ Chrome restarted — banner removed."),
+        SilenceOutcome::Ambiguous(n) => eprintln!(
+            "  ({n} Chrome instances are running — will silence on a future single-instance connect.)"
+        ),
+        // NotRunning / AlreadySilent / Declined / Failed → nothing to show now;
+        // the stored consent takes effect on the next connect.
+        _ => {}
+    }
 }
 
 /// Both stdin and stderr are TTYs, so a confirm prompt is safe.
