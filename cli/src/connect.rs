@@ -544,6 +544,16 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
         );
     }
 
+    // Enterprise-managed Chrome that BLOCKS our extension ("您的管理员已屏蔽此
+    // 内容"): the Web Store install will just fail, so don't send the user there.
+    // Explain the block + the escape hatches (allowlist / CDP path / unmanaged
+    // Chrome) and stop. Only when nothing is installed yet — if some profile
+    // already has it, the block doesn't matter for this run.
+    if with_ext == 0 && extension_blocked_by_policy() {
+        print_blocked_by_policy_guidance(zh);
+        return;
+    }
+
     // Fast path (one click, Codex-parity): exactly one profile is missing the
     // extension and we're on an interactive terminal — open the Web Store page
     // right there and wait for it to connect, skipping the multi-step policy /
@@ -1584,6 +1594,95 @@ fn managed_policy_state() -> PolicyState {
     match stale {
         Some(entry) => PolicyState::Stale(entry),
         None => PolicyState::Absent,
+    }
+}
+
+/// Whether an enterprise/managed-Chrome policy BLOCKS our extension — the
+/// "您的管理员已屏蔽此内容 / Your administrator has blocked this" case (distinct
+/// from force-install). True when our id is in `ExtensionInstallBlocklist`, or
+/// the blocklist is `*` (block-all) and our id is not in
+/// `ExtensionInstallAllowlist`. macOS only (reads Managed Preferences); returns
+/// false elsewhere or when no such policy is present, so it never false-positives
+/// on an unmanaged machine.
+fn extension_blocked_by_policy() -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let user = std::env::var("USER").unwrap_or_default();
+    let domains = [
+        format!("/Library/Managed Preferences/{user}/com.google.Chrome"),
+        "/Library/Managed Preferences/com.google.Chrome".to_string(),
+    ];
+    let read = |domain: &str, key: &str| -> String {
+        std::process::Command::new("defaults")
+            .args(["read", domain, key])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    };
+    for domain in &domains {
+        let blocklist = read(domain, "ExtensionInstallBlocklist");
+        if blocklist.is_empty() {
+            continue;
+        }
+        let ours_listed =
+            blocklist.contains(STORE_EXTENSION_ID) || blocklist.contains(EXTENSION_ID);
+        let block_all = blocklist
+            .lines()
+            .any(|l| l.trim().trim_matches(|c| c == '"' || c == ',') == "*");
+        if ours_listed {
+            return true;
+        }
+        if block_all {
+            let allowlist = read(domain, "ExtensionInstallAllowlist");
+            let allowed =
+                allowlist.contains(STORE_EXTENSION_ID) || allowlist.contains(EXTENSION_ID);
+            if !allowed {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Print the "your admin blocked this extension" guidance — enterprise policy we
+/// can't (and shouldn't) override, plus the escape hatches. Returns nothing; the
+/// caller stops the normal install flow after this.
+fn print_blocked_by_policy_guidance(zh: bool) {
+    if zh {
+        println!(
+            "\n⚠ 你的 Chrome 由所在组织托管，其策略「屏蔽」了本扩展（ID: {STORE_EXTENSION_ID}）。\n\
+             \x20 这是企业策略，我们无法也不应绕过。三选一即可继续用 chrome-use："
+        );
+        println!(
+            "  A) 让 IT / 管理员把本扩展加入白名单：在 Chrome 的\n\
+             \x20    ExtensionInstallAllowlist 策略里加上 {STORE_EXTENSION_ID}。"
+        );
+        println!(
+            "  B) 不用扩展，直接走 CDP：用 --remote-debugging-port 启动 Chrome，或\n\
+             \x20    `chrome-use open --launch <url>`（无需扩展；首次会弹一次\n\
+             \x20    「允许远程调试？」，点一下允许即可）。见 chrome-use.leeguoo.com/real-chrome.html"
+        );
+        println!("  C) 换一个个人 / 未托管的 Chrome 或 profile（没被企业策略纳管的）。");
+    } else {
+        println!(
+            "\n⚠ Your Chrome is managed by your organization, and its policy BLOCKS this\n\
+             \x20 extension (ID: {STORE_EXTENSION_ID}). That's enterprise policy — we can't and\n\
+             \x20 shouldn't override it. Pick ONE to keep using chrome-use:"
+        );
+        println!(
+            "  A) Ask IT/your admin to allowlist it: add {STORE_EXTENSION_ID} to Chrome's\n\
+             \x20    ExtensionInstallAllowlist policy."
+        );
+        println!(
+            "  B) Skip the extension — drive Chrome over CDP: launch with\n\
+             \x20    --remote-debugging-port, or `chrome-use open --launch <url>` (no extension;\n\
+             \x20    click \"Allow\" on Chrome's remote-debugging prompt once). See\n\
+             \x20    chrome-use.leeguoo.com/real-chrome.html"
+        );
+        println!("  C) Use a personal / unmanaged Chrome or profile (not enrolled in your org).");
     }
 }
 

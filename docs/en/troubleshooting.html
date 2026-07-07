@@ -218,6 +218,40 @@
         gone for good. Background and trade-offs in <a href="/debugger-banner-silence.html">the deep-dive (Chinese)</a>.
       </div>
 
+      <hr class="du-divider" />
+
+      <h2>"Your administrator has blocked this" — can't install the extension</h2>
+      <p>
+        Seeing <strong>Your administrator has blocked this content (ID:
+        knfcmbamhjmaonkfnjhldjedeobeafmk)</strong> on the Web Store page means your Chrome is
+        <strong>managed by your organization</strong> and its
+        <code>ExtensionInstallBlocklist</code> (or an allowlist-only policy) forbids installing this
+        extension. That's <strong>enterprise policy — we can't and shouldn't override it</strong>.
+        Pick ONE to keep using chrome-use:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">three ways out</span>
+        </div>
+<pre><code><span class="du-cmt"># A) Ask IT / your admin to allowlist it:</span>
+<span class="du-cmt">#    add knfcmbamhjmaonkfnjhldjedeobeafmk to Chrome's</span>
+<span class="du-cmt">#    ExtensionInstallAllowlist policy</span>
+
+<span class="du-cmt"># B) Skip the extension — drive Chrome over CDP (no extension at all):</span>
+<span class="du-prompt">$</span> chrome-use open --launch <span class="du-str">"&lt;url&gt;"</span>   <span class="du-cmt"># or add --remote-debugging-port=9222 to Chrome</span>
+<span class="du-cmt">#    click "Allow" on Chrome's remote-debugging prompt once</span>
+
+<span class="du-cmt"># C) Use a personal / unmanaged Chrome or profile (not enrolled in your org)</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Note</div>
+        <code>chrome-use extension install</code> now detects a managed Chrome that blocks the
+        extension (macOS) and prints these three ways out directly, instead of sending you to a Web
+        Store page that can't install. The CDP path (B) needs no extension and is the least
+        friction — see <a href="/en/real-chrome.html">Driving real Chrome</a>.
+      </div>
+
       <h2>You read the wrong page</h2>
       <p>
         <code>eval</code>, <code>screenshot</code>, and <code>network requests</code> all print the page they actually ran on

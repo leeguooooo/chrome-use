@@ -209,6 +209,37 @@
         背景与方案取舍见 <a href="/debugger-banner-silence.html">深入：静音 debugger 提示条</a>。
       </div>
 
+      <hr class="du-divider" />
+
+      <h2>「您的管理员已屏蔽此内容」——装不上扩展</h2>
+      <p>
+        在商店页看到 <strong>您的管理员已屏蔽此内容（ID: knfcmbamhjmaonkfnjhldjedeobeafmk）</strong>，
+        说明你的 Chrome 被<strong>所在组织/企业策略托管</strong>，其
+        <code>ExtensionInstallBlocklist</code>（或"只允许白名单"策略）禁止安装本扩展。
+        这是<strong>企业策略，我们无法也不应绕过</strong>。三选一即可继续用 chrome-use：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">三条出路</span>
+        </div>
+<pre><code><span class="du-cmt"># A) 让 IT / 管理员把本扩展加入白名单：</span>
+<span class="du-cmt">#    在 Chrome 的 ExtensionInstallAllowlist 策略里加上</span>
+<span class="du-cmt">#    knfcmbamhjmaonkfnjhldjedeobeafmk</span>
+
+<span class="du-cmt"># B) 不用扩展，直接走 CDP（无需任何扩展）：</span>
+<span class="du-prompt">$</span> chrome-use open --launch <span class="du-str">"&lt;url&gt;"</span>   <span class="du-cmt"># 或给 Chrome 加 --remote-debugging-port=9222</span>
+<span class="du-cmt">#    首次会弹一次「允许远程调试？」，点一下允许即可</span>
+
+<span class="du-cmt"># C) 换一个个人 / 未托管的 Chrome 或 profile（没被企业策略纳管的）</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 说明</div>
+        <code>chrome-use extension install</code> 现在会自动检测这种被屏蔽的托管 Chrome（macOS）并直接给出上面这三条出路，
+        不会再把你送到一个装不上的商店页。CDP 路径（B）不依赖扩展，最省事——见
+        <a href="/real-chrome.html">驱动真实 Chrome</a>。
+      </div>
+
       <h2>读到了错误的页面</h2>
       <p>
         <code>eval</code>、<code>screenshot</code>、<code>network requests</code> 都会把实际运行所在的页面打到 stderr：
