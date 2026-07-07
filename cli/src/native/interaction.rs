@@ -601,10 +601,20 @@ pub async fn fill(
     // remains for sites that need per-keystroke events.
     let fill_js = format!(
         r#"function() {{
-            const el = this;
+            let el = this;
             const v = {val};
-            try {{ el.focus(); }} catch (e) {{}}
+            // If the ref anchored a WRAPPER rather than the field itself (common when
+            // a controlled input lives inside a shadow/portal and snapshot pinned the
+            // host), retarget to the nested editable so the native setter lands on the
+            // real input instead of no-op'ing on a div (#105.2). Also lets a Monaco
+            // container resolve down to its `textarea.inputarea`.
+            const editable = n => n && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.tagName === 'SELECT' || n.isContentEditable);
+            if (!editable(el) && el.querySelector) {{
+                const inner = el.querySelector('input, textarea, select, [contenteditable]');
+                if (inner) el = inner;
+            }}
             const tag = el.tagName;
+            try {{ el.focus(); }} catch (e) {{}}
             const fire = (type, ctor) => el.dispatchEvent(new (ctor || Event)(type, {{ bubbles: true }}));
 
             // CodeMirror 5: a hidden <textarea> inside .CodeMirror with a live instance.
@@ -619,6 +629,25 @@ pub async fn fill(
                     if (ed) {{ ed.setValue(v); return 'monaco'; }}
                     const models = monaco.editor.getModels ? monaco.editor.getModels() : [];
                     if (models[0]) {{ models[0].setValue(v); return 'monaco'; }}
+                }} catch (e) {{}}
+            }}
+
+            // Monaco whose runtime isn't exposed on `window.monaco` (bundled inside a
+            // module scope — e.g. Cloudflare Zaraz's Custom-HTML editor, #105.3): the
+            // model can't be reached, and setting the hidden `textarea.inputarea`'s
+            // `.value` does nothing (Monaco ignores it). Drive it the way a human
+            // paste does — a synthetic `paste` ClipboardEvent on the inputarea, which
+            // Monaco's paste handler applies to the model and fires its own events.
+            const mon = el.closest && el.closest('.monaco-editor');
+            const ta = (mon && mon.querySelector('textarea.inputarea'))
+                || ((el.matches && el.matches('textarea.inputarea')) ? el : null);
+            if (ta) {{
+                try {{
+                    ta.focus();
+                    const dt = new DataTransfer();
+                    dt.setData('text/plain', v);
+                    ta.dispatchEvent(new ClipboardEvent('paste', {{ bubbles: true, cancelable: true, clipboardData: dt }}));
+                    return 'monaco-paste';
                 }} catch (e) {{}}
             }}
 
@@ -1130,19 +1159,52 @@ pub async fn select_option(
 
     // Count matches so an unmatched value is a loud error (with the available
     // options) instead of a silent no-op. (Ported from vercel-labs/agent-browser #1432.)
-    let js = r#"function(vals) {
-            const options = Array.from(this.options);
-            let matched = 0;
-            for (const opt of options) {
-                const hit = vals.includes(opt.value) || vals.includes(opt.textContent.trim());
-                opt.selected = hit;
-                if (hit) matched++;
+    //
+    // Native <select>: set the matching <option> + dispatch change. For a CUSTOM
+    // combobox (react-select / ARIA listbox that is a <div>, not a <select>), the
+    // old `Array.from(this.options)` threw (a div has no `.options`) — and because
+    // the caller never inspected `exceptionDetails`, `select` returned a SILENT
+    // success while nothing was selected (#105.1). Now non-<select> targets fall
+    // through to the same portal-aware open→poll→click routine `pick` uses, so
+    // `select @ref "Pageview"` actually lands on react-select and friends.
+    let js = r#"async function(vals) {
+            const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+            const el = this;
+
+            if (el.tagName === 'SELECT') {
+                const options = Array.from(el.options);
+                let matched = 0;
+                for (const opt of options) {
+                    const hit = vals.includes(opt.value) || vals.includes(norm(opt.textContent));
+                    opt.selected = hit;
+                    if (hit) matched++;
+                }
+                if (matched === 0) {
+                    return { ok: false, kind: 'select', available: options.map(o => ({ value: o.value, label: norm(o.textContent) })) };
+                }
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return { ok: true, matched, kind: 'select' };
             }
-            if (matched === 0) {
-                return { ok: false, available: options.map(o => ({ value: o.value, label: o.textContent.trim() })) };
+
+            // Custom combobox: open the control (so a portalled menu mounts), poll
+            // for the option by visible text anywhere in the document, then click it.
+            const want = norm(vals[0] || '');
+            const matches = o => norm(o.textContent).toLowerCase().includes(want.toLowerCase());
+            const fire = (n, t) => n.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+            (el.focus && el.focus());
+            ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach(t => fire(el, t));
+            const sel = '[role=option], [role=listbox] [role=option], li[role=option], [class*=option], [class*=item]';
+            const find = () => [...document.querySelectorAll(sel)].find(o => o.offsetParent !== null && matches(o));
+            const deadline = Date.now() + 2500;
+            let opt = find();
+            while (!opt && Date.now() < deadline) { await new Promise(r => setTimeout(r, 80)); opt = find(); }
+            if (!opt) {
+                const seen = [...document.querySelectorAll(sel)].filter(o => o.offsetParent !== null).map(o => norm(o.textContent)).filter(Boolean);
+                return { ok: false, kind: 'custom', available: [...new Set(seen)].map(t => ({ value: '', label: t })) };
             }
-            this.dispatchEvent(new Event('change', { bubbles: true }));
-            return { ok: true, matched };
+            (opt.scrollIntoView && opt.scrollIntoView({ block: 'center' }));
+            ['pointermove', 'pointerover', 'mouseover', 'pointerdown', 'mousedown', 'mouseup', 'click'].forEach(t => fire(opt, t));
+            return { ok: true, matched: 1, kind: 'custom', picked: norm(opt.textContent) };
         }"#
     .to_string();
 
@@ -1157,17 +1219,28 @@ pub async fn select_option(
                     object_id: None,
                 }]),
                 return_by_value: Some(true),
-                await_promise: Some(false),
+                await_promise: Some(true),
             },
             Some(&effective_session_id),
         )
         .await?;
 
+    // A thrown exception (or a missing result) must be a loud error, never a silent
+    // success — this is what let the old `select` no-op on custom comboboxes (#105.1).
+    if let Some(ex) = resp.get("exceptionDetails") {
+        let text = ex
+            .get("exception")
+            .and_then(|e| e.get("description"))
+            .and_then(|d| d.as_str())
+            .or_else(|| ex.get("text").and_then(|t| t.as_str()))
+            .unwrap_or("select failed");
+        return Err(format!("select {:?} failed: {}", values, text));
+    }
     let result = resp.get("result").and_then(|r| r.get("value"));
     let ok = result
         .and_then(|v| v.get("ok"))
         .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+        .unwrap_or(false);
     if !ok {
         let avail = result
             .and_then(|v| v.get("available"))
@@ -1189,9 +1262,18 @@ pub async fn select_option(
                     .join(", ")
             })
             .unwrap_or_default();
+        let kind = result
+            .and_then(|v| v.get("kind"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("select");
+        let what = if kind == "custom" {
+            "no option matched"
+        } else {
+            "no <option> matched"
+        };
         return Err(format!(
-            "no <option> matched {:?}. available options: {}",
-            values, avail
+            "{} {:?}. available options: {}",
+            what, values, avail
         ));
     }
 
