@@ -328,6 +328,12 @@
         </tbody>
       </table>
       </div>
+      <p>
+        <strong>为什么这里没有性能 / token 实测表</strong>（不像上面 ego 那节）：两者是<strong>同一个机制</strong>——扩展 → relay → CDP 驱动<strong>同一个真 Chrome</strong>，
+        原始浏览器操作两边必然一样快（都受页面加载 + CDP 限制），性能不构成差异，唯一能差的只有 CLI 启动开销（我们 Rust 二进制 vs 它 Node 起进程）和我们的
+        <code>batch</code>/<a href="/script.html">script</a>。token 上，我们默认 <code>snapshot -i</code> 是<strong>交互树（AX，只列可交互元素）</strong>、它是整页标注文本，按 ego 的经验多半我们更省——但要拿确切字节数得把它的
+        <code>chrome.debugger</code> 扩展装进你的真 Chrome，而<strong>同一个标签只能有一个 debugger 客户端，会和 chrome-use 直接冲突</strong>。本页纪律是<em>能测才写数字</em>，测不了就不硬写，所以这里只做定性对照。
+      </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 诚实结论</div>
         browser-relay 在<strong>跨机远程控制</strong>上确实领先（我们目前是纯本地）。其余维度——一键商店安装、无调试横幅、隐身/humanize、多 agent 隔离、单次成型脚本、AX 树定位、无 Node 单二进制——是 chrome-use 更强。两者血统不同：browser-relay 源自 openclaw-browser-relay，chrome-use 源自 <a href="/lineage.html">vercel-labs/agent-browser</a>。

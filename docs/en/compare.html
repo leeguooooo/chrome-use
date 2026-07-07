@@ -331,6 +331,12 @@
         </tbody>
       </table>
       </div>
+      <p>
+        <strong>Why there's no measured perf / token table here</strong> (unlike the ego section above): the two are the <strong>same mechanism</strong> — extension → relay → CDP driving the <strong>same real Chrome</strong>,
+        so raw browser operations are necessarily equally fast (both bound by page load + CDP). Performance isn't a differentiator; the only real deltas are CLI startup (our Rust binary vs its Node process) and our
+        <code>batch</code> / <a href="/en/script.html">script</a>. On tokens, our default <code>snapshot -i</code> is an <strong>interactive AX tree (interactive elements only)</strong> while theirs is annotated full-page text, so by the ego experience we're likely leaner — but getting exact byte counts would mean installing its
+        <code>chrome.debugger</code> extension into your real Chrome, and <strong>a tab can have only one debugger client, so it conflicts head-on with chrome-use</strong>. This page's rule is <em>measure or don't claim a number</em>, so this comparison stays qualitative.
+      </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Honest verdict</div>
         browser-relay is genuinely ahead on <strong>cross-machine remote control</strong> (we're local-only today). On the rest — one-click store install, no debug banner, stealth/humanize, multi-agent isolation, single-pass scripting, AX-tree locating, a Node-free single binary — chrome-use is stronger. Different lineage too: browser-relay descends from openclaw-browser-relay, chrome-use from <a href="/en/lineage.html">vercel-labs/agent-browser</a>.
