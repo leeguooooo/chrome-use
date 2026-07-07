@@ -112,6 +112,13 @@
     <li><code>chrome-use extension connect --keep-banner</code>：完全不碰浏览器，保留横幅。</li>
     <li>默认（不带 flag）在交互终端里会先问一句 <code>Restart Chrome now? [Y/n]</code>，回车即同意；非交互环境不动浏览器，只打印一行提示。</li>
   </ul>
+  <aside class="now">
+    <p><strong>v1.5.72 起：装机时问一次，之后 agent 自动处理。</strong> <code>curl … | sh</code> 装完二进制会跑一遍引导式
+    <code>extension install</code>（借 <code>/dev/tty</code>，管道里也能问真人），并问一句「允许 chrome-use 需要时重启 Chrome 去掉横幅吗？」。
+    答应后写入 <code>~/.chrome-use/silence-consent</code>；此后<strong>非交互的 agent 连接会凭这份同意自动静默、不再问</strong>——
+    解决了「agent 没 TTY、问不了人，横幅只能一直留着」。安全护栏不变：只在单实例时动、优雅退出、<code>--restore-last-session</code> 恢复标签。
+    想跳过装机引导：<code>AGENT_BROWSER_NO_SETUP=1</code>。</p>
+  </aside>
   <p>实现见 <span class="path">cli/src/silence.rs</span>。</p>
 
   <aside class="note">

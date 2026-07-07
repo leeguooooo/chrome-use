@@ -158,9 +158,10 @@
       <!-- ============ 勾选与下拉 ============ -->
       <h2>勾选、选择与下拉</h2>
       <p>
-        复选框用 <code>check</code>/<code>uncheck</code>。下拉框要分清两种：原生
-        <code>&lt;select&gt;</code> 用 <code>select</code>；<strong>任何自定义组合框</strong>
-        （react-select / ARIA 等）用 <code>pick</code>。
+        复选框用 <code>check</code>/<code>uncheck</code>。下拉：原生 <code>&lt;select&gt;</code> 和
+        <strong>自定义组合框（react-select / ARIA 等）都可以用 <code>select</code></strong>——
+        自 v1.5.72 起，<code>select</code> 遇到非原生控件会自动走 portal-aware 逻辑（开控件→等选项→按可见文本点）；
+        <code>pick</code> 是同一能力的显式别名。
       </p>
 
       <div class="du-code">
@@ -171,7 +172,7 @@
 <pre><code><span class="du-prompt">$</span> chrome-use check @e3                   <span class="du-cmt"># 勾选复选框</span>
 <span class="du-prompt">$</span> chrome-use uncheck @e3                 <span class="du-cmt"># 取消勾选</span>
 
-<span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"option-value"</span>   <span class="du-cmt"># 仅限原生 &lt;select&gt;</span>
+<span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"Pageview"</span>       <span class="du-cmt"># 原生 &lt;select&gt; 或自定义组合框（v1.5.72+）</span>
 <span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"a"</span> <span class="du-str">"b"</span>          <span class="du-cmt"># 多选</span>
 
 <span class="du-cmt"># 任意组合框：打开它、等菜单出现（含 portal 渲染）、按可见文本匹配、</span>
@@ -179,10 +180,13 @@
 <span class="du-prompt">$</span> chrome-use pick @e4 <span class="du-flag">--option</span> <span class="du-str">"Europe"</span></code></pre>
       </div>
 
-      <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ select 返回 ✓ 却没变化</div>
-        对自定义下拉，<code>select</code> 可能返回成功但实际什么都没改。这种情况一律改用
-        <code>pick</code>——它会真正打开菜单、匹配、派发事件，选项不出现时明确报错。
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ v1.5.72：原生命令扛 shadow-DOM 重站（#105）</div>
+        以前 <code>select</code> 对自定义下拉会「返回 ✓ 却没变化」（静默假成功）——现已修复：
+        非原生控件走 portal-aware 逻辑，选项始终不出现时<strong>明确报错</strong>并列出可见选项，不再静默。
+        <code>fill</code> 同样加固：能填进<strong>模块作用域内的 Monaco 编辑器</strong>（<code>window.monaco</code> 拿不到时用合成 paste）、
+        以及 <code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入（自动下钻到内部 editable）。像 Cloudflare Zaraz
+        这类 react-select + Monaco + shadow-DOM 的后台，现在原生 <code>select</code>/<code>fill</code> 就能驱动，不用再手搓 <code>eval</code>。
       </div>
 
       <hr class="du-divider" />

@@ -160,9 +160,11 @@
       <!-- ============ Check &amp; select ============ -->
       <h2>Check, select and dropdowns</h2>
       <p>
-        Checkboxes use <code>check</code>/<code>uncheck</code>. For dropdowns, tell the two kinds apart: native
-        <code>&lt;select&gt;</code> uses <code>select</code>; <strong>any custom combobox</strong>
-        (react-select / ARIA, etc.) uses <code>pick</code>.
+        Checkboxes use <code>check</code>/<code>uncheck</code>. For dropdowns, <strong>both a native
+        <code>&lt;select&gt;</code> and a custom combobox (react-select / ARIA, etc.) work with
+        <code>select</code></strong> — since v1.5.72 <code>select</code> falls through to portal-aware
+        logic on a non-native control (open → wait for options → click by visible text);
+        <code>pick</code> is the explicit alias for the same behavior.
       </p>
 
       <div class="du-code">
@@ -173,7 +175,7 @@
 <pre><code><span class="du-prompt">$</span> chrome-use check @e3                   <span class="du-cmt"># check a checkbox</span>
 <span class="du-prompt">$</span> chrome-use uncheck @e3                 <span class="du-cmt"># uncheck</span>
 
-<span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"option-value"</span>   <span class="du-cmt"># native &lt;select&gt; only</span>
+<span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"Pageview"</span>       <span class="du-cmt"># native &lt;select&gt; OR a custom combobox (v1.5.72+)</span>
 <span class="du-prompt">$</span> chrome-use select @e4 <span class="du-str">"a"</span> <span class="du-str">"b"</span>          <span class="du-cmt"># multi-select</span>
 
 <span class="du-cmt"># any combobox: open it, wait for the menu to appear (including portal-rendered),</span>
@@ -182,11 +184,16 @@
 <span class="du-prompt">$</span> chrome-use pick @e4 <span class="du-flag">--option</span> <span class="du-str">"Europe"</span></code></pre>
       </div>
 
-      <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ select returns ✓ but nothing changed</div>
-        For custom dropdowns, <code>select</code> may return success while nothing actually changed. In that case always
-        switch to <code>pick</code>—it genuinely opens the menu, matches, and dispatches events, and errors clearly when
-        the option doesn't appear.
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ v1.5.72: native commands survive shadow-DOM-heavy apps (#105)</div>
+        <code>select</code> used to "return ✓ but change nothing" on custom dropdowns (a silent
+        false success) — now fixed: non-native controls go through the portal-aware path and
+        <strong>error loudly</strong> (listing the visible options) when the option never appears, never silently.
+        <code>fill</code> is hardened the same way: it fills a <strong>module-scoped Monaco editor</strong>
+        (synthetic paste when <code>window.monaco</code> isn't reachable) and controlled inputs whose
+        <code>@ref</code> anchored a <strong>wrapper</strong> (retargets to the nested editable). Backends like
+        Cloudflare Zaraz (react-select + Monaco + shadow-DOM) now drive with native
+        <code>select</code>/<code>fill</code> — no hand-rolled <code>eval</code>.
       </div>
 
       <hr class="du-divider" />
