@@ -233,8 +233,8 @@
           </tr>
           <tr>
             <td>"not a JS shim on stock Chrome … reach into <strong>cross-origin iframes, shadow DOM, third-party SDK widgets</strong> like Stripe, Salesforce, Intercom, React portals … <strong>JS shims usually give up</strong> … burning tokens for nothing"</td>
-            <td>chrome-use uses <strong>CDP</strong> (not a JS shim). reCAPTCHA demo, measured: <code>frames</code> lists all 5 cross-origin frames; <code>eval --frame 1</code> read the checkbox <code>role=checkbox</code> "I'm not a robot". <strong>But</strong> the default <code>snapshot -i</code> didn't merge it while ego's did (fixing in <a href="https://github.com/leeguooooo/chrome-use/issues/92">#92</a>).</td>
-            <td><span class="cmp-mut">Half wrong, half right</span> — we're <strong>not a JS shim and do reach</strong> OOPIF/SDK widgets; but the default snapshot did miss this reCAPTCHA case — that part is fair.</td>
+            <td>chrome-use uses <strong>CDP</strong> (not a JS shim). reCAPTCHA demo, measured: <code>frames</code> lists all 5 cross-origin frames; <code>eval --frame 1</code> read the checkbox <code>role=checkbox</code> "I'm not a robot". The default <code>snapshot -i</code> previously didn't merge it — <strong>now fixed</strong> (<a href="https://github.com/leeguooooo/chrome-use/issues/92">#92</a> merges presentation-role / AX-stripped cross-origin iframes).</td>
+            <td><span class="cmp-win">Now closed</span> — we're <strong>not a JS shim and do reach</strong> OOPIF/SDK widgets, and the default snapshot now merges them too (#92 fixed). ego's dig is about generic JS shims — it doesn't apply to us.</td>
           </tr>
           <tr>
             <td>"your AI agents will <strong>never get stuck on captchas, 2FA, and SSO redirects</strong>" (because you're logged into it)</td>
