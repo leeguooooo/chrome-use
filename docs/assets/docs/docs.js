@@ -53,6 +53,11 @@
     authjs.defer = true;
     head.appendChild(authjs);
   }
+
+  // PostHog product analytics (project 93027) — unified across every
+  // *.leeguoo.com site. Loaded lazily on idle; direct us.i.posthog.com with a
+  // fall back to ph.leeguoo.com. Idempotent via window.__lgPH + posthog.__loaded.
+  (function(){if(window.__lgPH)return;window.__lgPH=1;function start(){if(window.posthog&&window.posthog.__loaded)return;var done=false;function init(api){if(done||!window.posthog||!window.posthog.init)return;done=true;window.posthog.init('phc_P763fJAjFo1FFvtWdCzg1v0jhOYyYe57SS9pJ1Q31SL',{api_host:api,ui_host:'https://us.posthog.com',defaults:'2026-05-30',person_profiles:'identified_only',disable_session_recording:true,capture_pageview:true});}function load(base,api,fail){var s=document.createElement('script');s.async=true;s.crossOrigin='anonymous';s.src=base+'/static/array.js';var t=setTimeout(function(){if(!done&&fail){s.onerror=s.onload=null;fail();}},6000);s.onload=function(){clearTimeout(t);init(api);};s.onerror=function(){clearTimeout(t);if(!done&&fail)fail();};document.head.appendChild(s);}load('https://us-assets.i.posthog.com','https://us.i.posthog.com',function(){load('https://ph.leeguoo.com','https://ph.leeguoo.com',null);});}if('requestIdleCallback' in window){requestIdleCallback(start,{timeout:3000});}else{setTimeout(start,1500);}})();
 })();
 
 /* ==========================================================================
