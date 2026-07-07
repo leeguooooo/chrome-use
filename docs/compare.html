@@ -174,6 +174,20 @@
         </div>
       </div>
 
+      <h2>怎么选</h2>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>你的情况</th><th>选</th></tr></thead>
+        <tbody>
+          <tr class="me"><th>要用你已登录的真账号、不想装新浏览器、要过反爬</th><td class="cmp-win">chrome-use</td></tr>
+          <tr><th>愿意换一个专为 agent 做的新浏览器、要最干净的隔离</th><td>ego-lite</td></tr>
+          <tr><th>写传统自动化脚本、跨语言、CI 里跑</th><td>Playwright / Puppeteer</td></tr>
+          <tr><th>无状态大规模云抓取</th><td>Browserbase / Steel</td></tr>
+          <tr><th>只是终端用户想让浏览器帮点忙</th><td>ChatGPT Atlas / Comet</td></tr>
+        </tbody>
+      </table>
+      </div>
+
       <h2>最接近的对手：chrome-use vs ego-lite（实测深挖）</h2>
       <p>
         ego-lite 的定位和我们最像（都用真登录、不抢用户标签），README 还<strong>直接点名 agent-browser</strong>。
@@ -259,6 +273,19 @@
       </table>
       </div>
 
+
+      <h3>反超的一项：单次成型脚本（chrome-use script）</h3>
+      <p>
+        ego 的核心卖点是 “code base, not CLI base”：写一段 JS 把整个任务一次跑完。这一项我们<span class="cmp-win">已 ship 并反超</span>：
+        <code>chrome-use script</code> 同样写一段 JS（ego 原样 idiom），用 <code>cu.snapshot/eval/click/fill/find/waitFor/extract</code>
+        直接驱动，带控制流，一次往返返回结构化结果；JSON op-list 形式亦可（可 dry-run、可机器生成）。
+      </p>
+      <p>
+        反超点在引擎位置：JS 引擎跑在<strong>守护进程里、不在页面里</strong>，<strong>扛得住硬跳转</strong>，
+        而多页翻页正是 ego 赢、页面内运行时输的地方。实测 HN 翻 3 页收集 ≥100 分故事 = <strong>一次 tool call</strong>（旧 per-verb 要 13+），
+        跑在你<strong>已登录的真 Chrome</strong> + 隐身传输，<strong>跨平台</strong>（ego 仅 macOS）。
+      </p>
+
       <h3>我们从 ego-lite 学到 &amp; 已搬的</h3>
       <p>逐项试用对比后，把真缺口用 chrome-use 原生的方式搬过来（进度在 <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>）：</p>
       <ul>
@@ -267,22 +294,7 @@
         <li><strong>登录继承 / 隔离上下文 / 按名复用 / token 经济</strong>（<span class="cmp-win">已具备</span>）：relay 天然带登录、每会话标签组隔离、<code>session list</code>、<code>--session-name</code>、更省 token。</li>
         <li><strong>定位（locating）</strong>（<span class="cmp-win">持平</span>）：<code>@ref</code>（backendNodeId 跨调用稳定）+ CSS + XPath + 坐标 + 语义 <code>find role button --name</code> + <code>box</code> 几何 + <code>-s</code> 作用域，对齐 ego 的 <code>loc=</code> / <code>@N</code>。</li>
         <li><strong>群组（groups）</strong>（<span class="cmp-win">持平</span>）：每个 <code>--session</code> 一个彩色 Chrome 标签组、group-scoped 隔离（<a href="https://github.com/leeguooooo/chrome-use/issues/40">#40</a>）、多 agent 互不串、只拥有自己建的标签。等价 ego 的 Task Space，只是发生在你的真 Chrome 里，不用换浏览器。</li>
-        <li><strong>单次成型的复杂脚本</strong>（ego 的 “code base, not CLI base” 优势，<span class="cmp-win">已 ship，反超</span>）：<code>chrome-use script</code> 写一段 JS（ego 原样 idiom），用 <code>cu.snapshot/eval/click/fill/find/waitFor/extract</code> 直接驱动，带控制流，一次往返返回结构化结果。反超点在引擎位置：JS 引擎跑在<strong>守护进程里、不在页面里</strong>，<strong>扛得住硬跳转</strong>，而多页翻页正是 ego 赢、页面内运行时输的地方。实测 HN 翻 3 页收集 ≥100 分故事 = <strong>一次 tool call</strong>（旧 per-verb 要 13+），跑在你<strong>已登录的真 Chrome</strong> + 隐身传输，<strong>跨平台</strong>（ego 仅 macOS）。JSON op-list 形式亦可（可 dry-run、可机器生成）。</li>
       </ul>
-
-      <h2>怎么选</h2>
-      <div class="cmp-scroll">
-      <table class="cmp-table">
-        <thead><tr><th>你的情况</th><th>选</th></tr></thead>
-        <tbody>
-          <tr class="me"><th>要用你已登录的真账号、不想装新浏览器、要过反爬</th><td class="cmp-win">chrome-use</td></tr>
-          <tr><th>愿意换一个专为 agent 做的新浏览器、要最干净的隔离</th><td>ego-lite</td></tr>
-          <tr><th>写传统自动化脚本、跨语言、CI 里跑</th><td>Playwright / Puppeteer</td></tr>
-          <tr><th>无状态大规模云抓取</th><td>Browserbase / Steel</td></tr>
-          <tr><th>只是终端用户想让浏览器帮点忙</th><td>ChatGPT Atlas / Comet</td></tr>
-        </tbody>
-      </table>
-      </div>
 
       <h2>对比 workflow</h2>
       <p>这一页是活文档。每评估一个方案，走同一套流程，保证对比诚实、可复现：</p>
