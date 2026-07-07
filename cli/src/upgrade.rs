@@ -145,10 +145,38 @@ pub fn maybe_notify_update() {
         .unwrap_or((0, String::new()));
 
     if is_newer(&latest, CURRENT_VERSION) {
-        eprintln!(
-            "{} chrome-use {latest} is available (you have {CURRENT_VERSION}) — run `chrome-use upgrade`",
-            color::warning_indicator()
-        );
+        // Opt-in auto-update (`CHROME_USE_AUTO_UPGRADE=1`): like the Web Store
+        // extension, keep the CLI current with zero manual steps. We NEVER swap
+        // the running binary mid-command — we fire a detached background upgrade
+        // that install.sh applies in place, so the user's NEXT run is on the new
+        // version. Guarded: only when the binary dir is writable (an install.sh
+        // ~/.local/bin, not a package-manager/system path), not Windows, and
+        // debounced so repeated commands don't spawn a swarm of upgraders.
+        if auto_upgrade_enabled() && !recently_attempted_auto_upgrade() && binary_dir_writable() {
+            touch_auto_upgrade_marker();
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = Command::new(exe)
+                    .arg("__auto-upgrade")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
+            }
+            eprintln!(
+                "{} auto-updating chrome-use → v{latest} in the background (you have {CURRENT_VERSION}; takes effect on your next run)",
+                color::warning_indicator()
+            );
+        } else {
+            let hint = if cfg!(windows) {
+                ""
+            } else {
+                " (or set CHROME_USE_AUTO_UPGRADE=1 to auto-update)"
+            };
+            eprintln!(
+                "{} chrome-use {latest} is available (you have {CURRENT_VERSION}) — run `chrome-use upgrade`{hint}",
+                color::warning_indicator()
+            );
+        }
     }
 
     // Refresh in the background at most once a day. Bump the timestamp first
@@ -164,6 +192,85 @@ pub fn maybe_notify_update() {
                 .stderr(Stdio::null())
                 .spawn();
         }
+    }
+}
+
+/// Opt-in flag for background CLI auto-update.
+fn auto_upgrade_enabled() -> bool {
+    matches!(
+        std::env::var("CHROME_USE_AUTO_UPGRADE").ok().as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
+}
+
+fn auto_upgrade_marker() -> PathBuf {
+    crate::connection::config_home().join("auto-upgrade-attempt")
+}
+
+/// Debounce: don't spawn another background upgrade within 10 minutes of the
+/// last attempt, so a burst of commands (before the new binary lands) doesn't
+/// launch a swarm of concurrent installers.
+fn recently_attempted_auto_upgrade() -> bool {
+    std::fs::metadata(auto_upgrade_marker())
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.elapsed().ok())
+        .map(|d| d.as_secs() < 600)
+        .unwrap_or(false)
+}
+
+fn touch_auto_upgrade_marker() {
+    let path = auto_upgrade_marker();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, now_secs().to_string());
+}
+
+/// Whether the running binary lives in a directory we can write to — an
+/// install.sh `~/.local/bin`, not a Homebrew/apt/system path. Auto-update only
+/// fires when true, so we never fight a package manager or need `sudo`. Probes
+/// by creating and removing a temp file in the binary's directory.
+fn binary_dir_writable() -> bool {
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    else {
+        return false;
+    };
+    let probe = dir.join(".chrome-use-upgrade-probe");
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Quiet, non-interactive in-place upgrade for the detached `__auto-upgrade`
+/// child spawned by [`maybe_notify_update`]. Runs install.sh into the running
+/// binary's directory with all output suppressed; failures are silent (the
+/// notice reappears next run and the user can `chrome-use upgrade` manually).
+pub fn run_auto_upgrade() {
+    #[cfg(not(windows))]
+    {
+        let bin_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.canonicalize().ok())
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        let install_cmd = format!("curl -fsSL {} | sh", INSTALL_URL);
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(&install_cmd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(ref dir) = bin_dir {
+            cmd.env("AGENT_BROWSER_BIN_DIR", dir);
+        }
+        let _ = cmd.status();
     }
 }
 
