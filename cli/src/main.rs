@@ -2122,6 +2122,14 @@ fn main() {
         return;
     }
 
+    // Handle single-pass `script`: load the JSON op-list (file arg or stdin), send
+    // it as ONE daemon round-trip, and map the 3-way exit code (0 ok / 1 runtime
+    // failure or assert / 2 invalid program).
+    if cmd.get("action").and_then(|v| v.as_str()) == Some("script") {
+        run_script(&flags, cmd.clone());
+        return;
+    }
+
     let output_opts = OutputOptions::from_flags(&flags);
 
     match send_command(cmd.clone(), &flags.session) {
@@ -2200,6 +2208,101 @@ fn main() {
                 exit(if pass { 0 } else { 1 });
             }
             if !success {
+                exit(1);
+            }
+        }
+        Err(e) => {
+            if flags.json {
+                print_json_error(e);
+            } else {
+                eprintln!("{} {}", color::error_indicator(), e);
+            }
+            exit(1);
+        }
+    }
+}
+
+fn run_script(flags: &Flags, mut cmd: serde_json::Value) {
+    use std::io::Read as _;
+
+    // Load the program: from a file arg, or stdin (`-` / no path).
+    let src = match cmd.get("file").and_then(|v| v.as_str()) {
+        Some(f) if f != "-" => {
+            std::fs::read_to_string(f).map_err(|e| format!("cannot read script file {}: {}", f, e))
+        }
+        _ => {
+            let mut s = String::new();
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .map(|_| s)
+                .map_err(|e| format!("failed to read script from stdin: {}", e))
+        }
+    };
+    let src = match src {
+        Ok(s) => s,
+        Err(e) => {
+            if flags.json {
+                print_json_error(e);
+            } else {
+                eprintln!("{} {}", color::error_indicator(), e);
+            }
+            exit(2);
+        }
+    };
+    // A JSON array is the op-list (Phase 1); anything else is a JS program run
+    // through the `cu.*` helpers (Phase 2). This lets `chrome-use script` accept
+    // both a `prog.json` recipe and a `<<'JS' … JS` heredoc.
+    let as_program = match serde_json::from_str::<serde_json::Value>(&src) {
+        Ok(v @ serde_json::Value::Array(_)) => Some(v),
+        _ => None,
+    };
+
+    if let Some(obj) = cmd.as_object_mut() {
+        match as_program {
+            Some(program) => {
+                obj.insert("program".to_string(), program);
+            }
+            None => {
+                obj.insert("source".to_string(), serde_json::Value::String(src));
+            }
+        }
+        if let Some(a) = obj.remove("scriptArgs") {
+            obj.insert("args".to_string(), a);
+        }
+        obj.remove("file");
+    }
+
+    match send_command(cmd, &flags.session) {
+        Ok(resp) => {
+            let data = resp.data.clone().unwrap_or(serde_json::Value::Null);
+            if flags.json {
+                println!("{}", serde_json::to_string(&data).unwrap_or_default());
+            } else if let Some(e) = &resp.error {
+                eprintln!("{} {}", color::error_indicator(), e);
+            } else {
+                let ret = data
+                    .get("return")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                match ret {
+                    serde_json::Value::Null => {}
+                    serde_json::Value::String(s) => println!("{}", s),
+                    other => println!(
+                        "{}",
+                        serde_json::to_string_pretty(&other).unwrap_or_default()
+                    ),
+                }
+                if let Some(err) = data.get("error").and_then(|v| v.as_str()) {
+                    eprintln!("{} {}", color::error_indicator(), err);
+                }
+            }
+            // Exit code: 2 = invalid program (transport-level failure); 1 = runtime
+            // failure / assert (ok:false); 0 = ok.
+            if !resp.success {
+                exit(2);
+            }
+            let ok = data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !ok {
                 exit(1);
             }
         }

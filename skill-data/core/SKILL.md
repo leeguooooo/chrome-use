@@ -514,6 +514,51 @@ daemon; `press --hold` and `wait` block in-daemon, so timing is precise):
 chrome-use batch "press d --hold 900" "press j" "press j" "wait 200" "press d --hold 500"
 ```
 
+**When a step needs to *use the result of an earlier step*, or you need a loop or a
+condition, go up one level to `chrome-use script`** — a whole observe→decide→act→verify
+flow in ONE round-trip over the daemon, with the decision logic running next to the
+browser instead of bouncing every step back through the model. Two forms:
+
+*JSON op-list* (machine-generatable, dry-runnable) — a later op reads an earlier op's
+result via `{{name.path}}`, plus `waitUntil` / `forEach` / `assert` / `set` / `push` / `return`:
+
+```bash
+chrome-use script - <<'JSON'
+[
+  {"do":"navigate","url":"https://example.com"},
+  {"do":"evaluate","script":"document.title","bind":"t"},
+  {"assert":{"contains":["{{t.result}}","Example"]},"msg":"wrong page"},
+  {"return":"{{t.result}}"}
+]
+JSON
+```
+
+*JS program* (ego-style "code base") — a real synchronous JS script with `cu.*` helpers
+(`cu.snapshot/eval/open/click/fill/find/waitFor/wait/extract/log`) driving your real,
+already-logged-in Chrome. No `await` (each `cu.*` call blocks until the browser returns),
+and the engine lives in the daemon so it survives hard navigations:
+
+```bash
+chrome-use script --timeout 120000 <<'JS'
+  cu.open('https://news.ycombinator.com');
+  const out = [];
+  for (let page = 0; page < 3; page++) {
+    const rows = cu.eval("[...document.querySelectorAll('.athing')].map(r=>({id:r.id,title:r.querySelector('.titleline a')?.innerText}))");
+    for (const r of rows) {
+      const pts = cu.eval(`+(document.querySelector('#score_${r.id}')?.innerText.match(/\\d+/)?.[0] ?? 0)`); // raw DOM read, no round-trip decision
+      if (pts >= 100) out.push({ ...r, points: pts });
+    }
+    if (!cu.visible('a.morelink')) break;
+    cu.click('a.morelink');            // hard navigation — engine survives it
+    cu.waitFor('.athing', 8000);
+  }
+  return out;                          // becomes the script's return value
+JS
+```
+
+Exit codes: 0 ok · 1 runtime failure / failed `assert` · 2 invalid program. `--dry-run`
+validates a JSON program without touching the browser; `--arg k=v` seeds a variable.
+
 Also try reading real state instead of pixels: `eval` runs in the page's main
 world, so for a framework/engine game you can often reach its globals (e.g. a
 Phaser/PIXI/Three instance, a store, `window.__GAME__`) and read positions/score

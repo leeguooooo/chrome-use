@@ -995,7 +995,15 @@ pub fn probe_daemon_healthy(session: &str, timeout: Duration) -> bool {
 fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
     let mut stream = connect(session)?;
 
-    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+    // A long-running command (notably `script`, which runs a whole op-list in one
+    // round-trip) carries its own `timeout_ms`; give the socket read that budget
+    // plus margin so we don't cut off a legitimately long script at the default 30s.
+    let read_to = cmd
+        .get("timeout_ms")
+        .and_then(|v| v.as_u64())
+        .map(|ms| Duration::from_millis(ms.saturating_add(15_000)))
+        .unwrap_or(Duration::from_secs(30));
+    stream.set_read_timeout(Some(read_to)).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
     let mut json_str = serde_json::to_string(cmd).map_err(|e| e.to_string())?;

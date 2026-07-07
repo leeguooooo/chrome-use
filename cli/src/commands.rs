@@ -39,6 +39,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "read",
     "expect",
     "extract",
+    "script",
     "form",
     "click",
     "fill",
@@ -2539,6 +2540,46 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let mut cmd = json!({ "id": id, "action": "batch", "bail": bail });
             if !commands.is_empty() {
                 cmd["commands"] = json!(commands);
+            }
+            Ok(cmd)
+        }
+
+        // === Single-pass scripting: run a JSON op-list in one round-trip ===
+        // `chrome-use script prog.json` | `chrome-use script - < prog.json` (stdin)
+        // Flags: --timeout <ms> --dry-run --yes/--autoconfirm --arg k=v
+        "script" => {
+            let mut cmd = json!({ "id": id, "action": "script" });
+            let mut script_args = serde_json::Map::new();
+            let mut timeout_ms: Option<u64> = None;
+            let mut i = 0;
+            while i < rest.len() {
+                let a = rest[i];
+                match a {
+                    "--dry-run" => cmd["dryRun"] = json!(true),
+                    "--yes" | "--autoconfirm" => cmd["autoConfirm"] = json!(true),
+                    "--json" => {}
+                    "--timeout" => {
+                        i += 1;
+                        if i < rest.len() {
+                            timeout_ms = rest[i].parse().ok();
+                        }
+                    }
+                    "--arg" => {
+                        i += 1;
+                        if i < rest.len() {
+                            if let Some((k, v)) = rest[i].split_once('=') {
+                                script_args.insert(k.to_string(), json!(v));
+                            }
+                        }
+                    }
+                    s if !s.starts_with("--") => cmd["file"] = json!(s),
+                    _ => {}
+                }
+                i += 1;
+            }
+            cmd["timeout_ms"] = json!(timeout_ms.unwrap_or(60_000));
+            if !script_args.is_empty() {
+                cmd["scriptArgs"] = json!(script_args);
             }
             Ok(cmd)
         }

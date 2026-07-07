@@ -36,6 +36,10 @@ pub mod recording;
 pub mod relay;
 #[allow(dead_code)]
 pub mod screenshot;
+
+pub mod script;
+
+pub mod script_js;
 #[allow(dead_code)]
 pub mod slider;
 #[allow(dead_code)]
