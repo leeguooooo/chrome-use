@@ -201,9 +201,10 @@
       <!-- ============ 双因素 ======= -->
       <h2>处理两步验证（2FA）</h2>
       <p>
-        遇到需要短信 / TOTP / 硬件密钥的第二步时，最省心的办法是让浏览器可见、由人来完成这一步，
-        脚本只负责在旁边等它跳转。用 <code>--headed</code> 打开有界面的窗口，
-        再用一个较长的 <code>--timeout</code> 等待登录后的 URL。
+        遇到需要短信 / TOTP / 硬件密钥的第二步时，最省心的办法是让人来完成这一步，脚本在旁边等它跳转。
+        默认走扩展驱动你真实 Chrome 时窗口本来就可见，直接由你补第二步即可；把控制权正式交回用户用
+        <code>session handoff</code>（见 <a href="/sessions.html">会话与持久化</a>），交接后 agent 会拒绝对该会话的驱动命令，直到你交还。
+        只有在 <code>--launch</code> 另开浏览器时才需要 <code>--headed</code> 让那个窗口可见，再配一个较长的 <code>--timeout</code> 等登录后的 URL。
       </p>
 
       <div class="du-code">

@@ -211,10 +211,12 @@
       <!-- ============ Two-factor ======= -->
       <h2>Handling two-factor authentication (2FA)</h2>
       <p>
-        When you hit a second step that needs SMS / TOTP / a hardware key, the least painful approach is to keep the
-        browser visible and let a human do that step, while the script just waits alongside for the redirect. Use
-        <code>--headed</code> to open a windowed session, then use a longer <code>--timeout</code> to wait for the
-        post-login URL.
+        When you hit a second step that needs SMS / TOTP / a hardware key, the least painful approach is to let a human
+        do that step while the script waits alongside for the redirect. On the default extension path driving your real
+        Chrome, the window is already visible, so just do the second step yourself; hand control back formally with
+        <code>session handoff</code> (see <a href="/en/sessions.html">Sessions &amp; Persistence</a>) — after handoff the
+        agent refuses driving commands on that session until you return it. <code>--headed</code> is only needed when you
+        <code>--launch</code> a separate browser, paired with a longer <code>--timeout</code> to wait for the post-login URL.
       </p>
 
       <div class="du-code">
