@@ -3192,6 +3192,30 @@ fn parse_form(rest: &[&str], id: &str) -> Result<Value, ParseError> {
 /// `{ "rows"?: "<css>", "fields": { "k": "<css>" | {"sel","get","all"} } }`.
 /// `get` = text (default) | @attr | html | value. Compiled to one eval (see
 /// handle_extract). `--frame` is leading-only, mirroring `eval`.
+/// Accept the canonical `{rows?, fields}` extract schema, or an array-shaped
+/// one like `{"items":[{"title":"…","url":"…"}]}` — the array element's object
+/// is the field map, the outer key is just a human label, and `rows` is
+/// auto-detected at extraction time (#96). Returns the canonical form.
+fn normalize_extract_schema(schema: Value) -> Result<Value, String> {
+    if schema.get("fields").map(|f| f.is_object()).unwrap_or(false) {
+        return Ok(schema);
+    }
+    if let Value::Object(map) = &schema {
+        for v in map.values() {
+            if let Value::Array(arr) = v {
+                if let Some(Value::Object(fields)) = arr.first() {
+                    if !fields.is_empty() {
+                        return Ok(json!({ "fields": Value::Object(fields.clone()) }));
+                    }
+                }
+            }
+        }
+    }
+    Err("extract schema needs a \"fields\" object, or an array-shaped schema like \
+         {\"items\":[{\"title\":\"…\",\"url\":\"…\"}]}"
+        .to_string())
+}
+
 fn parse_extract(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     let usage = "extract --schema <json> | --schema-file <path> | --stdin  [--frame <f>]";
     // Leading-only --frame (copy eval's pattern so it never eats a schema token).
@@ -3249,12 +3273,11 @@ fn parse_extract(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             message: format!("extract schema is not valid JSON: {e}"),
             usage,
         })?;
-    if !schema.get("fields").map(|f| f.is_object()).unwrap_or(false) {
-        return Err(ParseError::InvalidValue {
-            message: "extract schema needs a \"fields\" object".to_string(),
+    let schema =
+        normalize_extract_schema(schema).map_err(|message| ParseError::InvalidValue {
+            message,
             usage,
-        });
-    }
+        })?;
 
     let mut obj = serde_json::Map::new();
     obj.insert("id".into(), json!(id));
@@ -6411,6 +6434,19 @@ mod tests {
         .unwrap();
         assert_eq!(c["frame"], "1");
         assert_eq!(c["schema"]["fields"]["a"], ".x");
+    }
+
+    #[test]
+    fn test_extract_array_shaped_schema() {
+        // {label: [{field: sel, ...}]} normalizes to the canonical {fields} form (#96).
+        let c = parse_command(
+            &args(r#"extract --schema {"items":[{"title":".t","url":"@href"}]}"#),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(c["action"], "extract");
+        assert_eq!(c["schema"]["fields"]["title"], ".t");
+        assert_eq!(c["schema"]["fields"]["url"], "@href");
     }
 
     #[test]

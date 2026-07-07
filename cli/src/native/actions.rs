@@ -6089,25 +6089,67 @@ async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, Strin
     if (get === 'value') return el.value != null ? el.value : null;
     return ((el.innerText || el.textContent) || '').trim();
   }};
+  // Field selectors are wrapped so an invalid-CSS `sel` (e.g. a natural-language
+  // description) yields null instead of throwing and dropping the whole row (#96).
   const one = (root, spec) => {{
-    if (spec.all) {{
-      const nodes = spec.sel ? Array.from(root.querySelectorAll(spec.sel)) : [];
-      return nodes.map((n) => pick(n, spec.get));
-    }}
-    const el = spec.sel ? root.querySelector(spec.sel) : root;
-    return pick(el, spec.get);
+    try {{
+      if (spec.all) {{
+        const nodes = spec.sel ? Array.from(root.querySelectorAll(spec.sel)) : [];
+        return nodes.map((n) => pick(n, spec.get));
+      }}
+      const el = spec.sel ? root.querySelector(spec.sel) : root;
+      return pick(el, spec.get);
+    }} catch (e) {{ return null; }}
   }};
   const extractRow = (root) => {{
     const o = {{}};
     for (const k in FIELDS) o[k] = one(root, FIELDS[k]);
     return o;
   }};
-  if (ROWSEL) return Array.from(document.querySelectorAll(ROWSEL)).map(extractRow);
-  return extractRow(document);
+  // Nearest repeating containers, for the auto-detect fallback + a diagnostic
+  // when nothing matched (so `extract` never silently returns []). Signature is
+  // tag + first class so it stays a valid selector.
+  const repeating = () => {{
+    const sig = new Map();
+    document.querySelectorAll('li, tr, article, [class]').forEach((el) => {{
+      const tag = el.tagName.toLowerCase();
+      let key = tag;
+      try {{ if (el.classList && el.classList[0]) key = tag + '.' + CSS.escape(el.classList[0]); }} catch (e) {{}}
+      const rec = sig.get(key) || {{ sel: key, count: 0 }};
+      rec.count++; sig.set(key, rec);
+    }});
+    return [...sig.values()]
+      .filter((r) => r.count >= 2 && (r.sel.indexOf('.') >= 0 || r.sel === 'li' || r.sel === 'tr' || r.sel === 'article'))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+  }};
+
+  if (!ROWSEL) return {{ rows: [extractRow(document)], meta: {{ mode: 'single' }} }};
+
+  let nodes = null, used = ROWSEL, autoDetected = false, rowsError = null;
+  try {{ nodes = Array.from(document.querySelectorAll(ROWSEL)); }}
+  catch (e) {{ rowsError = 'not a valid CSS selector'; }}
+  // `rows` is meant to be a CSS selector; when it's a description (invalid CSS)
+  // or matches nothing, fall back to the dominant repeating container so plain
+  // <li>/<tr> lists just work.
+  if (!nodes || nodes.length === 0) {{
+    const rep = repeating();
+    if (rep.length) {{
+      try {{
+        const cand = Array.from(document.querySelectorAll(rep[0].sel));
+        if (cand.length >= 2) {{ nodes = cand; used = rep[0].sel; autoDetected = true; }}
+      }} catch (e) {{}}
+    }}
+  }}
+  if (!nodes || nodes.length === 0) {{
+    return {{ rows: [], meta: {{ matched: 0, requested: ROWSEL, rowsError: rowsError,
+      nearestRepeating: repeating().map((r) => r.sel + '×' + r.count) }} }};
+  }}
+  return {{ rows: nodes.map(extractRow), meta: {{ matched: nodes.length, used: used, autoDetected: autoDetected }} }};
 }})()"#
     );
 
-    let extracted = match cmd.get("frame").and_then(|v| v.as_str()) {
+    let result = match cmd.get("frame").and_then(|v| v.as_str()) {
         Some(spec) => {
             let frame_id =
                 resolve_frame_spec(mgr, &state.ref_map, &state.iframe_sessions, spec).await?;
@@ -6116,11 +6158,40 @@ async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, Strin
         }
         None => mgr.evaluate(&script, None).await?,
     };
-    let count = extracted.as_array().map(|a| a.len());
+
+    // The script returns { rows, meta }. `extracted` stays the rows array for
+    // back-compat; `meta` carries which selector was used (auto-detected or not).
+    let rows = result.get("rows").cloned().unwrap_or_else(|| json!([]));
+    let meta = result.get("meta").cloned().unwrap_or_else(|| json!({}));
+    let count = rows.as_array().map(|a| a.len()).unwrap_or(0);
     let url = mgr.get_url().await.unwrap_or_default();
-    let mut out = json!({ "extracted": extracted, "origin": url });
-    if let Some(c) = count {
-        out["count"] = json!(c);
+    let mut out = json!({ "extracted": rows, "count": count, "origin": url, "meta": meta });
+
+    // Never a bare [] with no signal (#96): when nothing matched, say what was
+    // asked for and what repeating containers ARE on the page, so the agent can
+    // retry with a real CSS selector instead of guessing page-vs-extractor.
+    if count == 0 {
+        let nearest = meta
+            .get("nearestRepeating")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "none found".to_string());
+        let requested = meta
+            .get("requested")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no rows selector)");
+        out["diagnostic"] = json!(format!(
+            "extract matched 0 rows for {requested:?}. `extract` \"rows\"/field selectors are CSS \
+             (not descriptions); auto-detect found no dominant repeating container either. \
+             Repeating containers on the page: {nearest}. Retry with one of those as \"rows\", \
+             or use `snapshot -i` / `eval`."
+        ));
     }
     Ok(out)
 }
