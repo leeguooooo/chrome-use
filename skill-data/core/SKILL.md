@@ -59,18 +59,8 @@ interaction after a *navigation* or a structural change.
 > agent's own input — and a full-page `screenshot` of a real retina browser is
 > often too large for an image reader anyway. (If you ever feel you *need* a
 > screenshot to read state or locate something, that's a bug — please file it.)
-
-> **Snapshot-first, always. Never default to `screenshot` + coordinate clicking
-> for form fields or buttons.** Run `snapshot -i` and act on `@refs`. Use
-> coordinates only for canvas/WebGL, or when `snapshot` genuinely returns nothing
-> for your target. This holds **even inside cross-origin embedded iframes** —
-> since v1.5.12 `snapshot -i` pierces out-of-process iframes (Google Payments,
-> Stripe, embedded checkout/KYC) and lists their elements with refs, so
-> `click @e` / `type @e` / `fill @e` work directly. A screenshot is for a genuine
-> *visual* check you report to the user — not your own input. (Full-page
-> screenshots of a real retina Chrome are often too large for the image reader
-> anyway.) Driving off pixels on the relay also risks a coordinate event drifting
-> onto the user's foreground tab — refs never do. See issue #37.
+> Driving off pixels on the relay also risks a coordinate event drifting onto the
+> user's foreground tab — refs never do (issue #37).
 
 > **Two different intents — only one is discouraged.** The rule above is about
 > *screenshot-to-locate* (using a picture to find/hit an element) — that's the bug.
@@ -1020,6 +1010,8 @@ chrome-use dialog accept           # accept
 chrome-use dialog accept "text"    # accept with prompt input
 chrome-use dialog dismiss          # cancel
 ```
+
+<!-- full -->
 
 ## Diagnosing install issues
 

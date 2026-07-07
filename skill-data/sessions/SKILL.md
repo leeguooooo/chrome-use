@@ -72,3 +72,21 @@ chrome-use daemon restart    # kill every session daemon worker
 `daemon restart` leaves the extension's native-messaging bridge (`__nm-host`)
 alone, so the relay to your live Chrome stays up — the next command just spins up
 a fresh, clean daemon against the same browser. It does **not** close any tabs.
+
+## Hand a session to the human (rare escape hatch)
+
+Autonomous login is the default — drive the login flow yourself. `session
+handoff` is only for the one step the agent genuinely can't do (a device 2FA
+prompt, a CAPTCHA the humanizer can't clear), not a login method.
+
+```bash
+chrome-use session handoff       # give THIS session to the user; agent driving commands refuse (exit 1)
+chrome-use session status        # who owns each session (agent | user)
+chrome-use session list          # all sessions + owners
+chrome-use session resume        # take the session back once the human is done
+```
+
+While a session is handed off, its owner sidecar (`.owner`) flips to the user and
+every driving command (`click`/`type`/`eval`/…) refuses with a loud exit-1 error
+so the agent can't fight the human for the page. `resume` returns control. Ownership
+is per-session, so other sessions keep working normally.

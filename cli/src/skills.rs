@@ -221,9 +221,26 @@ fn truncate_description(desc: &str, max_len: usize) -> String {
     format!("{}...", &desc[..end])
 }
 
-/// Read the full SKILL.md content (including frontmatter).
-fn read_skill_full(skill_md: &Path) -> Option<String> {
-    fs::read_to_string(skill_md).ok()
+/// Read SKILL.md honoring an optional `<!-- full -->` tier marker (#100). The
+/// default serve is everything BEFORE the marker (the high-frequency workflow);
+/// `--full` returns the whole file (and the caller then also appends the
+/// references/ + templates/). A skill with no marker serves whole either way, so
+/// tiering is opt-in per skill and this never truncates a skill that hasn't been
+/// split. Returns the full content when `full` is set.
+fn read_skill_tiered(skill_md: &Path, full: bool) -> Option<String> {
+    let content = fs::read_to_string(skill_md).ok()?;
+    if full {
+        return Some(content);
+    }
+    match content.find("<!-- full -->") {
+        Some(idx) => {
+            let head = content[..idx].trim_end();
+            Some(format!(
+                "{head}\n\n_(Reference sections omitted for brevity — re-run with `--full` for the complete guide.)_\n"
+            ))
+        }
+        None => Some(content),
+    }
 }
 
 /// Collect all supplementary files (references/, templates/) for a skill.
@@ -362,7 +379,7 @@ fn run_get(skills_dirs: &[PathBuf], names: &[String], get_all: bool, full: bool,
             .iter()
             .map(|s| {
                 let skill_md = s.dir.join("SKILL.md");
-                let content = read_skill_full(&skill_md).unwrap_or_default();
+                let content = read_skill_tiered(&skill_md, full).unwrap_or_default();
                 let mut obj = json!({
                     "name": s.name,
                     "content": content,
@@ -390,7 +407,7 @@ fn run_get(skills_dirs: &[PathBuf], names: &[String], get_all: bool, full: bool,
                 println!("\n---\n");
             }
             let skill_md = s.dir.join("SKILL.md");
-            if let Some(content) = read_skill_full(&skill_md) {
+            if let Some(content) = read_skill_tiered(&skill_md, full) {
                 print!("{}", content);
                 if !content.ends_with('\n') {
                     println!();
