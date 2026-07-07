@@ -83,6 +83,7 @@
       { slug: "overview",  ico: "🧭", zh: "概览",        en: "Overview",            kw: "intro start home 首页 介绍" },
       { slug: "install",   ico: "📦", zh: "安装",        en: "Installation",        kw: "install setup 安装 npm curl extension 扩展" },
       { slug: "core-loop", ico: "🔁", zh: "核心循环",    en: "The Core Loop",       kw: "loop snapshot act observe 循环 workflow" },
+      { slug: "how-it-works", ico: "⚙️", zh: "它怎么工作", en: "How It Works",       kw: "architecture daemon relay native messaging extension cdp pipeline 架构 原理 守护进程 中继 工作原理" },
     ]},
     { id: "core", label: { zh: "核心用法", en: "Core Usage" }, items: [
       { slug: "reading",     ico: "📖", zh: "读取页面",  en: "Reading Pages",       kw: "snapshot read dom accessibility 读取 快照" },
@@ -99,6 +100,7 @@
       { slug: "stealth",     ico: "🥷", zh: "反检测与隐身", en: "Stealth & Anti-detection", kw: "stealth anti-detection antibot cloudflare creepjs humanize 反检测 隐身 封号 指纹 bot" },
     ]},
     { id: "advanced", label: { zh: "进阶", en: "Advanced" }, items: [
+      { slug: "script",  ico: "⚡", zh: "单次成型脚本", en: "Single-pass Scripting", kw: "script batch op-list json js boa foreach waituntil assert dry-run cu 单次 脚本 一次往返 编排" },
       { slug: "canvas",  ico: "🎨", zh: "Canvas / WebGL / 游戏", en: "Canvas / WebGL / Games", kw: "canvas webgl game figma capture 游戏" },
       { slug: "network", ico: "🛰️", zh: "网络拦截与改写", en: "Network Interception", kw: "network mock rewrite fetch cdp 拦截 改写" },
       { slug: "react",   ico: "⚛️", zh: "React / Web Vitals", en: "React / Web Vitals", kw: "react vitals performance 性能" },
@@ -118,6 +120,7 @@
       { slug: "commands",        ico: "📚", zh: "命令参考",   en: "Command Reference",  kw: "commands cli flags reference 命令 参考" },
       { slug: "troubleshooting", ico: "🩹", zh: "故障排查",   en: "Troubleshooting",    kw: "troubleshoot debug relay error 故障 排查" },
       { slug: "family",          ico: "🧩", zh: "*-use 家族", en: "The *-use Family",   kw: "family iphone-use cookie-use bitwarden 家族" },
+      { slug: "lineage",         ico: "🌱", zh: "血统与上游", en: "Lineage & Upstream", kw: "fork upstream vercel agent-browser apache license attribution 上游 分叉 血统 许可证 出身" },
     ]},
   ];
 

@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Single-pass Scripting · chrome-use docs</title>
+  <meta name="description" content="chrome-use script runs a whole observe→decide→act→verify flow in one round-trip over the daemon, returning structured results in one tool call. JSON op-list (value bus + loops + asserts) or synchronous JS (cu.* helpers); the engine runs in the daemon, so it survives hard navigations." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="script" data-lang="en">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M32 6 L14 34 h14 l-4 20 20-30 h-14 z"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">Advanced</p>
+
+      <div class="du-title-row">
+        <h1>Single-pass Scripting</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        When you drive the browser one verb at a time, the model is stuck in the loop: every step means read the result, decide the next move, send another command.
+        <code>chrome-use script</code> hands the whole <span class="mark">observe / decide / act / verify</span> flow to the daemon at once,
+        so the decision logic runs next to the browser and you get structured results back in one tool call. Two forms:
+        a <strong>JSON op-list</strong> (machine-generatable, dry-runnable) and a real <strong>synchronous JS</strong> program (<code>cu.*</code> helpers).
+        Measured: crawling 3 HN pages for high-score stories drops from 13+ calls to one.
+      </p>
+
+      <h2>How expensive the per-verb loop is</h2>
+      <p>
+        chrome-use is one-command-one-action by default: <code>snapshot</code> to see the page, <code>click @e8</code> to press a button,
+        <code>eval</code> to read data. Each command is a full round-trip: process spawn, Unix socket to the daemon, extension relay to the browser,
+        result back the same way, then the agent's model reads the output and decides the next step. Fine for a single step; the cost shows up in multi-step flows:
+        pagination, conditional retries, using a prior result to pick the next action. The model is forced to stay in the loop, <strong>one inference and one tool call per step</strong>.
+      </p>
+      <p>
+        A fixed sequence of actions already runs in one round-trip with <code>batch</code> (<code>press --hold</code> and <code>wait</code> block inside the daemon, so timing is precise),
+        but batch steps can't pass values between them, and there are no loops or conditions. <code>script</code> is the layer that adds them.
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">🪜 Four-rung ladder</div>
+        single verb (one step, one round-trip) → <code>batch</code> (fixed sequence, one round-trip) → <code>script</code> (values between steps +
+        loops + conditions + asserts, one round-trip) → <code>stream</code> WebSocket (continuous real-time driving). Each rung down expresses more logic
+        with fewer round-trips and tool calls; pick the lowest one that's enough.
+      </div>
+
+      <h2>JSON op-list form</h2>
+      <p>
+        The first form is a JSON array of statements — good for a model to emit directly and for a program to assemble.
+        A later op reads an earlier op's result through the <code>{{name.path}}</code> value bus:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use script - &lt;&lt;'JSON'
+[
+  {"do":"navigate","url":"https://example.com"},
+  {"do":"evaluate","script":"document.title","bind":"t"},
+  {"assert":{"contains":["{{t.result}}","Example"]},"msg":"wrong page"},
+  {"return":"{{t.result}}"}
+]
+JSON</code></pre>
+      </div>
+      <p>There are eight statements (<code>cli/src/native/script.rs</code>):</p>
+<pre><code>{ "do": "&lt;action&gt;", ...params, "bind"?: "name", "optional"?: bool }   // run a command, store its result
+{ "waitUntil": &lt;cond&gt;, "timeoutMs"?: n, "pollMs"?: n }                 // poll until a condition holds
+{ "forEach": "{{list}}", "as"?: "item", "max": n, "body": [ ... ] }   // loop (max is required, a hard cap)
+{ "assert": &lt;cond&gt;, "msg"?: "..." }                                   // assert, stop on failure (exit 1)
+{ "set": "name", "value": &lt;v|"{{expr}}"&gt; }                            // assign
+{ "push": "name", "value": &lt;v|"{{expr}}"&gt; }                           // append to an array
+{ "return": &lt;v|"{{expr}}"&gt; }                                          // return and end
+{ "log": &lt;v|"...{{expr}}..."&gt; }                                       // record a progress line</code></pre>
+      <p>
+        Conditions (<code>&lt;cond&gt;</code>): <code>{"eq":[a,b]}</code>, <code>{"ne"}</code>, <code>{"contains"}</code>,
+        <code>{"matches":[a,rx]}</code>, <code>{"exists":"&lt;selector&gt;"}</code>, <code>{"gone"}</code>.
+        The <code>{{expr}}</code> value bus: a string that is exactly <code>{{x}}</code> yields the value at its real type (a number stays a number);
+        embedded <code>...{{x}}...</code> does string interpolation; paths take indices, e.g. <code>rows.0.ref</code>, <code>rows[0].url</code>.
+      </p>
+      <div class="du-callout tip">
+        <div class="du-callout-title">💡 Tip</div>
+        <code>evaluate</code>'s return value is wrapped under <code>.result</code>, so reference a page value as <code>{{t.result}}</code>, not <code>{{t}}</code>.
+        <code>--dry-run</code> validates the program's shape without touching the browser; <code>--arg k=v</code> seeds a variable. Exit codes: 0 ok, 1 runtime failure or failed assert, 2 invalid program.
+      </div>
+
+      <h2>JS program form</h2>
+      <p>
+        The second form is a real JavaScript program that drives your already-logged-in Chrome through <code>cu.*</code> helpers.
+        This is ego-lite's "code base" idiom; control flow is just JS's own <code>for</code> / <code>if</code> / <code>break</code>.
+        <strong>No <code>await</code></strong>: every <code>cu.*</code> call blocks until the browser returns, so the script is synchronous.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use script --timeout 120000 &lt;&lt;'JS'
+  cu.open('https://news.ycombinator.com');
+  const out = [];
+  for (let page = 0; page &lt; 3; page++) {
+    const rows = cu.eval("[...document.querySelectorAll('.athing')].map(r=&gt;({id:r.id,title:r.querySelector('.titleline a')?.innerText}))");
+    for (const r of rows) {
+      const pts = cu.eval(`+(document.querySelector('#score_${r.id}')?.innerText.match(/\\d+/)?.[0] ?? 0)`);
+      if (pts &gt;= 100) out.push({ title: r.title, points: pts });
+    }
+    if (!cu.visible('a.morelink')) break;
+    cu.click('a.morelink');       // full-page navigation, script state kept
+    cu.waitFor('.athing', 8000);
+  }
+  return { count: out.length, top: out.slice(0, 5) };
+JS</code></pre>
+      </div>
+      <p>
+        The helpers: <code>cu.snapshot</code> / <code>cu.eval</code> / <code>cu.open</code> / <code>cu.click</code> /
+        <code>cu.fill</code> / <code>cu.type</code> / <code>cu.press</code> / <code>cu.hover</code> / <code>cu.select</code> /
+        <code>cu.check</code> / <code>cu.scroll</code> / <code>cu.find</code> / <code>cu.visible</code> / <code>cu.waitFor</code> /
+        <code>cu.wait</code> / <code>cu.extract</code> / <code>cu.text</code> / <code>cu.log</code>. <code>cu.eval</code> returns the page value directly;
+        the rest throw on failure so the script fails fast. The program's return value is the command's result; <code>cu.log(...)</code> collects progress lines.
+      </p>
+
+      <h2>The engine runs in the daemon</h2>
+      <p>ego can also write one JS program that runs a whole task; where chrome-use script pulls ahead is <strong>where the engine lives</strong>.</p>
+      <p>
+        <strong>It survives hard navigations.</strong> A runtime injected into the page world dies the moment the page navigates — the whole execution context is gone, and multi-page flows die exactly at the page turn.
+        chrome-use's JS engine runs in the daemon, outside the page: in the example above <code>cu.click('a.morelink')</code> triggers a full navigation, the script state
+        (the <code>out</code> array, the loop counter) stays put, and <code>cu.waitFor</code> confirms the new page loaded before continuing.
+      </p>
+      <p>
+        <strong>Pure-Rust engine, every platform.</strong> The JS engine is boa, a pure-Rust implementation compiled into the chrome-use binary itself — no Node, no system V8.
+        macOS / Linux / Windows all run it; ego is macOS-only.
+      </p>
+      <p>
+        <strong>Every op goes through the same front door.</strong> Each step of a script (both forms) re-enters the daemon's <code>execute_command</code>,
+        the identical path a hand-typed single command takes: policy checks, the stealth transport, <code>--humanize</code>, <code>@ref</code> healing, cross-process session recovery.
+        Nothing is reimplemented, so behavior inside a script matches the command line exactly. The full pipeline is on <a href="/en/how-it-works.html">How It Works</a>.
+      </p>
+
+      <h2>Measured: 3 HN pages</h2>
+      <p>
+        Benchmark task: paginate 3 pages of Hacker News, collect every story with ≥100 points, output JSON. The JS program above is the complete solution,
+        verified on real Chrome (3 pages, 34 stories, ~4.8s).
+      </p>
+      <div class="cmp-scroll" style="overflow-x:auto; margin:14px 0;">
+      <table>
+        <thead><tr><th></th><th>per-verb</th><th>chrome-use script</th></tr></thead>
+        <tbody>
+          <tr><th>tool calls</th><td>13+</td><td><strong>1</strong></td></tr>
+          <tr><th>model inferences</th><td>one per step; every page turn and per-story score check goes back to the model</td><td>2: write the program + read the result</td></tr>
+          <tr><th>intermediate output</th><td>every snapshot / eval result enters the context</td><td>only the final <code>return</code> JSON</td></tr>
+          <tr><th>pagination (hard nav)</th><td>fine (each step is independent)</td><td>fine, engine is in the daemon</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        The "≥100 points" decision is one <code>if</code> in the script; the old way carries every story's score back to the model to judge.
+        The more steps and the denser the decisions, the wider the gap. Full landscape and the item-by-item ego-lite measurements are on <a href="/en/compare.html">how chrome-use compares</a>.
+      </p>
+
+      <h2>Which layer to use</h2>
+      <p>script doesn't replace single commands; it's the layer above for multi-step flows. How to choose:</p>
+      <ul>
+        <li><strong>One or two steps</strong>: a single verb, closed with <a href="/en/waiting.html"><code>expect</code></a> or <code>--observe</code>.</li>
+        <li><strong>Fixed sequence, no values passed between steps</strong>: <code>batch</code> — precise timing, minimal overhead.</li>
+        <li><strong>Need a prior result, a loop or condition, an assert to bail mid-way</strong>: <code>script</code>. Let the model emit the JSON form (dry-runnable); hand-write or complex logic → the JS form.</li>
+        <li><strong>Continuous real-time driving</strong> (games, frame-by-frame): the <code>stream</code> WebSocket, see <a href="/en/canvas.html">Canvas / WebGL</a>.</li>
+      </ul>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Start here</div>
+        For pure data-scraping, look at <a href="/en/extract.html"><code>extract --schema</code></a> first (one call structures the page into JSON);
+        to accumulate across pages or filter conditionally, wrap extract in a <code>script</code> loop.
+      </div>
+
+      <hr class="du-divider" />
+
+      <div class="du-cards">
+        <a class="du-card" href="/en/how-it-works.html">
+          <div class="du-card-title"><span class="du-card-ico">⚙️</span> How It Works</div>
+          <p>Daemon, relay, and where the boa engine runs — the reason script survives hard navigations is in this pipeline.</p>
+        </a>
+        <a class="du-card" href="/en/compare.html">
+          <div class="du-card-title"><span class="du-card-ico">⚖️</span> How chrome-use compares</div>
+          <p>chrome-use script vs ego-lite's code-base idiom, measured item by item.</p>
+        </a>
+        <a class="du-card" href="/en/waiting.html">
+          <div class="du-card-title"><span class="du-card-ico">⏳</span> Waiting &amp; Asserting</div>
+          <p><code>expect</code> / <code>--observe</code>: the single-command verification that maps to <code>assert</code> / <code>waitUntil</code> in a script.</p>
+        </a>
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

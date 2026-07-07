@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>它怎么工作 · chrome-use 文档</title>
+  <meta name="description" content="一条 chrome-use 命令从终端到页面要经过四个进程：CLI、每会话一个的守护进程、Chrome 拉起的中继、ab-connect 扩展。拆开讲每一站在哪个进程、说什么协议、状态放在谁手上，以及为什么装扩展而不是开调试端口。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="how-it-works" data-lang="zh">
+
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
+        <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="30" cy="30" r="10"/><path d="M30 4v8M30 48v8M4 30h8M48 30h8M11 11l6 6M43 43l6 6M49 11l-6 6M17 43l-6 6"/>
+        </svg>
+      </span>
+
+      <p class="du-eyebrow">开始 / Getting Started</p>
+
+      <div class="du-title-row">
+        <h1>它怎么工作</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        一条 chrome-use 命令从终端出发，要经过<span class="mark">四个进程</span>才碰到页面：CLI 本身、每个会话一个的守护进程、
+        Chrome 为扩展拉起的中继进程、浏览器里的 ab-connect 扩展。这一页把整条链路拆开：每一站在哪个进程里、说什么协议、
+        状态放在谁手上。读完你就能解释 <code>relay-cdp-url</code> 是什么文件、<code>@ref</code> 为什么会失效、
+        以及为什么装一个扩展而不是开调试端口。
+      </p>
+
+      <h2>一条命令走过的四站</h2>
+      <p>以 <code>chrome-use open https://example.com</code> 为例，完整链路是：</p>
+<pre><code>chrome-use open &lt;url&gt;                    CLI，执行完即退出
+        │  一行 JSON 请求，一行 JSON 响应
+        │  Unix 域套接字 ~/.chrome-use/&lt;session&gt;.sock
+        ▼
+守护进程 (daemon)                         每个 --session 一个，常驻后台
+持有 CDP 连接、@ref 映射、脚本引擎
+        │  标准 CDP over WebSocket
+        │  ws://127.0.0.1:&lt;随机端口&gt;/&lt;随机 guid&gt;
+        ▼
+中继 (chrome-use __nm-host)               Chrome 为扩展拉起的进程
+本地应答 Target.* 发现命令，其余转发
+        │  Chrome 原生消息 (stdio，4 字节长度前缀 + JSON 帧)
+        ▼
+ab-connect 扩展                           MV3，装一次
+        │  chrome.debugger，按标签页附加
+        ▼
+你已登录的真实 Chrome 标签页</code></pre>
+      <p>
+        每一段都是标准协议，没有私有魔法：CLI 到守护进程是本机套接字，守护进程到中继是普通 CDP，
+        中继到扩展是 Chrome 原生消息，扩展到页面是 <code>chrome.debugger</code>（和 DevTools 同一套）。
+      </p>
+
+      <h2>CLI 很薄，状态都在守护进程里</h2>
+      <p>
+        <code>chrome-use</code> 这个二进制在 CLI 模式下不持有任何浏览器状态。它把命令序列化成一行 JSON，
+        写进 Unix 域套接字，读回一行 JSON，打印，退出。套接字路径是 <code>~/.chrome-use/&lt;session&gt;.sock</code>
+        （有 <code>XDG_RUNTIME_DIR</code> 时用 <code>$XDG_RUNTIME_DIR/chrome-use/</code>，见 <code>cli/src/native/daemon.rs</code>
+        的 <code>get_daemon_socket_dir</code>）。Windows 没有 Unix 套接字，改用 127.0.0.1 上按会话名哈希出的 TCP 端口。
+      </p>
+      <p>
+        第一次对某个会话发命令时，CLI 发现套接字不存在，就先 fork 出守护进程再重试。守护进程旁边还有几个
+        sidecar 文件：<code>&lt;session&gt;.pid</code>、<code>&lt;session&gt;.version</code>、<code>&lt;session&gt;.stream</code>（实时流服务的端口）。
+      </p>
+      <p>守护进程持有三样跨命令的东西：</p>
+      <ol>
+        <li>到浏览器的 CDP 连接（<code>CdpClient</code>）</li>
+        <li>@ref 到 DOM 节点的映射表（<code>RefMap</code>，见下文 snapshot 一节）</li>
+        <li><code>chrome-use script</code> 的 JS 引擎（boa，纯 Rust）。引擎跑在守护进程里而不是页面里，所以页面硬跳转时脚本状态不丢，详见 <a href="/script.html">单次成型脚本</a>。</li>
+      </ol>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 为什么守护进程常驻</div>
+        CDP 连接和 @ref 映射建立一次就复用，省掉每条命令重新连、重新快照的开销。这也是 <code>batch</code>
+        和 <code>script</code> 能「一次往返跑完多步」的底座。守护进程闲置约 10 分钟自动退出，清掉它开的临时标签。
+      </div>
+
+      <h2>中继进程是 Chrome 自己拉起来的</h2>
+      <p>第三站最容易让人迷糊：中继不是你启动的，是 Chrome 启动的。</p>
+      <p>
+        装扩展时，<code>chrome-use extension install</code> 往 Chrome 的原生消息宿主目录写一份 manifest
+        （宿主名 <code>com.leeguoo.chrome_use</code>，兼容旧名 <code>com.agent_browser.connect</code>），里面登记了
+        chrome-use 二进制的路径和允许对话的扩展 id。之后 ab-connect 扩展一调用 <code>connectNative</code>，
+        Chrome 就以隐藏的 <code>__nm-host</code> 模式拉起 chrome-use（<code>cli/src/connect.rs</code> 的 <code>run_nm_host</code>），
+        两边用 stdio 说原生消息协议：4 字节小端长度前缀加一个 JSON 帧。
+      </p>
+      <p>这个 nm-host 进程做两件事：</p>
+      <ol>
+        <li>在 127.0.0.1 上随机绑一个端口，开一个 WebSocket 端点 <code>ws://127.0.0.1:&lt;port&gt;/&lt;guid&gt;</code>，把 URL 写进 <code>~/.chrome-use/relay-cdp-url</code>，文件权限 0600。guid 不可猜、文件只有当前用户可读，所以本机其他进程拿不到入口。守护进程读这个文件，把它当成一个普通 Chrome 的 CDP 端点去连。</li>
+        <li>在扩展协议和标准 CDP 之间做翻译，并本地应答 <code>Target.getTargets</code> 这类发现命令，避免每次都往扩展绕一圈（<code>cli/src/native/relay.rs</code>）。</li>
+      </ol>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 排障锚点</div>
+        <code>~/.chrome-use/relay-cdp-url</code> 不存在，多半是中继没起来（扩展没连上）；
+        <code>nm-host.log</code> 里 <code>stdin EOF</code> 一般是 MV3 后台 worker 被 Chrome 回收了。
+        细节见 <a href="/troubleshooting.html">故障排查</a>。
+      </div>
+
+      <h2>扩展端只做一件事</h2>
+      <p>
+        ab-connect 是个 MV3 扩展，核心就是拿 <code>chrome.debugger</code> 按标签页执行 CDP 命令，把结果通过原生消息交回中继。
+        权限足迹是 7 项，没有 <code>&lt;all_urls&gt;</code>。两条对指纹重要的性质：
+      </p>
+      <ol>
+        <li>它<strong>只附加 agent 自己的标签</strong>。你正在看的页面不会被 attach，也就不会出现「chrome-use 已开始调试此浏览器」的横幅（扩展 0.5.5 起，只 attach agent 拥有的标签）。</li>
+        <li>这条路径<strong>不注入任何 JS 补丁</strong>。页面看到的就是你真实的 Chrome、真实的 cookie、真实的指纹，所以 CreepJS 测出来是 0% bot。反检测靠的不是伪装，是根本没有东西需要伪装（见 <a href="/stealth.html">反检测与隐身</a>）。</li>
+      </ol>
+      <p>换句话说，扩展是整条链路里唯一碰得到页面的进程，而它碰页面的方式和 DevTools 是同一套协议。</p>
+
+      <h2>为什么装扩展，而不是开 --remote-debugging-port</h2>
+      <p>
+        驱动真实 Chrome 的传统做法是加 <code>--remote-debugging-port=9222</code> 然后直连 CDP。这条路从 Chrome 136 起废了一半：
+        每次有客户端连上来，Chrome 都弹一个阻塞式的「Allow remote debugging?」确认框。agent 每连一次你点一次，自动化无从谈起。
+        而且端口要在启动 Chrome 前就开好，等于要求用户换一种方式启动日常浏览器。
+      </p>
+      <p>
+        原生消息没有这个问题，因为信任关系是反过来的：不是外部进程去敲 Chrome 的端口，而是 Chrome 根据宿主 manifest 里
+        登记的扩展 id，主动拉起并认证这个宿主。装扩展点一次「添加至 Chrome」，之后每次使用零确认。本机安全性由两层兜住：
+        只有 manifest 里登记的扩展能启动宿主；中继的 WebSocket URL 带不可猜的 guid，写在 0600 权限的文件里。
+      </p>
+
+      <h2>两种模式</h2>
+      <p>上面讲的四站链路是默认模式：连你真实的、已登录的 Chrome。还有第二条路，<code>--launch</code>：</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code><span class="du-cmt"># 默认：走扩展中继，用你的真实 Chrome</span>
+$ chrome-use open https://example.com
+<span class="du-cmt"># 另开一个隔离的隐身 Chromium</span>
+$ chrome-use --launch open https://example.com</code></pre>
+      </div>
+      <div class="cmp-scroll" style="overflow-x:auto; margin:14px 0;">
+      <table>
+        <thead><tr><th></th><th>扩展中继（默认）</th><th><code>--launch</code></th></tr></thead>
+        <tbody>
+          <tr><th>浏览器</th><td>你正在用的那个 Chrome</td><td>守护进程自己拉起的独立 Chromium</td></tr>
+          <tr><th>登录态</th><td>全部现成</td><td>空的临时 profile（<code>--profile</code> 可指定持久 profile）</td></tr>
+          <tr><th>链路</th><td>daemon → 中继 → 扩展 → chrome.debugger</td><td>daemon 直连 CDP，没有中继和扩展</td></tr>
+          <tr><th>反检测</th><td>不需要：本来就是真浏览器，零注入</td><td>原生覆盖（改 UA、时区、webdriver 等，见 <code>stealth.rs</code>），不打 JS 补丁</td></tr>
+          <tr><th>适用</th><td>需要登录态、过反爬、用户随时接管</td><td>干净环境测试、并行跑一次性任务</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>两种模式共用同一个守护进程架构和同一套命令，区别只在守护进程连的是谁。</p>
+
+      <h2>每个 --session 一个彩色标签组</h2>
+      <p>多个 agent 共用一个真实 Chrome 时，隔离靠标签组：</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
+<pre><code>$ chrome-use --session research open https://a.com   <span class="du-cmt"># research 组</span>
+$ chrome-use --session shopping open https://b.com   <span class="du-cmt"># shopping 组，互不可见</span></code></pre>
+      </div>
+      <p>
+        守护进程启动时把会话名记进 <code>DAEMON_SESSION</code>，它开的每个标签都落进这个会话专属的彩色 Chrome 标签组。
+        隔离在中继层强制执行（<code>relay.rs</code> 的 <code>client_groups</code>）：守护进程连上中继后先声明自己的组，
+        此后它的 <code>Target.getTargets</code> 只返回本组的标签。它看不见你的标签，也看不见其他 agent 的标签，自然也就点不到。
+      </p>
+      <p>
+        细节都有归属规则：新标签打上创建者的组标签；页面弹出的 pop-up 继承 opener 的组，跨进程跳转（比如 OAuth 弹窗）不会跑丢；
+        <code>chrome-use adopt</code> 是唯一的跨组通道，收养后那一个标签被重新打进收养者的组，其余照旧不可见。会话与持久化细节见
+        <a href="/sessions.html">会话与持久化</a>。
+      </p>
+
+      <h2>snapshot 和 @ref 从哪里来</h2>
+      <p>
+        <code>chrome-use snapshot -i</code> 输出的那棵文本树不是 HTML，是无障碍树（accessibility tree）。守护进程通过 CDP 的
+        <code>Accessibility.getFullAXTree</code> 拿到整棵 AX 树（<code>cli/src/native/snapshot.rs</code>），过滤出 button、link、
+        textbox 等可交互角色，渲染成带缩进的文本：
+      </p>
+<pre><code>button "提交" [ref=e12]
+textbox "邮箱" [ref=e13]</code></pre>
+      <p>
+        每个 <code>[ref=eN]</code> 是守护进程在生成快照时分配的编号，背后是 <code>RefMap</code>（<code>cli/src/native/element.rs</code>）：
+        ref 映射到 CDP 的 <code>backend_node_id</code>，也就是那个 DOM 节点在浏览器进程里的稳定句柄。<code>chrome-use click @e12</code>
+        时，守护进程查表拿到节点 id，直接对节点发操作，不需要 CSS 选择器，也不需要坐标。由此推出两条使用规则：
+      </p>
+      <ol>
+        <li>ref 是守护进程的内存状态。守护进程重启（比如闲置退出）后旧 ref 全部作废，重新 <code>snapshot</code> 即可。</li>
+        <li>页面大改后 ref 可能指向已不存在的节点。<code>RefMap</code> 存了每个 ref 的角色、名称等指纹，<code>--heal</code> 能据此把 ref 重新定位到最接近的节点。定位细节见 <a href="/finding.html">定位元素</a>。</li>
+      </ol>
+
+      <h2>出身</h2>
+      <p>
+        chrome-use 最初基于 vercel-labs/agent-browser（Apache-2.0）。CLI 骨架和部分命令语义来自上游，
+        但隐身与扩展中继架构、反检测、humanize、多 agent 隔离、以及本页讲的整条 nm-host 链路都是本项目自己长出来的，
+        现在是独立项目。完整的分叉说明见 <a href="/lineage.html">血统与上游</a>。
+      </p>
+      <div class="du-callout tip">
+        <div class="du-callout-title">🔧 想动手验证</div>
+        <code>AGENT_BROWSER_DEBUG=1</code> 让守护进程把日志写到 <code>~/.chrome-use/&lt;session&gt;.log</code>；
+        <code>cat ~/.chrome-use/relay-cdp-url</code> 看中继的实时端点；<code>chrome-use doctor</code> 把每一站的健康状况报一遍。
+        排障见 <a href="/troubleshooting.html">故障排查</a>，扩展安装见 <a href="/real-chrome.html">驱动真实 Chrome</a>，反检测数据见 <a href="/stealth.html">反检测与隐身</a>。
+      </div>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
