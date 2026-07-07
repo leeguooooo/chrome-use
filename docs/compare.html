@@ -265,6 +265,9 @@
         <li><strong>所有权 + 交接</strong>——<span class="cmp-win">已实现</span> <code>session handoff/resume/status/list</code>：交接给用户后 agent 对该会话的驱动命令全被拒绝。这是<strong>逃生口</strong>（agent 真做不了的一步，如解不了的验证码），<strong>不改变自主登录</strong>——默认 agent 自己登录、自己驱动，零影响。</li>
         <li><strong>富文本 write-probe 纪律</strong>——<span class="cmp-win">已搬</span>（见 <a href="/canvas.html">Canvas / WebGL</a> 页末）。</li>
         <li><strong>登录继承 / 隔离上下文 / 按名复用 / token 经济</strong>——<span class="cmp-win">已具备</span>（relay 天然带登录、每会话标签组隔离、<code>session list</code>、<code>--session-name</code>、更省 token）。</li>
+        <li><strong>定位（locating）</strong>——<span class="cmp-win">已具备·持平</span>：<code>@ref</code>（backendNodeId 跨调用稳定）+ CSS + XPath + 坐标 + 语义 <code>find role button --name</code> + <code>box</code> 几何 + <code>-s</code> 作用域，对齐 ego 的 <code>loc=</code> / <code>@N</code>。</li>
+        <li><strong>群组（groups）</strong>——<span class="cmp-win">已具备·持平</span>：每个 <code>--session</code> 映射一个彩色 Chrome 标签组、group-scoped 隔离（<a href="https://github.com/leeguooooo/chrome-use/issues/40">#40</a>）、多 agent 互不串、只拥有自己建的标签，等价 ego 的 Task Space——只是发生在你的真 Chrome 里而非另一个浏览器。</li>
+        <li><strong>单次成型的复杂脚本</strong>（ego 的 “code base, not CLI base” 优势）——<span class="cmp-win">已基本追平</span>：<code>eval</code> 在页面 MAIN world 跑任意复杂逻辑一次成型 + <code>batch</code> 一次往返多命令 + WebSocket 流。<em>正在做的是把它从“追平”推向“全面超越”</em>：一段脚本里直接调 chrome-use 的高级 helper（snapshot/@ref/click/fill/wait/find/extract）、带控制流、一趟往返返回结构化结果——ego 的写法，跑在你已登录的真 Chrome + 隐身传输上。</li>
       </ul>
 
       <h2>怎么选</h2>
