@@ -544,6 +544,31 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
         );
     }
 
+    // Fast path (one click, Codex-parity): exactly one profile is missing the
+    // extension and we're on an interactive terminal — open the Web Store page
+    // right there and wait for it to connect, skipping the multi-step policy /
+    // System-Settings approval wall entirely. The Web Store install auto-updates
+    // forever, so the user never updates the extension by hand. The full A/B
+    // guide below still covers the multi-profile / silent-policy cases.
+    if !all_profiles
+        && policy != PolicyState::Active
+        && interactive_tty()
+        && missing.len() == 1
+        && open_store_and_wait(missing[0], zh)
+    {
+        println!(
+            "\n[3/3] {}",
+            if zh {
+                "✓ 已连接！扩展来自 Chrome 应用商店，之后由 Chrome 自动更新，你什么都不用管。\n  现在就能用了： chrome-use open <url>"
+            } else {
+                "✓ Connected! The extension is from the Web Store and Chrome keeps it\n  auto-updated — nothing to maintain. Ready to go: chrome-use open <url>"
+            }
+        );
+        return;
+    }
+    // If the fast path didn't fire or didn't connect in time, the full A/B guide
+    // below covers the multi-profile / silent-policy cases.
+
     println!(
         "\n[3/3] {}",
         if zh {
@@ -1628,6 +1653,65 @@ fn open_store_in_profile(profile: &ChromeProfileInfo) -> bool {
         let _ = (root, profile_arg);
         false
     }
+}
+
+/// One-click, Codex-parity fast path: open the Web Store "Add to Chrome" page in
+/// `profile` and wait (polling the relay's `hello`) until the extension
+/// connects, with a live progress line and a green "Connected" light. Returns
+/// true once connected. Installing from the Web Store means Chrome auto-updates
+/// the extension forever — the user never updates it by hand.
+fn open_store_and_wait(profile: &ChromeProfileInfo, zh: bool) -> bool {
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+
+    // Already connected (relay saw a hello)? Nothing to do.
+    if relay_ext_version().is_some() && relay_url_path().exists() {
+        return true;
+    }
+    if !open_store_in_profile(profile) {
+        return false;
+    }
+    if zh {
+        eprintln!(
+            "\n  已在你的 Chrome（{}）打开扩展商店页。点一下「加入 Chrome」即可 ——\n\
+             \x20 装好后 Chrome 会一直自动帮你更新它，你再也不用手动升级。",
+            profile.label()
+        );
+        eprint!("  等待连接 ");
+    } else {
+        eprintln!(
+            "\n  Opened the Web Store page in your Chrome ({}). Click \"Add to Chrome\" —\n\
+             \x20 once installed, Chrome keeps it auto-updated, so you never update it by hand.",
+            profile.label()
+        );
+        eprint!("  waiting for the connection ");
+    }
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline {
+        if relay_ext_version().is_some() {
+            eprintln!(
+                "{}",
+                if zh {
+                    " ✓ 已连接"
+                } else {
+                    " ✓ Connected"
+                }
+            );
+            return true;
+        }
+        eprint!(".");
+        let _ = std::io::stderr().flush();
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    eprintln!(
+        "{}",
+        if zh {
+            " （还没连上 —— 点了「加入 Chrome」了吗？下面还有备选方案）"
+        } else {
+            " (not connected yet — did you click \"Add to Chrome\"? options below)"
+        }
+    );
+    false
 }
 
 fn chrome_extension_status_from_file(path: &Path) -> Option<ChromeExtensionStatus> {
