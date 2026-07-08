@@ -33,17 +33,25 @@ The CLI serves skill content that always matches the installed version,
 so instructions never go stale. The content in this stub cannot change
 between releases, which is why it just points at `skills get core`.
 
-## Specialized skills
+## Route to a specialized skill by symptom
 
-Load a specialized skill when the task falls outside browser web pages:
+Load a specialized guide when the task falls outside plain browser web pages.
+Match on the situation you're in, then run the command — the binary serves the
+full, version-matched content:
 
-```bash
-chrome-use skills get electron          # Electron desktop apps (VS Code, Slack, Discord, Figma, ...)
-chrome-use skills get slack             # Slack workspace automation
-chrome-use skills get dogfood           # Exploratory testing / QA / bug hunts
-chrome-use skills get vercel-sandbox    # chrome-use inside Vercel Sandbox microVMs
-chrome-use skills get agentcore         # AWS Bedrock AgentCore cloud browsers
-```
+| What you're hitting | Run |
+|---|---|
+| An element is clearly on screen but snapshot/find returns no `@ref` (canvas/WebGL/game/map) | `chrome-use skills get canvas` |
+| Mock an API response, rewrite request headers, block a URL, record HAR | `chrome-use skills get network` |
+| Debug React renders/state, or measure LCP/CLS/INP | `chrome-use skills get react` |
+| Drive the user's real, already-logged-in Chrome (reuse the session) | `chrome-use skills get real-chrome` |
+| Parallel sessions, multiple accounts, recover a stuck tab | `chrome-use skills get sessions` |
+| Turn manual checks into a re-runnable regression suite | `chrome-use skills get test` |
+| Electron desktop apps (VS Code, Slack, Discord, Figma, …) | `chrome-use skills get electron` |
+| Slack workspace automation | `chrome-use skills get slack` |
+| Exploratory testing / QA / bug hunt | `chrome-use skills get dogfood` |
+| chrome-use inside Vercel Sandbox microVMs | `chrome-use skills get vercel-sandbox` |
+| AWS Bedrock AgentCore cloud browsers | `chrome-use skills get agentcore` |
 
 Run `chrome-use skills list` to see everything available on the
 installed version.
