@@ -62,12 +62,15 @@
 
 ```sh
 if [ -z "${AGENT_BROWSER_NO_SKILL:-}" ]; then
-  "$bindir/${BIN_NAME}" skill install < /dev/tty > /dev/tty 2>&1 || \
+  if [ -e /dev/tty ]; then
+    "$bindir/${BIN_NAME}" skill install < /dev/tty > /dev/tty 2>&1 || true
+  else
     "$bindir/${BIN_NAME}" skill install || true
+  fi
 fi
 ```
 
-（有 tty 走交互，否则退化为非交互；逻辑本体只在二进制里维护一份。）保留 `AGENT_BROWSER_NO_SKILL=1` opt-out。
+分支**按 tty 是否存在**选择（而非按退出码重试）。这一点很重要：`skill install` 在无 Node 时会**故意返回非 0**（组件 1），若用退出码触发重试，无 Node 但有 tty 的机器会把「两条出路」提示打印两遍。改成按 tty 分支后，交互/非交互各跑一次，绝不重复。逻辑本体只在二进制里维护一份。保留 `AGENT_BROWSER_NO_SKILL=1` opt-out。
 
 ### 组件 3：install.sh 新终点——doctor 自检 + 首条 prompt
 
@@ -120,7 +123,9 @@ curl … | sh
   ├─ chrome-use extension install（交互，装 Chrome 扩展 + 注册 native host）
   ├─ chrome-use skill install → npx skills add leeguooooo/chrome-use -g
   │     └─ skills.sh 探测 runner，写入各自技能目录（skills.sh 的活）
-  ├─ chrome-use doctor（自检：binary ✓ / extension ✓ / skill ✓）
+  ├─ chrome-use doctor（自检：binary ✓ / extension ✓ / skill ✓⚠）
+  │     （skill 可能为黄灯——skills.sh 写到了 doctor 探测清单外的 runner
+  │      目录如 Cursor/Windsurf 时属正常，不是失败）
   └─ 打印首条 agent prompt
                 │
 用户粘贴 prompt 进 agent
@@ -132,8 +137,8 @@ curl … | sh
 
 ## 错误处理
 
-- npx 缺失：`skill install` 提示性失败（非 0 退出），install.sh `|| true` 消化，绝不阻断二进制安装。
-- skills.sh 本身失败（网络/权限）：透传其错误 + 打印手动一行命令兜底。
+- npx 缺失：`skill install` 提示性失败（退出码 **1**），install.sh `|| true` 消化，绝不阻断二进制安装。
+- skills.sh 本身失败（网络/权限）：透传其错误 + 打印手动一行命令兜底，`skill install` **原样返回 skills.sh 的退出码**（便于脚本区分「没装 Node」与「装了但 skills.sh 跑挂了」；单元测试据此断言）。
 - doctor 技能检查：永远 warn，绝不 fail（其他 runner 检测不到属正常）。
 - stub 分发的 main 分支版本 ≠ 本机二进制版本：不构成问题（stub 版本稳定，正文永远由本机二进制释出）。
 
