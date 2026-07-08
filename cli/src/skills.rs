@@ -504,6 +504,15 @@ fn build_skill_install_argv(project: bool) -> Vec<String> {
 }
 
 pub fn run_skills(args: &[String], json_mode: bool) {
+    // `skill install` delegates to skills.sh (npx) and needs no local skill
+    // dirs — handle it before the empty-dirs guard so a single-binary install
+    // with an unwritable cache still reaches npx instead of a misleading
+    // "Skills directory not found" error.
+    if args.get(1).map(|s| s.as_str()) == Some("install") {
+        let project = args[2..].iter().any(|a| a == "--project" || a == "-p");
+        run_skill_install(project, json_mode);
+    }
+
     let skills_dirs = find_skills_dirs();
     if skills_dirs.is_empty() {
         if json_mode {
@@ -542,10 +551,7 @@ pub fn run_skills(args: &[String], json_mode: bool) {
             let name = args.get(2).map(|s| s.as_str());
             run_path(&skills_dirs, name, json_mode);
         }
-        Some("install") => {
-            let project = args[2..].iter().any(|a| a == "--project" || a == "-p");
-            run_skill_install(project, json_mode);
-        }
+        // `install` is dispatched early (above), before the skill-dirs guard.
         Some(unknown) => {
             if json_mode {
                 println!(
