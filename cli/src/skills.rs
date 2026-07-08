@@ -487,6 +487,23 @@ fn run_path(skills_dirs: &[PathBuf], name: Option<&str>, json_mode: bool) {
     }
 }
 
+/// Build the argv passed to `npx` for `chrome-use skill install`.
+/// Delegates to skills.sh — we never write runner dirs ourselves.
+/// Global (`-g`) by default; `--project` installs into the current project.
+#[allow(dead_code)]
+fn build_skill_install_argv(project: bool) -> Vec<String> {
+    let mut v = vec![
+        "-y".to_string(),
+        "skills@latest".to_string(),
+        "add".to_string(),
+        "leeguooooo/chrome-use".to_string(),
+    ];
+    if !project {
+        v.push("-g".to_string());
+    }
+    v
+}
+
 pub fn run_skills(args: &[String], json_mode: bool) {
     let skills_dirs = find_skills_dirs();
     if skills_dirs.is_empty() {
@@ -564,6 +581,28 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn skill_install_argv_defaults_to_global() {
+        let argv = build_skill_install_argv(false);
+        assert_eq!(
+            argv,
+            vec![
+                "-y".to_string(),
+                "skills@latest".to_string(),
+                "add".to_string(),
+                "leeguooooo/chrome-use".to_string(),
+                "-g".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn skill_install_argv_project_drops_global() {
+        let argv = build_skill_install_argv(true);
+        assert!(!argv.contains(&"-g".to_string()));
+        assert_eq!(argv.last().unwrap(), "leeguooooo/chrome-use");
     }
 
     #[test]
