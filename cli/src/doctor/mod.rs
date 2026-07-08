@@ -19,6 +19,7 @@ mod native_host;
 mod network;
 mod providers;
 mod security;
+mod skill;
 mod versions;
 
 use serde_json::{json, Value};
@@ -106,6 +107,7 @@ pub fn run_doctor(opts: DoctorOptions) -> i32 {
     config::check(&mut checks);
     security::check(&mut checks);
     providers::check(&mut checks);
+    skill::check(&mut checks);
 
     if !opts.offline {
         network::check(&mut checks);
