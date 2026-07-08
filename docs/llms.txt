@@ -20,7 +20,7 @@ chrome-use lets any AI agent (Claude Code, Cursor, Codex, or your own scripts) d
 
 ## Install
 - `curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh`
-- Agent skills: `npx skills add leeguooooo/chrome-use`
+- Agent skills: `npx skills add leeguooooo/chrome-use -g`
 
 ## Links
 - Site: https://chrome-use.leeguoo.com/

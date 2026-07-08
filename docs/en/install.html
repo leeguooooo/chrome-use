@@ -150,6 +150,11 @@
 
       <!-- ============ 3. SKILLS ============ -->
       <h2>Pull the agent skills</h2>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ The <code>install.sh</code> above already did this</div>
+        The <code>curl … | sh</code> one-liner installs the agent skill globally right after the binary (<code>npx skills add leeguooooo/chrome-use -g</code>).
+        Read on only to install it by hand or on a non–Claude Code runner. Opt out with <code>AGENT_BROWSER_NO_SKILL=1</code>.
+      </div>
       <p>
         <strong>Claude Code — plugin marketplace (recommended)</strong>: installs the skill globally (all projects), auto-updates, and lists the rest of the
         <a href="https://github.com/leeguooooo/plugins"><code>*-use</code> family</a>:
@@ -165,7 +170,8 @@
       </div>
 
       <p>
-        Other agent runners (Cursor, Codex, custom scripts): pull the SKILL.md files into the current project with <a href="https://skills.sh">skills.sh</a>:
+        Other agent runners (Cursor, Codex, custom scripts): pull the SKILL.md with <a href="https://skills.sh">skills.sh</a>. Add
+        <code>-g</code> for a global install (visible to every project); drop it to install only into the current project:
       </p>
 
       <div class="du-code">
@@ -173,7 +179,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
+<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use -g</code></pre>
       </div>
 
       <p>
