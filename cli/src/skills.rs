@@ -490,7 +490,6 @@ fn run_path(skills_dirs: &[PathBuf], name: Option<&str>, json_mode: bool) {
 /// Build the argv passed to `npx` for `chrome-use skill install`.
 /// Delegates to skills.sh — we never write runner dirs ourselves.
 /// Global (`-g`) by default; `--project` installs into the current project.
-#[allow(dead_code)]
 fn build_skill_install_argv(project: bool) -> Vec<String> {
     let mut v = vec![
         "-y".to_string(),
@@ -543,6 +542,10 @@ pub fn run_skills(args: &[String], json_mode: bool) {
             let name = args.get(2).map(|s| s.as_str());
             run_path(&skills_dirs, name, json_mode);
         }
+        Some("install") => {
+            let project = args[2..].iter().any(|a| a == "--project" || a == "-p");
+            run_skill_install(project, json_mode);
+        }
         Some(unknown) => {
             if json_mode {
                 println!(
@@ -558,6 +561,56 @@ pub fn run_skills(args: &[String], json_mode: bool) {
                     "{} Unknown skills subcommand: {}",
                     color::error_indicator(),
                     unknown
+                );
+            }
+            exit(1);
+        }
+    }
+}
+
+/// `chrome-use skill install` — delegate to skills.sh (`npx skills add …`).
+/// We never write runner skill dirs ourselves; skills.sh owns that mapping
+/// across 20+ runners. Exit codes: npx missing -> 1 (with guidance);
+/// skills.sh ran -> pass through its exit code so scripts can tell
+/// "no Node" apart from "skills.sh failed".
+fn run_skill_install(project: bool, json_mode: bool) -> ! {
+    use std::process::Command;
+    let zh = crate::connect::ui_zh();
+    let argv = build_skill_install_argv(project);
+
+    match Command::new("npx").args(&argv).status() {
+        Ok(status) => {
+            let code = status.code().unwrap_or(1);
+            if code != 0 && !json_mode {
+                let g = if project { "" } else { " -g" };
+                eprintln!(
+                    "{} {}\n  npx skills add leeguooooo/chrome-use{}",
+                    color::warning_indicator(),
+                    if zh { "技能安装失败。可手动重试：" } else { "Skill install failed. Retry manually:" },
+                    g
+                );
+            }
+            exit(code);
+        }
+        Err(_) => {
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "success": false,
+                        "error": "npx not found; install Node then run `chrome-use skill install`, or use the Claude Code plugin marketplace",
+                    }))
+                    .unwrap_or_default()
+                );
+            } else if zh {
+                eprintln!(
+                    "{} 没找到 npx（未装 Node）。装 agent 技能有两条出路：\n  1. 装 Node 后重跑：chrome-use skill install\n  2. Claude Code：/plugin marketplace add leeguooooo/plugins 再 /plugin install chrome-use@leeguooooo-plugins",
+                    color::warning_indicator()
+                );
+            } else {
+                eprintln!(
+                    "{} npx not found (no Node). Two ways to install the agent skill:\n  1. Install Node, then rerun: chrome-use skill install\n  2. Claude Code: /plugin marketplace add leeguooooo/plugins then /plugin install chrome-use@leeguooooo-plugins",
+                    color::warning_indicator()
                 );
             }
             exit(1);

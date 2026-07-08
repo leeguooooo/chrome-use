@@ -1153,8 +1153,8 @@ fn main() {
         }
     }
 
-    // Handle skills command (doesn't need daemon)
-    if clean.first().map(|s| s.as_str()) == Some("skills") {
+    // Handle skills command (doesn't need daemon). `skill` is an alias.
+    if matches!(clean.first().map(|s| s.as_str()), Some("skills") | Some("skill")) {
         skills::run_skills(&clean, flags.json);
         return;
     }
