@@ -3225,9 +3225,11 @@ fn normalize_extract_schema(schema: Value) -> Result<Value, String> {
             }
         }
     }
-    Err("extract schema needs a \"fields\" object, or an array-shaped schema like \
+    Err(
+        "extract schema needs a \"fields\" object, or an array-shaped schema like \
          {\"items\":[{\"title\":\"…\",\"url\":\"…\"}]}"
-        .to_string())
+            .to_string(),
+    )
 }
 
 fn parse_extract(rest: &[&str], id: &str) -> Result<Value, ParseError> {
@@ -3287,11 +3289,8 @@ fn parse_extract(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             message: format!("extract schema is not valid JSON: {e}"),
             usage,
         })?;
-    let schema =
-        normalize_extract_schema(schema).map_err(|message| ParseError::InvalidValue {
-            message,
-            usage,
-        })?;
+    let schema = normalize_extract_schema(schema)
+        .map_err(|message| ParseError::InvalidValue { message, usage })?;
 
     let mut obj = serde_json::Map::new();
     obj.insert("id".into(), json!(id));

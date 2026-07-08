@@ -5564,7 +5564,10 @@ async fn handle_diagnose(_cmd: &Value, state: &mut DaemonState) -> Result<Value,
         .cloned()
         .unwrap_or(Value::Null);
 
-    let body_len = scan.get("bodyTextLen").and_then(|v| v.as_i64()).unwrap_or(0);
+    let body_len = scan
+        .get("bodyTextLen")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let root_empty = scan.get("rootEmpty").and_then(|v| v.as_bool());
     let empty_assets = Vec::new();
     let assets = scan
@@ -5574,9 +5577,9 @@ async fn handle_diagnose(_cmd: &Value, state: &mut DaemonState) -> Result<Value,
     let mime_mismatch = assets
         .iter()
         .any(|a| a.get("mimeMismatch").and_then(|m| m.as_bool()) == Some(true));
-    let failed = assets.iter().any(|a| {
-        matches!(a.get("status").and_then(|s| s.as_i64()), Some(s) if s == 0 || s >= 400)
-    });
+    let failed = assets
+        .iter()
+        .any(|a| matches!(a.get("status").and_then(|s| s.as_i64()), Some(s) if s == 0 || s >= 400));
     let blank = body_len < 16 && root_empty != Some(false);
     let console_on = console_capture_active(state);
 

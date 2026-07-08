@@ -592,7 +592,11 @@ fn run_skill_install(project: bool, json_mode: bool) -> ! {
                 eprintln!(
                     "{} {}\n  npx skills add leeguooooo/chrome-use{}",
                     color::warning_indicator(),
-                    if zh { "技能安装失败。可手动重试：" } else { "Skill install failed. Retry manually:" },
+                    if zh {
+                        "技能安装失败。可手动重试："
+                    } else {
+                        "Skill install failed. Retry manually:"
+                    },
                     g
                 );
             }

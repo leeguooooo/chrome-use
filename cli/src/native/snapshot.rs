@@ -1579,11 +1579,7 @@ async fn find_top_layer_backend_ids(
         )
         .await?;
 
-    let count = result
-        .result
-        .value
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let count = result.result.value.and_then(|v| v.as_i64()).unwrap_or(0);
     if count == 0 {
         return Ok(std::collections::HashSet::new());
     }
