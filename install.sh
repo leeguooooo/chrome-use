@@ -112,6 +112,29 @@ else
   info "skipped extension setup (no terminal). Run \`${BIN_NAME} extension install\` later."
 fi
 
+# --- install the AI agent skill (skills.sh) ----------------------------------
+# The binary alone lets *you* run chrome-use; the skill is what teaches your AI
+# agent (Claude Code, Cursor, Codex, …) how to use it — usage patterns plus
+# pre-approved bash permissions for `chrome-use`/`abs`. Install it globally so
+# every project sees it. Non-fatal, opt-out with AGENT_BROWSER_NO_SKILL=1.
+# Needs npx (Node); if that's missing we just print the one-liner.
+if [ -z "${AGENT_BROWSER_NO_SKILL:-}" ]; then
+  if command -v npx >/dev/null 2>&1 && [ -e /dev/tty ]; then
+    info "installing the AI agent skill (so your agent knows how to drive chrome-use)..."
+    npx -y skills@latest add "$REPO" -g < /dev/tty > /dev/tty 2>&1 \
+      || info "skill setup skipped. Install later: npx skills add ${REPO} -g"
+  elif command -v npx >/dev/null 2>&1; then
+    info "installing the AI agent skill (global, non-interactive)..."
+    npx -y skills@latest add "$REPO" -g -y >/dev/null 2>&1 \
+      && info "agent skill installed (npx skills add ${REPO} -g)" \
+      || info "skill setup skipped. Install later: npx skills add ${REPO} -g"
+  else
+    info "no npx (Node) found — install the agent skill later so your AI agent can use chrome-use:"
+    info "  npx skills add ${REPO} -g"
+    info "  (Claude Code: /plugin marketplace add leeguooooo/plugins && /plugin install chrome-use@leeguooooo-plugins)"
+  fi
+fi
+
 case ":$PATH:" in
   *":$bindir:"*) : ;;
   *) printf '\033[33mnote:\033[0m %s is not on your PATH. Add:\n  export PATH="%s:$PATH"\n' "$bindir" "$bindir" >&2 ;;

@@ -149,6 +149,11 @@
 
       <!-- ============ 3. SKILLS ============ -->
       <h2>拉 agent 技能</h2>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 上面的 <code>install.sh</code> 已经帮你装了</div>
+        跑 <code>curl … | sh</code> 时，装完二进制会顺手用 skills.sh 把 agent 技能装到全局（<code>npx skills add leeguooooo/chrome-use -g</code>）。
+        想手动装、或用非 Claude Code 的 runner，再看下面。可用 <code>AGENT_BROWSER_NO_SKILL=1</code> 关掉这一步。
+      </div>
       <p>
         <strong>Claude Code 推荐走 plugin marketplace</strong>：全局生效（所有项目）、自动更新，还能顺带发现
         <a href="https://github.com/leeguooooo/plugins"><code>*-use</code> 全家桶</a>里的其他工具：
@@ -164,7 +169,8 @@
       </div>
 
       <p>
-        其他 agent runner（Cursor、Codex、自研脚本）用 <a href="https://skills.sh">skills.sh</a> 把 SKILL.md 拉进当前项目：
+        其他 agent runner（Cursor、Codex、自研脚本）用 <a href="https://skills.sh">skills.sh</a> 装 SKILL.md。加
+        <code>-g</code> 装到全局（所有项目可见）；去掉 <code>-g</code> 只装当前项目：
       </p>
 
       <div class="du-code">
@@ -172,7 +178,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use</code></pre>
+<pre><code><span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use -g</code></pre>
       </div>
 
       <p>

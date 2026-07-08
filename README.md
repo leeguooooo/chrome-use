@@ -141,11 +141,13 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 /plugin install chrome-use@leeguooooo-plugins
 ```
 
-**Other agent runners (Cursor, Codex, custom):** pull the SKILL.md files into the current project with [skills.sh](https://skills.sh):
+**Other agent runners (Cursor, Codex, custom):** pull the SKILL.md with [skills.sh](https://skills.sh). Add `-g` for a global install (visible to every project); drop it to install only into the current project:
 
 ```bash
-npx skills add leeguooooo/chrome-use
+npx skills add leeguooooo/chrome-use -g
 ```
+
+> The `install.sh` one-liner above already runs this step for you (opt out with `AGENT_BROWSER_NO_SKILL=1`). Run it by hand only when you skipped the installer or use a non-default agent runner.
 
 Either way the agent gets the right usage patterns and pre-approved bash permissions for `chrome-use` and `abs`; the skill self-heals a missing binary by re-running the `install.sh` one-liner above. Specialized guides (`electron`, `slack`, `agentcore`, …) are served by the binary itself via `chrome-use skills get <name>`, so instructions always match the installed version.
 
