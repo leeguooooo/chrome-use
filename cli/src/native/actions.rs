@@ -1792,14 +1792,20 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
 // Auto-launch
 // ---------------------------------------------------------------------------
 
-/// Connect to a running Chrome via auto-discovery and open a fresh tab so
-/// subsequent navigations don't hijack the user's existing tabs.
+fn should_create_fresh_tab_after_connect(page_count: usize) -> bool {
+    page_count == 0
+}
+
+/// Connect to a running Chrome via auto-discovery. Target discovery creates an
+/// owned scratch tab when the session has no pages, so reuse that tab instead of
+/// creating a duplicate. Keep a zero-page fallback for defensive recovery.
 async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
     let mut mgr = BrowserManager::connect_auto().await?;
-    // tab_new creates the tab in the background (CreateTargetParams.background),
-    // so attaching to the user's Chrome never steals their foreground tab. We
-    // deliberately do NOT bring it to front — silent operation.
-    mgr.tab_new(None, None).await?;
+    if should_create_fresh_tab_after_connect(mgr.page_count()) {
+        // tab_new creates the tab in the background (CreateTargetParams.background),
+        // so attaching to the user's Chrome never steals their foreground tab.
+        mgr.tab_new(None, None).await?;
+    }
     let session_id = mgr.active_session_id()?.to_string();
 
     // Liveness probe: confirm the CDP session can actually round-trip
@@ -11949,6 +11955,13 @@ mod tests {
         // reusing whatever external connection the daemon holds is correct.
         let relay = "ws://127.0.0.1:50466/4ce0fec0fcaea0037b9c3df18723a4e4";
         assert!(explicit_endpoint_matches(relay, None, None));
+    }
+
+    #[test]
+    fn auto_connect_reuses_existing_scratch_page() {
+        assert!(should_create_fresh_tab_after_connect(0));
+        assert!(!should_create_fresh_tab_after_connect(1));
+        assert!(!should_create_fresh_tab_after_connect(2));
     }
 
     #[test]

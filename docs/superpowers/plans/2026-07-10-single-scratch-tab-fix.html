@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Single Scratch Tab Fix Implementation Plan</title>
+  <style>
+    :root { --fg: #202124; --muted: #6b7280; --accent: #2563eb; --border: #d1d5db; --bg: #fff; }
+    body { max-width: 860px; margin: 48px auto; padding: 0 24px; color: var(--fg); background: var(--bg); font: 16px/1.65 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    header { border-bottom: 1px solid var(--border); margin-bottom: 28px; }
+    h1, h2 { line-height: 1.25; } h1 { font-size: 2rem; } h2 { margin-top: 28px; font-size: 1.2rem; }
+    code { color: var(--accent); } li { margin: 8px 0; } aside { border-left: 3px solid var(--accent); padding: 8px 16px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header><h1>Single Scratch Tab Fix Implementation Plan</h1><p>Goal: ensure relay auto-connect creates at most one initial scratch tab.</p></header>
+  <main>
+    <section><h2>Files</h2><p>Modify <code>cli/src/native/actions.rs</code> for the decision and regression test. No public interface or documentation surface changes.</p></section>
+    <section><h2>Task 1: Red</h2><ol><li>Add a focused unit test asserting that a fresh tab is needed only when the connected manager has zero pages.</li><li>Run <code>cd cli &amp;&amp; cargo test auto_connect_reuses_existing_scratch_page -- --exact</code>.</li><li>Confirm failure is caused by the missing decision helper.</li></ol></section>
+    <section><h2>Task 2: Green</h2><ol><li>Add the minimal page-count predicate.</li><li>Guard <code>tab_new(None, None)</code> with that predicate.</li><li>Rerun the targeted test and confirm it passes.</li></ol></section>
+    <section><h2>Task 3: Verification</h2><ol><li>Run the complete unit test suite with <code>cd cli &amp;&amp; cargo test</code>.</li><li>Run <code>cargo fmt -- --check</code>.</li><li>Run <code>cargo clippy</code>.</li><li>Review <code>git diff</code> and report exact files for staging. Do not commit.</li></ol></section>
+    <aside>Live integration remains a maintainer-run step: start a new named relay session, run a non-navigation command, and verify only one owned <code>about:blank</code> tab appears.</aside>
+  </main>
+</body>
+</html>

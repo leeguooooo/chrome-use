@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Single Scratch Tab Fix Design</title>
+  <style>
+    :root { --fg: #202124; --muted: #6b7280; --accent: #2563eb; --border: #d1d5db; --bg: #fff; }
+    body { max-width: 860px; margin: 48px auto; padding: 0 24px; color: var(--fg); background: var(--bg); font: 16px/1.65 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    header { border-bottom: 1px solid var(--border); margin-bottom: 28px; }
+    h1, h2 { line-height: 1.25; } h1 { font-size: 2rem; } h2 { margin-top: 28px; font-size: 1.2rem; }
+    code { color: var(--accent); } table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { background: #f6f7f9; } aside { border-left: 3px solid var(--accent); padding: 8px 16px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header><h1>Single Scratch Tab Fix</h1><p>2026-07-10</p></header>
+  <main>
+    <section><h2>Problem</h2><p>A new relay-backed session creates one owned <code>about:blank</code> target during target discovery. <code>connect_auto_with_fresh_tab()</code> then creates a second target unconditionally. Commands that do not navigate to a real URL can therefore leave two visible blank tabs.</p></section>
+    <section><h2>Decision</h2><p>Reuse the owned page returned by <code>BrowserManager::connect_auto()</code>. Create a fallback page only if the manager unexpectedly reports zero pages. This preserves session isolation and prevents navigation from replacing a user-owned tab.</p></section>
+    <section><h2>Behavior</h2><table><thead><tr><th>State after connect</th><th>Action</th><th>Result</th></tr></thead><tbody><tr><td>One or more session pages</td><td>Reuse the active owned page</td><td>No duplicate blank tab</td></tr><tr><td>Zero pages</td><td>Create one fallback blank page</td><td>Connection remains usable</td></tr><tr><td>Real URL opens</td><td>Keep existing cleanup</td><td>Leftover scratch pages are removed</td></tr></tbody></table></section>
+    <section><h2>Verification</h2><p>A unit regression test covers the fresh-tab decision for zero and nonzero page counts. Existing Rust unit tests, formatting, and Clippy must remain clean.</p></section>
+    <aside>No user-facing commands, flags, environment variables, or documented workflows change.</aside>
+  </main>
+</body>
+</html>
