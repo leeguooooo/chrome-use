@@ -790,6 +790,7 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             if let Some(total) = data.get("total").and_then(|v| v.as_i64()) {
                 let label_noun = match action {
                     Some("window_new") => "Window opened",
+                    Some("tab_duplicate") => "Tab duplicated",
                     _ => "Tab opened",
                 };
                 let tab_label = data.get("label").and_then(|v| v.as_str());
@@ -2625,8 +2626,16 @@ Operations:
   list                       List open tabs with their ids and labels (default)
   new [url]                  Open a new tab
   new --label <name> [url]   Open a new tab with a label like `docs` or `app`
-  close [t<N>|label]         Close a tab (current if no ref given)
-  <t<N>|label>               Switch to a tab by id or label
+  duplicate [ref]            Natively duplicate a tab (current if no ref given)
+  duplicate [ref] --label <name>
+                             Natively duplicate and label a tab
+  close [ref]                Close a tab (current if no ref given)
+  <ref>                      Switch to a tab
+
+Native duplication requires real Chrome connected through the chrome-use
+extension. It restores the previously visible foreground tab when complete.
+The duplicate becomes chrome-use's internal active tab. There is no URL-based
+fallback for launched Chrome, raw CDP, Lightpanda, or cloud providers.
 
 Global Options:
   --json               Output as JSON
@@ -2638,6 +2647,8 @@ Examples:
   chrome-use tab new
   chrome-use tab new https://example.com
   chrome-use tab new --label docs https://docs.example.com
+  chrome-use tab duplicate
+  chrome-use tab duplicate docs --label docs-copy
   chrome-use tab t2
   chrome-use tab docs
   chrome-use tab close
@@ -3651,7 +3662,10 @@ Storage:
   storage <local|session>    Manage web storage
 
 Tabs:
-  tab [new|list|close|<ref>] Manage tabs (<ref> = t<N>, a label, or a CDP targetId)
+  tab [new|duplicate|list|close|<ref>]
+                             Manage tabs (<ref> = t<N>, a label, or a CDP targetId)
+  tab duplicate [ref] [--label <name>]
+                             Natively duplicate on extension-connected real Chrome
   tab list --full            Full URLs + stable cross-session targetId per tab
   tab <targetId>             Adopt a specific tab (incl. another session's) by its
                              stable targetId, no reload — preserves in-page state

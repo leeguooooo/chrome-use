@@ -475,12 +475,12 @@ fn extended_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_TABS,
-            "description": "List, open, close, or switch browser tabs.",
+            "description": "List, open, duplicate, close, or switch browser tabs.",
             "inputSchema": build_schema(obj(&[
-                ("action", json!({ "type": "string", "enum": ["list", "new", "close", "switch"], "description": "Tab operation to perform." })),
+                ("action", json!({ "type": "string", "enum": ["list", "new", "duplicate", "close", "switch"], "description": "Tab operation to perform." })),
                 ("url", json!({ "type": "string", "description": "With action=new: URL to open in the new tab." })),
-                ("label", json!({ "type": "string", "description": "With action=new: assign this label to the tab (--label)." })),
-                ("tabId", json!({ "type": "string", "description": "Tab id or label (e.g. t1, docs). Required for action=switch; optional for action=close (defaults to current tab)." })),
+                ("label", json!({ "type": "string", "description": "With action=new or duplicate: assign this label to the new tab (--label)." })),
+                ("tabId", json!({ "type": "string", "description": "Tab id, label, or stable target ID. Required for action=switch; optional for action=close or duplicate (defaults to current tab)." })),
                 ("activate", json!({ "type": "boolean", "description": "With action=switch: also raise the tab to the foreground (--activate)." })),
                 ("full", json!({ "type": "boolean", "description": "With action=list: emit untruncated tab URLs (--full)." })),
             ]), &["action"]),
@@ -969,9 +969,13 @@ fn call_scroll(arguments: &Value) -> Result<Value, ProtocolError> {
     run_tool(arguments, args)
 }
 
-/// `tab list [--full]` | `tab new [url] [--label <name>]` | `tab close
-/// [tabId]` | `tab <tabId> [--activate]`.
+/// `tab list [--full]` | `tab new [url] [--label <name>]` | `tab duplicate
+/// [tabId] [--label <name>]` | `tab close [tabId]` | `tab <tabId> [--activate]`.
 fn call_tabs(arguments: &Value) -> Result<Value, ProtocolError> {
+    run_tool(arguments, tabs_args(arguments)?)
+}
+
+fn tabs_args(arguments: &Value) -> Result<Vec<String>, ProtocolError> {
     let action = required_string(arguments, "action")?;
     let mut args = vec!["tab".to_string()];
     match action.as_str() {
@@ -991,6 +995,16 @@ fn call_tabs(arguments: &Value) -> Result<Value, ProtocolError> {
                 args.push(url);
             }
         }
+        "duplicate" => {
+            args.push("duplicate".to_string());
+            if let Some(tab_id) = optional_string(arguments, "tabId")? {
+                args.push(tab_id);
+            }
+            if let Some(label) = optional_string(arguments, "label")? {
+                args.push("--label".to_string());
+                args.push(label);
+            }
+        }
         "close" => {
             args.push("close".to_string());
             if let Some(tab_id) = optional_string(arguments, "tabId")? {
@@ -1006,12 +1020,12 @@ fn call_tabs(arguments: &Value) -> Result<Value, ProtocolError> {
         }
         other => {
             return Err(ProtocolError::invalid_params(format!(
-                "chrome_use_tabs: unknown action '{}' (use list, new, close, or switch)",
+                "chrome_use_tabs: unknown action '{}' (use list, new, duplicate, close, or switch)",
                 other
             )))
         }
     }
-    run_tool(arguments, args)
+    Ok(args)
 }
 
 /// `extract [--frame <f>] --schema <json>`.
@@ -1625,6 +1639,26 @@ fn write_json_line(stdout: &mut io::Stdout, value: &Value) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tabs_duplicate_maps_to_cli_contract() {
+        let current = tabs_args(&json!({ "action": "duplicate" }))
+            .ok()
+            .expect("duplicate action should map to the CLI");
+        assert_eq!(current, vec!["tab", "duplicate"]);
+
+        let selected = tabs_args(&json!({
+            "action": "duplicate",
+            "tabId": "docs",
+            "label": "docs-copy"
+        }))
+        .ok()
+        .expect("duplicate action with ref and label should map to the CLI");
+        assert_eq!(
+            selected,
+            vec!["tab", "duplicate", "docs", "--label", "docs-copy"]
+        );
+    }
 
     const CORE_TOOL_NAMES: &[&str] = &[
         TOOL_OPEN,

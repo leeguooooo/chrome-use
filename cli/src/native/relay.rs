@@ -46,6 +46,9 @@ struct TargetEntry {
 /// client.
 #[derive(Default)]
 pub struct RelayState {
+    /// Capabilities announced by the connected extension. An older extension
+    /// reports none, allowing daemons to fail unsupported operations clearly.
+    extension_capabilities: HashSet<String>,
     /// targetId -> entry
     targets: HashMap<String, TargetEntry>,
     /// relay-global command id -> (client that sent it, its original id)
@@ -61,13 +64,13 @@ pub struct RelayState {
     /// daemon) is absent here and gets the full, UNSCOPED target list — so this
     /// is fully backward-compatible.
     client_groups: HashMap<ClientId, String>,
-    /// targetId -> group name. Created tabs are tagged from `Target.createTarget`'s
-    /// `agentGroup`; an explicitly adopted tab is tagged to the adopter; a pop-up
-    /// inherits its opener's group (needs the extension to report `openerTargetId`).
+    /// targetId -> group name. Created and duplicated tabs are tagged from the
+    /// command's `agentGroup`; an explicitly adopted tab is tagged to the adopter;
+    /// a pop-up inherits its opener's group.
     target_group: HashMap<String, String>,
-    /// relay-global id of an in-flight `Target.createTarget` -> the `agentGroup`
-    /// it carried, so the reply's `targetId` can be tagged with that group.
-    pending_create: HashMap<i64, String>,
+    /// Relay-global id of an in-flight target-creating command to its
+    /// `agentGroup`, so the reply's `targetId` can be tagged with that group.
+    pending_target_group: HashMap<i64, String>,
     /// Sessions of OOPIF (cross-origin iframe) child targets the extension
     /// auto-attached (flat `Target.setAutoAttach`). Unlike the page-level
     /// `cb-tab-*` attaches (which the relay consumes to maintain `targets`),
@@ -105,6 +108,14 @@ impl RelayState {
         Self::default()
     }
 
+    pub fn set_extension_capabilities<I, S>(&mut self, capabilities: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.extension_capabilities = capabilities.into_iter().map(Into::into).collect();
+    }
+
     /// The challenge the relay sends to the extension as soon as it connects,
     /// kicking off the connect handshake.
     pub fn connect_challenge(nonce: &str) -> Value {
@@ -119,6 +130,14 @@ impl RelayState {
     /// Forget a disconnected client's in-flight commands so its orphaned
     /// `pending` entries don't leak.
     pub fn drop_client(&mut self, client_id: ClientId) {
+        let dropped: Vec<i64> = self
+            .pending
+            .iter()
+            .filter_map(|(gid, (cid, _))| (*cid == client_id).then_some(*gid))
+            .collect();
+        for gid in dropped {
+            self.pending_target_group.remove(&gid);
+        }
         self.pending.retain(|_, (cid, _)| *cid != client_id);
         self.client_groups.remove(&client_id);
     }
@@ -158,6 +177,18 @@ impl RelayState {
                     }
                 }
                 ClientRoute::Local(json!({ "id": id, "result": {} }))
+            }
+            "ABRelay.getCapabilities" => {
+                let mut capabilities: Vec<&str> = self
+                    .extension_capabilities
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                capabilities.sort_unstable();
+                ClientRoute::Local(json!({
+                    "id": id,
+                    "result": { "capabilities": capabilities }
+                }))
             }
             // Discovery is best-effort and event-driven in real CDP; abs only
             // reads the getTargets result, so an empty ack is enough here.
@@ -228,12 +259,12 @@ impl RelayState {
                 self.next_global_id += 1;
                 let gid = self.next_global_id;
                 self.pending.insert(gid, (client_id, id));
-                // Remember the group a createTarget carries so the reply's
-                // targetId can be tagged to the creating session (issue #40).
-                if method == "Target.createTarget" {
+                // Remember the group a target-creating command carries so its
+                // reply can be attributed even when attach arrives first.
+                if method == "Target.createTarget" || method == "ABExt.duplicateTab" {
                     if let Some(g) = params.get("agentGroup").and_then(|g| g.as_str()) {
                         if !g.is_empty() {
-                            self.pending_create.insert(gid, g.to_string());
+                            self.pending_target_group.insert(gid, g.to_string());
                             self.client_groups
                                 .entry(client_id)
                                 .or_insert_with(|| g.to_string());
@@ -284,9 +315,9 @@ impl RelayState {
             && msg.get("method").is_none()
         {
             let gid = msg.get("id").and_then(|i| i.as_i64());
-            // A createTarget reply: tag the new tab's targetId with the group the
-            // command carried, so it lands in the creating session's scope (#40).
-            if let Some(g) = gid.and_then(|g| self.pending_create.remove(&g)) {
+            // A target-creating reply: tag the new target with the request's
+            // group, including when its attach event arrived before this reply.
+            if let Some(g) = gid.and_then(|g| self.pending_target_group.remove(&g)) {
                 if let Some(tid) = msg
                     .get("result")
                     .and_then(|r| r.get("targetId"))
@@ -753,6 +784,20 @@ mod tests {
             RelayOut::ToClient { to, .. } => assert_eq!(*to, None),
             _ => panic!(),
         }
+
+        let duplicate = s.route_client_command(
+            9,
+            &json!({ "id": 2, "method": "ABExt.duplicateTab", "params": {
+                "sourceTargetId": "source", "agentGroup": "agent-a"
+            } }),
+        );
+        let duplicate_gid = match duplicate {
+            ClientRoute::Forward(v) => v["id"].as_i64().unwrap(),
+            _ => panic!(),
+        };
+        assert!(s.pending_target_group.contains_key(&duplicate_gid));
+        s.drop_client(9);
+        assert!(!s.pending_target_group.contains_key(&duplicate_gid));
     }
 
     #[test]
@@ -775,6 +820,31 @@ mod tests {
             }
             _ => panic!("expected ToExt"),
         }
+    }
+
+    #[test]
+    fn capabilities_are_empty_until_the_extension_announces_them() {
+        let mut s = RelayState::new();
+        let empty =
+            s.route_client_command(1, &json!({ "id": 1, "method": "ABRelay.getCapabilities" }));
+        assert_eq!(
+            empty,
+            ClientRoute::Local(json!({
+                "id": 1,
+                "result": { "capabilities": [] }
+            }))
+        );
+
+        s.set_extension_capabilities(["nativeTabDuplicate"]);
+        let announced =
+            s.route_client_command(1, &json!({ "id": 2, "method": "ABRelay.getCapabilities" }));
+        assert_eq!(
+            announced,
+            ClientRoute::Local(json!({
+                "id": 2,
+                "result": { "capabilities": ["nativeTabDuplicate"] }
+            }))
+        );
     }
 
     // === Group-scoped isolation (issue #40) ===
@@ -804,6 +874,47 @@ mod tests {
                     "targetId": tid, "type": "page", "url": "about:blank", "attached": true } } } }),
             "",
         );
+    }
+
+    #[test]
+    fn duplicate_reply_attributes_target_to_requesting_group() {
+        let mut s = RelayState::new();
+        s.route_client_command(
+            1,
+            &json!({ "id": 1, "method": "ABRelay.setGroup", "params": { "group": "agent-a" } }),
+        );
+        let route = s.route_client_command(
+            1,
+            &json!({ "id": 2, "method": "ABExt.duplicateTab", "params": {
+                "sourceTargetId": "source", "agentGroup": "agent-a"
+            } }),
+        );
+        let gid = match route {
+            ClientRoute::Forward(env) => env["id"].as_i64().unwrap(),
+            _ => panic!("duplicateTab must forward to the extension"),
+        };
+
+        // attachTab announces the target before the extension sends the command
+        // response. The response must still make the target visible to agent-a.
+        s.handle_ext_message(
+            &json!({ "method": "forwardCDPEvent", "params": {
+                "method": "Target.attachedToTarget",
+                "params": { "sessionId": "sd", "targetInfo": {
+                    "targetId": "duplicate", "type": "page", "url": "https://example.com",
+                    "attached": true
+                } }
+            } }),
+            "",
+        );
+        assert!(get_target_ids(&mut s, 1).is_empty());
+
+        s.handle_ext_message(
+            &json!({ "id": gid, "result": {
+                "sourceTargetId": "source", "targetId": "duplicate"
+            } }),
+            "",
+        );
+        assert_eq!(get_target_ids(&mut s, 1), vec!["duplicate"]);
     }
 
     fn get_target_ids(s: &mut RelayState, client: ClientId) -> Vec<String> {

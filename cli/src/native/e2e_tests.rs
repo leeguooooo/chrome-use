@@ -1191,6 +1191,205 @@ async fn e2e_tabs() {
 
 #[tokio::test]
 #[ignore]
+async fn e2e_tab_duplicate_rejects_launched_chrome_without_native_extension_capability() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(&json!({ "id": "2", "action": "tab_duplicate" }), &mut state).await;
+    assert_eq!(resp["success"], false);
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("extension-connected real Chrome"),
+        "unexpected error: {resp}"
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Native duplication is extension-only and therefore cannot run in the normal
+/// isolated-launch E2E suite. Set `CHROME_USE_EXTENSION_E2E=1` after loading the
+/// extension from this checkout to exercise the real Chrome path explicitly.
+#[tokio::test]
+#[ignore]
+async fn e2e_tab_duplicate_preserves_native_history_on_extension_connected_chrome() {
+    if std::env::var("CHROME_USE_EXTENSION_E2E").as_deref() != Ok("1") {
+        return;
+    }
+
+    let guard = EnvGuard::new(&["AGENT_BROWSER_AUTO_CONNECT", "AGENT_BROWSER_FORCE_LAUNCH"]);
+    guard.set("AGENT_BROWSER_AUTO_CONNECT", "1");
+    guard.remove("AGENT_BROWSER_FORCE_LAUNCH");
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(&json!({ "id": "1", "action": "launch" }), &mut state).await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "tab_new",
+            "url": "data:text/html,<title>History A</title>",
+            "label": "duplicate-source"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let source = get_data(&resp).clone();
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "navigate",
+            "url": "data:text/html,<title>History B</title>"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "tab_duplicate",
+            "tabId": "duplicate-source",
+            "label": "duplicate-copy"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let duplicate = get_data(&resp).clone();
+    assert_eq!(duplicate["duplicated"], true);
+    assert_eq!(duplicate["native"], true);
+    assert_eq!(duplicate["label"], "duplicate-copy");
+    assert_eq!(duplicate["sourceTargetId"], source["targetId"]);
+    assert!(duplicate.get("targetId").is_some());
+    assert!(
+        duplicate.get("url").is_none(),
+        "duplicate output must not expose URL"
+    );
+
+    let resp = execute_command(&json!({ "id": "4a", "action": "tab_list" }), &mut state).await;
+    assert_success(&resp);
+    let tabs = get_data(&resp)["tabs"].as_array().unwrap();
+    assert!(tabs.iter().any(|tab| {
+        tab["tabId"] == duplicate["tabId"]
+            && tab["targetId"] == duplicate["targetId"]
+            && tab["active"] == true
+    }));
+    assert!(tabs
+        .iter()
+        .any(|tab| tab["label"] == "duplicate-source" && tab["active"] == false));
+
+    // A URL-recreated tab has no source navigation history. Going back to A is
+    // the observable proof that Chrome's native duplicate primitive was used.
+    let resp = execute_command(&json!({ "id": "5", "action": "back" }), &mut state).await;
+    assert_success(&resp);
+    let resp = execute_command(&json!({ "id": "6", "action": "title" }), &mut state).await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["title"], "History A");
+
+    let stable_target = duplicate["targetId"].as_str().unwrap().to_string();
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "tab_duplicate", "label": "current-copy" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let current_duplicate = get_data(&resp).clone();
+    assert_eq!(current_duplicate["sourceTabId"], duplicate["tabId"]);
+
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "tab_switch", "tabId": "duplicate-source" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({
+            "id": "9",
+            "action": "tab_duplicate",
+            "tabId": stable_target,
+            "label": "target-copy"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let target_duplicate = get_data(&resp).clone();
+
+    let resp = execute_command(
+        &json!({
+            "id": "9a",
+            "action": "tab_duplicate",
+            "tabId": source["tabId"],
+            "label": "short-copy"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let short_duplicate = get_data(&resp).clone();
+
+    let resp = execute_command(
+        &json!({ "id": "10", "action": "tab_duplicate", "label": "current-copy" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false);
+    assert!(resp["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("already used"));
+
+    // Closing the duplicate must leave the source tab isolated and usable.
+    let duplicate_tab_id = duplicate["tabId"].as_str().unwrap().to_string();
+    let resp = execute_command(
+        &json!({ "id": "11", "action": "tab_close", "tabId": duplicate_tab_id }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(&json!({ "id": "12", "action": "tab_list" }), &mut state).await;
+    assert_success(&resp);
+    let tabs = get_data(&resp)["tabs"].as_array().unwrap();
+    assert!(!tabs
+        .iter()
+        .any(|tab| tab["targetId"] == duplicate["targetId"]));
+    assert!(tabs.iter().any(|tab| tab["label"] == "duplicate-source"));
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+
+    // Reconnect after ending the owning session. Its still-open duplicates must
+    // have been removed from Chrome rather than leaking into the next session.
+    let mut state = DaemonState::new();
+    let resp = execute_command(&json!({ "id": "100", "action": "launch" }), &mut state).await;
+    assert_success(&resp);
+    let resp = execute_command(&json!({ "id": "101", "action": "tab_list" }), &mut state).await;
+    assert_success(&resp);
+    let tabs = get_data(&resp)["tabs"].as_array().unwrap();
+    for closed_target in [
+        current_duplicate["targetId"].as_str().unwrap(),
+        target_duplicate["targetId"].as_str().unwrap(),
+        short_duplicate["targetId"].as_str().unwrap(),
+    ] {
+        assert!(!tabs.iter().any(|tab| tab["targetId"] == closed_target));
+    }
+    let resp = execute_command(&json!({ "id": "102", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+#[tokio::test]
+#[ignore]
 async fn e2e_tab_ids_not_reused() {
     let mut state = DaemonState::new();
 

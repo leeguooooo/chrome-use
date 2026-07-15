@@ -226,6 +226,8 @@ chrome-use network requests --filter api    # Filter requests
 chrome-use tab                              # List tabs with tabId and label
 chrome-use tab new [url]                    # New tab
 chrome-use tab new --label docs [url]       # New tab with a memorable label
+chrome-use tab duplicate [ref]              # Native Duplicate tab (current by default)
+chrome-use tab duplicate docs --label copy  # Duplicate by ref and label the copy
 chrome-use tab t2                           # Switch to tab by id
 chrome-use tab docs                         # Switch to tab by label
 chrome-use tab close                        # Close current tab
@@ -257,6 +259,13 @@ Labels are never auto-generated, never rewritten on navigation, and must be
 unique within a session. To interact with another tab, switch to it first:
 the daemon maintains a single active tab, so refs (`@eN`) belong to the tab
 that was active when the snapshot ran.
+
+Native duplication requires real Chrome connected through the chrome-use
+extension. The command accepts a `t<N>` id, label, or stable CDP target ID. It
+restores the previously visible foreground tab when complete while making the
+copy chrome-use's internal active tab. Providers without native duplication
+return an error; chrome-use never substitutes a same-URL new tab. Background
+loading remains controlled by Chrome.
 
 ## Frames
 

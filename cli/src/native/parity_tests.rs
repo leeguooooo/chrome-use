@@ -99,6 +99,7 @@ const DOCUMENTED_ACTIONS: &[&str] = &[
     "pdf",
     "tab_list",
     "tab_new",
+    "tab_duplicate",
     "tab_switch",
     "tab_close",
     "viewport",
@@ -251,7 +252,7 @@ fn minimal_command(action: &str, id: &str) -> Value {
         "credentials_get" | "credentials_delete" | "auth_show" | "auth_delete" => {
             obj.insert("name".to_string(), json!("parity-test-cred"));
         }
-        "tab_switch" | "tab_close" => {
+        "tab_switch" | "tab_close" | "tab_duplicate" => {
             obj.insert("index".to_string(), json!(0));
         }
         "viewport" | "user_agent" | "set_media" | "timezone" | "locale" | "geolocation"

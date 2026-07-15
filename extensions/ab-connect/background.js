@@ -16,6 +16,8 @@
 // attach + Target handling; the transport is rewritten from WebSocket+token to
 // native messaging.
 
+importScripts('tab-duplicate.js')
+
 const HOST_NAME = 'com.agent_browser.connect'
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i
 
@@ -85,12 +87,15 @@ function colorForName(name) {
 
 // Put a freshly-created tab into the agent/session's own Chrome tab group, so
 // each agent's tabs are visually separated (from each other and from the user's
-// own tabs) on the shared real browser. Best-effort: grouping failures never
-// break tab creation.
+// own tabs) on the shared real browser. This helper is strict; callers may
+// explicitly downgrade grouping failures to best-effort when their contract
+// allows it.
 async function groupTabInto(tabId, name) {
-  if (!name || !chrome.tabGroups || !chrome.tabs.group) return
+  if (!name || !chrome.tabGroups || !chrome.tabs.group) {
+    throw new Error('groupTabInto: Chrome tab-group APIs are unavailable')
+  }
   const tab = await chrome.tabs.get(tabId).catch(() => null)
-  if (!tab) return
+  if (!tab) throw new Error(`groupTabInto: tab ${tabId} is unavailable`)
   let gid = groupIdByName.get(name)
   if (gid != null) {
     const ok = await chrome.tabGroups.get(gid).then(() => true).catch(() => false)
@@ -106,9 +111,14 @@ async function groupTabInto(tabId, name) {
   }
   if (gid == null) {
     gid = await chrome.tabs.group({ tabIds: tabId })
-    await chrome.tabGroups.update(gid, { title: name, color: colorForName(name) }).catch(() => {})
+    await chrome.tabGroups.update(gid, { title: name, color: colorForName(name) })
   } else {
-    await chrome.tabs.group({ groupId: gid, tabIds: tabId }).catch(() => {})
+    await chrome.tabs.group({ groupId: gid, tabIds: tabId })
+  }
+  const grouped = await chrome.tabs.get(tabId)
+  const groupInfo = await chrome.tabGroups.get(grouped.groupId)
+  if (grouped.groupId !== gid || groupInfo.title !== name) {
+    throw new Error(`groupTabInto: tab ${tabId} did not join group ${name}`)
   }
   groupIdByName.set(name, gid)
 }
@@ -314,6 +324,7 @@ function connectHost() {
       postToHost({
         method: 'hello',
         version: chrome.runtime.getManifest().version,
+        capabilities: ['nativeTabDuplicate'],
         ...extra,
       })
     } catch {}
@@ -529,6 +540,28 @@ async function handleForwardCdpCommand(msg) {
     // stuck on a page they own. On SW restart the adoption simply releases (banner
     // clears); re-`adopt` if still needed. Only agent-CREATED tabs are persisted.
     return { targetId: entry.targetId, url: match.url || '', title: match.title || '' }
+  }
+
+  // Native Chrome tab duplication. This intentionally has no URL-based
+  // fallback: callers use it when they need the semantics of Chrome's Duplicate
+  // tab action, including navigation history. The duplicated tab becomes owned
+  // by the requesting session but the user's previously visible tab is restored.
+  if (method === 'ABExt.duplicateTab') {
+    return await globalThis.ABTabDuplicate.duplicateTab(params, {
+      tabForTarget,
+      getTab: (tabId) => chrome.tabs.get(tabId),
+      eligible,
+      getLastFocusedWindow: () => chrome.windows.getLastFocused(),
+      getActiveTabs: (windowId) => chrome.tabs.query({ active: true, windowId }),
+      duplicateTab: (tabId) => chrome.tabs.duplicate(tabId),
+      markOwned,
+      unmarkOwned,
+      groupTabInto,
+      attachTab,
+      activateTab: (tabId) => chrome.tabs.update(tabId, { active: true }),
+      focusWindow: (windowId) => chrome.windows.update(windowId, { focused: true }),
+      removeTab: (tabId) => chrome.tabs.remove(tabId),
+    })
   }
 
   // Browser-level Target methods that map onto chrome.tabs.

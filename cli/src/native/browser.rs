@@ -429,7 +429,8 @@ pub fn to_ai_friendly_error(error: &str) -> String {
 pub struct PageInfo {
     pub tab_id: u32,
     /// Optional user-assigned label (e.g. "docs", "app"). Set via
-    /// `tab new --label <name>`. Labels are agent-assigned and never
+    /// `tab new --label <name>` or `tab duplicate --label <name>`. Labels are
+    /// agent-assigned and never
     /// auto-generated, never rewritten on navigation, and unique within a
     /// session. Agents use labels instead of `t<N>` for readable multi-tab
     /// workflows.
@@ -1781,8 +1782,9 @@ impl BrowserManager {
             // they don't pile up in the user's window (in their per-session tab
             // group) every time a session ends, idles out, or the daemon shuts
             // down. `created_targets` only holds tabs we made via
-            // Target.createTarget — never the user's existing tabs or other
-            // sessions' — so this is always safe. Best-effort per tab.
+            // Target.createTarget or native duplicate — never the user's
+            // existing tabs or other sessions' — so this is always safe.
+            // Best-effort per tab.
             for target_id in self.created_targets.drain() {
                 let _ = self
                     .client
@@ -2377,6 +2379,22 @@ impl BrowserManager {
         }
     }
 
+    /// Best-effort rollback for a tab that Chrome created but the daemon could
+    /// not finish registering. The extension owns the underlying Chrome tab,
+    /// so closing the stable target also clears its persisted ownership entry.
+    async fn discard_created_target(&self, target_id: &str) {
+        let _ = self
+            .client
+            .send_command_typed::<_, Value>(
+                "Target.closeTarget",
+                &CloseTargetParams {
+                    target_id: target_id.to_string(),
+                },
+                None,
+            )
+            .await;
+    }
+
     pub async fn tab_new(
         &mut self,
         url: Option<&str>,
@@ -2460,6 +2478,165 @@ impl BrowserManager {
             "tabId": format_tab_id(tab_id),
             "label": label,
             "url": target_url,
+            "total": self.pages.len(),
+        }))
+    }
+
+    /// Duplicate a tab with Chrome's native duplicate primitive exposed by the
+    /// `ab-connect` extension. URL-based recreation is deliberately unsupported:
+    /// it does not preserve Chrome's duplicate-tab semantics.
+    pub async fn tab_duplicate(
+        &mut self,
+        source_ref: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<Value, String> {
+        if !self.via_relay() || !self.relay_scoped {
+            return Err(
+                "Native tab duplication requires extension-connected real Chrome; it is not \
+                 available for launched Chrome, raw CDP, Lightpanda, or providers without the \
+                 ab-connect duplicate capability"
+                    .to_string(),
+            );
+        }
+        // The relay endpoint can become discoverable just before the extension's
+        // asynchronous hello reaches it. Retry briefly so a command issued at
+        // startup does not misclassify a capable extension as unsupported.
+        let mut supports_duplicate = false;
+        for attempt in 0..10 {
+            let capabilities: Value = self
+                .client
+                .send_command_typed("ABRelay.getCapabilities", &json!({}), None)
+                .await
+                .map_err(|_| {
+                    "Native tab duplication is unavailable because the connected relay does not \
+                     advertise extension capabilities"
+                        .to_string()
+                })?;
+            supports_duplicate = capabilities
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.iter().any(|item| item == "nativeTabDuplicate"));
+            if supports_duplicate || attempt == 9 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if !supports_duplicate {
+            return Err(
+                "Native tab duplication is unavailable in the connected extension; update the \
+                 chrome-use extension to a build that advertises `nativeTabDuplicate`"
+                    .to_string(),
+            );
+        }
+        self.resync_targets().await.ok();
+        if let Some(label) = label {
+            if !is_valid_label(label) {
+                return Err(format!(
+                    "Invalid tab label `{}`; labels must start with a letter and contain only \
+                     letters, digits, `-`, and `_`",
+                    label
+                ));
+            }
+            if self.has_label(label) {
+                return Err(format!(
+                    "Label `{}` is already used by another tab; labels must be unique within a \
+                     session",
+                    label
+                ));
+            }
+        }
+
+        let source_index = match source_ref {
+            Some(value) => match self.pages.iter().position(|p| p.target_id == value) {
+                Some(index) => index,
+                None => {
+                    let tab_ref = TabRef::parse(value)?;
+                    let tab_id = self.resolve_tab_ref(&tab_ref)?;
+                    self.pages
+                        .iter()
+                        .position(|p| p.tab_id == tab_id)
+                        .ok_or_else(|| format!("Tab ID {} not found", tab_id))?
+                }
+            },
+            None => self.resolved_active_index(),
+        };
+        let source = self
+            .pages
+            .get(source_index)
+            .cloned()
+            .ok_or_else(|| "No active tab to duplicate".to_string())?;
+        let agent_group = self.agent_group().ok_or_else(|| {
+            "Native tab duplication requires an extension session group".to_string()
+        })?;
+
+        let duplicate: CreateTargetResult = self
+            .client
+            .send_command_typed(
+                "ABExt.duplicateTab",
+                &json!({
+                    "sourceTargetId": source.target_id,
+                    "agentGroup": agent_group,
+                }),
+                None,
+            )
+            .await?;
+
+        let attach: AttachToTargetResult = match self
+            .client
+            .send_command_typed(
+                "Target.attachToTarget",
+                &AttachToTargetParams {
+                    target_id: duplicate.target_id.clone(),
+                    flatten: true,
+                },
+                None,
+            )
+            .await
+        {
+            Ok(attach) => attach,
+            Err(error) => {
+                self.discard_created_target(&duplicate.target_id).await;
+                return Err(format!(
+                    "Native duplicate was created but debugger attachment failed: {}",
+                    error
+                ));
+            }
+        };
+
+        if let Err(error) = self.enable_domains(&attach.session_id).await {
+            self.discard_created_target(&duplicate.target_id).await;
+            return Err(format!(
+                "Native duplicate was created but debugger setup failed: {}",
+                error
+            ));
+        }
+
+        self.created_targets.insert(duplicate.target_id.clone());
+        let source_target_id = source.target_id.clone();
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+        let label = label.map(ToString::to_string);
+        let index = self.pages.len();
+        self.pages.push(PageInfo {
+            tab_id,
+            label: label.clone(),
+            target_id: duplicate.target_id.clone(),
+            session_id: attach.session_id,
+            url: source.url,
+            title: source.title,
+            target_type: source.target_type,
+        });
+        self.active_page_index = index;
+        self.pin_active_target();
+
+        Ok(json!({
+            "sourceTabId": format_tab_id(source.tab_id),
+            "sourceTargetId": source_target_id,
+            "tabId": format_tab_id(tab_id),
+            "targetId": duplicate.target_id,
+            "label": label,
+            "duplicated": true,
+            "native": true,
             "total": self.pages.len(),
         }))
     }

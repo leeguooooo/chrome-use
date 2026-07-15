@@ -1523,6 +1523,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "pdf" => handle_pdf(cmd, state).await,
             "tab_list" => handle_tab_list(cmd, state).await,
             "tab_new" => handle_tab_new(cmd, state).await,
+            "tab_duplicate" => handle_tab_duplicate(cmd, state).await,
             "tab_switch" => handle_tab_switch(cmd, state).await,
             "tab_close" => handle_tab_close(cmd, state).await,
             "viewport" => handle_viewport(cmd, state).await,
@@ -1776,7 +1777,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             // so screencasting always targets the correct page.
             if matches!(
                 action,
-                "tab_new" | "tab_switch" | "tab_close" | "open" | "navigate"
+                "tab_new" | "tab_duplicate" | "tab_switch" | "tab_close" | "open" | "navigate"
             ) {
                 let session_id = mgr.active_session_id().ok().map(|s| s.to_string());
                 server.set_cdp_session_id(session_id).await;
@@ -6539,6 +6540,27 @@ async fn handle_tab_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
         .as_ref()
         .and_then(|m| m.active_session_id().ok())
         .map(|s| s.to_string())
+    {
+        apply_stealth_to_session(state, &sid).await;
+    }
+    Ok(result)
+}
+
+async fn handle_tab_duplicate(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let source_ref = cmd.get("tabId").and_then(|v| v.as_str());
+    let label = cmd.get("label").and_then(|v| v.as_str());
+    state.ref_map.clear();
+    state.iframe_sessions.clear();
+    state.active_frame_id = None;
+    let result = {
+        let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+        mgr.tab_duplicate(source_ref, label).await?
+    };
+    if let Some(sid) = state
+        .browser
+        .as_ref()
+        .and_then(|m| m.active_session_id().ok())
+        .map(ToString::to_string)
     {
         apply_stealth_to_session(state, &sid).await;
     }
