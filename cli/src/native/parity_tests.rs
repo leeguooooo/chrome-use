@@ -253,7 +253,7 @@ fn minimal_command(action: &str, id: &str) -> Value {
             obj.insert("name".to_string(), json!("parity-test-cred"));
         }
         "tab_switch" | "tab_close" | "tab_duplicate" => {
-            obj.insert("index".to_string(), json!(0));
+            obj.insert("tabId".to_string(), json!("t1"));
         }
         "viewport" | "user_agent" | "set_media" | "timezone" | "locale" | "geolocation"
         | "permissions" | "device" => {
@@ -369,6 +369,18 @@ fn minimal_command(action: &str, id: &str) -> Value {
         _ => {}
     }
     cmd
+}
+
+#[test]
+fn tab_parity_commands_use_tab_references() {
+    for action in ["tab_switch", "tab_close", "tab_duplicate"] {
+        let command = minimal_command(action, "tab-parity");
+        assert_eq!(command["tabId"], "t1", "{action} should exercise tabId");
+        assert!(
+            command.get("index").is_none(),
+            "{action} should not use index"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

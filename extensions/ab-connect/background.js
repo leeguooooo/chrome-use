@@ -16,7 +16,7 @@
 // attach + Target handling; the transport is rewritten from WebSocket+token to
 // native messaging.
 
-importScripts('tab-duplicate.js')
+import { duplicateTab as runDuplicateTab } from './tab-duplicate.js'
 
 const HOST_NAME = 'com.agent_browser.connect'
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i
@@ -547,7 +547,7 @@ async function handleForwardCdpCommand(msg) {
   // tab action, including navigation history. The duplicated tab becomes owned
   // by the requesting session but the user's previously visible tab is restored.
   if (method === 'ABExt.duplicateTab') {
-    return await globalThis.ABTabDuplicate.duplicateTab(params, {
+    return await runDuplicateTab(params, {
       tabForTarget,
       getTab: (tabId) => chrome.tabs.get(tabId),
       eligible,

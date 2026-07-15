@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import vm from 'node:vm'
-
-const source = readFileSync(new URL('./tab-duplicate.js', import.meta.url), 'utf8')
-const context = vm.createContext({})
-vm.runInContext(source, context)
-const { duplicateTab } = context.ABTabDuplicate
+import { duplicateTab } from './tab-duplicate.js'
 
 function fixture(overrides = {}) {
   const calls = []
@@ -75,6 +69,54 @@ test('native duplicate failure is returned without orphan cleanup', async () => 
   await assert.rejects(duplicateTab(params, deps), /native duplicate failed/)
   assert.ok(!calls.some((call) => call[0] === 'unmarkOwned'))
   assert.ok(!calls.some((call) => call[0] === 'remove'))
+})
+
+test('rollback continues after unmark ownership throws', async () => {
+  const original = new Error('group is unavailable')
+  const { calls, deps } = fixture({
+    groupTabInto: async () => Promise.reject(original),
+    unmarkOwned: () => {
+      calls.push(['unmarkOwned'])
+      throw new Error('unmark failed')
+    },
+    focusWindow: async (windowId) => calls.push(['focusWindow', windowId]),
+  })
+
+  await assert.rejects(duplicateTab(params, deps), (error) => error === original)
+  assert.ok(calls.some((call) => call[0] === 'remove'))
+  assert.ok(calls.some((call) => call[0] === 'activate'))
+  assert.ok(calls.some((call) => call[0] === 'focusWindow'))
+})
+
+test('rollback continues after tab removal rejects', async () => {
+  const original = new Error('attach is unavailable')
+  const { calls, deps } = fixture({
+    attachTab: async () => Promise.reject(original),
+    removeTab: async (tabId) => {
+      calls.push(['remove', tabId])
+      throw new Error('remove failed')
+    },
+    focusWindow: async (windowId) => calls.push(['focusWindow', windowId]),
+  })
+
+  await assert.rejects(duplicateTab(params, deps), (error) => error === original)
+  assert.ok(calls.some((call) => call[0] === 'activate'))
+  assert.ok(calls.some((call) => call[0] === 'focusWindow'))
+})
+
+test('rollback focuses the previous window after tab activation rejects', async () => {
+  const original = new Error('setup failed')
+  const { calls, deps } = fixture({
+    attachTab: async () => Promise.reject(original),
+    activateTab: async (tabId) => {
+      calls.push(['activate', tabId])
+      throw new Error('activate failed')
+    },
+    focusWindow: async (windowId) => calls.push(['focusWindow', windowId]),
+  })
+
+  await assert.rejects(duplicateTab(params, deps), (error) => error === original)
+  assert.ok(calls.some((call) => call[0] === 'focusWindow'))
 })
 
 for (const [stage, failure] of [

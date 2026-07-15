@@ -6549,13 +6549,13 @@ async fn handle_tab_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
 async fn handle_tab_duplicate(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let source_ref = cmd.get("tabId").and_then(|v| v.as_str());
     let label = cmd.get("label").and_then(|v| v.as_str());
-    state.ref_map.clear();
-    state.iframe_sessions.clear();
-    state.active_frame_id = None;
     let result = {
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
         mgr.tab_duplicate(source_ref, label).await?
     };
+    state.ref_map.clear();
+    state.iframe_sessions.clear();
+    state.active_frame_id = None;
     if let Some(sid) = state
         .browser
         .as_ref()
@@ -11919,6 +11919,32 @@ fn error_response(id: &str, error: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tab_duplicate_failure_preserves_active_tab_context() {
+        let mut state = DaemonState::new();
+        state
+            .ref_map
+            .add("e1".to_string(), Some(42), "button", "Keep", None);
+        state
+            .iframe_sessions
+            .insert("frame-1".to_string(), "session-1".to_string());
+        state.active_frame_id = Some("frame-1".to_string());
+
+        let response = execute_command(
+            &json!({ "id": "duplicate-failure", "action": "tab_duplicate" }),
+            &mut state,
+        )
+        .await;
+
+        assert_eq!(response["success"], false);
+        assert!(state.ref_map.get("e1").is_some());
+        assert_eq!(
+            state.iframe_sessions.get("frame-1").map(String::as_str),
+            Some("session-1")
+        );
+        assert_eq!(state.active_frame_id.as_deref(), Some("frame-1"));
+    }
     use crate::test_utils::EnvGuard;
     use std::fs;
 
