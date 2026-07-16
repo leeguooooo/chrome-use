@@ -406,6 +406,18 @@ pub fn to_ai_friendly_error(error: &str) -> String {
         return "Another element is covering the target element. Try scrolling or closing overlays."
             .to_string();
     }
+    // A CDP call that ran to its full budget ("CDP command timed out: …") means
+    // the browser connection is unresponsive — over the extension relay this
+    // happens when the relay/service-worker went stale mid-session while
+    // `sessions` still reports the daemon alive (issue #117). Keep the concrete
+    // failing method and spell out recovery instead of leaving a bare timeout.
+    if lower.contains("timed out") {
+        return format!(
+            "{error}\nHint: the session's browser connection is unresponsive (likely a stale \
+             relay/service-worker mid-session). Reconnect with `connect`, or close the session \
+             and reopen it."
+        );
+    }
     if lower.contains("timeout") {
         return "Operation timed out. The page may still be loading or the element may not exist."
             .to_string();
