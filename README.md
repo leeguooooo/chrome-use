@@ -236,7 +236,17 @@ chrome-use click "Post"
 chrome-use click 449 320            # …or click a raw viewport coordinate
 chrome-use fill "Title" "Hello World"
 chrome-use screenshot ./page.png
+
+# Native Duplicate tab on extension-connected real Chrome. The copy stays in
+# the background and becomes chrome-use's internal active tab.
+chrome-use tab duplicate --label working-copy
 ```
+
+`tab duplicate [ref] [--label <name>]` uses Chrome's native Duplicate tab
+operation and preserves its navigation history. It requires the browser
+extension path and never falls back to opening the same URL on launched Chrome,
+raw CDP, Lightpanda, or cloud providers. Chrome controls whether a background
+duplicate starts loading.
 
 The agent operates in your Chrome — you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
 

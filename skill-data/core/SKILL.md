@@ -903,6 +903,8 @@ Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
 chrome-use tab                      # list open tabs (with stable tabId)
 chrome-use tabs                     # alias for `tab` (lists too)
 chrome-use tab new https://docs...  # open a new tab (and switch to it)
+chrome-use tab duplicate            # native Duplicate tab; copy becomes the internal active tab
+chrome-use tab duplicate docs --label docs-copy
 chrome-use tab t2                   # switch to tab t2
 chrome-use tab close t2             # close tab t2
 ```
@@ -914,6 +916,12 @@ Tab ids are stable strings (`t1`, `t2`, …), never reused within a session, so
 the same id keeps referring to the same tab across commands. Positional
 integers are **not** accepted — use `t2`, not `2`. After switching, refs from a
 prior snapshot on a different tab no longer apply — re-snapshot.
+
+`tab duplicate [ref] [--label <name>]` is available only through the
+extension-connected real Chrome path. It calls Chrome's native Duplicate tab
+operation, restores the previously visible foreground tab, and keeps the copy as
+chrome-use's internal active tab. It never recreates the source URL as a
+fallback. Chrome may still load the duplicate while it is in the background.
 
 ### Run multiple browsers in parallel / reset stuck daemons
 

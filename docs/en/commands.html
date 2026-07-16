@@ -387,6 +387,8 @@
 <pre><code><span class="du-prompt">$</span> chrome-use tab                              <span class="du-cmt"># list tabs (with tabId and label)</span>
 <span class="du-prompt">$</span> chrome-use tab new [url]                    <span class="du-cmt"># new tab</span>
 <span class="du-prompt">$</span> chrome-use tab new <span class="du-flag">--label</span> docs [url]       <span class="du-cmt"># new tab with a readable label</span>
+<span class="du-prompt">$</span> chrome-use tab duplicate [ref]              <span class="du-cmt"># native Duplicate tab; current by default</span>
+<span class="du-prompt">$</span> chrome-use tab duplicate docs <span class="du-flag">--label</span> copy <span class="du-cmt"># duplicate by ref and label the copy</span>
 <span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># switch by id</span>
 <span class="du-prompt">$</span> chrome-use tab docs                         <span class="du-cmt"># switch by label</span>
 <span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># close the current tab</span>
@@ -394,6 +396,12 @@
 <span class="du-prompt">$</span> chrome-use tab close docs                   <span class="du-cmt"># close by label</span>
 <span class="du-prompt">$</span> chrome-use window new                       <span class="du-cmt"># new window</span></code></pre>
       </div>
+      <p>
+        Native duplication requires real Chrome connected through the chrome-use extension. It restores the
+        previously visible foreground tab, while the duplicate becomes chrome-use's internal active tab. There is
+        no same-URL fallback for launched Chrome, raw CDP, Lightpanda, or cloud providers. Chrome decides whether
+        the background duplicate starts loading.
+      </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ refs belong to the tab active at snapshot time</div>
         The daemon maintains a single active tab, and <code>@eN</code> belongs to the tab that was active when the

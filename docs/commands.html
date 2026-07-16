@@ -380,6 +380,8 @@
 <pre><code><span class="du-prompt">$</span> chrome-use tab                              <span class="du-cmt"># 列出标签（含 tabId 与 label）</span>
 <span class="du-prompt">$</span> chrome-use tab new [url]                    <span class="du-cmt"># 新标签</span>
 <span class="du-prompt">$</span> chrome-use tab new <span class="du-flag">--label</span> docs [url]       <span class="du-cmt"># 带可读 label 的新标签</span>
+<span class="du-prompt">$</span> chrome-use tab duplicate [ref]              <span class="du-cmt"># 原生复制标签，默认复制当前标签</span>
+<span class="du-prompt">$</span> chrome-use tab duplicate docs <span class="du-flag">--label</span> copy <span class="du-cmt"># 按 ref 复制并设置 label</span>
 <span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># 按 id 切换</span>
 <span class="du-prompt">$</span> chrome-use tab docs                         <span class="du-cmt"># 按 label 切换</span>
 <span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># 关闭当前标签</span>
@@ -387,6 +389,11 @@
 <span class="du-prompt">$</span> chrome-use tab close docs                   <span class="du-cmt"># 按 label 关闭</span>
 <span class="du-prompt">$</span> chrome-use window new                       <span class="du-cmt"># 新窗口</span></code></pre>
       </div>
+      <p>
+        原生复制只支持通过 chrome-use 扩展连接的真实 Chrome。命令完成后会恢复此前可见的前台标签，
+        同时让副本成为 chrome-use 内部活动标签。启动型 Chrome、raw CDP、Lightpanda 和云 provider
+        不会退化为同 URL 新建标签；副本是否在后台开始加载仍由 Chrome 决定。
+      </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ ref 属于快照时的活动标签</div>
         守护进程只维护单个活动标签，<code>@eN</code> 归属于快照运行时的那个标签。要操作另一个标签，

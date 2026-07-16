@@ -2134,6 +2134,37 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
+                Some("duplicate") => {
+                    // Accepted forms:
+                    //   tab duplicate [ref]
+                    //   tab duplicate --label <name> [ref]
+                    //   tab duplicate [ref] --label <name>
+                    let mut cmd = json!({ "id": id, "action": "tab_duplicate" });
+                    let mut i = 1;
+                    while i < rest.len() {
+                        match rest[i] {
+                            "--label" => {
+                                let name = rest.get(i + 1).ok_or(ParseError::MissingArguments {
+                                    context: "tab duplicate --label".to_string(),
+                                    usage: "tab duplicate [ref] --label <name>",
+                                })?;
+                                cmd["label"] = json!(name);
+                                i += 2;
+                            }
+                            other if !other.starts_with("--") && cmd.get("tabId").is_none() => {
+                                cmd["tabId"] = json!(other);
+                                i += 1;
+                            }
+                            other => {
+                                return Err(ParseError::UnknownSubcommand {
+                                    subcommand: other.to_string(),
+                                    valid_options: &["--label", "<ref>"],
+                                });
+                            }
+                        }
+                    }
+                    Ok(cmd)
+                }
                 Some("list") => {
                     let mut cmd = json!({ "id": id, "action": "tab_list" });
                     if full {
@@ -5571,6 +5602,34 @@ mod tests {
         let cmd = parse_command(&args("tab new https://example.com"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "tab_new");
         assert_eq!(cmd["url"], "https://example.com");
+    }
+
+    #[test]
+    fn test_tab_duplicate_current() {
+        let cmd = parse_command(&args("tab duplicate"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "tab_duplicate");
+        assert!(cmd.get("tabId").is_none());
+        assert!(cmd.get("label").is_none());
+    }
+
+    #[test]
+    fn test_tab_duplicate_by_ref_with_label() {
+        let cmd = parse_command(
+            &args("tab duplicate docs --label docs-copy"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "tab_duplicate");
+        assert_eq!(cmd["tabId"], "docs");
+        assert_eq!(cmd["label"], "docs-copy");
+
+        let target = parse_command(
+            &args("tab duplicate 0123456789ABCDEF --label target-copy"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(target["tabId"], "0123456789ABCDEF");
+        assert_eq!(target["label"], "target-copy");
     }
 
     #[test]

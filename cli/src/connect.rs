@@ -2441,6 +2441,13 @@ async fn nm_host_main() {
         // `doctor` can report which extension build is live (and whether it's
         // behind). Best-effort; the message carries no CDP payload.
         if v.get("method").and_then(|m| m.as_str()) == Some("hello") {
+            let capabilities = v
+                .get("capabilities")
+                .and_then(|x| x.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|x| x.as_str().map(ToString::to_string));
+            state.lock().await.set_extension_capabilities(capabilities);
             if let Some(ver) = v.get("version").and_then(|x| x.as_str()) {
                 let _ = std::fs::write(relay_ext_version_path(), ver);
             }
