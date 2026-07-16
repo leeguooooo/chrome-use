@@ -1453,9 +1453,9 @@ Global Options:
   --session <name>     Use specific session
   --headers <json>     Set HTTP headers (scoped to this origin)
   --headed             Show browser window (default; headless is forbidden — it's a bot tell)
-  --window <mode>      dedicated = open agent tabs in a separate window (same
-                       profile) so they don't clutter your active window;
-                       user (default) = interleave into your current window.
+  --window <mode>      dedicated (default) = open agent tabs in a separate
+                       window (same profile) so they don't clutter your active
+                       window; user = interleave into your current window.
                        Extension-relay path only; applies when the session starts.
   --enable react-devtools   Inject the React DevTools hook before any page JS
   --init-script <path>      Register a page init script (repeatable)

@@ -514,14 +514,20 @@ pub fn is_valid_label(s: &str) -> bool {
 }
 
 /// Whether the agent should place its tabs in a dedicated agent window instead
-/// of the user's active window. Opt-in via `AGENT_BROWSER_DEDICATED_WINDOW`
-/// (`1`/`true`/`on`/`dedicated`); the `--window dedicated` flag sets this env
-/// before spawning the daemon. Any other value (or unset) keeps the legacy
-/// behavior of creating tabs in the user's current window.
+/// of the user's active window. **Default: on** — agent tabs go to a separate
+/// window in the user's profile so they never clutter the window the user is
+/// working in. Opt out via `AGENT_BROWSER_DEDICATED_WINDOW` set to an off value
+/// (`0`/`false`/`off`/`user`/`shared`) or the `--window user` flag; unset or any
+/// on value (`1`/`true`/`on`/`dedicated`) keeps the default dedicated window.
 pub fn dedicated_window_enabled() -> bool {
     std::env::var("AGENT_BROWSER_DEDICATED_WINDOW")
-        .map(|v| matches!(v.trim(), "1" | "true" | "on" | "dedicated"))
-        .unwrap_or(false)
+        .map(|v| {
+            !matches!(
+                v.trim(),
+                "0" | "false" | "off" | "no" | "user" | "shared" | "current"
+            )
+        })
+        .unwrap_or(true)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3830,16 +3836,19 @@ mod tests {
         let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_DEDICATED_WINDOW"]);
 
         guard.remove("AGENT_BROWSER_DEDICATED_WINDOW");
-        assert!(!dedicated_window_enabled(), "unset → legacy behavior");
+        assert!(
+            dedicated_window_enabled(),
+            "unset → dedicated window is default"
+        );
 
         for on in ["1", "true", "on", "dedicated", " dedicated "] {
             guard.set("AGENT_BROWSER_DEDICATED_WINDOW", on);
-            assert!(dedicated_window_enabled(), "{on:?} should enable");
+            assert!(dedicated_window_enabled(), "{on:?} should stay dedicated");
         }
 
-        for off in ["0", "false", "user", "shared", ""] {
+        for off in ["0", "false", "off", "user", "shared", "current"] {
             guard.set("AGENT_BROWSER_DEDICATED_WINDOW", off);
-            assert!(!dedicated_window_enabled(), "{off:?} should not enable");
+            assert!(!dedicated_window_enabled(), "{off:?} should opt out");
         }
     }
 
