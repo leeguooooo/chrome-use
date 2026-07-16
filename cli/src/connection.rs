@@ -997,12 +997,19 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
 
     // A long-running command (notably `script`, which runs a whole op-list in one
     // round-trip) carries its own `timeout_ms`; give the socket read that budget
-    // plus margin so we don't cut off a legitimately long script at the default 30s.
+    // plus margin so we don't cut off a legitimately long script.
+    //
+    // For a plain command (`get`/`eval`/…) the daemon caps each CDP call at 30s
+    // and then returns a proper error response ("CDP command timed out: …"). Our
+    // read budget MUST exceed that daemon budget, otherwise the socket read fires
+    // at the same 30s, we abandon the connection before the daemon's error line
+    // arrives, and the actionable diagnostic is lost — the exact swallow behind
+    // issue #117. 45s = daemon's 30s CDP budget + 15s margin.
     let read_to = cmd
         .get("timeout_ms")
         .and_then(|v| v.as_u64())
         .map(|ms| Duration::from_millis(ms.saturating_add(15_000)))
-        .unwrap_or(Duration::from_secs(30));
+        .unwrap_or(Duration::from_secs(45));
     stream.set_read_timeout(Some(read_to)).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
@@ -1015,9 +1022,25 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
 
     let mut reader = BufReader::new(stream);
     let mut response_line = String::new();
-    reader
-        .read_line(&mut response_line)
-        .map_err(|e| format!("Failed to read: {}", e))?;
+    reader.read_line(&mut response_line).map_err(|e| {
+        // A read that runs the full budget without a byte means the daemon never
+        // answered — its browser connection is stale/hung (issue #117). Surface a
+        // clear, actionable error that is NOT classified transient, so we fail
+        // loudly and non-zero instead of silently retrying the 45s read 5× (and
+        // leaving the caller with "daemon may be busy or unresponsive").
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ) {
+            format!(
+                "session unresponsive: no response within {}s — the browser connection is \
+                 likely stale. Reconnect with `connect`, or close and reopen the session.",
+                read_to.as_secs()
+            )
+        } else {
+            format!("Failed to read: {}", e)
+        }
+    })?;
 
     serde_json::from_str(&response_line).map_err(|e| format!("Invalid response: {}", e))
 }
