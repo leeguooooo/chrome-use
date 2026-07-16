@@ -249,6 +249,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--idle-timeout",
         "--model",
         "--humanize",
+        "--window",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -930,6 +931,28 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     i += 1;
                 }
             }
+            "--window" => {
+                // Where agent tabs open on the extension-relay path:
+                //   dedicated  → a separate window in the user's profile, so agent
+                //                tabs don't clutter the window the user is using
+                //   user       → legacy: interleave into the user's active window
+                // Surfaced as AGENT_BROWSER_DEDICATED_WINDOW so the daemon (a child
+                // that inherits this env) picks it up when its session launches.
+                if let Some(s) = args.get(i + 1) {
+                    match s.trim() {
+                        "dedicated" | "separate" | "own" => {
+                            std::env::set_var("AGENT_BROWSER_DEDICATED_WINDOW", "dedicated")
+                        }
+                        "user" | "shared" | "current" => {
+                            std::env::set_var("AGENT_BROWSER_DEDICATED_WINDOW", "0")
+                        }
+                        other => eprintln!(
+                            "warning: --window must be dedicated|user, got {other:?} (ignored)"
+                        ),
+                    }
+                    i += 1;
+                }
+            }
             "--screenshot-dir" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.screenshot_dir = Some(s.clone());
@@ -1073,6 +1096,7 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         "--idle-timeout",
         "--model",
         "--humanize",
+        "--window",
     ];
 
     let mut i = 0;
