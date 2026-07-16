@@ -942,12 +942,10 @@ pub fn parse_flags(args: &[String]) -> Flags {
                 // Dedicated is the default (unset env), so `user` sets the opt-out.
                 if let Some(s) = args.get(i + 1) {
                     match s.trim() {
-                        "dedicated" | "separate" | "own" => {
+                        "dedicated" => {
                             std::env::set_var("AGENT_BROWSER_DEDICATED_WINDOW", "dedicated")
                         }
-                        "user" | "shared" | "current" => {
-                            std::env::set_var("AGENT_BROWSER_DEDICATED_WINDOW", "0")
-                        }
+                        "user" => std::env::set_var("AGENT_BROWSER_DEDICATED_WINDOW", "0"),
                         other => eprintln!(
                             "warning: --window must be dedicated|user, got {other:?} (ignored)"
                         ),
