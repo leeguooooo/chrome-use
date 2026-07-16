@@ -1406,7 +1406,15 @@ fn main() {
                 exit(1);
             }
         }
-    } else if flags.auto_connect && flags.cdp.is_none() && !flags.force_launch {
+    } else if flags.auto_connect
+        && flags.cdp.is_none()
+        && !flags.force_launch
+        // Only choose a profile when establishing this session's daemon for the
+        // first time. Once it's running it stays bound to its profile — otherwise
+        // re-resolving on every invocation would silently hop the session to a
+        // different profile as the user changes window focus mid-task.
+        && !connection::daemon_ready(&flags.session)
+    {
         // No explicit `--browser`. With several Chrome profiles each running the
         // extension, the relay's generic endpoint is whichever host connected
         // last — often NOT the profile the user is logged into for the task, so

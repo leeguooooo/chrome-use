@@ -2351,6 +2351,12 @@ fn pick_focused_default(
     if profiles.len() < 2 {
         return None;
     }
+    // Any profile without focus data (0) makes the comparison unreliable — an
+    // old-extension profile the user is actively using reports no focus, so it
+    // would be silently bypassed. Fall back to the warn+legacy path instead.
+    if profiles.iter().any(|p| p.3 == 0) {
+        return None;
+    }
     let max = profiles.iter().map(|p| p.3).max().unwrap_or(0);
     if max == 0 {
         return None;
@@ -2817,9 +2823,9 @@ mod tests {
         // tie on the freshest → ambiguous → None (never guess)
         assert_eq!(pick_focused_default(&[p("a", 30), p("b", 30)]), None);
 
-        // one profile has data, the other doesn't → the one with data wins
-        let got = pick_focused_default(&[p("a", 0), p("b", 7)]);
-        assert_eq!(got.map(|w| w.0), Some("b".to_string()));
+        // partial focus data (a profile with no data may be the focused one on an
+        // old extension) → ambiguous → None, so we warn + keep the legacy default
+        assert_eq!(pick_focused_default(&[p("a", 0), p("b", 7)]), None);
     }
 
     #[test]
