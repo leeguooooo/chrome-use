@@ -234,11 +234,38 @@ async fn capture_screenshot_base64(
         }
     }
 
-    let result: CaptureScreenshotResult = client
-        .send_command_typed("Page.captureScreenshot", &params, Some(session_id))
-        .await?;
+    // Fill the compositor base with opaque white before capturing. Under
+    // `fromSurface: true` (always on), regions the GPU compositor did not paint
+    // into the captured surface — common with `position: fixed` / `overflow`
+    // scroll / `backdrop-filter` layers under mobile device emulation — come
+    // back transparent, which encodes as a solid BLACK region in the output
+    // (issue #119). An opaque default background makes those uncaptured regions
+    // render white (matching the light page the user actually sees) instead of
+    // black. It draws behind all real content, so fully-painted pages are
+    // unaffected. Restored immediately after so it never leaks into the live
+    // page or later captures.
+    let _ = client
+        .send_command(
+            "Emulation.setDefaultBackgroundColorOverride",
+            Some(serde_json::json!({ "color": { "r": 255, "g": 255, "b": 255, "a": 255 } })),
+            Some(session_id),
+        )
+        .await;
 
-    Ok(result.data)
+    let result: Result<CaptureScreenshotResult, String> = client
+        .send_command_typed("Page.captureScreenshot", &params, Some(session_id))
+        .await;
+
+    // Clear the override regardless of capture success (empty params = reset).
+    let _ = client
+        .send_command(
+            "Emulation.setDefaultBackgroundColorOverride",
+            Some(serde_json::json!({})),
+            Some(session_id),
+        )
+        .await;
+
+    Ok(result?.data)
 }
 
 async fn collect_annotations(
