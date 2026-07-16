@@ -1453,6 +1453,11 @@ Global Options:
   --session <name>     Use specific session
   --headers <json>     Set HTTP headers (scoped to this origin)
   --headed             Show browser window (default; headless is forbidden — it's a bot tell)
+  --window <mode>      dedicated (default) = open agent tabs in a separate
+                       window (same profile) so they don't clutter your active
+                       window; user = interleave into your current window.
+                       Extension-relay path only; applies when the session starts.
+                       Env: AGENT_BROWSER_DEDICATED_WINDOW=1 (on) / 0 (off).
   --enable react-devtools   Inject the React DevTools hook before any page JS
   --init-script <path>      Register a page init script (repeatable)
 
@@ -1461,6 +1466,10 @@ Examples:
   chrome-use open example.com
   chrome-use open https://github.com
   chrome-use open localhost:3000
+  chrome-use open example.com --window dedicated
+    # ^ Agent tabs open in a separate window; your current window stays clean
+  chrome-use open example.com --window user
+    # ^ Opt out: interleave agent tabs into your current window (or AGENT_BROWSER_DEDICATED_WINDOW=0)
   chrome-use open api.example.com --headers '{"Authorization": "Bearer token"}'
     # ^ Headers only sent to api.example.com, not other domains
 

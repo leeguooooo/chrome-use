@@ -513,6 +513,23 @@ pub fn is_valid_label(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Whether the agent should place its tabs in a dedicated agent window instead
+/// of the user's active window. **Default: on** — agent tabs go to a separate
+/// window in the user's profile so they never clutter the window the user is
+/// working in. Opt out via `AGENT_BROWSER_DEDICATED_WINDOW` set to an off value
+/// (`0`/`false`/`off`/`user`/`shared`) or the `--window user` flag; unset or any
+/// on value (`1`/`true`/`on`/`dedicated`) keeps the default dedicated window.
+pub fn dedicated_window_enabled() -> bool {
+    std::env::var("AGENT_BROWSER_DEDICATED_WINDOW")
+        .map(|v| {
+            !matches!(
+                v.trim(),
+                "0" | "false" | "off" | "no" | "user" | "shared" | "current"
+            )
+        })
+        .unwrap_or(true)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitUntil {
     Load,
@@ -1099,6 +1116,7 @@ impl BrowserManager {
         if page_targets.is_empty() {
             // Create a new tab
             let agent_group = self.agent_group();
+            let dedicated_window = self.dedicated_window();
             let result: CreateTargetResult = self
                 .client
                 .send_command_typed(
@@ -1107,6 +1125,7 @@ impl BrowserManager {
                         url: "about:blank".to_string(),
                         agent_group,
                         background: None,
+                        dedicated_window,
                     },
                     None,
                 )
@@ -1898,6 +1917,7 @@ impl BrowserManager {
         }
 
         let agent_group = self.agent_group();
+        let dedicated_window = self.dedicated_window();
         let result: CreateTargetResult = self
             .client
             .send_command_typed(
@@ -1906,6 +1926,7 @@ impl BrowserManager {
                     url: "about:blank".to_string(),
                     agent_group,
                     background: None,
+                    dedicated_window,
                 },
                 None,
             )
@@ -2313,6 +2334,19 @@ impl BrowserManager {
         }
     }
 
+    /// Opt-in hint for the `ab-connect` extension to place this session's tabs
+    /// in a dedicated agent window (same profile, separate window) so agent
+    /// activity doesn't clutter the window the user is working in. Only
+    /// meaningful on the relay path — the extension consumes it; `None` on
+    /// launched/real-CDP so a strict endpoint never receives an unknown param.
+    fn dedicated_window(&self) -> Option<bool> {
+        if self.agent_group().is_some() && dedicated_window_enabled() {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
     /// Tell the relay which tab group this session owns so it can scope
     /// `Target.getTargets` to us (issue #40). Only meaningful on the relay; a
     /// no-op (returns false) on a launched/real-CDP connection. Sets and returns
@@ -2420,6 +2454,7 @@ impl BrowserManager {
         let target_url = url.unwrap_or("about:blank");
 
         let agent_group = self.agent_group();
+        let dedicated_window = self.dedicated_window();
         let result: CreateTargetResult = self
             .client
             .send_command_typed(
@@ -2428,6 +2463,7 @@ impl BrowserManager {
                     url: target_url.to_string(),
                     agent_group,
                     background: Some(true),
+                    dedicated_window,
                 },
                 None,
             )
@@ -3793,6 +3829,27 @@ mod tests {
         assert!(!is_valid_label("2docs"));
         assert!(!is_valid_label("-docs"));
         assert!(!is_valid_label("docs!"));
+    }
+
+    #[test]
+    fn test_dedicated_window_enabled() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_DEDICATED_WINDOW"]);
+
+        guard.remove("AGENT_BROWSER_DEDICATED_WINDOW");
+        assert!(
+            dedicated_window_enabled(),
+            "unset → dedicated window is default"
+        );
+
+        for on in ["1", "true", "on", "dedicated", " dedicated "] {
+            guard.set("AGENT_BROWSER_DEDICATED_WINDOW", on);
+            assert!(dedicated_window_enabled(), "{on:?} should stay dedicated");
+        }
+
+        for off in ["0", "false", "off", "user", "shared", "current"] {
+            guard.set("AGENT_BROWSER_DEDICATED_WINDOW", off);
+            assert!(!dedicated_window_enabled(), "{off:?} should opt out");
+        }
     }
 
     #[test]

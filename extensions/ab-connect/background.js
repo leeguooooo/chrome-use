@@ -45,6 +45,120 @@ function rememberSessionTarget(sessionId, targetId) {
 /** tab-group name -> chrome tabGroups id (best-effort cache) */
 const groupIdByName = new Map()
 
+// Shared "agent window" (opt-in via the daemon's `dedicatedWindow` hint). When
+// set, all agent tabs are created in this one separate window — same Chrome
+// profile (so logins/cookies are shared), but out of the window the user is
+// working in, instead of being interleaved with the user's own tabs. Per-session
+// colored tab groups still apply inside it. The id is persisted in
+// chrome.storage.local and re-validated on use, so a service-worker restart
+// reuses the SAME window instead of opening a second one. `null` = not resolved
+// yet this SW lifetime.
+const AGENT_WINDOW_KEY = 'ab_agent_window_id'
+let agentWindowId = null
+// In-flight window-creation promise: serializes first use so concurrent
+// `Target.createTarget` calls share ONE window instead of each creating their own.
+let agentWindowInit = null
+// The placeholder tab a freshly-created window opens with; removed once the first
+// real agent tab lands in the window.
+let agentWindowPlaceholderTabId = null
+
+// Resolve the existing agent window (this SW's memory, then the persisted id),
+// validating it still exists. Returns its id, or null if there is no live agent
+// window yet.
+async function resolveAgentWindow() {
+  if (agentWindowId != null) {
+    if (await chrome.windows.get(agentWindowId).then(() => true).catch(() => false)) {
+      return agentWindowId
+    }
+    agentWindowId = null
+  }
+  try {
+    const got = await chrome.storage.local.get(AGENT_WINDOW_KEY)
+    const persisted = got && got[AGENT_WINDOW_KEY]
+    if (persisted != null) {
+      if (await chrome.windows.get(persisted).then(() => true).catch(() => false)) {
+        agentWindowId = persisted
+        return agentWindowId
+      }
+      await chrome.storage.local.remove(AGENT_WINDOW_KEY).catch(() => {})
+    }
+  } catch {}
+  return null
+}
+
+// Ensure the shared agent window exists, returning its id (or null if the
+// windows API is unavailable). First use is serialized via `agentWindowInit` so
+// concurrent callers don't each open a window.
+async function ensureAgentWindowId() {
+  const existing = await resolveAgentWindow()
+  if (existing != null) return existing
+  if (!(chrome.windows && chrome.windows.create)) return null
+  if (!agentWindowInit) {
+    agentWindowInit = (async () => {
+      const win = await chrome.windows
+        .create({ focused: false, url: 'about:blank' })
+        .catch(() => null)
+      if (!win || win.id == null) return null
+      agentWindowId = win.id
+      agentWindowPlaceholderTabId = (win.tabs && win.tabs[0] && win.tabs[0].id) ?? null
+      try {
+        await chrome.storage.local.set({ [AGENT_WINDOW_KEY]: win.id })
+      } catch {}
+      return win.id
+    })()
+  }
+  const id = await agentWindowInit.catch(() => null)
+  if (id == null) agentWindowInit = null // creation failed → let a later call retry
+  return id
+}
+
+// Create an agent tab in the shared agent window (created in the background,
+// `focused: false`, so it never steals the user's foreground). Falls back to the
+// user's active window if the windows API is unavailable, so tab creation never
+// hard-fails.
+async function createAgentTab(url) {
+  const winId = await ensureAgentWindowId()
+  if (winId == null) return await chrome.tabs.create({ url, active: false })
+  const tab = await chrome.tabs.create({ url, active: false, windowId: winId })
+  // Drop the window's initial about:blank once a real agent tab exists (only the
+  // first caller sees the id; it's cleared before the await so no double-remove).
+  if (agentWindowPlaceholderTabId != null) {
+    const placeholder = agentWindowPlaceholderTabId
+    agentWindowPlaceholderTabId = null
+    chrome.tabs.remove(placeholder).catch(() => {})
+  }
+  return tab
+}
+
+// Forget the agent window when the user (or Chrome) closes it, so the next agent
+// tab creates a fresh one instead of targeting a dead window id.
+if (chrome.windows && chrome.windows.onRemoved) {
+  chrome.windows.onRemoved.addListener((windowId) => {
+    if (windowId === agentWindowId) {
+      agentWindowId = null
+      agentWindowInit = null
+      agentWindowPlaceholderTabId = null
+      chrome.storage.local.remove(AGENT_WINDOW_KEY).catch(() => {})
+    }
+  })
+}
+
+// Which Chrome profile is the user actively using? When several profiles each
+// run this extension, the daemon otherwise binds to whichever host connected
+// last — often NOT the profile the user is logged into for the task, so the
+// agent lands on a logged-out profile. Ping the host whenever a real window of
+// THIS profile gains focus (ignoring our own background agent window); the host
+// timestamps it, and the CLI defaults to the most-recently-focused profile.
+// onFocusChanged wakes the MV3 worker, so the user focusing the window they
+// want is exactly the signal that reaches the host.
+if (chrome.windows && chrome.windows.onFocusChanged) {
+  chrome.windows.onFocusChanged.addListener((windowId) => {
+    if (windowId == null || windowId === chrome.windows.WINDOW_ID_NONE) return
+    if (windowId === agentWindowId) return
+    postToHost({ method: 'focus' })
+  })
+}
+
 // Tabs THIS extension owns: ones the agent created (Target.createTarget) or
 // explicitly adopted. We attach the debugger ONLY to these — never to the user's
 // own tabs — so Chrome's "started debugging this browser" banner never appears on
@@ -567,8 +681,13 @@ async function handleForwardCdpCommand(msg) {
   // Browser-level Target methods that map onto chrome.tabs.
   if (method === 'Target.createTarget') {
     const url = typeof params?.url === 'string' && params.url ? params.url : 'about:blank'
-    const tab = await chrome.tabs.create({ url, active: false })
-    if (!tab.id) throw new Error('createTarget: no tab id')
+    // `dedicatedWindow` (opt-in daemon hint): put agent tabs in a separate
+    // window in the same profile instead of the user's active window.
+    const dedicated = params?.dedicatedWindow === true
+    const tab = dedicated
+      ? await createAgentTab(url)
+      : await chrome.tabs.create({ url, active: false })
+    if (!tab || !tab.id) throw new Error('createTarget: no tab id')
     markOwned(tab.id) // agent-created → ours to attach (and re-attach after SW restart)
     await new Promise((r) => setTimeout(r, 100))
     const t = await attachTab(tab.id)

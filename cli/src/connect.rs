@@ -2195,6 +2195,15 @@ fn parse_ext_profile(s: &str) -> Option<(String, Option<String>)> {
 // removed by that host on disconnect. `--browser <id|email-substr>` resolves to
 // `relay-cdp-url-<id>`; the generic file stays the (last-writer) default.
 
+/// Milliseconds since the Unix epoch on the host clock. Used to timestamp
+/// per-profile focus so profiles on the same machine are directly comparable.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Keep a profileId safe as a filename suffix. profileIds are UUIDs, but be
 /// defensive against anything the extension might report.
 fn sanitize_profile_id(id: &str) -> String {
@@ -2313,6 +2322,70 @@ fn render_browser_list(profiles: &[(String, Option<String>, String)]) -> String 
     s
 }
 
+/// Short one-line label for a profile in a warning (email if known, else id).
+pub fn profile_label(id: &str, email: Option<&str>) -> String {
+    match email {
+        Some(e) if !e.is_empty() => format!("{e} ({id})"),
+        _ => id.to_string(),
+    }
+}
+
+/// A per-profile record's focus timestamp (host-clock millis). `0` when the
+/// record predates focus tracking (old extension), so such profiles sort last.
+fn parse_focused_at(s: &str) -> u64 {
+    serde_json::from_str::<serde_json::Value>(s.trim())
+        .ok()
+        .and_then(|v| v.get("focusedAt").and_then(|x| x.as_u64()))
+        .unwrap_or(0)
+}
+
+/// Pure default-profile selection. Given `(id, email, ws, focusedAt)` for every
+/// connected profile, pick the most recently focused one — the profile the user
+/// is actively using. Returns `None` (caller keeps the legacy last-writer
+/// default and warns) when there are fewer than two profiles, when no profile
+/// carries focus data, or when the newest focus is a tie (genuinely ambiguous —
+/// never guess between equally-fresh profiles).
+fn pick_focused_default(
+    profiles: &[(String, Option<String>, String, u64)],
+) -> Option<(String, Option<String>, String)> {
+    if profiles.len() < 2 {
+        return None;
+    }
+    // Any profile without focus data (0) makes the comparison unreliable — an
+    // old-extension profile the user is actively using reports no focus, so it
+    // would be silently bypassed. Fall back to the warn+legacy path instead.
+    if profiles.iter().any(|p| p.3 == 0) {
+        return None;
+    }
+    let max = profiles.iter().map(|p| p.3).max().unwrap_or(0);
+    if max == 0 {
+        return None;
+    }
+    let mut at_max = profiles.iter().filter(|p| p.3 == max);
+    let winner = at_max.next()?;
+    if at_max.next().is_some() {
+        return None; // tie on the freshest focus → ambiguous
+    }
+    Some((winner.0.clone(), winner.1.clone(), winner.2.clone()))
+}
+
+/// The connected profile the CLI should drive by default when `--browser` isn't
+/// given: the most recently focused one. `None` when there are fewer than two
+/// profiles (unambiguous / legacy path) or the choice is ambiguous. Reads the
+/// per-profile focus timestamps written by the native host.
+pub fn most_recently_focused_profile() -> Option<(String, Option<String>, String)> {
+    let enriched: Vec<(String, Option<String>, String, u64)> = list_relay_profiles()
+        .into_iter()
+        .map(|(id, email, ws)| {
+            let focused = std::fs::read_to_string(relay_ext_profile_path_for(&id))
+                .map(|s| parse_focused_at(&s))
+                .unwrap_or(0);
+            (id, email, ws, focused)
+        })
+        .collect();
+    pick_focused_default(&enriched)
+}
+
 /// Hidden `__nm-host` mode: launched by Chrome for the ab-connect extension.
 ///
 /// Bridges the extension (native-messaging stdio, envelope protocol) to a local
@@ -2423,6 +2496,7 @@ async fn nm_host_main() {
     // The profileId this host got from `hello` — so we can clean up our
     // per-profile sidecars on disconnect (issue #60).
     let mut bound_profile_id: Option<String> = None;
+    let mut bound_profile_email: Option<String> = None;
     loop {
         let mut len_buf = [0u8; 4];
         if stdin.read_exact(&mut len_buf).await.is_err() {
@@ -2454,17 +2528,41 @@ async fn nm_host_main() {
             // Record which profile is driving (issue #60), if the extension
             // reported one. Stored as JSON so `email` can be added when present.
             if let Some(id) = v.get("profileId").and_then(|x| x.as_str()) {
-                let rec = serde_json::json!({
-                    "id": id,
-                    "email": v.get("profileEmail").and_then(|x| x.as_str()),
-                });
-                let rec = rec.to_string();
+                let email = v.get("profileEmail").and_then(|x| x.as_str());
+                let rec = serde_json::json!({ "id": id, "email": email }).to_string();
                 let _ = std::fs::write(relay_ext_profile_path(), &rec);
                 // Stable per-profile endpoint so `--browser <id>` can pin to THIS
                 // profile regardless of who last clobbered the generic file.
                 let _ = std::fs::write(relay_url_path_for(id), &url);
-                let _ = std::fs::write(relay_ext_profile_path_for(id), &rec);
+                // The per-profile record also carries a focus timestamp (host
+                // clock, so it's comparable across profiles) — baseline it at
+                // connect and refresh it on `focus` pings. Lets the CLI default to
+                // the profile the user is actively using instead of the last one
+                // to connect (the "wrong profile / logged out" complaint).
+                let per = serde_json::json!({
+                    "id": id,
+                    "email": email,
+                    "focusedAt": now_millis(),
+                })
+                .to_string();
+                let _ = std::fs::write(relay_ext_profile_path_for(id), &per);
                 bound_profile_id = Some(id.to_string());
+                bound_profile_email = email.map(ToString::to_string);
+            }
+            continue;
+        }
+        // The extension pings `focus` when a real window of this profile gains
+        // focus. Refresh this profile's focus timestamp so the CLI's default
+        // profile selection tracks the window the user is actually using.
+        if v.get("method").and_then(|m| m.as_str()) == Some("focus") {
+            if let Some(id) = &bound_profile_id {
+                let per = serde_json::json!({
+                    "id": id,
+                    "email": bound_profile_email,
+                    "focusedAt": now_millis(),
+                })
+                .to_string();
+                let _ = std::fs::write(relay_ext_profile_path_for(id), &per);
             }
             continue;
         }
@@ -2696,6 +2794,45 @@ mod tests {
         );
         assert_eq!(sanitize_profile_id("a/b c..d"), "a_b_c..d");
         assert_eq!(sanitize_profile_id("../etc/passwd"), ".._etc_passwd");
+    }
+
+    #[test]
+    fn parse_focused_at_reads_timestamp_or_zero() {
+        assert_eq!(
+            parse_focused_at(r#"{"id":"a","focusedAt":1700000000000}"#),
+            1700000000000
+        );
+        assert_eq!(parse_focused_at(r#"{"id":"a","email":"x@y.z"}"#), 0); // old record
+        assert_eq!(parse_focused_at("not json"), 0);
+    }
+
+    #[test]
+    fn pick_focused_default_picks_most_recent() {
+        let p = |id: &str, at: u64| (id.to_string(), None, format!("ws://{id}"), at);
+
+        // fewer than two → None (single profile is unambiguous, handled elsewhere)
+        assert_eq!(pick_focused_default(&[p("a", 5)]), None);
+
+        // clear winner → the freshest focus
+        let got = pick_focused_default(&[p("a", 10), p("b", 30), p("c", 20)]);
+        assert_eq!(got.map(|w| w.0), Some("b".to_string()));
+
+        // no focus data at all (old extension on every profile) → None (warn+legacy)
+        assert_eq!(pick_focused_default(&[p("a", 0), p("b", 0)]), None);
+
+        // tie on the freshest → ambiguous → None (never guess)
+        assert_eq!(pick_focused_default(&[p("a", 30), p("b", 30)]), None);
+
+        // partial focus data (a profile with no data may be the focused one on an
+        // old extension) → ambiguous → None, so we warn + keep the legacy default
+        assert_eq!(pick_focused_default(&[p("a", 0), p("b", 7)]), None);
+    }
+
+    #[test]
+    fn profile_label_prefers_email() {
+        assert_eq!(profile_label("uuid", Some("me@x.com")), "me@x.com (uuid)");
+        assert_eq!(profile_label("uuid", None), "uuid");
+        assert_eq!(profile_label("uuid", Some("")), "uuid");
     }
 
     #[test]

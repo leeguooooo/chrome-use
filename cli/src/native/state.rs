@@ -119,9 +119,11 @@ async fn collect_storage_via_temp_target(
             "Target.createTarget",
             &CreateTargetParams {
                 url: "about:blank".to_string(),
-                // Transient internal target (storage collection) — never grouped.
+                // Transient internal target (storage collection) — never grouped,
+                // and never placed in the agent window.
                 agent_group: None,
                 background: None,
+                dedicated_window: None,
             },
             None,
         )

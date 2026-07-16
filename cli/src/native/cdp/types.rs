@@ -159,6 +159,14 @@ pub struct CreateTargetParams {
     /// affects the raw-CDP (no extension) path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<bool>,
+    /// Non-CDP hint consumed only by the `ab-connect` extension: place agent
+    /// tabs in a dedicated agent window (same profile, separate window) instead
+    /// of the user's active window, so agent activity never clutters the window
+    /// the user is working in. Opt-in via `AGENT_BROWSER_DEDICATED_WINDOW` /
+    /// `--window dedicated`. `None` on the normal CDP path so a strict
+    /// real-Chrome endpoint never receives an unknown parameter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dedicated_window: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
