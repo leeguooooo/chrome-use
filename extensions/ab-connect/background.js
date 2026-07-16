@@ -85,6 +85,22 @@ if (chrome.windows && chrome.windows.onRemoved) {
   })
 }
 
+// Which Chrome profile is the user actively using? When several profiles each
+// run this extension, the daemon otherwise binds to whichever host connected
+// last — often NOT the profile the user is logged into for the task, so the
+// agent lands on a logged-out profile. Ping the host whenever a real window of
+// THIS profile gains focus (ignoring our own background agent window); the host
+// timestamps it, and the CLI defaults to the most-recently-focused profile.
+// onFocusChanged wakes the MV3 worker, so the user focusing the window they
+// want is exactly the signal that reaches the host.
+if (chrome.windows && chrome.windows.onFocusChanged) {
+  chrome.windows.onFocusChanged.addListener((windowId) => {
+    if (windowId == null || windowId === chrome.windows.WINDOW_ID_NONE) return
+    if (windowId === agentWindowId) return
+    postToHost({ method: 'focus' })
+  })
+}
+
 // Tabs THIS extension owns: ones the agent created (Target.createTarget) or
 // explicitly adopted. We attach the debugger ONLY to these — never to the user's
 // own tabs — so Chrome's "started debugging this browser" banner never appears on

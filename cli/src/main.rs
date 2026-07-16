@@ -1406,6 +1406,38 @@ fn main() {
                 exit(1);
             }
         }
+    } else if flags.auto_connect && flags.cdp.is_none() && !flags.force_launch {
+        // No explicit `--browser`. With several Chrome profiles each running the
+        // extension, the relay's generic endpoint is whichever host connected
+        // last — often NOT the profile the user is logged into for the task, so
+        // the agent lands on a logged-out profile. Default instead to the profile
+        // the user is actively using (most recently focused window); if that's
+        // ambiguous, keep the legacy default but warn loudly with how to pick.
+        let profiles = connect::list_relay_profiles();
+        if profiles.len() >= 2 {
+            match connect::most_recently_focused_profile() {
+                Some((id, email, ws)) => {
+                    flags.cdp = Some(ws);
+                    flags.auto_connect = false;
+                    eprintln!(
+                        "{} {} Chrome profiles connected — driving {} (most recently used). Override with --browser <id|email>.",
+                        color::warning_indicator(),
+                        profiles.len(),
+                        connect::profile_label(&id, email.as_deref()),
+                    );
+                }
+                None => {
+                    eprintln!(
+                        "{} {} Chrome profiles connected and none is clearly in focus — driving the last-connected one, which may be logged out. Pick one with --browser <id|email>:",
+                        color::warning_indicator(),
+                        profiles.len(),
+                    );
+                    for (id, email, _) in &profiles {
+                        eprintln!("    {}", connect::profile_label(id, email.as_deref()));
+                    }
+                }
+            }
+        }
     }
 
     // Handle session separately (doesn't need daemon)
