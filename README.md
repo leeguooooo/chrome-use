@@ -314,6 +314,25 @@ $ chrome-use open https://github.com
 ✓ GitHub
 ```
 
+**Private / org-internal packs.** Adapters that target self-hosted or internal
+services (a company Gogs/GitLab, an internal dashboard) can't live in the public
+bb-sites pack. Point `site update` at **extra sources** — a GitHub `owner/repo`, a
+`.zip` URL, or a local directory — and they sync into `~/.chrome-use/sites`
+alongside the community pack, with the same auto-sync lifecycle:
+
+```bash
+chrome-use site add leeguooooo/chrome-use-sites   # a private/extra adapter repo
+chrome-use site add /path/to/local/adapters       # or a local dir / .zip URL
+chrome-use site sources                            # list configured extra sources
+chrome-use site remove leeguooooo/chrome-use-sites
+chrome-use site update                             # syncs bb-sites + every source
+```
+
+Sources also come from `CHROME_USE_SITES_SOURCES` (comma-separated) or the
+`~/.chrome-use/sites.sources` file. Private repos authenticate via
+`CHROME_USE_SITES_TOKEN` (or `GITHUB_TOKEN`/`GH_TOKEN`). Packs are namespaced by
+their directory, and a later source wins on a name collision.
+
 ## Automated testing (`chrome-use test`)
 
 Turn the repetitive "open it, click around, check it's right" work into a

@@ -1063,7 +1063,12 @@ fn main() {
         // 7d) so adapters stay fresh without a manual `site update`. Skipped for an
         // explicit `update` (full sync below). Best-effort: offline → cached pack.
         // Disable with AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1.
-        if clean.get(1).map(|s| s.as_str()) != Some("update") && site::needs_refresh() {
+        // Pure config/subcommands (`update` does its own sync; `sources`/`add`/
+        // `remove` just edit the source list) skip the implicit auto-sync.
+        let sub = clean.get(1).map(|s| s.as_str());
+        if !matches!(sub, Some("update") | Some("sources") | Some("add") | Some("remove"))
+            && site::needs_refresh()
+        {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
             match rt.block_on(site::update()) {
                 Ok(n) => {
@@ -1133,6 +1138,108 @@ fn main() {
                         "{}",
                         serde_json::to_string_pretty(&a.meta).unwrap_or_default()
                     ),
+                    Err(e) => {
+                        eprintln!("{} {}", color::error_indicator(), e);
+                        exit(1);
+                    }
+                }
+                return;
+            }
+            // `site sources` — list the configured extra adapter sources (#127).
+            // The community pack (epiral/bb-sites) is always synced and not listed.
+            Some("sources") => {
+                let sources = site::read_sources();
+                if flags.json {
+                    println!("{}", json!({ "success": true, "sources": sources }));
+                } else if sources.is_empty() {
+                    println!(
+                        "no extra sources configured — add one with `chrome-use site add <owner/repo|url|dir>`\n\
+                         (the community pack epiral/bb-sites is always synced)"
+                    );
+                } else {
+                    for s in &sources {
+                        println!("{s}");
+                    }
+                    eprintln!(
+                        "{}",
+                        color::dim(&format!(
+                            "{} extra source(s) · synced alongside epiral/bb-sites on `site update`",
+                            sources.len()
+                        ))
+                    );
+                }
+                return;
+            }
+            // `site add <owner/repo|zip-url|local-dir>` — register an extra source.
+            Some("add") => {
+                let src = clean.get(2).cloned().unwrap_or_default();
+                if src.is_empty() {
+                    eprintln!(
+                        "{} usage: chrome-use site add <owner/repo | https://…zip | /local/dir>",
+                        color::error_indicator()
+                    );
+                    exit(2);
+                }
+                match site::add_source(&src) {
+                    Ok(true) => {
+                        if flags.json {
+                            println!("{}", json!({ "success": true, "added": src }));
+                        } else {
+                            println!(
+                                "{} added source `{}` — run `chrome-use site update` to sync it",
+                                color::success_indicator(),
+                                src
+                            );
+                        }
+                    }
+                    Ok(false) => {
+                        if flags.json {
+                            println!(
+                                "{}",
+                                json!({ "success": true, "added": serde_json::Value::Null, "note": "already present" })
+                            );
+                        } else {
+                            println!("source `{src}` is already configured");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{} {}", color::error_indicator(), e);
+                        exit(1);
+                    }
+                }
+                return;
+            }
+            // `site remove <source>` — unregister an extra source (installed
+            // adapter files are left in place; a future `update` won't re-fetch).
+            Some("remove") => {
+                let src = clean.get(2).cloned().unwrap_or_default();
+                if src.is_empty() {
+                    eprintln!(
+                        "{} usage: chrome-use site remove <source>",
+                        color::error_indicator()
+                    );
+                    exit(2);
+                }
+                match site::remove_source(&src) {
+                    Ok(true) => {
+                        if flags.json {
+                            println!("{}", json!({ "success": true, "removed": src }));
+                        } else {
+                            println!("{} removed source `{}`", color::success_indicator(), src);
+                        }
+                    }
+                    Ok(false) => {
+                        if flags.json {
+                            print_json_error(format!("source `{src}` not found"));
+                        } else {
+                            eprintln!(
+                                "{} source `{}` was not in the list (run `chrome-use site sources`)",
+                                color::warning_indicator(),
+                                src
+                            );
+                        }
+                        exit(1);
+                    }
                     Err(e) => {
                         eprintln!("{} {}", color::error_indicator(), e);
                         exit(1);

@@ -27,6 +27,98 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// `~/.chrome-use/sites.sources` — extra adapter sources, one per line (issue
+/// #127). Each line is a GitHub `owner/repo`, a `.zip` URL, or a local directory.
+/// `#` starts a comment. Lets orgs auto-sync **private/internal** adapter packs
+/// (self-hosted Gogs/GitLab, internal tools) that can't live in the public
+/// bb-sites pack, with the same lifecycle as the community pack.
+pub fn sources_config_path() -> Option<PathBuf> {
+    dirs_home().map(|h| h.join(".chrome-use").join("sites.sources"))
+}
+
+/// The configured extra sources: env `CHROME_USE_SITES_SOURCES` (comma-separated)
+/// first, then the `sites.sources` file — deduped, order preserved. The community
+/// pack (`epiral/bb-sites`) is always synced and is NOT listed here.
+pub fn read_sources() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: &str| {
+        let s = s.trim();
+        if !s.is_empty() && !s.starts_with('#') && !out.iter().any(|e| e == s) {
+            out.push(s.to_string());
+        }
+    };
+    if let Ok(env) = std::env::var("CHROME_USE_SITES_SOURCES") {
+        for part in env.split(',') {
+            push(part);
+        }
+    }
+    if let Some(cfg) = sources_config_path() {
+        if let Ok(text) = std::fs::read_to_string(cfg) {
+            for line in text.lines() {
+                push(line);
+            }
+        }
+    }
+    out
+}
+
+/// Add a source to `sites.sources` (idempotent). Returns whether it was newly
+/// added (false = already present). Env-only sources aren't written here.
+pub fn add_source(source: &str) -> Result<bool, String> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Err("site add: empty source".into());
+    }
+    let path = sources_config_path().ok_or("site add: cannot resolve home dir")?;
+    let existing: Vec<String> = std::fs::read_to_string(&path)
+        .ok()
+        .map(|t| t.lines().map(|l| l.trim().to_string()).collect())
+        .unwrap_or_default();
+    if existing.iter().any(|l| l == source) {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(source);
+    text.push('\n');
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Remove a source from `sites.sources`. Returns whether a line was removed.
+pub fn remove_source(source: &str) -> Result<bool, String> {
+    let source = source.trim();
+    let path = sources_config_path().ok_or("site remove: cannot resolve home dir")?;
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    let mut removed = false;
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            if l.trim() == source {
+                removed = true;
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    if removed {
+        let mut out = kept.join("\n");
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        std::fs::write(&path, out).map_err(|e| e.to_string())?;
+    }
+    Ok(removed)
+}
+
 /// Parsed adapter: its `@meta` JSON and the raw `async function(args){...}` source.
 pub struct Adapter {
     pub meta: Value,
@@ -243,39 +335,157 @@ pub fn list_adapters() -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Download the bb-sites repo zip and extract its adapters into `~/.chrome-use/sites`.
+/// Sync the community pack (`epiral/bb-sites`) **plus** any configured extra
+/// sources (issue #127) into `~/.chrome-use/sites`. Sources are applied AFTER the
+/// community pack, so on a pack-dir name collision the later source wins (with a
+/// warning). Extra sources are best-effort: one failing (offline/private-auth)
+/// doesn't abort the others or the community sync. Returns the total adapter count.
 pub async fn update() -> Result<usize, String> {
     let dir = sites_dir().ok_or("site: cannot resolve home dir")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let client = reqwest::Client::builder()
         .user_agent("chrome-use")
         .build()
         .map_err(|e| e.to_string())?;
-    let bytes = client
-        .get(SITES_ZIP_URL)
+
+    // 1) Community pack — a hard failure here is the whole command's failure,
+    // preserving the original contract (offline first-sync still errors).
+    fetch_zip_into(&client, SITES_ZIP_URL, None, &dir, true)
+        .await
+        .map_err(|e| format!("site update: {e}"))?;
+
+    // 2) Extra sources (private/org packs). Best-effort, overlaid on top.
+    let token = sources_token();
+    for source in read_sources() {
+        if let Err(e) = sync_source(&client, &source, token.as_deref(), &dir).await {
+            eprintln!("site update: source `{source}` skipped: {e}");
+        }
+    }
+
+    // Total adapter count after all overlays.
+    let count = list_adapters().map(|l| l.len()).unwrap_or(0);
+    // Build the domain→adapters index and stamp the sync time so navigation can
+    // suggest adapters (auto-trigger) and `needs_refresh` can pace re-syncs.
+    write_domain_index(&dir);
+    if let Some(p) = last_update_path() {
+        let _ = std::fs::write(p, now_secs().to_string());
+    }
+    Ok(count)
+}
+
+/// A GitHub token for private-repo sources: `CHROME_USE_SITES_TOKEN`, else the
+/// usual `GITHUB_TOKEN` / `GH_TOKEN`. Public sources need none.
+fn sources_token() -> Option<String> {
+    for k in ["CHROME_USE_SITES_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"] {
+        if let Ok(v) = std::env::var(k) {
+            if !v.trim().is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve one configured source and merge it into `dir`:
+/// - a local directory path → copy its `.js`/`_helper.js` tree in;
+/// - a `.zip`/http(s) URL → download + extract;
+/// - a GitHub `owner/repo` → download its default-branch archive (private repos
+///   use the token via the API zipball endpoint).
+async fn sync_source(
+    client: &reqwest::Client,
+    source: &str,
+    token: Option<&str>,
+    dir: &std::path::Path,
+) -> Result<usize, String> {
+    // Local directory: copy the adapter tree verbatim (no strip).
+    let as_path = PathBuf::from(source);
+    if as_path.is_dir() {
+        return copy_local_tree(&as_path, dir);
+    }
+    // Explicit zip / http(s) URL.
+    if source.starts_with("http://") || source.starts_with("https://") {
+        let strip = source.contains("github.com") || source.contains("api.github.com");
+        return fetch_zip_into(client, source, token, dir, strip).await;
+    }
+    // GitHub `owner/repo`.
+    if let Some((owner, repo)) = parse_owner_repo(source) {
+        if let Some(tok) = token {
+            // API zipball works for private repos and honours the token.
+            let url = format!("https://api.github.com/repos/{owner}/{repo}/zipball");
+            return fetch_zip_into(client, &url, Some(tok), dir, true).await;
+        }
+        // Public: hit the archive host directly (no api.github.com rate limit).
+        let main = format!("https://github.com/{owner}/{repo}/archive/refs/heads/main.zip");
+        match fetch_zip_into(client, &main, None, dir, true).await {
+            Ok(n) => return Ok(n),
+            Err(_) => {
+                let master =
+                    format!("https://github.com/{owner}/{repo}/archive/refs/heads/master.zip");
+                return fetch_zip_into(client, &master, None, dir, true).await;
+            }
+        }
+    }
+    Err("unrecognized source (want `owner/repo`, a .zip URL, or a local dir path)".to_string())
+}
+
+/// `owner/repo` shape check: exactly one `/`, non-empty halves, no traversal /
+/// URL scheme / whitespace. Returns the split.
+fn parse_owner_repo(s: &str) -> Option<(String, String)> {
+    if s.contains("://") || s.contains(' ') || s.contains("..") {
+        return None;
+    }
+    let (owner, repo) = s.split_once('/')?;
+    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
+}
+
+/// Download a zip and extract it into `dir`. When `strip_top` is set, drop the
+/// single top-level wrapper component every GitHub archive adds
+/// (`<repo>-<ref>/…`). Files are overlaid (later sources overwrite earlier).
+async fn fetch_zip_into(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+    dir: &std::path::Path,
+    strip_top: bool,
+) -> Result<usize, String> {
+    let mut req = client.get(url);
+    if let Some(tok) = token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let bytes = req
         .send()
         .await
-        .map_err(|e| format!("site update: download failed: {e}"))?
+        .map_err(|e| format!("download failed: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("site update: {e}"))?
+        .map_err(|e| format!("{e}"))?
         .bytes()
         .await
-        .map_err(|e| format!("site update: read body: {e}"))?;
+        .map_err(|e| format!("read body: {e}"))?;
 
     let cursor = std::io::Cursor::new(bytes);
-    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| format!("site update: bad zip: {e}"))?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| format!("bad zip: {e}"))?;
     let mut count = 0usize;
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
         let Some(enclosed) = f.enclosed_name() else {
             continue;
         };
-        // Strip the top-level `bb-sites-main/` component from the archive path.
-        let rel: PathBuf = enclosed.components().skip(1).collect();
+        let rel: PathBuf = if strip_top {
+            enclosed.components().skip(1).collect()
+        } else {
+            enclosed.to_path_buf()
+        };
         if rel.as_os_str().is_empty() {
             continue;
         }
         let out = dir.join(&rel);
+        // Defense-in-depth: never let a crafted zip escape the sites dir.
+        if !out.starts_with(dir) {
+            continue;
+        }
         if f.is_dir() {
             let _ = std::fs::create_dir_all(&out);
             continue;
@@ -290,13 +500,44 @@ pub async fn update() -> Result<usize, String> {
             count += 1;
         }
     }
-    // Build the domain→adapters index and stamp the sync time so navigation can
-    // suggest adapters (auto-trigger) and `needs_refresh` can pace re-syncs.
-    write_domain_index(&dir);
-    if let Some(p) = last_update_path() {
-        let _ = std::fs::write(p, now_secs().to_string());
+    Ok(count)
+}
+
+/// Copy a local adapter tree (a directory of `<name>/<cmd>.js` packs) into `dir`.
+fn copy_local_tree(src: &std::path::Path, dir: &std::path::Path) -> Result<usize, String> {
+    let mut count = 0usize;
+    for entry in walkdir_js(src) {
+        let rel = entry.strip_prefix(src).map_err(|e| e.to_string())?;
+        let out = dir.join(rel);
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(&entry, &out).map_err(|e| e.to_string())?;
+        if out.extension().and_then(|e| e.to_str()) == Some("js") {
+            count += 1;
+        }
     }
     Ok(count)
+}
+
+/// Recursively collect `.js` files under `root` (shallow, dependency-free walk).
+fn walkdir_js(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(cur) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&cur) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|x| x.to_str()) == Some("js") {
+                out.push(p);
+            }
+        }
+    }
+    out
 }
 
 /// `~/.chrome-use/sites/.last_update` — unix-seconds marker of the last sync.
@@ -496,6 +737,22 @@ async function(args) { return { repo: args.repo }; }"#;
     fn rejects_bad_spec() {
         assert!(load_adapter("noslash").is_err());
         assert!(load_adapter("../etc/passwd").is_err());
+    }
+
+    // #127: `owner/repo` source resolution — accept a clean single-slash pair,
+    // reject URLs, traversal, whitespace, and nested paths.
+    #[test]
+    fn parse_owner_repo_accepts_and_rejects() {
+        assert_eq!(
+            parse_owner_repo("leeguooooo/chrome-use-sites"),
+            Some(("leeguooooo".into(), "chrome-use-sites".into()))
+        );
+        assert_eq!(parse_owner_repo("noslash"), None);
+        assert_eq!(parse_owner_repo("https://example.com/x.zip"), None);
+        assert_eq!(parse_owner_repo("a/b/c"), None);
+        assert_eq!(parse_owner_repo("../etc/passwd"), None);
+        assert_eq!(parse_owner_repo("owner /repo"), None);
+        assert_eq!(parse_owner_repo("/absolute/dir"), None);
     }
 
     // Regression: positional args must follow DECLARATION order, not serde's
