@@ -8,6 +8,91 @@ const CONFIG_DIR: &str = ".chrome-use";
 const CONFIG_FILENAME: &str = "config.json";
 const PROJECT_CONFIG_FILENAME: &str = "chrome-use.json";
 
+/// Global boolean flags: they optionally take a trailing `true`/`false`, so they
+/// never silently swallow the next positional. Kept module-level so `clean_args`
+/// and the site-adapter collision check ([`is_reserved_global_flag`]) share one
+/// source of truth.
+pub(crate) const GLOBAL_BOOL_FLAGS: &[&str] = &[
+    "--json",
+    "--headed",
+    "--debug",
+    "--ignore-https-errors",
+    "--allow-file-access",
+    "--hide-scrollbars",
+    "--auto-connect",
+    "--launch",
+    "--new",
+    "--annotate",
+    "--content-boundaries",
+    "--confirm-interactive",
+    "--no-auto-dialog",
+    // Action guards (issue #65 followup): skip an action instead of erroring
+    // when its target element is absent. Stripped here so they don't break a
+    // command's positional parsing; injected into the action JSON via
+    // parse_command from Flags.if_present.
+    "--if-present",
+    "--optional",
+    "--observe",
+    "--as-strict",
+    "-v",
+    "--verbose",
+    "-q",
+    "--quiet",
+    // doctor-specific flags; harmless on other commands (ignored)
+    "--offline",
+    "--quick",
+    "--fix",
+];
+
+/// Global flags that always consume the following argument. These are the ones
+/// that silently swallow a colliding site-adapter override (issue #125).
+pub(crate) const GLOBAL_FLAGS_WITH_VALUE: &[&str] = &[
+    "--session",
+    "--headers",
+    "--executable-path",
+    "--cdp",
+    "--browser",
+    "--as",
+    "--extension",
+    "--init-script",
+    "--enable",
+    "--profile",
+    "--state",
+    "--proxy",
+    "--proxy-bypass",
+    "--args",
+    "--user-agent",
+    "-p",
+    "--provider",
+    "--device",
+    "--session-name",
+    "--color-scheme",
+    "--download-path",
+    "--max-output",
+    "--allowed-domains",
+    "--action-policy",
+    "--confirm-actions",
+    "--config",
+    "--engine",
+    "--screenshot-dir",
+    "--screenshot-quality",
+    "--screenshot-format",
+    "--idle-timeout",
+    "--model",
+    "--humanize",
+    "--window",
+];
+
+/// Whether `--<name>` is a reserved global flag (value-taking or boolean) that
+/// `clean_args`/`parse_flags` consume before a subcommand sees it. A site adapter
+/// declaring an arg with a colliding name can never receive it as `--<name>`
+/// (issue #125); callers use this to warn instead of silently dropping the value.
+pub fn is_reserved_global_flag(name: &str) -> bool {
+    let dashed = format!("--{name}");
+    GLOBAL_FLAGS_WITH_VALUE.contains(&dashed.as_str())
+        || GLOBAL_BOOL_FLAGS.contains(&dashed.as_str())
+}
+
 /// Parse idle timeout from user-friendly format.
 /// Supports: "10s" (seconds), "3m" (minutes), "1h" (hours), or raw milliseconds.
 fn parse_idle_timeout(s: &str) -> Result<String, String> {
@@ -253,6 +338,10 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
     ];
     let mut i = 0;
     while i < args.len() {
+        // `--` ends option parsing; anything after is a passthrough arg (#125).
+        if args[i] == "--" {
+            break;
+        }
         if args[i] == "--config" {
             return Some(args.get(i + 1).cloned());
         }
@@ -643,6 +732,13 @@ pub fn parse_flags(args: &[String]) -> Flags {
 
     let mut i = 0;
     while i < args.len() {
+        // `--` ends option parsing (standard getopt convention): everything after
+        // it is a positional / passthrough arg, so a global flag name appearing
+        // there is NOT consumed as a flag. Pairs with `clean_args` to let site
+        // adapters receive colliding `--key value` overrides (issue #125).
+        if args[i] == "--" {
+            break;
+        }
         match args[i].as_str() {
             "--json" => {
                 let (val, consumed) = parse_bool_arg(args, i);
@@ -1032,76 +1128,6 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
     let mut result = Vec::new();
     let mut skip_next = false;
 
-    // Boolean flags that optionally take true/false
-    const GLOBAL_BOOL_FLAGS: &[&str] = &[
-        "--json",
-        "--headed",
-        "--debug",
-        "--ignore-https-errors",
-        "--allow-file-access",
-        "--hide-scrollbars",
-        "--auto-connect",
-        "--launch",
-        "--new",
-        "--annotate",
-        "--content-boundaries",
-        "--confirm-interactive",
-        "--no-auto-dialog",
-        // Action guards (issue #65 followup): skip an action instead of erroring
-        // when its target element is absent. Stripped here so they don't break a
-        // command's positional parsing; injected into the action JSON via
-        // parse_command from Flags.if_present.
-        "--if-present",
-        "--optional",
-        "--observe",
-        "--as-strict",
-        "-v",
-        "--verbose",
-        "-q",
-        "--quiet",
-        // doctor-specific flags; harmless on other commands (ignored)
-        "--offline",
-        "--quick",
-        "--fix",
-    ];
-    // Global flags that always take a value (need to skip the next arg too)
-    const GLOBAL_FLAGS_WITH_VALUE: &[&str] = &[
-        "--session",
-        "--headers",
-        "--executable-path",
-        "--cdp",
-        "--browser",
-        "--as",
-        "--extension",
-        "--init-script",
-        "--enable",
-        "--profile",
-        "--state",
-        "--proxy",
-        "--proxy-bypass",
-        "--args",
-        "--user-agent",
-        "-p",
-        "--provider",
-        "--device",
-        "--session-name",
-        "--color-scheme",
-        "--download-path",
-        "--max-output",
-        "--allowed-domains",
-        "--action-policy",
-        "--confirm-actions",
-        "--config",
-        "--engine",
-        "--screenshot-dir",
-        "--screenshot-quality",
-        "--screenshot-format",
-        "--idle-timeout",
-        "--model",
-        "--humanize",
-        "--window",
-    ];
-
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -1109,6 +1135,14 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
             skip_next = false;
             i += 1;
             continue;
+        }
+        // `--` is the standard end-of-options marker: drop it and forward every
+        // remaining arg verbatim, so a site adapter can receive `--key value`
+        // overrides that would otherwise be swallowed by a global flag of the
+        // same name (issue #125): `site demo/pr-list -- --state closed`.
+        if arg == "--" {
+            result.extend(args[i + 1..].iter().cloned());
+            break;
         }
         if GLOBAL_FLAGS_WITH_VALUE.contains(&arg.as_str()) {
             skip_next = true;
@@ -1274,6 +1308,38 @@ mod tests {
     fn test_clean_args_removes_idle_timeout_before_command() {
         let cleaned = clean_args(&args("--idle-timeout 10s open example.com"));
         assert_eq!(cleaned, vec!["open", "example.com"]);
+    }
+
+    // #125: `--` ends option parsing — everything after is forwarded verbatim,
+    // so a site-adapter override colliding with a global flag survives.
+    #[test]
+    fn test_clean_args_passthrough_after_double_dash() {
+        let cleaned = clean_args(&args("site demo/pr-list -- --state closed"));
+        assert_eq!(cleaned, vec!["site", "demo/pr-list", "--state", "closed"]);
+    }
+
+    #[test]
+    fn test_clean_args_double_dash_keeps_leading_global_flags() {
+        // Global flags BEFORE `--` are still stripped; only the tail passes through.
+        let cleaned = clean_args(&args("--json site demo/pr-list -- --state closed"));
+        assert_eq!(cleaned, vec!["site", "demo/pr-list", "--state", "closed"]);
+    }
+
+    #[test]
+    fn test_parse_flags_stops_at_double_dash() {
+        // `--state` after `--` must NOT be consumed as the global auth-state flag.
+        let flags = parse_flags(&args("site demo/pr-list -- --state closed"));
+        assert_eq!(flags.state, None);
+    }
+
+    #[test]
+    fn test_is_reserved_global_flag() {
+        assert!(is_reserved_global_flag("state"));
+        assert!(is_reserved_global_flag("profile"));
+        assert!(is_reserved_global_flag("session"));
+        assert!(is_reserved_global_flag("json"));
+        assert!(!is_reserved_global_flag("repo"));
+        assert!(!is_reserved_global_flag("status"));
     }
 
     #[test]

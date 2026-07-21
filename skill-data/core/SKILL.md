@@ -189,6 +189,9 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
 ```
 
 - Positional args fill the adapter's declared args **in order**; `--key value` overrides by name.
+  If a `--key` name collides with a reserved global flag (`--state`, `--profile`, `--session`, `--timeout`, …)
+  it is consumed globally and never reaches the adapter — the CLI warns, and you should pass it
+  **positionally** or after `--`: `chrome-use site demo/pr-list -- --state closed`.
 - It navigates to the adapter's domain (reusing the current tab if you're already on it), so
   login-gated feeds (`bilibili/feed`, `twitter/...`) work because they run as *you*.
 - If no adapter fits, fall back to the normal `snapshot`/`eval` loop. Adapters come from the

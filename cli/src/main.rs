@@ -1141,7 +1141,37 @@ fn main() {
                 return;
             }
             // `site <name>/<cmd> [args]` → fall through to the daemon dispatch.
-            Some(spec) if spec.contains('/') => {}
+            Some(spec) if spec.contains('/') => {
+                // #125: an adapter arg whose name collides with a reserved global
+                // flag (e.g. `--state`) is swallowed by clean_args BEFORE the
+                // adapter sees it — the override silently vanishes and the adapter
+                // uses its default. Warn loudly and point at the escape hatches:
+                // pass it positionally, or after the `--` end-of-options marker.
+                // Only warn for a collision that appears BEFORE a `--` (after `--`
+                // the value is forwarded verbatim and reaches the adapter fine).
+                if let Ok(adapter) = site::load_adapter(spec) {
+                    let passthrough_at = args.iter().position(|a| a == "--");
+                    for name in &adapter.arg_order {
+                        if !flags::is_reserved_global_flag(name) {
+                            continue;
+                        }
+                        let dashed = format!("--{name}");
+                        let consumed_globally = args
+                            .iter()
+                            .enumerate()
+                            .any(|(i, a)| a == &dashed && passthrough_at.is_none_or(|p| i < p));
+                        if consumed_globally {
+                            eprintln!(
+                                "{} adapter arg \"{name}\" collides with the global --{name} flag, \
+                                 so it was consumed as a global flag and never reached the adapter. \
+                                 Pass it positionally, or after `--`: \
+                                 `chrome-use site {spec} -- --{name} <value>`",
+                                color::warning_indicator()
+                            );
+                        }
+                    }
+                }
+            }
             _ => {
                 eprintln!(
                     "{} usage: chrome-use site <name>/<cmd> [args] | site update | site list | \
@@ -2184,7 +2214,33 @@ fn main() {
     let output_opts = OutputOptions::from_flags(&flags);
 
     match send_command(cmd.clone(), &flags.session) {
-        Ok(resp) => {
+        Ok(mut resp) => {
+            // #122: a `site` adapter can return an application-level error (e.g.
+            // `{error:"HTTP 429", hint:...}`) while the *eval* itself succeeds, so
+            // the transport envelope stays `success:true` / exit 0 and automation
+            // can't tell a rate-limited/failed call from a real empty result.
+            // Promote such an adapter error into the top-level envelope so both
+            // `--json` (`success:false`, `error`) and the exit code (1) reflect it.
+            if cmd.get("action").and_then(|v| v.as_str()) == Some("site") {
+                if let Some(result) = resp.data.as_ref().and_then(|d| d.get("result")) {
+                    let adapter_err = result
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+                    let explicit_fail =
+                        result.get("success").and_then(|v| v.as_bool()) == Some(false);
+                    if adapter_err.is_some() || explicit_fail {
+                        resp.success = false;
+                        if resp.error.is_none() {
+                            resp.error =
+                                Some(adapter_err.unwrap_or_else(|| {
+                                    "site adapter reported failure".to_string()
+                                }));
+                        }
+                    }
+                }
+            }
             let success = resp.success;
             // Handle interactive confirmation
             if flags.confirm_interactive {

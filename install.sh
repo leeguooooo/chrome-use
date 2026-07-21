@@ -15,6 +15,13 @@ BIN_NAME="chrome-use"
 err() { printf '\033[31merror:\033[0m %s\n' "$1" >&2; exit 1; }
 info() { printf '\033[36m==>\033[0m %s\n' "$1" >&2; }
 
+# True only when /dev/tty can actually be opened for read+write. `[ -e /dev/tty ]`
+# is not enough: in an agent/CI shell the device node exists but opening it fails
+# with "Device not configured", which leaked raw `sh: line N: /dev/tty: Device not
+# configured` errors during an otherwise-successful install/upgrade (issue #123).
+# Probe the real open in a subshell so a failure is caught, not printed.
+have_tty() { (exec 3<>/dev/tty) 2>/dev/null; }
+
 command -v curl >/dev/null 2>&1 || err "curl is required"
 command -v tar >/dev/null 2>&1 || err "tar is required"
 
@@ -105,7 +112,7 @@ info "installed -> ${bindir}/${BIN_NAME}"
 # extension install and ask once whether chrome-use may auto-restart Chrome to
 # remove the "started debugging this browser" banner. Non-fatal: a declined or
 # failed setup never breaks the binary install. Skip with AGENT_BROWSER_NO_SETUP=1.
-if [ -e /dev/tty ] && [ -z "${AGENT_BROWSER_NO_SETUP:-}" ]; then
+if have_tty && [ -z "${AGENT_BROWSER_NO_SETUP:-}" ]; then
   info "setting up the Chrome extension + debugging-banner preference..."
   "$bindir/${BIN_NAME}" extension install < /dev/tty > /dev/tty 2>&1 || true
 else
@@ -119,7 +126,7 @@ fi
 # with AGENT_BROWSER_NO_SKILL=1. Branch on tty (NOT exit code) so a no-Node box
 # doesn't print the guidance twice.
 if [ -z "${AGENT_BROWSER_NO_SKILL:-}" ]; then
-  if [ -e /dev/tty ]; then
+  if have_tty; then
     "$bindir/${BIN_NAME}" skill install < /dev/tty > /dev/tty 2>&1 || true
   else
     "$bindir/${BIN_NAME}" skill install || true
