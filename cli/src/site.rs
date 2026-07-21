@@ -414,6 +414,13 @@ pub fn adapters_for_domain(host: &str) -> Vec<String> {
 /// Map CLI args to the adapter's `args` object. Positional args fill the adapter's
 /// declared `args` keys in order; `--key value` overrides by name. The adapter
 /// validates required args itself.
+///
+/// Caveat (issue #125): a `--key` whose name collides with a reserved global flag
+/// (e.g. `--state`, `--profile`, `--session`) is consumed by the global flag
+/// parser before it reaches here, so it never lands in `named`. Pass such args
+/// positionally, or after the `--` end-of-options marker
+/// (`site <name>/<cmd> -- --state closed`), which forwards everything verbatim.
+/// The CLI warns when it detects this collision.
 pub fn map_args(adapter: &Adapter, positional: &[String], named: &[(String, String)]) -> Value {
     let mut obj = serde_json::Map::new();
     // Positional args fill the adapter's declared args in DECLARATION order
