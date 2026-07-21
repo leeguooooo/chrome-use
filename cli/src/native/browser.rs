@@ -4018,8 +4018,12 @@ mod tests {
     #[test]
     fn command_timeout_matches_navigate_timeout() {
         // The #126 signature: the navigate CDP command ran to its full budget.
-        assert!(is_command_timeout_error("CDP command timed out: Page.navigate"));
-        assert!(is_command_timeout_error("CDP command timed out: Runtime.evaluate"));
+        assert!(is_command_timeout_error(
+            "CDP command timed out: Page.navigate"
+        ));
+        assert!(is_command_timeout_error(
+            "CDP command timed out: Runtime.evaluate"
+        ));
         // A genuine navigation failure is NOT a command timeout.
         assert!(!is_command_timeout_error(
             "Navigation failed: net::ERR_NAME_NOT_RESOLVED"
@@ -4039,7 +4043,10 @@ mod tests {
             "https://sg-git.pwtk.cc/o/r/compare/main...b"
         ));
         // Still on about:blank / blank / a foreign host → nav never took.
-        assert!(!navigation_committed("about:blank", "https://sg-git.pwtk.cc/x"));
+        assert!(!navigation_committed(
+            "about:blank",
+            "https://sg-git.pwtk.cc/x"
+        ));
         assert!(!navigation_committed("", "https://sg-git.pwtk.cc/x"));
         assert!(!navigation_committed(
             "https://example.com/",

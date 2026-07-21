@@ -1066,8 +1066,10 @@ fn main() {
         // Pure config/subcommands (`update` does its own sync; `sources`/`add`/
         // `remove` just edit the source list) skip the implicit auto-sync.
         let sub = clean.get(1).map(|s| s.as_str());
-        if !matches!(sub, Some("update") | Some("sources") | Some("add") | Some("remove"))
-            && site::needs_refresh()
+        if !matches!(
+            sub,
+            Some("update") | Some("sources") | Some("add") | Some("remove")
+        ) && site::needs_refresh()
         {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
             match rt.block_on(site::update()) {
