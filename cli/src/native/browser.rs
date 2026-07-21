@@ -367,6 +367,29 @@ pub(crate) fn is_stale_target_error(error: &str) -> bool {
         || lower.contains("no attached tab")
 }
 
+/// A CDP call that ran to its full time budget without the command promise ever
+/// resolving — surfaced as `CDP command timed out: <method>` (see cdp/client.rs).
+/// Distinct from a *lifecycle* wait timeout: here the `Page.navigate` command
+/// itself never returned (issue #126, heavy server-rendered pages).
+pub(crate) fn is_command_timeout_error(error: &str) -> bool {
+    error.to_lowercase().contains("command timed out")
+}
+
+/// Did a navigation actually commit despite a `Page.navigate` command timeout?
+/// True when the tab's live URL is a real page on the target's host — i.e. the
+/// nav happened and only the (heavy) load/commit acknowledgement stalled. A tab
+/// still on `about:blank`/blank, or on an unrelated host, means the nav never
+/// took, so the timeout is a genuine failure.
+pub(crate) fn navigation_committed(landed: &str, target: &str) -> bool {
+    if landed.is_empty() || landed == "about:blank" {
+        return false;
+    }
+    match (url::Url::parse(landed), url::Url::parse(target)) {
+        (Ok(l), Ok(t)) => l.host_str().is_some() && l.host_str() == t.host_str(),
+        _ => false,
+    }
+}
+
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     let lower = error.to_lowercase();
@@ -1466,6 +1489,10 @@ impl BrowserManager {
         }
         let mut session_id = self.active_session_id()?.to_string();
         let mut lifecycle_rx = self.client.subscribe();
+        // Carries a graceful-degradation note when navigation didn't complete
+        // cleanly but the page is usable anyway (issues #10, #126). Surfaced to the
+        // CLI in the response so the agent knows to expect a still-rendering page.
+        let mut nav_warning: Option<String> = None;
 
         let nav_result: PageNavigateResult = match self
             .client
@@ -1522,6 +1549,31 @@ impl BrowserManager {
                     )
                     .await?
             }
+            // The `Page.navigate` CDP command itself timed out (issue #126). On a
+            // very large server-rendered page (a huge diff/table/log) Chrome holds
+            // the navigate result open until the giant document commits+loads, so
+            // the command blows past its budget even though the navigation *did*
+            // start. Mirror the #10 fix one layer down: if the tab has actually
+            // landed on the target host, degrade to success-with-warning instead of
+            // a hard failure; only a nav that never committed still errors.
+            Err(e) if is_command_timeout_error(&e) => {
+                let landed = self.get_url().await.unwrap_or_default();
+                if navigation_committed(&landed, url) {
+                    nav_warning = Some(format!(
+                        "`Page.navigate` timed out (heavy page) but the tab reached {landed} — \
+                         continuing; the document may still be rendering. For read-only \
+                         extraction from large pages, `fetch(url)` inside `eval` (or `read`) is a \
+                         lighter path than `open`."
+                    ));
+                    PageNavigateResult {
+                        frame_id: String::new(),
+                        loader_id: None,
+                        error_text: None,
+                    }
+                } else {
+                    return Err(e);
+                }
+            }
             Err(e) => return Err(e),
         };
 
@@ -1543,7 +1595,6 @@ impl BrowserManager {
         // Only wait for lifecycle events if Chrome created a new loader (full navigation).
         // If loader_id is None, it was a same-document navigation (e.g., hash routing)
         // which does not fire Page.loadEventFired or Page.domContentEventFired.
-        let mut nav_warning: Option<String> = None;
         if nav_result.loader_id.is_some() && wait_until != WaitUntil::None {
             if let Err(e) = self
                 .wait_for_lifecycle(wait_until, &session_id, &mut lifecycle_rx)
@@ -3961,6 +4012,45 @@ mod tests {
         ));
         assert!(!is_stale_target_error(
             "CDP command timed out: Page.navigate"
+        ));
+    }
+
+    #[test]
+    fn command_timeout_matches_navigate_timeout() {
+        // The #126 signature: the navigate CDP command ran to its full budget.
+        assert!(is_command_timeout_error(
+            "CDP command timed out: Page.navigate"
+        ));
+        assert!(is_command_timeout_error(
+            "CDP command timed out: Runtime.evaluate"
+        ));
+        // A genuine navigation failure is NOT a command timeout.
+        assert!(!is_command_timeout_error(
+            "Navigation failed: net::ERR_NAME_NOT_RESOLVED"
+        ));
+    }
+
+    #[test]
+    fn navigation_committed_requires_same_host_real_page() {
+        // Landed on the target host → the nav committed; only the load stalled.
+        assert!(navigation_committed(
+            "https://sg-git.pwtk.cc/o/r/compare/main...b",
+            "https://sg-git.pwtk.cc/o/r/compare/main...b"
+        ));
+        // Host match is enough even if the path differs (server redirect).
+        assert!(navigation_committed(
+            "https://sg-git.pwtk.cc/o/r/pulls/5",
+            "https://sg-git.pwtk.cc/o/r/compare/main...b"
+        ));
+        // Still on about:blank / blank / a foreign host → nav never took.
+        assert!(!navigation_committed(
+            "about:blank",
+            "https://sg-git.pwtk.cc/x"
+        ));
+        assert!(!navigation_committed("", "https://sg-git.pwtk.cc/x"));
+        assert!(!navigation_committed(
+            "https://example.com/",
+            "https://sg-git.pwtk.cc/x"
         ));
     }
 
