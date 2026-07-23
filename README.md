@@ -132,6 +132,37 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 - **npm (legacy):** `npm install -g chrome-use` — still published, but GitHub Releases is the primary channel now.
 </details>
 
+### Install with Nix
+
+Run it once, no install:
+
+```bash
+nix run github:leeguooooo/chrome-use -- --help
+```
+
+Add to a flake and enable declaratively:
+
+```nix
+# home-manager — registers the user-level native-messaging host on activation
+{ inputs, ... }: {
+  imports = [ inputs.chrome-use.homeManagerModules.default ];
+  programs.chrome-use.enable = true;
+}
+```
+
+```nix
+# NixOS — system-wide install; optional Chrome-policy force-install of the extension
+{ inputs, ... }: {
+  imports = [ inputs.chrome-use.nixosModules.default ];
+  programs.chrome-use = {
+    enable = true;
+    forceInstallExtension = true;
+  };
+}
+```
+
+Dev shell: `nix develop` (rust toolchain + node 24 + pnpm + chromium + vhs).
+
 ### Install the AI agent skill
 
 **Claude Code — plugin marketplace (recommended):** installs the skill globally (all projects), auto-updates, and lists the rest of the [`*-use` family](https://github.com/leeguooooo/plugins):
