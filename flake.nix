@@ -19,6 +19,22 @@
           program = "${self'.packages.default}/bin/chrome-use";
         };
 
+        devShells.default = pkgs.mkShell {
+          inputsFrom = [ self'.packages.default ];
+          packages = with pkgs; [
+            cargo
+            rustc
+            clippy
+            rustfmt
+            nodejs_24
+            pnpm
+            chromium
+            vhs
+            jq
+            ripgrep
+          ];
+        };
+
         formatter = pkgs.nixpkgs-fmt;
       };
     };
