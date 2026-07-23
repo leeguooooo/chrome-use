@@ -185,6 +185,8 @@ fn set_json_path(root: &mut Value, path: &str, val: Value) {
     }
 }
 
+/// Captured HTTP request or WebSocket connection metadata exposed by
+/// `network requests`. WebSocket frame payloads are intentionally excluded.
 #[derive(Clone, serde::Serialize)]
 pub struct TrackedRequest {
     pub url: String,
@@ -1032,10 +1034,7 @@ impl DaemonState {
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("Other")
                                         .to_string();
-                                    let timestamp = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map(|d| d.as_millis() as u64)
-                                        .unwrap_or(0);
+                                    let timestamp = unix_timestamp_millis() as u64;
                                     self.tracked_requests.push(TrackedRequest {
                                         url,
                                         method,
@@ -1053,6 +1052,33 @@ impl DaemonState {
                                     });
                                 }
                             }
+                        }
+                        "Network.webSocketCreated" if self.request_tracking => {
+                            let request_id = event
+                                .params
+                                .get("requestId")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let url = event
+                                .params
+                                .get("url")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let timestamp = unix_timestamp_millis() as u64;
+                            self.tracked_requests.push(TrackedRequest {
+                                url,
+                                method: "GET".to_string(),
+                                headers: json!({}),
+                                timestamp,
+                                resource_type: "WebSocket".to_string(),
+                                request_id,
+                                post_data: None,
+                                status: None,
+                                response_headers: None,
+                                mime_type: None,
+                            });
                         }
                         "Network.responseReceived"
                             if self.har_recording || self.request_tracking =>
@@ -11022,10 +11048,16 @@ async fn enable_request_tracking(state: &mut DaemonState) {
     }
     state.request_tracking = true;
     if let Some(ref mgr) = state.browser {
+        let mut session_ids: Vec<String> = state.iframe_sessions.values().cloned().collect();
         if let Ok(session_id) = mgr.active_session_id() {
+            session_ids.push(session_id.to_string());
+        }
+        session_ids.sort();
+        session_ids.dedup();
+        for session_id in session_ids {
             let _ = mgr
                 .client
-                .send_command_no_params("Network.enable", Some(session_id))
+                .send_command_no_params("Network.enable", Some(&session_id))
                 .await;
         }
     }

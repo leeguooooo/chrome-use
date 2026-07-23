@@ -218,6 +218,7 @@ chrome-use network route <url> --set-json data.user.vip=true --set-json items.0.
 chrome-use network unroute [url]            # Remove routes
 chrome-use network requests                 # View tracked requests
 chrome-use network requests --filter api    # Filter requests
+chrome-use network requests --type websocket # View WebSocket connection metadata (not frame payloads)
 ```
 
 ## Tabs and Windows
