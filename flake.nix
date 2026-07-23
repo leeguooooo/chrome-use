@@ -35,6 +35,8 @@
           ];
         };
 
+        checks.build = self'.packages.default;
+
         formatter = pkgs.nixpkgs-fmt;
       };
     };
