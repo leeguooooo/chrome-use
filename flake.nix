@@ -39,5 +39,10 @@
 
         formatter = pkgs.nixpkgs-fmt;
       };
+
+      flake = {
+        nixosModules.default = import ./nix/module.nix { flake = inputs.self; mode = "nixos"; };
+        homeManagerModules.default = import ./nix/module.nix { flake = inputs.self; mode = "home"; };
+      };
     };
 }
