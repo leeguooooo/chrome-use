@@ -27,7 +27,7 @@ let
     forceInstallExtension = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Force-install the chrome-use extension via Chrome managed policy (system-level; NixOS only).";
+      description = "Force-install the chrome-use extension via Chrome managed policy (system-level; NixOS only). Native messaging is registered per-user — run `chrome-use extension connect` once, or use the home-manager module.";
     };
     extensionId = lib.mkOption {
       type = lib.types.str;

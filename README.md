@@ -161,6 +161,8 @@ Add to a flake and enable declaratively:
 }
 ```
 
+> On NixOS the native-messaging host is registered per-user — after switching, run `chrome-use extension connect` once (or add the home-manager module above) to connect the extension.
+
 Dev shell: `nix develop` (rust toolchain + node 24 + pnpm + chromium + vhs).
 
 ### Install the AI agent skill

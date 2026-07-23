@@ -23,7 +23,7 @@ let
 in
 rustPlatform.buildRustPackage {
   pname = "chrome-use";
-  version = "1.5.77";
+  version = (lib.importTOML ../cli/Cargo.toml).package.version;
   inherit src;
 
   cargoLock.lockFile = ../cli/Cargo.lock;
