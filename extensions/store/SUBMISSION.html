@@ -99,6 +99,7 @@ automate pages the user is working with, entirely on the user's machine and at t
   <tr><td class="field">debugger</td><td>Attaches the Chrome DevTools Protocol to the user's own active tab so the paired local chrome-use CLI can automate it (navigate, click, read DOM) only while the user is running a command. Commands arrive solely from the local CLI via native messaging; there is no remote endpoint.</td></tr>
   <tr><td class="field">tabs</td><td>Enumerate and target the correct open tab to attach automation to.</td></tr>
   <tr><td class="field">tabGroups</td><td>Organizes the tabs the local chrome-use CLI drives into a labeled, colored Chrome tab group per automation session, so the user can see at a glance which tabs are under automation and they stay visually separated from the user's own tabs.</td></tr>
+  <tr><td class="field">downloads</td><td>Starts downloads explicitly requested by the local chrome-use CLI, reports completion and the local filename, and lets the user list or clear Chrome download history. Clearing history never deletes files. No download data is sent to a remote server.</td></tr>
   <tr><td class="field">nativeMessaging</td><td>The sole communication channel: a local native-messaging connection to the chrome-use CLI installed on the same machine. No network is used.</td></tr>
   <tr><td class="field">storage</td><td>Persist small local pairing/configuration state for the extension.</td></tr>
   <tr><td class="field">alarms</td><td>Keep the MV3 service worker alive during longer automation sessions.</td></tr>

@@ -183,6 +183,29 @@ chrome-use storage local set k v       # Set value
 chrome-use storage local clear         # Clear all
 ```
 
+## Downloads
+
+```bash
+chrome-use download <selector|@ref> <path> # Download from an element
+chrome-use download-url <url> [path]       # Start a URL download (ab-connect 0.5.13+)
+chrome-use downloads [--limit N] [--json]  # List recent downloads; --json is machine-readable
+chrome-use downloads --clear               # Clear download history, not files
+```
+
+## Local HTTP API
+
+```bash
+PORT=$(chrome-use stream status --json | jq -r '.data.port')
+ORIGIN="http://127.0.0.1:$PORT"
+curl -fsS "$ORIGIN/api/v1/status"
+curl -fsS -X POST "$ORIGIN/api/v1/command" \
+  -H "Origin: $ORIGIN" -H 'Content-Type: application/json' \
+  -d '{"id":"curl-1","action":"snapshot","interactive":true}'
+```
+
+Failure envelopes expose `success`, `error`, `code`, and `retryable` through
+CLI JSON, MCP structured content, and HTTP.
+
 ## Account identity (whoami / --as) — never act as the wrong account
 
 Needs the [cookie-use](https://github.com/leeguooooo/cookie-use) vault (the

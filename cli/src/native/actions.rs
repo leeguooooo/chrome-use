@@ -1556,6 +1556,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "useragent" | "user_agent" => handle_user_agent(cmd, state).await,
             "set_media" => handle_set_media(cmd, state).await,
             "download" => handle_download(cmd, state).await,
+            "download_url" => handle_download_url(cmd, state).await,
+            "downloads" => handle_downloads(cmd, state).await,
             "diff_snapshot" => handle_diff_snapshot(cmd, state).await,
             "diff_url" => handle_diff_url(cmd, state).await,
             "credentials_set" => handle_credentials_set(cmd).await,
@@ -6763,40 +6765,46 @@ async fn handle_download(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         .and_then(|v| v.as_str())
         .ok_or("Missing 'path' parameter")?;
 
-    // Resolve to absolute path and canonicalize to prevent path traversal
-    let raw_dest = if std::path::Path::new(path_str).is_absolute() {
-        PathBuf::from(path_str)
-    } else {
-        std::env::current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?
-            .join(path_str)
-    };
-
-    // Extract directory and desired filename
-    let download_dir = raw_dest
-        .parent()
-        .ok_or("Invalid download path: no parent directory")?
-        .to_path_buf();
-
-    // Create the directory if it doesn't exist
-    std::fs::create_dir_all(&download_dir)
-        .map_err(|e| format!("Failed to create download directory: {}", e))?;
-
-    // Canonicalize after mkdir so the path actually exists for resolution
-    let download_dir = download_dir
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve download directory: {}", e))?;
-    let dest = download_dir.join(
-        raw_dest
-            .file_name()
-            .ok_or("Invalid download path: no filename")?,
-    );
+    let (download_dir, dest) = prepare_download_destination(path_str)?;
     let download_dir_str = download_dir
         .to_str()
         .ok_or("Download directory path is not valid UTF-8")?;
 
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
+
+    // An anchor URL is safer and more reliable through chrome.downloads than a
+    // synthetic click: cross-origin `download` attributes are ignored by Chrome
+    // and navigate the current tab instead (issue #130). Resolve the href first,
+    // including refs whose AX backend node went stale after a dynamic insertion.
+    if let Some(url) = resolve_download_href(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        &state.iframe_sessions,
+    )
+    .await
+    {
+        if relay_supports_downloads(mgr).await {
+            let filename = dest.file_name().and_then(|name| name.to_str());
+            let result = extension_download_url(mgr, &url, filename, 30_000).await?;
+            let source = result
+                .get("filename")
+                .and_then(Value::as_str)
+                .ok_or("Extension download completed without a filename")?;
+            move_downloaded_file(&PathBuf::from(source), &dest)?;
+            return Ok(json!({ "path": dest.to_string_lossy(), "url": url }));
+        }
+        if mgr.on_relay() {
+            return Err(
+                "Direct anchor download requires ab-connect 0.5.13 or newer. \
+                 Refusing to click because a cross-origin media link may navigate \
+                 the current tab instead of downloading."
+                    .to_string(),
+            );
+        }
+    }
 
     // Set download behavior to save to the parent directory
     mgr.set_download_behavior(download_dir_str).await?;
@@ -6907,6 +6915,245 @@ async fn handle_download(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     let dest_str = dest.to_string_lossy().to_string();
     Ok(json!({ "path": dest_str }))
+}
+
+fn prepare_download_destination(path_str: &str) -> Result<(PathBuf, PathBuf), String> {
+    let raw_dest = if std::path::Path::new(path_str).is_absolute() {
+        PathBuf::from(path_str)
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?
+            .join(path_str)
+    };
+    let download_dir = raw_dest
+        .parent()
+        .ok_or("Invalid download path: no parent directory")?
+        .to_path_buf();
+    std::fs::create_dir_all(&download_dir)
+        .map_err(|e| format!("Failed to create download directory: {}", e))?;
+    let download_dir = download_dir
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve download directory: {}", e))?;
+    let filename = raw_dest
+        .file_name()
+        .ok_or("Invalid download path: no filename")?;
+    let dest = download_dir.join(filename);
+    Ok((download_dir, dest))
+}
+
+fn move_downloaded_file(source: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    if source == dest {
+        return Ok(());
+    }
+    if !source.exists() {
+        return Err(format!(
+            "Downloaded file not found at '{}'",
+            source.to_string_lossy()
+        ));
+    }
+    if dest.exists() {
+        std::fs::remove_file(dest).map_err(|e| {
+            format!(
+                "Failed to replace existing download '{}': {}",
+                dest.to_string_lossy(),
+                e
+            )
+        })?;
+    }
+    if let Err(rename_error) = std::fs::rename(source, dest) {
+        std::fs::copy(source, dest).map_err(|copy_error| {
+            format!(
+                "Failed to move downloaded file to '{}': {}; copy fallback failed: {}",
+                dest.to_string_lossy(),
+                rename_error,
+                copy_error
+            )
+        })?;
+        std::fs::remove_file(source).map_err(|e| {
+            format!(
+                "Downloaded file was copied to '{}' but the temporary file could not be removed: {}",
+                dest.to_string_lossy(),
+                e
+            )
+        })?;
+    }
+    Ok(())
+}
+
+async fn relay_supports_downloads(mgr: &BrowserManager) -> bool {
+    mgr.client
+        .send_command_no_params("ABRelay.getCapabilities", None)
+        .await
+        .ok()
+        .and_then(|value| value.get("capabilities").and_then(Value::as_array).cloned())
+        .is_some_and(|capabilities| {
+            capabilities
+                .iter()
+                .any(|capability| capability.as_str() == Some("downloadsApi"))
+        })
+}
+
+async fn extension_download_url(
+    mgr: &BrowserManager,
+    url: &str,
+    filename: Option<&str>,
+    timeout_ms: u64,
+) -> Result<Value, String> {
+    let mut params = json!({ "url": url, "timeoutMs": timeout_ms });
+    if let Some(filename) = filename {
+        params["filename"] = json!(filename);
+    }
+    mgr.client
+        .send_command("ABExt.downloadUrl", Some(params), None)
+        .await
+}
+
+async fn resolve_download_href(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Option<String> {
+    let resolved = super::element::resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await;
+
+    if let Ok((object_id, effective_session_id)) = resolved {
+        if let Ok(result) = client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": object_id,
+                    "functionDeclaration": "function() { const a = this.closest ? this.closest('a[href]') : null; return (a || this).href || null; }",
+                    "returnByValue": true
+                })),
+                Some(&effective_session_id),
+            )
+            .await
+        {
+            if let Some(url) = result
+                .get("result")
+                .and_then(|value| value.get("value"))
+                .and_then(Value::as_str)
+                .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
+            {
+                return Some(url.to_string());
+            }
+        }
+    }
+
+    // Dynamic links can exist in the DOM while their cached AX/backend node is
+    // already stale. Re-resolve refs by accessible name, or selectors directly.
+    let expression = if let Some(ref_id) = super::element::parse_ref(selector_or_ref) {
+        let entry = ref_map.get(&ref_id)?;
+        if !entry.role.eq_ignore_ascii_case("link") {
+            return None;
+        }
+        format!(
+            r#"(() => {{
+                const wanted = {};
+                const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+                const link = Array.from(document.querySelectorAll('a[href]')).find(a =>
+                    clean(a.innerText || a.textContent || a.getAttribute('aria-label')) === wanted);
+                return link ? link.href : null;
+            }})()"#,
+            serde_json::to_string(&entry.name).ok()?
+        )
+    } else {
+        format!(
+            r#"(() => {{
+                try {{
+                    const element = document.querySelector({});
+                    const link = element?.closest?.('a[href]') || element;
+                    return link?.href || null;
+                }} catch {{
+                    return null;
+                }}
+            }})()"#,
+            serde_json::to_string(selector_or_ref).ok()?
+        )
+    };
+    let result = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({
+                "expression": expression,
+                "returnByValue": true,
+                "awaitPromise": false
+            })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    result
+        .get("result")
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
+        .map(ToString::to_string)
+}
+
+async fn handle_download_url(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+    let url = cmd
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or("Missing 'url' parameter")?;
+    let parsed = url::Url::parse(url).map_err(|e| format!("Invalid download URL: {}", e))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Invalid download URL: expected http:// or https://".to_string());
+    }
+
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    if !relay_supports_downloads(mgr).await {
+        return Err(
+            "URL-initiated downloads require ab-connect 0.5.13 or newer with the downloads permission"
+                .to_string(),
+        );
+    }
+
+    let timeout_ms = state.timeout_ms(cmd);
+    if let Some(path_str) = cmd.get("path").and_then(Value::as_str) {
+        let (_, dest) = prepare_download_destination(path_str)?;
+        let filename = dest.file_name().and_then(|name| name.to_str());
+        let result = extension_download_url(mgr, parsed.as_str(), filename, timeout_ms).await?;
+        let source = result
+            .get("filename")
+            .and_then(Value::as_str)
+            .ok_or("Extension download completed without a filename")?;
+        move_downloaded_file(&PathBuf::from(source), &dest)?;
+        Ok(json!({
+            "path": dest.to_string_lossy(),
+            "url": result.get("url").cloned().unwrap_or_else(|| json!(parsed.as_str()))
+        }))
+    } else {
+        extension_download_url(mgr, parsed.as_str(), None, timeout_ms).await
+    }
+}
+
+async fn handle_downloads(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    if !relay_supports_downloads(mgr).await {
+        return Err(
+            "Download listing requires ab-connect 0.5.13 or newer with the downloads permission"
+                .to_string(),
+        );
+    }
+    if cmd.get("clear").and_then(Value::as_bool).unwrap_or(false) {
+        return mgr
+            .client
+            .send_command_no_params("ABExt.clearDownloads", None)
+            .await;
+    }
+    let limit = cmd.get("limit").and_then(Value::as_u64).unwrap_or(20);
+    mgr.client
+        .send_command("ABExt.listDownloads", Some(json!({ "limit": limit })), None)
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -11941,11 +12188,13 @@ fn success_response(id: &str, data: Value) -> Value {
 }
 
 fn error_response(id: &str, error: &str) -> Value {
-    json!({
+    let mut response = json!({
         "id": id,
         "success": false,
         "error": error,
-    })
+    });
+    crate::error_envelope::enrich_error_value(&mut response);
+    response
 }
 
 #[cfg(test)]
@@ -11992,6 +12241,20 @@ mod tests {
         assert_eq!(v["items"][0]["price"], 9.99);
         assert_eq!(v["data"]["new"]["deep"], "x");
         assert_eq!(v["items"].as_array().unwrap().len(), 1); // unchanged
+    }
+
+    #[test]
+    fn downloaded_file_move_replaces_destination_and_removes_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let destination = dir.path().join("destination.bin");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&destination, b"old").unwrap();
+
+        move_downloaded_file(&source, &destination).unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(fs::read(destination).unwrap(), b"new");
     }
 
     #[test]
@@ -12406,6 +12669,8 @@ mod tests {
         assert_eq!(resp["id"], "cmd-2");
         assert_eq!(resp["success"], false);
         assert_eq!(resp["error"], "Something went wrong");
+        assert_eq!(resp["code"], "command_failed");
+        assert_eq!(resp["retryable"], false);
     }
 
     #[tokio::test]

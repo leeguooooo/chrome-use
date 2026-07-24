@@ -299,6 +299,24 @@
     <priority>0.7</priority>
   </url>
   <url>
+    <loc>https://chrome-use.leeguoo.com/http-api.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/http-api.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/http-api.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/http-api.html" />
+    <lastmod>2026-07-24</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/http-api.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/http-api.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/http-api.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/http-api.html" />
+    <lastmod>2026-07-24</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://chrome-use.leeguoo.com/en/react.html</loc>
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/react.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/react.html" />

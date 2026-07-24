@@ -108,6 +108,7 @@
       { slug: "script",  ico: "⚡", zh: "单次成型脚本", en: "Single-pass Scripting", kw: "script batch op-list json js boa foreach waituntil assert dry-run cu 单次 脚本 一次往返 编排" },
       { slug: "canvas",  ico: "🎨", zh: "Canvas / WebGL / 游戏", en: "Canvas / WebGL / Games", kw: "canvas webgl game figma capture 游戏" },
       { slug: "network", ico: "🛰️", zh: "网络拦截与改写", en: "Network Interception", kw: "network mock rewrite fetch cdp 拦截 改写" },
+      { slug: "http-api", ico: "API", zh: "本地 HTTP API", en: "Local HTTP API", kw: "http rest api curl integration localhost 接口 集成" },
       { slug: "react",   ico: "⚛️", zh: "React / Web Vitals", en: "React / Web Vitals", kw: "react vitals performance 性能" },
       { slug: "media",   ico: "🎬", zh: "截图·录像·视口", en: "Screenshots, Video & Viewport", kw: "screenshot video viewport record 截图 录像 视口" },
     ]},

@@ -32,6 +32,10 @@ pub struct Response {
     pub data: Option<Value>,
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
 }
 

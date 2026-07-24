@@ -157,7 +157,10 @@
 <span class="du-prompt">$</span> chrome-use scroll down 500     <span class="du-cmt"># scroll the page (default down 300px)</span>
 <span class="du-prompt">$</span> chrome-use scrollintoview @e1  <span class="du-cmt"># scroll element into the viewport (alias: scrollinto)</span>
 <span class="du-prompt">$</span> chrome-use drag @e1 @e2        <span class="du-cmt"># drag and drop</span>
-<span class="du-prompt">$</span> chrome-use upload @e1 file.pdf <span class="du-cmt"># upload a file</span></code></pre>
+<span class="du-prompt">$</span> chrome-use upload @e1 file.pdf <span class="du-cmt"># upload a file</span>
+<span class="du-prompt">$</span> chrome-use download @e2 ./file.pdf <span class="du-cmt"># download from a link or control</span>
+<span class="du-prompt">$</span> chrome-use download-url https://example.com/file.pdf ./file.pdf
+<span class="du-prompt">$</span> chrome-use downloads <span class="du-flag">--limit</span> 10 <span class="du-flag">--json</span> <span class="du-cmt"># machine-readable Chrome downloads</span></code></pre>
       </div>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ Click "succeeds but nothing happens"</div>

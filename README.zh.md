@@ -241,6 +241,44 @@ suite: chatgpt smoke  (session cu-test)
 
 任一用例失败时退出码非零（可直接丢进 CI），失败用例会存截图。断言：`url` · `visible` · `hidden` · `text` · `count` · `eval`。步骤：`open` · `click` · `fill` · `type` · `press` · `wait` · `scroll` · `eval`。完整指南：`chrome-use skills get test`。发现回归？加个用例 —— 用得越多，套件越值钱。
 
+## 下载
+
+ab-connect 0.5.13 及以上版本通过 Chrome 原生 downloads API 发起 URL
+下载并读取下载历史。下载使用当前已登录 Chrome profile 的 cookie，且不会把
+当前标签页导航到媒体 URL。
+
+```bash
+chrome-use download @e2 ./video.mp4
+chrome-use download-url "https://example.com/report.pdf" ./report.pdf
+chrome-use downloads --limit 10 --json
+chrome-use downloads --clear
+```
+
+对 HTTP(S) 链接，`download` 会先解析元素的 `href`，动态创建且能在
+`snapshot -i` 中看到的链接也适用。`downloads --clear` 只清除 Chrome
+下载历史，不会删除文件。
+
+## 本地 HTTP API
+
+每个 session 的本地 stream 端口同时提供版本化 HTTP API。先用
+`stream status --json` 获取端口，再提交 CLI/MCP 使用的同一份 daemon
+命令 JSON：
+
+```bash
+PORT=$(chrome-use --session demo stream status --json | jq -r '.data.port')
+ORIGIN="http://127.0.0.1:$PORT"
+curl -fsS "$ORIGIN/api/v1/status"
+curl -fsS -X POST "$ORIGIN/api/v1/command" \
+  -H "Origin: $ORIGIN" \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"curl-1","action":"snapshot","interactive":true}'
+```
+
+版本化只读请求必须使用 loopback `Host`，且会拒绝不匹配的浏览器来源。
+命令请求还必须带有匹配的 `Origin` 或 `Referer`。CLI、MCP、HTTP 的失败
+响应统一包含 `success`、`error`、稳定的 `code` 和 `retryable` 字段。
+详见 [HTTP API 文档](docs/http-api.html)。
+
 ## 反检测
 
 连接你真实 Chrome 时，我们**零** JS 注入 —— 浏览器指纹完全是真的。指导原则是 **native CDP/Chrome 覆盖优先于 JS 谎言**：被重定义的 getter 本身可被检测，原生覆盖则不会。

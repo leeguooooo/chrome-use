@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>本地 HTTP API · chrome-use 文档</title>
+  <meta name="description" content="通过版本化 localhost HTTP API 使用 curl 或自定义工具驱动 chrome-use session。" />
+  <meta name="theme-color" content="#fcfbf4" />
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+<body data-page="http-api" data-lang="zh">
+  <div id="du-topbar"></div>
+  <div class="du-shell">
+    <nav id="du-sidebar"></nav>
+    <main class="du-main">
+      <p class="du-eyebrow">集成</p>
+      <div class="du-title-row">
+        <h1>本地 HTTP API</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+      <p class="du-lede">
+        每个 session 的 stream 端口都在 <code>127.0.0.1</code> 上提供版本化
+        HTTP 接口。接口接受 CLI 和 MCP 使用的同一份命令对象，自定义工具无需为
+        每个操作启动一个新进程。
+      </p>
+
+      <h2>获取端口</h2>
+      <p>stream server 随 daemon 启动。先查询目标 session 的端口：</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>PORT=$(chrome-use --session demo stream status --json | jq -r '.data.port')
+ORIGIN="http://127.0.0.1:$PORT"</code></pre>
+      </div>
+
+      <h2>只读接口</h2>
+      <table>
+        <thead><tr><th>接口</th><th>返回内容</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET /api/v1/status</code></td><td>daemon engine 与可用状态。</td></tr>
+          <tr><td><code>GET /api/v1/tabs</code></td><td>最近观察到的 session 标签页。</td></tr>
+          <tr><td><code>GET /api/v1/sessions</code></td><td>本机可发现的 sessions。</td></tr>
+        </tbody>
+      </table>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>curl -fsS "$ORIGIN/api/v1/status"
+curl -fsS "$ORIGIN/api/v1/tabs"</code></pre>
+      </div>
+
+      <h2>执行命令</h2>
+      <p>
+        把 daemon 命令对象 POST 到 <code>/api/v1/command</code>，响应沿用
+        chrome-use 标准 envelope。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>curl -fsS -X POST "$ORIGIN/api/v1/command" \
+  -H "Origin: $ORIGIN" \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"curl-1","action":"snapshot","interactive":true}'</code></pre>
+      </div>
+      <p>
+        命令字段与对应 CLI parser 产生的 JSON 一致。编写集成时，可先查看
+        <code>chrome-use &lt;command&gt; --help</code> 和命令参考。
+      </p>
+
+      <h2>安全边界</h2>
+      <p>
+        server 只监听 loopback。版本化只读请求必须使用 loopback
+        <code>Host</code>，且会拒绝来源不匹配的浏览器请求。会执行操作的命令
+        请求还必须携带 authority 与 Host 一致的 <code>Origin</code> 或
+        <code>Referer</code>。不满足条件的请求会收到 HTTP 403，且不会被
+        转发给 daemon。
+      </p>
+
+      <h2>错误契约</h2>
+      <p>CLI JSON、MCP structured content 和 HTTP 共享以下失败字段：</p>
+      <table>
+        <thead><tr><th>字段</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><code>success</code></td><td>命令失败时为 <code>false</code>。</td></tr>
+          <tr><td><code>error</code></td><td>面向人的错误说明。</td></tr>
+          <tr><td><code>code</code></td><td>稳定的机器分类，例如 <code>timeout</code> 或 <code>element_not_found</code>。</td></tr>
+          <tr><td><code>retryable</code></td><td>短暂恢复后重试是否可能成功。</td></tr>
+        </tbody>
+      </table>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">json</span></div>
+<pre><code>{"success":false,"error":"Timeout waiting for download","code":"timeout","retryable":true}</code></pre>
+      </div>
+    </main>
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -144,6 +144,24 @@ fn is_same_origin_command_request(request: &str) -> bool {
     }
 }
 
+/// Allow curl-style reads without browser metadata, while rejecting browser
+/// requests whose Origin/Referer or Host could cross the loopback boundary.
+fn is_safe_versioned_read_request(request: &str) -> bool {
+    let Some(host) = request_header_value(request, "host").map(normalize_host_authority) else {
+        return false;
+    };
+    if !is_loopback_authority(&host) {
+        return false;
+    }
+    if request_header_value(request, "origin").is_some() {
+        return header_authority_matches_host(request, "origin");
+    }
+    if request_header_value(request, "referer").is_some() {
+        return header_authority_matches_host(request, "referer");
+    }
+    true
+}
+
 fn command_cors_headers(request: &str) -> String {
     match request_header_value(request, "origin") {
         Some(origin) if is_same_origin_command_request(request) => format!(
@@ -158,10 +176,7 @@ async fn write_json_error_response_no_cors(
     status: &str,
     error: &str,
 ) {
-    let body = format!(
-        r#"{{"success":false,"error":{}}}"#,
-        serde_json::to_string(error).unwrap_or_else(|_| format!("\"{}\"", error))
-    );
+    let body = crate::error_envelope::error_value(error).to_string();
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
@@ -185,10 +200,13 @@ pub(super) async fn handle_http_request(
     let first_line = request.lines().next().unwrap_or("");
     let method = first_line.split_whitespace().next().unwrap_or("GET");
     let path = first_line.split_whitespace().nth(1).unwrap_or("/");
+    let command_path = path == "/api/command" || path == "/api/v1/command";
+    let versioned_read_path =
+        matches!(path, "/api/v1/status" | "/api/v1/tabs" | "/api/v1/sessions");
     let origin = parse_origin(peeked);
 
     if method == "OPTIONS" {
-        if path == "/api/command" {
+        if command_path {
             if !is_same_origin_command_request(&request) {
                 write_json_error_response_no_cors(
                     &mut stream,
@@ -207,6 +225,16 @@ pub(super) async fn handle_http_request(
             return;
         }
 
+        if versioned_read_path && !is_safe_versioned_read_request(&request) {
+            write_json_error_response_no_cors(
+                &mut stream,
+                "403 Forbidden",
+                "Origin or Referer does not match loopback Host header.",
+            )
+            .await;
+            return;
+        }
+
         let response = format!(
             "HTTP/1.1 204 No Content\r\n{CORS_HEADERS}Access-Control-Max-Age: 86400\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
@@ -215,7 +243,7 @@ pub(super) async fn handle_http_request(
     }
 
     if method == "POST" {
-        if path == "/api/command" && !is_same_origin_command_request(&request) {
+        if command_path && !is_same_origin_command_request(&request) {
             write_json_error_response_no_cors(
                 &mut stream,
                 "403 Forbidden",
@@ -226,11 +254,11 @@ pub(super) async fn handle_http_request(
         }
 
         let full_body = read_full_body(&mut stream, peeked).await;
-        if full_body.is_none()
-            && (path == "/api/chat" || path == "/api/sessions" || path == "/api/command")
-        {
-            let body = r#"{"error":"Request body too large"}"#;
-            let cors_headers = if path == "/api/command" {
+        if full_body.is_none() && (path == "/api/chat" || path == "/api/sessions" || command_path) {
+            let mut payload = crate::error_envelope::error_value("Request body too large");
+            payload["code"] = serde_json::json!("payload_too_large");
+            let body = payload.to_string();
+            let cors_headers = if command_path {
                 command_cors_headers(&request)
             } else {
                 CORS_HEADERS.to_string()
@@ -251,10 +279,7 @@ pub(super) async fn handle_http_request(
                 Ok(msg) => ("200 OK", msg),
                 Err(e) => (
                     "400 Bad Request",
-                    format!(
-                        r#"{{"success":false,"error":{}}}"#,
-                        serde_json::to_string(&e).unwrap_or_else(|_| format!("\"{}\"", e))
-                    ),
+                    crate::error_envelope::error_value(&e).to_string(),
                 ),
             };
             let response = format!(
@@ -266,16 +291,26 @@ pub(super) async fn handle_http_request(
             return;
         }
 
-        if path == "/api/command" {
+        if command_path {
             let result = relay_command_to_daemon(session_name, body_str).await;
             let (status, resp_body) = match result {
-                Ok(resp) => ("200 OK", resp),
+                Ok(resp) => match serde_json::from_str::<serde_json::Value>(&resp) {
+                    Ok(mut value) => {
+                        crate::error_envelope::enrich_error_value(&mut value);
+                        ("200 OK", value.to_string())
+                    }
+                    Err(e) => (
+                        "502 Bad Gateway",
+                        crate::error_envelope::error_value(&format!(
+                            "Daemon connection returned malformed JSON: {}",
+                            e
+                        ))
+                        .to_string(),
+                    ),
+                },
                 Err(e) => (
                     "502 Bad Gateway",
-                    format!(
-                        r#"{{"success":false,"error":{}}}"#,
-                        serde_json::to_string(&e).unwrap_or_else(|_| format!("\"{}\"", e))
-                    ),
+                    crate::error_envelope::error_value(&e).to_string(),
                 ),
             };
             let cors_headers = command_cors_headers(&request);
@@ -299,37 +334,48 @@ pub(super) async fn handle_http_request(
         return;
     }
 
-    let (status, content_type, body): (&str, &str, Vec<u8>) = if path == "/api/sessions" {
-        (
-            "200 OK",
-            "application/json; charset=utf-8",
-            discover_sessions().into_bytes(),
+    if method == "GET" && versioned_read_path && !is_safe_versioned_read_request(&request) {
+        write_json_error_response_no_cors(
+            &mut stream,
+            "403 Forbidden",
+            "Origin or Referer does not match loopback Host header.",
         )
-    } else if path == "/api/tabs" {
-        let tabs = last_tabs.read().await;
-        (
-            "200 OK",
-            "application/json; charset=utf-8",
-            serde_json::to_string(&*tabs)
-                .unwrap_or_else(|_| "[]".to_string())
-                .into_bytes(),
-        )
-    } else if path == "/api/status" {
-        let engine = last_engine.read().await;
-        (
-            "200 OK",
-            "application/json; charset=utf-8",
-            format!(r#"{{"engine":"{}"}}"#, *engine).into_bytes(),
-        )
-    } else if path == "/api/chat/status" {
-        (
-            "200 OK",
-            "application/json; charset=utf-8",
-            chat_status_json().into_bytes(),
-        )
-    } else {
-        serve_embedded_file(path)
-    };
+        .await;
+        return;
+    }
+
+    let (status, content_type, body): (&str, &str, Vec<u8>) =
+        if path == "/api/sessions" || path == "/api/v1/sessions" {
+            (
+                "200 OK",
+                "application/json; charset=utf-8",
+                discover_sessions().into_bytes(),
+            )
+        } else if path == "/api/tabs" || path == "/api/v1/tabs" {
+            let tabs = last_tabs.read().await;
+            (
+                "200 OK",
+                "application/json; charset=utf-8",
+                serde_json::to_string(&*tabs)
+                    .unwrap_or_else(|_| "[]".to_string())
+                    .into_bytes(),
+            )
+        } else if path == "/api/status" || path == "/api/v1/status" {
+            let engine = last_engine.read().await;
+            (
+                "200 OK",
+                "application/json; charset=utf-8",
+                format!(r#"{{"engine":"{}"}}"#, *engine).into_bytes(),
+            )
+        } else if path == "/api/chat/status" {
+            (
+                "200 OK",
+                "application/json; charset=utf-8",
+                chat_status_json().into_bytes(),
+            )
+        } else {
+            serve_embedded_file(path)
+        };
 
     let response = format!(
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n{CORS_HEADERS}\r\n",
@@ -513,6 +559,7 @@ mod tests {
     async fn spawn_fake_daemon(
         socket_dir: &std::path::Path,
         session_name: &str,
+        response: &'static str,
     ) -> oneshot::Receiver<String> {
         let socket_path = socket_dir.join(format!("{session_name}.sock"));
         let _ = std::fs::remove_file(&socket_path);
@@ -526,10 +573,7 @@ mod tests {
             reader.read_line(&mut line).await.unwrap();
 
             let mut stream = reader.into_inner();
-            stream
-                .write_all(br#"{"success":true,"data":{"ok":true}}"#)
-                .await
-                .unwrap();
+            stream.write_all(response.as_bytes()).await.unwrap();
             stream.write_all(b"\n").await.unwrap();
             let _ = tx.send(line);
         });
@@ -556,7 +600,12 @@ mod tests {
         guard.remove("XDG_RUNTIME_DIR");
 
         let session_name = "x";
-        let daemon_command = spawn_fake_daemon(socket_dir.path(), session_name).await;
+        let daemon_command = spawn_fake_daemon(
+            socket_dir.path(),
+            session_name,
+            r#"{"success":true,"data":{"ok":true}}"#,
+        )
+        .await;
         let body = r#"{"action":"tabs"}"#;
         let request = format!(
             "POST /api/command HTTP/1.1\r\nHost: localhost:7777\r\nOrigin: https://evil.example\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -620,6 +669,41 @@ mod tests {
             !response.contains("Access-Control-Allow-Origin: *"),
             "forbidden command response exposed wildcard CORS: {response}"
         );
+        assert!(
+            response.contains(r#""code":"command_failed""#),
+            "{response}"
+        );
+        assert!(response.contains(r#""retryable":false"#), "{response}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn versioned_status_alias_returns_the_existing_status_payload() {
+        let request = "GET /api/v1/status HTTP/1.1\r\nHost: localhost:7777\r\n\r\n";
+        let response = send_request_to_handler(request, "x").await;
+
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "unexpected response: {response}"
+        );
+        assert!(response.contains(r#""engine":"chrome""#), "{response}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn versioned_reads_reject_cross_origin_and_dns_rebinding_requests() {
+        for request in [
+            "GET /api/v1/tabs HTTP/1.1\r\nHost: localhost:7777\r\nOrigin: https://evil.example\r\n\r\n",
+            "GET /api/v1/sessions HTTP/1.1\r\nHost: attacker.example:7777\r\n\r\n",
+        ] {
+            let response = send_request_to_handler(request, "x").await;
+            assert!(
+                response.starts_with("HTTP/1.1 403 Forbidden"),
+                "unexpected response: {response}"
+            );
+            assert!(
+                !response.contains("Access-Control-Allow-Origin: *"),
+                "forbidden read exposed wildcard CORS: {response}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -683,10 +767,15 @@ mod tests {
         guard.remove("XDG_RUNTIME_DIR");
 
         let session_name = "x";
-        let daemon_command = spawn_fake_daemon(socket_dir.path(), session_name).await;
+        let daemon_command = spawn_fake_daemon(
+            socket_dir.path(),
+            session_name,
+            r#"{"success":true,"data":{"ok":true}}"#,
+        )
+        .await;
         let body = r#"{"action":"tabs"}"#;
         let request = format!(
-            "POST /api/command HTTP/1.1\r\nHost: localhost:7777\r\nOrigin: http://localhost:7777\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /api/v1/command HTTP/1.1\r\nHost: localhost:7777\r\nOrigin: http://localhost:7777\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),
             body
         );
@@ -706,6 +795,52 @@ mod tests {
             "same-origin command response exposed wildcard CORS: {response}"
         );
 
+        let relayed = tokio::time::timeout(std::time::Duration::from_secs(1), daemon_command)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(relayed.contains(r#""action":"tabs""#), "{relayed}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn malformed_daemon_response_is_a_retryable_bad_gateway() {
+        let temp_parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("t");
+        std::fs::create_dir_all(&temp_parent).unwrap();
+        let socket_dir = tempfile::Builder::new()
+            .prefix("ab-")
+            .tempdir_in(temp_parent)
+            .unwrap();
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
+        guard.set(
+            "AGENT_BROWSER_SOCKET_DIR",
+            socket_dir.path().to_str().unwrap(),
+        );
+        guard.remove("XDG_RUNTIME_DIR");
+
+        let session_name = "malformed";
+        let daemon_command = spawn_fake_daemon(socket_dir.path(), session_name, "not-json").await;
+        let body = r#"{"action":"tabs"}"#;
+        let request = format!(
+            "POST /api/v1/command HTTP/1.1\r\nHost: localhost:7777\r\nOrigin: http://localhost:7777\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = send_request_to_handler(&request, session_name).await;
+
+        assert!(
+            response.starts_with("HTTP/1.1 502 Bad Gateway"),
+            "unexpected response: {response}"
+        );
+        assert!(response.contains(r#""success":false"#), "{response}");
+        assert!(
+            response.contains(r#""code":"connection_failed""#),
+            "{response}"
+        );
+        assert!(response.contains(r#""retryable":true"#), "{response}");
         let relayed = tokio::time::timeout(std::time::Duration::from_secs(1), daemon_command)
             .await
             .unwrap()

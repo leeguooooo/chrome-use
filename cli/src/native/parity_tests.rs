@@ -106,6 +106,8 @@ const DOCUMENTED_ACTIONS: &[&str] = &[
     "user_agent",
     "set_media",
     "download",
+    "download_url",
+    "downloads",
     "diff_snapshot",
     "diff_url",
     "credentials_set",
@@ -325,6 +327,9 @@ fn minimal_command(action: &str, id: &str) -> Value {
         }
         "download" => {
             obj.insert("path".to_string(), json!("/tmp/parity-download"));
+        }
+        "download_url" => {
+            obj.insert("url".to_string(), json!("https://example.com/file"));
         }
         "multiselect" => {
             obj.insert("selector".to_string(), json!("select"));
