@@ -3,20 +3,31 @@
 //! site's cookies / same-origin fetch / its own webpack modules — the site thinks
 //! it's you, because it is).
 //!
-//! The adapter format is the community **bb-sites** convention
-//! (<https://github.com/epiral/bb-sites>): one `.js` file per command, a
+//! The adapter format follows the **bb-sites** convention: one `.js` file per command, a
 //! `/* @meta {...} */` JSON header (name, description, domain, args), then an
-//! `async function(args){ ... return {...} }`. chrome-use ships none of those
-//! adapters — `chrome-use site update` fetches the upstream repo at runtime into
-//! `~/.chrome-use/sites` (like a package manager pulling a dependency), so the
-//! adapters stay the property of their authors. Running an adapter navigates to
-//! its `@meta.domain` and `eval`s the function in the site's own logged-in page.
+//! `async function(args){ ... return {...} }`. chrome-use ships none of those adapters —
+//! `chrome-use site update` fetches the community **epiral/bb-sites** pack and the
+//! official **leeguooooo/chrome-use-sites** pack at runtime into `~/.chrome-use/sites`
+//! (like a package manager pulling dependencies), so the adapters stay the property of
+//! their authors. Running an adapter navigates to its `@meta.domain` and `eval`s the
+//! function in the site's own logged-in page.
 
 use std::path::PathBuf;
 
 use serde_json::Value;
 
-const SITES_ZIP_URL: &str = "https://github.com/epiral/bb-sites/archive/refs/heads/main.zip";
+pub const COMMUNITY_SITES_SOURCE: &str = "epiral/bb-sites";
+pub const OFFICIAL_SITES_SOURCE: &str = "leeguooooo/chrome-use-sites";
+const DEFAULT_SITES_SOURCES: [&str; 2] = [COMMUNITY_SITES_SOURCE, OFFICIAL_SITES_SOURCE];
+
+/// Built-in adapter sources, synced on every update without user configuration.
+pub fn default_sources() -> &'static [&'static str] {
+    &DEFAULT_SITES_SOURCES
+}
+
+pub fn is_default_source(source: &str) -> bool {
+    DEFAULT_SITES_SOURCES.contains(&source.trim())
+}
 
 /// `~/.chrome-use/sites` — where synced adapters live.
 pub fn sites_dir() -> Option<PathBuf> {
@@ -31,19 +42,25 @@ fn dirs_home() -> Option<PathBuf> {
 /// #127). Each line is a GitHub `owner/repo`, a `.zip` URL, or a local directory.
 /// `#` starts a comment. Lets orgs auto-sync **private/internal** adapter packs
 /// (self-hosted Gogs/GitLab, internal tools) that can't live in the public
-/// bb-sites pack, with the same lifecycle as the community pack.
+/// built-in packs, with the same lifecycle as the community and official packs.
 pub fn sources_config_path() -> Option<PathBuf> {
     dirs_home().map(|h| h.join(".chrome-use").join("sites.sources"))
 }
 
 /// The configured extra sources: env `CHROME_USE_SITES_SOURCES` (comma-separated)
-/// first, then the `sites.sources` file — deduped, order preserved. The community
-/// pack (`epiral/bb-sites`) is always synced and is NOT listed here.
+/// first, then the `sites.sources` file — deduped, order preserved. The built-in
+/// community and official packs are always synced and are NOT listed here. If an
+/// older configuration explicitly contains either built-in source, it is ignored
+/// so the repository is not downloaded twice.
 pub fn read_sources() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |s: &str| {
         let s = s.trim();
-        if !s.is_empty() && !s.starts_with('#') && !out.iter().any(|e| e == s) {
+        if !s.is_empty()
+            && !s.starts_with('#')
+            && !is_default_source(s)
+            && !out.iter().any(|e| e == s)
+        {
             out.push(s.to_string());
         }
     };
@@ -69,6 +86,9 @@ pub fn add_source(source: &str) -> Result<bool, String> {
     if source.is_empty() {
         return Err("site add: empty source".into());
     }
+    if is_default_source(source) {
+        return Ok(false);
+    }
     let path = sources_config_path().ok_or("site add: cannot resolve home dir")?;
     let existing: Vec<String> = std::fs::read_to_string(&path)
         .ok()
@@ -93,6 +113,11 @@ pub fn add_source(source: &str) -> Result<bool, String> {
 /// Remove a source from `sites.sources`. Returns whether a line was removed.
 pub fn remove_source(source: &str) -> Result<bool, String> {
     let source = source.trim();
+    if is_default_source(source) {
+        return Err(format!(
+            "site remove: `{source}` is a built-in default source and cannot be removed"
+        ));
+    }
     let path = sources_config_path().ok_or("site remove: cannot resolve home dir")?;
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(false);
@@ -335,11 +360,12 @@ pub fn list_adapters() -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Sync the community pack (`epiral/bb-sites`) **plus** any configured extra
-/// sources (issue #127) into `~/.chrome-use/sites`. Sources are applied AFTER the
-/// community pack, so on a pack-dir name collision the later source wins (with a
-/// warning). Extra sources are best-effort: one failing (offline/private-auth)
-/// doesn't abort the others or the community sync. Returns the total adapter count.
+/// Sync both built-in packs (`epiral/bb-sites` community and
+/// `leeguooooo/chrome-use-sites` official) **plus** any configured extra sources
+/// into `~/.chrome-use/sites`. Sources are applied in order, so on a pack-dir name
+/// collision the later source wins (with a warning). Both built-in sources are
+/// required; extra sources are best-effort, so one failing (offline/private-auth)
+/// doesn't abort the others or the built-in sync. Returns the total adapter count.
 pub async fn update() -> Result<usize, String> {
     let dir = sites_dir().ok_or("site: cannot resolve home dir")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -348,13 +374,16 @@ pub async fn update() -> Result<usize, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    // 1) Community pack — a hard failure here is the whole command's failure,
-    // preserving the original contract (offline first-sync still errors).
-    fetch_zip_into(&client, SITES_ZIP_URL, None, &dir, true)
-        .await
-        .map_err(|e| format!("site update: {e}"))?;
+    // 1) Built-in packs — both are first-class defaults. A hard failure preserves
+    // the original contract: an incomplete first sync must not look successful.
+    for source in default_sources() {
+        sync_source(&client, source, None, &dir)
+            .await
+            .map_err(|e| format!("site update: default source `{source}` failed: {e}"))?;
+    }
 
-    // 2) Extra sources (private/org packs). Best-effort, overlaid on top.
+    // 2) Extra sources (private/org packs). Best-effort, overlaid on top. Built-in
+    // names are filtered by read_sources() for compatibility with old config files.
     let token = sources_token();
     for source in read_sources() {
         if let Err(e) = sync_source(&client, &source, token.as_deref(), &dir).await {
@@ -386,7 +415,7 @@ fn sources_token() -> Option<String> {
     None
 }
 
-/// Resolve one configured source and merge it into `dir`:
+/// Resolve one built-in or configured source and merge it into `dir`:
 /// - a local directory path → copy its `.js`/`_helper.js` tree in;
 /// - a `.zip`/http(s) URL → download + extract;
 /// - a GitHub `owner/repo` → download its default-branch archive (private repos
@@ -594,7 +623,7 @@ fn write_domain_index(dir: &std::path::Path) {
 
 const DEFAULT_TTL_DAYS: u64 = 7;
 
-/// Whether the adapter pack should be (re)synced: true on first use (nothing
+/// Whether the adapter packs should be (re)synced: true on first use (nothing
 /// installed) or when the last sync is older than the TTL. Disabled by
 /// `AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`; TTL overridable via
 /// `AGENT_BROWSER_SITES_TTL_DAYS` (0 = always).
@@ -626,7 +655,7 @@ pub fn needs_refresh() -> bool {
 
 /// Adapters whose `@meta.domain` matches `host` (exact, or `host` is a subdomain
 /// of it) — for auto-suggesting `site` commands when you land on a known site.
-/// Reads the prebuilt `.index.json`; empty if the pack isn't synced yet.
+/// Reads the prebuilt `.index.json`; empty if the packs aren't synced yet.
 pub fn adapters_for_domain(host: &str) -> Vec<String> {
     let host = host.trim_start_matches("www.");
     let Some(raw) = index_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
@@ -753,6 +782,21 @@ async function(args) { return { repo: args.repo }; }"#;
         assert_eq!(parse_owner_repo("../etc/passwd"), None);
         assert_eq!(parse_owner_repo("owner /repo"), None);
         assert_eq!(parse_owner_repo("/absolute/dir"), None);
+    }
+
+    #[test]
+    fn built_in_sources_include_community_and_official_packs() {
+        assert_eq!(
+            default_sources(),
+            &["epiral/bb-sites", "leeguooooo/chrome-use-sites"]
+        );
+        assert!(is_default_source("epiral/bb-sites"));
+        assert!(is_default_source(" leeguooooo/chrome-use-sites "));
+        assert!(!is_default_source("example/private-sites"));
+        assert!(!add_source(OFFICIAL_SITES_SOURCE).unwrap());
+        assert!(remove_source(COMMUNITY_SITES_SOURCE)
+            .unwrap_err()
+            .contains("built-in default source"));
     }
 
     // Regression: positional args must follow DECLARATION order, not serde's

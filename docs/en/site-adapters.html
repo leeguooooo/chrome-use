@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Site Adapters · chrome-use</title>
-  <meta name="description" content="Site adapters: a small community-written JS snippet that hits a site's own JSON API directly from your logged-in tab and returns clean structured data — no clicking, no scraping, no screenshots. The full site update / list / info / run flow, plus auto-hints and how it compares to the alternatives." />
+  <meta name="description" content="Site adapters: a small JS snippet that hits a site's own JSON API directly from your logged-in tab and returns clean structured data — no clicking, no scraping, no screenshots. The full site update / list / info / run flow, plus auto-hints and how it compares to the alternatives." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -79,7 +79,7 @@
 
       <h2>How to use it</h2>
       <p>
-        Four actions: pull the pack once (<code>update</code>), see what's installed (<code>list</code>), see how a given adapter is
+        Four actions: pull the sources once (<code>update</code>), see what's installed (<code>list</code>), see how a given adapter is
         called (<code>info</code>), and run it (<code>site &lt;name&gt;/&lt;cmd&gt;</code>).
       </p>
 
@@ -88,14 +88,14 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># one-time: pull the adapter pack (count grows with bb-sites)</span>
+<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># one-time: pull community, official, and extra sources</span>
 <span class="du-prompt">$</span> chrome-use site list                              <span class="du-cmt"># what's installed (github/issues, reddit/search…)</span>
 <span class="du-prompt">$</span> chrome-use site info github/issues                <span class="du-cmt"># an adapter's params + which domain it runs on</span>
 <span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># run → JSON (navigates there for you)</span></code></pre>
       </div>
 
       <ul>
-        <li><code>site update</code>: pulls the whole adapter set from the bb-sites community pack. Only needed once; after that chrome-use keeps it in sync automatically (see "Auto-triggering" below).</li>
+        <li><code>site update</code>: pulls adapters from the bb-sites community source, the chrome-use-sites official source, and any configured extras. Only needed once; after that chrome-use keeps them in sync automatically (see "Auto-triggering" below).</li>
         <li><code>site list</code>: lists every <code>&lt;name&gt;/&lt;cmd&gt;</code> installed locally, e.g. <code>github/issues</code>, <code>reddit/search</code>.</li>
         <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>: shows which params an adapter declares and which domain it runs on — check this before calling, and you'll know what to pass.</li>
         <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>: actually runs it. Add <code>--json</code> for one line of parseable structured output.</li>
@@ -183,7 +183,7 @@
 
       <h2>Auto-triggering — see it, use it</h2>
       <p>
-        You don't have to remember which sites have adapters. chrome-use keeps the adapter pack in sync automatically
+        You don't have to remember which sites have adapters. chrome-use keeps the adapter sources in sync automatically
         (<strong>on first use + weekly</strong>), and when you <code>open</code> / <code>navigate</code> / <code>snapshot</code> a page whose
         <strong>domain has adapters</strong>, it proactively hints you:
       </p>
@@ -212,7 +212,7 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Exception on a fresh environment</div>
-        Only on a <strong>brand-new environment where the adapter pack hasn't been pulled yet</strong> might naming a
+        Only on a <strong>brand-new environment where the adapter sources haven't been pulled yet</strong> might naming a
         <code>site &lt;name&gt;/&lt;cmd&gt;</code> report "not installed." In that case run <code>site update</code> once and re-run the command.
       </div>
 
@@ -264,15 +264,16 @@
 
       <h2>Source and license</h2>
       <p>
-        Adapters come from the <a href="https://github.com/epiral/bb-sites">bb-sites</a> community pack.
+        Adapters come from two defaults: the <a href="https://github.com/epiral/bb-sites">bb-sites</a> community source and
+        the <a href="https://github.com/leeguooooo/chrome-use-sites">chrome-use-sites</a> official source.
         chrome-use <strong>fetches and executes them at runtime</strong> — this repo <span class="mark">does not bundle or redistribute</span>
         any adapter code, and <code>site update</code> fetches the latest version from upstream each time.
       </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Fetched at runtime, not built in</div>
-        Because adapters are maintained upstream by the community and fetched only at runtime, the command set you see changes as bb-sites
-        updates; <code>site list</code> reflects the version you synced to locally this time.
+        Because adapters are maintained in the community and official sources and fetched only at runtime, the command set you see changes
+        as either default source updates; <code>site list</code> reflects the version you synced to locally this time.
       </div>
 
       <hr class="du-divider" />

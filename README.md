@@ -279,14 +279,17 @@ inside your logged-in tab* (your cookies, same-origin `fetch`, the site's own
 modules) and returns clean JSON. The site can't tell it apart from you, because it
 *is* you.
 
-chrome-use ships none of these adapters — `site update` fetches the community
-[**bb-sites**](https://github.com/epiral/bb-sites) pack at runtime (like a package
-manager pulling a dependency), then runs them over chrome-use's stealth transport:
+chrome-use ships none of these adapters. `site update` fetches two default packs at
+runtime: the community [**bb-sites**](https://github.com/epiral/bb-sites) pack and
+the official [**chrome-use-sites**](https://github.com/leeguooooo/chrome-use-sites)
+pack. It works like a package manager pulling dependencies, then runs the adapters
+over chrome-use's stealth transport:
 
 ```bash
-chrome-use site update                          # fetch the adapter pack (~145 commands)
+chrome-use site update                          # fetch both default packs + configured extras
 chrome-use site list                            # github/issues, reddit/search, bilibili/feed, …
 chrome-use site info github/issues              # see an adapter's args + domain
+chrome-use site sources                         # show community, official, and extra sources
 
 # Run one — navigates to the site (reusing the tab if you're already there) and returns JSON
 chrome-use site github/issues epiral/bb-browser --json
@@ -295,11 +298,10 @@ chrome-use site bilibili/feed --json            # works because it's your logged
 ```
 
 Positional args fill the adapter's declared args in order; `--key value` overrides
-by name. Adapters are authored by the bb-sites community and remain their authors'
-property — chrome-use just runs them.
+by name. Adapters remain their authors' property; chrome-use just runs them.
 
 **Auto-sync + auto-suggest.** You rarely type `site update` yourself: chrome-use
-syncs the pack on first use and refreshes it weekly in the background (tune with
+syncs both default packs on first use and refreshes them weekly in the background (tune with
 `AGENT_BROWSER_SITES_TTL_DAYS`, disable with `AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`).
 And when you `open`/`snapshot` a page whose domain has adapters, chrome-use surfaces
 them right in the output — a `💡 site adapters for <domain>` line, plus a
@@ -314,24 +316,25 @@ $ chrome-use open https://github.com
 ✓ GitHub
 ```
 
-**Private / org-internal packs.** Adapters that target self-hosted or internal
-services (a company Gogs/GitLab, an internal dashboard) can't live in the public
-bb-sites pack. Point `site update` at **extra sources** — a GitHub `owner/repo`, a
-`.zip` URL, or a local directory — and they sync into `~/.chrome-use/sites`
-alongside the community pack, with the same auto-sync lifecycle:
+**Sources.** The community `epiral/bb-sites` pack and official
+`leeguooooo/chrome-use-sites` pack are built-in defaults; no `site add` is needed.
+For other private or org-internal adapters, register an **extra source** as a GitHub
+`owner/repo`, a `.zip` URL, or a local directory. Extra sources sync into
+`~/.chrome-use/sites` with the same auto-sync lifecycle:
 
 ```bash
-chrome-use site add leeguooooo/chrome-use-sites   # a private/extra adapter repo
+chrome-use site sources                            # lists both defaults + extras
+chrome-use site add acme/internal-sites            # a private/extra adapter repo
 chrome-use site add /path/to/local/adapters       # or a local dir / .zip URL
-chrome-use site sources                            # list configured extra sources
-chrome-use site remove leeguooooo/chrome-use-sites
-chrome-use site update                             # syncs bb-sites + every source
+chrome-use site remove acme/internal-sites
+chrome-use site update                             # syncs both defaults + every extra
 ```
 
 Sources also come from `CHROME_USE_SITES_SOURCES` (comma-separated) or the
 `~/.chrome-use/sites.sources` file. Private repos authenticate via
-`CHROME_USE_SITES_TOKEN` (or `GITHUB_TOKEN`/`GH_TOKEN`). Packs are namespaced by
-their directory, and a later source wins on a name collision.
+`CHROME_USE_SITES_TOKEN` (or `GITHUB_TOKEN`/`GH_TOKEN`). The two built-in defaults
+cannot be removed. Packs are namespaced by their directory, and a later source wins
+on a name collision.
 
 ## Automated testing (`chrome-use test`)
 

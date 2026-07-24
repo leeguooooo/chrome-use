@@ -1059,7 +1059,7 @@ fn main() {
     // `info` are CLI-side (download/filesystem); `site <name>/<cmd> [args]` falls
     // through to the daemon dispatch below (navigate to the adapter's domain + eval).
     if clean.first().map(|s| s.as_str()) == Some("site") {
-        // Auto-sync the adapter pack on first use and periodically (TTL, default
+        // Auto-sync the adapter packs on first use and periodically (TTL, default
         // 7d) so adapters stay fresh without a manual `site update`. Skipped for an
         // explicit `update` (full sync below). Best-effort: offline → cached pack.
         // Disable with AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1.
@@ -1147,25 +1147,28 @@ fn main() {
                 }
                 return;
             }
-            // `site sources` — list the configured extra adapter sources (#127).
-            // The community pack (epiral/bb-sites) is always synced and not listed.
+            // `site sources` — list the built-in defaults and configured extras.
             Some("sources") => {
                 let sources = site::read_sources();
                 if flags.json {
-                    println!("{}", json!({ "success": true, "sources": sources }));
-                } else if sources.is_empty() {
                     println!(
-                        "no extra sources configured — add one with `chrome-use site add <owner/repo|url|dir>`\n\
-                         (the community pack epiral/bb-sites is always synced)"
+                        "{}",
+                        json!({
+                            "success": true,
+                            "defaultSources": site::default_sources(),
+                            "sources": sources
+                        })
                     );
                 } else {
-                    for s in &sources {
-                        println!("{s}");
+                    println!("{} (default: community)", site::COMMUNITY_SITES_SOURCE);
+                    println!("{} (default: official)", site::OFFICIAL_SITES_SOURCE);
+                    for source in &sources {
+                        println!("{source} (extra)");
                     }
                     eprintln!(
                         "{}",
                         color::dim(&format!(
-                            "{} extra source(s) · synced alongside epiral/bb-sites on `site update`",
+                            "2 default source(s) + {} extra source(s) · synced on `site update`",
                             sources.len()
                         ))
                     );
@@ -1195,13 +1198,18 @@ fn main() {
                         }
                     }
                     Ok(false) => {
+                        let note = if site::is_default_source(&src) {
+                            "built-in default"
+                        } else {
+                            "already present"
+                        };
                         if flags.json {
                             println!(
                                 "{}",
-                                json!({ "success": true, "added": serde_json::Value::Null, "note": "already present" })
+                                json!({ "success": true, "added": serde_json::Value::Null, "note": note })
                             );
                         } else {
-                            println!("source `{src}` is already configured");
+                            println!("source `{src}` is already configured ({note})");
                         }
                     }
                     Err(e) => {
@@ -1284,7 +1292,7 @@ fn main() {
             _ => {
                 eprintln!(
                     "{} usage: chrome-use site <name>/<cmd> [args] | site update | site list | \
-                     site info <name>/<cmd>",
+                     site info <name>/<cmd> | site sources | site add|remove <source>",
                     color::error_indicator()
                 );
                 exit(2);
