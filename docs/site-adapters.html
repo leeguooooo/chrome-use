@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>站点适配器 · chrome-use 文档</title>
-  <meta name="description" content="站点适配器：社区写的一小段 JS，在你登录态的标签页里直接打站点自己的 JSON API，返回干净结构化数据——不点击、不爬、不截图。site update / list / info / run 全流程，以及自动触发提示与选型对比。" />
+  <meta name="description" content="站点适配器：一小段 JS，在你登录态的标签页里直接调用站点自己的 JSON API，返回干净结构化数据——不点击、不爬、不截图。site update / list / info / run 全流程，以及自动触发提示与选型对比。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -77,7 +77,7 @@
 
       <h2>怎么用</h2>
       <p>
-        四个动作：一次性拉包（<code>update</code>）、看装了哪些（<code>list</code>）、看某个适配器怎么调
+        四个动作：一次性拉取源（<code>update</code>）、看装了哪些（<code>list</code>）、看某个适配器怎么调
         （<code>info</code>）、运行它（<code>site &lt;name&gt;/&lt;cmd&gt;</code>）。
       </p>
 
@@ -86,14 +86,14 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># 一次性：拉取适配器包（命令数随 bb-sites 同步增长）</span>
+<pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># 一次性：拉取社区源、官方源及额外源</span>
 <span class="du-prompt">$</span> chrome-use site list                              <span class="du-cmt"># 已装了哪些（github/issues、reddit/search…）</span>
 <span class="du-prompt">$</span> chrome-use site info github/issues                <span class="du-cmt"># 某适配器的参数 + 在哪个域名上跑</span>
 <span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># 运行 → JSON（自动帮你导航过去）</span></code></pre>
       </div>
 
       <ul>
-        <li><code>site update</code>：从 bb-sites 社区包拉取整套适配器。只需一次；之后 chrome-use 会自动保持同步（见下方「自动触发」）。</li>
+        <li><code>site update</code>：默认从 bb-sites 社区源和 chrome-use-sites 官方源拉取适配器，并同步用户配置的额外源。只需一次；之后 chrome-use 会自动保持同步（见下方「自动触发」）。</li>
         <li><code>site list</code>：列出本地已安装的所有 <code>&lt;name&gt;/&lt;cmd&gt;</code>，例如 <code>github/issues</code>、<code>reddit/search</code>。</li>
         <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>：查一个适配器声明了哪些参数、以及它会在哪个域名上运行——调之前先看这个，就知道该传什么。</li>
         <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>：真正运行。加 <code>--json</code> 拿一行可解析的结构化输出。</li>
@@ -179,12 +179,12 @@
 
       <h2>自动触发 —— 看到就用它</h2>
       <p>
-        你不用记住哪些站点有适配器。chrome-use 会自动保持适配器包同步（<strong>首次使用 + 每周</strong>），
+        你不用记住哪些站点有适配器。chrome-use 会自动保持适配器源同步（<strong>首次使用 + 每周</strong>），
         并且当你 <code>open</code> / <code>navigate</code> / <code>snapshot</code> 一个<strong>域名有适配器</strong>的页面时主动提示你：
       </p>
 
       <ul>
-        <li>stderr 上一行 <code>💡 site adapters for &lt;domain&gt;</code>；</li>
+        <li>stderr 上一行 <code>site adapters for &lt;domain&gt;</code>；</li>
         <li><code>--json</code> 输出里的 <code>siteAdapters: {domain, commands}</code> 字段。</li>
       </ul>
 
@@ -195,19 +195,19 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/epiral/bb-sites
 <span class="du-cmt"># … 页面打开的同时，stderr 冒出一行：</span>
-💡 site adapters for github.com: github/issues, github/pulls, github/repo …</code></pre>
+site adapters for github.com: github/issues, github/pulls, github/repo …</code></pre>
       </div>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 看到提示，优先用它列出的 <code>site &lt;name&gt;/&lt;cmd&gt;</code></div>
-        看到 <code>💡 site adapters for &lt;domain&gt;</code> 时，<strong>别再 snapshot + click 去读数据</strong>——
+        看到 <code>site adapters for &lt;domain&gt;</code> 时，<strong>别再 snapshot + click 去读数据</strong>——
         直接用它点名的 <code>site &lt;name&gt;/&lt;cmd&gt;</code>：更省、更稳，而且已经装好了。你也<strong>不需要</strong>自己先跑
         <code>site update</code>，用它给出的命令即可。
       </div>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 全新环境的例外</div>
-        只有在<strong>刚装好、适配器包还没拉取</strong>的全新环境里，点名一个 <code>site &lt;name&gt;/&lt;cmd&gt;</code>
+        只有在<strong>刚装好、适配器源还没拉取</strong>的全新环境里，点名一个 <code>site &lt;name&gt;/&lt;cmd&gt;</code>
         可能提示「未安装」。这时手动跑一次 <code>site update</code>，再重跑那条命令即可。
       </div>
 
@@ -258,14 +258,15 @@
 
       <h2>来源与许可</h2>
       <p>
-        适配器来自 <a href="https://github.com/epiral/bb-sites">bb-sites</a> 社区包。
+        适配器默认来自 <a href="https://github.com/epiral/bb-sites">bb-sites</a> 社区源和
+        <a href="https://github.com/leeguooooo/chrome-use-sites">chrome-use-sites</a> 官方源。
         chrome-use 负责在<strong>运行时拉取并执行</strong>它们——本仓库<span class="mark">不打包、不重分发</span>任何适配器代码，
         <code>site update</code> 每次从上游获取最新版本。
       </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 运行时拉取，不内置</div>
-        因为适配器是上游社区维护、运行时才拉取的，所以你看到的命令集会随 bb-sites 更新而变化；
+        因为适配器由社区源和官方源维护、运行时才拉取，所以你看到的命令集会随两个默认源更新而变化；
         <code>site list</code> 反映的是你本地这一次同步到的版本。
       </div>
 

@@ -198,7 +198,7 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
             if !cmds.is_empty() {
-                eprintln!("💡 site adapters for {domain} — prefer these for structured data:");
+                eprintln!("site adapters for {domain} — prefer these for structured data:");
                 eprintln!("   {}", color::dim(&cmds.join(", ")));
                 eprintln!(
                     "   {}",
@@ -3787,12 +3787,14 @@ Batch:
                               --bail stops on first error (default: continue all)
 
 Site adapters:  turn a website into a structured-data CLI (runs as you, in your tab)
-  site update                Fetch the community adapter pack into ~/.chrome-use/sites
+  site update                Fetch the community + official packs and configured extras
   site list                  List installed adapters (name/cmd)
   site info <name>/<cmd>     Show an adapter's @meta (args, domain, capabilities)
   site <name>/<cmd> [args]   Run an adapter: navigate to its site + return JSON
                              e.g. site github/issues epiral/repo, site reddit/search rust
                              Positional args fill declared args in order; --key value overrides
+  site sources               List built-in default sources and configured extras
+  site add|remove <source>   Manage extra GitHub repo, .zip URL, or local-dir sources
 
 Auth Vault:
   auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
