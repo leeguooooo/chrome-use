@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>更新日志 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 版本更新日志：network route 的结构化 JSON 编辑、chrome-use report 一键提 issue、MCP --tools all、chrome-use mcp、read、select 报错行为等近期版本要点。" />
+  <meta name="description" content="chrome-use 版本更新日志：原生下载、版本化本地 HTTP API、WebSocket 观测、社区与官方双默认站点源，以及近期版本要点。" />
 
   <!-- SEO / social -->
   <meta name="theme-color" content="#fcfbf4" />
@@ -69,6 +69,8 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.78</strong>（2026-07-24）— 新增原生下载能力：<code>download-url</code>、<code>download-start</code>、<code>downloads</code> 及对应 MCP 工具，动态链接下载不再误导航当前标签页；本地服务新增受 loopback / origin 保护的 <code>/api/v1</code>，CLI、MCP、daemon 与 HTTP 错误统一提供稳定的 <code>code</code> / <code>retryable</code> 字段（#132）。<code>network requests --type websocket</code> 可观察页面与跨域 iframe 的 WebSocket 连接元数据，不记录帧载荷（#131）。<code>site update</code> 现在默认同步社区源 <code>epiral/bb-sites</code> 与官方源 <code>leeguooooo/chrome-use-sites</code>，无需手动添加（#133）。</li>
+        <li><strong>v1.5.77</strong>（2026-07-21）— 站点适配器错误现在返回非零退出码；安装器兼容无 <code>/dev/tty</code> 的非交互环境；保留全局参数名冲突时给出明确提示；大型页面的 <code>Page.navigate</code> 超时在确认已完成导航后降级为警告；新增可配置的组织私有适配器源与 <code>site sources/add/remove</code>（#122、#123、#125、#126、#127）。</li>
         <li><strong>v1.5.76</strong>（2026-07-16）— 新增 <code>chrome-use tab duplicate [ref] [--label &lt;name&gt;]</code>：用 Chrome 原生「复制标签页」（保留完整导航历史），并同步暴露到 <code>chrome_use_tabs</code> MCP。仅在扩展连接的真实 Chrome 上可用——<code>--launch</code>／裸 CDP／Lightpanda／云 provider 与旧扩展一律明确报错，绝不用 URL 重建兜底（那会丢失 duplicate 语义）；扩展通过 <code>hello</code> 声明 <code>nativeTabDuplicate</code> 能力协商。复制出的标签页成为 chrome-use 内部 active target，同时恢复用户原本聚焦的窗口与标签页，输出只给 tab/target id 不泄露 URL；attach／grouping／setup 任一步失败都会回滚孤儿标签页。</li>
         <li><strong>v1.5.75</strong>（2026-07-10）— 修复扩展 relay 自动连接在新会话中重复创建两个 <code>about:blank</code> 标签页。连接现在复用目标发现阶段创建的 session-owned scratch tab，仅在页面数为零时创建兜底页；纯读取、状态查询或导航前失败不再留下成对空白页。</li>
         <li><strong>v1.5.74</strong>（2026-07-08）— 技能分发 v2：新增 <code>chrome-use skill install</code> 统一入口，委托 skills.sh（<code>npx skills add … -g</code>）跨 20+ runner 装技能，自己绝不写 runner 目录；<code>curl … | sh</code> 装完二进制顺带装技能，并以 <code>doctor</code> 自检 + 一条可直接粘贴给 agent 的首条 prompt 收尾；<code>doctor</code> 新增只读探测「agent 技能是否已装」（warn 不 fail）；stub 路由表从 5 个场景补齐到 11 个（canvas/network/react/real-chrome/sessions/test 等按症状路由）。另修：<code>skills/chrome-use/SKILL.md</code> 的 <code>description</code> 是含 <code>: </code> 的非法 YAML，导致 <code>npx skills add</code> 误装成 <code>core</code>/<code>test</code> 等而非 <code>chrome-use</code>——改为折叠块标量修复。</li>
