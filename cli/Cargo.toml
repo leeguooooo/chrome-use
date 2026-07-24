@@ -14,6 +14,11 @@ categories = ["command-line-utilities", "web-programming"]
 name = "chrome-use"
 path = "src/main.rs"
 
+[features]
+# Browser-backed tests are large and ignored by default. Compile them only in
+# the dedicated E2E pass so ordinary unit and cross-platform tests stay fast.
+e2e-tests = []
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -72,6 +77,8 @@ codegen-units = 1
 strip = true
 
 [profile.ci]
-inherits = "release"
-lto = "thin"
-codegen-units = 16
+inherits = "dev"
+debug = 0
+debug-assertions = false
+overflow-checks = false
+incremental = false

@@ -7,13 +7,49 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A new PR commit makes its older run obsolete. Main uses the commit SHA so a
+# later documentation-only push cannot displace an unverified code revision.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  version-sync:
-    name: Version Sync Check
+  preflight:
+    name: Preflight
     runs-on: ubuntu-latest
+    outputs:
+      run_heavy: ${{ steps.changes.outputs.run_heavy }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect documentation-only changes
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          run_heavy=true
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if git diff --quiet "origin/${BASE_REF}...HEAD" -- . ':(exclude)docs/**'; then
+              run_heavy=false
+            fi
+          elif [[ "$EVENT_NAME" == "push" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+            if git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- . ':(exclude)docs/**'; then
+              run_heavy=false
+            fi
+          fi
+
+          echo "run_heavy=$run_heavy" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -23,30 +59,77 @@ jobs:
       - name: Check version sync
         run: node scripts/check-version-sync.js
 
-  docs-freshness:
-    name: Docs Freshness (advisory)
-    # Advisory net for the docs site (chrome-use.leeguoo.com): warns, never fails.
-    # PR-only so it doesn't spam direct pushes to main (the pre-commit hook
-    # already covers those locally).
-    if: github.event_name == 'pull_request'
+      - name: Run extension tests
+        if: steps.changes.outputs.run_heavy == 'true'
+        run: node --test extensions/ab-connect/*.test.js
+
+      - name: Warn when doc sources change without their generated pages
+        if: github.event_name == 'pull_request'
+        env:
+          DOCS_CHECK_GHA: "1"
+          DOCS_CHECK_DIFF: origin/${{ github.base_ref }}...HEAD
+        run: node scripts/check-docs-staleness.js
+
+      - name: Setup Rustfmt
+        if: steps.changes.outputs.run_heavy == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format check
+        if: steps.changes.outputs.run_heavy == 'true'
+        run: cargo fmt --manifest-path cli/Cargo.toml -- --check
+
+  rust:
+    name: Rust Tests
+    needs: preflight
+    if: needs.preflight.outputs.run_heavy == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
         with:
-          fetch-depth: 0
+          workspaces: cli
+          shared-key: linux-ci
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
+      - name: Run Rust tests
+        if: github.event_name == 'pull_request'
+        run: cargo test --profile ci --manifest-path cli/Cargo.toml
 
-      - name: Warn when doc sources change without their generated pages
-        run: DOCS_CHECK_GHA=1 DOCS_CHECK_DIFF="origin/${{ github.base_ref }}...HEAD" node scripts/check-docs-staleness.js
+      # Enabling the internal feature here compiles the ignored browser tests
+      # into the same test binary. The following E2E step can then reuse it.
+      - name: Run Rust tests with E2E support
+        if: github.event_name != 'pull_request'
+        run: cargo test --profile ci --features e2e-tests --manifest-path cli/Cargo.toml
 
-  rust:
-    name: Rust
+      - name: Verify preinstalled Chrome
+        if: github.event_name != 'pull_request'
+        run: google-chrome --version
+
+      - name: Install ffmpeg
+        if: github.event_name != 'pull_request'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Run native E2E tests
+        if: github.event_name != 'pull_request'
+        env:
+          AGENT_BROWSER_ALLOW_HEADLESS: "1"
+          AGENT_BROWSER_EXECUTABLE_PATH: /usr/bin/google-chrome
+        run: cargo test --profile ci --features e2e-tests --manifest-path cli/Cargo.toml e2e -- --ignored --test-threads=1
+
+  rust-lint:
+    name: Rust Clippy
+    needs: preflight
+    if: needs.preflight.outputs.run_heavy == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -54,40 +137,58 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: cli
+          shared-key: linux-ci
 
-      - name: Format check
-        run: cargo fmt --manifest-path cli/Cargo.toml -- --check
-
+      # Clippy runs beside the test job instead of adding its separate full
+      # dependency compilation to the test job's critical path.
       - name: Clippy check
-        run: cargo clippy --manifest-path cli/Cargo.toml -- -D warnings
+        run: cargo clippy --profile ci --manifest-path cli/Cargo.toml -- -D warnings
 
-      - name: Run Rust tests
-        run: cargo test --profile ci --manifest-path cli/Cargo.toml
+  rust-e2e-compile:
+    name: Rust E2E Compile
+    needs: preflight
+    if: needs.preflight.outputs.run_heavy == 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+          shared-key: linux-ci
+
+      # Keep the large browser test module out of ordinary PR test binaries,
+      # but compile-check it in parallel so broken E2E code cannot be merged.
+      - name: Check E2E test code
+        run: cargo check --profile ci --tests --features e2e-tests --manifest-path cli/Cargo.toml
 
   rust-cross:
     name: Rust (${{ matrix.os }} - ${{ matrix.target }})
-    if: github.event_name != 'pull_request'
+    needs: preflight
+    if: needs.preflight.outputs.run_heavy == 'true' && github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
-    # The x86_64-apple-darwin cross-build on the arm64 macos-latest runner
-    # recompiles every dependency for the foreign target; a cold cache can run
-    # ~31 min and was getting cancelled at the old 30-min cap. Give it headroom
-    # (still far under GitHub's 6h default) so a legit cold build can finish and
-    # warm the cache for later runs.
-    timeout-minutes: 50
+    timeout-minutes: 30
     strategy:
-      # Don't cancel the arm64 / windows targets just because one target is slow.
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-latest
+          # Run Intel tests natively. Running them through Rosetta on the arm64
+          # runner was the slowest and flakiest leg in the entire workflow.
+          - os: macos-15-intel
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -105,57 +206,28 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: cli
+          key: ${{ matrix.target }}-ci
 
       - name: Run Rust tests
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
 
-  native-e2e:
-    name: Native E2E Tests
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    needs: rust
-    # Fail fast on a hung e2e test instead of GitHub's 6h default.
-    timeout-minutes: 30
-    # This fork forbids headless by default (always-headed for stealth), but CI
-    # runners have no display. Opt into the documented display-less escape so
-    # launched Chrome can start; e2e tests exercise functionality, not stealth.
-    env:
-      AGENT_BROWSER_ALLOW_HEADLESS: "1"
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: cli
-
-      - name: Install Chrome
-        run: |
-          cargo run --manifest-path cli/Cargo.toml -- install --with-deps
-
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Run e2e tests
-        run: cargo test --profile ci --manifest-path cli/Cargo.toml e2e -- --ignored --test-threads=1
-
   windows-integration:
-    name: Windows Integration Test
-    if: github.event_name != 'pull_request'
+    name: Windows Integration and Global Install
+    needs: preflight
+    if: needs.preflight.outputs.run_heavy == 'true' && github.event_name != 'pull_request'
     runs-on: windows-latest
-    needs: rust-cross
-    # Headless-forbidden fork on a headless CI runner — opt into the escape so
-    # `chrome-use open` can launch Chrome.
+    timeout-minutes: 30
     env:
       AGENT_BROWSER_ALLOW_HEADLESS: "1"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -166,6 +238,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: cli
+          key: x86_64-pc-windows-msvc-release
 
       - name: Build Rust CLI
         run: cargo build --release --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc
@@ -187,14 +260,11 @@ jobs:
         shell: pwsh
         timeout-minutes: 10
 
-      - name: Test chrome-use extension install (Windows registry native host)
+      - name: Test chrome-use extension install
         run: |
           $env:PATH = "$pwd\bin;$env:PATH"
-          # Registers the native-messaging host in HKCU and writes the manifests;
-          # must succeed on Windows (regression guard for #86).
           bin/chrome-use-win32-x64.exe extension install --json
           if ($LASTEXITCODE -ne 0) { Write-Host "extension install failed"; exit 1 }
-          # The registry key must now point at a manifest that exists.
           $key = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.agent_browser.connect"
           $manifest = (Get-ItemProperty -Path $key -ErrorAction Stop).'(default)'
           if (-not (Test-Path $manifest)) { Write-Host "manifest missing: $manifest"; exit 1 }
@@ -202,32 +272,51 @@ jobs:
         shell: pwsh
         timeout-minutes: 5
 
-      - name: Test daemon lifecycle (open, snapshot, close)
+      - name: Test daemon lifecycle
         run: |
           $env:PATH = "$pwd\bin;$env:PATH"
-          Write-Host "--- Opening page ---"
-          # --launch: spawn a standalone browser. Without it, `open` defaults to
-          # auto-connect and looks for an existing Chrome on a debug port — which
-          # a fresh CI runner doesn't have, so it errors "Could not connect".
           bin/chrome-use-win32-x64.exe --launch open https://example.com
           if ($LASTEXITCODE -ne 0) { Write-Error "open failed"; exit 1 }
-          Write-Host "--- Taking snapshot ---"
           $snapshot = bin/chrome-use-win32-x64.exe snapshot
           if ($LASTEXITCODE -ne 0) { Write-Error "snapshot failed"; exit 1 }
           Write-Host $snapshot
-          Write-Host "--- Closing browser ---"
           bin/chrome-use-win32-x64.exe close
           if ($LASTEXITCODE -ne 0) { Write-Error "close failed"; exit 1 }
-          Write-Host "--- Windows daemon lifecycle test passed ---"
         shell: pwsh
         timeout-minutes: 5
 
+      # Reuse the release binary above instead of compiling it again in a
+      # separate Windows global-install matrix job.
+      - name: Test npm global install
+        run: |
+          npm pack
+          npm install -g chrome-use-*.tgz
+          chrome-use --version
+        shell: bash
+
+      - name: Verify installed CLI works
+        run: |
+          $ver = chrome-use --version
+          if ($LASTEXITCODE -ne 0) { Write-Error "chrome-use --version failed"; exit 1 }
+          Write-Host "CLI version: $ver"
+          $content = Get-Content "$(npm prefix -g)\chrome-use.cmd" -Raw
+          Write-Host "Shim content:"
+          Write-Host $content
+          if ($content -match "chrome-use-win32-x64\.exe") {
+            Write-Host "OK: shim points directly to the native binary"
+          } else {
+            Write-Host "INFO: shim uses the functional JavaScript wrapper"
+          }
+        shell: pwsh
+
   global-install:
     name: Global Install (${{ matrix.os }})
-    if: github.event_name != 'pull_request'
+    needs: preflight
+    if: needs.preflight.outputs.run_heavy == 'true' && github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
-    needs: rust-cross
+    timeout-minutes: 30
     strategy:
+      fail-fast: true
       matrix:
         include:
           - os: ubuntu-latest
@@ -236,9 +325,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: chrome-use-darwin-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary: chrome-use-win32-x64.exe
 
     steps:
       - name: Checkout repository
@@ -258,17 +344,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: cli
+          key: ${{ matrix.target }}-release
 
       - name: Build Rust CLI
         run: cargo build --release --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
 
-      - name: Copy CLI binary to bin directory (Unix)
-        if: runner.os != 'Windows'
+      - name: Copy CLI binary to bin directory
         run: cp cli/target/${{ matrix.target }}/release/chrome-use bin/${{ matrix.binary }}
-
-      - name: Copy CLI binary to bin directory (Windows)
-        if: runner.os == 'Windows'
-        run: Copy-Item cli/target/${{ matrix.target }}/release/chrome-use.exe bin/${{ matrix.binary }}
 
       - name: Test npm global install
         run: |
@@ -277,37 +359,15 @@ jobs:
           chrome-use --version
         shell: bash
 
-      - name: Verify symlink points to native binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Verify symlink points to native binary
         run: |
           SYMLINK=$(npm prefix -g)/bin/chrome-use
           TARGET=$(readlink "$SYMLINK")
           echo "Symlink: $SYMLINK"
           echo "Target: $TARGET"
           if [[ "$TARGET" != *"${{ matrix.binary }}"* ]]; then
-            echo "ERROR: Symlink should point to native binary, not JS wrapper"
+            echo "ERROR: Symlink should point to native binary, not JavaScript wrapper"
             exit 1
           fi
           echo "Symlink correctly points to native binary"
         shell: bash
-
-      - name: Verify CLI works (and prefers the native shim) (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          # The CLI must work. The native-shim rewrite is a best-effort speedup
-          # (npm often creates the .cmd AFTER postinstall runs, so the rewrite
-          # can't happen and the JS wrapper — which spawns the native binary — is
-          # the valid fallback). Require functionality; prefer, but don't require,
-          # the native shim.
-          $ver = chrome-use --version
-          if ($LASTEXITCODE -ne 0) { Write-Error "chrome-use --version failed"; exit 1 }
-          echo "CLI version: $ver"
-          $content = Get-Content "$(npm prefix -g)\chrome-use.cmd" -Raw
-          echo "Shim content:"
-          echo $content
-          if ($content -match "chrome-use-win32-x64\.exe") {
-            echo "OK: shim points directly to the native binary (zero overhead)"
-          } else {
-            echo "INFO: shim uses the JS wrapper fallback (functional; native-shim optimization not applied)"
-          }
-        shell: pwsh

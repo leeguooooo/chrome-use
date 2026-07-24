@@ -14,9 +14,13 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
-concurrency: release-binaries-${{ github.ref }}
+concurrency: release-binaries-${{ github.event.inputs.tag || github.ref_name }}
+
+env:
+  CARGO_ZIGBUILD_VERSION: "0.23.0"
+  ZIG_VERSION: "0.16.0"
 
 jobs:
   build:
@@ -32,7 +36,7 @@ jobs:
           - { name: Linux musl x64,   os: ubuntu-latest, target: x86_64-unknown-linux-musl,   asset: chrome-use-linux-musl-x64,   use_zigbuild: true,  ext: '' }
           - { name: Linux musl ARM64, os: ubuntu-latest, target: aarch64-unknown-linux-musl,  asset: chrome-use-linux-musl-arm64, use_zigbuild: true,  ext: '' }
           - { name: Windows x64,      os: ubuntu-latest, target: x86_64-pc-windows-gnu,       asset: chrome-use-win32-x64,        use_zigbuild: false, ext: '.exe' }
-          - { name: macOS x64,        os: macos-latest,  target: x86_64-apple-darwin,         asset: chrome-use-darwin-x64,       use_zigbuild: false, ext: '' }
+          - { name: macOS x64,        os: macos-15-intel, target: x86_64-apple-darwin,         asset: chrome-use-darwin-x64,       use_zigbuild: false, ext: '' }
           - { name: macOS ARM64,      os: macos-latest,  target: aarch64-apple-darwin,        asset: chrome-use-darwin-arm64,     use_zigbuild: false, ext: '' }
     steps:
       - name: Checkout
@@ -45,34 +49,32 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu mingw-w64
-
-      - name: Install cargo-zigbuild
-        if: matrix.use_zigbuild
-        run: |
-          pip3 install ziglang
-          cargo install cargo-zigbuild
-
-      - name: Configure Rust linkers
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p ~/.cargo
-          cat >> ~/.cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-
-          [target.x86_64-pc-windows-gnu]
-          linker = "x86_64-w64-mingw32-gcc"
-          EOF
-
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: cli
+          key: ${{ matrix.target }}-release-zig-${{ env.ZIG_VERSION }}-cargo-zigbuild-${{ env.CARGO_ZIGBUILD_VERSION }}
+
+      - name: Install MinGW
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64
+
+      - name: Install cargo-zigbuild
+        if: matrix.use_zigbuild
+        # The maintained Python package provides both cargo-zigbuild and Zig as
+        # wheels, avoiding a Rust tool build and cross-GCC installs in each leg.
+        run: pip3 install "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}" "ziglang==${ZIG_VERSION}"
+
+      - name: Configure MinGW linker
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'EOF'
+          [target.x86_64-pc-windows-gnu]
+          linker = "x86_64-w64-mingw32-gcc"
+          EOF
 
       - name: Build (zigbuild)
         if: matrix.use_zigbuild
@@ -106,6 +108,7 @@ jobs:
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}.tar.gz*
+          compression-level: 0
           retention-days: 3
 
   release:

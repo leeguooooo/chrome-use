@@ -13,9 +13,9 @@ if [[ $# -eq 0 ]]; then
   echo "Usage: ./scripts/windows-debug/run.sh \"<powershell-command>\""
   echo ""
   echo "Examples:"
-  echo "  ./scripts/windows-debug/run.sh \"cd C:\\chrome-use && cargo test\""
+  echo "  ./scripts/windows-debug/run.sh \"Set-Location C:\\chrome-use; cargo test --manifest-path cli\\Cargo.toml\""
   echo "  ./scripts/windows-debug/run.sh \"Get-Content C:\\bootstrap.log\""
-  echo "  ./scripts/windows-debug/run.sh \"cd C:\\chrome-use && cargo test e2e -- --ignored --test-threads=1\""
+  echo "  ./scripts/windows-debug/run.sh \"Set-Location C:\\chrome-use; Set-Item Env:AGENT_BROWSER_ALLOW_HEADLESS 1; cargo test --features e2e-tests --manifest-path cli\\Cargo.toml e2e -- --ignored --test-threads=1\""
   exit 1
 fi
 

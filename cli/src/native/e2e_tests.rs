@@ -5,7 +5,7 @@
 //! so they don't run during normal `cargo test`.
 //!
 //! Run serially to avoid Chrome instance contention:
-//!   cargo test e2e -- --ignored --test-threads=1
+//!   cargo test --features e2e-tests e2e -- --ignored --test-threads=1
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::StreamExt;

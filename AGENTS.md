@@ -99,17 +99,19 @@ This is a Rust codebase. The browser automation daemon lives in `cli/src/native/
 cd cli && cargo test
 ```
 
-Runs all unit tests (~320 tests). These are fast and don't require Chrome.
+Runs the ordinary unit test suite. These tests are fast and don't require Chrome.
 
 ### End-to-End Tests
 
 ```bash
-cd cli && cargo test e2e -- --ignored --test-threads=1
+cd cli && cargo test --features e2e-tests e2e -- --ignored --test-threads=1
 ```
 
-Runs 18 e2e tests that launch real headless Chrome instances and exercise the full native daemon command pipeline. Requirements:
+Runs the browser-backed tests that launch real headless Chrome instances and exercise the full native daemon command pipeline. The feature gate keeps their large test module out of ordinary unit and cross-platform test builds. Requirements:
 
 - Chrome must be installed
+- FFmpeg must be installed for recording tests
+- Display-less environments must set `AGENT_BROWSER_ALLOW_HEADLESS=1`
 - Must run serially (`--test-threads=1`) to avoid Chrome instance contention
 - Tests are `#[ignore]`'d so they don't run during normal `cargo test`
 
@@ -167,13 +169,13 @@ Stop the instance when done (avoids cost):
 Run unit tests on Windows:
 
 ```bash
-./scripts/windows-debug/run.sh "cd C:\chrome-use && cargo test --manifest-path cli\Cargo.toml"
+./scripts/windows-debug/run.sh "Set-Location C:\chrome-use; cargo test --manifest-path cli\Cargo.toml"
 ```
 
 Run e2e tests on Windows:
 
 ```bash
-./scripts/windows-debug/run.sh "cd C:\chrome-use && cargo test e2e --manifest-path cli\Cargo.toml -- --ignored --test-threads=1"
+./scripts/windows-debug/run.sh "Set-Location C:\chrome-use; Set-Item Env:AGENT_BROWSER_ALLOW_HEADLESS 1; cargo test --features e2e-tests --manifest-path cli\Cargo.toml e2e -- --ignored --test-threads=1"
 ```
 
 Check bootstrap progress (first boot only):

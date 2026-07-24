@@ -57,7 +57,7 @@ pub mod tracing;
 #[allow(dead_code)]
 pub mod webdriver;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "e2e-tests"))]
 mod e2e_tests;
 #[cfg(test)]
 mod parity_tests;

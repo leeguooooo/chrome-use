@@ -389,11 +389,13 @@ fn tab_parity_commands_use_tab_references() {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Action dispatch coverage
+// 1. Browser-backed action dispatch coverage
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_all_documented_actions_are_handled() {
+#[ignore = "browser-backed dispatch parity runs in the main-branch E2E pass"]
+// The e2e prefix is part of the CI filter contract.
+async fn e2e_all_documented_actions_are_handled() {
     let mut state = DaemonState::new();
 
     for (i, action) in DOCUMENTED_ACTIONS.iter().enumerate() {
