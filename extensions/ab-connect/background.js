@@ -49,6 +49,66 @@ function rememberSessionTarget(sessionId, targetId) {
 }
 /** tab-group name -> chrome tabGroups id (best-effort cache) */
 const groupIdByName = new Map()
+/** Source tabId -> native duplicate API promises awaiting exact tab classification. */
+const pendingNativeDuplicates = new Map()
+/** Native duplicate tabs owned by an explicit duplicate transaction. */
+const nativeDuplicateTabs = new Set()
+const NATIVE_DUPLICATE_CLASSIFICATION_TIMEOUT_MS = 5000
+const NATIVE_DUPLICATE_REGISTRY_TIMEOUT_MS = 30000
+
+function duplicateTabForTransaction(sourceTabId) {
+  const pending = pendingNativeDuplicates.get(sourceTabId) || new Set()
+  pendingNativeDuplicates.set(sourceTabId, pending)
+  const operation = chrome.tabs.duplicate(sourceTabId).then((tab) => {
+    if (tab?.id != null) nativeDuplicateTabs.add(tab.id)
+    return tab
+  })
+  let expiry
+  const classification = Promise.race([
+    operation.then(
+      () => undefined,
+      () => undefined,
+    ),
+    new Promise((resolve) => {
+      expiry = setTimeout(resolve, NATIVE_DUPLICATE_REGISTRY_TIMEOUT_MS)
+    }),
+  ])
+  pending.add(classification)
+  void classification.finally(() => {
+    clearTimeout(expiry)
+    pending.delete(classification)
+    if (pending.size === 0) pendingNativeDuplicates.delete(sourceTabId)
+  })
+  return operation
+}
+
+async function isNativeDuplicateLifecycleEvent(tab) {
+  if (tab?.id == null) return false
+  if (nativeDuplicateTabs.has(tab.id)) return true
+  if (typeof tab.openerTabId !== 'number') return false
+  const pending = [...(pendingNativeDuplicates.get(tab.openerTabId) || [])]
+  if (pending.length === 0) return false
+  let timer
+  const classified = await Promise.race([
+    Promise.allSettled(pending).then(() => true),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(false), NATIVE_DUPLICATE_CLASSIFICATION_TIMEOUT_MS)
+    }),
+  ])
+  clearTimeout(timer)
+  if (!classified) {
+    void Promise.allSettled(pending).then(async () => {
+      if (nativeDuplicateTabs.has(tab.id) || tabs.has(tab.id) || !port) return
+      const liveTab = await chrome.tabs.get(tab.id).catch(() => null)
+      if (!eligible(liveTab)) return
+      try {
+        await attachTab(tab.id)
+      } catch {}
+    })
+    return true
+  }
+  return nativeDuplicateTabs.has(tab.id)
+}
 
 // Shared "agent window" (opt-in via the daemon's `dedicatedWindow` hint). When
 // set, all agent tabs are created in this one separate window — same Chrome
@@ -669,17 +729,26 @@ async function handleForwardCdpCommand(msg) {
     return await runDuplicateTab(params, {
       tabForTarget,
       getTab: (tabId) => chrome.tabs.get(tabId),
+      getWindow: (windowId) => chrome.windows.get(windowId),
       eligible,
       getLastFocusedWindow: () => chrome.windows.getLastFocused(),
       getActiveTabs: (windowId) => chrome.tabs.query({ active: true, windowId }),
-      duplicateTab: (tabId) => chrome.tabs.duplicate(tabId),
+      duplicateTab: duplicateTabForTransaction,
       markOwned,
       unmarkOwned,
       groupTabInto,
       attachTab,
+      completeTab: (tabId) => nativeDuplicateTabs.delete(tabId),
+      isolateTab: async (tabId) => {
+        detachTab(tabId, true)
+        await chrome.debugger.detach({ tabId }).catch(() => {})
+      },
       activateTab: (tabId) => chrome.tabs.update(tabId, { active: true }),
       focusWindow: (windowId) => chrome.windows.update(windowId, { focused: true }),
-      removeTab: (tabId) => chrome.tabs.remove(tabId),
+      removeTab: async (tabId) => {
+        await chrome.tabs.remove(tabId)
+        nativeDuplicateTabs.delete(tabId)
+      },
     })
   }
 
@@ -815,7 +884,7 @@ async function handleForwardCdpCommand(msg) {
 
 // ---- attach / detach ------------------------------------------------------
 
-async function attachTab(tabId) {
+async function attachTab(tabId, transactionIsActive) {
   const existing = tabs.get(tabId)
   if (existing) return existing
   const dbg = { tabId }
@@ -852,6 +921,10 @@ async function attachTab(tabId) {
   const targetInfo = info?.targetInfo
   const targetId = String(targetInfo?.targetId || '')
   if (!targetId) throw new Error('attachTab: no targetId')
+  if (transactionIsActive && !transactionIsActive()) {
+    await chrome.debugger.detach(dbg).catch(() => {})
+    throw new Error('attachTab: duplicate transaction cancelled')
+  }
   // Derive the session id from the STABLE Chrome tabId, not a monotonic counter
   // (issue #17). A tab's chrome.debugger session can be torn down and
   // re-established — cross-process navigation, a service-worker restart wiping
@@ -861,13 +934,17 @@ async function attachTab(tabId) {
   // never tells it to rebind) → permanent "stale sessionId / tab is gone". The
   // tabId is stable across all of that, so `cb-tab-<tabId>` restores the SAME
   // session the daemon already holds → eval/snapshot auto-follow the new page.
+  const { openerTargetId, abGroup } = await tabScopeHints(tabId)
+  if (transactionIsActive && !transactionIsActive()) {
+    await chrome.debugger.detach(dbg).catch(() => {})
+    throw new Error('attachTab: duplicate transaction cancelled')
+  }
   const sessionId = `cb-tab-${tabId}`
   const entry = { sessionId, targetId }
   tabs.set(tabId, entry)
   sessionToTab.set(sessionId, tabId)
   rememberSessionTarget(sessionId, targetId)
   setBadge(tabId, port ? 'on' : 'connecting')
-  const { openerTargetId, abGroup } = await tabScopeHints(tabId)
   postToHost({
     method: 'forwardCDPEvent',
     params: {
@@ -913,6 +990,7 @@ async function reattachOwnedTabs() {
       unmarkOwned(tabId)
       continue
     }
+    if (nativeDuplicateTabs.has(tabId)) continue
     if (!tabs.has(tabId)) {
       try {
         await attachTab(tabId)
@@ -989,10 +1067,12 @@ chrome.debugger.onDetach.addListener((source, reason) =>
     // user or DevTools initiated.
     if (reason === 'canceled_by_user' || reason === 'replaced_with_devtools') return
     if (!port) return
+    if (nativeDuplicateTabs.has(tabId)) return
     // The swapped-in process needs a moment to settle; retry with backoff.
     for (let i = 0; i < 6; i++) {
       await new Promise((r) => setTimeout(r, 250 + i * 200))
       if (tabs.has(tabId)) return // already re-attached (e.g. via onUpdated)
+      if (nativeDuplicateTabs.has(tabId)) return
       const tab = await chrome.tabs.get(tabId).catch(() => null)
       if (!tab || !eligible(tab)) return // tab gone or now a restricted page
       try {
@@ -1030,6 +1110,7 @@ chrome.debugger.onDetach.addListener((source, reason) =>
 chrome.tabs.onCreated.addListener((tab) =>
   void whenReady(async () => {
     if (!port || !tab || tab.id == null) return
+    if (await isNativeDuplicateLifecycleEvent(tab)) return
     const opener = tab.openerTabId
     if (typeof opener !== 'number') return
     if (!ownedTabs.has(opener) && !tabs.has(opener)) return
@@ -1047,6 +1128,7 @@ chrome.tabs.onCreated.addListener((tab) =>
 )
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
   void whenReady(async () => {
+    if (await isNativeDuplicateLifecycleEvent(tab)) return
     if (changeInfo.status === 'complete' && eligible(tab) && !tabs.has(tabId) && port) {
       try {
         await attachTab(tabId)
@@ -1057,6 +1139,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
 chrome.tabs.onRemoved.addListener(
   (tabId) =>
     void whenReady(() => {
+      nativeDuplicateTabs.delete(tabId)
       unmarkOwned(tabId)
       detachTab(tabId, true)
     }),
