@@ -186,9 +186,9 @@
 
       <h2>Observe and record traffic</h2>
       <p>
-        Before rewriting, see clearly which requests are in flight. <code>network requests</code> lists captured traffic,
-        and <code>--clear</code> starts recording fresh; <code>network har</code> records the whole session into a standard
-        HAR file.
+        Before rewriting, see clearly which requests are in flight. <code>network requests</code> lists captured HTTP
+        requests and WebSocket connection metadata, and <code>--clear</code> starts recording fresh. WebSocket frame
+        payloads are not recorded. <code>network har</code> records HTTP traffic into a standard HAR file.
       </p>
 
       <div class="du-code">
@@ -198,6 +198,7 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use network requests <span class="du-flag">--clear</span>        <span class="du-cmt"># clear and start capturing again</span>
 <span class="du-prompt">$</span> chrome-use network requests                <span class="du-cmt"># see which requests went out</span>
+<span class="du-prompt">$</span> chrome-use network requests <span class="du-flag">--type</span> websocket <span class="du-cmt"># show WebSocket connection metadata only</span>
 
 <span class="du-prompt">$</span> chrome-use network har start               <span class="du-cmt"># record all traffic</span>
 <span class="du-cmt"># ... perform your actions ...</span>

@@ -181,8 +181,9 @@
 
       <h2>观察与录制流量</h2>
       <p>
-        改写之前，先看清楚都有哪些请求在飞。<code>network requests</code> 列出已捕获的流量，
-        <code>--clear</code> 从头开始记；<code>network har</code> 则把整段流量录成标准的 HAR 文件。
+        改写之前，先看清楚都有哪些请求在飞。<code>network requests</code> 列出已捕获的 HTTP 请求和 WebSocket
+        连接元数据，<code>--clear</code> 从头开始记；WebSocket 不记录消息帧内容。
+        <code>network har</code> 则把 HTTP 流量录成标准的 HAR 文件。
       </p>
 
       <div class="du-code">
@@ -192,6 +193,7 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use network requests <span class="du-flag">--clear</span>        <span class="du-cmt"># 清空并重新开始捕获</span>
 <span class="du-prompt">$</span> chrome-use network requests                <span class="du-cmt"># 查看都发出了哪些请求</span>
+<span class="du-prompt">$</span> chrome-use network requests <span class="du-flag">--type</span> websocket <span class="du-cmt"># 只看 WebSocket 连接元数据</span>
 
 <span class="du-prompt">$</span> chrome-use network har start               <span class="du-cmt"># 录制全部流量</span>
 <span class="du-cmt"># ... 执行你的操作 ...</span>

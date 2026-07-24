@@ -117,6 +117,84 @@ async fn send_raw_http_request(port: u64, request: &str) -> String {
     String::from_utf8(response).expect("HTTP response should be utf-8")
 }
 
+async fn spawn_html_server(
+    html: String,
+    request_count: usize,
+) -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("HTTP listener should bind");
+    let port = listener
+        .local_addr()
+        .expect("HTTP listener should have an address")
+        .port();
+    let task = tokio::spawn(async move {
+        for _ in 0..request_count {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("HTTP server should accept a connection");
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                html.len(),
+                html
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("HTTP response should be written");
+        }
+    });
+    (port, task)
+}
+
+async fn spawn_websocket_server(connection_count: usize) -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("websocket listener should bind");
+    let port = listener
+        .local_addr()
+        .expect("websocket listener should have an address")
+        .port();
+    let task = tokio::spawn(async move {
+        for _ in 0..connection_count {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("websocket server should accept a connection");
+            tokio::spawn(async move {
+                let mut websocket = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("websocket handshake should succeed");
+                while websocket.next().await.is_some() {}
+            });
+        }
+    });
+    (port, task)
+}
+
+async fn wait_for_evaluation(state: &mut DaemonState, script: &str, failure_message: &str) {
+    for attempt in 0..50 {
+        let evaluated = execute_command(
+            &json!({
+                "id": format!("condition-{attempt}"),
+                "action": "evaluate",
+                "script": script
+            }),
+            state,
+        )
+        .await;
+        assert_success(&evaluated);
+        if get_data(&evaluated)["result"] == true {
+            return;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+    panic!("{failure_message}");
+}
+
 #[cfg(unix)]
 async fn spawn_fake_daemon_socket(
     socket_dir: &std::path::Path,
@@ -211,6 +289,193 @@ async fn e2e_launch_navigate_evaluate_close() {
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
     assert_eq!(get_data(&resp)["closed"], true);
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_network_requests_capture_websocket_connections() {
+    let (websocket_port, websocket_task) = spawn_websocket_server(2).await;
+    let iframe_page = format!(
+        r#"<!doctype html>
+<title>WebSocket iframe probe</title>
+<link rel="icon" href="data:,">
+<script>
+window.addEventListener("message", (event) => {{
+  if (event.data !== "start-websocket-probe") return;
+  window.websocketProbe = new WebSocket("ws://localhost:{websocket_port}/ws/iframe-probe");
+  window.websocketProbe.addEventListener("open", () => {{
+    parent.postMessage("iframe-websocket-open", "*");
+  }});
+}});
+parent.postMessage("iframe-probe-loaded", "*");
+</script>"#
+    );
+    let (iframe_port, iframe_task) = spawn_html_server(iframe_page, 1).await;
+    let page = format!(
+        r#"<!doctype html>
+<title>WebSocket network probe</title>
+<link rel="icon" href="data:,">
+<iframe id="probe-frame" src="http://localhost:{iframe_port}/"></iframe>
+<script>
+window.addEventListener("message", (event) => {{
+  if (event.data === "iframe-probe-loaded") window.iframeProbeLoaded = true;
+  if (event.data === "iframe-websocket-open") window.iframeWebsocketReady = true;
+}});
+window.startNetworkProbes = () => {{
+  window.websocketProbe = new WebSocket("ws://127.0.0.1:{websocket_port}/ws/top-level-probe");
+  window.websocketProbe.addEventListener("open", () => {{
+    window.topLevelWebsocketReady = true;
+  }});
+  fetch("/http-probe").then(() => {{
+    window.httpProbeReady = true;
+  }});
+  document.getElementById("probe-frame").contentWindow.postMessage("start-websocket-probe", "*");
+}};
+</script>"#
+    );
+    let (http_port, http_task) = spawn_html_server(page, 2).await;
+
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let navigate = execute_command(
+        &json!({
+            "id": "2",
+            "action": "navigate",
+            "url": format!("http://127.0.0.1:{http_port}/")
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&navigate);
+
+    wait_for_evaluation(
+        &mut state,
+        "window.iframeProbeLoaded === true",
+        "cross-origin iframe should attach before request tracking starts",
+    )
+    .await;
+
+    let clear_before = execute_command(
+        &json!({ "id": "3", "action": "requests", "clear": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&clear_before);
+
+    let start = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": "window.startNetworkProbes()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&start);
+
+    wait_for_evaluation(
+        &mut state,
+        "window.topLevelWebsocketReady === true && window.iframeWebsocketReady === true && window.httpProbeReady === true",
+        "top-level, iframe, and HTTP probes should complete"
+    )
+    .await;
+
+    let requests = execute_command(
+        &json!({
+            "id": "5",
+            "action": "requests",
+            "filter": "/ws/",
+            "type": "websocket"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&requests);
+    let captured = get_data(&requests)["requests"]
+        .as_array()
+        .expect("requests response should contain an array");
+    assert_eq!(
+        captured.len(),
+        2,
+        "network requests should capture top-level and pre-existing iframe websockets: {}",
+        serde_json::to_string_pretty(&requests).unwrap_or_default()
+    );
+    for connection in captured {
+        assert_eq!(connection["resourceType"], "WebSocket");
+        assert_eq!(connection["method"], "GET");
+        assert!(
+            connection["timestamp"]
+                .as_u64()
+                .is_some_and(|value| value > 0),
+            "websocket timestamp should be present"
+        );
+        assert!(
+            connection["requestId"]
+                .as_str()
+                .is_some_and(|request_id| !request_id.is_empty()),
+            "websocket requestId should be present"
+        );
+        assert!(
+            connection.get("postData").is_none(),
+            "websocket frame payloads must not be captured"
+        );
+    }
+    assert!(captured.iter().any(|connection| {
+        connection["url"] == format!("ws://127.0.0.1:{websocket_port}/ws/top-level-probe")
+    }));
+    assert!(captured.iter().any(|connection| {
+        connection["url"] == format!("ws://localhost:{websocket_port}/ws/iframe-probe")
+    }));
+
+    let http_requests = execute_command(
+        &json!({
+            "id": "6",
+            "action": "requests",
+            "filter": "/http-probe",
+            "type": "fetch"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&http_requests);
+    assert_eq!(
+        get_data(&http_requests)["requests"]
+            .as_array()
+            .expect("HTTP requests response should contain an array")
+            .len(),
+        1,
+        "existing HTTP request tracking should remain unchanged"
+    );
+
+    let clear_after = execute_command(
+        &json!({ "id": "7", "action": "requests", "clear": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&clear_after);
+    let after_clear = execute_command(
+        &json!({
+            "id": "8",
+            "action": "requests",
+            "type": "websocket"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&after_clear);
+    assert_eq!(get_data(&after_clear)["requests"], json!([]));
+
+    let close = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&close);
+    http_task.abort();
+    iframe_task.abort();
+    websocket_task.abort();
 }
 
 #[tokio::test]

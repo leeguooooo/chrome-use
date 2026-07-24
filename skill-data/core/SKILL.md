@@ -948,7 +948,9 @@ proxy, no extension permission). Three modes: **mock** the response
 **rewrite** the outgoing request (`--method`/`--set-body`/`--set-header`/`--rewrite-url`),
 or **edit** the real response (`--edit-status`/`--edit-header`/`--replace 'from=>to'`);
 `--abort` blocks entirely. Scope with `--resource-type xhr,fetch`; inspect/record via
-`network requests` and `network har start|stop`; `network unroute` drops all routes.
+`network requests` and `network har start|stop`; filter WebSocket connections with
+`network requests --type websocket`. Connection metadata is recorded, not frame payloads.
+`network unroute` drops all routes.
 
 Full detail: `chrome-use skills get network`
 

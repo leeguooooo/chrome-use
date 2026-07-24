@@ -2505,7 +2505,7 @@ Subcommands:
   requests [options]         List captured requests
     --clear                  Clear request log
     --filter <pattern>       Filter by URL pattern
-    --type <types>           Filter by resource type (comma-separated: xhr,fetch,document)
+    --type <types>           Filter by resource type (comma-separated: xhr,fetch,document,websocket)
     --method <method>        Filter by HTTP method (GET, POST, etc.)
     --status <code>          Filter by status (200, 2xx, 400-499)
   request <requestId>        View full request/response detail (including body)
@@ -2525,6 +2525,7 @@ Examples:
   chrome-use network requests
   chrome-use network requests --filter "api"
   chrome-use network requests --type xhr,fetch
+  chrome-use network requests --type websocket
   chrome-use network requests --method POST --status 2xx
   chrome-use network requests --clear
   chrome-use network request 1234.5
