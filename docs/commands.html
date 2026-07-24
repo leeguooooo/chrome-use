@@ -151,7 +151,10 @@
 <span class="du-prompt">$</span> chrome-use scroll down 500     <span class="du-cmt"># 滚动页面（默认 down 300px）</span>
 <span class="du-prompt">$</span> chrome-use scrollintoview @e1  <span class="du-cmt"># 滚动元素进入视口（别名：scrollinto）</span>
 <span class="du-prompt">$</span> chrome-use drag @e1 @e2        <span class="du-cmt"># 拖放</span>
-<span class="du-prompt">$</span> chrome-use upload @e1 file.pdf <span class="du-cmt"># 上传文件</span></code></pre>
+<span class="du-prompt">$</span> chrome-use upload @e1 file.pdf <span class="du-cmt"># 上传文件</span>
+<span class="du-prompt">$</span> chrome-use download @e2 ./file.pdf <span class="du-cmt"># 从链接或控件下载</span>
+<span class="du-prompt">$</span> chrome-use download-url https://example.com/file.pdf ./file.pdf
+<span class="du-prompt">$</span> chrome-use downloads <span class="du-flag">--limit</span> 10 <span class="du-flag">--json</span> <span class="du-cmt"># 机器可读的 Chrome 下载记录</span></code></pre>
       </div>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 点击"成功但没反应"</div>

@@ -95,7 +95,7 @@
       <h2>扩展 profile：--tools all</h2>
       <p>
         默认的 12 个工具够大多数任务用了。需要更多能力时加 <code>--tools all</code>，
-        把 profile 从 12 个扩到<strong>24 个工具</strong>——核心 12 个之外，再加上下面这些
+        把 profile 从 12 个扩到<strong>26 个工具</strong>——核心 12 个之外，再加上下面这些
         （仍不是完整的 CLI 全集）：
       </p>
 
@@ -116,6 +116,8 @@
           <tr><td><code>chrome_use_site</code></td><td>跑社区站点适配器做结构化提取</td></tr>
           <tr><td><code>chrome_use_upload</code></td><td>给文件输入框上传文件</td></tr>
           <tr><td><code>chrome_use_download</code></td><td>触发并抓取一次下载</td></tr>
+          <tr><td><code>chrome_use_download_url</code></td><td>通过当前 Chrome profile 从 URL 发起下载</td></tr>
+          <tr><td><code>chrome_use_downloads</code></td><td>列出或清除 Chrome 下载历史</td></tr>
         </tbody>
       </table>
 
@@ -124,7 +126,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-cmt"># 24 工具扩展 profile</span>
+<pre><code><span class="du-cmt"># 26 工具扩展 profile</span>
 <span class="du-prompt">$</span> chrome-use mcp <span class="du-flag">--tools</span> all</code></pre>
       </div>
 

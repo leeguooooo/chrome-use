@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Local HTTP API · chrome-use docs</title>
+  <meta name="description" content="Drive a chrome-use session through the versioned localhost HTTP API with curl or custom tools." />
+  <meta name="theme-color" content="#fcfbf4" />
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+<body data-page="http-api" data-lang="en">
+  <div id="du-topbar"></div>
+  <div class="du-shell">
+    <nav id="du-sidebar"></nav>
+    <main class="du-main">
+      <p class="du-eyebrow">Integration</p>
+      <div class="du-title-row">
+        <h1>Local HTTP API</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+      <p class="du-lede">
+        Every session stream port exposes a versioned HTTP surface on
+        <code>127.0.0.1</code>. It accepts the same command objects used by the
+        CLI and MCP, so custom tools do not need to spawn a process for each action.
+      </p>
+
+      <h2>Discover the port</h2>
+      <p>The stream server starts with the daemon. Query the active session to find its port:</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>PORT=$(chrome-use --session demo stream status --json | jq -r '.data.port')
+ORIGIN="http://127.0.0.1:$PORT"</code></pre>
+      </div>
+
+      <h2>Read endpoints</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET /api/v1/status</code></td><td>Daemon engine and availability.</td></tr>
+          <tr><td><code>GET /api/v1/tabs</code></td><td>Last observed session tabs.</td></tr>
+          <tr><td><code>GET /api/v1/sessions</code></td><td>Locally discoverable sessions.</td></tr>
+        </tbody>
+      </table>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>curl -fsS "$ORIGIN/api/v1/status"
+curl -fsS "$ORIGIN/api/v1/tabs"</code></pre>
+      </div>
+
+      <h2>Run a command</h2>
+      <p>
+        Post a daemon command object to <code>/api/v1/command</code>. The
+        response is the normal chrome-use envelope.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>curl -fsS -X POST "$ORIGIN/api/v1/command" \
+  -H "Origin: $ORIGIN" \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"curl-1","action":"snapshot","interactive":true}'</code></pre>
+      </div>
+      <p>
+        Command fields match the JSON emitted by the corresponding CLI parser.
+        Start with <code>chrome-use &lt;command&gt; --help</code> and the command
+        reference when building an integration.
+      </p>
+
+      <h2>Security boundary</h2>
+      <p>
+        The server binds only to loopback. Versioned reads require a loopback
+        <code>Host</code> and reject mismatched browser origins. Mutating command
+        requests also require an <code>Origin</code> or <code>Referer</code>
+        whose authority matches that Host. Requests without that match receive
+        HTTP 403 and are never relayed to the daemon.
+      </p>
+
+      <h2>Error contract</h2>
+      <p>CLI JSON, MCP structured content, and HTTP share the same failure fields:</p>
+      <table>
+        <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>success</code></td><td><code>false</code> for a failed command.</td></tr>
+          <tr><td><code>error</code></td><td>Human-readable diagnostic.</td></tr>
+          <tr><td><code>code</code></td><td>Stable machine category such as <code>timeout</code> or <code>element_not_found</code>.</td></tr>
+          <tr><td><code>retryable</code></td><td>Whether retrying after a short recovery may succeed.</td></tr>
+        </tbody>
+      </table>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">json</span></div>
+<pre><code>{"success":false,"error":"Timeout waiting for download","code":"timeout","retryable":true}</code></pre>
+      </div>
+    </main>
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

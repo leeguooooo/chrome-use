@@ -1770,6 +1770,9 @@ chrome-use download - Download a file by clicking an element
 Usage: chrome-use download <selector> <path>
 
 Clicks an element that triggers a download and saves the file to the specified path.
+For HTTP(S) anchors in an ab-connect session, chrome-use resolves the href and
+uses Chrome's downloads API instead of clicking. This prevents cross-origin
+`download` links from navigating the current tab.
 
 Arguments:
   selector             Element to click (CSS selector or @ref)
@@ -1783,6 +1786,53 @@ Examples:
   chrome-use download "#download-btn" ./file.pdf
   chrome-use download @e5 ./report.xlsx
   chrome-use download "a[href$='.zip']" ./archive.zip
+"##
+        }
+        "download-url" | "download-start" => {
+            r##"
+chrome-use download-url - Start a Chrome download from a URL
+
+Usage: chrome-use download-url <url> [path]
+
+Starts an HTTP(S) download through ab-connect. When path is provided, the
+completed file is moved there. Without path, Chrome keeps it in the profile's
+normal download directory. Requires ab-connect 0.5.13 or newer.
+
+Alias: download-start
+
+Global Options:
+  --json               Output as JSON
+  --session <name>     Use specific session
+
+Examples:
+  chrome-use download-url "https://example.com/report.pdf"
+  chrome-use download-url "https://example.com/video.mp4" ./video.mp4
+"##
+        }
+        "downloads" => {
+            r##"
+chrome-use downloads - List or clear Chrome download history
+
+Usage:
+  chrome-use downloads [--limit <count>]
+  chrome-use downloads --clear
+
+Lists recent downloads from the connected Chrome profile. `--clear` erases
+download history only; it never deletes downloaded files. Requires ab-connect
+0.5.13 or newer.
+
+Options:
+  --limit <count>      Maximum entries to return (default 20, max 100)
+  --clear              Clear Chrome's download history
+
+Global Options:
+  --json               Output as JSON
+  --session <name>     Use specific session
+
+Examples:
+  chrome-use downloads
+  chrome-use downloads --limit 5 --json
+  chrome-use downloads --clear
 "##
         }
 
@@ -3264,6 +3314,8 @@ available localhost port automatically and reports it back.
 Notes:
   - 'stream enable' creates the WebSocket server.
   - WebSocket clients trigger frame streaming automatically.
+  - The same localhost port exposes the versioned HTTP API at /api/v1.
+    POST /api/v1/command accepts the daemon command JSON used by CLI/MCP.
   - 'screencast_start' and 'screencast_stop' still control explicit CDP screencasts.
   - Streaming is always enabled. Set AGENT_BROWSER_STREAM_PORT to bind to a
     specific port instead of the default OS-assigned port.
@@ -3592,7 +3644,9 @@ Core Commands:
   select <sel> <val...>      Select dropdown option
   drag <src> <dst>           Drag and drop
   upload <sel> <files...>    Upload files
-  download <sel> <path>      Download file by clicking element
+  download <sel> <path>      Download file from an element
+  download-url <url> [path]  Start a URL download through ab-connect
+  downloads [--limit N]      List downloads (--clear clears history)
   scroll <dir> [px]          Scroll (up/down/left/right)
   scrollintoview <sel>       Scroll element into view
   wait <sel|ms>              Wait for element or time
@@ -3835,7 +3889,7 @@ Options:
                              Use --hide-scrollbars false to keep scrollbars visible
   -p, --provider <name>      Browser provider: ios, browserbase, kernel, browseruse, browserless, agentcore
   --device <name>            iOS device name (e.g., "iPhone 15 Pro")
-  --json                     JSON output
+  --json                     JSON output; failures include code + retryable
   --annotate                 Annotated screenshot with numbered labels and legend
   --screenshot-dir <path>    Default screenshot output directory (or AGENT_BROWSER_SCREENSHOT_DIR)
   --screenshot-quality <n>   JPEG quality 0-100; ignored for PNG (or AGENT_BROWSER_SCREENSHOT_QUALITY)

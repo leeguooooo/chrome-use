@@ -98,7 +98,7 @@
       <h2>Extended profile: --tools all</h2>
       <p>
         The default 12 tools cover most tasks. When a host needs more, add <code>--tools all</code> to
-        expand the profile from 12 to <strong>24 tools</strong> — the core 12 plus the ones below
+        expand the profile from 12 to <strong>26 tools</strong> — the core 12 plus the ones below
         (still not full CLI parity):
       </p>
 
@@ -119,6 +119,8 @@
           <tr><td><code>chrome_use_site</code></td><td>Run a community site adapter for structured extraction</td></tr>
           <tr><td><code>chrome_use_upload</code></td><td>Upload a file to a file input</td></tr>
           <tr><td><code>chrome_use_download</code></td><td>Trigger and capture a download</td></tr>
+          <tr><td><code>chrome_use_download_url</code></td><td>Start a URL download through the current Chrome profile</td></tr>
+          <tr><td><code>chrome_use_downloads</code></td><td>List or clear Chrome download history</td></tr>
         </tbody>
       </table>
 
@@ -127,7 +129,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-cmt"># 24-tool extended profile</span>
+<pre><code><span class="du-cmt"># 26-tool extended profile</span>
 <span class="du-prompt">$</span> chrome-use mcp <span class="du-flag">--tools</span> all</code></pre>
       </div>
 

@@ -271,6 +271,27 @@
 
       <hr class="du-divider" />
 
+      <h2>下载</h2>
+      <p>
+        ab-connect 0.5.13 及以上版本会通过 Chrome downloads API 下载
+        HTTP(S) 链接。chrome-use 会先解析链接的 <code>href</code>，包括
+        <code>snapshot -i</code> 中能看到的动态 anchor，从而避免跨源
+        <code>download</code> 链接把当前标签页导航到媒体 URL。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code><span class="du-prompt">$</span> chrome-use download @e2 ./video.mp4
+<span class="du-prompt">$</span> chrome-use download-url https://example.com/report.pdf ./report.pdf
+<span class="du-prompt">$</span> chrome-use downloads --limit 10 --json
+<span class="du-prompt">$</span> chrome-use downloads --clear</code></pre>
+      </div>
+      <p>
+        <code>download-url</code> 省略目标路径时保留 Chrome 的默认下载位置。
+        <code>downloads --clear</code> 只清除历史，不会删除文件。
+      </p>
+
+      <hr class="du-divider" />
+
       <!-- ============ 跨源 iframe ============ -->
       <h2>跨源 iframe：始终按 ref 操作</h2>
       <p>

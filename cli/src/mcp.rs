@@ -53,6 +53,8 @@ const TOOL_NETWORK_ROUTE: &str = "chrome_use_network_route";
 const TOOL_SITE: &str = "chrome_use_site";
 const TOOL_UPLOAD: &str = "chrome_use_upload";
 const TOOL_DOWNLOAD: &str = "chrome_use_download";
+const TOOL_DOWNLOAD_URL: &str = "chrome_use_download_url";
+const TOOL_DOWNLOADS: &str = "chrome_use_downloads";
 
 /// Which set of `chrome_use_*` tools this server instance exposes, chosen at
 /// startup via `chrome-use mcp --tools <core|all>` (default `core`).
@@ -580,11 +582,27 @@ fn extended_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_DOWNLOAD,
-            "description": "Click an element that triggers a download and save the result to a path.",
+            "description": "Download from an element and save the result to a path. HTTP(S) links use Chrome's downloads API when ab-connect supports it.",
             "inputSchema": build_schema(obj(&[
                 ("selector", json!({ "type": "string", "description": "CSS selector or @ref that triggers the download." })),
                 ("path", json!({ "type": "string", "description": "Local file path to save the download to." })),
             ]), &["selector", "path"]),
+        }),
+        json!({
+            "name": TOOL_DOWNLOAD_URL,
+            "description": "Start an HTTP(S) download through the connected Chrome profile.",
+            "inputSchema": build_schema(obj(&[
+                ("url", json!({ "type": "string", "description": "HTTP(S) URL to download." })),
+                ("path", json!({ "type": "string", "description": "Optional local destination. Omit to keep Chrome's normal download path." })),
+            ]), &["url"]),
+        }),
+        json!({
+            "name": TOOL_DOWNLOADS,
+            "description": "List recent Chrome downloads or clear download history without deleting files.",
+            "inputSchema": build_schema(obj(&[
+                ("limit", json!({ "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum entries to return." })),
+                ("clear", json!({ "type": "boolean", "description": "Erase Chrome download history instead of listing it." })),
+            ]), &[]),
         }),
     ]
 }
@@ -631,6 +649,8 @@ fn is_known_tool(name: &str, profile: Profile) -> bool {
                 | TOOL_SITE
                 | TOOL_UPLOAD
                 | TOOL_DOWNLOAD
+                | TOOL_DOWNLOAD_URL
+                | TOOL_DOWNLOADS
         )
 }
 
@@ -677,6 +697,8 @@ fn call_tool(params: Option<&Value>, profile: Profile) -> Result<Value, Protocol
         TOOL_SITE => call_site(arguments),
         TOOL_UPLOAD => call_upload(arguments),
         TOOL_DOWNLOAD => call_download(arguments),
+        TOOL_DOWNLOAD_URL => call_download_url(arguments),
+        TOOL_DOWNLOADS => call_downloads(arguments),
         _ => unreachable!("known MCP tool missing call handler: {}", name),
     }
 }
@@ -1299,6 +1321,26 @@ fn call_download(arguments: &Value) -> Result<Value, ProtocolError> {
     run_tool(arguments, vec!["download".to_string(), selector, path])
 }
 
+fn call_download_url(arguments: &Value) -> Result<Value, ProtocolError> {
+    let url = required_string(arguments, "url")?;
+    let mut args = vec!["download-url".to_string(), url];
+    if let Some(path) = optional_string(arguments, "path")? {
+        args.push(path);
+    }
+    run_tool(arguments, args)
+}
+
+fn call_downloads(arguments: &Value) -> Result<Value, ProtocolError> {
+    let mut args = vec!["downloads".to_string()];
+    if optional_bool(arguments, "clear")?.unwrap_or(false) {
+        args.push("--clear".to_string());
+    } else if let Some(limit) = optional_u64(arguments, "limit")? {
+        args.push("--limit".to_string());
+        args.push(limit.to_string());
+    }
+    run_tool(arguments, args)
+}
+
 /// Build the final argv (command args + `--session`/global flags + `--json`)
 /// and run it as a child `chrome-use` process.
 fn run_tool(arguments: &Value, mut args: Vec<String>) -> Result<Value, ProtocolError> {
@@ -1688,6 +1730,8 @@ mod tests {
         TOOL_SITE,
         TOOL_UPLOAD,
         TOOL_DOWNLOAD,
+        TOOL_DOWNLOAD_URL,
+        TOOL_DOWNLOADS,
     ];
 
     fn tool_names(tools: &[Value]) -> Vec<&str> {

@@ -6,6 +6,7 @@ mod connect;
 mod connection;
 mod cookie_export;
 mod doctor;
+mod error_envelope;
 mod findurl;
 mod flags;
 mod friction;
@@ -57,10 +58,7 @@ fn print_json_value(value: serde_json::Value) {
 }
 
 fn print_json_error(message: impl AsRef<str>) {
-    print_json_value(json!({
-        "success": false,
-        "error": message.as_ref(),
-    }));
+    print_json_value(error_envelope::error_value(message.as_ref()));
 }
 
 fn print_json_error_with_type(message: impl AsRef<str>, error_type: &str) {
@@ -68,6 +66,8 @@ fn print_json_error_with_type(message: impl AsRef<str>, error_type: &str) {
         "success": false,
         "error": message.as_ref(),
         "type": error_type,
+        "code": error_type,
+        "retryable": false,
     }));
 }
 
@@ -1714,14 +1714,21 @@ fn main() {
                 success: true,
                 data: Some(data),
                 error: None,
+                code: None,
+                retryable: None,
                 warning: None,
             },
-            Err(e) => connection::Response {
-                success: false,
-                data: None,
-                error: Some(e),
-                warning: None,
-            },
+            Err(e) => {
+                let metadata = error_envelope::classify_error(&e);
+                connection::Response {
+                    code: Some(metadata.code.to_string()),
+                    retryable: Some(metadata.retryable),
+                    success: false,
+                    data: None,
+                    error: Some(e),
+                    warning: None,
+                }
+            }
         };
         let output_opts = OutputOptions::from_flags(&flags);
         output::print_response_with_opts(&resp, action, &output_opts);

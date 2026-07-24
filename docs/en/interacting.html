@@ -281,6 +281,29 @@
 
       <hr class="du-divider" />
 
+      <h2>Downloads</h2>
+      <p>
+        With ab-connect 0.5.13 or newer, HTTP(S) links are downloaded through
+        Chrome's downloads API. chrome-use resolves a link's <code>href</code>
+        before acting, including dynamically-created anchors listed by
+        <code>snapshot -i</code>. This prevents a cross-origin
+        <code>download</code> link from navigating the active tab.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code><span class="du-prompt">$</span> chrome-use download @e2 ./video.mp4
+<span class="du-prompt">$</span> chrome-use download-url https://example.com/report.pdf ./report.pdf
+<span class="du-prompt">$</span> chrome-use downloads --limit 10 --json
+<span class="du-prompt">$</span> chrome-use downloads --clear</code></pre>
+      </div>
+      <p>
+        Omitting the destination from <code>download-url</code> keeps Chrome's
+        normal download location. <code>downloads --clear</code> removes history
+        entries only and never deletes files.
+      </p>
+
+      <hr class="du-divider" />
+
       <!-- ============ Cross-origin iframes ============ -->
       <h2>Cross-origin iframes: always act by ref</h2>
       <p>

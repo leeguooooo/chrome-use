@@ -15,7 +15,7 @@
     "chrome-use": "bin/chrome-use.js"
   },
   "scripts": {
-    "test:extension": "node --test extensions/ab-connect/tab-duplicate.test.js",
+    "test:extension": "node --test extensions/ab-connect/*.test.js",
     "prepare": "husky || true",
     "version:sync": "node scripts/sync-version.js",
     "version": "npm run version:sync && git add cli/Cargo.toml",

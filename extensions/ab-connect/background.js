@@ -17,6 +17,11 @@
 // native messaging.
 
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js'
+import {
+  clearDownloads,
+  listDownloads,
+  startDownload,
+} from './download-manager.js'
 
 const HOST_NAME = 'com.agent_browser.connect'
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i
@@ -438,7 +443,7 @@ function connectHost() {
       postToHost({
         method: 'hello',
         version: chrome.runtime.getManifest().version,
-        capabilities: ['nativeTabDuplicate'],
+        capabilities: ['nativeTabDuplicate', 'downloadsApi'],
         ...extra,
       })
     } catch {}
@@ -675,6 +680,29 @@ async function handleForwardCdpCommand(msg) {
       activateTab: (tabId) => chrome.tabs.update(tabId, { active: true }),
       focusWindow: (windowId) => chrome.windows.update(windowId, { focused: true }),
       removeTab: (tabId) => chrome.tabs.remove(tabId),
+    })
+  }
+
+  if (method === 'ABExt.downloadUrl') {
+    return await startDownload(params, {
+      download: (options) => chrome.downloads.download(options),
+      search: (query) => chrome.downloads.search(query),
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      makeToken: () =>
+        (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`).replaceAll('.', '-'),
+    })
+  }
+
+  if (method === 'ABExt.listDownloads') {
+    return await listDownloads(params, {
+      search: (query) => chrome.downloads.search(query),
+    })
+  }
+
+  if (method === 'ABExt.clearDownloads') {
+    return await clearDownloads(params, {
+      erase: (query) => chrome.downloads.erase(query),
     })
   }
 

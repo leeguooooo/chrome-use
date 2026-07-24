@@ -411,10 +411,8 @@ async fn handle_connection<S>(
                 let cmd: Value = match serde_json::from_str(trimmed) {
                     Ok(v) => v,
                     Err(e) => {
-                        let err = serde_json::json!({
-                            "success": false,
-                            "error": format!("Invalid JSON: {}", e),
-                        });
+                        let err =
+                            crate::error_envelope::error_value(&format!("Invalid JSON: {}", e));
                         let mut resp = serde_json::to_string(&err).unwrap_or_default();
                         resp.push('\n');
                         let _ = writer.write_all(resp.as_bytes()).await;

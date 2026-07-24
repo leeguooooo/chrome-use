@@ -85,6 +85,9 @@ const KNOWN_COMMANDS: &[&str] = &[
     "solve-slider",
     "dialog",
     "upload",
+    "download",
+    "download-url",
+    "downloads",
     "site",
     "box",
     "adopt",
@@ -831,6 +834,62 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 usage: "download <selector> <path>",
             })?;
             Ok(json!({ "id": id, "action": "download", "selector": sel, "path": path }))
+        }
+        "download-url" | "download-start" => {
+            let url = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "download-url".to_string(),
+                usage: "download-url <url> [path]",
+            })?;
+            let mut cmd = json!({ "id": id, "action": "download_url", "url": url });
+            if let Some(path) = rest.get(1) {
+                cmd["path"] = json!(path);
+            }
+            Ok(cmd)
+        }
+        "downloads" => {
+            let mut cmd = json!({ "id": id, "action": "downloads" });
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i] {
+                    "--clear" => {
+                        cmd["clear"] = json!(true);
+                        i += 1;
+                    }
+                    "--limit" => {
+                        let value =
+                            rest.get(i + 1)
+                                .ok_or_else(|| ParseError::MissingArguments {
+                                    context: "downloads --limit".to_string(),
+                                    usage: "downloads [--limit <count>] [--clear]",
+                                })?;
+                        let limit = value.parse::<u64>().map_err(|_| ParseError::InvalidValue {
+                            message: format!(
+                                "Invalid limit '{}': expected a positive integer",
+                                value
+                            ),
+                            usage: "downloads [--limit <count>] [--clear]",
+                        })?;
+                        if !(1..=100).contains(&limit) {
+                            return Err(ParseError::InvalidValue {
+                                message: format!(
+                                    "Invalid limit '{}': expected an integer from 1 to 100",
+                                    limit
+                                ),
+                                usage: "downloads [--limit <count>] [--clear]",
+                            });
+                        }
+                        cmd["limit"] = json!(limit);
+                        i += 2;
+                    }
+                    flag => {
+                        return Err(ParseError::InvalidValue {
+                            message: format!("Unknown flag for downloads: {}", flag),
+                            usage: "downloads [--limit <count>] [--clear]",
+                        });
+                    }
+                }
+            }
+            Ok(cmd)
         }
 
         // === Keyboard ===
@@ -6896,6 +6955,38 @@ mod tests {
         assert_eq!(cmd["action"], "download");
         assert_eq!(cmd["selector"], "#btn");
         assert_eq!(cmd["path"], "./file.pdf");
+    }
+
+    #[test]
+    fn test_download_url_with_optional_path() {
+        let cmd = parse_command(
+            &args("download-url https://example.com/video.mp4 /tmp/video.mp4"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "download_url");
+        assert_eq!(cmd["url"], "https://example.com/video.mp4");
+        assert_eq!(cmd["path"], "/tmp/video.mp4");
+
+        let without_path = parse_command(
+            &args("download-start https://example.com/video.mp4"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(without_path["action"], "download_url");
+        assert!(without_path.get("path").is_none());
+    }
+
+    #[test]
+    fn test_downloads_filters() {
+        let cmd = parse_command(&args("downloads --limit 7"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "downloads");
+        assert_eq!(cmd["limit"], 7);
+
+        let clear = parse_command(&args("downloads --clear"), &default_flags()).unwrap();
+        assert_eq!(clear["clear"], true);
+        assert!(parse_command(&args("downloads --limit 0"), &default_flags()).is_err());
+        assert!(parse_command(&args("downloads --limit 101"), &default_flags()).is_err());
     }
 
     #[test]

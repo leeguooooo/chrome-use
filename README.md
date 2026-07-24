@@ -375,6 +375,49 @@ a screenshot. Assertions: `url` · `visible` · `hidden` · `text` · `count` ·
 [给前端写「单元测试」:chrome-use test 详解](https://blog.leeguoo.com/zh/posts/chrome-use-test-suite/).
 Found a regression? Add a case — the suite gets more valuable the more you use it.
 
+## Downloads
+
+With ab-connect 0.5.13 or newer, URL downloads and download history use Chrome's
+native downloads API. The download runs in the connected profile, so it uses the
+same cookies as the logged-in browser without navigating the current tab.
+
+```bash
+chrome-use download @e2 ./video.mp4
+chrome-use download-url "https://example.com/report.pdf" ./report.pdf
+chrome-use download-url "https://example.com/archive.zip"
+chrome-use downloads --limit 10 --json
+chrome-use downloads --clear
+```
+
+For HTTP(S) anchors, `download` resolves the element's `href` first and starts a
+URL download. This also covers dynamically-created anchors exposed by
+`snapshot -i`. `downloads --clear` erases Chrome's download history only; it
+never deletes files.
+
+## Local HTTP API
+
+Every session's localhost stream port exposes a versioned HTTP integration
+surface. Use `stream status --json` to discover the port, then send the same
+daemon command JSON used by the CLI and MCP:
+
+```bash
+PORT=$(chrome-use --session demo stream status --json | jq -r '.data.port')
+ORIGIN="http://127.0.0.1:$PORT"
+
+curl -fsS "$ORIGIN/api/v1/status"
+curl -fsS "$ORIGIN/api/v1/tabs"
+curl -fsS -X POST "$ORIGIN/api/v1/command" \
+  -H "Origin: $ORIGIN" \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"curl-1","action":"snapshot","interactive":true}'
+```
+
+Versioned reads require a loopback `Host` and reject mismatched browser origins.
+Command POSTs additionally require matching `Origin` or `Referer`; this blocks
+cross-site requests and DNS rebinding. Failed CLI, MCP, and HTTP commands share
+`success`, `error`, stable `code`, and `retryable` fields.
+See [the HTTP API guide](docs/en/http-api.html).
+
 ## Network interception (`chrome-use network route`)
 
 Mock a response, rewrite an outgoing request, or block one — right on the Chrome

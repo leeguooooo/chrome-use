@@ -940,6 +940,35 @@ session daemon workers without touching the relay or closing any tabs.
 
 Full detail: `chrome-use skills get sessions`
 
+### Downloads
+
+In an ab-connect 0.5.13+ session, `download <selector|@ref> <path>` resolves an
+HTTP(S) anchor's URL and uses Chrome's downloads API instead of clicking it.
+This prevents cross-origin media links from navigating the active tab and works
+for dynamically-created anchors visible in `snapshot -i`.
+
+```bash
+chrome-use download @e2 ./video.mp4
+chrome-use download-url "https://example.com/report.pdf" ./report.pdf
+chrome-use downloads --limit 10 --json
+chrome-use downloads --clear
+```
+
+Omit the `download-url` path to keep Chrome's normal download location.
+`downloads --clear` clears history only and never deletes files.
+
+### Local HTTP API
+
+The session stream port also serves a versioned localhost API. Discover it with
+`stream status --json`; `GET /api/v1/status`, `/api/v1/tabs`, and
+`/api/v1/sessions` are read endpoints. `POST /api/v1/command` accepts the same
+daemon command object used internally by CLI and MCP.
+
+Versioned reads require a loopback Host and reject mismatched browser origins.
+Command POSTs additionally require matching Origin or Referer. Errors across
+CLI, MCP, and HTTP include stable `code` and `retryable` fields in addition to
+`success` and `error`.
+
 ### Mock responses & rewrite requests
 
 `network route <glob>` intercepts matching requests via the CDP Fetch domain (no
