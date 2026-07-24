@@ -200,7 +200,7 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
 
 > **Auto-trigger — act on it.** chrome-use keeps both packs synced automatically (first use +
 > weekly), and when you `open`/`navigate`/`snapshot` a page whose domain has adapters it tells
-> you: a `💡 site adapters for <domain>` line on stderr, and a `siteAdapters: {domain, commands}`
+> you: a `site adapters for <domain>` line on stderr, and a `siteAdapters: {domain, commands}`
 > field in `--json`. **When you see that, prefer the listed `site <name>/<cmd>` over snapshot+click
 > for reading data** — it's the cheaper, more reliable path and it's already installed. You don't
 > need to run `site update` yourself; just use the command it names. (Only on a brand-new setup

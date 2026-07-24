@@ -304,13 +304,13 @@ by name. Adapters remain their authors' property; chrome-use just runs them.
 syncs both default packs on first use and refreshes them weekly in the background (tune with
 `AGENT_BROWSER_SITES_TTL_DAYS`, disable with `AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`).
 And when you `open`/`snapshot` a page whose domain has adapters, chrome-use surfaces
-them right in the output — a `💡 site adapters for <domain>` line, plus a
+them right in the output — a `site adapters for <domain>` line, plus a
 `siteAdapters` field under `--json` — so an agent reaches for the structured-data
 adapter instead of scraping the DOM:
 
 ```text
 $ chrome-use open https://github.com
-💡 site adapters for github.com — prefer these for structured data:
+site adapters for github.com — prefer these for structured data:
    github/issues, github/me, github/repo, …
    e.g. chrome-use site github/issues --json
 ✓ GitHub

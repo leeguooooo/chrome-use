@@ -198,7 +198,7 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
             if !cmds.is_empty() {
-                eprintln!("💡 site adapters for {domain} — prefer these for structured data:");
+                eprintln!("site adapters for {domain} — prefer these for structured data:");
                 eprintln!("   {}", color::dim(&cmds.join(", ")));
                 eprintln!(
                     "   {}",

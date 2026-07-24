@@ -184,7 +184,7 @@
       </p>
 
       <ul>
-        <li>stderr 上一行 <code>💡 site adapters for &lt;domain&gt;</code>；</li>
+        <li>stderr 上一行 <code>site adapters for &lt;domain&gt;</code>；</li>
         <li><code>--json</code> 输出里的 <code>siteAdapters: {domain, commands}</code> 字段。</li>
       </ul>
 
@@ -195,12 +195,12 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/epiral/bb-sites
 <span class="du-cmt"># … 页面打开的同时，stderr 冒出一行：</span>
-💡 site adapters for github.com: github/issues, github/pulls, github/repo …</code></pre>
+site adapters for github.com: github/issues, github/pulls, github/repo …</code></pre>
       </div>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 看到提示，优先用它列出的 <code>site &lt;name&gt;/&lt;cmd&gt;</code></div>
-        看到 <code>💡 site adapters for &lt;domain&gt;</code> 时，<strong>别再 snapshot + click 去读数据</strong>——
+        看到 <code>site adapters for &lt;domain&gt;</code> 时，<strong>别再 snapshot + click 去读数据</strong>——
         直接用它点名的 <code>site &lt;name&gt;/&lt;cmd&gt;</code>：更省、更稳，而且已经装好了。你也<strong>不需要</strong>自己先跑
         <code>site update</code>，用它给出的命令即可。
       </div>
