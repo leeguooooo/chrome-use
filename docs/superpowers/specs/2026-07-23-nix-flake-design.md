@@ -1,8 +1,13 @@
 # Nix flake for chrome-use — design
 
 **Date:** 2026-07-23
-**Status:** Approved (design), pending implementation plan
+**Status:** Superseded by the implementation — see [`../plans/2026-07-23-nix-flake.md`](../plans/2026-07-23-nix-flake.md) and the shipped `flake.nix` / `nix/package.nix` / `nix/module.nix` for what was actually built.
 **Scope:** Add a Nix flake providing a package, runnable app, dev shell, checks, and NixOS + home-manager modules.
+
+> **Implementation deltas** (this doc records the original design; the shipped code differs):
+> - **Build:** `rustPlatform.buildRustPackage`, not crane / `cargoArtifacts`.
+> - **Checks:** build-only (`checks.build = the package`); clippy + tests stay in CI, not `nix flake check`.
+> - **Module option:** `connectFlags` (extra flags for `chrome-use extension connect`), not `browsers`.
 
 ## Goal
 
@@ -58,7 +63,7 @@ Chrome native-messaging host and (where possible) the browser extension.
 
 ## File layout
 
-```
+```text
 flake.nix          # inputs + flake-parts wiring; perSystem outputs; flake-level modules
 flake.lock         # committed lockfile
 nix/package.nix    # crane build of cli/ → chrome-use binary
