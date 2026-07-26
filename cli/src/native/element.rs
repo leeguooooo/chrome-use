@@ -6,6 +6,88 @@ use super::adaptive::{self, ElementFingerprint};
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
 
+/// Read the value represented by an editable element.
+///
+/// Rich editors keep their authoritative value outside the DOM node exposed by
+/// the accessibility tree. In particular, Monaco snapshots its hidden
+/// `textarea.inputarea` as a textbox even though the textarea value is not the
+/// editor model. Resolve the owning editor and return the model value so callers
+/// can verify writes instead of treating an empty textarea as success.
+pub(crate) const READ_EDITABLE_VALUE_FUNCTION: &str = r#"function() {
+    let el = this;
+
+    const monacoRoot = (el.closest && el.closest('.monaco-editor'))
+        || (el.querySelector && el.querySelector('.monaco-editor'));
+    if (monacoRoot) {
+        const candidates = [];
+        const seen = new Set();
+        const add = value => {
+            if (!value || seen.has(value)) return;
+            seen.add(value);
+            if (value.editor) candidates.push(value.editor);
+            if (value.monaco && value.monaco.editor) candidates.push(value.monaco.editor);
+            if (value.default) add(value.default);
+        };
+        add(window.monaco);
+        if (typeof window.require === 'function') {
+            for (const id of ['vs/editor/editor.api', 'vs/editor/editor.main']) {
+                try { add(window.require(id)); } catch (e) {}
+            }
+        }
+
+        for (const api of candidates) {
+            try {
+                const editors = api.getEditors ? api.getEditors() : [];
+                const editor = editors.find(candidate => {
+                    const node = candidate.getDomNode && candidate.getDomNode();
+                    return node && (node === monacoRoot || node.contains(el));
+                });
+                if (editor && editor.getValue) {
+                    return { ok: true, engine: 'monaco', value: editor.getValue() };
+                }
+
+                const models = api.getModels ? api.getModels() : [];
+                const roots = document.querySelectorAll('.monaco-editor');
+                if (models.length === 1 && roots.length === 1 && models[0].getValue) {
+                    return { ok: true, engine: 'monaco', value: models[0].getValue() };
+                }
+            } catch (e) {}
+        }
+
+        return {
+            ok: false,
+            engine: 'monaco',
+            error: 'Monaco model API is not accessible for this editor'
+        };
+    }
+
+    const cm5 = (el.closest && el.closest('.CodeMirror'))
+        || (el.querySelector && el.querySelector('.CodeMirror'));
+    if (cm5 && cm5.CodeMirror) {
+        return { ok: true, engine: 'codemirror5', value: cm5.CodeMirror.getValue() };
+    }
+
+    const editable = node => node && (
+        node.tagName === 'INPUT'
+        || node.tagName === 'TEXTAREA'
+        || node.tagName === 'SELECT'
+        || node.isContentEditable
+    );
+    if (!editable(el) && el.querySelector) {
+        const inner = el.querySelector('input, textarea, select, [contenteditable]');
+        if (inner) el = inner;
+    }
+
+    if (typeof el.value === 'string') {
+        const engine = el.tagName === 'SELECT' ? 'select' : 'input';
+        return { ok: true, engine, value: el.value };
+    }
+    if (el.isContentEditable) {
+        return { ok: true, engine: 'contenteditable', value: el.innerText };
+    }
+    return { ok: false, engine: 'unknown', error: 'Element does not expose an editable value' };
+}"#;
+
 #[derive(Debug, Clone)]
 pub struct RefEntry {
     pub backend_node_id: Option<i64>,
@@ -1636,27 +1718,7 @@ pub async fn get_element_input_value(
         .send_command_typed(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
-                // Read rich-editor content too (issue #41): CodeMirror 5 / Monaco
-                // keep their text in a model, not `.value`; contenteditable keeps
-                // it as innerText. Falls back to `.value` for plain inputs.
-                function_declaration: r#"function() {
-                    const el = this;
-                    const cm5 = el.closest && el.closest('.CodeMirror');
-                    if (cm5 && cm5.CodeMirror) return cm5.CodeMirror.getValue();
-                    if (window.monaco && monaco.editor) {
-                        try {
-                            const eds = monaco.editor.getEditors ? monaco.editor.getEditors() : [];
-                            const ed = eds.find(e => e.getDomNode && e.getDomNode().contains(el)) || eds[0];
-                            if (ed) return ed.getValue();
-                            const m = monaco.editor.getModels ? monaco.editor.getModels() : [];
-                            if (m[0]) return m[0].getValue();
-                        } catch (e) {}
-                    }
-                    if (typeof el.value === 'string') return el.value;
-                    if (el.isContentEditable) return el.innerText;
-                    return '';
-                }"#
-                .to_string(),
+                function_declaration: READ_EDITABLE_VALUE_FUNCTION.to_string(),
                 object_id: Some(object_id),
                 arguments: None,
                 return_by_value: Some(true),
@@ -1666,11 +1728,23 @@ pub async fn get_element_input_value(
         )
         .await?;
 
-    Ok(result
-        .result
-        .value
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_default())
+    if let Some(ex) = result.exception_details {
+        return Err(format!("get value failed: {}", ex.text));
+    }
+
+    let data = result.result.value.unwrap_or(Value::Null);
+    if !data.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(data
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("Element does not expose a readable value")
+            .to_string());
+    }
+
+    data.get("value")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "Element value was not returned as text".to_string())
 }
 
 pub async fn set_element_value(

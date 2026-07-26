@@ -4,7 +4,10 @@ use serde_json::Value;
 
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
-use super::element::{parse_ref, resolve_element_center, resolve_element_object_id, RefMap};
+use super::element::{
+    parse_ref, resolve_element_center, resolve_element_object_id, RefMap,
+    READ_EDITABLE_VALUE_FUNCTION,
+};
 use super::humanize;
 
 /// Whether a pointer interaction should be DOM-dispatched (invoke the event on
@@ -603,11 +606,58 @@ pub async fn fill(
         r#"function() {{
             let el = this;
             const v = {val};
+            const monacoRoot = (el.closest && el.closest('.monaco-editor'))
+                || (el.querySelector && el.querySelector('.monaco-editor'));
+
+            // Monaco: only use its authoritative model API. The hidden
+            // textarea.inputarea surfaced by the accessibility tree is an input
+            // transport, not the model. Synthetic paste events on it are untrusted
+            // and may be ignored while still looking successful (#138).
+            if (monacoRoot) {{
+                const candidates = [];
+                const seen = new Set();
+                const add = value => {{
+                    if (!value || seen.has(value)) return;
+                    seen.add(value);
+                    if (value.editor) candidates.push(value.editor);
+                    if (value.monaco && value.monaco.editor) candidates.push(value.monaco.editor);
+                    if (value.default) add(value.default);
+                }};
+                add(window.monaco);
+                if (typeof window.require === 'function') {{
+                    for (const id of ['vs/editor/editor.api', 'vs/editor/editor.main']) {{
+                        try {{ add(window.require(id)); }} catch (e) {{}}
+                    }}
+                }}
+
+                for (const api of candidates) {{
+                    try {{
+                        const editors = api.getEditors ? api.getEditors() : [];
+                        const editor = editors.find(candidate => {{
+                            const node = candidate.getDomNode && candidate.getDomNode();
+                            return node && (node === monacoRoot || node.contains(el));
+                        }});
+                        if (editor && editor.setValue && editor.getValue) {{
+                            editor.setValue(v);
+                            return 'monaco';
+                        }}
+
+                        const models = api.getModels ? api.getModels() : [];
+                        const roots = document.querySelectorAll('.monaco-editor');
+                        if (models.length === 1 && roots.length === 1
+                            && models[0].setValue && models[0].getValue) {{
+                            models[0].setValue(v);
+                            return 'monaco';
+                        }}
+                    }} catch (e) {{}}
+                }}
+                return 'monaco-unsupported';
+            }}
+
             // If the ref anchored a WRAPPER rather than the field itself (common when
             // a controlled input lives inside a shadow/portal and snapshot pinned the
             // host), retarget to the nested editable so the native setter lands on the
-            // real input instead of no-op'ing on a div (#105.2). Also lets a Monaco
-            // container resolve down to its `textarea.inputarea`.
+            // real input instead of no-op'ing on a div (#105.2).
             const editable = n => n && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.tagName === 'SELECT' || n.isContentEditable);
             if (!editable(el) && el.querySelector) {{
                 const inner = el.querySelector('input, textarea, select, [contenteditable]');
@@ -620,36 +670,6 @@ pub async fn fill(
             // CodeMirror 5: a hidden <textarea> inside .CodeMirror with a live instance.
             const cm5 = el.closest && el.closest('.CodeMirror');
             if (cm5 && cm5.CodeMirror) {{ cm5.CodeMirror.setValue(v); return 'codemirror5'; }}
-
-            // Monaco: global `monaco`; prefer the editor whose DOM contains el.
-            if (window.monaco && monaco.editor) {{
-                try {{
-                    const eds = monaco.editor.getEditors ? monaco.editor.getEditors() : [];
-                    const ed = eds.find(e => e.getDomNode && e.getDomNode().contains(el)) || eds[0];
-                    if (ed) {{ ed.setValue(v); return 'monaco'; }}
-                    const models = monaco.editor.getModels ? monaco.editor.getModels() : [];
-                    if (models[0]) {{ models[0].setValue(v); return 'monaco'; }}
-                }} catch (e) {{}}
-            }}
-
-            // Monaco whose runtime isn't exposed on `window.monaco` (bundled inside a
-            // module scope — e.g. Cloudflare Zaraz's Custom-HTML editor, #105.3): the
-            // model can't be reached, and setting the hidden `textarea.inputarea`'s
-            // `.value` does nothing (Monaco ignores it). Drive it the way a human
-            // paste does — a synthetic `paste` ClipboardEvent on the inputarea, which
-            // Monaco's paste handler applies to the model and fires its own events.
-            const mon = el.closest && el.closest('.monaco-editor');
-            const ta = (mon && mon.querySelector('textarea.inputarea'))
-                || ((el.matches && el.matches('textarea.inputarea')) ? el : null);
-            if (ta) {{
-                try {{
-                    ta.focus();
-                    const dt = new DataTransfer();
-                    dt.setData('text/plain', v);
-                    ta.dispatchEvent(new ClipboardEvent('paste', {{ bubbles: true, cancelable: true, clipboardData: dt }}));
-                    return 'monaco-paste';
-                }} catch (e) {{}}
-            }}
 
             if (tag === 'SELECT') {{ el.value = v; fire('input'); fire('change'); return 'select'; }}
 
@@ -703,11 +723,23 @@ pub async fn fill(
         )
         .await?;
 
-    let engine = result
+    if let Some(ex) = result.exception_details {
+        return Err(format!("fill failed: {}", ex.text));
+    }
+
+    let mut engine = result
         .result
         .value
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(|| "input".to_string());
+
+    if engine == "monaco-unsupported" {
+        return Err(
+            "fill cannot safely replace this Monaco editor because its model API is not \
+             accessible; no text was written"
+                .to_string(),
+        );
+    }
 
     // Contenteditable rich editors (DraftJS / Lexical / ProseMirror): the JS above
     // only focused + selected-all. Do the actual edit through CDP so the events are
@@ -739,7 +771,7 @@ pub async fn fill(
                         "Runtime.callFunctionOn",
                         &CallFunctionOnParams {
                             function_declaration: "function() { try { this.dispatchEvent(new Event('change', { bubbles: true })); this.dispatchEvent(new Event('focusout', { bubbles: true })); } catch (e) {} }".to_string(),
-                            object_id: Some(object_id),
+                            object_id: Some(object_id.clone()),
                             arguments: None,
                             return_by_value: Some(true),
                             await_promise: Some(false),
@@ -747,7 +779,6 @@ pub async fn fill(
                         Some(&effective_session_id),
                     )
                     .await;
-                return Ok("contenteditable".to_string());
             }
             Err(_) => {
                 // CDP insert unavailable (rare: some Electron webviews). Fall back to
@@ -768,7 +799,7 @@ pub async fn fill(
                         "Runtime.callFunctionOn",
                         &CallFunctionOnParams {
                             function_declaration: fallback_js,
-                            object_id: Some(object_id),
+                            object_id: Some(object_id.clone()),
                             arguments: None,
                             return_by_value: Some(true),
                             await_promise: Some(false),
@@ -776,16 +807,84 @@ pub async fn fill(
                         Some(&effective_session_id),
                     )
                     .await?;
-                return Ok(fb
+                engine = fb
                     .result
                     .value
                     .and_then(|v| v.as_str().map(String::from))
-                    .unwrap_or_else(|| "contenteditable-fallback".to_string()));
+                    .unwrap_or_else(|| "contenteditable-fallback".to_string());
             }
         }
     }
 
+    verify_fill_value(client, &effective_session_id, &object_id, value, &engine).await?;
+
     Ok(engine)
+}
+
+async fn verify_fill_value(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    expected: &str,
+    engine: &str,
+) -> Result<(), String> {
+    // Let framework-controlled inputs and editor models finish their synchronous
+    // update plus the next paint before reading the authoritative value back.
+    wait_for_paint_settled(client, session_id).await;
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: READ_EDITABLE_VALUE_FUNCTION.to_string(),
+                object_id: Some(object_id.to_string()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+
+    if let Some(ex) = result.exception_details {
+        return Err(format!(
+            "fill verification failed for {engine}: {}",
+            ex.text
+        ));
+    }
+
+    let data = result.result.value.unwrap_or(Value::Null);
+    if !data.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        let reason = data
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("the edited value could not be read back");
+        return Err(format!("fill verification failed for {engine}: {reason}"));
+    }
+
+    let actual = data
+        .get("value")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("fill verification failed for {engine}: no text was read back"))?;
+
+    // HTML text controls normalize CRLF to LF. Compare that standardized form
+    // while preserving every other byte, including leading spaces in YAML.
+    let normalized_expected = expected.replace("\r\n", "\n");
+    let normalized_actual = actual.replace("\r\n", "\n");
+    if normalized_actual != normalized_expected {
+        let detail = if actual.is_empty() && !expected.is_empty() {
+            "read back an empty value".to_string()
+        } else {
+            format!(
+                "read back {} characters after writing {}",
+                actual.chars().count(),
+                expected.chars().count()
+            )
+        };
+        return Err(format!("fill verification failed for {engine}: {detail}"));
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

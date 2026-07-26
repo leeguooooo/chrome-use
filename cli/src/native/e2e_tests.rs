@@ -37,6 +37,7 @@ fn native_test_fixture_html(name: &str) -> &'static str {
         "upload_probe" => include_str!("test_fixtures/upload_probe.html"),
         "hidden_upload_probe" => include_str!("test_fixtures/hidden_upload_probe.html"),
         "iframe_button_probe" => include_str!("test_fixtures/iframe_button_probe.html"),
+        "monaco_fill_probe" => include_str!("test_fixtures/monaco_fill_probe.html"),
         _ => panic!("Unknown native test fixture: {}", name),
     }
 }
@@ -1155,6 +1156,152 @@ async fn e2e_form_interaction() {
     );
     assert!(snap.contains("textbox"), "Snapshot should show textbox");
     assert!(snap.contains("button"), "Snapshot should show button");
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Regression coverage for issue #138. Synology DSM exposes Monaco's hidden
+/// textarea as a textbox, so the command must resolve the owning model, replace
+/// multiline content atomically, and verify the exact value before succeeding.
+#[tokio::test]
+#[ignore]
+async fn e2e_fill_monaco_is_atomic_and_verified() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "navigate",
+            "url": native_test_fixture_url("monaco_fill_probe")
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let snapshot = get_data(&resp)["snapshot"].as_str().unwrap_or("");
+    let ref_for = |accessible_name: &str| {
+        snapshot
+            .lines()
+            .find(|line| line.contains(accessible_name))
+            .and_then(|line| line.split("ref=").nth(1))
+            .map(|value| format!("@{}", value.trim_end_matches(']').trim()))
+            .unwrap_or_else(|| panic!("{accessible_name} not found in snapshot:\n{snapshot}"))
+    };
+    let working_ref = ref_for("Working editor content");
+    let stuck_ref = ref_for("Stuck editor content");
+    let unsupported_ref = ref_for("Unsupported editor content");
+
+    let yaml = "services:\n  app:\n    image: nginx:latest\n    volumes:\n      - /data:/data\n    ports:\n      - \"5533:80\"";
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "fill",
+            "selector": working_ref,
+            "value": yaml
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], "monaco");
+
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "inputvalue",
+            "selector": working_ref
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["value"],
+        yaml,
+        "Monaco fill must preserve multiline YAML indentation exactly"
+    );
+
+    // A Monaco model that ignores setValue must fail the fill verification.
+    // Returning success here would recreate the dangerous DSM false positive.
+    let resp = execute_command(
+        &json!({
+            "id": "6",
+            "action": "fill",
+            "selector": stuck_ref,
+            "value": yaml
+        }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "empty Monaco readback must fail");
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("read back an empty value"),
+        "failure should explain the failed post-condition: {resp}"
+    );
+
+    // A Monaco-looking textbox without a resolvable editor/model must fail
+    // before attempting any hidden-textarea fallback.
+    let resp = execute_command(
+        &json!({
+            "id": "7",
+            "action": "fill",
+            "selector": unsupported_ref,
+            "value": yaml
+        }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "unsupported Monaco must fail");
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("model API is not accessible"),
+        "failure should explain why Monaco cannot be filled safely: {resp}"
+    );
+
+    // Plain inputs still use the native setter path and are verified too.
+    let resp = execute_command(
+        &json!({
+            "id": "8",
+            "action": "fill",
+            "selector": "#plain-input",
+            "value": "ordinary value"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], "input");
+    let resp = execute_command(
+        &json!({
+            "id": "9",
+            "action": "inputvalue",
+            "selector": "#plain-input"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["value"], "ordinary value");
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);

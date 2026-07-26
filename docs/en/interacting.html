@@ -189,11 +189,11 @@
         <code>select</code> used to "return ✓ but change nothing" on custom dropdowns (a silent
         false success) — now fixed: non-native controls go through the portal-aware path and
         <strong>error loudly</strong> (listing the visible options) when the option never appears, never silently.
-        <code>fill</code> is hardened the same way: it fills a <strong>module-scoped Monaco editor</strong>
-        (synthetic paste when <code>window.monaco</code> isn't reachable) and controlled inputs whose
-        <code>@ref</code> anchored a <strong>wrapper</strong> (retargets to the nested editable). Backends like
-        Cloudflare Zaraz (react-select + Monaco + shadow-DOM) now drive with native
-        <code>select</code>/<code>fill</code> — no hand-rolled <code>eval</code>.
+        <code>fill</code> is hardened the same way: it resolves Monaco through its global or AMD model API,
+        performs one atomic <code>setValue</code>, and verifies the exact model readback before reporting
+        success. If the model is inaccessible or the value differs, it errors loudly instead of falling back
+        to an unverified synthetic paste. Controlled inputs whose <code>@ref</code> anchored a
+        <strong>wrapper</strong> still retarget to the nested editable.
       </div>
 
       <hr class="du-divider" />

@@ -184,9 +184,9 @@
         <div class="du-callout-title">✅ v1.5.72：原生命令扛 shadow-DOM 重站（#105）</div>
         以前 <code>select</code> 对自定义下拉会「返回 ✓ 却没变化」（静默假成功）——现已修复：
         非原生控件走 portal-aware 逻辑，选项始终不出现时<strong>明确报错</strong>并列出可见选项，不再静默。
-        <code>fill</code> 同样加固：能填进<strong>模块作用域内的 Monaco 编辑器</strong>（<code>window.monaco</code> 拿不到时用合成 paste）、
-        以及 <code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入（自动下钻到内部 editable）。像 Cloudflare Zaraz
-        这类 react-select + Monaco + shadow-DOM 的后台，现在原生 <code>select</code>/<code>fill</code> 就能驱动，不用再手搓 <code>eval</code>。
+        <code>fill</code> 同样加固：通过 Monaco 的全局或 AMD model API 做一次原子的
+        <code>setValue</code>，并在返回成功前精确回读 model；model 无法访问或内容不一致时会明确报错，
+        不再回退到无法校验的合成 paste。<code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入仍会自动下钻到内部 editable。
       </div>
 
       <hr class="du-divider" />
