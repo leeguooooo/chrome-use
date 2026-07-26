@@ -156,6 +156,7 @@
 <span class="du-prompt">$</span> chrome-use download-url https://example.com/file.pdf ./file.pdf
 <span class="du-prompt">$</span> chrome-use downloads <span class="du-flag">--limit</span> 10 <span class="du-flag">--json</span> <span class="du-cmt"># 机器可读的 Chrome 下载记录</span></code></pre>
       </div>
+      <p><code>fill</code> 会在返回成功前回读控件或富编辑器 model，并精确比较结果。若 Monaco 隐藏了 model API，则通过一次可信的编辑器 paste 写入，再通过编辑器 copy 处理器精确回读，并在结束后恢复浏览器剪贴板。paste 无法校验或回读不一致时会报错，不会静默成功。</p>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 点击"成功但没反应"</div>
         自动补全 / 菜单 <code>&lt;li&gt;</code> 项常在输入框失焦时关闭。若 <code>click</code> 报成功但页面没反应，

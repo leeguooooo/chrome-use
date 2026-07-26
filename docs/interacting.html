@@ -184,9 +184,17 @@
         <div class="du-callout-title">✅ v1.5.72：原生命令扛 shadow-DOM 重站（#105）</div>
         以前 <code>select</code> 对自定义下拉会「返回 ✓ 却没变化」（静默假成功）——现已修复：
         非原生控件走 portal-aware 逻辑，选项始终不出现时<strong>明确报错</strong>并列出可见选项，不再静默。
-        <code>fill</code> 同样加固：能填进<strong>模块作用域内的 Monaco 编辑器</strong>（<code>window.monaco</code> 拿不到时用合成 paste）、
-        以及 <code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入（自动下钻到内部 editable）。像 Cloudflare Zaraz
-        这类 react-select + Monaco + shadow-DOM 的后台，现在原生 <code>select</code>/<code>fill</code> 就能驱动，不用再手搓 <code>eval</code>。
+        <code>fill</code> 同样加固：通过 Monaco 的全局或 AMD model API 做一次原子的
+        <code>setValue</code>，并在返回成功前精确回读 model。若应用隐藏了该 API，则执行一次可信的编辑器
+        <code>paste</code>，通过编辑器自己的 <code>copy</code> 处理器精确回读，并在结束后恢复浏览器剪贴板；
+        操作无法校验或内容不一致时会明确报错。<code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入仍会自动下钻到内部 editable。
+      </div>
+
+      <div class="du-callout">
+        <div class="du-callout-title">受 CSP 限制的页面</div>
+        Cloudflare Zaraz 和启用严格内容安全策略的页面不能依赖 <code>eval</code>。
+        请使用原生 <code>select</code> 与 <code>fill</code> 命令，以免要求页面开放
+        <code>unsafe-eval</code>。
       </div>
 
       <hr class="du-divider" />

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Monaco fill probe</title>
+</head>
+<body>
+  <label for="plain-input">Plain input</label>
+  <input id="plain-input" value="old">
+
+  <div id="working-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Working editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
+  <div id="stuck-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Stuck editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
+  <div id="unsupported-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Unsupported editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
+  <div id="clipboard-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Clipboard editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
+  <div id="global-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Global editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
+  <div id="default-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Default editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
+  <script>
+    (() => {
+      let workingValue = '';
+      let stuckValue = '';
+      let globalValue = '';
+      let defaultValue = '';
+      const workingRoot = document.getElementById('working-editor');
+      const stuckRoot = document.getElementById('stuck-editor');
+      const globalRoot = document.getElementById('global-editor');
+      const defaultRoot = document.getElementById('default-editor');
+
+      const workingEditor = {
+        getDomNode: () => workingRoot,
+        setValue: value => { workingValue = value; },
+        getValue: () => workingValue
+      };
+      const stuckEditor = {
+        getDomNode: () => stuckRoot,
+        setValue: () => {},
+        getValue: () => stuckValue
+      };
+      const globalEditor = {
+        getDomNode: () => globalRoot,
+        setValue: value => { globalValue = value; },
+        getValue: () => globalValue
+      };
+      const defaultEditor = {
+        getDomNode: () => defaultRoot,
+        setValue: value => { defaultValue = value; },
+        getValue: () => defaultValue
+      };
+
+      const moduleScopedMonaco = {
+        editor: {
+          getEditors: () => [workingEditor, stuckEditor],
+          getModels: () => []
+        }
+      };
+      window.require = id => {
+        if (id === 'vs/editor/editor.api' || id === 'vs/editor/editor.main') {
+          return moduleScopedMonaco;
+        }
+        throw new Error(`Unknown module: ${id}`);
+      };
+      window.monaco = {
+        editor: {
+          getEditors: () => [globalEditor],
+          getModels: () => []
+        },
+        default: {
+          monaco: {
+            editor: {
+              getEditors: () => [defaultEditor],
+              getModels: () => []
+            }
+          }
+        }
+      };
+
+      let clipboardModelValue = '';
+      let clipboardSelectionAll = false;
+      const clipboardInput = document.querySelector('#clipboard-editor textarea.inputarea');
+      clipboardInput.addEventListener('keydown', event => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
+          clipboardSelectionAll = true;
+          event.preventDefault();
+        }
+      });
+      clipboardInput.addEventListener('paste', event => {
+        if (!event.isTrusted) return;
+        const pasted = event.clipboardData.getData('text/plain');
+        clipboardModelValue = clipboardSelectionAll
+          ? pasted
+          : clipboardModelValue + pasted;
+        clipboardSelectionAll = false;
+        event.preventDefault();
+      });
+      clipboardInput.addEventListener('copy', event => {
+        if (!event.isTrusted || !clipboardSelectionAll) return;
+        event.clipboardData.setData('text/plain', clipboardModelValue);
+        event.preventDefault();
+      });
+    })();
+  </script>
+</body>
+</html>

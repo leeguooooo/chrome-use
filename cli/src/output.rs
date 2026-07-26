@@ -1593,6 +1593,11 @@ Clears the field and fills it with the text, replacing existing content.
 Works on rich editors too (issue #41): CodeMirror 5, Monaco, ProseMirror and
 plain contenteditable are detected and set via their own API / input events,
 not a raw `.value` write — and the response echoes which `engine` was used.
+The written value is read back from the control or editor model and compared
+exactly before success is reported. If Monaco hides its model API, fill uses
+one trusted editor paste, reads the selected model back through the editor's
+copy handler, and restores the browser clipboard. If that cannot be verified,
+fill fails loudly instead of reporting a false success.
 For framework inputs (React/Vue/Angular) the value goes through the native
 setter so the form registers it (no more "pristine" Save no-ops).
 

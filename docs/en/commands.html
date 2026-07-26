@@ -162,6 +162,7 @@
 <span class="du-prompt">$</span> chrome-use download-url https://example.com/file.pdf ./file.pdf
 <span class="du-prompt">$</span> chrome-use downloads <span class="du-flag">--limit</span> 10 <span class="du-flag">--json</span> <span class="du-cmt"># machine-readable Chrome downloads</span></code></pre>
       </div>
+      <p><code>fill</code> reads the resulting control or rich-editor model value back and compares it exactly before reporting success. If Monaco hides its model API, one trusted editor paste is verified through the editor's copy handler and the browser clipboard is restored afterward. An unverifiable paste or mismatched readback is an error, not a silent success.</p>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ Click "succeeds but nothing happens"</div>
         Autocomplete / menu <code>&lt;li&gt;</code> items often close when the input loses focus. If <code>click</code>
