@@ -29,6 +29,13 @@
     ></textarea>
   </div>
 
+  <div id="clipboard-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Clipboard editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
   <script>
     (() => {
       let workingValue = '';
@@ -59,6 +66,30 @@
         }
         throw new Error(`Unknown module: ${id}`);
       };
+
+      let clipboardModelValue = '';
+      let clipboardSelectionAll = false;
+      const clipboardInput = document.querySelector('#clipboard-editor textarea.inputarea');
+      clipboardInput.addEventListener('keydown', event => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
+          clipboardSelectionAll = true;
+          event.preventDefault();
+        }
+      });
+      clipboardInput.addEventListener('paste', event => {
+        if (!event.isTrusted) return;
+        const pasted = event.clipboardData.getData('text/plain');
+        clipboardModelValue = clipboardSelectionAll
+          ? pasted
+          : clipboardModelValue + pasted;
+        clipboardSelectionAll = false;
+        event.preventDefault();
+      });
+      clipboardInput.addEventListener('copy', event => {
+        if (!event.isTrusted || !clipboardSelectionAll) return;
+        event.clipboardData.setData('text/plain', clipboardModelValue);
+        event.preventDefault();
+      });
     })();
   </script>
 </body>

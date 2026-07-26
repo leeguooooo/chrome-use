@@ -1719,7 +1719,7 @@ pub async fn get_element_input_value(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
                 function_declaration: READ_EDITABLE_VALUE_FUNCTION.to_string(),
-                object_id: Some(object_id),
+                object_id: Some(object_id.clone()),
                 arguments: None,
                 return_by_value: Some(true),
                 await_promise: Some(false),
@@ -1733,6 +1733,17 @@ pub async fn get_element_input_value(
     }
 
     let data = result.result.value.unwrap_or(Value::Null);
+    if !data.get("ok").and_then(Value::as_bool).unwrap_or(false)
+        && data.get("engine").and_then(Value::as_str) == Some("monaco")
+    {
+        return super::interaction::read_monaco_via_clipboard(
+            client,
+            &effective_session_id,
+            &object_id,
+        )
+        .await;
+    }
+
     if !data.get("ok").and_then(Value::as_bool).unwrap_or(false) {
         return Err(data
             .get("error")

@@ -1176,11 +1176,24 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
     .await;
     assert_success(&resp);
 
+    let (fixture_port, fixture_server) =
+        spawn_html_server(native_test_fixture_html("monaco_fill_probe").to_string(), 1).await;
+    state
+        .browser
+        .as_ref()
+        .expect("browser should be launched")
+        .grant_permissions(&[
+            "clipboardReadWrite".to_string(),
+            "clipboardSanitizedWrite".to_string(),
+        ])
+        .await
+        .expect("clipboard permissions should be granted for the disposable fixture browser");
+
     let resp = execute_command(
         &json!({
             "id": "2",
             "action": "navigate",
-            "url": native_test_fixture_url("monaco_fill_probe")
+            "url": format!("http://127.0.0.1:{fixture_port}/")
         }),
         &mut state,
     )
@@ -1205,6 +1218,7 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
     let working_ref = ref_for("Working editor content");
     let stuck_ref = ref_for("Stuck editor content");
     let unsupported_ref = ref_for("Unsupported editor content");
+    let clipboard_ref = ref_for("Clipboard editor content");
 
     let yaml = "services:\n  app:\n    image: nginx:latest\n    volumes:\n      - /data:/data\n    ports:\n      - \"5533:80\"";
     let resp = execute_command(
@@ -1236,11 +1250,43 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
         "Monaco fill must preserve multiline YAML indentation exactly"
     );
 
+    // DSM-like Monaco can hide its model API while still handling trusted
+    // clipboard commands through textarea.inputarea. That fallback must remain
+    // atomic and must verify the copied model value before succeeding.
+    let resp = execute_command(
+        &json!({
+            "id": "6",
+            "action": "fill",
+            "selector": clipboard_ref,
+            "value": yaml
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], "monaco-clipboard");
+
+    let resp = execute_command(
+        &json!({
+            "id": "6b",
+            "action": "inputvalue",
+            "selector": clipboard_ref
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["value"],
+        yaml,
+        "clipboard-backed Monaco readback must preserve multiline YAML exactly"
+    );
+
     // A Monaco model that ignores setValue must fail the fill verification.
     // Returning success here would recreate the dangerous DSM false positive.
     let resp = execute_command(
         &json!({
-            "id": "6",
+            "id": "7",
             "action": "fill",
             "selector": stuck_ref,
             "value": yaml
@@ -1261,7 +1307,7 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
     // before attempting any hidden-textarea fallback.
     let resp = execute_command(
         &json!({
-            "id": "7",
+            "id": "8",
             "action": "fill",
             "selector": unsupported_ref,
             "value": yaml
@@ -1274,14 +1320,14 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
         resp["error"]
             .as_str()
             .unwrap_or("")
-            .contains("model API is not accessible"),
+            .contains("not handled as a trusted editor operation"),
         "failure should explain why Monaco cannot be filled safely: {resp}"
     );
 
     // Plain inputs still use the native setter path and are verified too.
     let resp = execute_command(
         &json!({
-            "id": "8",
+            "id": "9",
             "action": "fill",
             "selector": "#plain-input",
             "value": "ordinary value"
@@ -1293,7 +1339,7 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
     assert_eq!(get_data(&resp)["engine"], "input");
     let resp = execute_command(
         &json!({
-            "id": "9",
+            "id": "10",
             "action": "inputvalue",
             "selector": "#plain-input"
         }),
@@ -1305,6 +1351,9 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
+    fixture_server
+        .await
+        .expect("Monaco fixture server should shut down");
 }
 
 // ---------------------------------------------------------------------------

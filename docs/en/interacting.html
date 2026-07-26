@@ -191,8 +191,9 @@
         <strong>error loudly</strong> (listing the visible options) when the option never appears, never silently.
         <code>fill</code> is hardened the same way: it resolves Monaco through its global or AMD model API,
         performs one atomic <code>setValue</code>, and verifies the exact model readback before reporting
-        success. If the model is inaccessible or the value differs, it errors loudly instead of falling back
-        to an unverified synthetic paste. Controlled inputs whose <code>@ref</code> anchored a
+        success. When an app hides that API, it performs one trusted editor <code>paste</code>, verifies the
+        selected model through the editor's own <code>copy</code> handler, and restores the browser clipboard.
+        If those operations cannot be verified or the value differs, it errors loudly. Controlled inputs whose <code>@ref</code> anchored a
         <strong>wrapper</strong> still retarget to the nested editable.
       </div>
 

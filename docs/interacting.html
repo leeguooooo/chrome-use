@@ -185,8 +185,9 @@
         以前 <code>select</code> 对自定义下拉会「返回 ✓ 却没变化」（静默假成功）——现已修复：
         非原生控件走 portal-aware 逻辑，选项始终不出现时<strong>明确报错</strong>并列出可见选项，不再静默。
         <code>fill</code> 同样加固：通过 Monaco 的全局或 AMD model API 做一次原子的
-        <code>setValue</code>，并在返回成功前精确回读 model；model 无法访问或内容不一致时会明确报错，
-        不再回退到无法校验的合成 paste。<code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入仍会自动下钻到内部 editable。
+        <code>setValue</code>，并在返回成功前精确回读 model。若应用隐藏了该 API，则执行一次可信的编辑器
+        <code>paste</code>，通过编辑器自己的 <code>copy</code> 处理器精确回读，并在结束后恢复浏览器剪贴板；
+        操作无法校验或内容不一致时会明确报错。<code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入仍会自动下钻到内部 editable。
       </div>
 
       <hr class="du-divider" />
