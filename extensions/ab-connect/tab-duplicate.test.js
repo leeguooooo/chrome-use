@@ -34,6 +34,14 @@ function fixture(overrides = {}) {
 
 const params = { sourceTargetId: 'source-target', agentGroup: 'agent-a' }
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+async function waitUntil(predicate, timeoutMs = 250) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await wait(5)
+  }
+  return predicate()
+}
 
 test('native duplicate is grouped, attached, owned, and restores the foreground tab', async () => {
   const { calls, deps } = fixture()
@@ -174,9 +182,9 @@ test('late native duplicate is removed after the transaction times out', async (
   })
 
   await assert.rejects(duplicateTab(params, deps), /native duplicate timed out/)
-  await wait(20)
-
-  assert.ok(calls.some((call) => call[0] === 'remove' && call[1] === 22))
+  assert.ok(
+    await waitUntil(() => calls.some((call) => call[0] === 'remove' && call[1] === 22)),
+  )
 })
 
 test(
@@ -194,7 +202,9 @@ test(
 
     await assert.rejects(duplicateTab(params, deps), /native duplicate timed out/)
     const restoreCallsAfterTimeout = calls.filter((call) => call[0] === 'activate').length
-    await wait(20)
+    assert.ok(
+      await waitUntil(() => calls.some((call) => call[0] === 'remove' && call[1] === 22)),
+    )
 
     assert.equal(
       calls.filter((call) => call[0] === 'activate').length,
@@ -231,9 +241,11 @@ test('late debugger attach observes that its duplicate transaction was cancelled
   })
 
   await assert.rejects(duplicateTab(params, deps), /debugger attach timed out/)
-  await wait(20)
-
-  assert.ok(calls.some((call) => call[0] === 'attachActive' && call[2] === false))
+  assert.ok(
+    await waitUntil(() =>
+      calls.some((call) => call[0] === 'attachActive' && call[2] === false),
+    ),
+  )
 })
 
 test('native duplicate failure is returned without orphan cleanup', async () => {
@@ -276,6 +288,43 @@ test('rollback continues after tab removal rejects', async () => {
   await assert.rejects(duplicateTab(params, deps), (error) => error === original)
   assert.ok(calls.some((call) => call[0] === 'activate'))
   assert.ok(calls.some((call) => call[0] === 'focusWindow'))
+})
+
+test('rollback cleanup stages share one aggregate deadline', { timeout: 1000 }, async () => {
+  const stalled = () => new Promise(() => {})
+  const { calls, deps } = fixture({
+    cleanupTimeoutMs: 250,
+    groupTabInto: async () => {
+      throw new Error('group failed')
+    },
+    unmarkOwned: (tabId) => {
+      calls.push(['unmarkOwned', tabId])
+      return stalled()
+    },
+    isolateTab: (tabId) => {
+      calls.push(['isolate', tabId])
+      return stalled()
+    },
+    removeTab: (tabId) => {
+      calls.push(['remove', tabId])
+      return stalled()
+    },
+    activateTab: (tabId) => {
+      calls.push(['activate', tabId])
+      return stalled()
+    },
+    getWindow: stalled,
+    focusWindow: (windowId) => {
+      calls.push(['focusWindow', windowId])
+      return stalled()
+    },
+  })
+
+  await assert.rejects(duplicateTab(params, deps), /group failed/)
+
+  for (const operation of ['unmarkOwned', 'isolate', 'remove', 'activate', 'focusWindow']) {
+    assert.ok(calls.some((call) => call[0] === operation), `${operation} was not attempted`)
+  }
 })
 
 test('failed rollback does not commit the duplicate transaction', async () => {

@@ -746,8 +746,11 @@ async function handleForwardCdpCommand(msg) {
       activateTab: (tabId) => chrome.tabs.update(tabId, { active: true }),
       focusWindow: (windowId) => chrome.windows.update(windowId, { focused: true }),
       removeTab: async (tabId) => {
-        await chrome.tabs.remove(tabId)
-        nativeDuplicateTabs.delete(tabId)
+        try {
+          await chrome.tabs.remove(tabId)
+        } finally {
+          nativeDuplicateTabs.delete(tabId)
+        }
       },
     })
   }

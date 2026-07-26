@@ -59,13 +59,15 @@ async function settleOrVerify(operation, verify, deadline, operationTimeoutMs, s
   }
 }
 
-async function restoreForegroundBestEffort(deps, tabId, windowId, timeoutMs) {
-  await bestEffort(() => deps.activateTab(tabId), timeoutMs)
+async function restoreForegroundBestEffort(deps, tabId, windowId, deadline) {
+  await bestEffort(() => deps.activateTab(tabId), remainingTime(deadline))
   const focused = await observeWithin(
     () => deps.getWindow(windowId).then((window) => window?.focused === true),
-    timeoutMs,
+    remainingTime(deadline),
   )
-  if (!focused) await bestEffort(() => deps.focusWindow(windowId), timeoutMs)
+  if (!focused) {
+    await bestEffort(() => deps.focusWindow(windowId), remainingTime(deadline))
+  }
 }
 
 export async function duplicateTab(params, deps) {
@@ -132,17 +134,34 @@ export async function duplicateTab(params, deps) {
     return { sourceTargetId, targetId: entry.targetId }
   } catch (error) {
     transactionActive = false
+    const cleanupDeadline = Date.now() + cleanupTimeoutMs
     if (duplicateTabId != null) {
-      await bestEffort(() => deps.unmarkOwned(duplicateTabId), cleanupTimeoutMs)
-      await bestEffort(() => deps.isolateTab(duplicateTabId), cleanupTimeoutMs)
-      await bestEffort(() => deps.removeTab(duplicateTabId), cleanupTimeoutMs)
+      await bestEffort(
+        () => deps.unmarkOwned(duplicateTabId),
+        remainingTime(cleanupDeadline),
+      )
+      await bestEffort(
+        () => deps.isolateTab(duplicateTabId),
+        remainingTime(cleanupDeadline),
+      )
+      await bestEffort(
+        () => deps.removeTab(duplicateTabId),
+        remainingTime(cleanupDeadline),
+      )
     } else {
       void duplicatePromise.then(
         async (duplicate) => {
           const lateTabId = duplicate?.id ?? null
           if (lateTabId == null) return
-          await bestEffort(() => deps.isolateTab(lateTabId), cleanupTimeoutMs)
-          await bestEffort(() => deps.removeTab(lateTabId), cleanupTimeoutMs)
+          const lateCleanupDeadline = Date.now() + cleanupTimeoutMs
+          await bestEffort(
+            () => deps.isolateTab(lateTabId),
+            remainingTime(lateCleanupDeadline),
+          )
+          await bestEffort(
+            () => deps.removeTab(lateTabId),
+            remainingTime(lateCleanupDeadline),
+          )
         },
         () => {},
       )
@@ -151,7 +170,7 @@ export async function duplicateTab(params, deps) {
       deps,
       restoreTabId,
       restoreWindowId,
-      cleanupTimeoutMs,
+      cleanupDeadline,
     )
     throw error
   }
