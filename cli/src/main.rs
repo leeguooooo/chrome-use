@@ -151,6 +151,22 @@ fn parse_proxy(proxy_str: &str) -> ParsedProxy {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum SessionCommandRoute {
+    Lifecycle,
+    Ownership,
+}
+
+/// Keep daemon lifecycle commands on the lifecycle path while ownership
+/// commands remain CLI-local. This classifier prevents a broad `session`
+/// intercept from making later subcommands unreachable.
+fn session_command_route(sub: Option<&str>) -> SessionCommandRoute {
+    match sub {
+        Some("stop") | Some("prune") => SessionCommandRoute::Lifecycle,
+        _ => SessionCommandRoute::Ownership,
+    }
+}
+
 /// `session <handoff|resume|status|list>` — ownership + human handoff (#89,
 /// ported from ego-lite). CLI-local: only touches the `.owner` sidecar.
 fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
@@ -282,7 +298,7 @@ fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
         }
         Some(other) => {
             let msg = format!(
-                "unknown `session` subcommand '{other}'. Use: handoff | resume | status | list"
+                "unknown `session` subcommand '{other}'. Use: handoff | resume | status | list | stop | prune"
             );
             if json_mode {
                 print_json_error(&msg);
@@ -410,55 +426,24 @@ fn run_cookies_export(args: &[String], flags: &Flags) {
     }
 }
 
-fn run_session(args: &[String], session: &str, json_mode: bool) {
+fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
     let subcommand = args.get(1).map(|s| s.as_str());
 
     match subcommand {
-        Some("list") => {
-            let sessions: Vec<String> = walk_daemons()
-                .sessions
-                .into_iter()
-                .map(|s| s.name)
-                .collect();
-            // The extension relay drives the user's live Chrome but isn't always
-            // registered as a launched daemon session — without surfacing it,
-            // `session list` says "No active sessions" while open/tab work fine,
-            // and agents misjudge the connection as down (issue #15).
-            let relay_up = connect::relay_url().is_some();
-
-            if json_mode {
-                println!(
-                    r#"{{"success":true,"data":{{"sessions":{},"relay":{}}}}}"#,
-                    serde_json::to_string(&sessions).unwrap_or_default(),
-                    relay_up
-                );
-            } else if sessions.is_empty() && !relay_up {
-                println!("No active sessions");
-            } else {
-                println!("Active sessions:");
-                for s in &sessions {
-                    let marker = if s == session {
-                        color::cyan("→")
-                    } else {
-                        " ".to_string()
-                    };
-                    println!("{} {}", marker, s);
-                }
-                if relay_up && !sessions.iter().any(|s| s == session) {
-                    println!(
-                        "{} {} {}",
-                        color::cyan("→"),
-                        session,
-                        color::dim("(relay/extension → live Chrome)")
-                    );
-                }
-            }
-        }
         // Stop a specific session daemon (issue #48). Graceful: kill_stale_daemon
         // sends SIGTERM first, so the daemon's shutdown handler runs `close()` and
         // tidies the tabs IT created (its tab group) before exiting.
         Some("stop") => {
             let target = args.get(2).map(|s| s.as_str()).unwrap_or(session);
+            if !validation::is_valid_session_name(target) {
+                let msg = validation::session_name_error(target);
+                if json_mode {
+                    print_json_error_with_type(msg, "invalid_session_name");
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), msg);
+                }
+                exit(1);
+            }
             connection::kill_stale_daemon(target);
             if json_mode {
                 print_json_value(json!({ "success": true, "data": { "stopped": target } }));
@@ -497,19 +482,7 @@ fn run_session(args: &[String], session: &str, json_mode: bool) {
                 );
             }
         }
-        None | Some(_) => {
-            // Just show current session
-            if json_mode {
-                print_json_value(json!({
-                    "success": true,
-                    "data": {
-                        "session": session,
-                    },
-                }));
-            } else {
-                println!("{}", session);
-            }
-        }
+        _ => unreachable!("session lifecycle route only accepts stop or prune"),
     }
 }
 
@@ -1339,12 +1312,18 @@ fn main() {
         return;
     }
 
-    // `session <handoff|resume|status|list>` — ownership + human handoff
-    // (issue #89, ego-lite model). CLI-local: reads/writes the `.owner`
-    // sidecar, never touches the daemon, so it works even while a session is
-    // handed off (the guard in send_command only blocks browser-driving).
+    // Session management is local and daemon-free. Route stop/prune to daemon
+    // lifecycle handling; keep ownership commands on the `.owner` sidecar path.
     if clean.first().map(|s| s.as_str()) == Some("session") {
-        run_session_ownership(clean.get(1).map(|s| s.as_str()), &flags.session, flags.json);
+        let sub = clean.get(1).map(|s| s.as_str());
+        match session_command_route(sub) {
+            SessionCommandRoute::Lifecycle => {
+                run_session_lifecycle(&clean, &flags.session, flags.json)
+            }
+            SessionCommandRoute::Ownership => {
+                run_session_ownership(sub, &flags.session, flags.json)
+            }
+        }
         return;
     }
 
@@ -1593,12 +1572,6 @@ fn main() {
                 }
             }
         }
-    }
-
-    // Handle session separately (doesn't need daemon)
-    if clean.first().map(|s| s.as_str()) == Some("session") {
-        run_session(&clean, &flags.session, flags.json);
-        return;
     }
 
     // Handle daemon management (doesn't talk to a daemon — it manages them).
@@ -2748,6 +2721,35 @@ mod tests {
         assert_eq!(result.server, "http://proxy.com:8080");
         assert_eq!(result.username.as_deref(), Some("user"));
         assert_eq!(result.password.as_deref(), Some("p@ss:w0rd"));
+    }
+
+    #[test]
+    fn test_session_lifecycle_commands_are_not_intercepted_by_ownership() {
+        assert_eq!(
+            session_command_route(Some("stop")),
+            SessionCommandRoute::Lifecycle
+        );
+        assert_eq!(
+            session_command_route(Some("prune")),
+            SessionCommandRoute::Lifecycle
+        );
+    }
+
+    #[test]
+    fn test_session_ownership_commands_remain_cli_local() {
+        for sub in [
+            None,
+            Some("handoff"),
+            Some("resume"),
+            Some("status"),
+            Some("list"),
+        ] {
+            assert_eq!(
+                session_command_route(sub),
+                SessionCommandRoute::Ownership,
+                "unexpected route for {sub:?}"
+            );
+        }
     }
 
     #[test]

@@ -797,6 +797,10 @@ and drives every session by default, autonomous login included. Check state with
 `chrome-use session status`; `chrome-use session list` shows every session's owner.
 Never call `session resume` on your own to grab control back — wait for the user.
 
+To reclaim daemon workers without restarting every browser connection, use
+`chrome-use session stop [name]` for one session or `chrome-use session prune`
+for all active session daemons. Both commands stop workers gracefully.
+
 ### Persist session across runs
 
 ```bash

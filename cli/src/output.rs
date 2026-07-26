@@ -3095,14 +3095,20 @@ Examples:
             r##"
 chrome-use session - Manage sessions
 
-Usage: chrome-use session [operation]
+Usage:
+  chrome-use session [status|handoff|resume|list|prune]
+  chrome-use session stop [name]
 
-Manage isolated browser sessions. Each session has its own browser
-instance with separate cookies, storage, and state.
+Manage isolated browser sessions, daemon lifecycle, and ownership handoff.
 
 Operations:
-  (none)               Show current session name
-  list                 List all active sessions
+  (none)               Show the current session owner
+  list                 List active sessions and their owners
+  status               Show the current session owner
+  handoff              Hand control to the user
+  resume               Return control to the agent
+  stop [name]          Stop one session daemon (default: current)
+  prune                Stop all session daemons
 
 Environment:
   AGENT_BROWSER_SESSION    Default session name
@@ -3114,6 +3120,12 @@ Global Options:
 Examples:
   chrome-use session
   chrome-use session list
+  chrome-use session status
+  chrome-use session handoff
+  chrome-use session resume
+  chrome-use session stop
+  chrome-use session stop test
+  chrome-use session prune
   chrome-use --session test open example.com
 "##
         }
@@ -3813,8 +3825,11 @@ Confirmation:
   deny <id>                  Deny a pending action
 
 Sessions:
-  session                    Show current session name
-  session list               List active sessions
+  session                    Show current session owner
+  session list               List active sessions and their owners
+  session status             Show current session owner
+  session handoff            Hand control to the user
+  session resume             Return control to the agent
   session stop [name]        Stop one session daemon (default: current) — graceful,
                              closes the tabs it created
   session prune              Stop ALL session daemons now (closes their tabs; they
