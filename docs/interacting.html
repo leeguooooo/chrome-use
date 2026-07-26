@@ -190,6 +190,13 @@
         操作无法校验或内容不一致时会明确报错。<code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入仍会自动下钻到内部 editable。
       </div>
 
+      <div class="du-callout">
+        <div class="du-callout-title">受 CSP 限制的页面</div>
+        Cloudflare Zaraz 和启用严格内容安全策略的页面不能依赖 <code>eval</code>。
+        请使用原生 <code>select</code> 与 <code>fill</code> 命令，以免要求页面开放
+        <code>unsafe-eval</code>。
+      </div>
+
       <hr class="du-divider" />
 
       <!-- ============ 上传文件 ============ -->

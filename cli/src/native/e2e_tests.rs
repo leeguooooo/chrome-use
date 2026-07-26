@@ -1211,14 +1211,17 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
         snapshot
             .lines()
             .find(|line| line.contains(accessible_name))
-            .and_then(|line| line.split("ref=").nth(1))
-            .map(|value| format!("@{}", value.trim_end_matches(']').trim()))
+            .and_then(|line| line.split_once("[ref="))
+            .and_then(|(_, rest)| rest.split(']').next())
+            .map(|value| format!("@{}", value.trim()))
             .unwrap_or_else(|| panic!("{accessible_name} not found in snapshot:\n{snapshot}"))
     };
     let working_ref = ref_for("Working editor content");
     let stuck_ref = ref_for("Stuck editor content");
     let unsupported_ref = ref_for("Unsupported editor content");
     let clipboard_ref = ref_for("Clipboard editor content");
+    let global_ref = ref_for("Global editor content");
+    let default_ref = ref_for("Default editor content");
 
     let yaml = "services:\n  app:\n    image: nginx:latest\n    volumes:\n      - /data:/data\n    ports:\n      - \"5533:80\"";
     let resp = execute_command(
@@ -1248,6 +1251,66 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
         get_data(&resp)["value"],
         yaml,
         "Monaco fill must preserve multiline YAML indentation exactly"
+    );
+
+    // The same shared resolver must also follow window.monaco and nested
+    // default.monaco exports, rather than succeeding only through AMD require.
+    let resp = execute_command(
+        &json!({
+            "id": "5c",
+            "action": "fill",
+            "selector": global_ref,
+            "value": yaml
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], "monaco");
+
+    let resp = execute_command(
+        &json!({
+            "id": "5d",
+            "action": "inputvalue",
+            "selector": global_ref
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["value"],
+        yaml,
+        "global Monaco readback must preserve multiline YAML exactly"
+    );
+
+    let resp = execute_command(
+        &json!({
+            "id": "5e",
+            "action": "fill",
+            "selector": default_ref,
+            "value": yaml
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], "monaco");
+
+    let resp = execute_command(
+        &json!({
+            "id": "5f",
+            "action": "inputvalue",
+            "selector": default_ref
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["value"],
+        yaml,
+        "default-wrapped Monaco readback must preserve multiline YAML exactly"
     );
 
     // DSM-like Monaco can hide its model API while still handling trusted
@@ -1295,12 +1358,14 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
     )
     .await;
     assert_eq!(resp["success"], false, "empty Monaco readback must fail");
+    let error = resp["error"].as_str().unwrap_or("");
     assert!(
-        resp["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("read back an empty value"),
-        "failure should explain the failed post-condition: {resp}"
+        error.contains("fill verification failed"),
+        "failure should report the verification boundary: {resp}"
+    );
+    assert!(
+        error.contains("monaco"),
+        "failure should identify the Monaco engine: {resp}"
     );
 
     // A Monaco-looking textbox without a resolvable editor/model must fail

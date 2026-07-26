@@ -197,6 +197,13 @@
         <strong>wrapper</strong> still retarget to the nested editable.
       </div>
 
+      <div class="du-callout">
+        <div class="du-callout-title">CSP-restricted pages</div>
+        Cloudflare Zaraz and pages with a strict Content Security Policy must not rely on
+        <code>eval</code>. Use the native <code>select</code> and <code>fill</code> commands so the
+        interaction works without requiring <code>unsafe-eval</code>.
+      </div>
+
       <hr class="du-divider" />
 
       <!-- ============ Uploading files ============ -->

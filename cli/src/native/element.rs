@@ -6,6 +6,29 @@ use super::adaptive::{self, ElementFingerprint};
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
 
+/// Discover Monaco editor APIs exposed through the global object or AMD loader.
+///
+/// Keep this as the single source for both reads and writes so the two paths
+/// cannot silently diverge when Monaco's public surface changes.
+pub(crate) const MONACO_CANDIDATES_FUNCTION: &str = r#"function() {
+    const candidates = [];
+    const seen = new Set();
+    const add = value => {
+        if (!value || seen.has(value)) return;
+        seen.add(value);
+        if (value.editor) candidates.push(value.editor);
+        if (value.monaco && value.monaco.editor) candidates.push(value.monaco.editor);
+        if (value.default) add(value.default);
+    };
+    add(window.monaco);
+    if (typeof window.require === 'function') {
+        for (const id of ['vs/editor/editor.api', 'vs/editor/editor.main']) {
+            try { add(window.require(id)); } catch (e) {}
+        }
+    }
+    return candidates;
+}"#;
+
 /// Read the value represented by an editable element.
 ///
 /// Rich editors keep their authoritative value outside the DOM node exposed by
@@ -13,29 +36,14 @@ use super::cdp::types::*;
 /// `textarea.inputarea` as a textbox even though the textarea value is not the
 /// editor model. Resolve the owning editor and return the model value so callers
 /// can verify writes instead of treating an empty textarea as success.
-pub(crate) const READ_EDITABLE_VALUE_FUNCTION: &str = r#"function() {
+const READ_EDITABLE_VALUE_TEMPLATE: &str = r#"function() {
     let el = this;
+    const monacoCandidates = __CHROME_USE_MONACO_CANDIDATES__;
 
     const monacoRoot = (el.closest && el.closest('.monaco-editor'))
         || (el.querySelector && el.querySelector('.monaco-editor'));
     if (monacoRoot) {
-        const candidates = [];
-        const seen = new Set();
-        const add = value => {
-            if (!value || seen.has(value)) return;
-            seen.add(value);
-            if (value.editor) candidates.push(value.editor);
-            if (value.monaco && value.monaco.editor) candidates.push(value.monaco.editor);
-            if (value.default) add(value.default);
-        };
-        add(window.monaco);
-        if (typeof window.require === 'function') {
-            for (const id of ['vs/editor/editor.api', 'vs/editor/editor.main']) {
-                try { add(window.require(id)); } catch (e) {}
-            }
-        }
-
-        for (const api of candidates) {
+        for (const api of monacoCandidates()) {
             try {
                 const editors = api.getEditors ? api.getEditors() : [];
                 const editor = editors.find(candidate => {
@@ -87,6 +95,13 @@ pub(crate) const READ_EDITABLE_VALUE_FUNCTION: &str = r#"function() {
     }
     return { ok: false, engine: 'unknown', error: 'Element does not expose an editable value' };
 }"#;
+
+pub(crate) fn read_editable_value_function() -> String {
+    READ_EDITABLE_VALUE_TEMPLATE.replace(
+        "__CHROME_USE_MONACO_CANDIDATES__",
+        MONACO_CANDIDATES_FUNCTION,
+    )
+}
 
 #[derive(Debug, Clone)]
 pub struct RefEntry {
@@ -1718,7 +1733,7 @@ pub async fn get_element_input_value(
         .send_command_typed(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
-                function_declaration: READ_EDITABLE_VALUE_FUNCTION.to_string(),
+                function_declaration: read_editable_value_function(),
                 object_id: Some(object_id.clone()),
                 arguments: None,
                 return_by_value: Some(true),

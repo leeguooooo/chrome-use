@@ -5,8 +5,8 @@ use serde_json::Value;
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
 use super::element::{
-    parse_ref, resolve_element_center, resolve_element_object_id, RefMap,
-    READ_EDITABLE_VALUE_FUNCTION,
+    parse_ref, read_editable_value_function, resolve_element_center, resolve_element_object_id,
+    RefMap, MONACO_CANDIDATES_FUNCTION,
 };
 use super::humanize;
 
@@ -606,6 +606,7 @@ pub async fn fill(
         r#"function() {{
             let el = this;
             const v = {val};
+            const monacoCandidates = {monaco_candidates};
             const monacoRoot = (el.closest && el.closest('.monaco-editor'))
                 || (el.querySelector && el.querySelector('.monaco-editor'));
 
@@ -614,23 +615,7 @@ pub async fn fill(
             // transport, not the model. Synthetic paste events on it are untrusted
             // and may be ignored while still looking successful (#138).
             if (monacoRoot) {{
-                const candidates = [];
-                const seen = new Set();
-                const add = value => {{
-                    if (!value || seen.has(value)) return;
-                    seen.add(value);
-                    if (value.editor) candidates.push(value.editor);
-                    if (value.monaco && value.monaco.editor) candidates.push(value.monaco.editor);
-                    if (value.default) add(value.default);
-                }};
-                add(window.monaco);
-                if (typeof window.require === 'function') {{
-                    for (const id of ['vs/editor/editor.api', 'vs/editor/editor.main']) {{
-                        try {{ add(window.require(id)); }} catch (e) {{}}
-                    }}
-                }}
-
-                for (const api of candidates) {{
+                for (const api of monacoCandidates()) {{
                     try {{
                         const editors = api.getEditors ? api.getEditors() : [];
                         const editor = editors.find(candidate => {{
@@ -706,7 +691,8 @@ pub async fn fill(
             fire('focusout');                          // blur-triggered lookups/validation
             return 'input';
         }}"#,
-        val = serde_json::to_string(value).unwrap_or_default()
+        val = serde_json::to_string(value).unwrap_or_default(),
+        monaco_candidates = MONACO_CANDIDATES_FUNCTION,
     );
 
     let result: EvaluateResult = client
@@ -1303,7 +1289,7 @@ async fn verify_fill_value(
         .send_command_typed(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
-                function_declaration: READ_EDITABLE_VALUE_FUNCTION.to_string(),
+                function_declaration: read_editable_value_function(),
                 object_id: Some(object_id.to_string()),
                 arguments: None,
                 return_by_value: Some(true),
@@ -1336,9 +1322,7 @@ async fn verify_fill_value(
 
     // HTML text controls normalize CRLF to LF. Compare that standardized form
     // while preserving every other byte, including leading spaces in YAML.
-    let normalized_expected = expected.replace("\r\n", "\n");
-    let normalized_actual = actual.replace("\r\n", "\n");
-    if normalized_actual != normalized_expected {
+    if !fill_values_match(expected, actual, engine) {
         let detail = if actual.is_empty() && !expected.is_empty() {
             "read back an empty value".to_string()
         } else {
@@ -1352,6 +1336,21 @@ async fn verify_fill_value(
     }
 
     Ok(())
+}
+
+fn fill_values_match(expected: &str, actual: &str, engine: &str) -> bool {
+    let normalized_expected = expected.replace("\r\n", "\n");
+    let normalized_actual = actual.replace("\r\n", "\n");
+    if engine.starts_with("contenteditable") {
+        // Rich editors may render text as nested blocks, and innerText follows
+        // layout whitespace rules. Validate the same non-whitespace content and
+        // ordering without rejecting a successful edit over cosmetic line breaks.
+        normalized_actual
+            .split_whitespace()
+            .eq(normalized_expected.split_whitespace())
+    } else {
+        normalized_actual == normalized_expected
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2554,6 +2553,40 @@ fn named_key_info(key: &str) -> (String, String, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_fill_verification_tolerates_contenteditable_layout_whitespace() {
+        assert!(fill_values_match(
+            "first line\nsecond line",
+            "first line\n\n  second line\n",
+            "contenteditable"
+        ));
+        assert!(fill_values_match(
+            "first line second line",
+            "first line\nsecond line",
+            "contenteditable-fallback"
+        ));
+        assert!(!fill_values_match(
+            "first line second line",
+            "first line different line",
+            "contenteditable"
+        ));
+    }
+
+    #[test]
+    fn test_fill_verification_remains_exact_for_value_backed_engines() {
+        assert!(fill_values_match(
+            "first\r\nsecond",
+            "first\nsecond",
+            "monaco"
+        ));
+        assert!(!fill_values_match(
+            "first second",
+            "first\nsecond",
+            "monaco"
+        ));
+        assert!(!fill_values_match("  yaml", " yaml", "input"));
+    }
 
     /// Verify that `char_to_key_info` returns the correct (key, code,
     /// windowsVirtualKeyCode) triple for every character in Playwright's

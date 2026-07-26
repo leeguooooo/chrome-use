@@ -36,12 +36,30 @@
     ></textarea>
   </div>
 
+  <div id="global-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Global editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
+  <div id="default-editor" class="monaco-editor">
+    <textarea
+      class="inputarea"
+      aria-label="Default editor content;Press Alt+F1 for Accessibility Options."
+    ></textarea>
+  </div>
+
   <script>
     (() => {
       let workingValue = '';
       let stuckValue = '';
+      let globalValue = '';
+      let defaultValue = '';
       const workingRoot = document.getElementById('working-editor');
       const stuckRoot = document.getElementById('stuck-editor');
+      const globalRoot = document.getElementById('global-editor');
+      const defaultRoot = document.getElementById('default-editor');
 
       const workingEditor = {
         getDomNode: () => workingRoot,
@@ -52,6 +70,16 @@
         getDomNode: () => stuckRoot,
         setValue: () => {},
         getValue: () => stuckValue
+      };
+      const globalEditor = {
+        getDomNode: () => globalRoot,
+        setValue: value => { globalValue = value; },
+        getValue: () => globalValue
+      };
+      const defaultEditor = {
+        getDomNode: () => defaultRoot,
+        setValue: value => { defaultValue = value; },
+        getValue: () => defaultValue
       };
 
       const moduleScopedMonaco = {
@@ -65,6 +93,20 @@
           return moduleScopedMonaco;
         }
         throw new Error(`Unknown module: ${id}`);
+      };
+      window.monaco = {
+        editor: {
+          getEditors: () => [globalEditor],
+          getModels: () => []
+        },
+        default: {
+          monaco: {
+            editor: {
+              getEditors: () => [defaultEditor],
+              getModels: () => []
+            }
+          }
+        }
       };
 
       let clipboardModelValue = '';
