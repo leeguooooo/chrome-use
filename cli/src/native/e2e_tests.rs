@@ -1615,6 +1615,28 @@ async fn e2e_tab_duplicate_preserves_native_history_on_extension_connected_chrom
         .unwrap_or_default()
         .contains("already used"));
 
+    // Repeated native duplication must return exactly one registered tab per
+    // command. A late extension response used to make the command time out,
+    // then surface an extra tab during the next resync.
+    let mut expected_total = short_duplicate["total"].as_u64().unwrap();
+    let mut stress_targets = Vec::new();
+    for index in 0..10 {
+        let resp = execute_command(
+            &json!({
+                "id": format!("stress-{index}"),
+                "action": "tab_duplicate",
+                "label": format!("stress-copy-{index}")
+            }),
+            &mut state,
+        )
+        .await;
+        assert_success(&resp);
+        let data = get_data(&resp);
+        expected_total += 1;
+        assert_eq!(data["total"].as_u64(), Some(expected_total));
+        stress_targets.push(data["targetId"].as_str().unwrap().to_string());
+    }
+
     // Closing the duplicate must leave the source tab isolated and usable.
     let duplicate_tab_id = duplicate["tabId"].as_str().unwrap().to_string();
     let resp = execute_command(
@@ -1646,7 +1668,10 @@ async fn e2e_tab_duplicate_preserves_native_history_on_extension_connected_chrom
         current_duplicate["targetId"].as_str().unwrap(),
         target_duplicate["targetId"].as_str().unwrap(),
         short_duplicate["targetId"].as_str().unwrap(),
-    ] {
+    ]
+    .into_iter()
+    .chain(stress_targets.iter().map(String::as_str))
+    {
         assert!(!tabs.iter().any(|tab| tab["targetId"] == closed_target));
     }
     let resp = execute_command(&json!({ "id": "102", "action": "close" }), &mut state).await;
