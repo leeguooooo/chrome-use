@@ -92,6 +92,34 @@
         <li><strong>npm (legacy):</strong> <code>npm install -g chrome-use</code> is still published, but GitHub Releases is the primary channel now.</li>
       </ul>
 
+      <h3>Install with Nix</h3>
+      <p>Run directly from the repository flake, or import its Home Manager or NixOS module for a declarative installation:</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">nix</span>
+        </div>
+<pre><code><span class="du-cmt"># run once without installing</span>
+<span class="du-prompt">$</span> nix run github:leeguooooo/chrome-use -- --help
+
+<span class="du-cmt"># flake input</span>
+inputs.chrome-use.url = "github:leeguooooo/chrome-use";
+
+<span class="du-cmt"># Home Manager: install and register the native-messaging host on activation</span>
+imports = [ inputs.chrome-use.homeManagerModules.default ];
+programs.chrome-use.enable = true;
+
+<span class="du-cmt"># NixOS: install system-wide and optionally force-install the extension</span>
+imports = [ inputs.chrome-use.nixosModules.default ];
+programs.chrome-use = {
+  enable = true;
+  forceInstallExtension = true;
+};</code></pre>
+      </div>
+
+      <p>The NixOS module writes the managed Chrome and Chromium extension policies. Native-messaging registration is per user; run <code>chrome-use extension connect</code> once after switching, or use the Home Manager module above.</p>
+
       <p>For the list of pinnable tags, see <a href="/en/lineage.html">Lineage</a>—how the tags evolved from the <code>agent-browser</code> fork (early <code>v0.x-fork.N</code> tags) to today's <code>chrome-use</code> <code>v1.5.x</code> tags.</p>
 
       <div class="du-callout warn">

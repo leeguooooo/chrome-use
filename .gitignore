@@ -15,6 +15,10 @@ bin/.install-method
 cli/target/
 cli/*.o
 
+# Nix build output symlink
+/result
+/result-*
+
 # Logs
 *.log
 npm-debug.log*

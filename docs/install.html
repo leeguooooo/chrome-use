@@ -91,6 +91,34 @@
         <li><strong>npm（遗留）：</strong><code>npm install -g chrome-use</code> 仍在发布，但 GitHub Releases 是现在的主渠道。</li>
       </ul>
 
+      <h3>使用 Nix 安装</h3>
+      <p>可以直接运行仓库 flake，也可以导入 Home Manager 或 NixOS 模块进行声明式安装：</p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">nix</span>
+        </div>
+<pre><code><span class="du-cmt"># 不安装，直接运行</span>
+<span class="du-prompt">$</span> nix run github:leeguooooo/chrome-use -- --help
+
+<span class="du-cmt"># flake 输入</span>
+inputs.chrome-use.url = "github:leeguooooo/chrome-use";
+
+<span class="du-cmt"># Home Manager：安装并在激活时注册原生消息 host</span>
+imports = [ inputs.chrome-use.homeManagerModules.default ];
+programs.chrome-use.enable = true;
+
+<span class="du-cmt"># NixOS：系统级安装，并可选强制安装浏览器扩展</span>
+imports = [ inputs.chrome-use.nixosModules.default ];
+programs.chrome-use = {
+  enable = true;
+  forceInstallExtension = true;
+};</code></pre>
+      </div>
+
+      <p>NixOS 模块会写入 Chrome 和 Chromium 的托管扩展策略。原生消息 host 按用户注册；系统切换后运行一次 <code>chrome-use extension connect</code>，或同时使用上面的 Home Manager 模块。</p>
+
       <p>可选的版本 tag 见 <a href="/lineage.html">版本沿革</a>——从 <code>agent-browser</code> fork（早期 <code>v0.x-fork.N</code> tag）到今天 <code>chrome-use</code> 的 <code>v1.5.x</code> tag 演进。</p>
 
       <div class="du-callout warn">
