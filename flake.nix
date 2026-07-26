@@ -17,6 +17,7 @@
         apps.default = {
           type = "app";
           program = "${self'.packages.default}/bin/chrome-use";
+          meta.description = "Run chrome-use";
         };
 
         devShells.default = pkgs.mkShell {
