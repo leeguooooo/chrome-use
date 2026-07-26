@@ -90,6 +90,11 @@ Each `--session` gets its **own colored Chrome tab group**, so multiple agents
 can share one real browser concurrently without stepping on each other — or your
 own tabs.
 
+Manage those workers with `chrome-use session list`, stop one gracefully with
+`chrome-use session stop [name]`, or reclaim all session daemons with
+`chrome-use session prune`. Ownership handoff remains available through
+`session handoff`, `session status`, and `session resume`.
+
 ## Why the extension (not a raw debug port)
 
 Other local tools drive Chrome over a raw `--remote-debugging-port` (CDP). Since

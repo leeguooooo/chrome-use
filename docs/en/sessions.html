@@ -251,6 +251,12 @@
 <pre><code><span class="du-cmt"># List running session daemons (with relay status)</span>
 <span class="du-prompt">$</span> chrome-use daemon status
 
+<span class="du-cmt"># Stop one daemon gracefully (defaults to the current session)</span>
+<span class="du-prompt">$</span> chrome-use session stop [name]
+
+<span class="du-cmt"># Stop every active session daemon gracefully</span>
+<span class="du-prompt">$</span> chrome-use session prune
+
 <span class="du-cmt"># Kill all session daemon workers</span>
 <span class="du-prompt">$</span> chrome-use daemon restart</code></pre>
       </div>

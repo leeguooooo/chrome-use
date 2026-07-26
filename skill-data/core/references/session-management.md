@@ -152,6 +152,15 @@ chrome-use --session auth close
 
 # List active sessions
 chrome-use session list
+
+# Stop the current session daemon gracefully
+chrome-use session stop
+
+# Stop a named session daemon
+chrome-use session stop auth
+
+# Stop all session daemons
+chrome-use session prune
 ```
 
 ## Best Practices

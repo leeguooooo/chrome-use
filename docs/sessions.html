@@ -234,6 +234,12 @@
 <pre><code><span class="du-cmt"># 列出运行中的会话守护进程（含 relay 状态）</span>
 <span class="du-prompt">$</span> chrome-use daemon status
 
+<span class="du-cmt"># 优雅停止一个守护进程（默认当前会话）</span>
+<span class="du-prompt">$</span> chrome-use session stop [name]
+
+<span class="du-cmt"># 优雅停止所有活动会话守护进程</span>
+<span class="du-prompt">$</span> chrome-use session prune
+
 <span class="du-cmt"># 杀掉所有会话守护进程 worker</span>
 <span class="du-prompt">$</span> chrome-use daemon restart</code></pre>
       </div>
