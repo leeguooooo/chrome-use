@@ -13,12 +13,12 @@ let
         rel = lib.removePrefix (toString root + "/") (toString path);
         keepTree = p: rel == p || lib.hasPrefix (p + "/") rel;
       in
-        (keepTree "cli" && !(lib.hasInfix "/target/" ("/" + rel + "/")))
-        || keepTree "skills"
-        || keepTree "skill-data"
-        || rel == "extensions"
-        || rel == "extensions/ab-connect"
-        || rel == "extensions/ab-connect/manifest.json";
+      (keepTree "cli" && !(lib.hasInfix "/target/" ("/" + rel + "/")))
+      || keepTree "skills"
+      || keepTree "skill-data"
+      || rel == "extensions"
+      || rel == "extensions/ab-connect"
+      || rel == "extensions/ab-connect/manifest.json";
   };
 in
 rustPlatform.buildRustPackage {

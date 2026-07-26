@@ -46,7 +46,7 @@ in
       description = "The chrome-use package to install.";
     };
   } // lib.optionalAttrs (mode == "home") homeOpts
-    // lib.optionalAttrs (mode == "nixos") nixosOpts;
+  // lib.optionalAttrs (mode == "nixos") nixosOpts;
 
   config = lib.mkIf cfg.enable (
     if mode == "home" then {
