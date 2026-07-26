@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>更新日志 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 版本更新日志：Nix 打包、原生标签页复制事务加固、Monaco 编辑器写入校验，以及近期版本要点。" />
+  <meta name="description" content="chrome-use 版本更新日志：会话生命周期路由修复、Nix 打包、Monaco 编辑器写入校验，以及近期版本要点。" />
 
   <!-- SEO / social -->
   <meta name="theme-color" content="#fcfbf4" />
@@ -69,6 +69,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.80</strong>（2026-07-26）— 修复 <code>session stop [name]</code> 与 <code>session prune</code> 被会话所有权命令提前截获的问题；两条生命周期命令重新路由到守护进程处理器，<code>session --help</code> 现在完整区分所有权与生命周期操作，命名停止还会先校验会话名再触碰守护进程状态（#142，修复 #140）。<strong>贡献者：</strong>@leeguooooo。</li>
         <li><strong>v1.5.79</strong>（2026-07-26）— 新增 Nix flake，提供 package、开发 shell、NixOS module 与 home-manager module（#136）。原生「复制标签页」事务现在有明确生命周期边界，超时后的扩展回复不会继续存活或污染后续会话状态（#137）。<code>fill</code> 现在通过 Monaco 的全局或 AMD model API 定位编辑器，执行原子的 <code>setValue</code> 或可信剪贴板兜底，并在返回成功前校验权威 model 回读；Synology DSM 编辑器“显示成功但内容为空”的问题现在会安全失败（#139）。<strong>贡献者：</strong>@M4jor-Tom、@forsakesoul、@leeguooooo。</li>
         <li><strong>v1.5.78</strong>（2026-07-24）— 新增原生下载能力：<code>download-url</code>、<code>download-start</code>、<code>downloads</code> 及对应 MCP 工具，动态链接下载不再误导航当前标签页；本地服务新增受 loopback / origin 保护的 <code>/api/v1</code>，CLI、MCP、daemon 与 HTTP 错误统一提供稳定的 <code>code</code> / <code>retryable</code> 字段（#132）。<code>network requests --type websocket</code> 可观察页面与跨域 iframe 的 WebSocket 连接元数据，不记录帧载荷（#131）。<code>site update</code> 现在默认同步社区源 <code>epiral/bb-sites</code> 与官方源 <code>leeguooooo/chrome-use-sites</code>，无需手动添加（#133）。</li>
         <li><strong>v1.5.77</strong>（2026-07-21）— 站点适配器错误现在返回非零退出码；安装器兼容无 <code>/dev/tty</code> 的非交互环境；保留全局参数名冲突时给出明确提示；大型页面的 <code>Page.navigate</code> 超时在确认已完成导航后降级为警告；新增可配置的组织私有适配器源与 <code>site sources/add/remove</code>（#122、#123、#125、#126、#127）。</li>
