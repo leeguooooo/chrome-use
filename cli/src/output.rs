@@ -3095,7 +3095,9 @@ Examples:
             r##"
 chrome-use session - Manage sessions
 
-Usage: chrome-use session [operation] [name]
+Usage:
+  chrome-use session [status|handoff|resume|list|prune]
+  chrome-use session stop [name]
 
 Manage isolated browser sessions, daemon lifecycle, and ownership handoff.
 

@@ -435,6 +435,15 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
         // tidies the tabs IT created (its tab group) before exiting.
         Some("stop") => {
             let target = args.get(2).map(|s| s.as_str()).unwrap_or(session);
+            if !validation::is_valid_session_name(target) {
+                let msg = validation::session_name_error(target);
+                if json_mode {
+                    print_json_error_with_type(msg, "invalid_session_name");
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), msg);
+                }
+                exit(1);
+            }
             connection::kill_stale_daemon(target);
             if json_mode {
                 print_json_value(json!({ "success": true, "data": { "stopped": target } }));
