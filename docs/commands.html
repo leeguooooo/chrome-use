@@ -619,6 +619,10 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use extension status         <span class="du-cmt"># 宿主是否已安装？</span>
 <span class="du-prompt">$</span> chrome-use extension uninstall      <span class="du-cmt"># 移除宿主清单</span></code></pre>
       </div>
+      <p>
+        <code>chrome-use status</code> 会区分「已安装清单」和「launcher 确实指向可执行文件」；
+        JSON 输出通过 <code>extension.hostHealthy</code> 报告 launcher 健康状态。
+      </p>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 推荐从 Chrome 应用商店安装</div>
         商店版重启稳定、自动更新（store id <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>）。加载已解压的开发版可能在

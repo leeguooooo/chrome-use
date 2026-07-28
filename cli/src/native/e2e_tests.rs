@@ -871,8 +871,7 @@ async fn e2e_click_confirm_returns_before_dialog_accept() {
             &json!({
                 "id": "3",
                 "action": "click",
-                "selector": "#confirm",
-                "_clickMode": "dom"
+                "selector": "#confirm"
             }),
             &mut state,
         ),

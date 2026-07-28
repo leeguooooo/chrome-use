@@ -12,10 +12,15 @@ test('withRelayTimeout rejects a debugger operation that never settles', async (
     withRelayTimeout(new Promise(() => {}), 'Runtime.evaluate', 5),
     (error) => {
       assert.equal(isRelayTimeoutError(error), true)
+      assert.equal(error.name, 'RelayTimeoutError')
       assert.match(error.message, /relay timeout after 5ms: Runtime\.evaluate/)
       return true
     },
   )
+})
+
+test('timeout detection ignores unrelated errors with similar messages', () => {
+  assert.equal(isRelayTimeoutError(new Error('relay timeout after 5ms: unrelated')), false)
 })
 
 test('a late rejection remains handled after the timeout wins', async () => {

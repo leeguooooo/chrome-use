@@ -633,6 +633,10 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use extension status         <span class="du-cmt"># is the host installed?</span>
 <span class="du-prompt">$</span> chrome-use extension uninstall      <span class="du-cmt"># remove the host manifest</span></code></pre>
       </div>
+      <p>
+        <code>chrome-use status</code> distinguishes an installed manifest from a runnable native-host launcher.
+        JSON output exposes the launcher result as <code>extension.hostHealthy</code>.
+      </p>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Install from the Chrome Web Store (recommended)</div>
         The Store build is stable across restarts and auto-updates (store id <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>).

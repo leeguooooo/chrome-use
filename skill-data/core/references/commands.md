@@ -442,6 +442,10 @@ chrome-use extension status         # is the host installed?
 chrome-use extension uninstall      # remove the host manifest
 ```
 
+`chrome-use status --json` reports native-host launcher health as
+`data.extension.hostHealthy`, so a stale launcher is distinguishable from a
+missing manifest or a disconnected relay.
+
 Security: the extension↔host link is authenticated by Chrome (extension id); the
 host↔chrome-use CDP link uses an unguessable URL in a 0600 file. Use this when
 you need the user's real cookies/login on their actual machine. (`--extension
