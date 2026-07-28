@@ -439,7 +439,8 @@
       <h2>Dialogs</h2>
       <p>
         By default <code>alert</code> and <code>beforeunload</code> are accepted automatically so the agent doesn't
-        block; <code>confirm</code> and <code>prompt</code> still need explicit handling. Use <code>--no-auto-dialog</code>
+        block; <code>confirm</code> and <code>prompt</code> still need explicit handling. A click that opens either one
+        returns a pending-dialog result immediately, so the same session can run the commands below. Use <code>--no-auto-dialog</code>
         to turn that behavior off.
       </p>
       <div class="du-code">
@@ -624,6 +625,7 @@ JS</code></pre>
           <span class="du-code-name">extension</span>
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use extension install        <span class="du-cmt"># write the native messaging host manifest (one-time)</span>
+<span class="du-prompt">$</span> chrome-use status                   <span class="du-cmt"># CLI, extension, relay, profile, and session health</span>
 <span class="du-prompt">$</span> chrome-use extension connect        <span class="du-cmt"># auto-attach to the real logged-in tabs</span>
 <span class="du-prompt">$</span> chrome-use tab                      <span class="du-cmt"># list the real tabs it now controls</span>
 <span class="du-prompt">$</span> chrome-use tab t3                   <span class="du-cmt"># switch the session to one of them</span>

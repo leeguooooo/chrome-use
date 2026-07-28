@@ -231,12 +231,15 @@ then register the local bridge once:
 ```bash
 chrome-use extension install      # register the native-messaging host (one-time)
 chrome-use open https://x.com/home
+chrome-use status                 # relay, profile, extension, and session health
 ```
 
 `chrome-use open` then drives your real, logged-in Chrome over **native
 messaging** — no debug port, no token, and **no "Allow remote debugging?" dialog,
 ever**. The extension auto-updates and survives Chrome restarts, so it stays
 connected with zero per-use confirmation (ideal for unattended/agent use).
+`chrome-use status` is daemon-free, so it still answers when the current session
+worker is the component that became unresponsive.
 
 <details>
 <summary>Alternative — raw remote-debugging port (pops a consent dialog)</summary>
@@ -287,6 +290,12 @@ raw CDP, Lightpanda, or cloud providers. Chrome controls whether a background
 duplicate starts loading.
 
 The agent operates in your Chrome — you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
+
+If a click opens native `confirm()` or `prompt()`, the click returns with a
+pending-dialog result instead of blocking the session. Follow with
+`chrome-use dialog status` and `chrome-use dialog accept|dismiss`.
+Chrome debugger relay calls are also time-bounded, so a process-swapped tab
+fails with recovery guidance rather than hanging indefinitely.
 
 ### Standalone mode (`--launch`)
 
@@ -356,6 +365,8 @@ site adapters for github.com — prefer these for structured data:
 
 **Sources.** The community `epiral/bb-sites` pack and official
 `leeguooooo/chrome-use-sites` pack are built-in defaults; no `site add` is needed.
+The official source overrides same-named community adapters and currently ships
+the stable Twitter engagement schema (`replies`, `bookmarks`, and numeric `views`).
 For other private or org-internal adapters, register an **extra source** as a GitHub
 `owner/repo`, a `.zip` URL, or a local directory. Extra sources sync into
 `~/.chrome-use/sites` with the same auto-sync lifecycle:

@@ -433,6 +433,7 @@ the folder (one click). After it loads, Chrome assigns the extension a fixed id
 
 Then, any time (pure CLI, zero confirmation):
 ```bash
+chrome-use status                   # CLI + relay/profile + current session health
 chrome-use extension connect        # auto-attaches to the live, logged-in tabs
 chrome-use tab                      # list the real tabs it now controls
 chrome-use tab t3                   # switch the session to one of them

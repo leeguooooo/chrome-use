@@ -361,7 +361,7 @@ EOF</code></pre>
       </p>
       <ul>
         <li><strong>Just retry the command</strong>—the relay has usually reconnected by now.</li>
-        <li>Still failing: check with <code>chrome-use status</code>, then reattach with <code>chrome-use extension connect</code>
+        <li>Still failing: use daemon-free <code>chrome-use status</code> for CLI, extension, relay, profile, and current-session health, then reattach with <code>chrome-use extension connect</code>
           (or the friendly alias <code>chrome-use reconnect</code>), then retry.</li>
         <li><strong>Never</strong> have the user quit/restart Chrome with <code>--remote-debugging-port</code> to recover the
           relay—that loses their tabs and breaks the extension path too.</li>
@@ -385,6 +385,9 @@ EOF</code></pre>
         see <a href="/en/how-it-works.html">How It Works</a>). If a session starts misbehaving—commands
         hitting the wrong tab, refs/handles looking stale, or you upgraded <code>chrome-use</code> mid-session leaving an old
         worker behind—restart the daemon; don't <code>pgrep</code>/<code>kill</code> hunt for PIDs.
+        The current extension also bounds Chrome debugger calls. If an older
+        extension leaves a worker silent, the CLI resets that daemon after the
+        socket deadline and tells you to retry or adopt the tab.
       </p>
 
       <div class="du-code">

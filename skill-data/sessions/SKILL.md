@@ -72,6 +72,10 @@ chrome-use daemon restart    # kill every session daemon worker
 `daemon restart` leaves the extension's native-messaging bridge (`__nm-host`)
 alone, so the relay to your live Chrome stays up — the next command just spins up
 a fresh, clean daemon against the same browser. It does **not** close any tabs.
+Start with `chrome-use status`, which does not contact the daemon. Debugger calls
+through the extension have a bounded timeout; if an older extension leaves the
+session silent until the CLI socket deadline, chrome-use automatically resets
+that stuck daemon and tells you to rerun or adopt the tab.
 
 ## Hand a session to the human (rare escape hatch)
 

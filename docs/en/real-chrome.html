@@ -214,7 +214,7 @@
       </p>
       <ol>
         <li><strong>Just re-run the command</strong>—by then the relay has usually reconnected.</li>
-        <li>Still failing: <code>chrome-use status</code> (check) → <code>chrome-use extension connect</code> (re-attach) → retry.
+        <li>Still failing: <code>chrome-use status</code> (daemon-free CLI, extension, relay, profile, and session health) → <code>chrome-use extension connect</code> (re-attach) → retry.
           The CLI registers the native host automatically, and opens the store page if the extension was never installed—you
           don't have to run <code>extension install</code> by hand.</li>
         <li><strong>Never</strong> have the user quit/restart Chrome with <code>--remote-debugging-port</code> to recover a

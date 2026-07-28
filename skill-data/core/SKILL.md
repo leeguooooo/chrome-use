@@ -946,6 +946,9 @@ adopts without reload); `--reuse-tab` avoids duplicate tabs on rebind.
 
 Reset stuck state with `chrome-use daemon status` / `daemon restart` — restarts the
 session daemon workers without touching the relay or closing any tabs.
+Use `chrome-use status` first for a daemon-free snapshot of the CLI, extension
+relay/profile, and current session. Relay debugger requests are bounded, and a
+silent stale worker is reset automatically after its socket deadline.
 
 Full detail: `chrome-use skills get sessions`
 
@@ -1061,6 +1064,11 @@ chrome-use dialog accept           # accept
 chrome-use dialog accept "text"    # accept with prompt input
 chrome-use dialog dismiss          # cancel
 ```
+
+A click that opens `confirm` or `prompt` returns immediately with a pending
+dialog result. The same session can then run `dialog status` and
+`dialog accept|dismiss`; do not restart the daemon or override the page's dialog
+functions.
 
 <!-- full -->
 

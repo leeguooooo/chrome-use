@@ -22,6 +22,7 @@ import {
   listDownloads,
   startDownload,
 } from './download-manager.js'
+import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js'
 
 const HOST_NAME = 'com.agent_browser.connect'
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i
@@ -594,6 +595,7 @@ async function recoverSessionTab(sessionId) {
         await attachTab(tabId)
         if (tabs.has(tabId)) return tabId
       } catch (e) {
+        if (isRelayTimeoutError(e)) throw e
         // Permanently off-limits (other extension's page etc.) — stop the tabId
         // fast-path and let the stable-targetId path below try a different tab.
         if (isPermanentAttachError(e)) break
@@ -612,7 +614,16 @@ async function recoverSessionTab(sessionId) {
   const targetId = sessionTargets.get(sessionId)
   if (targetId) {
     for (let i = 0; i < 6; i++) {
-      const targets = await chrome.debugger.getTargets().catch(() => null)
+      let targets
+      try {
+        targets = await withRelayTimeout(
+          chrome.debugger.getTargets(),
+          'chrome.debugger.getTargets',
+        )
+      } catch (e) {
+        if (isRelayTimeoutError(e)) throw e
+        targets = null
+      }
       const t = targets && targets.find((x) => x.id === targetId && x.tabId != null)
       if (t && t.tabId != null) {
         const tab = await chrome.tabs.get(t.tabId).catch(() => null)
@@ -624,6 +635,7 @@ async function recoverSessionTab(sessionId) {
               return t.tabId
             }
           } catch (e) {
+            if (isRelayTimeoutError(e)) throw e
             // The tab hosting our target is a page we can never attach to — no
             // amount of waiting fixes that, so give up the recovery now.
             if (isPermanentAttachError(e)) return null
@@ -651,7 +663,10 @@ async function recoverSessionTab(sessionId) {
 async function sendCdpToTab(tabId, method, params, childSessionId) {
   const dbg = childSessionId ? { tabId, sessionId: childSessionId } : { tabId }
   try {
-    return await chrome.debugger.sendCommand(dbg, method, params)
+    return await withRelayTimeout(
+      chrome.debugger.sendCommand(dbg, method, params),
+      `chrome.debugger.sendCommand(${method})`,
+    )
   } catch (e) {
     const msg = String((e && e.message) || e)
     if (!/detached|not attached|target.*(closed|gone)|no target|cannot access|frame.*detached/i.test(msg)) {
@@ -660,7 +675,10 @@ async function sendCdpToTab(tabId, method, params, childSessionId) {
     detachTab(tabId, false)
     const ok = await recoverSessionTab(`cb-tab-${tabId}`)
     if (!ok) throw e
-    return await chrome.debugger.sendCommand(dbg, method, params)
+    return await withRelayTimeout(
+      chrome.debugger.sendCommand(dbg, method, params),
+      `chrome.debugger.sendCommand(${method}) retry`,
+    )
   }
 }
 
@@ -892,7 +910,10 @@ async function attachTab(tabId, transactionIsActive) {
   if (existing) return existing
   const dbg = { tabId }
   try {
-    await chrome.debugger.attach(dbg, '1.3')
+    await withRelayTimeout(
+      chrome.debugger.attach(dbg, '1.3'),
+      'chrome.debugger.attach',
+    )
   } catch (e) {
     // After a service-worker restart, chrome.debugger may still be bound to
     // this tab from the previous instance — "Another debugger is already
@@ -903,7 +924,10 @@ async function attachTab(tabId, transactionIsActive) {
     const msg = String((e && e.message) || e)
     if (!/already attached|already being debugged/i.test(msg)) throw e
   }
-  await chrome.debugger.sendCommand(dbg, 'Page.enable').catch(() => {})
+  await withRelayTimeout(
+    chrome.debugger.sendCommand(dbg, 'Page.enable'),
+    'chrome.debugger.sendCommand(Page.enable)',
+  ).catch(() => {})
   // Enable FLAT auto-attach so Chrome attaches each cross-origin (out-of-process)
   // iframe as a child CDP session and fires Target.attachedToTarget through
   // chrome.debugger.onEvent below. Without this the GSI / payment / SSO iframe is
@@ -913,14 +937,20 @@ async function attachTab(tabId, transactionIsActive) {
   // here (not only via the daemon's forwarded command) so it's re-armed on every
   // attach/re-attach — including the cross-process-nav recovery — regardless of
   // daemon timing. Best-effort; ignored where unsupported.
-  await chrome.debugger
-    .sendCommand(dbg, 'Target.setAutoAttach', {
+  await withRelayTimeout(
+    chrome.debugger.sendCommand(dbg, 'Target.setAutoAttach', {
       autoAttach: true,
       flatten: true,
       waitForDebuggerOnStart: false,
-    })
-    .catch(() => {})
-  const info = /** @type {any} */ (await chrome.debugger.sendCommand(dbg, 'Target.getTargetInfo'))
+    }),
+    'chrome.debugger.sendCommand(Target.setAutoAttach)',
+  ).catch(() => {})
+  const info = /** @type {any} */ (
+    await withRelayTimeout(
+      chrome.debugger.sendCommand(dbg, 'Target.getTargetInfo'),
+      'chrome.debugger.sendCommand(Target.getTargetInfo)',
+    )
+  )
   const targetInfo = info?.targetInfo
   const targetId = String(targetInfo?.targetId || '')
   if (!targetId) throw new Error('attachTab: no targetId')

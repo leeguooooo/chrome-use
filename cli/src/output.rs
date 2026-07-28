@@ -3363,6 +3363,24 @@ Examples:
 "##
         }
 
+        "status" => {
+            r##"
+chrome-use status - Show browser automation health without contacting a session daemon
+
+Usage: chrome-use [--session <name>] status [--json]
+
+Reports the installed CLI version, native host and extension relay state,
+live versus bundled extension version, driving Chrome profile, current session,
+and all running session daemons. Because this command is daemon-free, use it as
+the first check when browser commands are hanging.
+
+Examples:
+  chrome-use status
+  chrome-use --session checkout status
+  chrome-use status --json
+"##
+        }
+
         // === iOS Commands ===
         "tap" => {
             r##"
@@ -3825,6 +3843,7 @@ Confirmation:
   deny <id>                  Deny a pending action
 
 Sessions:
+  status                     Show CLI, extension relay/profile, and session health
   session                    Show current session owner
   session list               List active sessions and their owners
   session status             Show current session owner

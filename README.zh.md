@@ -122,9 +122,10 @@ npx skills add leeguooooo/chrome-use
 ```bash
 chrome-use extension install      # 注册原生消息 host（一次性）
 chrome-use open https://x.com/home
+chrome-use status                 # 中继、profile、扩展与会话健康总览
 ```
 
-之后 `chrome-use open` 就通过**原生消息**驱动你真实、已登录的 Chrome —— 无调试端口、无 token、**永远不弹 "Allow remote debugging?"**。扩展自动更新、重启不掉，零确认（适合无人值守 / agent 场景）。
+之后 `chrome-use open` 就通过**原生消息**驱动你真实、已登录的 Chrome —— 无调试端口、无 token、**永远不弹 "Allow remote debugging?"**。扩展自动更新、重启不掉，零确认（适合无人值守 / agent 场景）。`chrome-use status` 不依赖会话 daemon，因此即使当前 worker 卡住也能返回健康状态。
 
 <details>
 <summary>备选 —— 裸 remote-debugging 端口（会弹同意框）</summary>
@@ -156,6 +157,10 @@ chrome-use screenshot ./page.png
 
 Agent 在你的 Chrome 里操作 —— 你能实时看到开标签、加载、点击。任意时刻都能接管（比如手动过验证码），然后让 agent 继续。
 
+若点击触发原生 `confirm()` 或 `prompt()`，click 会返回待处理 dialog，而不是把会话卡死；
+接着运行 `chrome-use dialog status` 与 `chrome-use dialog accept|dismiss` 即可。
+扩展中继的 Chrome debugger 调用也有明确超时，跨进程跳转后的坏句柄会返回恢复提示，不再无限挂起。
+
 ### 独立模式（`--launch`）
 
 ```bash
@@ -174,9 +179,11 @@ chrome-use --launch --profile auto open https://x.com/home
 **已登录的标签页内**调用那个接口（用你的 cookie、同源 `fetch`、网站自己的模块），返回
 干净的 JSON。网站分辨不出它和你的区别，因为它**就是你**。
 
-chrome-use 本身不附带任何适配器 —— `site update` 会在运行时拉取社区的
-[**bb-sites**](https://github.com/epiral/bb-sites) 适配器包（就像包管理器拉依赖），
-然后在 chrome-use 的隐身通道上运行它们：
+chrome-use 本身不把适配器编进二进制。`site update` 会在运行时默认拉取社区
+[**bb-sites**](https://github.com/epiral/bb-sites) 与官方
+[**chrome-use-sites**](https://github.com/leeguooooo/chrome-use-sites) 两个源，
+然后在 chrome-use 的隐身通道上运行它们。官方源在同名冲突时覆盖社区源，
+其中 Twitter 适配器提供稳定的 `replies`、`bookmarks` 与数字 `views` 字段：
 
 ```bash
 chrome-use site update                          # 拉取适配器包（约 145 条命令）
@@ -189,8 +196,8 @@ chrome-use site reddit/search "rust async" --json
 chrome-use site bilibili/feed --json            # 能用，因为走的是你的登录态
 ```
 
-位置参数按适配器声明的参数顺序填入；`--key value` 按名覆盖。适配器由 bb-sites 社区编写、
-版权归各自作者所有 —— chrome-use 只负责运行它们。
+位置参数按适配器声明的参数顺序填入；`--key value` 按名覆盖。社区适配器版权归各自作者所有，
+官方适配器由 chrome-use 项目维护；chrome-use CLI 负责同步并运行它们。
 
 **自动同步 + 自动提示。** 你基本不用手动 `site update`:chrome-use 首次使用时自动拉取,
 之后每周后台刷新一次(`AGENT_BROWSER_SITES_TTL_DAYS` 调周期,`AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`
