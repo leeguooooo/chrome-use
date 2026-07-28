@@ -160,9 +160,12 @@
       </div>
 
       <p>
-        To set a default session for the current shell, use <code>AGENT_BROWSER_SESSION=myapp</code>; when you
-        omit <code>--session</code>, commands land on the default session. Close a session with <code>close</code>
-        when you no longer need it, and use <code>session list</code> to see which sessions are still active:
+        When <code>--session</code> is omitted, chrome-use derives a stable per-agent session from supported
+        runner IDs. Codex tasks use <code>CODEX_THREAD_ID</code> automatically; other runners can provide
+        <code>AGENT_BROWSER_SESSION_ID</code>. A plain shell without a runner ID retains the
+        <code>default</code> session. To set an explicit shell default, use
+        <code>AGENT_BROWSER_SESSION=myapp</code>. Close a session with <code>close</code> when you no longer
+        need it, and use <code>session list</code> to see which sessions are still active:
       </p>
 
       <div class="du-code">
@@ -180,11 +183,12 @@
       </div>
 
       <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ Concurrent agents must each use a different --session</div>
+        <div class="du-callout-title">Concurrent agents must each have a distinct session</div>
         Within a session, commands are pinned to the tab you opened (locked by target_id, so a stray tab
         won't drag your <code>eval</code>/<code>screenshot</code> off target). Two agents sharing
         <strong>the same</strong> session (e.g. both on the bare default session) share one daemon and one
-        active tab, and overwrite each other. Give each agent its own <code>--session &lt;name&gt;</code>.
+        active tab, and overwrite each other. Codex task isolation is automatic; elsewhere, give each agent
+        its own <code>--session &lt;name&gt;</code> or <code>AGENT_BROWSER_SESSION_ID</code>.
       </div>
 
       <div class="du-callout note">

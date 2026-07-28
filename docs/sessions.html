@@ -148,8 +148,11 @@
       </div>
 
       <p>
-        想给当前 shell 设一个默认会话，用 <code>AGENT_BROWSER_SESSION=myapp</code>；省略
-        <code>--session</code> 时命令都落到默认会话。会话不需要时用 <code>close</code> 关掉，用
+        省略 <code>--session</code> 时，chrome-use 会优先从受支持的运行器 ID 派生稳定的独立会话。
+        Codex 任务会自动使用 <code>CODEX_THREAD_ID</code>，其他运行器可以提供
+        <code>AGENT_BROWSER_SESSION_ID</code>。没有运行器 ID 的普通 shell 仍使用
+        <code>default</code>。想显式设置当前 shell 的默认会话，用
+        <code>AGENT_BROWSER_SESSION=myapp</code>。会话不需要时用 <code>close</code> 关掉，用
         <code>session list</code> 看还有哪些活跃会话：
       </p>
 
@@ -168,11 +171,12 @@
       </div>
 
       <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ 并发 agent 必须各用不同的 --session</div>
+        <div class="du-callout-title">并发 agent 必须各有独立会话</div>
         一个会话内，命令被钉在你打开的那个标签（按 target_id 锁定，外来标签不会把你的
         <code>eval</code>/<code>screenshot</code> 带偏）。两个 agent 共用<strong>同一个</strong>会话
-        （比如都用裸默认会话）会共享一个守护进程和一个活跃标签，互相覆盖。给每个 agent 一个独立的
-        <code>--session &lt;name&gt;</code>。
+        （比如都用裸默认会话）会共享一个守护进程和一个活跃标签，互相覆盖。Codex 任务现在自动隔离；
+        其他环境请给每个 agent 一个独立的 <code>--session &lt;name&gt;</code> 或
+        <code>AGENT_BROWSER_SESSION_ID</code>。
       </div>
 
       <div class="du-callout note">

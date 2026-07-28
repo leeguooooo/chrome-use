@@ -135,13 +135,17 @@ chrome-use --session variant-b screenshot /tmp/variant-b.png
 
 ## Default Session
 
-When `--session` is omitted, commands use the default session:
+When `--session` is omitted, chrome-use first looks for a stable runner ID.
+Codex exposes `CODEX_THREAD_ID`, so separate Codex tasks automatically receive
+different `cu-…` sessions. Other runners can set
+`AGENT_BROWSER_SESSION_ID`. A plain shell with no recognized runner ID uses the
+`default` session:
 
 ```bash
-# These use the same default session
+# These use the same derived task session, or "default" in a plain shell
 chrome-use open https://example.com
 chrome-use snapshot -i
-chrome-use close  # Closes default session
+chrome-use close
 ```
 
 ## Session Cleanup

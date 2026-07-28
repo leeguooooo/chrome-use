@@ -689,7 +689,9 @@ JS</code></pre>
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">environment</span>
         </div>
-<pre><code>AGENT_BROWSER_SESSION=<span class="du-str">"mysession"</span>            <span class="du-cmt"># default session name</span>
+<pre><code>AGENT_BROWSER_SESSION=<span class="du-str">"mysession"</span>            <span class="du-cmt"># explicit session name</span>
+AGENT_BROWSER_SESSION_ID=<span class="du-str">"agent-id"</span>           <span class="du-cmt"># stable runner id for auto-isolation</span>
+CODEX_THREAD_ID=<span class="du-str">"thread-id"</span>                   <span class="du-cmt"># recognized automatically for Codex tasks</span>
 AGENT_BROWSER_EXECUTABLE_PATH=<span class="du-str">"/path/chrome"</span> <span class="du-cmt"># custom browser path</span>
 AGENT_BROWSER_EXTENSIONS=<span class="du-str">"/ext1,/ext2"</span>       <span class="du-cmt"># comma-separated extension paths</span>
 AGENT_BROWSER_INIT_SCRIPTS=<span class="du-str">"/a.js,/b.js"</span>     <span class="du-cmt"># comma-separated init script paths</span>

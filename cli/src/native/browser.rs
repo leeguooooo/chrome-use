@@ -148,6 +148,45 @@ fn active_page_index_after_removal(
     active_page_index
 }
 
+/// Resolve the active-target pin after a page is removed.
+///
+/// On the shared extension relay, removing the pinned page must leave a
+/// tombstone pin instead of silently selecting a surviving tab. A surviving tab
+/// is commonly the session's `about:blank` scratch page, and retargeting reads
+/// there unloads the user's SPA state while returning plausible but incorrect
+/// data. The tombstone makes strict relay routing fail loudly and lets the stale
+/// target retry re-discover the same stable target if the removal was transient.
+/// A launched browser has no foreign tabs, so it retains the historical
+/// survivor fallback.
+fn active_target_after_removal(
+    pages: &[PageInfo],
+    active_page_index: usize,
+    active_target_id: Option<&str>,
+    removed_target_id: &str,
+    on_relay: bool,
+) -> Option<String> {
+    if active_target_id != Some(removed_target_id) {
+        return active_target_id.map(str::to_string);
+    }
+    if on_relay {
+        return Some(removed_target_id.to_string());
+    }
+    pages
+        .get(active_page_index)
+        .map(|page| page.target_id.clone())
+}
+
+/// Return the stored target pin for relay session recovery.
+///
+/// Do not use the lenient resolved active page here: after a relay target is
+/// removed, that fallback can point at a surviving `about:blank` page while the
+/// stored pin deliberately remains a tombstone for the original target.
+fn target_id_for_reattach(active_target_id: Option<&str>) -> Result<String, String> {
+    active_target_id
+        .map(str::to_string)
+        .ok_or_else(|| BOUND_TAB_GONE.to_string())
+}
+
 /// Resolve the session's active page index: prefer the pinned `active_target_id`
 /// (stable across tab reorder / passive discovery / removal), falling back to the
 /// raw `active_page_index` only when nothing is pinned or the pin is gone. Keeping
@@ -365,6 +404,7 @@ pub(crate) fn is_stale_target_error(error: &str) -> bool {
         || lower.contains("stale sessionid")
         || lower.contains("unknown sessionid")
         || lower.contains("no attached tab")
+        || lower.contains("can no longer be resolved")
 }
 
 /// A CDP call that ran to its full time budget without the command promise ever
@@ -1441,7 +1481,7 @@ impl BrowserManager {
     /// Relay-only: off the relay sessions don't rotate this way and the direct-CDP
     /// path has no `agent_group`, so callers gate this on `on_relay()`.
     pub async fn reattach_active_session(&mut self) -> Result<(), String> {
-        let target_id = self.active_target_id()?.to_string();
+        let target_id = target_id_for_reattach(self.active_target_id.as_deref())?;
         // Refresh the live target set first (updates url/title, drops only
         // genuinely-gone tabs — the pinned active target is debounce-protected, so
         // a single flaky snapshot during the swap can't prune it). Best-effort: a
@@ -2055,6 +2095,8 @@ impl BrowserManager {
 
     pub fn tab_list(&self) -> Vec<Value> {
         let active = self.resolved_active_index();
+        let pinned = self.active_target_id.as_deref();
+        let enforce_pin = self.agent_group().is_some();
         self.pages
             .iter()
             .enumerate()
@@ -2070,7 +2112,15 @@ impl BrowserManager {
                     "title": p.title,
                     "url": p.url,
                     "type": p.target_type,
-                    "active": i == active,
+                    // A dangling relay pin is a deliberate tombstone after the
+                    // bound tab disappears. Do not render a surviving scratch
+                    // tab as active merely because the lenient index fallback
+                    // points there (issue #149).
+                    "active": if enforce_pin {
+                        pinned == Some(p.target_id.as_str())
+                    } else {
+                        i == active
+                    },
                 })
             })
             .collect()
@@ -2081,6 +2131,14 @@ impl BrowserManager {
     /// handle an agent should hold across a multi-step flow.
     pub fn active_page_info(&self) -> Option<Value> {
         let i = self.resolved_active_index();
+        if self.agent_group().is_some()
+            && self
+                .active_target_id
+                .as_deref()
+                .is_some_and(|tid| self.pages.get(i).is_none_or(|p| p.target_id != tid))
+        {
+            return None;
+        }
         self.pages.get(i).map(|p| {
             json!({
                 "tabId": format_tab_id(p.tab_id),
@@ -3490,18 +3548,17 @@ impl BrowserManager {
 
     pub fn remove_page_by_target_id(&mut self, target_id: &str) {
         if let Some(pos) = self.pages.iter().position(|p| p.target_id == target_id) {
-            let removed_was_pinned = self.active_target_id.as_deref() == Some(target_id);
+            let previous_pin = self.active_target_id.clone();
+            let on_relay = self.agent_group().is_some();
             self.pages.remove(pos);
             self.update_active_page_after_removal(pos);
-            // If we just removed the pinned active target, the pin now dangles and
-            // `resolved_active_index` silently falls back to `active_page_index`.
-            // After a passive about:blank discovery that index can point at a blank
-            // tab, so `wait` → eval/snapshot lands on about:blank (issue #7). Re-pin
-            // to the surviving active page so the pin is never left pointing at a
-            // target that no longer exists.
-            if removed_was_pinned {
-                self.pin_active_target();
-            }
+            self.active_target_id = active_target_after_removal(
+                &self.pages,
+                self.active_page_index,
+                previous_pin.as_deref(),
+                target_id,
+                on_relay,
+            );
         }
     }
 
@@ -4001,6 +4058,7 @@ mod tests {
             "unknown sessionId cb-tab-7 for Page.navigate"
         ));
         assert!(is_stale_target_error("no attached tab for Page.navigate"));
+        assert!(is_stale_target_error(BOUND_TAB_GONE));
     }
 
     #[test]
@@ -4293,28 +4351,27 @@ mod tests {
         );
     }
 
-    // issue #7: removing the pinned active target must re-anchor the pin to a
-    // surviving page. Models `remove_page_by_target_id`'s index + re-pin steps
-    // purely (BrowserManager needs a live CDP client, so the method itself can't
-    // be unit-constructed). The invariant: after removal the pin never dangles
-    // and never silently resolves to a passively-discovered about:blank tab.
+    // Models `remove_page_by_target_id`'s index + pin update steps purely
+    // (BrowserManager needs a live CDP client, so the method itself cannot be
+    // unit-constructed).
     fn simulate_remove(
         target_ids: &[&str],
         active_index: usize,
         pinned: &str,
         remove_id: &str,
+        on_relay: bool,
     ) -> (Vec<String>, usize, Option<String>) {
         let pos = target_ids.iter().position(|t| *t == remove_id).unwrap();
-        let removed_was_pinned = pinned == remove_id;
-        let mut pages: Vec<String> = target_ids.iter().map(|s| s.to_string()).collect();
+        let mut pages: Vec<PageInfo> = target_ids.iter().map(|s| page(s)).collect();
         pages.remove(pos);
         let new_active = active_page_index_after_removal(active_index, pos, pages.len());
-        let new_pin = if removed_was_pinned {
-            pages.get(new_active).cloned()
-        } else {
-            Some(pinned.to_string())
-        };
-        (pages, new_active, new_pin)
+        let new_pin =
+            active_target_after_removal(&pages, new_active, Some(pinned), remove_id, on_relay);
+        (
+            pages.into_iter().map(|page| page.target_id).collect(),
+            new_active,
+            new_pin,
+        )
     }
 
     fn resolve_active<'a>(
@@ -4333,21 +4390,36 @@ mod tests {
     #[test]
     fn test_removing_unpinned_blank_keeps_pin_on_real_page() {
         // pages = [creepjs(pinned, active), about:blank]; a passive blank closes.
-        let (pages, active, pin) = simulate_remove(&["creepjs", "blank"], 0, "creepjs", "blank");
+        let (pages, active, pin) =
+            simulate_remove(&["creepjs", "blank"], 0, "creepjs", "blank", true);
         assert_eq!(resolve_active(&pages, active, &pin), "creepjs");
     }
 
     #[test]
-    fn test_removing_pinned_page_repins_to_survivor_not_dangling() {
-        // pages = [blank, creepjs(pinned, active)]; the pinned page itself closes.
-        let (pages, active, pin) = simulate_remove(&["blank", "creepjs"], 1, "creepjs", "creepjs");
-        // pin must point at a page that still exists (no dangling fallback).
-        let resolved = resolve_active(&pages, active, &pin);
-        assert!(
-            pages.iter().any(|p| p == resolved),
-            "resolved a dangling target"
+    fn relay_removing_pinned_page_keeps_tombstone_and_refuses_blank_fallback() {
+        // pages = [blank, spa(pinned, active)]; a relay detach/destroy removes the
+        // SPA target. Keep its stable target id as a tombstone rather than
+        // silently retargeting the session to the scratch page (issue #149).
+        let (pages, active, pin) = simulate_remove(&["blank", "spa"], 1, "spa", "spa", true);
+        assert_eq!(pin.as_deref(), Some("spa"));
+        assert_eq!(
+            target_id_for_reattach(pin.as_deref()).unwrap(),
+            "spa",
+            "relay recovery must retry the removed target, not the blank fallback"
         );
-        assert_eq!(resolved, "blank");
+        let owned = HashSet::from(["blank".to_string(), "spa".to_string()]);
+        let error = strict_session_index(&[page("blank")], pin.as_deref(), active, true, &owned)
+            .unwrap_err();
+        assert_eq!(error, BOUND_TAB_GONE);
+        assert_eq!(resolve_active(&pages, active, &pin), "blank");
+    }
+
+    #[test]
+    fn launched_browser_removing_pinned_page_keeps_survivor_fallback() {
+        // A launched browser has no foreign tabs, so historical fallback remains.
+        let (pages, active, pin) = simulate_remove(&["blank", "spa"], 1, "spa", "spa", false);
+        assert_eq!(pin.as_deref(), Some("blank"));
+        assert_eq!(resolve_active(&pages, active, &pin), "blank");
     }
 
     #[test]

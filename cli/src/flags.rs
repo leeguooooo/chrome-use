@@ -472,6 +472,7 @@ pub struct Flags {
 /// own id explicitly (e.g. cmux can export it per agent).
 const AGENT_ID_VARS: &[&str] = &[
     "AGENT_BROWSER_SESSION_ID",
+    "CODEX_THREAD_ID",
     "CMUX_SURFACE_ID",
     "CMUX_CLAUDE_PID",
     "GHOSTTY_SURFACE_ID",
@@ -1867,15 +1868,17 @@ mod tests {
         // Plain shell with no per-agent id → unchanged "default" behaviour.
         assert_eq!(default_session_name(), "default");
 
-        // A per-agent id → a stable, isolated "cu-…" name.
-        guard.set("CMUX_SURFACE_ID", "agent-one-uuid");
+        // Codex exposes one stable id per task. Recognizing it is what keeps
+        // concurrent Codex tasks in the same checkout off the shared `default`
+        // daemon (issue #149).
+        guard.set("CODEX_THREAD_ID", "thread-one-uuid");
         let one = default_session_name();
         assert!(one.starts_with("cu-"), "got {one}");
         assert!(is_valid_session_name(&one));
         assert_eq!(one, default_session_name(), "must be stable across calls");
 
-        // A different agent (different id) → a different session, no collision.
-        guard.set("CMUX_SURFACE_ID", "agent-two-uuid");
+        // A different task (different id) → a different session, no collision.
+        guard.set("CODEX_THREAD_ID", "thread-two-uuid");
         assert_ne!(one, default_session_name(), "two agents must not collide");
     }
 }

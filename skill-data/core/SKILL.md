@@ -113,7 +113,9 @@ transient relay drops — usually just retry the command.
 **Per-agent isolation is automatic:** each `--session <name>` gets its own colored
 Chrome tab group + dedicated daemon and drives ONLY the tabs it created, so
 concurrent agents share one real Chrome without cross-talk and never touch the
-user's tabs; an unset session auto-derives a stable per-agent name. `adopt
+user's tabs; an unset session auto-derives a stable per-agent name from supported
+runner IDs, including Codex's `CODEX_THREAD_ID`. Other runners can set
+`AGENT_BROWSER_SESSION_ID`. `adopt
 <url|targetId>` drives a pre-existing tab on demand; OAuth/SSO popups and
 cross-process redirects are followed automatically.
 
@@ -939,7 +941,9 @@ fallback. Chrome may still load the duplicate while it is in the background.
 
 Each `--session <name>` is an isolated browser (own cookies, tabs, refs), and
 concurrent agents MUST each use a distinct one; `AGENT_BROWSER_SESSION=myapp` sets
-the shell default. True multi-agent isolation needs the **extension-connect path**
+the shell default. Codex tasks get distinct defaults automatically through
+`CODEX_THREAD_ID`; other runners can set `AGENT_BROWSER_SESSION_ID`. True
+multi-agent isolation needs the **extension-connect path**
 (per-session tab groups) — raw `--cdp <port>` does NOT isolate. Reach a specific tab
 across sessions via its stable CDP `targetId` (`tab list --full` → `tab <targetId>`,
 adopts without reload); `--reuse-tab` avoids duplicate tabs on rebind.
