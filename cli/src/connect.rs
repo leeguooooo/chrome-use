@@ -1251,6 +1251,7 @@ pub struct NativeHostReport {
     /// Launcher script path the manifests point at (`~/.chrome-use/nm-host.sh`).
     pub launcher: Option<PathBuf>,
     pub launcher_exists: bool,
+    pub launcher_executable: bool,
     /// Binary the launcher `exec`s, parsed from its script body.
     pub target_bin: Option<String>,
     pub target_exists: bool,
@@ -1263,7 +1264,10 @@ pub struct NativeHostReport {
 impl NativeHostReport {
     /// The launcher resolves to a runnable binary.
     pub fn is_healthy(&self) -> bool {
-        self.launcher_exists && self.target_exists && self.target_executable
+        self.launcher_exists
+            && self.launcher_executable
+            && self.target_exists
+            && self.target_executable
     }
 }
 
@@ -1328,6 +1332,14 @@ pub fn native_host_report() -> NativeHostReport {
 
     if let Some(launcher) = launcher {
         report.launcher_exists = launcher.exists();
+        #[cfg(target_os = "windows")]
+        {
+            report.launcher_executable = launcher.is_file();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            report.launcher_executable = path_is_executable(&launcher);
+        }
         // Windows: the manifest `path` IS the target binary (chrome-use.exe) —
         // there is no shell launcher to parse, so treat it as the target.
         #[cfg(target_os = "windows")]
@@ -2733,14 +2745,18 @@ mod tests {
     }
 
     #[test]
-    fn native_host_report_is_healthy_requires_all_three() {
+    fn native_host_report_is_healthy_requires_executable_launcher_and_target() {
         let mut r = NativeHostReport {
             launcher_exists: true,
+            launcher_executable: true,
             target_exists: true,
             target_executable: true,
             ..Default::default()
         };
         assert!(r.is_healthy());
+        r.launcher_executable = false;
+        assert!(!r.is_healthy());
+        r.launcher_executable = true;
         r.target_exists = false;
         assert!(!r.is_healthy());
     }
