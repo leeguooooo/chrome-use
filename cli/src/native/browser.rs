@@ -176,6 +176,17 @@ fn active_target_after_removal(
         .map(|page| page.target_id.clone())
 }
 
+/// Return the stored target pin for relay session recovery.
+///
+/// Do not use the lenient resolved active page here: after a relay target is
+/// removed, that fallback can point at a surviving `about:blank` page while the
+/// stored pin deliberately remains a tombstone for the original target.
+fn target_id_for_reattach(active_target_id: Option<&str>) -> Result<String, String> {
+    active_target_id
+        .map(str::to_string)
+        .ok_or_else(|| BOUND_TAB_GONE.to_string())
+}
+
 /// Resolve the session's active page index: prefer the pinned `active_target_id`
 /// (stable across tab reorder / passive discovery / removal), falling back to the
 /// raw `active_page_index` only when nothing is pinned or the pin is gone. Keeping
@@ -1470,7 +1481,7 @@ impl BrowserManager {
     /// Relay-only: off the relay sessions don't rotate this way and the direct-CDP
     /// path has no `agent_group`, so callers gate this on `on_relay()`.
     pub async fn reattach_active_session(&mut self) -> Result<(), String> {
-        let target_id = self.active_target_id()?.to_string();
+        let target_id = target_id_for_reattach(self.active_target_id.as_deref())?;
         // Refresh the live target set first (updates url/title, drops only
         // genuinely-gone tabs — the pinned active target is debounce-protected, so
         // a single flaky snapshot during the swap can't prune it). Best-effort: a
@@ -4391,6 +4402,11 @@ mod tests {
         // silently retargeting the session to the scratch page (issue #149).
         let (pages, active, pin) = simulate_remove(&["blank", "spa"], 1, "spa", "spa", true);
         assert_eq!(pin.as_deref(), Some("spa"));
+        assert_eq!(
+            target_id_for_reattach(pin.as_deref()).unwrap(),
+            "spa",
+            "relay recovery must retry the removed target, not the blank fallback"
+        );
         let owned = HashSet::from(["blank".to_string(), "spa".to_string()]);
         let error = strict_session_index(&[page("blank")], pin.as_deref(), active, true, &owned)
             .unwrap_err();
