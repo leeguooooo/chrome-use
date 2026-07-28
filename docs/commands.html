@@ -429,7 +429,8 @@
       <h2>对话框</h2>
       <p>
         默认自动接受 <code>alert</code> 与 <code>beforeunload</code>，避免阻塞代理；
-        <code>confirm</code> 和 <code>prompt</code> 仍需显式处理。用 <code>--no-auto-dialog</code> 关闭该行为。
+        <code>confirm</code> 和 <code>prompt</code> 仍需显式处理。触发它们的 click 会立即返回待处理状态，
+        因此同一会话可以继续执行下面的 dialog 命令。用 <code>--no-auto-dialog</code> 关闭自动处理行为。
       </p>
       <div class="du-code">
         <div class="du-code-head">
@@ -610,6 +611,7 @@ JS</code></pre>
           <span class="du-code-name">extension</span>
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use extension install        <span class="du-cmt"># 写入原生消息宿主清单（一次性）</span>
+<span class="du-prompt">$</span> chrome-use status                   <span class="du-cmt"># CLI、扩展、中继、profile 与会话健康总览</span>
 <span class="du-prompt">$</span> chrome-use extension connect        <span class="du-cmt"># 自动挂接到真实的登录标签</span>
 <span class="du-prompt">$</span> chrome-use tab                      <span class="du-cmt"># 列出它现在控制的真实标签</span>
 <span class="du-prompt">$</span> chrome-use tab t3                   <span class="du-cmt"># 把会话切到其中一个</span>

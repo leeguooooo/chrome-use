@@ -209,7 +209,7 @@
       </p>
       <ol>
         <li><strong>直接重跑这条命令</strong>——到那会儿 relay 通常已经重连好了。</li>
-        <li>还不行：<code>chrome-use status</code>（检查）→ <code>chrome-use extension connect</code>（重新 attach）→ 再重试。
+        <li>还不行：<code>chrome-use status</code>（无需 daemon 的 CLI、扩展、中继、profile 与会话总览）→ <code>chrome-use extension connect</code>（重新 attach）→ 再重试。
           CLI 会自动注册原生宿主，如果扩展从没装过还会自己打开商店页面——你不用手动跑 <code>extension install</code>。</li>
         <li><strong>绝不要</strong>让用户用 <code>--remote-debugging-port</code> 退出/重启 Chrome 来恢复掉线的 relay——
           那会丢掉他们的所有标签页，也彻底破坏了扩展路径。</li>

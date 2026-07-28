@@ -841,6 +841,73 @@ async fn e2e_snapshot_and_click_ref() {
     assert_success(&resp);
 }
 
+/// A DOM click that opens confirm must return before the dialog is handled.
+/// Otherwise the daemon's state lock remains held by the click and the
+/// documented follow-up `dialog accept` command can never run (issue #144).
+#[tokio::test]
+#[ignore]
+async fn e2e_click_confirm_returns_before_dialog_accept() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = r#"<button id="confirm" onclick="window.confirmed=confirm('Delete it?')">Delete</button><script>window.confirmed=false</script>"#;
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let click = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        execute_command(
+            &json!({
+                "id": "3",
+                "action": "click",
+                "selector": "#confirm",
+                "_clickMode": "dom"
+            }),
+            &mut state,
+        ),
+    )
+    .await
+    .expect("click should return while confirm is still open");
+    assert_success(&click);
+    assert_eq!(get_data(&click)["dialog"]["type"], "confirm");
+    assert_eq!(get_data(&click)["dialog"]["pending"], true);
+
+    let status = execute_command(
+        &json!({ "id": "4", "action": "dialog", "response": "status" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&status);
+    assert_eq!(get_data(&status)["hasDialog"], true);
+
+    let accepted = execute_command(
+        &json!({ "id": "5", "action": "dialog", "response": "accept" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&accepted);
+    wait_for_evaluation(
+        &mut state,
+        "window.confirmed === true",
+        "confirm handler did not resume after dialog accept",
+    )
+    .await;
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 /// Clicking a button INSIDE an iframe by `@ref` must deliver a TRUSTED activation
 /// (`event.isTrusted === true`), not a synthetic DOM `.click()`. Security-sensitive
 /// embedded forms (Google Payments' `保存`) reject `isTrusted:false` clicks, so an

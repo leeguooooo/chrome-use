@@ -934,6 +934,13 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                     last_error = e;
                     continue;
                 }
+                if is_session_unresponsive_error(&e) {
+                    kill_stale_daemon(session);
+                    return Err(format!(
+                        "{e} The stuck session daemon was reset automatically; rerun the \
+                         command or adopt the tab into a fresh session."
+                    ));
+                }
                 // Non-transient error, fail immediately
                 return Err(e);
             }
@@ -944,6 +951,10 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         "{} (after {} retries - daemon may be busy or unresponsive)",
         last_error, MAX_RETRIES
     ))
+}
+
+fn is_session_unresponsive_error(error: &str) -> bool {
+    error.starts_with("session unresponsive: no response within ")
 }
 
 /// Check if an error is transient and worth retrying.
@@ -1337,5 +1348,18 @@ mod tests {
         assert!(!version_path.exists());
 
         let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn test_session_unresponsive_error_classification_is_narrow() {
+        assert!(is_session_unresponsive_error(
+            "session unresponsive: no response within 45s — the browser connection is likely stale"
+        ));
+        assert!(!is_session_unresponsive_error(
+            "CDP command timed out: Runtime.evaluate"
+        ));
+        assert!(!is_session_unresponsive_error(
+            "Failed to read: connection reset by peer"
+        ));
     }
 }

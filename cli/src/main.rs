@@ -574,6 +574,129 @@ fn run_daemon(args: &[String], json_mode: bool) {
     }
 }
 
+/// `chrome-use status` — one daemon-free health snapshot covering the installed
+/// CLI, real-Chrome extension relay, driving profile, and current session.
+/// Keeping this path local means it still answers when a session daemon is the
+/// component that is stuck (issue #145).
+fn run_status(session: &str, json_mode: bool) {
+    let inventory = walk_daemons();
+    let host_installed = connect::host_installed();
+    let relay_up = connect::relay_url().is_some();
+    let extension_version = connect::relay_ext_version();
+    let profile = connect::relay_ext_profile();
+    let current = inventory.sessions.iter().find(|item| item.name == session);
+
+    if json_mode {
+        let sessions: Vec<_> = inventory
+            .sessions
+            .iter()
+            .map(|item| {
+                json!({
+                    "name": item.name,
+                    "pid": item.pid,
+                    "version": item.version,
+                })
+            })
+            .collect();
+        let current_session = current
+            .map(|item| {
+                json!({
+                    "name": item.name,
+                    "running": true,
+                    "pid": item.pid,
+                    "version": item.version,
+                })
+            })
+            .unwrap_or_else(|| {
+                json!({
+                    "name": session,
+                    "running": false,
+                    "pid": null,
+                    "version": null,
+                })
+            });
+        let (profile_id, profile_email) = profile
+            .as_ref()
+            .map(|(id, email)| (Some(id.as_str()), email.as_deref()))
+            .unwrap_or((None, None));
+        print_json_value(json!({
+            "success": true,
+            "data": {
+                "cliVersion": env!("CARGO_PKG_VERSION"),
+                "extension": {
+                    "hostInstalled": host_installed,
+                    "relayUp": relay_up,
+                    "expectedVersion": env!("AB_CONNECT_VERSION"),
+                    "liveVersion": extension_version,
+                    "profileId": profile_id,
+                    "profileEmail": profile_email,
+                },
+                "currentSession": current_session,
+                "sessions": sessions,
+            }
+        }));
+        return;
+    }
+
+    println!("chrome-use {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "Extension relay: {}{}",
+        if relay_up { "up" } else { "down" },
+        if host_installed {
+            ""
+        } else {
+            " (native host not installed)"
+        }
+    );
+    println!(
+        "  extension: live {}, expected {}",
+        extension_version.as_deref().unwrap_or("unknown"),
+        env!("AB_CONNECT_VERSION")
+    );
+    if let Some((id, email)) = profile {
+        println!(
+            "  profile: {}",
+            connect::profile_label(&id, email.as_deref())
+        );
+    } else {
+        println!("  profile: unknown");
+    }
+
+    if let Some(item) = current {
+        let version = item
+            .version
+            .as_deref()
+            .map(|value| format!(", v{value}"))
+            .unwrap_or_default();
+        println!(
+            "Current session: {} (running, pid {}{})",
+            item.name, item.pid, version
+        );
+    } else {
+        println!("Current session: {} (not running)", session);
+    }
+
+    if inventory.sessions.is_empty() {
+        println!("Session daemons: none");
+    } else {
+        println!("Session daemons:");
+        for item in &inventory.sessions {
+            let version = item
+                .version
+                .as_deref()
+                .map(|value| format!(" (v{value})"))
+                .unwrap_or_default();
+            println!("  {} pid {}{}", item.name, item.pid, version);
+        }
+    }
+    if !relay_up {
+        println!(
+            "{}",
+            color::dim("Run `chrome-use extension status`, then `chrome-use extension connect`.")
+        );
+    }
+}
+
 fn get_dashboard_pid_path() -> std::path::PathBuf {
     get_socket_dir().join("dashboard.pid")
 }
@@ -1585,6 +1708,14 @@ fn main() {
     // same way `daemon status` does (issue #29).
     if clean.first().map(|s| s.as_str()) == Some("sessions") {
         run_daemon(&["sessions".to_string(), "status".to_string()], flags.json);
+        return;
+    }
+
+    // One stable health command for the recovery guidance used by the bundled
+    // skills. It intentionally runs before daemon bootstrap so a wedged daemon
+    // cannot make the health check hang (issue #145).
+    if clean.first().map(|s| s.as_str()) == Some("status") {
+        run_status(&flags.session, flags.json);
         return;
     }
 

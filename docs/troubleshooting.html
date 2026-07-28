@@ -346,7 +346,7 @@ EOF</code></pre>
       </p>
       <ul>
         <li><strong>直接重试这条命令</strong>——中继通常这会儿已经重连好了。</li>
-        <li>还不行：<code>chrome-use status</code> 查一下，再 <code>chrome-use extension connect</code>
+        <li>还不行：用不依赖 daemon 的 <code>chrome-use status</code> 查看 CLI、扩展、中继、profile 与当前会话，再 <code>chrome-use extension connect</code>
           （或友好别名 <code>chrome-use reconnect</code>）重新挂上，然后重试。</li>
         <li><strong>永远不要</strong>让用户用 <code>--remote-debugging-port</code> 退出/重启 Chrome 来恢复中继——
           那会丢掉他们的标签页，也废掉了扩展路径。</li>
@@ -368,6 +368,8 @@ EOF</code></pre>
         <a href="/how-it-works.html">它怎么工作</a>）。如果会话开始乱来——命令打到错误标签页、
         refs/句柄看起来陈旧、或你在会话中途升级了 <code>chrome-use</code> 导致旧 worker 残留——
         重启守护进程，别去 <code>pgrep</code>/<code>kill</code> 猎杀 PID。
+        新版扩展还会给 Chrome debugger 调用设置明确的超时；若旧扩展让 worker 一直沉默，
+        CLI 在 socket 截止后会自动重置该 daemon，并提示重试或 adopt 标签页。
       </p>
 
       <div class="du-code">

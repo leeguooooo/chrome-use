@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
+use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -241,6 +242,68 @@ pub struct PendingDialog {
     pub message: String,
     pub url: String,
     pub default_prompt: Option<String>,
+}
+
+fn pending_dialog_from_event(
+    event: &CdpEvent,
+    auto_dialog: bool,
+    active_session_id: &str,
+) -> Option<PendingDialog> {
+    if event.method != "Page.javascriptDialogOpening"
+        || event
+            .session_id
+            .as_deref()
+            .is_some_and(|session_id| session_id != active_session_id)
+    {
+        return None;
+    }
+    let dialog_event =
+        serde_json::from_value::<JavascriptDialogOpeningEvent>(event.params.clone()).ok()?;
+    let auto_handled =
+        auto_dialog && matches!(dialog_event.dialog_type.as_str(), "beforeunload" | "alert");
+    if auto_handled {
+        return None;
+    }
+    Some(PendingDialog {
+        dialog_type: dialog_event.dialog_type,
+        message: dialog_event.message,
+        url: dialog_event.url,
+        default_prompt: dialog_event.default_prompt,
+    })
+}
+
+/// Await a click CDP request unless it opens a dialog that requires explicit
+/// agent input. Chrome deliberately withholds the click response while a native
+/// confirm/prompt is open, so waiting only on that response deadlocks the
+/// daemon's state lock and prevents `dialog accept` from running (issue #144).
+async fn wait_for_click_or_dialog<F>(
+    click: F,
+    mut events: broadcast::Receiver<CdpEvent>,
+    auto_dialog: bool,
+    active_session_id: &str,
+) -> Result<Option<PendingDialog>, String>
+where
+    F: Future<Output = Result<(), String>>,
+{
+    tokio::pin!(click);
+    loop {
+        tokio::select! {
+            result = &mut click => return result.map(|_| None),
+            event = events.recv() => {
+                match event {
+                    Ok(event) => {
+                        if let Some(dialog) =
+                            pending_dialog_from_event(&event, auto_dialog, active_session_id)
+                        {
+                            return Ok(Some(dialog));
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return click.await.map(|_| None),
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1215,27 +1278,17 @@ impl DaemonState {
                             }
                         }
                         "Page.javascriptDialogOpening" => {
-                            if let Ok(dialog_event) =
-                                serde_json::from_value::<JavascriptDialogOpeningEvent>(
-                                    event.params.clone(),
-                                )
-                            {
-                                // When auto_dialog is enabled, alert and beforeunload
-                                // dialogs are handled by the background dialog_handler_task.
-                                // Skip tracking them to avoid a stale warning.
-                                let auto_handled = self.auto_dialog
-                                    && matches!(
-                                        dialog_event.dialog_type.as_str(),
-                                        "beforeunload" | "alert"
-                                    );
-                                if !auto_handled {
-                                    self.pending_dialog = Some(PendingDialog {
-                                        dialog_type: dialog_event.dialog_type,
-                                        message: dialog_event.message,
-                                        url: dialog_event.url,
-                                        default_prompt: dialog_event.default_prompt,
-                                    });
-                                }
+                            let active_session_id = self
+                                .browser
+                                .as_ref()
+                                .and_then(|browser| browser.active_session_id().ok())
+                                .unwrap_or_default();
+                            if let Some(dialog) = pending_dialog_from_event(
+                                &event,
+                                self.auto_dialog,
+                                active_session_id,
+                            ) {
+                                self.pending_dialog = Some(dialog);
                             }
                         }
                         "Page.javascriptDialogClosed" => {
@@ -4056,7 +4109,23 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         let session_id = mgr.active_session_id()?.to_string();
         let button = cmd.get("button").and_then(|v| v.as_str()).unwrap_or("left");
         let click_count = cmd.get("clickCount").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
-        interaction::click_at_point(&mgr.client, &session_id, x, y, button, click_count).await?;
+        let dialog_events = mgr.client.subscribe();
+        if let Some(dialog) = wait_for_click_or_dialog(
+            interaction::click_at_point(&mgr.client, &session_id, x, y, button, click_count),
+            dialog_events,
+            state.auto_dialog,
+            &session_id,
+        )
+        .await?
+        {
+            let dialog_type = dialog.dialog_type.clone();
+            let message = dialog.message.clone();
+            state.pending_dialog = Some(dialog);
+            return Ok(json!({
+                "clicked": { "x": x, "y": y },
+                "dialog": { "type": dialog_type, "message": message, "pending": true },
+            }));
+        }
         return Ok(json!({ "clicked": { "x": x, "y": y } }));
     }
 
@@ -4131,16 +4200,31 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     let before: std::collections::HashSet<String> =
         mgr.pages_list().into_iter().map(|p| p.target_id).collect();
 
-    interaction::click(
-        &mgr.client,
+    let dialog_events = mgr.client.subscribe();
+    if let Some(dialog) = wait_for_click_or_dialog(
+        interaction::click(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            selector,
+            button,
+            click_count,
+            &state.iframe_sessions,
+        ),
+        dialog_events,
+        state.auto_dialog,
         &session_id,
-        &state.ref_map,
-        selector,
-        button,
-        click_count,
-        &state.iframe_sessions,
     )
-    .await?;
+    .await?
+    {
+        let dialog_type = dialog.dialog_type.clone();
+        let message = dialog.message.clone();
+        state.pending_dialog = Some(dialog);
+        return Ok(json!({
+            "clicked": selector,
+            "dialog": { "type": dialog_type, "message": message, "pending": true },
+        }));
+    }
 
     // Give a just-opened tab a moment to register, then look for it.
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
@@ -13432,5 +13516,66 @@ mod tests {
             let auto_handled = auto_dialog && matches!(*dialog_type, "beforeunload" | "alert");
             assert!(!auto_handled, "{dialog_type} should NOT be auto-handled");
         }
+    }
+
+    #[test]
+    fn pending_dialog_parser_ignores_other_sessions_and_auto_handled_alerts() {
+        let confirm = CdpEvent {
+            method: "Page.javascriptDialogOpening".to_string(),
+            params: json!({
+                "url": "https://example.com",
+                "message": "Delete it?",
+                "type": "confirm",
+                "defaultPrompt": null,
+            }),
+            session_id: Some("session-a".to_string()),
+        };
+        assert!(pending_dialog_from_event(&confirm, true, "session-b").is_none());
+
+        let alert = CdpEvent {
+            method: "Page.javascriptDialogOpening".to_string(),
+            params: json!({
+                "url": "https://example.com",
+                "message": "Saved",
+                "type": "alert",
+                "defaultPrompt": null,
+            }),
+            session_id: Some("session-a".to_string()),
+        };
+        assert!(pending_dialog_from_event(&alert, true, "session-a").is_none());
+        assert!(pending_dialog_from_event(&alert, false, "session-a").is_some());
+    }
+
+    #[tokio::test]
+    async fn click_wait_returns_when_manual_dialog_opens() {
+        let (tx, rx) = broadcast::channel(4);
+        let sender = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            tx.send(CdpEvent {
+                method: "Page.javascriptDialogOpening".to_string(),
+                params: json!({
+                    "url": "https://example.com",
+                    "message": "Delete it?",
+                    "type": "confirm",
+                    "defaultPrompt": null,
+                }),
+                session_id: Some("session-a".to_string()),
+            })
+            .unwrap();
+        });
+
+        let pending_click = std::future::pending::<Result<(), String>>();
+        let dialog = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            wait_for_click_or_dialog(pending_click, rx, true, "session-a"),
+        )
+        .await
+        .expect("dialog event should unblock the click")
+        .expect("click wait should succeed")
+        .expect("confirm should be returned as pending");
+        sender.await.unwrap();
+
+        assert_eq!(dialog.dialog_type, "confirm");
+        assert_eq!(dialog.message, "Delete it?");
     }
 }

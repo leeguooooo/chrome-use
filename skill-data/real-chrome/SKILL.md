@@ -92,6 +92,8 @@ most drops you never even see. If a command *does* surface the error:
    (re-attach), then retry. The CLI auto-registers the native host and opens the
    Web Store page itself if the extension was never set up — you don't run
    `extension install` by hand.
+   `status` is daemon-free and reports CLI, live/expected extension, driving
+   profile, and current session state even when that session worker is stuck.
 3. **Never** tell the user to quit/restart Chrome with `--remote-debugging-port`
    to recover a dropped relay — that throws away their tabs and defeats the
    extension path. (The old error text said this; it no longer does.)
