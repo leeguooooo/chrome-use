@@ -3988,7 +3988,10 @@ Configuration:
 
 Environment:
   AGENT_BROWSER_CONFIG           Path to config file (or use --config)
-  AGENT_BROWSER_SESSION          Session name (default: "default")
+  AGENT_BROWSER_SESSION          Explicit session name; otherwise auto-derived per agent
+                                 when a stable runner id is available (fallback: "default")
+  AGENT_BROWSER_SESSION_ID       Stable runner/agent id for automatic session isolation
+  CODEX_THREAD_ID                Codex task id, recognized automatically for isolation
   AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)

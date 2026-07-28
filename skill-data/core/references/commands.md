@@ -550,7 +550,9 @@ chrome-use network route '*' --resource-type image,font --body '' # Stub images 
 ## Environment Variables
 
 ```bash
-AGENT_BROWSER_SESSION="mysession"            # Default session name
+AGENT_BROWSER_SESSION="mysession"            # Explicit session name
+AGENT_BROWSER_SESSION_ID="agent-id"          # Stable runner id for auto-isolation
+CODEX_THREAD_ID="thread-id"                  # Recognized automatically for Codex tasks
 AGENT_BROWSER_EXECUTABLE_PATH="/path/chrome" # Custom browser path
 AGENT_BROWSER_EXTENSIONS="/ext1,/ext2"       # Comma-separated extension paths
 AGENT_BROWSER_INIT_SCRIPTS="/a.js,/b.js"     # Comma-separated init script paths

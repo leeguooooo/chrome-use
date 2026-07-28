@@ -88,7 +88,10 @@ the CLI. Everything stays on your machine.
 
 Each `--session` gets its **own colored Chrome tab group**, so multiple agents
 can share one real browser concurrently without stepping on each other — or your
-own tabs.
+own tabs. When `--session` is omitted, chrome-use derives a stable per-agent
+session from supported runner IDs, including Codex's `CODEX_THREAD_ID`. A plain
+shell with no runner ID retains the `default` session; set
+`AGENT_BROWSER_SESSION_ID` or pass `--session` for parallel workers there.
 
 Manage those workers with `chrome-use session list`, stop one gracefully with
 `chrome-use session stop [name]`, or reclaim all session daemons with
@@ -562,7 +565,7 @@ We deliberately **don't ship our own bot detector** — the strongest, most hone
 - **Extension-relay transport** — a one-click Chrome Web Store extension + native messaging, so there's no debug port and no "Allow remote debugging?" dialog
 - **CDP-native stealth** — anti-detection via Chrome/CDP overrides rather than JS patches; zero patches when attached to your real Chrome, full patches only for `--launch`
 - **Humanize** — human-like cursor trajectories + adaptive anti-bot handling
-- **Multi-agent isolation** — concurrent agents share one real Chrome via per-session tab groups, no cross-talk
+- **Multi-agent isolation** — concurrent agents share one real Chrome via per-session tab groups; Codex tasks auto-isolate through `CODEX_THREAD_ID`
 - **Silent operation** — runs in the background; never steals your foreground tab
 
 <sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); the projects have since diverged substantially.</sub>

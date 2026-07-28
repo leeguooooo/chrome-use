@@ -672,7 +672,9 @@ JS</code></pre>
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">environment</span>
         </div>
-<pre><code>AGENT_BROWSER_SESSION=<span class="du-str">"mysession"</span>            <span class="du-cmt"># 默认会话名</span>
+<pre><code>AGENT_BROWSER_SESSION=<span class="du-str">"mysession"</span>            <span class="du-cmt"># 显式会话名</span>
+AGENT_BROWSER_SESSION_ID=<span class="du-str">"agent-id"</span>           <span class="du-cmt"># 用于自动隔离的稳定运行器 ID</span>
+CODEX_THREAD_ID=<span class="du-str">"thread-id"</span>                   <span class="du-cmt"># Codex 任务自动识别</span>
 AGENT_BROWSER_EXECUTABLE_PATH=<span class="du-str">"/path/chrome"</span> <span class="du-cmt"># 自定义浏览器路径</span>
 AGENT_BROWSER_EXTENSIONS=<span class="du-str">"/ext1,/ext2"</span>       <span class="du-cmt"># 逗号分隔的扩展路径</span>
 AGENT_BROWSER_INIT_SCRIPTS=<span class="du-str">"/a.js,/b.js"</span>     <span class="du-cmt"># 逗号分隔的 init 脚本路径</span>
