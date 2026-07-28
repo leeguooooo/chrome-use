@@ -69,6 +69,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.82</strong>（2026-07-28）— 完成 v1.5.81 的审查收尾：<code>status</code> 现在同时验证 native-host launcher 是否指向可执行文件，并在 JSON 中提供 <code>extension.hostHealthy</code>；自动重置卡住 daemon 后只给出一致的下一步提示；ab-connect 0.5.15 用稳定的 <code>RelayTimeoutError</code> 标识超时；confirm E2E 与命令帮助同步修正。<strong>贡献者：</strong>@leeguooooo。</li>
         <li><strong>v1.5.81</strong>（2026-07-28）— 新增无需 daemon 的 <code>chrome-use status</code>，统一报告 CLI、扩展、中继、profile 与会话健康（修复 #145）；click 触发原生 <code>confirm()</code>/<code>prompt()</code> 时立即返回待处理 dialog，同一会话可继续 accept 或 dismiss（修复 #144）；ab-connect 0.5.14 为 Chrome debugger 调用增加 8 秒超时，旧扩展导致 socket 超时时 CLI 会自动重置卡住的 daemon，HTTP→HTTPS 跨进程恢复不再无限挂起（修复 #146）；官方 chrome-use-sites 源新增 Twitter search/thread engagement schema，稳定返回 replies、bookmarks 与数字 views（修复 #124）。<strong>贡献者：</strong>@leeguooooo。</li>
         <li><strong>v1.5.80</strong>（2026-07-26）— 修复 <code>session stop [name]</code> 与 <code>session prune</code> 被会话所有权命令提前截获的问题；两条生命周期命令重新路由到守护进程处理器，<code>session --help</code> 现在完整区分所有权与生命周期操作，命名停止还会先校验会话名再触碰守护进程状态（#142，修复 #140）。<strong>贡献者：</strong>@leeguooooo。</li>
         <li><strong>v1.5.79</strong>（2026-07-26）— 新增 Nix flake，提供 package、开发 shell、NixOS module 与 home-manager module（#136）。原生「复制标签页」事务现在有明确生命周期边界，超时后的扩展回复不会继续存活或污染后续会话状态（#137）。<code>fill</code> 现在通过 Monaco 的全局或 AMD model API 定位编辑器，执行原子的 <code>setValue</code> 或可信剪贴板兜底，并在返回成功前校验权威 model 回读；Synology DSM 编辑器“显示成功但内容为空”的问题现在会安全失败（#139）。<strong>贡献者：</strong>@M4jor-Tom、@forsakesoul、@leeguooooo。</li>

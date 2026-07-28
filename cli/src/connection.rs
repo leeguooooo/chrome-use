@@ -937,8 +937,8 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                 if is_session_unresponsive_error(&e) {
                     kill_stale_daemon(session);
                     return Err(format!(
-                        "{e} The stuck session daemon was reset automatically; rerun the \
-                         command or adopt the tab into a fresh session."
+                        "session unresponsive: the stuck '{session}' daemon was reset \
+                         automatically; rerun the command, or adopt the tab into a fresh session."
                     ));
                 }
                 // Non-transient error, fail immediately

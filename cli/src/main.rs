@@ -580,7 +580,9 @@ fn run_daemon(args: &[String], json_mode: bool) {
 /// component that is stuck (issue #145).
 fn run_status(session: &str, json_mode: bool) {
     let inventory = walk_daemons();
-    let host_installed = connect::host_installed();
+    let host_report = connect::native_host_report();
+    let host_installed = !host_report.manifests.is_empty();
+    let host_healthy = host_report.is_healthy();
     let relay_up = connect::relay_url().is_some();
     let extension_version = connect::relay_ext_version();
     let profile = connect::relay_ext_profile();
@@ -625,6 +627,7 @@ fn run_status(session: &str, json_mode: bool) {
                 "cliVersion": env!("CARGO_PKG_VERSION"),
                 "extension": {
                     "hostInstalled": host_installed,
+                    "hostHealthy": host_healthy,
                     "relayUp": relay_up,
                     "expectedVersion": env!("AB_CONNECT_VERSION"),
                     "liveVersion": extension_version,
@@ -642,10 +645,12 @@ fn run_status(session: &str, json_mode: bool) {
     println!(
         "Extension relay: {}{}",
         if relay_up { "up" } else { "down" },
-        if host_installed {
-            ""
-        } else {
+        if !host_installed {
             " (native host not installed)"
+        } else if !host_healthy {
+            " (native host launcher broken)"
+        } else {
+            ""
         }
     );
     println!(

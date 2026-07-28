@@ -239,7 +239,9 @@ messaging** — no debug port, no token, and **no "Allow remote debugging?" dial
 ever**. The extension auto-updates and survives Chrome restarts, so it stays
 connected with zero per-use confirmation (ideal for unattended/agent use).
 `chrome-use status` is daemon-free, so it still answers when the current session
-worker is the component that became unresponsive.
+worker is the component that became unresponsive. It also validates that the
+native-host launcher resolves to a runnable binary; JSON output exposes this as
+`extension.hostHealthy`.
 
 <details>
 <summary>Alternative — raw remote-debugging port (pops a consent dialog)</summary>

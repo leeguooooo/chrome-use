@@ -1,7 +1,8 @@
 export const RELAY_COMMAND_TIMEOUT_MS = 8000
+export const RELAY_TIMEOUT_ERROR_NAME = 'RelayTimeoutError'
 
 export function isRelayTimeoutError(error) {
-  return String(error?.message || error).startsWith('relay timeout after ')
+  return error?.name === RELAY_TIMEOUT_ERROR_NAME
 }
 
 export async function withRelayTimeout(
@@ -15,13 +16,14 @@ export async function withRelayTimeout(
       Promise.resolve(operation),
       new Promise((_, reject) => {
         timer = setTimeout(
-          () =>
-            reject(
-              new Error(
-                `relay timeout after ${timeoutMs}ms: ${label}. ` +
-                  'The Chrome debugger stopped responding; restart the session and retry.',
-              ),
-            ),
+          () => {
+            const error = new Error(
+              `relay timeout after ${timeoutMs}ms: ${label}. ` +
+                'The Chrome debugger stopped responding; restart the session and retry.',
+            )
+            error.name = RELAY_TIMEOUT_ERROR_NAME
+            reject(error)
+          },
           timeoutMs,
         )
       }),

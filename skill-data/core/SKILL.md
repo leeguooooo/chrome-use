@@ -947,8 +947,9 @@ adopts without reload); `--reuse-tab` avoids duplicate tabs on rebind.
 Reset stuck state with `chrome-use daemon status` / `daemon restart` — restarts the
 session daemon workers without touching the relay or closing any tabs.
 Use `chrome-use status` first for a daemon-free snapshot of the CLI, extension
-relay/profile, and current session. Relay debugger requests are bounded, and a
-silent stale worker is reset automatically after its socket deadline.
+relay/profile, native-host launcher health (`extension.hostHealthy` in JSON),
+and current session. Relay debugger requests are bounded, and a silent stale
+worker is reset automatically after its socket deadline.
 
 Full detail: `chrome-use skills get sessions`
 

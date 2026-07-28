@@ -3367,12 +3367,16 @@ Examples:
             r##"
 chrome-use status - Show browser automation health without contacting a session daemon
 
-Usage: chrome-use [--session <name>] status [--json]
+Usage: chrome-use status
 
 Reports the installed CLI version, native host and extension relay state,
 live versus bundled extension version, driving Chrome profile, current session,
 and all running session daemons. Because this command is daemon-free, use it as
 the first check when browser commands are hanging.
+
+Global Options:
+  --json               Output as JSON
+  --session <name>     Use specific session
 
 Examples:
   chrome-use status

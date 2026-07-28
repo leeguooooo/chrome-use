@@ -50,6 +50,21 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         return;
     }
 
+    if !r.launcher_executable {
+        checks.push(
+            Check::new(
+                "native_host.launcher",
+                category,
+                Status::Fail,
+                format!("Launcher is not executable: {launcher_display}"),
+            )
+            .with_fix(format!(
+                "chmod +x {launcher_display}   (or: chrome-use extension connect)"
+            )),
+        );
+        return;
+    }
+
     match (&r.target_bin, r.target_exists, r.target_executable) {
         (None, _, _) => {
             checks.push(
