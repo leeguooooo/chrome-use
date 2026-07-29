@@ -37,8 +37,8 @@ use windows_sys::Win32::System::Threading::OpenProcess;
 
 use commands::{gen_id, parse_command, ParseError};
 use connection::{
-    cleanup_stale_files, ensure_daemon, get_socket_dir, is_pid_alive, restart_all_daemons,
-    send_command, walk_daemons, DaemonOptions,
+    cleanup_stale_files, get_socket_dir, is_pid_alive, restart_all_daemons, send_command,
+    walk_daemons, DaemonOptions,
 };
 use flags::{clean_args, parse_flags, Flags};
 use install::run_install;
@@ -1855,6 +1855,21 @@ fn main() {
         return;
     }
 
+    // Serialize this session's relay teardown and daemon replacement across CLI
+    // processes. The lock stays held through ensure_daemon below, preventing a
+    // concurrent command from entering the missing-socket window (issue #152).
+    let _session_lifecycle_lock = match connection::lock_session_lifecycle(&flags.session) {
+        Ok(lock) => lock,
+        Err(e) => {
+            if flags.json {
+                print_json_error(e);
+            } else {
+                eprintln!("{} {}", color::error_indicator(), e);
+            }
+            exit(1);
+        }
+    };
+
     // Relay self-heal (the "用不了" fix). On the extension-relay path, a dropped
     // relay used to mean either a 2-minute hang (a stale daemon still bound to the
     // dead relay ws keeps sending into the void) or a hard error that forced the
@@ -1877,29 +1892,47 @@ fn main() {
         // healed; a live launched browser answers fast and is left alone.
         && !connection::probe_daemon_healthy(&flags.session, std::time::Duration::from_secs(3))
     {
-        connection::kill_stale_daemon(&flags.session);
-        connect::ensure_host_installed();
-        // Reap any zombie native-messaging host (it already lost its Chrome port —
-        // relay-cdp-url is gone — but the process can linger). Killing it makes the
-        // extension worker's port disconnect fire immediately, so it reconnects and
-        // republishes the relay in ~2s instead of waiting ~30s for the keepalive
-        // alarm. Best-effort, unix-only; safe here because the relay is already down.
-        #[cfg(unix)]
+        // The native host is global, not per-session. Serialize its restart too,
+        // then recheck because another session may have restored the relay while
+        // this process waited for the lock.
+        let _relay_recovery_lock = match connection::lock_relay_recovery() {
+            Ok(lock) => lock,
+            Err(e) => {
+                if flags.json {
+                    print_json_error(e);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), e);
+                }
+                exit(1);
+            }
+        };
+        if connect::relay_url().is_none()
+            && !connection::probe_daemon_healthy(&flags.session, std::time::Duration::from_secs(3))
         {
-            let _ = std::process::Command::new("pkill")
-                .args(["-f", "__nm-host"])
-                .output();
+            connection::kill_stale_daemon(&flags.session);
+            connect::ensure_host_installed();
+            // Reap any zombie native-messaging host (it already lost its Chrome port —
+            // relay-cdp-url is gone — but the process can linger). Killing it makes the
+            // extension worker's port disconnect fire immediately, so it reconnects and
+            // republishes the relay in ~2s instead of waiting ~30s for the keepalive
+            // alarm. Best-effort, unix-only; safe here because the relay is already down.
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("pkill")
+                    .args(["-f", "__nm-host"])
+                    .output();
+            }
+            eprint!(
+                "{} Chrome relay dropped — reconnecting…",
+                color::success_indicator()
+            );
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+            while connect::relay_url().is_none() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            eprintln!();
         }
-        eprint!(
-            "{} Chrome relay dropped — reconnecting…",
-            color::success_indicator()
-        );
-        let _ = std::io::Write::flush(&mut std::io::stderr());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-        while connect::relay_url().is_none() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-        eprintln!();
     }
 
     // Parse proxy URL to separate server from credentials for the daemon.
@@ -1943,17 +1976,19 @@ fn main() {
         no_auto_dialog: flags.no_auto_dialog,
     };
 
-    let daemon_result = match ensure_daemon(&flags.session, &daemon_opts) {
-        Ok(result) => result,
-        Err(e) => {
-            if flags.json {
-                print_json_error(e);
-            } else {
-                eprintln!("{} {}", color::error_indicator(), e);
+    let daemon_result =
+        match connection::ensure_daemon_with_lifecycle_lock(&flags.session, &daemon_opts) {
+            Ok(result) => result,
+            Err(e) => {
+                if flags.json {
+                    print_json_error(e);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), e);
+                }
+                exit(1);
             }
-            exit(1);
-        }
-    };
+        };
+    drop(_session_lifecycle_lock);
 
     // Warn if launch-time options were explicitly passed via CLI but daemon was already running
     // Only warn about flags that were passed on the command line, not those set via environment

@@ -92,6 +92,76 @@ impl Connection {
     }
 }
 
+/// Cross-process lock for one session's daemon lifecycle.
+///
+/// A CLI invocation holds this across relay recovery and daemon startup so two
+/// processes cannot unlink, stop, or replace the same session concurrently.
+/// The kernel releases the lock automatically if the holder exits.
+pub struct SessionLifecycleLock {
+    #[cfg(unix)]
+    _file: fs::File,
+}
+
+/// Cross-process lock for the global extension relay recovery path.
+///
+/// The native-messaging host is shared by every session, so only one process
+/// may restart it while the relay endpoint is absent.
+pub struct RelayRecoveryLock {
+    #[cfg(unix)]
+    _file: fs::File,
+}
+
+#[cfg(unix)]
+fn acquire_file_lock(path: &std::path::Path, label: &str) -> Result<fs::File, String> {
+    use std::os::unix::io::AsRawFd;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {label} lock directory: {e}"))?;
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| format!("Failed to open {label} lock {}: {e}", path.display()))?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(format!(
+            "Failed to acquire {label} lock {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(file)
+}
+
+pub fn lock_session_lifecycle(session: &str) -> Result<SessionLifecycleLock, String> {
+    #[cfg(unix)]
+    {
+        let path = get_socket_dir().join(format!("{session}.lifecycle.lock"));
+        let file = acquire_file_lock(&path, "session lifecycle")?;
+        Ok(SessionLifecycleLock { _file: file })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = session;
+        Ok(SessionLifecycleLock {})
+    }
+}
+
+pub fn lock_relay_recovery() -> Result<RelayRecoveryLock, String> {
+    #[cfg(unix)]
+    {
+        let path = config_home().join("relay-recovery.lock");
+        let file = acquire_file_lock(&path, "relay recovery")?;
+        Ok(RelayRecoveryLock { _file: file })
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(RelayRecoveryLock {})
+    }
+}
+
 /// Brand-compat config directory basename. The project renamed
 /// `agent-browser` → `chrome-use`, but this dotfile dir is invisible internal
 /// plumbing: it's shared with the native-messaging host (the `relay-cdp-url`
@@ -156,6 +226,12 @@ fn get_socket_path(session: &str) -> PathBuf {
 
 fn get_pid_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.pid", session))
+}
+
+fn read_registered_daemon_pid(session: &str) -> Option<u32> {
+    fs::read_to_string(get_pid_path(session))
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
 }
 
 fn get_version_path(session: &str) -> PathBuf {
@@ -668,10 +744,28 @@ pub fn restart_all_daemons() -> Vec<String> {
 }
 
 pub fn ensure_daemon(session: &str, opts: &DaemonOptions) -> Result<DaemonResult, String> {
-    // Socket connectivity is the sole liveness check — no PID check — so
-    // callers in a different PID namespace (e.g. unshare) can still reuse
-    // an existing daemon they can reach over the socket.
-    if daemon_ready(session) {
+    let _lifecycle_lock = lock_session_lifecycle(session)?;
+    ensure_daemon_with_lifecycle_lock(session, opts)
+}
+
+/// Start or reuse a daemon while the caller holds `SessionLifecycleLock`.
+///
+/// The main command path uses this after keeping the same lock held across
+/// extension relay recovery and daemon replacement.
+pub(crate) fn ensure_daemon_with_lifecycle_lock(
+    session: &str,
+    opts: &DaemonOptions,
+) -> Result<DaemonResult, String> {
+    // Socket connectivity remains the sole healthy-daemon check. A PID sidecar
+    // is consulted only when the endpoint is missing: a live registered process
+    // with no reachable socket is an orphan that must be stopped before a
+    // replacement can claim the same session (issue #152).
+    let mut ready = daemon_ready(session);
+    if !ready {
+        ready = wait_for_registered_daemon_or_reclaim(session, Duration::from_secs(5));
+    }
+
+    if ready {
         // Double-check it's actually responsive by waiting and checking again
         // This handles the race condition where daemon is shutting down
         // (daemon has a 100ms shutdown delay, so we wait longer)
@@ -863,6 +957,41 @@ pub fn ensure_daemon(session: &str, opts: &DaemonOptions) -> Result<DaemonResult
     Err(format!("Daemon failed to start ({})", endpoint_info))
 }
 
+/// Give a concurrently-starting registered daemon its remaining startup grace.
+/// If its PID stays alive but the endpoint never becomes reachable, terminate
+/// and clean it so `ensure_daemon` can start a replacement without leaving an
+/// unreachable process behind.
+fn wait_for_registered_daemon_or_reclaim(session: &str, startup_grace: Duration) -> bool {
+    let Some(pid) = read_registered_daemon_pid(session) else {
+        return false;
+    };
+    if !is_pid_alive(pid) {
+        return false;
+    }
+
+    let pid_age = fs::metadata(get_pid_path(session))
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .unwrap_or(startup_grace);
+    let remaining_grace = startup_grace.saturating_sub(pid_age);
+    let deadline = std::time::Instant::now() + remaining_grace;
+
+    while std::time::Instant::now() < deadline {
+        if daemon_ready(session) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    if daemon_ready(session) {
+        return true;
+    }
+
+    kill_stale_daemon(session);
+    false
+}
+
 fn connect(session: &str) -> Result<Connection, String> {
     #[cfg(unix)]
     {
@@ -937,14 +1066,38 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                 if is_session_unresponsive_error(&e) {
                     kill_stale_daemon(session);
                     return Err(format!(
-                        "session unresponsive: the stuck '{session}' daemon was reset \
-                         automatically; rerun the command, or adopt the tab into a fresh session."
+                        "session unresponsive: the stuck '{session}' daemon was stopped \
+                         automatically; rerun the command to start a fresh daemon, or adopt \
+                         the tab into a fresh session."
                     ));
                 }
                 // Non-transient error, fail immediately
                 return Err(e);
             }
         }
+    }
+
+    if is_missing_endpoint_error(&last_error) {
+        #[cfg(unix)]
+        let endpoint = get_socket_path(session).display().to_string();
+        #[cfg(windows)]
+        let endpoint = format!("127.0.0.1:{}", resolve_port(session));
+
+        let had_live_daemon = read_registered_daemon_pid(session)
+            .map(is_pid_alive)
+            .unwrap_or(false);
+        kill_stale_daemon(session);
+
+        return Err(format!(
+            "Failed to connect: the daemon endpoint for session '{session}' disappeared \
+             ({endpoint}). {} Rerun the command to start a fresh daemon. \
+             Last error after {MAX_RETRIES} retries: {last_error}",
+            if had_live_daemon {
+                "The unreachable daemon was stopped and its stale state was cleared."
+            } else {
+                "Stale endpoint state was cleared."
+            }
+        ));
     }
 
     Err(format!(
@@ -955,6 +1108,10 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
 
 fn is_session_unresponsive_error(error: &str) -> bool {
     error.starts_with("session unresponsive: no response within ")
+}
+
+fn is_missing_endpoint_error(error: &str) -> bool {
+    error.contains("os error 2")
 }
 
 /// Check if an error is transient and worth retrying.
@@ -1188,6 +1345,9 @@ mod tests {
         assert!(is_transient_error(
             "Failed to connect: No such file or directory (os error 2)"
         ));
+        assert!(is_missing_endpoint_error(
+            "Failed to connect: No such file or directory (os error 2)"
+        ));
     }
 
     #[test]
@@ -1330,6 +1490,72 @@ mod tests {
         assert!(!dir.join("rktest.pid").exists());
         assert!(!get_socket_path("rktest").exists());
 
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_missing_socket_reclaims_live_registered_daemon() {
+        let dir = std::env::temp_dir().join(format!(
+            "ab-test-missing-socket-reclaim-{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_str().unwrap());
+
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        let session = "missing-socket";
+        let _ = fs::write(get_pid_path(session), pid.to_string());
+        let _ = fs::write(get_version_path(session), env!("CARGO_PKG_VERSION"));
+
+        assert!(!get_socket_path(session).exists());
+        assert!(!wait_for_registered_daemon_or_reclaim(
+            session,
+            Duration::ZERO
+        ));
+
+        let _ = child.wait();
+        assert!(!is_pid_alive(pid));
+        assert!(!get_pid_path(session).exists());
+        assert!(!get_version_path(session).exists());
+
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_session_lifecycle_lock_serializes_same_session() {
+        let dir = std::env::temp_dir().join(format!(
+            "ab-test-session-lifecycle-lock-{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
+        _guard.set("AGENT_BROWSER_SOCKET_DIR", dir.to_str().unwrap());
+
+        let first = lock_session_lifecycle("serialized").expect("acquire first lock");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let _second =
+                lock_session_lifecycle("serialized").expect("acquire second lock after release");
+            tx.send(()).expect("report second lock acquisition");
+        });
+
+        assert!(
+            rx.recv_timeout(Duration::from_millis(150)).is_err(),
+            "second process path must wait while the first lock is held"
+        );
+        drop(first);
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("second lock should acquire after release");
+        waiter.join().expect("lock waiter thread");
+
+        let _ = fs::remove_file(dir.join("serialized.lifecycle.lock"));
         let _ = fs::remove_dir(&dir);
     }
 

@@ -3100,6 +3100,8 @@ Usage:
   chrome-use session stop [name]
 
 Manage isolated browser sessions, daemon lifecycle, and ownership handoff.
+If a registered daemon loses its socket, the next browser command stops the
+unreachable worker and starts a clean replacement for the same session.
 
 Operations:
   (none)               Show the current session owner
@@ -3373,6 +3375,10 @@ Reports the installed CLI version, native host and extension relay state,
 live versus bundled extension version, driving Chrome profile, current session,
 and all running session daemons. Because this command is daemon-free, use it as
 the first check when browser commands are hanging.
+
+If a browser command reports that a session endpoint disappeared, rerun the
+command. chrome-use clears the unreachable worker and recreates the endpoint.
+Use `daemon restart` to reset every session worker explicitly.
 
 Global Options:
   --json               Output as JSON
@@ -3867,6 +3873,8 @@ Sessions:
   AGENT_BROWSER_IDLE_TIMEOUT_MS overrides, 0 disables — and on shutdown closes
   the scratch tabs IT created (its tab group). Use `keep` to leave a tab for the
   user (exempt from auto-close), `session stop/prune` to reclaim now.
+  If a registered daemon loses its socket, the next command stops the unreachable
+  process and starts a clean replacement for the same session automatically.
 
 Chat (AI):
   chat <message>             Send a natural language instruction (single-shot)

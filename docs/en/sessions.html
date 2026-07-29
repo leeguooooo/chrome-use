@@ -272,6 +272,14 @@
         the same browser. It does <strong>not</strong> close any tab.
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">Missing session socket recovery</div>
+        If a registered daemon process is still alive but its local socket has disappeared, the next browser
+        command stops that unreachable worker and starts a clean replacement for the same session. If the socket
+        disappears during an in-flight command, chrome-use names the missing endpoint, clears the stale state,
+        and asks you to rerun the command.
+      </div>
+
       <hr class="du-divider" />
 
       <h2>Rare case: hand a session to the user (session handoff / resume)</h2>

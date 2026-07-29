@@ -254,6 +254,13 @@
         保持在线——下一条命令只是对同一个浏览器起一个干净的新守护进程。它<strong>不会</strong>关掉任何标签。
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">会话 socket 丢失时自动恢复</div>
+        如果已登记的 daemon 进程仍然存活、但本地 socket 已消失，下一条浏览器命令会停止这个不可达 worker，
+        并为同一会话启动干净的新 daemon。若 socket 在命令执行途中消失，chrome-use 会在错误中给出缺失的
+        endpoint、清理陈旧状态，并提示重跑该命令。
+      </div>
+
       <hr class="du-divider" />
 
       <h2>极少数情况：把会话交接给用户（session handoff / resume）</h2>

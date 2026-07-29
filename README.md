@@ -98,6 +98,13 @@ Manage those workers with `chrome-use session list`, stop one gracefully with
 `chrome-use session prune`. Ownership handoff remains available through
 `session handoff`, `session status`, and `session resume`.
 
+If a session daemon stays alive but its local socket disappears, the next
+browser command stops that unreachable worker and starts a clean replacement
+for the same session. Rerun the command if chrome-use reports that an endpoint
+disappeared during an in-flight operation; use `chrome-use daemon restart` to
+reset every session worker explicitly. The extension relay and existing Chrome
+tabs stay open.
+
 ## Why the extension (not a raw debug port)
 
 Other local tools drive Chrome over a raw `--remote-debugging-port` (CDP). Since

@@ -953,7 +953,11 @@ session daemon workers without touching the relay or closing any tabs.
 Use `chrome-use status` first for a daemon-free snapshot of the CLI, extension
 relay/profile, native-host launcher health (`extension.hostHealthy` in JSON),
 and current session. Relay debugger requests are bounded, and a silent stale
-worker is reset automatically after its socket deadline.
+worker is stopped automatically after its socket deadline. If a registered
+daemon is still alive but its local endpoint has disappeared, the next browser
+command reclaims it and starts a clean replacement for the same session. If the
+endpoint disappears during an in-flight command, rerun that command after the
+CLI clears the stale state.
 
 Full detail: `chrome-use skills get sessions`
 
