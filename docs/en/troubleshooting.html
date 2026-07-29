@@ -386,8 +386,12 @@ EOF</code></pre>
         hitting the wrong tab, refs/handles looking stale, or you upgraded <code>chrome-use</code> mid-session leaving an old
         worker behind—restart the daemon; don't <code>pgrep</code>/<code>kill</code> hunt for PIDs.
         The current extension also bounds Chrome debugger calls. If an older
-        extension leaves a worker silent, the CLI resets that daemon after the
-        socket deadline and tells you to retry or adopt the tab.
+        extension leaves a worker silent, the CLI stops that daemon after the
+        socket deadline and tells you to retry or adopt the tab. If a registered
+        daemon stays alive after its local socket disappears, the next browser
+        command stops the unreachable process and starts a clean replacement for
+        the same session. An in-flight socket loss reports the exact endpoint,
+        clears stale state, and asks you to rerun the command.
       </p>
 
       <div class="du-code">

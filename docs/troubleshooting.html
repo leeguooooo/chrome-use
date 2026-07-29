@@ -369,7 +369,9 @@ EOF</code></pre>
         refs/句柄看起来陈旧、或你在会话中途升级了 <code>chrome-use</code> 导致旧 worker 残留——
         重启守护进程，别去 <code>pgrep</code>/<code>kill</code> 猎杀 PID。
         新版扩展还会给 Chrome debugger 调用设置明确的超时；若旧扩展让 worker 一直沉默，
-        CLI 在 socket 截止后会自动重置该 daemon，并提示重试或 adopt 标签页。
+        CLI 在 socket 截止后会自动停止该 daemon，并提示重试或 adopt 标签页。如果已登记的 daemon
+        仍存活但本地 socket 已消失，下一条浏览器命令会停止不可达进程，并为同一会话启动干净的新 daemon。
+        若 socket 在命令执行途中消失，错误会给出准确 endpoint、清理陈旧状态，并提示重跑该命令。
       </p>
 
       <div class="du-code">

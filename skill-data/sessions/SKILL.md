@@ -74,8 +74,12 @@ alone, so the relay to your live Chrome stays up — the next command just spins
 a fresh, clean daemon against the same browser. It does **not** close any tabs.
 Start with `chrome-use status`, which does not contact the daemon. Debugger calls
 through the extension have a bounded timeout; if an older extension leaves the
-session silent until the CLI socket deadline, chrome-use automatically resets
-that stuck daemon and tells you to rerun or adopt the tab.
+session silent until the CLI socket deadline, chrome-use automatically stops
+that stuck daemon and tells you to rerun or adopt the tab. If the daemon process
+is still alive but its local socket has disappeared, the next browser command
+reclaims it and starts a clean replacement for the same session. If the socket
+disappears during an in-flight command, rerun that command after chrome-use
+clears the stale state.
 
 ## Hand a session to the human (rare escape hatch)
 

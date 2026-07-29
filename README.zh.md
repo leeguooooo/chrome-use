@@ -127,6 +127,8 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 
 之后 `chrome-use open` 就通过**原生消息**驱动你真实、已登录的 Chrome —— 无调试端口、无 token、**永远不弹 "Allow remote debugging?"**。扩展自动更新、重启不掉，零确认（适合无人值守 / agent 场景）。`chrome-use status` 不依赖会话 daemon，因此即使当前 worker 卡住也能返回健康状态；它还会验证原生消息 host 的 launcher 是否指向可执行文件，JSON 输出对应 `extension.hostHealthy`。
 
+如果会话 daemon 进程仍在、但本地 socket 消失，下一条浏览器命令会停止这个不可达 worker，并为同一会话启动干净的新 daemon。若 socket 恰好在命令执行途中消失，按错误提示重跑一次即可；也可用 `chrome-use daemon restart` 明确重置全部会话 worker。扩展 relay 和现有 Chrome 标签页不会被关闭。
+
 <details>
 <summary>备选 —— 裸 remote-debugging 端口（会弹同意框）</summary>
 
