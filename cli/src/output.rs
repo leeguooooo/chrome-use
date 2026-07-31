@@ -2767,7 +2767,7 @@ Operations:
                              Natively duplicate and label a tab
   select <ref>               Switch to a tab (explicit alias for `<ref>`)
   adopt <url|targetId>       Attach an existing tab without navigating it
-  inspect <ref>              Read browser-level state (ab-connect 0.5.16+ on real Chrome)
+  inspect <ref>              Read browser-level state (relay requires ab-connect 0.5.16+)
   close [ref]                Close a tab (current if no ref given)
   <ref>                      Switch to a tab
 
