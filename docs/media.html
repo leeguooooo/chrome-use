@@ -135,6 +135,8 @@
         把一整段自动化录成视频，用于调试、写文档或留证据。
         <code>record start</code> 开始录，中间正常跑你的命令，
         <code>record stop</code> 结束并落盘。
+        通过扩展连接真实 Chrome 时会直接录当前 session 拥有的标签页，不会调用 Chrome 禁止的
+        <code>Target.createBrowserContext</code>；<code>--launch</code> 模式仍使用隔离 context。
       </p>
 
       <div class="du-code">

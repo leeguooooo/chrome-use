@@ -95,16 +95,16 @@
       <hr class="du-divider" />
 
       <!-- ============ REFS STALE ============ -->
-      <h2>@ref 会失效：页面一变就重新快照</h2>
+      <h2>@ref 在同一文档内稳定，导航后重置</h2>
       <p>
-        Ref（<code>@e1</code>、<code>@e2</code> …）在<strong>每次 snapshot 时重新分配</strong>。
-        它们会在<strong>页面变化的那一刻失效</strong>——导航的点击、表单提交、动态重渲染、弹窗打开之后都可能失效。
-        所以在一次<em>导航</em>或结构性变化之后、下一次用 ref 交互之前，先重新快照。
+        同一个 backend DOM 节点在连续 snapshot 中会保留原来的 Ref（<code>@e1</code>、<code>@e2</code> …）。
+        打开或关闭弹窗、列表插入新节点，不再让后面的控件整体改号。<strong>导航和切换标签页</strong>会硬重置身份映射；
+        越过这些边界后，下一次用 ref 交互前先重新快照。
       </p>
 
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ "Ref not found" / "Element not found: @eN"</div>
-        这几乎总是同一个原因：快照之后页面变了。别猜——重新 <code>chrome-use snapshot -i</code> 一次，用新的 ref。
+        原节点可能被框架替换或已经移除。别猜——重新 <code>chrome-use snapshot -i</code> 一次，确认当前节点与 ref。
       </div>
 
       <!-- ============ REFS SELF-HEAL ============ -->

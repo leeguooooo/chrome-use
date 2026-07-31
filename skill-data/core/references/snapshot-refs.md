@@ -80,19 +80,20 @@ chrome-use click @e12
 
 ## Ref Lifecycle
 
-**IMPORTANT**: Refs are invalidated when the page changes!
+Refs are stable for the same backend DOM node across snapshots in one document.
+Navigation and tab switches invalidate the identity map.
 
 ```bash
 # Get initial snapshot
 chrome-use snapshot -i
 # @e1 [button] "Next"
 
-# Click triggers page change
+# Click triggers navigation
 chrome-use click @e1
 
-# MUST re-snapshot to get new refs!
+# Re-snapshot after the document boundary
 chrome-use snapshot -i
-# @e1 [h1] "Page 2"  ← Different element now!
+# New-document refs start from @e1
 ```
 
 ## Best Practices
@@ -118,13 +119,18 @@ chrome-use snapshot -i          # Get new refs
 chrome-use click @e1            # Use new refs
 ```
 
-### 3. Re-Snapshot After Dynamic Changes
+### 3. Re-Snapshot to Discover Dynamic Changes
 
 ```bash
 chrome-use click @e1            # Opens dropdown
 chrome-use snapshot -i          # See dropdown items
 chrome-use click @e7            # Select item
 ```
+
+Existing DOM nodes keep their refs when a modal/dropdown is inserted or
+removed; newly created controls receive new refs. If a framework replaces a
+node entirely, the old ref can still self-heal by role/name/fingerprint, but a
+fresh snapshot is the safest way to discover the replacement.
 
 ### 4. Snapshot Specific Regions
 
@@ -182,8 +188,8 @@ chrome-use click @e5
 ```
 
 **Key details:**
-- Only one level of iframe nesting is expanded (iframes within iframes are not recursed)
-- Cross-origin iframes that block accessibility tree access are silently skipped
+- Iframes are expanded recursively up to three levels
+- Cross-origin iframe sessions are included when Chrome exposes them through CDP
 - Empty iframes or iframes with no interactive content are omitted from the output
 - To scope a snapshot to a single iframe, use `frame @ref` then `snapshot -i`
 
@@ -192,7 +198,7 @@ chrome-use click @e5
 ### "Ref not found" Error
 
 ```bash
-# Ref may have changed - re-snapshot
+# Element may have been replaced or removed — re-snapshot
 chrome-use snapshot -i
 ```
 

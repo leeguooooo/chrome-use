@@ -300,6 +300,7 @@ struct CursorElementInfo {
     kind: String, // "clickable", "focusable", "editable"
     hints: Vec<String>,
     text: String, // textContent from the DOM element (fallback when ARIA name is empty)
+    fallback_name: String,
     hidden_input_kind: Option<HiddenInputKind>,
     hidden_input_checked: Option<String>, // "true", "false", or "mixed" (tristate)
 }
@@ -533,7 +534,6 @@ async fn take_snapshot_at_depth(
     };
 
     let mut tracker = RoleNameTracker::new();
-    let mut next_ref: usize = ref_map.next_ref_num();
 
     let mut nodes_with_refs: Vec<(usize, usize)> = Vec::new();
 
@@ -559,6 +559,18 @@ async fn take_snapshot_at_depth(
     };
 
     promote_hidden_inputs(&mut tree_nodes, &cursor_elements);
+    for node in tree_nodes.iter_mut() {
+        if node.name.is_empty() {
+            if let Some(fallback_name) = node
+                .backend_node_id
+                .and_then(|bid| cursor_elements.get(&bid))
+                .map(|info| info.fallback_name.as_str())
+                .filter(|name| !name.is_empty())
+            {
+                node.name = fallback_name.to_string();
+            }
+        }
+    }
 
     // Name unlabeled interactive controls from their placeholder / nearest label
     // (issue #90): el-select and custom comboboxes leave the AX name empty, so
@@ -637,8 +649,7 @@ async fn take_snapshot_at_depth(
             None
         };
 
-        let ref_id = format!("e{}", next_ref);
-        next_ref += 1;
+        let ref_id = ref_map.snapshot_ref(tree_nodes[*idx].backend_node_id, frame_id);
 
         ref_map.add_with_frame(
             ref_id.clone(),
@@ -676,8 +687,6 @@ async fn take_snapshot_at_depth(
         .iter()
         .map(|text| render_error_line(text))
         .collect();
-
-    ref_map.set_next_ref_num(next_ref);
 
     if options.urls {
         let link_nodes: Vec<(usize, i64)> = tree_nodes
@@ -1034,11 +1043,11 @@ async fn find_cursor_interactive_elements(
 ) -> Result<HashMap<i64, CursorElementInfo>, String> {
     // Single JS evaluation that matches the v0.19.0 Node.js findCursorInteractiveElements():
     // - Uses querySelectorAll('*') to walk all elements
-    // - Checks getComputedStyle(el).cursor === 'pointer'
+    // - Surfaces deliberate non-default cursor values (pointer/grab/resize/text/etc.)
     // - Checks onclick attribute/handler and tabindex
     // - Skips interactiveTags (a, button, input, select, textarea, details, summary)
     // - Skips elements with interactive ARIA roles
-    // - Deduplicates inherited cursor:pointer from parent
+    // - Deduplicates cursor styles inherited unchanged from a parent
     // - Skips empty text and zero-size elements
     // - Tags each matched element with data-__ab-ci for batch backendNodeId resolution
     let js = r#"
@@ -1068,22 +1077,39 @@ async fn find_cursor_interactive_elements(
         if (role && interactiveRoles[role.toLowerCase()]) continue;
 
         var computedStyle = getComputedStyle(el);
-        var hasCursorPointer = computedStyle.cursor === 'pointer';
+        var cursor = computedStyle.cursor || 'auto';
+        var hasCursorPointer = cursor === 'pointer';
+        var hasMeaningfulCursor = cursor !== 'auto' && cursor !== 'default' && cursor !== 'none';
         var hasOnClick = el.hasAttribute('onclick') || el.onclick !== null;
         var tabIndex = el.getAttribute('tabindex');
         var hasTabIndex = tabIndex !== null && tabIndex !== '-1';
         var ce = el.getAttribute('contenteditable');
         var isEditable = ce === '' || ce === 'true';
 
-        if (!hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) continue;
+        if (!hasMeaningfulCursor && !hasOnClick && !hasTabIndex && !isEditable) continue;
 
-        // Skip elements that only inherit cursor:pointer from an ancestor
-        if (hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) {
+        // Skip elements that only inherit the same cursor from an ancestor.
+        if (hasMeaningfulCursor && !hasOnClick && !hasTabIndex && !isEditable) {
             var parent = el.parentElement;
-            if (parent && getComputedStyle(parent).cursor === 'pointer') continue;
+            if (parent && getComputedStyle(parent).cursor === cursor) continue;
         }
 
         var text = (el.textContent || '').trim().slice(0, 100);
+        var directText = Array.from(el.childNodes || [])
+            .filter(function(n) { return n.nodeType === Node.TEXT_NODE; })
+            .map(function(n) { return n.textContent || ''; })
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 100);
+        var fallbackName = (
+            el.getAttribute('aria-label')
+            || el.getAttribute('title')
+            || directText
+            || text
+            || ''
+        ).trim().slice(0, 100);
+        var classNames = Array.from(el.classList || []).slice(0, 2);
 
         var rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) continue;
@@ -1109,10 +1135,16 @@ async fn find_cursor_interactive_elements(
         results.push({
             text: text,
             tagName: tagName,
+            cursor: cursor,
             hasOnClick: hasOnClick,
             hasCursorPointer: hasCursorPointer,
+            hasMeaningfulCursor: hasMeaningfulCursor,
             hasTabIndex: hasTabIndex,
             isEditable: isEditable,
+            fallbackName: fallbackName,
+            id: (el.id || '').slice(0, 80),
+            testId: (el.getAttribute('data-testid') || '').slice(0, 80),
+            classNames: classNames,
             hiddenInputType: hiddenInputType,
             hiddenInputChecked: hiddenInputChecked
         });
@@ -1245,6 +1277,14 @@ async fn find_cursor_interactive_elements(
             .get("hasCursorPointer")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let has_meaningful_cursor = elem
+            .get("hasMeaningfulCursor")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let cursor = elem
+            .get("cursor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("auto");
         let has_on_click = elem
             .get("hasOnClick")
             .and_then(|v| v.as_bool())
@@ -1258,17 +1298,21 @@ async fn find_cursor_interactive_elements(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let kind = if has_cursor_pointer || has_on_click {
+        let kind = if matches!(cursor, "grab" | "grabbing") {
+            "draggable"
+        } else if has_cursor_pointer || has_on_click {
             "clickable"
         } else if is_editable {
             "editable"
-        } else {
+        } else if has_tab_index {
             "focusable"
+        } else {
+            "interactive"
         };
 
         let mut hints: Vec<String> = Vec::new();
-        if has_cursor_pointer {
-            hints.push("cursor:pointer".to_string());
+        if has_meaningful_cursor {
+            hints.push(format!("cursor:{cursor}"));
         }
         if has_on_click {
             hints.push("onclick".to_string());
@@ -1279,9 +1323,39 @@ async fn find_cursor_interactive_elements(
         if is_editable {
             hints.push("contenteditable".to_string());
         }
+        if let Some(id) = elem
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            hints.push(format!("id={id}"));
+        }
+        if let Some(test_id) = elem
+            .get("testId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            hints.push(format!("testid={test_id}"));
+        }
+        if let Some(classes) = elem.get("classNames").and_then(|v| v.as_array()) {
+            let classes = classes
+                .iter()
+                .filter_map(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>();
+            if !classes.is_empty() {
+                hints.push(format!("class={}", classes.join(".")));
+            }
+        }
 
         let text = elem
             .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let fallback_name = elem
+            .get("fallbackName")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .trim()
@@ -1303,6 +1377,7 @@ async fn find_cursor_interactive_elements(
                     kind: kind.to_string(),
                     hints,
                     text,
+                    fallback_name,
                     hidden_input_kind,
                     hidden_input_checked,
                 },
@@ -2458,6 +2533,7 @@ mod tests {
             kind: "clickable".to_string(),
             hints: vec!["cursor:pointer".to_string()],
             text: text.to_string(),
+            fallback_name: text.to_string(),
             hidden_input_kind: hidden_kind,
             hidden_input_checked: hidden_checked.map(|s| s.to_string()),
         }

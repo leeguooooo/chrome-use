@@ -119,14 +119,80 @@ pub struct RefEntry {
 pub struct RefMap {
     map: HashMap<String, RefEntry>,
     next_ref: usize,
+    stable_refs: HashMap<StableRefKey, StableRefEntry>,
+    snapshot_generation: u64,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StableRefKey {
+    backend_node_id: i64,
+    frame_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StableRefEntry {
+    ref_id: String,
+    last_seen_generation: u64,
+}
+
+/// Keep identities long enough for normal SPA churn while bounding memory on
+/// pages that continuously create and discard DOM nodes.
+const STABLE_REF_GENERATIONS: u64 = 32;
 
 impl RefMap {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
             next_ref: 1,
+            stable_refs: HashMap::new(),
+            snapshot_generation: 0,
         }
+    }
+
+    /// Start a new snapshot of the same document.
+    ///
+    /// Current entries are replaced so removed elements cannot be targeted, but
+    /// backend-node identities survive long enough for unchanged DOM nodes to
+    /// keep the same `@ref` across modal/list churn (issue #155). Navigation and
+    /// tab switches call [`Self::clear`] instead, which hard-resets identities.
+    pub fn begin_snapshot(&mut self) {
+        self.map.clear();
+        self.snapshot_generation = self.snapshot_generation.saturating_add(1);
+        let generation = self.snapshot_generation;
+        self.stable_refs.retain(|_, entry| {
+            generation.saturating_sub(entry.last_seen_generation) <= STABLE_REF_GENERATIONS
+        });
+    }
+
+    /// Return a stable ref for a snapshot node when CDP exposes a backend node
+    /// identity. Nodes without one receive a fresh ref because reusing them by
+    /// traversal position would risk silently targeting the wrong element.
+    pub fn snapshot_ref(&mut self, backend_node_id: Option<i64>, frame_id: Option<&str>) -> String {
+        if let Some(backend_node_id) = backend_node_id {
+            let key = StableRefKey {
+                backend_node_id,
+                frame_id: frame_id.map(str::to_string),
+            };
+            if let Some(entry) = self.stable_refs.get_mut(&key) {
+                entry.last_seen_generation = self.snapshot_generation;
+                return entry.ref_id.clone();
+            }
+
+            let ref_id = format!("e{}", self.next_ref);
+            self.next_ref += 1;
+            self.stable_refs.insert(
+                key,
+                StableRefEntry {
+                    ref_id: ref_id.clone(),
+                    last_seen_generation: self.snapshot_generation,
+                },
+            );
+            return ref_id;
+        }
+
+        let ref_id = format!("e{}", self.next_ref);
+        self.next_ref += 1;
+        ref_id
     }
 
     pub fn add(
@@ -230,6 +296,8 @@ impl RefMap {
     pub fn clear(&mut self) {
         self.map.clear();
         self.next_ref = 1;
+        self.stable_refs.clear();
+        self.snapshot_generation = 0;
     }
 
     pub fn next_ref_num(&self) -> usize {
@@ -2024,6 +2092,58 @@ mod tests {
         assert!(map.get("e1").is_some());
         assert_eq!(map.get("e1").unwrap().role, "button");
         assert!(map.get("e2").is_none());
+    }
+
+    #[test]
+    fn test_snapshot_refs_stay_stable_for_same_backend_node() {
+        let mut map = RefMap::new();
+        map.begin_snapshot();
+        let first = map.snapshot_ref(Some(42), None);
+        map.add(first.clone(), Some(42), "button", "Submit", None);
+
+        map.begin_snapshot();
+        assert!(
+            map.get(&first).is_none(),
+            "old live entries must be cleared"
+        );
+        let second = map.snapshot_ref(Some(42), None);
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn test_snapshot_refs_do_not_reuse_traversal_position_for_new_nodes() {
+        let mut map = RefMap::new();
+        map.begin_snapshot();
+        let original = map.snapshot_ref(Some(42), None);
+
+        map.begin_snapshot();
+        let inserted = map.snapshot_ref(Some(99), None);
+        let original_again = map.snapshot_ref(Some(42), None);
+
+        assert_ne!(inserted, original);
+        assert_eq!(original_again, original);
+    }
+
+    #[test]
+    fn test_snapshot_ref_identity_is_scoped_to_frame() {
+        let mut map = RefMap::new();
+        map.begin_snapshot();
+        let main = map.snapshot_ref(Some(42), None);
+        let iframe = map.snapshot_ref(Some(42), Some("child-frame"));
+        assert_ne!(main, iframe);
+    }
+
+    #[test]
+    fn test_hard_clear_resets_snapshot_identity() {
+        let mut map = RefMap::new();
+        map.begin_snapshot();
+        let first = map.snapshot_ref(Some(42), None);
+        let other = map.snapshot_ref(Some(99), None);
+        assert_ne!(first, other);
+
+        map.clear();
+        map.begin_snapshot();
+        assert_eq!(map.snapshot_ref(Some(99), None), "e1");
     }
 
     #[test]

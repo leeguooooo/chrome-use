@@ -1604,6 +1604,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "tab_new" => handle_tab_new(cmd, state).await,
             "tab_duplicate" => handle_tab_duplicate(cmd, state).await,
             "tab_switch" => handle_tab_switch(cmd, state).await,
+            "tab_adopt" => handle_tab_adopt(cmd, state).await,
+            "tab_inspect" => handle_tab_inspect(cmd, state).await,
             "tab_close" => handle_tab_close(cmd, state).await,
             "viewport" => handle_viewport(cmd, state).await,
             "useragent" | "user_agent" => handle_user_agent(cmd, state).await,
@@ -1674,6 +1676,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "getbytestid" => handle_getbytestid(cmd, state).await,
             "nth" => handle_nth(cmd, state).await,
             "find" => handle_find(cmd, state).await,
+            "findfuzzy" => handle_find_fuzzy(cmd, state).await,
             "expect" => handle_expect(cmd, state).await,
             "extract" => handle_extract(cmd, state).await,
             "form_fill" => handle_form_fill(cmd, state).await,
@@ -3641,7 +3644,7 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         urls: cmd.get("urls").and_then(|v| v.as_bool()).unwrap_or(false),
     };
 
-    state.ref_map.clear();
+    state.ref_map.begin_snapshot();
     let tree = snapshot::take_snapshot(
         &mgr.client,
         &session_id,
@@ -6713,7 +6716,10 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
         if let Some(obj) = result.as_object_mut() {
             obj.insert(
                 "warning".to_string(),
-                json!("switched tab is not responding yet (session re-attaching); retry the next command"),
+                json!(
+                    "tab is selected, but its renderer did not answer the liveness probe; \
+                     `tab inspect <ref>` can still read browser-level state without navigating"
+                ),
             );
         }
     }
@@ -6748,6 +6754,35 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     Ok(result)
+}
+
+async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let spec = cmd
+        .get("spec")
+        .and_then(|value| value.as_str())
+        .ok_or("Missing 'spec' parameter (expected a URL substring or targetId)")?;
+    state.ref_map.clear();
+    state.iframe_sessions.clear();
+    state.active_frame_id = None;
+    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    mgr.tab_adopt(spec).await
+}
+
+async fn handle_tab_inspect(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let tab_ref_str = cmd
+        .get("tabId")
+        .and_then(|value| value.as_str())
+        .ok_or("Missing 'tabId' parameter (expected `t<N>`, a label, or a targetId)")?;
+    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    mgr.resync_targets().await.ok();
+    let tab_id = match mgr.tab_id_for_target(tab_ref_str) {
+        Some(id) => id,
+        None => {
+            let tab_ref = super::browser::TabRef::parse(tab_ref_str)?;
+            mgr.resolve_tab_ref(&tab_ref)?
+        }
+    };
+    mgr.tab_inspect_by_id(tab_id).await
 }
 
 async fn handle_tab_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -7281,6 +7316,20 @@ async fn handle_profiler_stop(cmd: &Value, state: &mut DaemonState) -> Result<Va
     native_tracing::profiler_stop(&mgr.client, &session_id, &mut state.tracing_state, path).await
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordingTargetMode {
+    ActiveTab,
+    IsolatedContext,
+}
+
+fn recording_target_mode(on_relay: bool) -> RecordingTargetMode {
+    if on_relay {
+        RecordingTargetMode::ActiveTab
+    } else {
+        RecordingTargetMode::IsolatedContext
+    }
+}
+
 async fn handle_recording_start(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let path = cmd
         .get("path")
@@ -7291,6 +7340,36 @@ async fn handle_recording_start(cmd: &Value, state: &mut DaemonState) -> Result<
         .get("url")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
+
+    if state.recording_state.active {
+        return Err("Recording already active".to_string());
+    }
+
+    // The extension relay drives the user's real Chrome through chrome.debugger.
+    // That transport rejects Target.createBrowserContext with "Not allowed".
+    // Record the session-owned active tab in place instead (issue #151). This
+    // also preserves the actual logged-in page and avoids creating a duplicate
+    // context that the extension cannot own or route.
+    let target_mode =
+        recording_target_mode(state.browser.as_ref().is_some_and(BrowserManager::on_relay));
+    if target_mode == RecordingTargetMode::ActiveTab {
+        let (client, session_id) = {
+            let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+            if let Some(url) = recording_url {
+                mgr.navigate(url, WaitUntil::Load).await?;
+            }
+            (mgr.client.clone(), mgr.active_session_id()?.to_string())
+        };
+
+        let result = recording::recording_start(&mut state.recording_state, path)?;
+        state.start_recording_task(client, session_id).await?;
+
+        if let Some(ref server) = state.stream_server {
+            server.set_recording(true, &state.engine).await;
+        }
+
+        return Ok(result);
+    }
 
     let viewport = state.viewport;
 
@@ -9362,6 +9441,140 @@ async fn handle_find(cmd: &Value, state: &DaemonState) -> Result<Value, String> 
 
     let result = mgr.evaluate(&js, None).await?;
     Ok(json!({ "elements": result, "selector": selector }))
+}
+
+fn build_fuzzy_find_script(query: &str) -> String {
+    let query = serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"(() => {{
+            const query = {query};
+            const clean = value => String(value || '')
+                .toLocaleLowerCase()
+                .replace(/\s+/g, ' ')
+                .trim();
+            const wanted = clean(query);
+            const tokens = [...new Set(wanted.split(/[\s,，、/]+/).filter(Boolean))];
+            const roleHints = [
+                {{ terms: ['button', '按钮'], roles: ['button'] }},
+                {{ terms: ['link', '链接'], roles: ['link'] }},
+                {{ terms: ['input', 'textbox', '输入', '文本框'], roles: ['textbox', 'searchbox'] }},
+                {{ terms: ['checkbox', '复选框'], roles: ['checkbox'] }},
+                {{ terms: ['radio', '单选'], roles: ['radio'] }},
+                {{ terms: ['select', 'combobox', '下拉', '选择'], roles: ['combobox', 'listbox'] }}
+            ];
+            const implicitRole = el => {{
+                const explicit = clean(el.getAttribute('role'));
+                if (explicit) return explicit;
+                const tag = el.tagName.toLowerCase();
+                if (tag === 'button' || tag === 'summary') return 'button';
+                if (tag === 'a' && el.hasAttribute('href')) return 'link';
+                if (tag === 'select') return el.multiple ? 'listbox' : 'combobox';
+                if (tag === 'textarea') return 'textbox';
+                if (tag === 'input') {{
+                    const type = clean(el.getAttribute('type') || 'text');
+                    if (type === 'checkbox' || type === 'radio') return type;
+                    if (type === 'search') return 'searchbox';
+                    if (!['button', 'submit', 'reset', 'hidden'].includes(type)) return 'textbox';
+                    return 'button';
+                }}
+                return explicit || 'generic';
+            }};
+            const nameOf = el => clean(
+                el.getAttribute('aria-label')
+                || el.getAttribute('title')
+                || el.getAttribute('alt')
+                || el.getAttribute('placeholder')
+                || el.value
+                || ''
+            );
+            const textOf = el => clean(el.innerText || el.textContent || '').slice(0, 300);
+            const contextOf = el => {{
+                const parts = [];
+                let parent = el.parentElement;
+                for (let depth = 0; parent && depth < 3; depth++, parent = parent.parentElement) {{
+                    const text = textOf(parent);
+                    if (text) parts.push(text);
+                }}
+                return parts.join(' ').slice(0, 600);
+            }};
+            const selectorHint = el => {{
+                if (el.id) return '#' + CSS.escape(el.id);
+                const testId = el.getAttribute('data-testid');
+                if (testId) return '[data-testid=' + JSON.stringify(testId) + ']';
+                const classes = Array.from(el.classList || []).slice(0, 2);
+                return classes.length
+                    ? el.tagName.toLowerCase() + '.' + classes.map(CSS.escape).join('.')
+                    : el.tagName.toLowerCase();
+            }};
+
+            const results = [];
+            for (const el of document.querySelectorAll('body *')) {{
+                if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'].includes(el.tagName)) continue;
+                const rect = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                if (rect.width === 0 || rect.height === 0
+                    || style.display === 'none' || style.visibility === 'hidden') continue;
+
+                const role = implicitRole(el);
+                const name = nameOf(el);
+                const text = textOf(el);
+                const own = clean([name, text].filter(Boolean).join(' '));
+                if (!own) continue;
+                const context = contextOf(el);
+                const ownHits = tokens.filter(token => own.includes(token)).length;
+                const contextHits = tokens.filter(token => !own.includes(token) && context.includes(token)).length;
+                if (ownHits === 0 && ownHits + contextHits < Math.min(2, tokens.length)) continue;
+
+                let score = ownHits * 12 + contextHits * 3;
+                if (wanted && own.includes(wanted)) score += 30;
+                const roleMatch = roleHints.some(hint =>
+                    hint.terms.some(term => wanted.includes(term)) && hint.roles.includes(role)
+                );
+                if (roleMatch) score += 10;
+                const cursor = style.cursor || 'auto';
+                const interactive = role !== 'generic'
+                    || el.onclick !== null
+                    || el.hasAttribute('onclick')
+                    || (el.tabIndex >= 0)
+                    || !['auto', 'default', 'none'].includes(cursor);
+                if (interactive) score += 4;
+
+                results.push({{
+                    score,
+                    tagName: el.tagName.toLowerCase(),
+                    role,
+                    name: name || text.slice(0, 100),
+                    text: text.slice(0, 160),
+                    cursor,
+                    selector: selectorHint(el),
+                    id: el.id || null,
+                    testId: el.getAttribute('data-testid'),
+                    classes: Array.from(el.classList || []).slice(0, 2),
+                    interactive
+                }});
+            }}
+
+            results.sort((a, b) => b.score - a.score
+                || Number(b.interactive) - Number(a.interactive)
+                || a.text.length - b.text.length);
+            return results.slice(0, 12);
+        }})()"#
+    )
+}
+
+async fn handle_find_fuzzy(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+    let query = cmd
+        .get("query")
+        .and_then(|v| v.as_str())
+        .filter(|q| !q.trim().is_empty())
+        .ok_or("Missing natural-language query")?;
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let result = mgr.evaluate(&build_fuzzy_find_script(query), None).await?;
+    Ok(json!({
+        "query": query,
+        "candidates": result,
+        "note": "Candidates only; choose a returned selector/ref and act explicitly."
+    }))
 }
 
 // Evaluate a JS expression in the active page and return its value by value.
@@ -13382,6 +13595,26 @@ mod tests {
             WaitUntil::Load,
             "auth_login should navigate with Load and then wait for form \
              selectors explicitly"
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_find_script_includes_semantics_context_and_safe_candidates() {
+        let script = build_fuzzy_find_script("编辑 Web服务规则 设置按钮");
+        assert!(script.contains("编辑 Web服务规则 设置按钮"));
+        assert!(script.contains("roleHints"));
+        assert!(script.contains("contextOf"));
+        assert!(script.contains("selectorHint"));
+        assert!(script.contains("results.slice(0, 12)"));
+        assert!(!script.contains(".click()"));
+    }
+
+    #[test]
+    fn test_extension_relay_recording_uses_active_tab() {
+        assert_eq!(recording_target_mode(true), RecordingTargetMode::ActiveTab);
+        assert_eq!(
+            recording_target_mode(false),
+            RecordingTargetMode::IsolatedContext
         );
     }
 

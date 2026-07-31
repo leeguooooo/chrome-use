@@ -73,6 +73,9 @@
         <code>find label</code> matches more than <code>&lt;label&gt;</code> elements — it also matches
         <code>aria-label</code> and <code>aria-labelledby</code>, so icon buttons and custom controls
         labeled only via ARIA can be found too.
+        If you do not know the locator kind yet, pass a natural-language description directly.
+        chrome-use ranks candidates by name, text, ancestor context, and role, includes cursor and
+        compact selector anchors, and <strong>never acts automatically</strong>.
       </p>
 
       <div class="du-code">
@@ -81,6 +84,8 @@
           <span class="du-code-name">find — semantic locators</span>
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use find role button click <span class="du-flag">--name</span> <span class="du-str">"Submit"</span>
+<span class="du-prompt">$</span> chrome-use find <span class="du-str">"edit web service settings button"</span>  <span class="du-cmt"># ranked candidates only</span>
+<span class="du-prompt">$</span> chrome-use find query <span class="du-str">"edit settings button"</span>       <span class="du-cmt"># explicit query syntax</span>
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>     <span class="du-cmt"># exact match only</span>
 <span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>

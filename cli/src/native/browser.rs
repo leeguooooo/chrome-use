@@ -209,14 +209,15 @@ fn resolve_active_index(
 const BOUND_TAB_GONE: &str =
     "the tab this session was driving can no longer be resolved (it was closed, or a flaky \
      relay snapshot dropped it). Refusing to silently retarget — that could read/click the \
-     wrong tab. Re-open your target URL (`open <url>`) or `adopt <url>` the tab you want.";
+     wrong tab. Run `tab list`; if it is present, use `tab select <ref>` or `tab adopt <url>` \
+     without navigating. If it is absent, re-open the target URL with `open <url>`.";
 
 /// Message when a relay session has no tab of its own to route a command to.
 const NO_OWNED_TAB: &str =
     "this session owns no resolvable tab in its group. Refusing to run on a tab this session \
      didn't open — on the shared browser that could read/click the user's or another agent's \
-     tab. `open <url>` to create your own tab, or `adopt <url>` to explicitly take an existing \
-     one.";
+     tab. `open <url>` creates your own tab; `tab adopt <url>` explicitly takes an existing one \
+     without navigating it.";
 
 /// Strict session-index resolution for routing READ/CLICK commands.
 ///
@@ -453,9 +454,11 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     if is_stale_target_error(error) {
         return "the tab this command was driving is gone — it navigated across processes (e.g. \
                 an OAuth/SSO redirect), was closed, or the relay lost it. The session did NOT \
-                silently retarget, since that could read or click the wrong tab. Recover by \
-                re-placing the page yourself: `open <url>` / `navigate <url>` re-attaches to a \
-                fresh tab, or `adopt <url-substring>` the tab you want — then re-`snapshot`."
+                silently retarget, since that could read or click the wrong tab. Run `tab list` \
+                first. If the tab is listed, preserve it with `tab select <ref>` or \
+                `tab adopt <url-substring>`; use `tab inspect <ref>` when its renderer is stuck. \
+                Only if it is absent, re-open it with `open <url>` / `navigate <url>`, then \
+                re-`snapshot`."
             .to_string();
     }
     if lower.contains("strict mode violation") {
@@ -468,6 +471,15 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     if lower.contains("intercept") {
         return "Another element is covering the target element. Try scrolling or closing overlays."
             .to_string();
+    }
+    if lower.contains("relay timeout") {
+        return format!(
+            "{error}\nHint: Chrome still knows about the tab, but its renderer or debugger did \
+             not answer in time. This can happen when page JavaScript blocks the main thread. \
+             Use `tab inspect <ref>` for browser-level URL/status metadata without navigating; \
+             `tab select <ref>` keeps the same page selected for a screenshot retry. Runtime \
+             evaluation cannot complete until the page thread responds."
+        );
     }
     // A CDP call that ran to its full budget ("CDP command timed out: …") means
     // the browser connection is unresponsive — over the extension relay this
@@ -1089,6 +1101,23 @@ impl BrowserManager {
                 None,
             )
             .await?;
+        if let Some(index) = self
+            .pages
+            .iter()
+            .position(|page| page.target_id == target.target_id)
+        {
+            if let Some(page) = self.pages.get_mut(index) {
+                page.session_id = attach.session_id;
+                page.url = target.url;
+                page.title = sanitize_title(&target.title);
+            }
+            if !self.created_targets.contains(&target.target_id) {
+                self.adopted_targets.insert(target.target_id);
+            }
+            self.active_page_index = index;
+            self.pin_active_target();
+            return Ok(());
+        }
         let tab_id = self.assign_tab_id();
         self.pages.push(PageInfo {
             tab_id,
@@ -1105,8 +1134,24 @@ impl BrowserManager {
         self.adopted_targets.insert(target.target_id.clone());
         self.active_page_index = self.pages.len() - 1;
         self.pin_active_target();
-        self.enable_domains(&attach.session_id).await?;
         Ok(())
+    }
+
+    /// Adopt an existing relay tab in the current daemon without navigating it.
+    ///
+    /// Unlike the historical top-level `adopt` command, this does not restart
+    /// the daemon, so it preserves the diagnostic state of a white-screen or
+    /// unresponsive page (issue #157).
+    pub async fn tab_adopt(&mut self, spec: &str) -> Result<Value, String> {
+        if self.agent_group().is_none() {
+            return Err(
+                "`tab adopt` requires Chrome connected through the chrome-use extension"
+                    .to_string(),
+            );
+        }
+        self.adopt_existing_target(spec).await?;
+        self.active_page_info()
+            .ok_or_else(|| "Adopted tab could not be resolved".to_string())
     }
 
     /// Ask the extension to find a pre-existing tab by `spec` (targetId or URL
@@ -1510,7 +1555,11 @@ impl BrowserManager {
         if let Some(page) = self.pages.iter_mut().find(|p| p.target_id == target_id) {
             page.session_id = attach.session_id.clone();
         }
-        let _ = self.enable_domains(&attach.session_id).await;
+        // Do not synchronously initialize Page/Network domains here. Over the
+        // extension relay those page-scoped commands wait on the renderer and
+        // can hang for a white-screen tab whose main thread is blocked. The
+        // extension arms domains best-effort after registering the stable
+        // session; the next requested operation remains the liveness probe.
         Ok(())
     }
 
@@ -2332,12 +2381,14 @@ impl BrowserManager {
             self.remove_page_by_target_id(tid);
         }
 
-        // Refresh url/title from each live tab. The relay only stamps target_info
-        // on attach, so after a navigation its cached url/title go stale (or stay
-        // blank for a tab attached at about:blank) — which made `tab list` show
-        // blank rows you couldn't tell apart, defeating the point of listing them
-        // to pick a tab to adopt (issue #21). `Target.getTargetInfo` is a plain
-        // CDP read (no Runtime fingerprint), one cheap call per tab.
+        // Refresh url/title from each live tab on direct CDP. The extension relay
+        // keeps browser-level chrome.tabs metadata current in its synthesized
+        // Target.getTargets response. Asking each relay page session for
+        // Target.getTargetInfo would wait on a frozen renderer and turn a harmless
+        // tab list/switch into an eight-second timeout (issue #157).
+        if on_relay {
+            return Ok(());
+        }
         let sessions: Vec<(usize, String)> = self
             .pages
             .iter()
@@ -2809,16 +2860,31 @@ impl BrowserManager {
 
         self.active_page_index = index;
         self.pin_active_target();
-        let session_id = self.pages[index].session_id.clone();
-        self.enable_domains(&session_id).await?;
+        let on_relay = self.agent_group().is_some();
+        if on_relay {
+            // Refresh the stable session binding without requiring any response
+            // from the page renderer. This keeps a listed but frozen tab selected
+            // for the next screenshot/console/diagnostic command (issue #157).
+            self.reattach_active_session().await?;
+        } else {
+            let session_id = self.pages[index].session_id.clone();
+            self.enable_domains(&session_id).await?;
+        }
 
         // Silent: switching the agent's *internal* active page must not yank the
         // user's foreground tab. The page is driven in the background (focus is
         // emulated in enable_domains); the explicit `bringToFront` command is the
         // only way a tab is deliberately surfaced.
 
-        let url = self.get_url().await.unwrap_or_default();
-        let title = self.get_title().await.unwrap_or_default();
+        let (url, title) = if on_relay {
+            let page = &self.pages[index];
+            (page.url.clone(), page.title.clone())
+        } else {
+            (
+                self.get_url().await.unwrap_or_default(),
+                self.get_title().await.unwrap_or_default(),
+            )
+        };
 
         if let Some(page) = self.pages.get_mut(index) {
             page.url = url.clone();
@@ -3499,6 +3565,40 @@ impl BrowserManager {
             .position(|p| p.tab_id == tab_id)
             .ok_or_else(|| format!("Tab ID {} not found", tab_id))?;
         self.tab_switch(index).await
+    }
+
+    /// Return browser-level tab metadata without evaluating page JavaScript.
+    /// This remains useful when the renderer main thread is blocked.
+    pub async fn tab_inspect_by_id(&self, tab_id: u32) -> Result<Value, String> {
+        let page = self
+            .pages
+            .iter()
+            .find(|page| page.tab_id == tab_id)
+            .ok_or_else(|| format!("Tab ID {} not found", tab_id))?;
+        if self.agent_group().is_some() {
+            let mut result: Value = self
+                .client
+                .send_command_typed(
+                    "ABExt.inspectTab",
+                    &json!({
+                        "sessionId": page.session_id,
+                        "targetId": page.target_id,
+                    }),
+                    None,
+                )
+                .await?;
+            result["tabId"] = json!(format_tab_id(page.tab_id));
+            result["label"] = json!(page.label);
+            return Ok(result);
+        }
+        Ok(json!({
+            "tabId": format_tab_id(page.tab_id),
+            "label": page.label,
+            "targetId": page.target_id,
+            "url": page.url,
+            "title": page.title,
+            "debuggerAttached": true,
+        }))
     }
 
     pub async fn tab_close_by_id(&mut self, tab_id: Option<u32>) -> Result<Value, String> {
@@ -4548,6 +4648,19 @@ mod tests {
         assert!(m.contains("open <url>") && m.contains("adopt"));
         assert!(m.contains("did NOT") || m.contains("not silently"));
         assert_ne!(m, raw, "should rewrite the cryptic CDP text");
+    }
+
+    #[test]
+    fn test_to_ai_friendly_error_relay_timeout_preserves_hung_tab() {
+        let m = to_ai_friendly_error(
+            "relay timeout after 8000ms: chrome.debugger.sendCommand(Runtime.evaluate)",
+        );
+        assert!(m.contains("tab inspect <ref>"));
+        assert!(m.contains("main thread"));
+        assert!(
+            !m.contains("reopen it"),
+            "a renderer timeout must not imply that the tab disappeared"
+        );
     }
 
     /// Errors containing "not found" but NOT "element" should pass through unchanged.

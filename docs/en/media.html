@@ -135,6 +135,9 @@
         Record a whole automation run as video, for debugging, documentation, or evidence.
         <code>record start</code> begins recording, you run your commands as usual in between, and
         <code>record stop</code> ends it and writes to disk.
+        With extension-connected real Chrome, it records the current session-owned tab directly
+        instead of calling the forbidden <code>Target.createBrowserContext</code>; <code>--launch</code>
+        keeps the isolated-context behavior.
       </p>
 
       <div class="du-code">

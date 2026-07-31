@@ -95,9 +95,9 @@
 
       <h2>@ref 失效：Ref not found</h2>
       <p>
-        报 <code>"Ref not found"</code> / <code>Element not found: @eN</code>，说明自上次快照后页面变了。
-        每次 <code>snapshot</code> 都会重新分配 refs，导航、表单提交、对话框弹出、动态重渲染都会让旧 ref 作废。
-        重新快照，然后用新的 refs。
+        报 <code>"Ref not found"</code> / <code>Element not found: @eN</code>，通常说明节点被替换、移除，
+        或已经发生导航/切换标签页。同一文档里的同一个 backend DOM 节点会跨 snapshot 保持 ref，
+        弹窗插入/删除不会再让后续控件整体改号。遇到错误时重新快照，确认当前节点与 ref。
       </p>
 
       <div class="du-code">
@@ -160,9 +160,8 @@
 
       <h2>stale sessionId（扩展中继模式）</h2>
       <p>
-        报 <code>stale sessionId … re-open your target URL</code>，说明你的标签页被关了、跨进程导航了、
+        报 <code>stale sessionId … re-open your target URL</code>，通常说明标签页被关了、跨进程导航了、
         或它的 debugger 脱离了（例如落到了 <code>chrome://</code> 或 Chrome 应用商店页面——这些 Chrome 禁止调试）。
-        该会话已经没有活的标签页——重新 <code>chrome-use open &lt;你的 URL&gt;</code> 重新挂上，再重试。
         这个大声报错替代了旧的静默行为（旧行为会在<em>别的</em>标签页上跑命令、返回错误数据）。
       </p>
 
@@ -174,11 +173,21 @@
 <pre><code><span class="du-cmt"># 恢复需要标签页的“精确”URL（含全部 query 参数——长 SSO/redirect 链接截断就废了）</span>
 <span class="du-cmt"># tab list 会用 … 省略长 URL，用 --full 打印未截断的完整地址</span>
 <span class="du-prompt">$</span> chrome-use tab list <span class="du-flag">--full</span>
+<span class="du-prompt">$</span> chrome-use tab select t4
+<span class="du-prompt">$</span> chrome-use tab inspect t4
+<span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"&lt;URL 子串或 targetId&gt;"</span>
 <span class="du-prompt">$</span> chrome-use open <span class="du-str">"&lt;完整入口 URL&gt;"</span></code></pre>
       </div>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 说明</div>
+        如果 <code>tab list</code> 仍列得出白屏或卡死标签，先用 <code>tab select</code> 或
+        <code>tab adopt</code> 保留现场，再用 <code>tab inspect</code> 读取浏览器级状态。
+        <code>relay timeout</code> 表示 renderer/debugger 没有及时回答，不代表标签已经消失。
+        页面 JavaScript 用无限循环阻塞主线程时，<code>eval</code> 在主线程恢复前不可能完成；
+        不要为了恢复 eval 而刷新掉需要诊断的现场。
+        <br /><br />
+        只有标签确实不在清单里时才重开 URL。
         多重跳转的 SSO 流程，重开<strong>稳定的入口 URL</strong>（不是中途某个 redirect 地址），
         再 <code>wait</code> 几秒让 SPA 稳定下来，然后再快照。相关：
         <a href="/real-chrome.html">驱动真实 Chrome</a>、<a href="/sessions.html">会话与并发</a>。

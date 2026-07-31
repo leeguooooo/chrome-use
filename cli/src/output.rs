@@ -651,6 +651,38 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             print_with_boundaries(&formatted, origin, opts);
             return;
         }
+        // Natural-language find returns candidates only. Keep the ranking and
+        // selector visible so the caller can choose an explicit action.
+        if let Some(candidates) = data.get("candidates").and_then(|v| v.as_array()) {
+            if candidates.is_empty() {
+                println!("No matching candidates");
+            } else {
+                for (index, candidate) in candidates.iter().enumerate() {
+                    let role = candidate
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("generic");
+                    let name = candidate.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let selector = candidate
+                        .get("selector")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let score = candidate.get("score").and_then(|v| v.as_i64()).unwrap_or(0);
+                    println!(
+                        "{}. [{}] {}  selector={}  score={}",
+                        index + 1,
+                        role,
+                        name,
+                        selector,
+                        score
+                    );
+                }
+            }
+            if let Some(note) = data.get("note").and_then(|v| v.as_str()) {
+                println!("{}", color::dim(note));
+            }
+            return;
+        }
         // iOS Devices
         if let Some(devices) = data.get("devices").and_then(|v| v.as_array()) {
             if devices.is_empty() {
@@ -764,7 +796,7 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
         // Tab switch
-        if action == Some("tab_switch") {
+        if matches!(action, Some("tab_switch" | "tab_adopt")) {
             if let Some(tab_id) = data.get("tabId").and_then(|v| v.as_str()) {
                 let warning = data.get("warning").and_then(|v| v.as_str());
                 // A non-responding session isn't a real success — show a warning
@@ -784,6 +816,39 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 }
                 return;
             }
+        }
+        if action == Some("tab_inspect") {
+            let tab_id = data.get("tabId").and_then(|v| v.as_str()).unwrap_or("?");
+            let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let url = data.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let status = data
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let attached = data
+                .get("debuggerAttached")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            println!("Tab [{}] {} - {}", tab_id, title, url);
+            println!(
+                "  browser status: {}, debugger attached: {}",
+                status, attached
+            );
+            if data
+                .get("discarded")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                println!("  discarded: true");
+            }
+            if data
+                .get("frozen")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                println!("  frozen: true");
+            }
+            return;
         }
         // New tab/window
         if let Some(tab_id) = data.get("tabId").and_then(|v| v.as_str()) {
@@ -2440,11 +2505,15 @@ Examples:
             r##"
 chrome-use find - Find and interact with elements by locator
 
-Usage: chrome-use find <locator> <value> [action] [text]
+Usage: chrome-use find <natural-language description>
+       chrome-use find <locator> <value> [action] [text]
 
-Finds elements using semantic locators and optionally performs an action.
+With an explicit locator, finds an element and optionally performs an action.
+With a bare description (or `query <description>`), returns ranked candidates
+without acting. Candidates include role/name/text, cursor and selector anchors.
 
 Locators:
+  query <description>       Rank natural-language candidates (never acts)
   role <role>              Find by ARIA role (--name <n>, --exact)
   text <text>              Find by text content (--exact)
   label <label>            Find by associated label (--exact)
@@ -2468,6 +2537,8 @@ Global Options:
   --session <name>     Use specific session
 
 Examples:
+  chrome-use find "edit web service settings button"
+  chrome-use find query "编辑 Web服务规则 设置按钮"
   chrome-use find role button click --name Submit
   chrome-use find text "Sign In" click
   chrome-use find label "Email" fill "user@example.com"
@@ -2694,6 +2765,9 @@ Operations:
   duplicate [ref]            Natively duplicate a tab (current if no ref given)
   duplicate [ref] --label <name>
                              Natively duplicate and label a tab
+  select <ref>               Switch to a tab (explicit alias for `<ref>`)
+  adopt <url|targetId>       Attach an existing tab without navigating it
+  inspect <ref>              Read browser-level tab state without page JavaScript
   close [ref]                Close a tab (current if no ref given)
   <ref>                      Switch to a tab
 
@@ -2715,6 +2789,9 @@ Examples:
   chrome-use tab duplicate
   chrome-use tab duplicate docs --label docs-copy
   chrome-use tab t2
+  chrome-use tab select t2
+  chrome-use tab adopt "github.com/owner/repo"
+  chrome-use tab inspect t2
   chrome-use tab docs
   chrome-use tab close
   chrome-use tab close t1
@@ -2930,8 +3007,10 @@ Usage: chrome-use record start <path.webm> [url]
        chrome-use record restart <path.webm> [url]
 
 Record the browser to a WebM video file.
-Creates a fresh browser context but preserves cookies and localStorage.
-If no URL is provided, automatically navigates to your current page.
+In a launched browser, creates a fresh context while preserving cookies.
+In extension-connected real Chrome, records the current session-owned tab
+directly because Chrome does not permit creating browser contexts there.
+If no URL is provided, recording starts from the current page.
 
 Operations:
   start <path> [url]     Start recording (defaults to current URL if omitted)
@@ -3771,13 +3850,16 @@ Storage:
   storage <local|session>    Manage web storage
 
 Tabs:
-  tab [new|duplicate|list|close|<ref>]
+  tab [new|duplicate|list|select|adopt|inspect|close|<ref>]
                              Manage tabs (<ref> = t<N>, a label, or a CDP targetId)
   tab duplicate [ref] [--label <name>]
                              Natively duplicate on extension-connected real Chrome
   tab list --full            Full URLs + stable cross-session targetId per tab
   tab <targetId>             Adopt a specific tab (incl. another session's) by its
                              stable targetId, no reload — preserves in-page state
+  tab select <ref>           Explicit switch syntax (same as `tab <ref>`)
+  tab adopt <url|targetId>   Attach an existing tab in the current session, no reload
+  tab inspect <ref>          Browser-level URL/status metadata; works when page JS hangs
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning
                              a duplicate (matches origin+path; preserves state)
   adopt <url|targetId>       Read a PRE-EXISTING tab (the user's own, or another

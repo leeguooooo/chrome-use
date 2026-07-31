@@ -73,6 +73,8 @@
         <code>find label</code> 不止匹配 <code>&lt;label&gt;</code> 元素——也会匹配
         <code>aria-label</code> 和 <code>aria-labelledby</code>，所以只靠 ARIA 标注、没有
         <code>&lt;label&gt;</code> 标签的图标按钮和自定义控件也能被找到。
+        如果还不知道 locator 类型，直接传一段自然语言描述；chrome-use 会按名称、文本、祖先上下文和
+        role 排序返回候选，并附上 cursor 与精简 selector 锚点，<strong>不会自动点击</strong>。
       </p>
 
       <div class="du-code">
@@ -81,6 +83,8 @@
           <span class="du-code-name">find — 语义定位器</span>
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use find role button click <span class="du-flag">--name</span> <span class="du-str">"Submit"</span>
+<span class="du-prompt">$</span> chrome-use find <span class="du-str">"编辑 Web服务规则 设置按钮"</span>       <span class="du-cmt"># 只返回排序候选</span>
+<span class="du-prompt">$</span> chrome-use find query <span class="du-str">"edit settings button"</span>       <span class="du-cmt"># 显式自然语言语法</span>
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>     <span class="du-cmt"># 仅精确匹配</span>
 <span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
