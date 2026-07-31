@@ -2874,7 +2874,8 @@ impl BrowserManager {
         // Relay resync may prune an unrelated earlier tab while reattaching,
         // shifting vector positions. Resolve the selected tab again through its
         // pinned target id instead of reusing the now-stale caller index.
-        let index = self.resolved_active_index();
+        self.active_page_index = self.resolved_active_index();
+        let index = self.active_page_index;
 
         // Silent: switching the agent's *internal* active page must not yank the
         // user's foreground tab. The page is driven in the background (focus is
