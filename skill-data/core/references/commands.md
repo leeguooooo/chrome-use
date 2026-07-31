@@ -300,6 +300,11 @@ attaches an existing tab in the current daemon and never navigates it.
 page's renderer is unresponsive. Page-JavaScript operations such as `eval`
 still require the renderer main thread to respond.
 
+On the extension relay, `tab inspect` requires ab-connect 0.5.16 or newer. A
+failed `tab select` liveness probe does not by itself prove that the renderer is
+unresponsive. If the warning reports an older or unknown live extension
+version, update or reload ab-connect at `chrome://extensions`, then retry.
+
 ## Frames
 
 ```bash

@@ -144,6 +144,12 @@
 <span class="du-prompt">$</span> chrome-use extension status
 <span class="du-prompt">$</span> chrome-use doctor</code></pre>
       </div>
+      <p>
+        <code>doctor</code> reports both the live extension version and the version bundled with the CLI. If they
+        differ, update or reload ab-connect at <code>chrome://extensions</code> first. An older extension can make
+        the tab liveness probe unavailable; probe failure alone does not prove that the page renderer is stuck.
+        <code>tab inspect</code> requires ab-connect 0.5.16 or newer.
+      </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ sticky per session</div>

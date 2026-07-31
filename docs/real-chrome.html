@@ -141,6 +141,12 @@
 <span class="du-prompt">$</span> chrome-use extension status
 <span class="du-prompt">$</span> chrome-use doctor</code></pre>
       </div>
+      <p>
+        <code>doctor</code> 会同时显示当前运行中的扩展版本和 CLI 内置版本。若两者不一致，请先在
+        <code>chrome://extensions</code> 更新或重新加载 ab-connect。旧扩展可能让标签存活探针不可用；
+        探针失败本身不能证明页面 renderer 已卡死。<code>tab inspect</code> 需要 ab-connect 0.5.16
+        或更新版本。
+      </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ sticky per session</div>

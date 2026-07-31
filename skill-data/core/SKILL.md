@@ -952,6 +952,12 @@ JavaScript. A renderer blocked by an infinite JavaScript loop cannot complete
 `eval`, but it remains attached and is reported as unresponsive rather than
 gone.
 
+On extension-connected Chrome, `tab inspect` requires ab-connect 0.5.16 or
+newer. A failed liveness probe is not proof that the renderer is unresponsive.
+If the warning says the live extension is behind the bundled version, open
+`chrome://extensions`, update or reload ab-connect, and retry before diagnosing
+the page.
+
 `tab duplicate [ref] [--label <name>]` is available only through the
 extension-connected real Chrome path. It calls Chrome's native Duplicate tab
 operation, restores the previously visible foreground tab, and keeps the copy as
@@ -1166,6 +1172,11 @@ If the tab is still present but the page is white or frozen, do not reopen it
 and destroy the diagnostic state. Use `tab select <ref>` or `tab adopt
 <url-substring|targetId>`, then `tab inspect <ref>`. A relay timeout means the
 renderer did not answer; it does not mean the tab disappeared.
+
+If `tab select` reports that the liveness probe did not complete, read the full
+warning before judging the renderer. An outdated or unknown ab-connect version
+can make the probe channel unavailable. `tab inspect` requires ab-connect
+0.5.16 or newer; update or reload it from `chrome://extensions` and retry.
 
 **Reads landing on the wrong page**
 `eval`, `screenshot`, and `network requests` print the page they ran

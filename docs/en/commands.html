@@ -417,6 +417,10 @@
         reloading it. <code>tab inspect &lt;ref&gt;</code> reads Chrome's browser-level tab metadata, so it can still
         return URL, load status, discard/freeze state, and debugger attachment when page JavaScript blocks the
         renderer main thread. <code>eval</code> still cannot complete until that thread responds.
+        On the extension relay, <code>tab inspect</code> requires ab-connect 0.5.16 or newer. A failed
+        <code>tab select</code> liveness probe does not by itself prove that the renderer is stuck. If the warning
+        reports a live extension older than the bundled version, update or reload it at
+        <code>chrome://extensions</code>, then retry.
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ refs belong to the tab active at snapshot time</div>
