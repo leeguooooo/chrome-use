@@ -2232,10 +2232,18 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     Ok(cmd)
                 }
                 Some("select") => {
-                    let tab_ref = rest.get(1).ok_or(ParseError::MissingArguments {
-                        context: "tab select".to_string(),
-                        usage: "tab select <ref> [--activate]",
-                    })?;
+                    let subcommand_index = rest
+                        .iter()
+                        .position(|arg| *arg == "select")
+                        .unwrap_or_default();
+                    let tab_ref = rest
+                        .iter()
+                        .skip(subcommand_index + 1)
+                        .find(|arg| !arg.starts_with("--"))
+                        .ok_or(ParseError::MissingArguments {
+                            context: "tab select".to_string(),
+                            usage: "tab select <ref> [--activate]",
+                        })?;
                     let mut cmd = json!({ "id": id, "action": "tab_switch", "tabId": tab_ref });
                     if rest.iter().any(|a| *a == "--activate" || *a == "--front") {
                         cmd["activate"] = json!(true);
@@ -2243,17 +2251,33 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     Ok(cmd)
                 }
                 Some("adopt") => {
-                    let spec = rest.get(1).ok_or(ParseError::MissingArguments {
-                        context: "tab adopt".to_string(),
-                        usage: "tab adopt <url-substring|targetId>",
-                    })?;
+                    let subcommand_index = rest
+                        .iter()
+                        .position(|arg| *arg == "adopt")
+                        .unwrap_or_default();
+                    let spec = rest
+                        .iter()
+                        .skip(subcommand_index + 1)
+                        .find(|arg| !arg.starts_with("--"))
+                        .ok_or(ParseError::MissingArguments {
+                            context: "tab adopt".to_string(),
+                            usage: "tab adopt <url-substring|targetId>",
+                        })?;
                     Ok(json!({ "id": id, "action": "tab_adopt", "spec": spec }))
                 }
                 Some("inspect") => {
-                    let tab_ref = rest.get(1).ok_or(ParseError::MissingArguments {
-                        context: "tab inspect".to_string(),
-                        usage: "tab inspect <ref>",
-                    })?;
+                    let subcommand_index = rest
+                        .iter()
+                        .position(|arg| *arg == "inspect")
+                        .unwrap_or_default();
+                    let tab_ref = rest
+                        .iter()
+                        .skip(subcommand_index + 1)
+                        .find(|arg| !arg.starts_with("--"))
+                        .ok_or(ParseError::MissingArguments {
+                            context: "tab inspect".to_string(),
+                            usage: "tab inspect <ref>",
+                        })?;
                     Ok(json!({ "id": id, "action": "tab_inspect", "tabId": tab_ref }))
                 }
                 Some("close") => {
@@ -5848,6 +5872,16 @@ mod tests {
         let cmd = parse_command(&args("tab select t4"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "tab_switch");
         assert_eq!(cmd["tabId"], "t4");
+
+        let flag_before_ref =
+            parse_command(&args("tab select --activate t4"), &default_flags()).unwrap();
+        assert_eq!(flag_before_ref["tabId"], "t4");
+        assert_eq!(flag_before_ref["activate"], true);
+
+        let flag_before_subcommand =
+            parse_command(&args("tab --activate select t4"), &default_flags()).unwrap();
+        assert_eq!(flag_before_subcommand["tabId"], "t4");
+        assert_eq!(flag_before_subcommand["activate"], true);
     }
 
     #[test]

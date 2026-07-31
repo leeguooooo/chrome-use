@@ -1079,7 +1079,8 @@ async fn find_cursor_interactive_elements(
         var computedStyle = getComputedStyle(el);
         var cursor = computedStyle.cursor || 'auto';
         var hasCursorPointer = cursor === 'pointer';
-        var hasMeaningfulCursor = cursor !== 'auto' && cursor !== 'default' && cursor !== 'none';
+        var hasMeaningfulCursor = cursor !== 'auto' && cursor !== 'default'
+            && cursor !== 'none' && cursor !== 'not-allowed';
         var hasOnClick = el.hasAttribute('onclick') || el.onclick !== null;
         var tabIndex = el.getAttribute('tabindex');
         var hasTabIndex = tabIndex !== null && tabIndex !== '-1';

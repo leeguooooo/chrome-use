@@ -4089,6 +4089,7 @@ async fn e2e_snapshot_cursor_interactive() {
     //  - <div tabindex=0> (focusable – cursor section)
     //  - <span cursor:pointer> (clickable – cursor section)
     //  - <span cursor:pointer> child of <div cursor:pointer> (inherited – skip)
+    //  - <div cursor:not-allowed> (disabled affordance – skip)
     let html = concat!(
         "<html><body>",
         "<a href='#'>Link</a>",
@@ -4098,6 +4099,7 @@ async fn e2e_snapshot_cursor_interactive() {
         "<span style='cursor:pointer'>PointerSpan</span>",
         "<div style='cursor:pointer'><span>InheritChild</span></div>",
         "<div id='drag-handle' class='address-tag sort-handle' data-testid='address-sort' style='cursor:grab'>DragRule</div>",
+        "<div style='cursor:not-allowed'>DisabledCustomControl</div>",
         "</body></html>",
     );
 
@@ -4141,6 +4143,11 @@ async fn e2e_snapshot_cursor_interactive() {
             && snapshot.contains("testid=address-sort")
             && snapshot.contains("class=address-tag.sort-handle"),
         "Expected meaningful cursor and stable DOM anchors for an unlabeled generic:\n{}",
+        snapshot,
+    );
+    assert!(
+        !snapshot.contains("DisabledCustomControl"),
+        "cursor:not-allowed must not promote a disabled-looking custom control:\n{}",
         snapshot,
     );
 

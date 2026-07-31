@@ -2871,6 +2871,11 @@ impl BrowserManager {
             self.enable_domains(&session_id).await?;
         }
 
+        // Relay resync may prune an unrelated earlier tab while reattaching,
+        // shifting vector positions. Resolve the selected tab again through its
+        // pinned target id instead of reusing the now-stale caller index.
+        let index = self.resolved_active_index();
+
         // Silent: switching the agent's *internal* active page must not yank the
         // user's foreground tab. The page is driven in the background (focus is
         // emulated in enable_domains); the explicit `bringToFront` command is the

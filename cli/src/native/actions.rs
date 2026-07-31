@@ -6761,11 +6761,12 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         .get("spec")
         .and_then(|value| value.as_str())
         .ok_or("Missing 'spec' parameter (expected a URL substring or targetId)")?;
+    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    let result = mgr.tab_adopt(spec).await?;
     state.ref_map.clear();
     state.iframe_sessions.clear();
     state.active_frame_id = None;
-    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-    mgr.tab_adopt(spec).await
+    Ok(result)
 }
 
 async fn handle_tab_inspect(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -12511,6 +12512,36 @@ mod tests {
 
         let response = execute_command(
             &json!({ "id": "duplicate-failure", "action": "tab_duplicate" }),
+            &mut state,
+        )
+        .await;
+
+        assert_eq!(response["success"], false);
+        assert!(state.ref_map.get("e1").is_some());
+        assert_eq!(
+            state.iframe_sessions.get("frame-1").map(String::as_str),
+            Some("session-1")
+        );
+        assert_eq!(state.active_frame_id.as_deref(), Some("frame-1"));
+    }
+
+    #[tokio::test]
+    async fn tab_adopt_failure_preserves_active_tab_context() {
+        let mut state = DaemonState::new();
+        state
+            .ref_map
+            .add("e1".to_string(), Some(42), "button", "Keep", None);
+        state
+            .iframe_sessions
+            .insert("frame-1".to_string(), "session-1".to_string());
+        state.active_frame_id = Some("frame-1".to_string());
+
+        let response = execute_command(
+            &json!({
+                "id": "adopt-failure",
+                "action": "tab_adopt",
+                "spec": "missing-target"
+            }),
             &mut state,
         )
         .await;

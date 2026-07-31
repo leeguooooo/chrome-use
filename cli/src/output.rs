@@ -3819,7 +3819,9 @@ Anti-bot:  chrome-use stealth | cf-status
   stealth         stealth self-check (webdriver/UA/plugins + overrides)
   cf-status       Cloudflare challenge + cf_clearance preflight (skip re-solving)
 
-Find Elements:  chrome-use find <locator> <value> <action> [text]
+Find Elements:
+  chrome-use find "<description>" | query "<description>"   # ranked, no action
+  chrome-use find <locator> <value> <action> [text]
   role, text, label, placeholder, alt, title, testid, first, last, nth
 
 Mouse:  chrome-use mouse <action> [args]
