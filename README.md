@@ -293,6 +293,11 @@ chrome-use screenshot ./page.png
 # Native Duplicate tab on extension-connected real Chrome. The copy stays in
 # the background and becomes chrome-use's internal active tab.
 chrome-use tab duplicate --label working-copy
+
+# Work with an existing tab without reloading away its diagnostic state.
+chrome-use tab select t2
+chrome-use tab adopt "example.com/problem-page"
+chrome-use tab inspect t2
 ```
 
 `tab duplicate [ref] [--label <name>]` uses Chrome's native Duplicate tab
@@ -300,6 +305,14 @@ operation and preserves its navigation history. It requires the browser
 extension path and never falls back to opening the same URL on launched Chrome,
 raw CDP, Lightpanda, or cloud providers. Chrome controls whether a background
 duplicate starts loading.
+
+`tab select <ref>` is the explicit form of `tab <ref>`. `tab adopt
+<url-substring|targetId>` attaches an already-open tab inside the current
+session without navigating it. `tab inspect <ref>` reads URL, load status,
+discard/freeze state, and debugger attachment from Chrome's browser metadata,
+so it still works when page JavaScript has blocked the renderer main thread.
+Runtime evaluation cannot finish while that thread is blocked, but the tab is
+kept selected and is no longer misreported as closed.
 
 The agent operates in your Chrome — you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
 
@@ -438,6 +451,26 @@ a screenshot. Assertions: `url` · `visible` · `hidden` · `text` · `count` ·
 · `eval`. Full guide: `chrome-use skills get test`. Deep-dive writeup (中文):
 [给前端写「单元测试」:chrome-use test 详解](https://blog.leeguoo.com/zh/posts/chrome-use-test-suite/).
 Found a regression? Add a case — the suite gets more valuable the more you use it.
+
+## Finding elements and stable refs
+
+Use an explicit semantic locator when you know it, or pass a natural-language
+description to get ranked, non-acting candidates:
+
+```bash
+chrome-use find role button click --name "Save"
+chrome-use find "edit web service settings button"
+```
+
+Bare descriptions never click automatically. Candidate rows include role/name,
+visible text, computed cursor, and compact `id` / `data-testid` / class selector
+anchors so you can choose an explicit follow-up action.
+
+Within the same document, unchanged DOM nodes keep their `@ref` across repeated
+snapshots even when a modal or list inserts other nodes. Navigation and tab
+switches still invalidate refs. `snapshot -i` also surfaces deliberate cursor
+styles such as `grab` and `col-resize`, plus compact DOM anchors for otherwise
+indistinguishable generic controls.
 
 ## Downloads
 

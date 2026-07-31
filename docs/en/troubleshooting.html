@@ -99,9 +99,10 @@
 
       <h2>Dead @ref: Ref not found</h2>
       <p>
-        A <code>"Ref not found"</code> / <code>Element not found: @eN</code> error means the page changed since the last
-        snapshot. Every <code>snapshot</code> reassigns refs; navigation, form submission, a dialog popping up, or a
-        dynamic re-render all invalidate old refs. Re-snapshot, then use the new refs.
+        A <code>"Ref not found"</code> / <code>Element not found: @eN</code> error usually means the node was replaced
+        or removed, or navigation / a tab switch occurred. The same backend DOM node now keeps its ref across snapshots
+        within one document, so inserting or removing a modal does not renumber later controls. Re-snapshot to confirm
+        the current node and ref.
       </p>
 
       <div class="du-code">
@@ -166,10 +167,9 @@
 
       <h2>stale sessionId (extension relay mode)</h2>
       <p>
-        A <code>stale sessionId … re-open your target URL</code> error means your tab was closed, navigated across a
+        A <code>stale sessionId … re-open your target URL</code> error usually means your tab was closed, navigated across a
         process boundary, or its debugger detached (for example it landed on a <code>chrome://</code> or Chrome Web Store
-        page—which Chrome forbids debugging). The session no longer has a live tab—reattach with
-        <code>chrome-use open &lt;your URL&gt;</code> and retry. This loud error replaces the old silent behavior
+        page—which Chrome forbids debugging). This loud error replaces the old silent behavior
         (which would run commands on <em>another</em> tab and return the wrong data).
       </p>
 
@@ -181,11 +181,21 @@
 <pre><code><span class="du-cmt"># Recover with the "exact" URL the tab needs (with every query param—a truncated long SSO/redirect link is useless)</span>
 <span class="du-cmt"># tab list abbreviates long URLs with …; use --full to print the untruncated address</span>
 <span class="du-prompt">$</span> chrome-use tab list <span class="du-flag">--full</span>
+<span class="du-prompt">$</span> chrome-use tab select t4
+<span class="du-prompt">$</span> chrome-use tab inspect t4
+<span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"&lt;URL substring or targetId&gt;"</span>
 <span class="du-prompt">$</span> chrome-use open <span class="du-str">"&lt;full entry URL&gt;"</span></code></pre>
       </div>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Note</div>
+        If <code>tab list</code> still shows the white-screen or frozen tab, preserve it with <code>tab select</code>
+        or <code>tab adopt</code>, then use <code>tab inspect</code> for browser-level state. A
+        <code>relay timeout</code> means the renderer/debugger did not answer in time; it does not mean the tab
+        disappeared. When an infinite JavaScript loop blocks the page main thread, <code>eval</code> cannot complete
+        until that thread responds. Do not reload away the diagnostic state merely to restore evaluation.
+        <br /><br />
+        Reopen the URL only when the tab is genuinely absent from the list.
         For multi-hop SSO flows, re-open the <strong>stable entry URL</strong> (not some intermediate redirect address),
         then <code>wait</code> a few seconds for the SPA to settle, then snapshot. Related:
         <a href="/en/real-chrome.html">Driving real Chrome</a>, <a href="/en/sessions.html">Sessions &amp; concurrency</a>.

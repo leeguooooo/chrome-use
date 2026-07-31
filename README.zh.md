@@ -155,9 +155,21 @@ chrome-use open https://example.com
 chrome-use click "Post"
 chrome-use fill "Title" "Hello World"
 chrome-use screenshot ./page.png
+
+# 不刷新页面，直接选择、接管和检查已经打开的标签
+chrome-use tab select t2
+chrome-use tab adopt "example.com/problem-page"
+chrome-use tab inspect t2
 ```
 
 Agent 在你的 Chrome 里操作 —— 你能实时看到开标签、加载、点击。任意时刻都能接管（比如手动过验证码），然后让 agent 继续。
+
+`tab select <ref>` 是 `tab <ref>` 的显式写法。`tab adopt
+<url-substring|targetId>` 会在当前会话中接管已打开的标签，不触发导航。
+`tab inspect <ref>` 从 Chrome 的浏览器级元数据读取 URL、加载状态、
+discard/freeze 状态和 debugger 附加状态，所以页面 JavaScript 阻塞 renderer
+主线程时仍可使用。主线程阻塞期间 Runtime 求值无法完成，但该标签会保持选中，
+不会再被误报为已经关闭。
 
 若点击触发原生 `confirm()` 或 `prompt()`，click 会返回待处理 dialog，而不是把会话卡死；
 接着运行 `chrome-use dialog status` 与 `chrome-use dialog accept|dismiss` 即可。

@@ -261,7 +261,7 @@
       <h2>语义定位器</h2>
       <p>
         ref 之外的另一种定位方式：按角色、文本、标签、占位符、alt、title、testid 或位置定位，
-        并直接跟上要执行的动作。
+        并直接跟上要执行的动作。也可以直接传自然语言描述，返回排序候选而不执行动作。
       </p>
       <div class="du-code">
         <div class="du-code-head">
@@ -269,6 +269,7 @@
           <span class="du-code-name">find</span>
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use find role button click <span class="du-flag">--name</span> <span class="du-str">"Submit"</span>
+<span class="du-prompt">$</span> chrome-use find <span class="du-str">"编辑 Web服务规则 设置按钮"</span>       <span class="du-cmt"># 仅返回候选</span>
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>      <span class="du-cmt"># 仅精确匹配</span>
 <span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
@@ -387,6 +388,9 @@
 <span class="du-prompt">$</span> chrome-use tab duplicate [ref]              <span class="du-cmt"># 原生复制标签，默认复制当前标签</span>
 <span class="du-prompt">$</span> chrome-use tab duplicate docs <span class="du-flag">--label</span> copy <span class="du-cmt"># 按 ref 复制并设置 label</span>
 <span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># 按 id 切换</span>
+<span class="du-prompt">$</span> chrome-use tab select t2                    <span class="du-cmt"># 显式切换语法</span>
+<span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com/stuck"</span> <span class="du-cmt"># 接管现有标签，不导航</span>
+<span class="du-prompt">$</span> chrome-use tab inspect t2                   <span class="du-cmt"># 不运行页面 JS，读取浏览器级状态</span>
 <span class="du-prompt">$</span> chrome-use tab docs                         <span class="du-cmt"># 按 label 切换</span>
 <span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># 关闭当前标签</span>
 <span class="du-prompt">$</span> chrome-use tab close t2                     <span class="du-cmt"># 按 id 关闭</span>
@@ -397,6 +401,13 @@
         原生复制只支持通过 chrome-use 扩展连接的真实 Chrome。命令完成后会恢复此前可见的前台标签，
         同时让副本成为 chrome-use 内部活动标签。启动型 Chrome、raw CDP、Lightpanda 和云 provider
         不会退化为同 URL 新建标签；副本是否在后台开始加载仍由 Chrome 决定。
+      </p>
+      <p>
+        <code>tab select &lt;ref&gt;</code> 与 <code>tab &lt;ref&gt;</code> 等价。
+        <code>tab adopt &lt;URL 子串|targetId&gt;</code> 会在当前会话中附加现有标签，不刷新页面。
+        <code>tab inspect &lt;ref&gt;</code> 只读取 Chrome 的标签元数据，因此 renderer 主线程被页面
+        JavaScript 卡住时仍可返回 URL、加载状态、discard/freeze 状态与 debugger 附加状态。
+        页面主线程恢复响应前，<code>eval</code> 仍无法完成。
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ ref 属于快照时的活动标签</div>

@@ -2231,6 +2231,31 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
+                Some("select") => {
+                    let tab_ref = rest.get(1).ok_or(ParseError::MissingArguments {
+                        context: "tab select".to_string(),
+                        usage: "tab select <ref> [--activate]",
+                    })?;
+                    let mut cmd = json!({ "id": id, "action": "tab_switch", "tabId": tab_ref });
+                    if rest.iter().any(|a| *a == "--activate" || *a == "--front") {
+                        cmd["activate"] = json!(true);
+                    }
+                    Ok(cmd)
+                }
+                Some("adopt") => {
+                    let spec = rest.get(1).ok_or(ParseError::MissingArguments {
+                        context: "tab adopt".to_string(),
+                        usage: "tab adopt <url-substring|targetId>",
+                    })?;
+                    Ok(json!({ "id": id, "action": "tab_adopt", "spec": spec }))
+                }
+                Some("inspect") => {
+                    let tab_ref = rest.get(1).ok_or(ParseError::MissingArguments {
+                        context: "tab inspect".to_string(),
+                        usage: "tab inspect <ref>",
+                    })?;
+                    Ok(json!({ "id": id, "action": "tab_inspect", "tabId": tab_ref }))
+                }
                 Some("close") => {
                     let mut cmd = json!({ "id": id, "action": "tab_close" });
                     if let Some(tab_ref) = rest.get(1) {
@@ -3749,6 +3774,16 @@ fn parse_find(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     })?;
 
     match *locator {
+        "query" => {
+            if rest.get(1).is_none() {
+                return Err(ParseError::MissingArguments {
+                    context: "find query".to_string(),
+                    usage: "find query <natural-language description>",
+                });
+            }
+            let query = rest[1..].join(" ");
+            Ok(json!({ "id": id, "action": "findfuzzy", "query": query }))
+        }
         "role" | "text" | "label" | "placeholder" | "alt" | "title" | "testid" | "first"
         | "last" => {
             let value = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
@@ -3912,22 +3947,11 @@ fn parse_find(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             }
             Ok(cmd)
         }
-        _ => Err(ParseError::InvalidValue {
-            // The user passed a value where a locator keyword was expected — the
-            // classic `find "I'm not a robot" click` mistake (issue #8.4). Lead
-            // with the corrected command using their own value, then the menu.
-            message: format!(
-                "`{loc}` is not a find locator. To match by visible text, name the locator:\n  \
-                 chrome-use find text \"{loc}\" click\n\n\
-                 Locators: role, text, label, placeholder, alt, title, testid, first, last, nth\n\
-                 Examples:\n  \
-                 chrome-use find text \"Sign in\" click\n  \
-                 chrome-use find role button --name \"Submit\" click\n  \
-                 chrome-use find label \"Email\" fill you@example.com",
-                loc = locator,
-            ),
-            usage: "find <locator> <value> [action] [text]",
-        }),
+        _ => Ok(json!({
+            "id": id,
+            "action": "findfuzzy",
+            "query": rest.join(" "),
+        })),
     }
 }
 
@@ -5439,18 +5463,22 @@ mod tests {
     }
 
     #[test]
-    fn test_find_bare_value_suggests_text_locator() {
-        // `find "I'm not a robot" click` — value where a locator keyword was
-        // expected. Error must steer to the corrected `find text ...` form.
-        let input: Vec<String> = vec![
-            "find".to_string(),
-            "I'm not a robot".to_string(),
-            "click".to_string(),
-        ];
-        let err = parse_command(&input, &default_flags()).unwrap_err();
-        let msg = err.format();
-        assert!(msg.contains("find text"), "got: {msg}");
-        assert!(msg.contains("I'm not a robot"), "got: {msg}");
+    fn test_find_bare_value_becomes_fuzzy_query() {
+        let input: Vec<String> = vec!["find".to_string(), "编辑 Web服务规则 设置按钮".to_string()];
+        let cmd = parse_command(&input, &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "findfuzzy");
+        assert_eq!(cmd["query"], "编辑 Web服务规则 设置按钮");
+    }
+
+    #[test]
+    fn test_find_query_explicit_syntax_joins_description() {
+        let cmd = parse_command(
+            &args("find query edit web service settings button"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "findfuzzy");
+        assert_eq!(cmd["query"], "edit web service settings button");
     }
 
     // === Core Actions ===
@@ -5816,13 +5844,21 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_non_keyword_treated_as_ref() {
-        // After the shift to `t<N>`/label ids, non-keyword tokens (`select`,
-        // `docs`, etc.) are valid label refs; `tab <something>` routes to
-        // tab_switch and the runtime decides whether the label exists.
-        let cmd = parse_command(&args("tab select"), &default_flags()).unwrap();
+    fn test_tab_select_alias_switches_by_ref() {
+        let cmd = parse_command(&args("tab select t4"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "tab_switch");
-        assert_eq!(cmd["tabId"], "select");
+        assert_eq!(cmd["tabId"], "t4");
+    }
+
+    #[test]
+    fn test_tab_adopt_and_inspect_operations() {
+        let adopt = parse_command(&args("tab adopt drama/videos"), &default_flags()).unwrap();
+        assert_eq!(adopt["action"], "tab_adopt");
+        assert_eq!(adopt["spec"], "drama/videos");
+
+        let inspect = parse_command(&args("tab inspect t4"), &default_flags()).unwrap();
+        assert_eq!(inspect["action"], "tab_inspect");
+        assert_eq!(inspect["tabId"], "t4");
     }
 
     // === Network ===

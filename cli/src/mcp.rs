@@ -477,12 +477,13 @@ fn extended_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_TABS,
-            "description": "List, open, duplicate, close, or switch browser tabs.",
+            "description": "List, open, duplicate, adopt, inspect, close, or switch browser tabs.",
             "inputSchema": build_schema(obj(&[
-                ("action", json!({ "type": "string", "enum": ["list", "new", "duplicate", "close", "switch"], "description": "Tab operation to perform." })),
+                ("action", json!({ "type": "string", "enum": ["list", "new", "duplicate", "adopt", "inspect", "close", "switch"], "description": "Tab operation to perform." })),
                 ("url", json!({ "type": "string", "description": "With action=new: URL to open in the new tab." })),
+                ("spec", json!({ "type": "string", "description": "With action=adopt: URL substring or stable target ID of an existing tab." })),
                 ("label", json!({ "type": "string", "description": "With action=new or duplicate: assign this label to the new tab (--label)." })),
-                ("tabId", json!({ "type": "string", "description": "Tab id, label, or stable target ID. Required for action=switch; optional for action=close or duplicate (defaults to current tab)." })),
+                ("tabId", json!({ "type": "string", "description": "Tab id, label, or stable target ID. Required for action=switch or inspect; optional for action=close or duplicate (defaults to current tab)." })),
                 ("activate", json!({ "type": "boolean", "description": "With action=switch: also raise the tab to the foreground (--activate)." })),
                 ("full", json!({ "type": "boolean", "description": "With action=list: emit untruncated tab URLs (--full)." })),
             ]), &["action"]),
@@ -525,10 +526,10 @@ fn extended_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_FIND,
-            "description": "Find an element by a semantic locator (role/text/label/etc.) and optionally act on it, without needing a snapshot first.",
+            "description": "Find an element by a semantic locator and optionally act on it, or use locator=query to return ranked natural-language candidates without acting.",
             "inputSchema": build_schema(obj(&[
-                ("locator", json!({ "type": "string", "enum": ["role", "text", "label", "placeholder", "alt", "title", "testid", "first", "last", "nth"], "description": "Locator kind." })),
-                ("value", json!({ "type": "string", "description": "The locator's value (role name, text, label, etc.), or the CSS selector for first/last/nth." })),
+                ("locator", json!({ "type": "string", "enum": ["query", "role", "text", "label", "placeholder", "alt", "title", "testid", "first", "last", "nth"], "description": "Locator kind. query performs a safe natural-language candidate search and does not act." })),
+                ("value", json!({ "type": "string", "description": "Natural-language description for query, locator value for semantic locators, or CSS selector for first/last/nth." })),
                 ("index", json!({ "type": "integer", "description": "With locator=nth: 0-based match index." })),
                 ("action", json!({ "type": "string", "enum": ["click", "fill", "type", "hover", "focus", "check", "uncheck"], "description": "Action to perform on the match (default: click)." })),
                 ("text", json!({ "type": "string", "description": "With action=fill/type: the text to enter." })),
@@ -992,7 +993,8 @@ fn call_scroll(arguments: &Value) -> Result<Value, ProtocolError> {
 }
 
 /// `tab list [--full]` | `tab new [url] [--label <name>]` | `tab duplicate
-/// [tabId] [--label <name>]` | `tab close [tabId]` | `tab <tabId> [--activate]`.
+/// [tabId] [--label <name>]` | `tab adopt <spec>` | `tab inspect <tabId>` |
+/// `tab close [tabId]` | `tab <tabId> [--activate]`.
 fn call_tabs(arguments: &Value) -> Result<Value, ProtocolError> {
     run_tool(arguments, tabs_args(arguments)?)
 }
@@ -1027,6 +1029,14 @@ fn tabs_args(arguments: &Value) -> Result<Vec<String>, ProtocolError> {
                 args.push(label);
             }
         }
+        "adopt" => {
+            args.push("adopt".to_string());
+            args.push(required_string(arguments, "spec")?);
+        }
+        "inspect" => {
+            args.push("inspect".to_string());
+            args.push(required_string(arguments, "tabId")?);
+        }
         "close" => {
             args.push("close".to_string());
             if let Some(tab_id) = optional_string(arguments, "tabId")? {
@@ -1042,7 +1052,7 @@ fn tabs_args(arguments: &Value) -> Result<Vec<String>, ProtocolError> {
         }
         other => {
             return Err(ProtocolError::invalid_params(format!(
-                "chrome_use_tabs: unknown action '{}' (use list, new, duplicate, close, or switch)",
+                "chrome_use_tabs: unknown action '{}' (use list, new, duplicate, adopt, inspect, close, or switch)",
                 other
             )))
         }
@@ -1180,9 +1190,15 @@ fn call_expect(arguments: &Value) -> Result<Value, ProtocolError> {
 /// `nth` instead takes `find nth <index> <selector> [action] [text]`).
 fn call_find(arguments: &Value) -> Result<Value, ProtocolError> {
     let locator = required_string(arguments, "locator")?;
-    let action = optional_string(arguments, "action")?.unwrap_or_else(|| "click".to_string());
     let mut args = vec!["find".to_string()];
 
+    if locator == "query" {
+        args.push("query".to_string());
+        args.push(required_string(arguments, "value")?);
+        return run_tool(arguments, args);
+    }
+
+    let action = optional_string(arguments, "action")?.unwrap_or_else(|| "click".to_string());
     if locator == "nth" {
         let index = required_u64(arguments, "index")?;
         let selector = required_string(arguments, "value")?;
@@ -1700,6 +1716,25 @@ mod tests {
             selected,
             vec!["tab", "duplicate", "docs", "--label", "docs-copy"]
         );
+    }
+
+    #[test]
+    fn tabs_adopt_and_inspect_map_to_cli_contract() {
+        let adopt = tabs_args(&json!({
+            "action": "adopt",
+            "spec": "example.com/stuck"
+        }))
+        .ok()
+        .expect("adopt action should map to the CLI");
+        assert_eq!(adopt, vec!["tab", "adopt", "example.com/stuck"]);
+
+        let inspect = tabs_args(&json!({
+            "action": "inspect",
+            "tabId": "t4"
+        }))
+        .ok()
+        .expect("inspect action should map to the CLI");
+        assert_eq!(inspect, vec!["tab", "inspect", "t4"]);
     }
 
     const CORE_TOOL_NAMES: &[&str] = &[

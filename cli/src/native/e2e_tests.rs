@@ -4097,6 +4097,7 @@ async fn e2e_snapshot_cursor_interactive() {
         "<div tabindex='0'>FocusDiv</div>",
         "<span style='cursor:pointer'>PointerSpan</span>",
         "<div style='cursor:pointer'><span>InheritChild</span></div>",
+        "<div id='drag-handle' class='address-tag sort-handle' data-testid='address-sort' style='cursor:grab'>DragRule</div>",
         "</body></html>",
     );
 
@@ -4132,6 +4133,16 @@ async fn e2e_snapshot_cursor_interactive() {
         "Expected focusable role for tabindex-only element:\n{}",
         snapshot,
     );
+    assert!(
+        snapshot.contains("\"DragRule\"")
+            && snapshot.contains("draggable")
+            && snapshot.contains("cursor:grab")
+            && snapshot.contains("id=drag-handle")
+            && snapshot.contains("testid=address-sort")
+            && snapshot.contains("class=address-tag.sort-handle"),
+        "Expected meaningful cursor and stable DOM anchors for an unlabeled generic:\n{}",
+        snapshot,
+    );
 
     // Text dedup: "Link" and "Btn" are in the ARIA tree, so must NOT suffix
     // with cursor-interactive info. Verify line by line.
@@ -4159,6 +4170,161 @@ async fn e2e_snapshot_cursor_interactive() {
         elapsed.as_secs() < 5,
         "snapshot took {:?}, expected < 5s (Issue #841 regression)",
         elapsed,
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Same backend DOM node keeps its ref while a modal is inserted and removed.
+/// New modal nodes receive new refs instead of shifting every later element.
+#[tokio::test]
+#[ignore]
+async fn e2e_snapshot_refs_stable_across_modal_churn() {
+    fn ref_for(snapshot: &str, name: &str) -> String {
+        snapshot
+            .lines()
+            .find(|line| line.contains(name))
+            .and_then(|line| line.split("ref=").nth(1))
+            .and_then(|tail| tail.split([',', ']']).next())
+            .map(str::to_string)
+            .unwrap_or_else(|| panic!("No ref for {name} in snapshot:\n{snapshot}"))
+    }
+
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = concat!(
+        "<html><body>",
+        "<button id='before'>Before</button>",
+        "<button id='stable'>StableButton</button>",
+        "</body></html>",
+    );
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "setcontent", "html": html }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let first = ref_for(
+        get_data(&resp)["snapshot"].as_str().unwrap(),
+        "StableButton",
+    );
+
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "eval",
+            "expression": "document.body.insertAdjacentHTML('afterbegin', '<dialog open id=\"modal\"><button>ModalButton</button></dialog>')"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let second = ref_for(
+        get_data(&resp)["snapshot"].as_str().unwrap(),
+        "StableButton",
+    );
+    assert_eq!(
+        second, first,
+        "modal insertion must not renumber an existing node"
+    );
+
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "eval", "expression": "document.querySelector('#modal').remove()" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let third = ref_for(
+        get_data(&resp)["snapshot"].as_str().unwrap(),
+        "StableButton",
+    );
+    assert_eq!(
+        third, first,
+        "modal removal must not renumber an existing node"
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_find_fuzzy_returns_ranked_candidates_without_acting() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = concat!(
+        "<html><body>",
+        "<section><h2>Web服务规则</h2>",
+        "<button id='edit-rule' onclick='window.__clicked=true'>编辑设置</button>",
+        "<button id='delete-rule'>删除</button></section>",
+        "<script>window.__clicked=false</script>",
+        "</body></html>",
+    );
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "setcontent", "html": html }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "findfuzzy",
+            "query": "编辑 Web服务规则 设置按钮"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let candidates = get_data(&resp)["candidates"]
+        .as_array()
+        .expect("fuzzy find must return candidates");
+    assert!(!candidates.is_empty());
+    assert_eq!(candidates[0]["selector"], "#edit-rule");
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "eval", "expression": "window.__clicked" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        false,
+        "fuzzy candidate search must never act automatically"
     );
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;

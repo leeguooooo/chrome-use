@@ -15,6 +15,11 @@ Capture browser automation as video for debugging, documentation, or verificatio
 
 ## Basic Recording
 
+When connected through the Chrome extension relay, recording captures the
+current session-owned real-Chrome tab directly. It does not create a browser
+context, because Chrome rejects that CDP command on extension attachments.
+Under `--launch`, recording keeps the existing isolated-context behavior.
+
 ```bash
 # Start recording
 chrome-use record start ./demo.webm

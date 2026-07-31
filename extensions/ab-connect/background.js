@@ -23,6 +23,7 @@ import {
   startDownload,
 } from './download-manager.js'
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js'
+import { targetInfoForTab } from './target-info.js'
 
 const HOST_NAME = 'com.agent_browser.connect'
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i
@@ -739,6 +740,36 @@ async function handleForwardCdpCommand(msg) {
     return { targetId: entry.targetId, url: match.url || '', title: match.title || '' }
   }
 
+  // Browser-level tab diagnostics that remain available even when the page's
+  // renderer/main thread is stuck. This deliberately uses chrome.tabs metadata
+  // only: no Runtime/Page command, no navigation, and no page-state mutation.
+  if (method === 'ABExt.inspectTab') {
+    const requestedSession = String(params?.sessionId || '')
+    const requestedTarget = String(params?.targetId || '')
+    const tabId =
+      tabIdFromSession(requestedSession) ??
+      tabForSession(requestedSession) ??
+      tabForTarget(requestedTarget)
+    if (tabId == null) throw new Error('inspectTab: no tab matches the requested session or target')
+    const tab = await chrome.tabs.get(tabId).catch(() => null)
+    if (!tab) throw new Error(`inspectTab: Chrome tab ${tabId} no longer exists`)
+    const entry = tabs.get(tabId)
+    return {
+      chromeTabId: tabId,
+      sessionId: requestedSession || entry?.sessionId || null,
+      targetId: entry?.targetId || requestedTarget || null,
+      url: tab.url || tab.pendingUrl || '',
+      title: tab.title || '',
+      status: tab.status || null,
+      active: Boolean(tab.active),
+      audible: Boolean(tab.audible),
+      discarded: Boolean(tab.discarded),
+      frozen: Boolean(tab.frozen),
+      debuggerAttached: Boolean(entry),
+      windowId: tab.windowId,
+    }
+  }
+
   // Native Chrome tab duplication. This intentionally has no URL-based
   // fallback: callers use it when they need the semantics of Chrome's Duplicate
   // tab action, including navigation history. The duplicated tab becomes owned
@@ -924,34 +955,40 @@ async function attachTab(tabId, transactionIsActive) {
     const msg = String((e && e.message) || e)
     if (!/already attached|already being debugged/i.test(msg)) throw e
   }
-  await withRelayTimeout(
-    chrome.debugger.sendCommand(dbg, 'Page.enable'),
-    'chrome.debugger.sendCommand(Page.enable)',
-  ).catch(() => {})
-  // Enable FLAT auto-attach so Chrome attaches each cross-origin (out-of-process)
-  // iframe as a child CDP session and fires Target.attachedToTarget through
-  // chrome.debugger.onEvent below. Without this the GSI / payment / SSO iframe is
-  // an opaque leaf in the snapshot (no inner refs); with it the daemon learns the
-  // child sessionId and snapshots INTO the frame. `flatten:true` makes the child
-  // addressable as a {tabId, sessionId} DebuggerSession (Chrome 125+). We do this
-  // here (not only via the daemon's forwarded command) so it's re-armed on every
-  // attach/re-attach — including the cross-process-nav recovery — regardless of
-  // daemon timing. Best-effort; ignored where unsupported.
-  await withRelayTimeout(
-    chrome.debugger.sendCommand(dbg, 'Target.setAutoAttach', {
-      autoAttach: true,
-      flatten: true,
-      waitForDebuggerOnStart: false,
-    }),
-    'chrome.debugger.sendCommand(Target.setAutoAttach)',
-  ).catch(() => {})
-  const info = /** @type {any} */ (
-    await withRelayTimeout(
-      chrome.debugger.sendCommand(dbg, 'Target.getTargetInfo'),
-      'chrome.debugger.sendCommand(Target.getTargetInfo)',
+  // Resolve identity through Chrome's browser-level target registry first.
+  // Unlike Target.getTargetInfo on the page session, getTargets does not wait
+  // for the renderer main thread. A white-screen tab with an infinite JS loop
+  // can therefore still be attached and announced instead of being mislabeled
+  // as gone (issue #157).
+  let targetInfo = null
+  try {
+    targetInfo = targetInfoForTab(
+      await withRelayTimeout(chrome.debugger.getTargets(), 'chrome.debugger.getTargets'),
+      tabId,
     )
-  )
-  const targetInfo = info?.targetInfo
+  } catch {}
+  if (!targetInfo) {
+    const rememberedTargetId = sessionTargets.get(`cb-tab-${tabId}`)
+    const tab = await chrome.tabs.get(tabId).catch(() => null)
+    if (rememberedTargetId && tab) {
+      targetInfo = {
+        targetId: rememberedTargetId,
+        type: 'page',
+        url: tab.url || tab.pendingUrl || '',
+        title: tab.title || '',
+        attached: true,
+      }
+    }
+  }
+  if (!targetInfo) {
+    const info = /** @type {any} */ (
+      await withRelayTimeout(
+        chrome.debugger.sendCommand(dbg, 'Target.getTargetInfo'),
+        'chrome.debugger.sendCommand(Target.getTargetInfo)',
+      )
+    )
+    targetInfo = info?.targetInfo
+  }
   const targetId = String(targetInfo?.targetId || '')
   if (!targetId) throw new Error('attachTab: no targetId')
   if (transactionIsActive && !transactionIsActive()) {
@@ -978,17 +1015,23 @@ async function attachTab(tabId, transactionIsActive) {
   sessionToTab.set(sessionId, tabId)
   rememberSessionTarget(sessionId, targetId)
   setBadge(tabId, port ? 'on' : 'connecting')
-  postToHost({
-    method: 'forwardCDPEvent',
-    params: {
-      sessionId,
-      method: 'Target.attachedToTarget',
-      params: {
-        sessionId,
-        targetInfo: { ...targetInfo, attached: true, openerTargetId, abGroup },
-      },
-    },
-  })
+  await announceAttachedTab(tabId, entry, targetInfo, { openerTargetId, abGroup })
+
+  // Domain initialization is best-effort and must not hold the attach result
+  // hostage to an unresponsive renderer. Register the stable tab/session first,
+  // then arm Page and OOPIF support in the background.
+  void withRelayTimeout(
+    chrome.debugger.sendCommand(dbg, 'Page.enable'),
+    'chrome.debugger.sendCommand(Page.enable)',
+  ).catch(() => {})
+  void withRelayTimeout(
+    chrome.debugger.sendCommand(dbg, 'Target.setAutoAttach', {
+      autoAttach: true,
+      flatten: true,
+      waitForDebuggerOnStart: false,
+    }),
+    'chrome.debugger.sendCommand(Target.setAutoAttach)',
+  ).catch(() => {})
   return entry
 }
 
@@ -1034,34 +1077,35 @@ async function reattachOwnedTabs() {
   }
 }
 
-async function reannounceAttachedTabs() {
-  for (const [tabId, entry] of tabs.entries()) {
-    // Re-send the group hint too (issue #40) so the relay can rebuild its
-    // targetId→group map after its own restart (createTarget tagging won't
-    // re-run for tabs that are already open). Include the live url/title so the
-    // relay's target list stays matchable by URL after a reconnect (otherwise a
-    // reannounced tab shows a blank url and `adopt <url>` can't find it).
-    const { openerTargetId, abGroup } = await tabScopeHints(tabId)
-    let url = ''
-    let title = ''
-    try {
-      const t = await chrome.tabs.get(tabId)
-      if (t) {
-        url = t.url || t.pendingUrl || ''
-        title = t.title || ''
-      }
-    } catch {}
-    postToHost({
-      method: 'forwardCDPEvent',
+async function announceAttachedTab(tabId, entry, targetInfo, scopeHints) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null)
+  const { openerTargetId, abGroup } = scopeHints || (await tabScopeHints(tabId))
+  postToHost({
+    method: 'forwardCDPEvent',
+    params: {
+      sessionId: entry.sessionId,
+      method: 'Target.attachedToTarget',
       params: {
         sessionId: entry.sessionId,
-        method: 'Target.attachedToTarget',
-        params: {
-          sessionId: entry.sessionId,
-          targetInfo: { targetId: entry.targetId, type: 'page', url, title, attached: true, openerTargetId, abGroup },
+        targetInfo: {
+          targetId: entry.targetId,
+          type: targetInfo?.type || 'page',
+          url: tab?.url || tab?.pendingUrl || targetInfo?.url || '',
+          title: tab?.title || targetInfo?.title || '',
+          attached: true,
+          openerTargetId,
+          abGroup,
         },
       },
-    })
+    },
+  })
+}
+
+async function reannounceAttachedTabs() {
+  for (const [tabId, entry] of tabs.entries()) {
+    // Re-send live browser metadata and the group hint so the relay can rebuild
+    // target state without asking the possibly frozen renderer.
+    await announceAttachedTab(tabId, entry)
   }
 }
 
@@ -1162,6 +1206,11 @@ chrome.tabs.onCreated.addListener((tab) =>
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
   void whenReady(async () => {
     if (await isNativeDuplicateLifecycleEvent(tab)) return
+    const attached = tabs.get(tabId)
+    if (attached) {
+      await announceAttachedTab(tabId, attached)
+      return
+    }
     if (changeInfo.status === 'complete' && eligible(tab) && !tabs.has(tabId) && port) {
       try {
         await attachTab(tabId)

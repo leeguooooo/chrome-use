@@ -268,7 +268,8 @@
       <h2>Semantic locators</h2>
       <p>
         An alternative to refs: locate by role, text, label, placeholder, alt, title, testid, or position,
-        and chain the action to perform directly after it.
+        and chain the action to perform directly after it. Or pass a natural-language description to
+        return ranked candidates without acting.
       </p>
       <div class="du-code">
         <div class="du-code-head">
@@ -276,6 +277,7 @@
           <span class="du-code-name">find</span>
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use find role button click <span class="du-flag">--name</span> <span class="du-str">"Submit"</span>
+<span class="du-prompt">$</span> chrome-use find <span class="du-str">"edit web service settings button"</span>  <span class="du-cmt"># candidates only</span>
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click
 <span class="du-prompt">$</span> chrome-use find text <span class="du-str">"Sign In"</span> click <span class="du-flag">--exact</span>      <span class="du-cmt"># exact match only</span>
 <span class="du-prompt">$</span> chrome-use find label <span class="du-str">"Email"</span> fill <span class="du-str">"user@test.com"</span>
@@ -394,6 +396,9 @@
 <span class="du-prompt">$</span> chrome-use tab duplicate [ref]              <span class="du-cmt"># native Duplicate tab; current by default</span>
 <span class="du-prompt">$</span> chrome-use tab duplicate docs <span class="du-flag">--label</span> copy <span class="du-cmt"># duplicate by ref and label the copy</span>
 <span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># switch by id</span>
+<span class="du-prompt">$</span> chrome-use tab select t2                    <span class="du-cmt"># explicit switch syntax</span>
+<span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com/stuck"</span> <span class="du-cmt"># adopt without navigating</span>
+<span class="du-prompt">$</span> chrome-use tab inspect t2                   <span class="du-cmt"># browser state without page JavaScript</span>
 <span class="du-prompt">$</span> chrome-use tab docs                         <span class="du-cmt"># switch by label</span>
 <span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># close the current tab</span>
 <span class="du-prompt">$</span> chrome-use tab close t2                     <span class="du-cmt"># close by id</span>
@@ -405,6 +410,13 @@
         previously visible foreground tab, while the duplicate becomes chrome-use's internal active tab. There is
         no same-URL fallback for launched Chrome, raw CDP, Lightpanda, or cloud providers. Chrome decides whether
         the background duplicate starts loading.
+      </p>
+      <p>
+        <code>tab select &lt;ref&gt;</code> is equivalent to <code>tab &lt;ref&gt;</code>.
+        <code>tab adopt &lt;URL substring|targetId&gt;</code> attaches an existing tab in the current session without
+        reloading it. <code>tab inspect &lt;ref&gt;</code> reads Chrome's browser-level tab metadata, so it can still
+        return URL, load status, discard/freeze state, and debugger attachment when page JavaScript blocks the
+        renderer main thread. <code>eval</code> still cannot complete until that thread responds.
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ refs belong to the tab active at snapshot time</div>

@@ -35,10 +35,11 @@ chrome-use click @e3         # 3. Act on refs from the snapshot
 chrome-use snapshot -i       # 4. Re-snapshot after any page change
 ```
 
-Refs (`@e1`, `@e2`, ...) are assigned fresh on every snapshot. They become
-**stale the moment the page changes** — after clicks that navigate, form
-submits, dynamic re-renders, dialog opens. Re-snapshot before your next ref
-interaction after a *navigation* or a structural change.
+Refs (`@e1`, `@e2`, ...) are stable for the same backend DOM node across
+successive snapshots of one document, so inserting or removing a modal no
+longer renumbers every later control. Navigation and tab switches hard-reset
+the identity map. Re-snapshot after those boundaries, and whenever you need to
+discover newly rendered controls.
 
 > **@refs self-heal across re-renders — you don't need to re-snapshot for every
 > minor DOM churn.** Each ref records a fingerprint (role + accessible name +
@@ -46,8 +47,8 @@ interaction after a *navigation* or a structural change.
 > relocates to the matching element on the *current* page and proceeds. So after a
 > React/Vue list re-render that keeps the same labels, `click @e3` still hits the
 > right element. If the element is genuinely gone, it refuses (loud error) rather
-> than click the wrong node — it never silently mis-targets. Re-snapshot only when
-> you navigated, or when the labels/structure actually changed.
+> than click the wrong node — it never silently mis-targets. Re-snapshot when you
+> navigated, switched tabs, or need refs for newly created elements.
 
 > **Hard rule: snapshot-first, never screenshot-to-locate.** For form fields and
 > buttons, ALWAYS `snapshot -i` and act on refs/selectors. Do **not** reach for
@@ -268,8 +269,10 @@ URL: https://example.com/login
 ```
 
 Each line is `- <role> "<accessible name>" [<attrs>, ref=eN]`, indented by nesting
-depth. You pass the ref to commands as `@eN` (e.g. `click @e4`). Refs are
-assigned fresh on every snapshot.
+depth. You pass the ref to commands as `@eN` (e.g. `click @e4`). The same DOM
+node keeps its ref across snapshots within one document; new nodes receive new
+refs. Deliberate cursor styles and compact anchors can appear after the ref,
+for example `draggable [cursor:grab, class=address-tag]`.
 
 **Validation errors surface too.** When a form rejects a submit, the reason
 (`- alert "字数已超过 8 个字"`, `- alert "Email is required"`) is appended as
@@ -453,6 +456,8 @@ postal/autocomplete box inside the frame, `type @e "…" --key-events`.
 Use semantic locators:
 
 ```bash
+chrome-use find "edit web service settings button"  # ranked candidates, never acts
+chrome-use find query "编辑 Web服务规则 设置按钮"
 chrome-use find role button click --name "Submit"
 chrome-use find text "Sign In" click
 chrome-use find text "Sign In" click --exact     # exact match only
@@ -462,6 +467,11 @@ chrome-use find testid "submit-btn" click
 chrome-use find first ".card" click
 chrome-use find nth 2 ".card" hover
 ```
+
+A bare description is a safe discovery query: it returns up to 12 ranked
+candidates with role/name/text, computed cursor, and compact selector anchors.
+It never clicks automatically. Choose a candidate, then use its selector or
+take a snapshot and act on the matching `@ref`.
 
 Or a raw CSS selector:
 
@@ -920,6 +930,9 @@ chrome-use tab new https://docs...  # open a new tab (and switch to it)
 chrome-use tab duplicate            # native Duplicate tab; copy becomes the internal active tab
 chrome-use tab duplicate docs --label docs-copy
 chrome-use tab t2                   # switch to tab t2
+chrome-use tab select t2            # explicit switch syntax
+chrome-use tab adopt "example.com/stuck" # attach an existing tab without navigation
+chrome-use tab inspect t2           # browser metadata; no page JavaScript
 chrome-use tab close t2             # close tab t2
 ```
 
@@ -930,6 +943,14 @@ Tab ids are stable strings (`t1`, `t2`, …), never reused within a session, so
 the same id keeps referring to the same tab across commands. Positional
 integers are **not** accepted — use `t2`, not `2`. After switching, refs from a
 prior snapshot on a different tab no longer apply — re-snapshot.
+
+For a white-screen or unresponsive existing tab, use `tab adopt
+<url-substring|targetId>` and `tab select <ref>` to preserve the page rather
+than reopening it. `tab inspect <ref>` reads browser-level URL/status,
+discard/freeze state, and debugger attachment without evaluating page
+JavaScript. A renderer blocked by an infinite JavaScript loop cannot complete
+`eval`, but it remains attached and is reported as unresponsive rather than
+gone.
 
 `tab duplicate [ref] [--label <name>]` is available only through the
 extension-connected real Chrome path. It calls Chrome's native Duplicate tab
@@ -1005,6 +1026,9 @@ or **edit** the real response (`--edit-status`/`--edit-header`/`--replace 'from=
 Full detail: `chrome-use skills get network`
 
 ### Record a video of the workflow
+
+Extension-connected real Chrome records the current session-owned tab in
+place. A locally launched browser still records in a fresh isolated context.
 
 ```bash
 chrome-use record start demo.webm
@@ -1124,7 +1148,7 @@ Some modals and cookie banners block other clicks. Snapshot, find the
 dismiss/close button, click it, then re-snapshot.
 
 **`stale sessionId … re-open your target URL` (extension-relay mode)**
-Your tab was closed, navigated across processes, or its debugger detached
+Your tab may have been closed, navigated across processes, or its debugger detached
 (e.g. it landed on a `chrome://` or Chrome Web Store page, which Chrome
 forbids debugging). The session no longer has a live tab — re-run
 `chrome-use open <your URL>` to re-attach, then retry. This loud error
@@ -1137,6 +1161,11 @@ SSO/redirect link breaks if truncated). `tab list` shortens long URLs with
 right one. For multi-redirect SSO flows, re-open the **stable entry URL**
 (not the mid-redirect one) and `wait` a few seconds for the SPA to settle
 before snapshotting.
+
+If the tab is still present but the page is white or frozen, do not reopen it
+and destroy the diagnostic state. Use `tab select <ref>` or `tab adopt
+<url-substring|targetId>`, then `tab inspect <ref>`. A relay timeout means the
+renderer did not answer; it does not mean the tab disappeared.
 
 **Reads landing on the wrong page**
 `eval`, `screenshot`, and `network requests` print the page they ran

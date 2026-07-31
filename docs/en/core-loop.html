@@ -95,16 +95,16 @@
       <hr class="du-divider" />
 
       <!-- ============ REFS STALE ============ -->
-      <h2>@ref goes stale: snapshot again the moment the page changes</h2>
+      <h2>@ref stays stable within a document and resets after navigation</h2>
       <p>
-        Refs (<code>@e1</code>, <code>@e2</code>, …) are <strong>reassigned on every snapshot</strong>.
-        They go <strong>stale the moment the page changes</strong> — a navigating click, a form submit, a dynamic re-render, or a modal opening can all invalidate them.
-        So after a <em>navigation</em> or a structural change, snapshot again before your next ref-based interaction.
+        The same backend DOM node keeps its ref (<code>@e1</code>, <code>@e2</code>, …) across successive snapshots.
+        Opening or closing a modal and inserting list rows no longer renumbers every later control. <strong>Navigation and tab switches</strong>
+        hard-reset the identity map, so snapshot again before the next ref-based action after those boundaries.
       </p>
 
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ "Ref not found" / "Element not found: @eN"</div>
-        This is almost always the same cause: the page changed after the snapshot. Don't guess — just <code>chrome-use snapshot -i</code> again and use the new ref.
+        The framework may have replaced the original node, or the element may be gone. Don't guess — run <code>chrome-use snapshot -i</code> again and confirm the current node and ref.
       </div>
 
       <!-- ============ REFS SELF-HEAL ============ -->

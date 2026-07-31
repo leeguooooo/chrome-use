@@ -253,6 +253,9 @@ chrome-use tab new --label docs [url]       # New tab with a memorable label
 chrome-use tab duplicate [ref]              # Native Duplicate tab (current by default)
 chrome-use tab duplicate docs --label copy  # Duplicate by ref and label the copy
 chrome-use tab t2                           # Switch to tab by id
+chrome-use tab select t2                    # Explicit switch syntax
+chrome-use tab adopt "example.com/stuck"   # Adopt without navigating
+chrome-use tab inspect t2                   # Browser metadata without page JS
 chrome-use tab docs                         # Switch to tab by label
 chrome-use tab close                        # Close current tab
 chrome-use tab close t2                     # Close tab by id
@@ -290,6 +293,12 @@ restores the previously visible foreground tab when complete while making the
 copy chrome-use's internal active tab. Providers without native duplication
 return an error; chrome-use never substitutes a same-URL new tab. Background
 loading remains controlled by Chrome.
+
+`tab adopt` works only through the extension-connected real Chrome path. It
+attaches an existing tab in the current daemon and never navigates it.
+`tab inspect` reads browser-level metadata, so it remains available when a
+page's renderer is unresponsive. Page-JavaScript operations such as `eval`
+still require the renderer main thread to respond.
 
 ## Frames
 
