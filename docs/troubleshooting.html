@@ -184,6 +184,10 @@
         如果 <code>tab list</code> 仍列得出白屏或卡死标签，先用 <code>tab select</code> 或
         <code>tab adopt</code> 保留现场，再用 <code>tab inspect</code> 读取浏览器级状态。
         <code>relay timeout</code> 表示 renderer/debugger 没有及时回答，不代表标签已经消失。
+        同样，<code>tab select</code> 的存活探针失败也不能单独证明 renderer 已无响应。
+        通过扩展连接时，<code>tab inspect</code> 需要 ab-connect 0.5.16 或更新版本；
+        如果警告显示当前扩展落后于 CLI 内置版本，请打开 <code>chrome://extensions</code>
+        更新或重新加载 ab-connect 后重试。
         页面 JavaScript 用无限循环阻塞主线程时，<code>eval</code> 在主线程恢复前不可能完成；
         不要为了恢复 eval 而刷新掉需要诊断的现场。
         <br /><br />

@@ -192,7 +192,11 @@
         If <code>tab list</code> still shows the white-screen or frozen tab, preserve it with <code>tab select</code>
         or <code>tab adopt</code>, then use <code>tab inspect</code> for browser-level state. A
         <code>relay timeout</code> means the renderer/debugger did not answer in time; it does not mean the tab
-        disappeared. When an infinite JavaScript loop blocks the page main thread, <code>eval</code> cannot complete
+        disappeared. Likewise, a failed <code>tab select</code> liveness probe does not by itself prove that the
+        renderer is unresponsive. On the extension relay, <code>tab inspect</code> requires ab-connect 0.5.16 or
+        newer. If the warning says the live extension is behind the bundled version, open
+        <code>chrome://extensions</code>, update or reload ab-connect, then retry.
+        When an infinite JavaScript loop blocks the page main thread, <code>eval</code> cannot complete
         until that thread responds. Do not reload away the diagnostic state merely to restore evaluation.
         <br /><br />
         Reopen the URL only when the tab is genuinely absent from the list.

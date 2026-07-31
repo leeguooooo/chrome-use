@@ -2767,7 +2767,7 @@ Operations:
                              Natively duplicate and label a tab
   select <ref>               Switch to a tab (explicit alias for `<ref>`)
   adopt <url|targetId>       Attach an existing tab without navigating it
-  inspect <ref>              Read browser-level tab state without page JavaScript
+  inspect <ref>              Read browser-level state (ab-connect 0.5.16+ on real Chrome)
   close [ref]                Close a tab (current if no ref given)
   <ref>                      Switch to a tab
 
@@ -3862,7 +3862,7 @@ Tabs:
                              stable targetId, no reload — preserves in-page state
   tab select <ref>           Explicit switch syntax (same as `tab <ref>`)
   tab adopt <url|targetId>   Attach an existing tab in the current session, no reload
-  tab inspect <ref>          Browser-level URL/status metadata; works when page JS hangs
+  tab inspect <ref>          Browser metadata without page JS (ab-connect 0.5.16+ on relay)
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning
                              a duplicate (matches origin+path; preserves state)
   adopt <url|targetId>       Read a PRE-EXISTING tab (the user's own, or another

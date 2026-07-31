@@ -61,6 +61,10 @@ const AUTH_LOGIN_SELECTOR_POLL_INTERVAL_MS: u64 = 100;
 /// fallback selectors are allowed.
 const AUTH_LOGIN_PREFERRED_SELECTOR_WINDOW_MS: u64 = 5_000;
 
+/// First ab-connect build that implements the browser-level `ABExt.inspectTab`
+/// relay command used by `tab inspect`.
+const TAB_INSPECT_MIN_EXTENSION_VERSION: &str = "0.5.16";
+
 pub struct PendingConfirmation {
     pub action: String,
     pub cmd: Value,
@@ -6713,14 +6717,13 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // we surface a warning rather than a hard error to avoid a false failure
     // during that window.
     if mgr.evaluate("1", None).await.is_err() {
+        let warning = tab_liveness_probe_warning(
+            mgr.on_relay(),
+            crate::connect::relay_ext_version().as_deref(),
+            env!("AB_CONNECT_VERSION"),
+        );
         if let Some(obj) = result.as_object_mut() {
-            obj.insert(
-                "warning".to_string(),
-                json!(
-                    "tab is selected, but its renderer did not answer the liveness probe; \
-                     `tab inspect <ref>` can still read browser-level state without navigating"
-                ),
-            );
+            obj.insert("warning".to_string(), json!(warning));
         }
     }
 
@@ -6754,6 +6757,43 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     Ok(result)
+}
+
+/// Explain a failed tab liveness probe without treating it as proof that the
+/// renderer is hung. In particular, an older relay extension may not implement
+/// the command/session behavior expected by the bundled CLI.
+fn tab_liveness_probe_warning(
+    on_relay: bool,
+    live_extension_version: Option<&str>,
+    bundled_extension_version: &str,
+) -> String {
+    if on_relay {
+        match live_extension_version {
+            Some(live) if crate::upgrade::version_is_newer(bundled_extension_version, live) => {
+                return format!(
+                    "tab is selected, but its liveness probe could not complete while \
+                     ab-connect {live} is behind bundled {bundled_extension_version}; \
+                     this does not prove the renderer is unresponsive. Open \
+                     chrome://extensions, update/reload ab-connect, then retry"
+                );
+            }
+            None => {
+                return format!(
+                    "tab is selected, but the extension liveness probe could not complete \
+                     and the live ab-connect version is unknown (bundled \
+                     {bundled_extension_version}); this does not prove the renderer is \
+                     unresponsive. Open chrome://extensions, update/reload ab-connect, \
+                     then retry"
+                );
+            }
+            Some(_) => {}
+        }
+    }
+
+    "tab is selected, but its liveness probe did not complete; this alone does not prove \
+     the renderer is unresponsive. `tab inspect <ref>` can still read browser-level state \
+     without navigating"
+        .to_string()
 }
 
 async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -6798,7 +6838,42 @@ async fn handle_tab_inspect(cmd: &Value, state: &mut DaemonState) -> Result<Valu
             mgr.resolve_tab_ref(&tab_ref)?
         }
     };
-    mgr.tab_inspect_by_id(tab_id).await
+    let on_relay = mgr.on_relay();
+    let live_extension_version = crate::connect::relay_ext_version();
+    mgr.tab_inspect_by_id(tab_id).await.map_err(|error| {
+        tab_inspect_error_message(
+            error,
+            on_relay,
+            live_extension_version.as_deref(),
+            env!("AB_CONNECT_VERSION"),
+        )
+    })
+}
+
+/// Convert the raw CDP method-not-found error returned by pre-0.5.16 relay
+/// extensions into an actionable compatibility error.
+fn tab_inspect_error_message(
+    error: String,
+    on_relay: bool,
+    live_extension_version: Option<&str>,
+    bundled_extension_version: &str,
+) -> String {
+    let lower = error.to_ascii_lowercase();
+    let missing_inspect_method = lower.contains("abext.inspecttab")
+        && (lower.contains("-32601")
+            || lower.contains("wasn't found")
+            || lower.contains("method not found"));
+
+    if on_relay && missing_inspect_method {
+        let current = live_extension_version.unwrap_or("unknown");
+        return format!(
+            "tab inspect requires ab-connect {TAB_INSPECT_MIN_EXTENSION_VERSION} or newer; \
+             current extension is {current} (bundled {bundled_extension_version}). Open \
+             chrome://extensions, update/reload ab-connect, then retry"
+        );
+    }
+
+    error
 }
 
 async fn handle_tab_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -12580,6 +12655,71 @@ mod tests {
         assert!(state.iframe_sessions.is_empty());
         assert!(state.active_frame_id.is_none());
     }
+
+    #[test]
+    fn stale_extension_liveness_warning_is_non_conclusive_and_actionable() {
+        let warning = tab_liveness_probe_warning(true, Some("0.5.12"), "0.5.16");
+
+        assert!(warning.contains("ab-connect 0.5.12"));
+        assert!(warning.contains("bundled 0.5.16"));
+        assert!(warning.contains("does not prove the renderer is unresponsive"));
+        assert!(warning.contains("chrome://extensions"));
+        assert!(!warning.contains("renderer did not answer"));
+    }
+
+    #[test]
+    fn current_extension_liveness_warning_does_not_diagnose_renderer_failure() {
+        let warning = tab_liveness_probe_warning(true, Some("0.5.16"), "0.5.16");
+
+        assert!(warning.contains("liveness probe did not complete"));
+        assert!(warning.contains("does not prove the renderer is unresponsive"));
+        assert!(warning.contains("tab inspect <ref>"));
+        assert!(!warning.contains("behind bundled"));
+    }
+
+    #[test]
+    fn unknown_extension_liveness_warning_requests_update_and_reload() {
+        let warning = tab_liveness_probe_warning(true, None, "0.5.16");
+
+        assert!(warning.contains("live ab-connect version is unknown"));
+        assert!(warning.contains("bundled 0.5.16"));
+        assert!(warning.contains("update/reload ab-connect"));
+    }
+
+    #[test]
+    fn tab_inspect_method_not_found_reports_minimum_extension_version() {
+        let error = tab_inspect_error_message(
+            "CDP error (ABExt.inspectTab): {\"code\":-32601,\"message\":\"'ABExt.inspectTab' wasn't found\"}".to_string(),
+            true,
+            Some("0.5.12"),
+            "0.5.16",
+        );
+
+        assert!(error.contains("requires ab-connect 0.5.16 or newer"));
+        assert!(error.contains("current extension is 0.5.12"));
+        assert!(error.contains("bundled 0.5.16"));
+        assert!(error.contains("chrome://extensions"));
+        assert!(!error.contains("-32601"));
+    }
+
+    #[test]
+    fn tab_inspect_preserves_unrelated_errors() {
+        let original = "CDP error (ABExt.inspectTab): permission denied".to_string();
+        let error = tab_inspect_error_message(original.clone(), true, Some("0.5.16"), "0.5.16");
+
+        assert_eq!(error, original);
+    }
+
+    #[test]
+    fn direct_cdp_tab_inspect_preserves_method_not_found_error() {
+        let original =
+            "CDP error (ABExt.inspectTab): {\"code\":-32601,\"message\":\"method not found\"}"
+                .to_string();
+        let error = tab_inspect_error_message(original.clone(), false, Some("0.5.12"), "0.5.16");
+
+        assert_eq!(error, original);
+    }
+
     use crate::test_utils::EnvGuard;
     use std::fs;
 

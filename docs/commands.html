@@ -408,6 +408,9 @@
         <code>tab inspect &lt;ref&gt;</code> 只读取 Chrome 的标签元数据，因此 renderer 主线程被页面
         JavaScript 卡住时仍可返回 URL、加载状态、discard/freeze 状态与 debugger 附加状态。
         页面主线程恢复响应前，<code>eval</code> 仍无法完成。
+        通过扩展连接时，<code>tab inspect</code> 需要 ab-connect 0.5.16 或更新版本。
+        <code>tab select</code> 的存活探针失败不能单独证明 renderer 已卡死；如果警告显示当前扩展
+        落后于 CLI 内置版本，请在 <code>chrome://extensions</code> 更新或重新加载扩展后重试。
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ ref 属于快照时的活动标签</div>

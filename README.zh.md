@@ -171,6 +171,11 @@ discard/freeze 状态和 debugger 附加状态，所以页面 JavaScript 阻塞 
 主线程时仍可使用。主线程阻塞期间 Runtime 求值无法完成，但该标签会保持选中，
 不会再被误报为已经关闭。
 
+通过扩展连接真实 Chrome 时，`tab inspect` 需要 ab-connect 0.5.16 或更新版本。
+如果标签存活探针失败，而当前扩展比 CLI 内置版本旧，chrome-use 会先报告版本不匹配，
+不会据此断言 renderer 已无响应。请打开 `chrome://extensions` 更新或重新加载
+ab-connect，然后重试。
+
 若点击触发原生 `confirm()` 或 `prompt()`，click 会返回待处理 dialog，而不是把会话卡死；
 接着运行 `chrome-use dialog status` 与 `chrome-use dialog accept|dismiss` 即可。
 扩展中继的 Chrome debugger 调用也有明确超时，跨进程跳转后的坏句柄会返回恢复提示，不再无限挂起。

@@ -314,6 +314,12 @@ so it still works when page JavaScript has blocked the renderer main thread.
 Runtime evaluation cannot finish while that thread is blocked, but the tab is
 kept selected and is no longer misreported as closed.
 
+On extension-connected Chrome, `tab inspect` requires ab-connect 0.5.16 or
+newer. If a tab liveness probe fails while the live extension is older than the
+bundled version, chrome-use reports the version mismatch instead of diagnosing
+the renderer as unresponsive. Open `chrome://extensions`, update or reload
+ab-connect, and retry.
+
 The agent operates in your Chrome — you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
 
 If a click opens native `confirm()` or `prompt()`, the click returns with a
