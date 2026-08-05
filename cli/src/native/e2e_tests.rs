@@ -38,6 +38,7 @@ fn native_test_fixture_html(name: &str) -> &'static str {
         "hidden_upload_probe" => include_str!("test_fixtures/hidden_upload_probe.html"),
         "iframe_button_probe" => include_str!("test_fixtures/iframe_button_probe.html"),
         "monaco_fill_probe" => include_str!("test_fixtures/monaco_fill_probe.html"),
+        "ref_reuse_probe" => include_str!("test_fixtures/ref_reuse_probe.html"),
         _ => panic!("Unknown native test fixture: {}", name),
     }
 }
@@ -6722,6 +6723,124 @@ async fn e2e_removeinitscript_roundtrip() {
     .await;
     assert_success(&resp);
     assert_eq!(get_data(&resp)["removed"], true);
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #162 — a @ref must never activate a node that stopped being the element
+// it named. The reporter's `click @e273 --observe` printed `Done` while opening
+// an unrelated overflow menu, because the identity probe treats "could not
+// confirm" as "confirmed".
+// ---------------------------------------------------------------------------
+
+/// Extract the `eN` ref from the snapshot line carrying `label`.
+fn ref_for_label(snapshot: &str, label: &str) -> String {
+    let line = snapshot
+        .lines()
+        .find(|l| l.contains(label))
+        .unwrap_or_else(|| panic!("no snapshot line for {label}:\n{snapshot}"));
+    let start = line
+        .find("ref=")
+        .unwrap_or_else(|| panic!("no ref on line: {line}"))
+        + 4;
+    line[start..]
+        .chars()
+        .take_while(|c| *c == 'e' || c.is_ascii_digit())
+        .collect()
+}
+
+async fn launch_ref_reuse_probe() -> (DaemonState, String) {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "navigate",
+            "url": native_test_fixture_url("ref_reuse_probe")
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(&json!({ "id": "3", "action": "snapshot" }), &mut state).await;
+    assert_success(&resp);
+    let snapshot = get_data(&resp)["snapshot"].as_str().unwrap().to_string();
+    let target = ref_for_label(&snapshot, "我的 agent");
+    (state, target)
+}
+
+/// The reconciler hands the ref's DOM node to a different control and the
+/// original is gone: the click must be refused, not delivered to the impostor.
+#[tokio::test]
+#[ignore]
+async fn e2e_ref_refuses_to_click_a_reused_node() {
+    let (mut state, target) = launch_ref_reuse_probe().await;
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "window.rerender(); true" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "click", "selector": target }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(
+        resp["success"], false,
+        "clicking a ref whose node became another control must fail: {resp}"
+    );
+
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "window.fired" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp)["result"].is_null(),
+        "no handler may fire, got: {}",
+        get_data(&resp)["result"]
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+}
+
+/// Same identity swap, but the control the ref named still exists elsewhere:
+/// the ref re-anchors onto it and the right handler runs.
+#[tokio::test]
+#[ignore]
+async fn e2e_ref_reanchors_onto_the_moved_control() {
+    let (mut state, target) = launch_ref_reuse_probe().await;
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "window.rerenderAndMove(); true" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "click", "selector": target }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    wait_for_evaluation(
+        &mut state,
+        "window.fired === 'my-agent'",
+        "ref should have re-anchored onto the control it named",
+    )
+    .await;
 
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
 }

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>ref reuse probe</title></head>
+<body>
+  <!-- Two buttons that swap identities the way a reconciler does: the DOM nodes
+       are never recreated, only their labels and handlers are reassigned. That
+       is the shape of issue #162 — a @ref cached against the first node would
+       activate whatever the node became. -->
+  <button id="a" onclick="window.fired = 'my-agent'">我的 agent</button>
+  <button id="b" onclick="window.fired = 'overflow'">More actions</button>
+  <script>
+    window.fired = null;
+    // Called from the test: hand node #a the other component's identity and
+    // handler, exactly as React does when it reuses a node across a re-render.
+    window.rerender = () => {
+      const a = document.getElementById('a');
+      a.textContent = 'More actions';
+      a.onclick = () => { window.fired = 'overflow'; };
+      document.getElementById('b').remove();
+    };
+    // Same identity swap, but the original control survives elsewhere in the
+    // tree — a ref must re-anchor onto it instead of refusing.
+    window.rerenderAndMove = () => {
+      const a = document.getElementById('a');
+      a.textContent = 'More actions';
+      a.onclick = () => { window.fired = 'overflow'; };
+      const moved = document.getElementById('b');
+      moved.textContent = '我的 agent';
+      moved.onclick = () => { window.fired = 'my-agent'; };
+    };
+  </script>
+</body>
+</html>

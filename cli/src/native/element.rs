@@ -133,6 +133,12 @@ struct StableRefKey {
 struct StableRefEntry {
     ref_id: String,
     last_seen_generation: u64,
+    /// Role + name the ref was minted for. A reused backend node whose identity
+    /// changed must NOT inherit the old ref (issue #162) — the agent holds
+    /// `@e273` because the snapshot said it was `button "我的 agent"`, so once
+    /// that node is a different control the ref has to be a fresh one.
+    role: String,
+    name: String,
 }
 
 /// Keep identities long enough for normal SPA churn while bounding memory on
@@ -167,15 +173,27 @@ impl RefMap {
     /// Return a stable ref for a snapshot node when CDP exposes a backend node
     /// identity. Nodes without one receive a fresh ref because reusing them by
     /// traversal position would risk silently targeting the wrong element.
-    pub fn snapshot_ref(&mut self, backend_node_id: Option<i64>, frame_id: Option<&str>) -> String {
+    ///
+    /// Reuse is conditional on the node still presenting the same role + name:
+    /// a reconciler that hands the same DOM node to a different component gets a
+    /// new ref rather than inheriting the old one's meaning (issue #162).
+    pub fn snapshot_ref(
+        &mut self,
+        backend_node_id: Option<i64>,
+        frame_id: Option<&str>,
+        role: &str,
+        name: &str,
+    ) -> String {
         if let Some(backend_node_id) = backend_node_id {
             let key = StableRefKey {
                 backend_node_id,
                 frame_id: frame_id.map(str::to_string),
             };
             if let Some(entry) = self.stable_refs.get_mut(&key) {
-                entry.last_seen_generation = self.snapshot_generation;
-                return entry.ref_id.clone();
+                if entry.role == role && entry.name == name {
+                    entry.last_seen_generation = self.snapshot_generation;
+                    return entry.ref_id.clone();
+                }
             }
 
             let ref_id = format!("e{}", self.next_ref);
@@ -185,6 +203,8 @@ impl RefMap {
                 StableRefEntry {
                     ref_id: ref_id.clone(),
                     last_seen_generation: self.snapshot_generation,
+                    role: role.to_string(),
+                    name: name.to_string(),
                 },
             );
             return ref_id;
@@ -374,6 +394,140 @@ async fn relocate_stale_ref(
     }
 }
 
+/// Outcome of the cached-ref identity check.
+enum RefCheck {
+    /// The cached node still carries the snapshot's role + name.
+    Confirmed,
+    /// The node is a different control now, or we could not confirm it is the
+    /// same one. Carries the error to surface if re-anchoring also fails.
+    Suspect(String),
+}
+
+/// How long to wait for the identity probe before treating the ref as
+/// unconfirmed.
+///
+/// The relay transport (CLI → daemon → native host → extension →
+/// `chrome.debugger`) adds several hops per CDP round-trip, so the direct-CDP
+/// budget is far too tight there. That mattered because a timeout used to mean
+/// "skip the check and click the cached node anyway" — precisely the silent
+/// mis-target the guard exists to prevent (issue #162).
+fn identity_probe_budget() -> std::time::Duration {
+    if let Some(ms) = std::env::var("AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return std::time::Duration::from_millis(ms);
+    }
+    if crate::connect::relay_url().is_some() {
+        std::time::Duration::from_secs(5)
+    } else {
+        std::time::Duration::from_secs(2)
+    }
+}
+
+/// Read the full accessibility tree and return the node the ref names.
+///
+/// Prefers `cached` when that node still carries the ref's role + name — the
+/// bounded probe in [`verify_ref_identity`] can run out of budget on a busy page
+/// even though nothing changed, and re-anchoring a still-correct ref onto a
+/// different same-labelled element would trade one mis-target for another.
+/// Otherwise falls back to the ref's `nth` match, the same rule the snapshot
+/// used to number duplicates. `None` when nothing carries that identity.
+async fn reanchor_ref(
+    client: &CdpClient,
+    session_id: &str,
+    entry: &RefEntry,
+    cached: i64,
+    iframe_sessions: &HashMap<String, String>,
+) -> Option<i64> {
+    let (ax_params, effective_session_id) =
+        resolve_ax_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
+    let tree: GetFullAXTreeResult = client
+        .send_command_typed(
+            "Accessibility.getFullAXTree",
+            &ax_params,
+            Some(effective_session_id),
+        )
+        .await
+        .ok()?;
+
+    let matches: Vec<i64> = tree
+        .nodes
+        .iter()
+        .filter(|n| !n.ignored.unwrap_or(false))
+        .filter(|n| {
+            extract_ax_string(&n.role) == entry.role && extract_ax_string(&n.name) == entry.name
+        })
+        .filter_map(|n| n.backend_d_o_m_node_id)
+        .collect();
+
+    pick_reanchor_target(&matches, cached, entry.nth)
+}
+
+/// Selection rule for [`reanchor_ref`], split out so it can be tested directly.
+fn pick_reanchor_target(matches: &[i64], cached: i64, nth: Option<usize>) -> Option<i64> {
+    if matches.contains(&cached) {
+        return Some(cached);
+    }
+    matches.get(nth.unwrap_or(0)).copied()
+}
+
+/// Decide which backend node a `@ref` may act on, given the id cached at
+/// snapshot time.
+///
+/// Order: (1) keep the cached node when the AX identity check confirms it;
+/// (2) re-anchor by the ref's exact role + name — the identity the snapshot
+/// promised the agent; (3) adaptive fingerprint relocation; (4) fail loudly.
+/// There is deliberately no "act on the cached node anyway" branch: every
+/// unconfirmed path either relocates to the element the ref names or errors.
+async fn confirmed_backend_node_id(
+    client: &CdpClient,
+    session_id: &str,
+    effective_session_id: &str,
+    ref_id: &str,
+    entry: &RefEntry,
+    backend_node_id: i64,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<i64, String> {
+    if std::env::var("AGENT_BROWSER_VERIFY_REF").as_deref() == Ok("0") {
+        return Ok(backend_node_id);
+    }
+
+    let RefCheck::Suspect(err) = verify_ref_identity(
+        client,
+        effective_session_id,
+        backend_node_id,
+        ref_id,
+        &entry.role,
+        &entry.name,
+    )
+    .await
+    else {
+        return Ok(backend_node_id);
+    };
+
+    // Re-anchor on the exact role + name the ref was published with. The full
+    // tree also re-confirms the cached node itself, so a probe that merely ran
+    // out of budget on a busy page doesn't push a still-correct ref onto a
+    // different element.
+    if let Some(id) =
+        reanchor_ref(client, session_id, entry, backend_node_id, iframe_sessions).await
+    {
+        if id != backend_node_id {
+            eprintln!(
+                "[ref] {ref_id} re-anchored to backendNodeId {id} ({} \"{}\")",
+                entry.role, entry.name
+            );
+        }
+        return Ok(id);
+    }
+
+    match relocate_stale_ref(client, ref_id, entry, session_id, iframe_sessions).await {
+        Some(id) => Ok(id),
+        None => Err(err),
+    }
+}
+
 /// Resolve a `@ref` or CSS selector to a click point. Returns
 /// `(centre_x, centre_y, width, height, session_id)`. Width/height come from the
 /// element's box model and feed humanize's in-bounds landing jitter; the CSS
@@ -395,38 +549,26 @@ pub async fn resolve_element_center(
 
         // Try cached backend_node_id first (fast path)
         if let Some(backend_node_id) = entry.backend_node_id {
-            let mut active_id = backend_node_id;
             // Identity check: React often re-uses the same DOM node when
             // re-rendering — backendNodeId stays the same but accessibleName
             // / role changes. Without this verification, `click @e20` (saved
             // when the button said "Add post") happily clicks the *same*
             // node that now says "Post all", silently submitting the thread.
             //
-            // On mismatch, try adaptive fingerprint relocation before failing:
-            // a confident high-score/high-margin match is a stronger identity
-            // signal than role+name, and lets a moved+renamed element still
-            // resolve. If relocation isn't confident, surface the original
-            // identity error. Set AGENT_BROWSER_VERIFY_REF=0 to skip the check
-            // (and thus relocation) entirely.
-            if std::env::var("AGENT_BROWSER_VERIFY_REF").as_deref() != Ok("0") {
-                if let Err(e) = verify_ref_identity(
-                    client,
-                    effective_session_id,
-                    backend_node_id,
-                    &ref_id,
-                    &entry.role,
-                    &entry.name,
-                )
-                .await
-                {
-                    match relocate_stale_ref(client, &ref_id, entry, session_id, iframe_sessions)
-                        .await
-                    {
-                        Some(id) => active_id = id,
-                        None => return Err(e),
-                    }
-                }
-            }
+            // Unconfirmed ids never reach the click: they are re-anchored by
+            // role+name, then by fingerprint, then refused. Set
+            // AGENT_BROWSER_VERIFY_REF=0 to skip the check (and thus the
+            // relocation) entirely.
+            let active_id = confirmed_backend_node_id(
+                client,
+                session_id,
+                effective_session_id,
+                &ref_id,
+                entry,
+                backend_node_id,
+                iframe_sessions,
+            )
+            .await?;
 
             let result: Result<DomGetBoxModelResult, String> = client
                 .send_command_typed(
@@ -521,30 +663,20 @@ pub async fn resolve_element_object_id(
 
         // Try cached backend_node_id first (fast path)
         if let Some(backend_node_id) = entry.backend_node_id {
-            let mut active_id = backend_node_id;
             // Same identity guard as resolve_element_center — see that
             // function for why React DOM-node-reuse breaks ref-based
-            // interactions if we skip this, and why a confident adaptive
-            // relocation is allowed to override an identity mismatch.
-            if std::env::var("AGENT_BROWSER_VERIFY_REF").as_deref() != Ok("0") {
-                if let Err(e) = verify_ref_identity(
-                    client,
-                    effective_session_id,
-                    backend_node_id,
-                    &ref_id,
-                    &entry.role,
-                    &entry.name,
-                )
-                .await
-                {
-                    match relocate_stale_ref(client, &ref_id, entry, session_id, iframe_sessions)
-                        .await
-                    {
-                        Some(id) => active_id = id,
-                        None => return Err(e),
-                    }
-                }
-            }
+            // interactions if we skip this, and why an unconfirmed id is
+            // re-anchored or refused rather than acted on.
+            let active_id = confirmed_backend_node_id(
+                client,
+                session_id,
+                effective_session_id,
+                &ref_id,
+                entry,
+                backend_node_id,
+                iframe_sessions,
+            )
+            .await?;
 
             let result: Result<DomResolveNodeResult, String> = client
                 .send_command_typed(
@@ -783,10 +915,12 @@ fn resolve_frame_session<'a>(
 /// any reconciler) reused the DOM node for a different component instance
 /// — same physical node, different semantics.
 ///
-/// On mismatch, returns an actionable error naming both the snapshot label
-/// and the current label so the agent can re-snapshot intelligently.
-/// On any CDP failure (e.g. node deleted), returns Ok(()) so the caller's
-/// existing fallback (`find_node_id_by_role_name`) takes over.
+/// Returns [`RefCheck::Confirmed`] only when the live node still matches. Every
+/// other outcome — mismatch, probe timeout, CDP failure, node missing from the
+/// tree — is [`RefCheck::Suspect`], carrying the error to surface if the caller
+/// cannot re-anchor the ref. Treating an unfinished probe as "confirmed" is what
+/// let `click @e273` activate an unrelated overflow menu (issue #162), and the
+/// slow relay transport made that the *common* path, not a rare one.
 async fn verify_ref_identity(
     client: &CdpClient,
     session_id: &str,
@@ -794,31 +928,42 @@ async fn verify_ref_identity(
     ref_id: &str,
     expected_role: &str,
     expected_name: &str,
-) -> Result<(), String> {
+) -> RefCheck {
     let params = serde_json::json!({
         "backendNodeId": backend_node_id,
         "fetchRelatives": false,
     });
-    // Tight 1s timeout: this is a defensive guard, not a critical path.
-    // The default 30s CDP timeout was the dominant factor in the
-    // "click hangs 5+ minutes" report — three CDP calls (verify +
-    // resolveNode + paint-settle) at 30s each, multiplied by parallel
-    // click invocations queueing on the daemon, totalled multi-minute
-    // user-visible hangs. Cap our own helper so a stuck AX query
-    // doesn't make `click` worse than the no-guard version was.
+    // Bounded probe: the default 30s CDP timeout was the dominant factor in the
+    // "click hangs 5+ minutes" report — three CDP calls (verify + resolveNode +
+    // paint-settle) at 30s each, multiplied by parallel click invocations
+    // queueing on the daemon, totalled multi-minute user-visible hangs. Cap our
+    // own helper, but treat exhausting the budget as "unconfirmed", not "fine".
     let resp: Result<GetFullAXTreeResult, String> = match tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        identity_probe_budget(),
         client.send_command_typed("Accessibility.getPartialAXTree", &params, Some(session_id)),
     )
     .await
     {
         Ok(r) => r,
-        // Timeout: skip identity verification rather than block the click.
-        Err(_) => return Ok(()),
+        Err(_) => {
+            return RefCheck::Suspect(unconfirmed_ref_error(
+                ref_id,
+                expected_role,
+                expected_name,
+                "the accessibility probe timed out, so its identity could not be confirmed",
+            ))
+        }
     };
-    let Ok(tree) = resp else {
-        // Node likely gone; let the box-model call fail and trigger fallback.
-        return Ok(());
+    let tree = match resp {
+        Ok(tree) => tree,
+        Err(_) => {
+            return RefCheck::Suspect(unconfirmed_ref_error(
+                ref_id,
+                expected_role,
+                expected_name,
+                "the accessibility probe failed — the node was most likely removed",
+            ))
+        }
     };
     // Find the AXNode for our backendNodeId. fetchRelatives=false still
     // returns ancestors; the target node has the matching backendNodeId.
@@ -827,25 +972,49 @@ async fn verify_ref_identity(
         .iter()
         .find(|n| n.backend_d_o_m_node_id == Some(backend_node_id))
     else {
-        return Ok(());
+        return RefCheck::Suspect(unconfirmed_ref_error(
+            ref_id,
+            expected_role,
+            expected_name,
+            "the node is no longer in the accessibility tree",
+        ));
     };
     let actual_role = extract_ax_string(&node.role);
     let actual_name = extract_ax_string(&node.name);
     if actual_role == expected_role && actual_name == expected_name {
-        return Ok(());
+        return RefCheck::Confirmed;
     }
-    Err(format!(
+    RefCheck::Suspect(format!(
         "Ref {} no longer matches its snapshot. Was [{} \"{}\"], now [{} \"{}\"].\n\
-         The DOM mutated between snapshot and interaction (typical with React/Vue \
-         reusing nodes during re-render). Fix: take a fresh `snapshot` and re-target \
-         with the new ref. For SPAs where refs churn every interaction, drive the \
-         element directly with `eval` (e.g. `eval \"document.querySelector(...).click()\"`), \
-         which doesn't depend on refs.\n\
-         (Last resort: AGENT_BROWSER_VERIFY_REF=0 disables this safety check — only \
-         if you accept clicks may land on a re-rendered/wrong node.)",
-        ref_id, expected_role, expected_name, actual_role, actual_name,
+         {}",
+        ref_id, expected_role, expected_name, actual_role, actual_name, REF_RECOVERY_HINT,
     ))
 }
+
+/// Error for a ref whose cached node could not be confirmed *and* could not be
+/// re-anchored by role+name or fingerprint.
+fn unconfirmed_ref_error(
+    ref_id: &str,
+    expected_role: &str,
+    expected_name: &str,
+    why: &str,
+) -> String {
+    format!(
+        "Ref {} could not be resolved to the element it named [{} \"{}\"]: {}, \
+         and no element with that role and name is on the page now.\n\
+         {}",
+        ref_id, expected_role, expected_name, why, REF_RECOVERY_HINT,
+    )
+}
+
+const REF_RECOVERY_HINT: &str =
+    "The DOM mutated between snapshot and interaction (typical with React/Vue \
+     reusing nodes during re-render). Fix: take a fresh `snapshot` and re-target \
+     with the new ref. For SPAs where refs churn every interaction, drive the \
+     element directly with `eval` (e.g. `eval \"document.querySelector(...).click()\"`), \
+     which doesn't depend on refs.\n\
+     (Last resort: AGENT_BROWSER_VERIFY_REF=0 disables this safety check — only \
+     if you accept clicks may land on a re-rendered/wrong node.)";
 
 /// At the moment we'd dispatch the click, ask the page itself which element
 /// occupies (x, y). If it's not our target (and not a descendant or
@@ -2098,7 +2267,7 @@ mod tests {
     fn test_snapshot_refs_stay_stable_for_same_backend_node() {
         let mut map = RefMap::new();
         map.begin_snapshot();
-        let first = map.snapshot_ref(Some(42), None);
+        let first = map.snapshot_ref(Some(42), None, "button", "Submit");
         map.add(first.clone(), Some(42), "button", "Submit", None);
 
         map.begin_snapshot();
@@ -2106,7 +2275,7 @@ mod tests {
             map.get(&first).is_none(),
             "old live entries must be cleared"
         );
-        let second = map.snapshot_ref(Some(42), None);
+        let second = map.snapshot_ref(Some(42), None, "button", "Submit");
         assert_eq!(second, first);
     }
 
@@ -2114,11 +2283,11 @@ mod tests {
     fn test_snapshot_refs_do_not_reuse_traversal_position_for_new_nodes() {
         let mut map = RefMap::new();
         map.begin_snapshot();
-        let original = map.snapshot_ref(Some(42), None);
+        let original = map.snapshot_ref(Some(42), None, "button", "Submit");
 
         map.begin_snapshot();
-        let inserted = map.snapshot_ref(Some(99), None);
-        let original_again = map.snapshot_ref(Some(42), None);
+        let inserted = map.snapshot_ref(Some(99), None, "button", "Cancel");
+        let original_again = map.snapshot_ref(Some(42), None, "button", "Submit");
 
         assert_ne!(inserted, original);
         assert_eq!(original_again, original);
@@ -2128,22 +2297,92 @@ mod tests {
     fn test_snapshot_ref_identity_is_scoped_to_frame() {
         let mut map = RefMap::new();
         map.begin_snapshot();
-        let main = map.snapshot_ref(Some(42), None);
-        let iframe = map.snapshot_ref(Some(42), Some("child-frame"));
+        let main = map.snapshot_ref(Some(42), None, "button", "Submit");
+        let iframe = map.snapshot_ref(Some(42), Some("child-frame"), "button", "Submit");
         assert_ne!(main, iframe);
+    }
+
+    #[test]
+    fn test_reused_dom_node_with_new_identity_gets_a_fresh_ref() {
+        // React handed backendNodeId 42 to a different control between
+        // snapshots. Inheriting the old ref is what made `click @e273` open an
+        // unrelated overflow menu (issue #162) — the agent holds the ref
+        // because of the label it was published with.
+        let mut map = RefMap::new();
+        map.begin_snapshot();
+        let first = map.snapshot_ref(Some(42), None, "button", "我的 agent");
+
+        map.begin_snapshot();
+        let after_rerender = map.snapshot_ref(Some(42), None, "button", "More actions");
+        assert_ne!(after_rerender, first);
+
+        // …and the fresh identity is the one that now sticks.
+        map.begin_snapshot();
+        assert_eq!(
+            map.snapshot_ref(Some(42), None, "button", "More actions"),
+            after_rerender
+        );
     }
 
     #[test]
     fn test_hard_clear_resets_snapshot_identity() {
         let mut map = RefMap::new();
         map.begin_snapshot();
-        let first = map.snapshot_ref(Some(42), None);
-        let other = map.snapshot_ref(Some(99), None);
+        let first = map.snapshot_ref(Some(42), None, "button", "Submit");
+        let other = map.snapshot_ref(Some(99), None, "button", "Cancel");
         assert_ne!(first, other);
 
         map.clear();
         map.begin_snapshot();
-        assert_eq!(map.snapshot_ref(Some(99), None), "e1");
+        assert_eq!(map.snapshot_ref(Some(99), None, "button", "Cancel"), "e1");
+    }
+
+    #[test]
+    fn test_identity_probe_budget_is_larger_over_the_relay() {
+        // Explicit override wins, and is what the unit test can assert without
+        // reaching for process-wide relay state.
+        std::env::set_var("AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS", "1234");
+        assert_eq!(
+            identity_probe_budget(),
+            std::time::Duration::from_millis(1234)
+        );
+        std::env::remove_var("AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS");
+        // Direct CDP default: generous enough that a healthy page never trips
+        // it, bounded enough that a wedged one still errors quickly.
+        assert!(identity_probe_budget() >= std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_reanchor_prefers_the_cached_node_when_it_still_matches() {
+        // A probe that merely ran out of budget must not push a still-correct
+        // ref onto a different element that happens to share the label.
+        assert_eq!(pick_reanchor_target(&[11, 22, 33], 22, Some(0)), Some(22));
+        assert_eq!(pick_reanchor_target(&[11, 22], 22, None), Some(22));
+    }
+
+    #[test]
+    fn test_reanchor_falls_back_to_the_refs_nth_match() {
+        // Cached node no longer carries the identity → take the ref's own nth,
+        // the same rule the snapshot used to number duplicates.
+        assert_eq!(pick_reanchor_target(&[11, 22, 33], 99, Some(1)), Some(22));
+        assert_eq!(pick_reanchor_target(&[11, 22, 33], 99, None), Some(11));
+        // Nothing carries that identity, or the nth is gone → refuse.
+        assert_eq!(pick_reanchor_target(&[], 99, None), None);
+        assert_eq!(pick_reanchor_target(&[11], 99, Some(3)), None);
+    }
+
+    #[test]
+    fn test_unconfirmed_ref_error_names_the_element_and_the_recovery() {
+        let err = unconfirmed_ref_error(
+            "e273",
+            "button",
+            "我的 agent",
+            "the accessibility probe timed out, so its identity could not be confirmed",
+        );
+        assert!(err.contains("e273"));
+        assert!(err.contains("我的 agent"));
+        assert!(err.contains("timed out"));
+        assert!(err.contains("fresh `snapshot`"));
     }
 
     #[test]

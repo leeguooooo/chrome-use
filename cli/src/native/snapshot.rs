@@ -649,7 +649,12 @@ async fn take_snapshot_at_depth(
             None
         };
 
-        let ref_id = ref_map.snapshot_ref(tree_nodes[*idx].backend_node_id, frame_id);
+        let ref_id = ref_map.snapshot_ref(
+            tree_nodes[*idx].backend_node_id,
+            frame_id,
+            &tree_nodes[*idx].role,
+            &tree_nodes[*idx].name,
+        );
 
         ref_map.add_with_frame(
             ref_id.clone(),

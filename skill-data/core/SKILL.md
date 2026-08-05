@@ -414,6 +414,23 @@ chrome-use solve-slider                # auto-solve a 网易易盾 slider-puzzle
 chrome-use solve-slider 5              # ...retry up to 5 times (refreshes the puzzle on a miss)
 ```
 
+**The `@ref` contract: a ref acts on the element it named, or it errors.** Every
+verb above re-checks the ref's role + name against the live accessibility tree
+before touching anything. If the page re-rendered, chrome-use re-anchors on that
+exact role + name, then on the element's stored fingerprint — and if neither
+lands confidently it **fails loudly** telling you to re-snapshot. It never
+"best-effort" clicks the node that used to be there: a React reconciler handing
+the same DOM node to a different component is common, and a silent mis-click
+there is how an agent opens the wrong menu (or submits the wrong form) while the
+CLI prints `Done`. So an error here is the guard working — re-snapshot and
+re-target rather than reaching for `AGENT_BROWSER_VERIFY_REF=0`.
+
+| Env var | Effect |
+|---|---|
+| `AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS` | Budget for the identity check (default 2s direct CDP, 5s over the extension relay). Raise it on very large pages if you see "identity could not be confirmed". |
+| `AGENT_BROWSER_ADAPTIVE_REF=0` | Disable fingerprint relocation (exact role+name only). |
+| `AGENT_BROWSER_VERIFY_REF=0` | Last resort — skips the check entirely and accepts that clicks may land on a re-rendered node. |
+
 **Slider-puzzle captchas (网易易盾 / yidun).** Unattended/headless logins can't
 dodge the login slider (no human, no pre-logged-in session), so `solve-slider`
 clears it: it fetches the captcha's own background + jigsaw slices by URL (no
