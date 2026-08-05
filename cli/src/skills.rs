@@ -106,12 +106,17 @@ fn embedded_skills_root() -> Option<PathBuf> {
 }
 
 /// Collect all skill directories to search, respecting the env var override.
-fn find_skills_dirs() -> Vec<PathBuf> {
+///
+/// Returns `(dirs, override_used)`. The flag matters because stubs are hidden by
+/// directory: an override the caller chose hides nothing, but an override
+/// pointing at a path that doesn't exist falls back to the package layout, where
+/// `skills/` must still be treated as the stub directory.
+fn find_skills_dirs() -> (Vec<PathBuf>, bool) {
     // Env var override: single directory, used as-is
     if let Ok(dir) = env::var("AGENT_BROWSER_SKILLS_DIR") {
         let p = PathBuf::from(dir);
         if p.is_dir() {
-            return vec![p];
+            return (vec![p], true);
         }
     }
 
@@ -123,20 +128,23 @@ fn find_skills_dirs() -> Vec<PathBuf> {
             .filter(|p| p.is_dir())
             .collect();
         if !dirs.is_empty() {
-            return dirs;
+            return (dirs, false);
         }
     }
 
     // Fallback: skill content compiled into the binary (single-binary install).
     if let Some(root) = embedded_skills_root() {
-        return SKILL_DIRS
-            .iter()
-            .map(|d| root.join(d))
-            .filter(|p| p.is_dir())
-            .collect();
+        return (
+            SKILL_DIRS
+                .iter()
+                .map(|d| root.join(d))
+                .filter(|p| p.is_dir())
+                .collect(),
+            false,
+        );
     }
 
-    vec![]
+    (vec![], false)
 }
 
 /// Parse YAML frontmatter from a SKILL.md file. Returns (name, description, hidden).
@@ -180,15 +188,16 @@ fn parse_frontmatter(content: &str) -> Option<(String, String, bool)> {
 }
 
 /// Discover all skills across the given directories.
-fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillInfo> {
+///
+/// `override_used` comes from [`find_skills_dirs`]: when the caller pointed
+/// AGENT_BROWSER_SKILLS_DIR at a real directory, nothing in it is hidden — they
+/// asked for it. Otherwise the stub directory hides its skills.
+fn discover_skills(dirs: &[PathBuf], override_used: bool) -> Vec<SkillInfo> {
     let mut skills = Vec::new();
 
     for skills_dir in dirs {
-        // Stubs are hidden by location. An explicit AGENT_BROWSER_SKILLS_DIR
-        // override points at one directory the user chose, so nothing there is
-        // hidden — they asked for it.
-        let is_stub_dir = skills_dir.file_name().is_some_and(|n| n == STUB_SKILL_DIR)
-            && env::var("AGENT_BROWSER_SKILLS_DIR").is_err();
+        let is_stub_dir =
+            !override_used && skills_dir.file_name().is_some_and(|n| n == STUB_SKILL_DIR);
         let entries = match fs::read_dir(skills_dir) {
             Ok(e) => e,
             Err(_) => continue,
@@ -288,8 +297,8 @@ fn collect_supplementary_files(skill_dir: &Path) -> Vec<(String, String)> {
     files
 }
 
-fn run_list(skills_dirs: &[PathBuf], json_mode: bool) {
-    let skills: Vec<SkillInfo> = discover_skills(skills_dirs)
+fn run_list(skills_dirs: &[PathBuf], override_used: bool, json_mode: bool) {
+    let skills: Vec<SkillInfo> = discover_skills(skills_dirs, override_used)
         .into_iter()
         .filter(|s| !s.hidden)
         .collect();
@@ -332,8 +341,15 @@ fn run_list(skills_dirs: &[PathBuf], json_mode: bool) {
     }
 }
 
-fn run_get(skills_dirs: &[PathBuf], names: &[String], get_all: bool, full: bool, json_mode: bool) {
-    let all_skills = discover_skills(skills_dirs);
+fn run_get(
+    skills_dirs: &[PathBuf],
+    override_used: bool,
+    names: &[String],
+    get_all: bool,
+    full: bool,
+    json_mode: bool,
+) {
+    let all_skills = discover_skills(skills_dirs, override_used);
 
     let targets: Vec<&SkillInfo> = if get_all {
         all_skills.iter().filter(|s| !s.hidden).collect()
@@ -442,10 +458,10 @@ fn run_get(skills_dirs: &[PathBuf], names: &[String], get_all: bool, full: bool,
     }
 }
 
-fn run_path(skills_dirs: &[PathBuf], name: Option<&str>, json_mode: bool) {
+fn run_path(skills_dirs: &[PathBuf], override_used: bool, name: Option<&str>, json_mode: bool) {
     match name {
         Some(name) => {
-            let all_skills = discover_skills(skills_dirs);
+            let all_skills = discover_skills(skills_dirs, override_used);
             match all_skills.iter().find(|s| s.name == name) {
                 Some(s) => {
                     let path = s.dir.to_string_lossy().to_string();
@@ -528,7 +544,7 @@ pub fn run_skills(args: &[String], json_mode: bool) {
         run_skill_install(project, json_mode);
     }
 
-    let skills_dirs = find_skills_dirs();
+    let (skills_dirs, skills_dirs_overridden) = find_skills_dirs();
     if skills_dirs.is_empty() {
         if json_mode {
             println!(
@@ -551,7 +567,7 @@ pub fn run_skills(args: &[String], json_mode: bool) {
     let subcommand = args.get(1).map(|s| s.as_str());
 
     match subcommand {
-        None | Some("list") => run_list(&skills_dirs, json_mode),
+        None | Some("list") => run_list(&skills_dirs, skills_dirs_overridden, json_mode),
         Some("get") => {
             let names: Vec<String> = args[2..]
                 .iter()
@@ -560,11 +576,18 @@ pub fn run_skills(args: &[String], json_mode: bool) {
                 .collect();
             let full = args[2..].iter().any(|a| a == "--full");
             let get_all = args[2..].iter().any(|a| a == "--all");
-            run_get(&skills_dirs, &names, get_all, full, json_mode);
+            run_get(
+                &skills_dirs,
+                skills_dirs_overridden,
+                &names,
+                get_all,
+                full,
+                json_mode,
+            );
         }
         Some("path") => {
             let name = args.get(2).map(|s| s.as_str());
-            run_path(&skills_dirs, name, json_mode);
+            run_path(&skills_dirs, skills_dirs_overridden, name, json_mode);
         }
         // `install` is dispatched early (above), before the skill-dirs guard.
         Some(unknown) => {
@@ -718,6 +741,33 @@ mod tests {
         assert!(!hidden);
     }
 
+    /// Stubs are hidden by living in `skills/`, not by a frontmatter key.
+    #[test]
+    fn test_stub_directory_hides_its_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stubs = tmp.path().join(STUB_SKILL_DIR);
+        let data = tmp.path().join("skill-data");
+        fs::create_dir_all(&stubs).unwrap();
+        fs::create_dir_all(&data).unwrap();
+        create_test_skill(&stubs, "chrome-use", "Discovery stub.");
+        create_test_skill(&data, "core", "The real guide.");
+
+        let skills = discover_skills(&[stubs.clone(), data.clone()], false);
+        let hidden: Vec<_> = skills
+            .iter()
+            .filter(|s| s.hidden)
+            .map(|s| &s.name)
+            .collect();
+        assert_eq!(hidden, vec!["chrome-use"]);
+
+        // A directory the caller pointed AGENT_BROWSER_SKILLS_DIR at hides
+        // nothing — but a *failed* override must not turn hiding off for the
+        // package layout it fell back to, which is why the flag is threaded
+        // through instead of re-reading the env var here.
+        let skills = discover_skills(&[stubs, data], true);
+        assert!(skills.iter().all(|s| !s.hidden));
+    }
+
     /// The published stub is read by other harnesses too, and pi (plus anything
     /// else following the Agent Skills spec) reads `hidden:` as
     /// "never load this skill" — which is the opposite of what a discovery stub
@@ -780,7 +830,7 @@ mod tests {
         fs::write(tmp.path().join("not-a-skill").join("README.md"), "hi").unwrap();
 
         let dirs = vec![tmp.path().to_path_buf()];
-        let skills = discover_skills(&dirs);
+        let skills = discover_skills(&dirs, false);
         assert_eq!(skills.len(), 2);
         assert_eq!(skills[0].name, "alpha");
         assert_eq!(skills[1].name, "beta");
@@ -795,7 +845,7 @@ mod tests {
         create_test_skill(tmp2.path(), "gamma", "Gamma skill");
 
         let dirs = vec![tmp1.path().to_path_buf(), tmp2.path().to_path_buf()];
-        let skills = discover_skills(&dirs);
+        let skills = discover_skills(&dirs, false);
         assert_eq!(skills.len(), 3);
         assert_eq!(skills[0].name, "alpha");
         assert_eq!(skills[1].name, "beta");

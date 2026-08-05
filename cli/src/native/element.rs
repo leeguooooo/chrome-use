@@ -411,6 +411,10 @@ enum RefCheck {
 /// budget is far too tight there. That mattered because a timeout used to mean
 /// "skip the check and click the cached node anyway" — precisely the silent
 /// mis-target the guard exists to prevent (issue #162).
+/// Recovery reads the whole AX tree, so it gets a multiple of the probe budget
+/// rather than the same one — but still a bound, not the 30s CDP default.
+const RECOVERY_BUDGET_FACTOR: u32 = 4;
+
 fn identity_probe_budget() -> std::time::Duration {
     if let Some(ms) = std::env::var("AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS")
         .ok()
@@ -469,7 +473,16 @@ fn pick_reanchor_target(matches: &[i64], cached: i64, nth: Option<usize>) -> Opt
     if matches.contains(&cached) {
         return Some(cached);
     }
-    matches.get(nth.unwrap_or(0)).copied()
+    match nth {
+        // The snapshot numbered this identity because it was duplicated then;
+        // the same ordinal is the ref's own disambiguator.
+        Some(n) => matches.get(n).copied(),
+        // No ordinal means the snapshot saw exactly one node with this
+        // identity. If several carry it now, any pick is a guess — hand it to
+        // fingerprint relocation, or to the error.
+        None if matches.len() == 1 => matches.first().copied(),
+        None => None,
+    }
 }
 
 /// Decide which backend node a `@ref` may act on, given the id cached at
@@ -506,12 +519,23 @@ async fn confirmed_backend_node_id(
         return Ok(backend_node_id);
     };
 
+    // Both recovery steps read the whole accessibility tree, which is heavier
+    // than the probe that just timed out — and a page slow enough to exhaust
+    // the probe budget is exactly the page where they stall. Bound them too,
+    // generously (they legitimately take longer), and treat expiry as "could
+    // not recover" so a single ref action can't sit on the default 30s CDP
+    // timeout twice over.
+    let recovery_budget = identity_probe_budget() * RECOVERY_BUDGET_FACTOR;
+
     // Re-anchor on the exact role + name the ref was published with. The full
     // tree also re-confirms the cached node itself, so a probe that merely ran
     // out of budget on a busy page doesn't push a still-correct ref onto a
     // different element.
-    if let Some(id) =
-        reanchor_ref(client, session_id, entry, backend_node_id, iframe_sessions).await
+    if let Ok(Some(id)) = tokio::time::timeout(
+        recovery_budget,
+        reanchor_ref(client, session_id, entry, backend_node_id, iframe_sessions),
+    )
+    .await
     {
         if id != backend_node_id {
             eprintln!(
@@ -522,9 +546,14 @@ async fn confirmed_backend_node_id(
         return Ok(id);
     }
 
-    match relocate_stale_ref(client, ref_id, entry, session_id, iframe_sessions).await {
-        Some(id) => Ok(id),
-        None => Err(err),
+    match tokio::time::timeout(
+        recovery_budget,
+        relocate_stale_ref(client, ref_id, entry, session_id, iframe_sessions),
+    )
+    .await
+    {
+        Ok(Some(id)) => Ok(id),
+        _ => Err(err),
     }
 }
 
@@ -2365,10 +2394,18 @@ mod tests {
         // Cached node no longer carries the identity → take the ref's own nth,
         // the same rule the snapshot used to number duplicates.
         assert_eq!(pick_reanchor_target(&[11, 22, 33], 99, Some(1)), Some(22));
-        assert_eq!(pick_reanchor_target(&[11, 22, 33], 99, None), Some(11));
+        assert_eq!(pick_reanchor_target(&[11], 99, None), Some(11));
         // Nothing carries that identity, or the nth is gone → refuse.
         assert_eq!(pick_reanchor_target(&[], 99, None), None);
         assert_eq!(pick_reanchor_target(&[11], 99, Some(3)), None);
+    }
+
+    #[test]
+    fn test_reanchor_refuses_to_guess_between_new_duplicates() {
+        // No nth means the snapshot saw exactly one node with this identity.
+        // Several carry it now, so picking the first is a guess — exactly the
+        // silent mis-target this whole path exists to prevent.
+        assert_eq!(pick_reanchor_target(&[11, 22], 99, None), None);
     }
 
     #[test]
