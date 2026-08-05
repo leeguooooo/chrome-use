@@ -21,20 +21,30 @@ struct SkillInfo {
     /// but can still be fetched by name via `skills get <name>`. Used for
     /// bootstrap stubs that exist for external tooling (e.g. `npx skills add`)
     /// but aren't the intended entry point for agents already inside the CLI.
+    ///
+    /// Derived from which directory the skill was discovered in, NOT from
+    /// frontmatter: a published stub must not carry a `hidden:` key, because
+    /// harnesses that read the file (pi, and anything else following the Agent
+    /// Skills spec) treat `hidden` as "never load this skill" — which made
+    /// chrome-use invisible to the agents it exists for (issue #165).
     hidden: bool,
 }
 
 /// Skill content is split across two directories:
 ///
-/// - `skills/` — discovery stubs (picked up by `npx skills add`). Carry
-///   `hidden: true` so they don't show up in `skills list` or `skills get
-///   --all` inside the CLI, since they exist only to redirect external
-///   agents to `skills get core`.
+/// - `skills/` — discovery stubs (picked up by `npx skills add`). Hidden from
+///   `skills list` and `skills get --all` inside the CLI by virtue of living
+///   here, since they exist only to redirect external agents to
+///   `skills get core`.
 /// - `skill-data/` — runtime skill content served by the CLI (`core`,
 ///   `electron`, `slack`, `dogfood`, etc.).
 ///
 /// Both are shipped in the npm package and searched by `discover_skills`.
 const SKILL_DIRS: &[&str] = &["skills", "skill-data"];
+
+/// The stub directory from [`SKILL_DIRS`]. Skills found here are hidden inside
+/// the CLI (see [`SkillInfo::hidden`]).
+const STUB_SKILL_DIR: &str = "skills";
 
 /// Locate the package root that contains the skill directories.
 ///
@@ -174,6 +184,11 @@ fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillInfo> {
     let mut skills = Vec::new();
 
     for skills_dir in dirs {
+        // Stubs are hidden by location. An explicit AGENT_BROWSER_SKILLS_DIR
+        // override points at one directory the user chose, so nothing there is
+        // hidden — they asked for it.
+        let is_stub_dir = skills_dir.file_name().is_some_and(|n| n == STUB_SKILL_DIR)
+            && env::var("AGENT_BROWSER_SKILLS_DIR").is_err();
         let entries = match fs::read_dir(skills_dir) {
             Ok(e) => e,
             Err(_) => continue,
@@ -197,7 +212,7 @@ fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillInfo> {
                     name,
                     description,
                     dir: path,
-                    hidden,
+                    hidden: hidden || is_stub_dir,
                 });
             }
         }
@@ -701,6 +716,45 @@ mod tests {
         let content = "---\nname: visible\ndescription: Visible.\nhidden: false\n---\n";
         let (_, _, hidden) = parse_frontmatter(content).unwrap();
         assert!(!hidden);
+    }
+
+    /// The published stub is read by other harnesses too, and pi (plus anything
+    /// else following the Agent Skills spec) reads `hidden:` as
+    /// "never load this skill" — which is the opposite of what a discovery stub
+    /// wants (issue #165). Inside the CLI it is hidden by its directory instead.
+    #[test]
+    fn published_stub_carries_no_hidden_key() {
+        let stub = EMBEDDED_SKILLS
+            .get_file("chrome-use/SKILL.md")
+            .expect("chrome-use stub is embedded");
+        let content = stub.contents_utf8().expect("stub is utf-8");
+        let frontmatter = content
+            .trim_start()
+            .strip_prefix("---")
+            .and_then(|rest| rest.split_once("\n---"))
+            .map(|(fm, _)| fm)
+            .expect("stub has frontmatter");
+        assert!(
+            !frontmatter.lines().any(|l| l.starts_with("hidden:")),
+            "stub frontmatter must not carry `hidden:`\n{frontmatter}"
+        );
+    }
+
+    /// pi rejects a description over 1024 characters, and a rejected skill is an
+    /// undiscoverable skill (issue #164). Guard the budget so a future edit to
+    /// the trigger list can't quietly cross it again.
+    #[test]
+    fn published_stub_description_fits_the_pi_budget() {
+        let stub = EMBEDDED_SKILLS
+            .get_file("chrome-use/SKILL.md")
+            .expect("chrome-use stub is embedded");
+        let (_, desc, _) = parse_frontmatter(stub.contents_utf8().expect("stub is utf-8"))
+            .expect("stub has frontmatter");
+        assert!(
+            desc.chars().count() <= 1024,
+            "description is {} chars, pi's limit is 1024",
+            desc.chars().count()
+        );
     }
 
     #[test]
