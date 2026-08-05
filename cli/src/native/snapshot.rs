@@ -87,6 +87,13 @@ pub struct SnapshotOptions {
 struct TreeNode {
     role: String,
     name: String,
+    /// The raw accessible name from the AX tree, before any of the display-only
+    /// fallback passes below rewrite `name` (cursor text, control labels,
+    /// StaticText aggregation). Ref identity has to compare against what the
+    /// live AX tree will report at interaction time, and it has to be the same
+    /// value in `snapshot` and `snapshot -i` — otherwise a synthesized label
+    /// churns the ref between the two modes or fails its own identity check.
+    ax_name: String,
     level: Option<i64>,
     checked: Option<String>,
     expanded: Option<bool>,
@@ -114,6 +121,7 @@ impl TreeNode {
         Self {
             role: String::new(),
             name: String::new(),
+            ax_name: String::new(),
             level: None,
             checked: None,
             expanded: None,
@@ -136,6 +144,7 @@ impl TreeNode {
     fn clear(&mut self) {
         self.role = String::new();
         self.name = String::new();
+        self.ax_name = String::new();
         self.level = None;
         self.checked = None;
         self.expanded = None;
@@ -649,7 +658,16 @@ async fn take_snapshot_at_depth(
             None
         };
 
-        let ref_id = ref_map.snapshot_ref(tree_nodes[*idx].backend_node_id, frame_id);
+        // Identity for ref reuse is the RAW AX name, not the rendered one: the
+        // fallback label passes run differently for `snapshot` and
+        // `snapshot -i`, so keying on the display name would hand the same DOM
+        // node a different ref depending on which command asked (issue #155).
+        let ref_id = ref_map.snapshot_ref(
+            tree_nodes[*idx].backend_node_id,
+            frame_id,
+            &tree_nodes[*idx].role,
+            &tree_nodes[*idx].ax_name,
+        );
 
         ref_map.add_with_frame(
             ref_id.clone(),
@@ -1828,6 +1846,7 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
 
         tree_nodes.push(TreeNode {
             role,
+            ax_name: name.clone(),
             name,
             level,
             checked,

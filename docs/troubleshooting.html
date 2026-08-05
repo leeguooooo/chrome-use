@@ -112,9 +112,12 @@
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 小贴士</div>
         @ref 会跨重渲染<span class="mark">自愈</span>——它记录了 role + 可访问名 + 祖先路径的指纹，
-        节点消失时会自动重定位到当前页面上匹配的元素。所以只在<strong>发生了导航</strong>、
+        节点消失时会重新锚定到当前页面上仍带着这个身份的元素。所以只在<strong>发生了导航</strong>、
         或标签/结构<strong>真的变了</strong>时才需要重新快照；一次普通的 React/Vue 列表重渲染不用重来。
-        如果元素真的没了，它会大声报错而不是点错节点。
+        自愈以可访问名为界：轻微改名（<code>Submit</code> → <code>Submit now</code>）仍会重定位，
+        但标签已经完全变成另一回事的控件<strong>不是</strong>你要的那个元素，命令会直接失败。
+        每次按 ref 动作前都会先校验身份（直连 CDP 2 秒、扩展 relay 5 秒；页面特别大时用
+        <code>AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS</code> 调大），无法确认的 ref 绝不会被动作。
       </div>
 
       <h2>元素在 DOM 里，却不在快照里</h2>

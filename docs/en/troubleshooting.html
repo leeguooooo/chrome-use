@@ -117,10 +117,14 @@
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Tip</div>
         An @ref <span class="mark">self-heals</span> across re-renders—it records a fingerprint of role + accessible name +
-        ancestor path, and when the node disappears it automatically relocates to the matching element on the current page.
+        ancestor path, and when the node disappears it re-anchors on the element that still carries that identity.
         So you only need to re-snapshot when a <strong>navigation happened</strong>, or the label/structure
         <strong>actually changed</strong>; an ordinary React/Vue list re-render doesn't require a redo.
-        If the element is truly gone, it fails loudly rather than clicking the wrong node.
+        Healing is deliberately bounded by the accessible name: a recognisable rename
+        (<code>Submit</code> → <code>Submit now</code>) still relocates, but a control whose label now reads something
+        else entirely is <strong>not</strong> the element you asked for, so the command fails instead. Every ref action
+        re-checks identity first (budget: 2s on direct CDP, 5s over the extension relay—raise it with
+        <code>AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS</code> on very large pages), and an unconfirmed ref is never acted on.
       </div>
 
       <h2>The element is in the DOM but not in the snapshot</h2>

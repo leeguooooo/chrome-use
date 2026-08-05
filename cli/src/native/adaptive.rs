@@ -17,6 +17,19 @@ use std::collections::BTreeMap;
 pub const ADAPTIVE_THRESHOLD: f64 = 0.70;
 /// Minimum gap between the best and second-best candidate to avoid ambiguity.
 pub const ADAPTIVE_MARGIN: f64 = 0.15;
+/// Minimum accessible-name similarity for a candidate to be considered at all.
+///
+/// The structural components (role + attrs + ancestors + parent/sibling) are
+/// worth 0.60 on their own, so two plain `<button>`s under the same parent clear
+/// [`ADAPTIVE_THRESHOLD`] on shape alone no matter how unrelated their labels
+/// are — that is how a stale ref for `button "我的 agent"` relocated onto a
+/// message overflow button at exactly 0.70 (issue #162). The name is the
+/// dominant identity signal, so gate on it directly instead of letting the
+/// weighted total launder a total mismatch. A renamed control still heals while
+/// the label stays recognisable ("Submit" → "Submit now"); a wholesale
+/// relabelling is refused, which is the correct answer — the agent asked for
+/// the control that said X.
+pub const ADAPTIVE_MIN_NAME: f64 = 0.50;
 
 /// A structural/semantic fingerprint of an element, captured at snapshot time so
 /// a moved element can be re-identified after the page mutates.
@@ -202,6 +215,9 @@ pub fn score(base: &ElementFingerprint, cand: &ElementFingerprint) -> f64 {
 pub enum RejectReason {
     /// No candidates to score.
     NoCandidates,
+    /// No candidate's accessible name was close enough to the baseline's
+    /// (below [`ADAPTIVE_MIN_NAME`]).
+    NameDrift { best_name: f64 },
     /// Best score below [`ADAPTIVE_THRESHOLD`].
     LowScore { best: f64 },
     /// Best score too close to the runner-up (below [`ADAPTIVE_MARGIN`]).
@@ -230,7 +246,20 @@ pub fn pick_best(
     if candidates.is_empty() {
         return Err(RejectReason::NoCandidates);
     }
-    let mut scored: Vec<(i64, f64)> = candidates
+    // Gate on the accessible name before scoring: see ADAPTIVE_MIN_NAME.
+    let mut best_name = 0.0f64;
+    let plausible: Vec<&(i64, ElementFingerprint)> = candidates
+        .iter()
+        .filter(|(_, fp)| {
+            let name = string_similarity(&base.text, &fp.text);
+            best_name = best_name.max(name);
+            name >= ADAPTIVE_MIN_NAME
+        })
+        .collect();
+    if plausible.is_empty() {
+        return Err(RejectReason::NameDrift { best_name });
+    }
+    let mut scored: Vec<(i64, f64)> = plausible
         .iter()
         .map(|(id, fp)| (*id, score(base, fp)))
         .collect();
@@ -355,10 +384,59 @@ mod tests {
     }
 
     #[test]
-    fn pick_best_rejects_low_score() {
+    fn pick_best_rejects_a_structurally_identical_button_with_another_label() {
+        // Issue #162: two sibling <button>s share every structural signal, so
+        // the weighted total lands right on the threshold even though the
+        // labels have nothing in common. The name gate is what refuses it.
+        let base = fp("button", "我的 agent", &[]);
+        let impostor = fp("button", "More actions", &[]);
+        assert!(
+            score(&base, &impostor) >= ADAPTIVE_THRESHOLD,
+            "precondition: structure alone clears the total threshold"
+        );
+        let err =
+            pick_best(&base, &[(8, impostor)], ADAPTIVE_THRESHOLD, ADAPTIVE_MARGIN).unwrap_err();
+        assert!(matches!(err, RejectReason::NameDrift { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn pick_best_still_heals_a_lightly_renamed_control() {
+        let base = fp("button", "Submit", &[]);
+        let renamed = fp("button", "Submit now", &[]);
+        let unrelated = fp("link", "Privacy policy", &[]);
+        let out = pick_best(
+            &base,
+            &[(1, unrelated), (2, renamed)],
+            ADAPTIVE_THRESHOLD,
+            ADAPTIVE_MARGIN,
+        )
+        .expect("a recognisable rename should still relocate");
+        assert_eq!(out.backend_node_id, 2);
+    }
+
+    #[test]
+    fn pick_best_rejects_unrelated_junk() {
         let base = fp("button", "Submit order", &[("id", "checkout")]);
         let junk = fp("span", "unrelated footer text", &[("class", "muted")]);
+        // Rejected on the name gate before the total is even considered.
         let err = pick_best(&base, &[(1, junk)], ADAPTIVE_THRESHOLD, ADAPTIVE_MARGIN).unwrap_err();
+        assert!(matches!(err, RejectReason::NameDrift { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn pick_best_rejects_low_score() {
+        // Same label, but a different role in a different part of the tree:
+        // passes the name gate, fails the weighted total.
+        let mut base = fp("button", "Submit order", &[("id", "checkout")]);
+        base.ancestors = vec!["form".into(), "body".into()];
+        let elsewhere = fp("link", "Submit order", &[]);
+        let err = pick_best(
+            &base,
+            &[(1, elsewhere)],
+            ADAPTIVE_THRESHOLD,
+            ADAPTIVE_MARGIN,
+        )
+        .unwrap_err();
         assert!(matches!(err, RejectReason::LowScore { .. }), "got {err:?}");
     }
 
