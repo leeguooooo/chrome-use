@@ -1893,6 +1893,13 @@ Starts an HTTP(S) download through ab-connect. When path is provided, the
 completed file is moved there. Without path, Chrome keeps it in the profile's
 normal download directory. Requires ab-connect 0.5.13 or newer.
 
+blob: URLs take a different route. Chrome's download machinery can't reach a
+blob (it belongs to the document that created it), so the bytes are read from
+inside the page and written straight to disk — byte-exact, metadata intact, no
+ab-connect needed. A destination path is required, and the blob must still be
+alive in a loaded page. Blobs registered by an iframe are found automatically.
+Max 32 MB, since the bytes travel back through a CDP message.
+
 Alias: download-start
 
 Global Options:
@@ -1902,6 +1909,7 @@ Global Options:
 Examples:
   chrome-use download-url "https://example.com/report.pdf"
   chrome-use download-url "https://example.com/video.mp4" ./video.mp4
+  chrome-use download-url "blob:https://example.com/9f2c-…" ./generated.png
 "##
         }
         "downloads" => {
@@ -3807,7 +3815,9 @@ Core Commands:
   drag <src> <dst>           Drag and drop
   upload <sel> <files...>    Upload files
   download <sel> <path>      Download file from an element
-  download-url <url> [path]  Start a URL download through ab-connect
+  download-url <url> [path]  Start a URL download through ab-connect. A blob:
+                             URL is read from inside the page instead (byte-exact,
+                             no re-encode) — path required
   downloads [--limit N]      List downloads (--clear clears history)
   scroll <dir> [px]          Scroll (up/down/left/right)
   scrollintoview <sel>       Scroll element into view

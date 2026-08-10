@@ -2935,6 +2935,223 @@ async fn e2e_press_selector_pins_the_target_and_unfocused_enter_warns() {
     assert_success(&resp);
 }
 
+/// Issue #169: `download-url` rejected `blob:` outright, so an asset the page had
+/// already rendered could not be retrieved as bytes at all. The bytes must come
+/// back **byte-exact** — the canvas/`toDataURL` workaround re-encodes and drops
+/// metadata (for Google-generated images, the C2PA provenance manifest).
+#[tokio::test]
+#[ignore]
+async fn e2e_download_url_reads_blob_bytes_from_the_page() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // A blob whose bytes are a known, non-image byte sequence — including a 0x00
+    // and a 0xFF, so any re-encode or text round-trip would corrupt it.
+    let page = concat!(
+        "data:text/html,<html><body><script>",
+        "window.__bytes = new Uint8Array([0,1,2,253,254,255,65,66,67]);",
+        "window.__url = URL.createObjectURL(",
+        "new Blob([window.__bytes], {type:'application/octet-stream'}));",
+        "</script></body></html>"
+    );
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": page }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "evaluate", "script": "window.__url" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let blob_url = get_data(&resp)["result"]
+        .as_str()
+        .expect("blob url")
+        .to_string();
+    assert!(blob_url.starts_with("blob:"), "got {blob_url}");
+
+    let dir = std::env::temp_dir().join("chrome-use-e2e-blob");
+    let _ = std::fs::create_dir_all(&dir);
+    let dest = dir.join("blob-download.bin");
+    let _ = std::fs::remove_file(&dest);
+
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "download_url",
+            "url": blob_url,
+            "path": dest.to_string_lossy()
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["bytes"], 9);
+    assert_eq!(data["contentType"], "application/octet-stream");
+
+    let written = std::fs::read(&dest).expect("downloaded file");
+    assert_eq!(
+        written,
+        vec![0u8, 1, 2, 253, 254, 255, 65, 66, 67],
+        "blob download must be byte-exact, not re-encoded"
+    );
+    let _ = std::fs::remove_file(&dest);
+
+    // A destination is required: the bytes are read from the page, so there is no
+    // browser download to inherit a filename from.
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "download_url", "url": blob_url }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false);
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("explicit destination"),
+        "{resp}"
+    );
+
+    // A revoked blob must fail loudly, not write an empty file.
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "URL.revokeObjectURL(window.__url), 1" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "7",
+            "action": "download_url",
+            "url": blob_url,
+            "path": dest.to_string_lossy()
+        }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "{resp}");
+    assert!(
+        !dest.exists(),
+        "a failed blob download must not leave a file"
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Issue #169, the harder half: a blob registered by a cross-origin frame is not
+/// fetchable from the top frame at all (`TypeError: Failed to fetch` — the very
+/// symptom the report hit). The download has to find the frame that owns it.
+///
+/// Nested `data:` documents are opaque origins, so the iframe here really is
+/// cross-origin to its parent — no external page needed to reproduce it.
+#[tokio::test]
+#[ignore]
+async fn e2e_download_url_finds_a_blob_registered_by_another_frame() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // The iframe publishes its blob URL through the DOM: an isolated world can
+    // read the document but not the frame's `window` globals.
+    let inner = "data:text/html,<body><script>document.body.textContent=\
+                 URL.createObjectURL(new Blob([new Uint8Array([9,8,7])]))</script></body>";
+    let page = format!(
+        "data:text/html,<html><body><iframe src=\"{}\"></iframe></body></html>",
+        inner.replace('"', "&quot;")
+    );
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": page }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // Read the blob URL out of the frame that made it.
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "evaluate",
+            "script": "document.body.textContent.trim()",
+            "frame": "1"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let blob_url = get_data(&resp)["result"]
+        .as_str()
+        .expect("blob url")
+        .to_string();
+    assert!(blob_url.starts_with("blob:"), "got {blob_url}");
+
+    // The top frame genuinely cannot reach it — this is the reported failure.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": format!("fetch({}).then(() => 'ok').catch(() => 'fail')",
+                              serde_json::to_string(&blob_url).unwrap())
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        "fail",
+        "precondition: the top frame must not be able to fetch this blob"
+    );
+
+    let dir = std::env::temp_dir().join("chrome-use-e2e-blob");
+    let _ = std::fs::create_dir_all(&dir);
+    let dest = dir.join("iframe-blob.bin");
+    let _ = std::fs::remove_file(&dest);
+
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "download_url",
+            "url": blob_url,
+            "path": dest.to_string_lossy()
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["bytes"], 3);
+    assert!(
+        data["frame"].as_str().unwrap_or_default().contains("data:"),
+        "the response should name the frame the bytes came from: {data}"
+    );
+    assert_eq!(
+        std::fs::read(&dest).expect("downloaded file"),
+        vec![9u8, 8, 7]
+    );
+    let _ = std::fs::remove_file(&dest);
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 // ---------------------------------------------------------------------------
 // Raw mouse regressions
 // ---------------------------------------------------------------------------
