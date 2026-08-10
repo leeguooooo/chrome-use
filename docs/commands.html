@@ -139,7 +139,8 @@
 <span class="du-prompt">$</span> chrome-use focus @e1           <span class="du-cmt"># 聚焦元素</span>
 <span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># 清空后输入</span>
 <span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># 直接输入（不清空）</span>
-<span class="du-prompt">$</span> chrome-use press Enter         <span class="du-cmt"># 按键（别名：key）</span>
+<span class="du-prompt">$</span> chrome-use press Enter         <span class="du-cmt"># 在当前焦点按键（别名：key），输出报告落点</span>
+<span class="du-prompt">$</span> chrome-use press Enter --selector @e2  <span class="du-cmt"># 先聚焦目标再按（别名：--on）</span>
 <span class="du-prompt">$</span> chrome-use press Control+a     <span class="du-cmt"># 组合键</span>
 <span class="du-prompt">$</span> chrome-use keydown Shift       <span class="du-cmt"># 按住键</span>
 <span class="du-prompt">$</span> chrome-use keyup Shift         <span class="du-cmt"># 释放键</span>

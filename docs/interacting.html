@@ -139,7 +139,10 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">press / keydown / keyup</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use press Enter                 <span class="du-cmt"># 在当前焦点按一个键</span>
+<pre><code><span class="du-prompt">$</span> chrome-use press Enter                 <span class="du-cmt"># 在当前焦点按一个键，输出会报告落点</span>
+                                       <span class="du-cmt"># ✓ Pressed Enter → textarea[name="q"]</span>
+<span class="du-prompt">$</span> chrome-use press Enter --selector @e2  <span class="du-cmt"># 先聚焦目标再按（别名 --on）——每次调用</span>
+                                       <span class="du-cmt"># 都是独立进程，别假设焦点还在原处</span>
 <span class="du-prompt">$</span> chrome-use press Control+a             <span class="du-cmt"># 组合键</span>
 <span class="du-prompt">$</span> chrome-use keydown d                   <span class="du-cmt"># 按住某键不放（不自动抬起）</span>
 <span class="du-prompt">$</span> chrome-use keyup d                     <span class="du-cmt"># 抬起——成对用来「按住移动」</span>

@@ -380,7 +380,12 @@ chrome-use type @e6 "ChatGPT" --enter  # type (real keystrokes, implies --key-ev
                                           # confirmed (e.g. juejin 「添加标签」). If you'd rather
                                           # pick from the list, type --key-events first, then
                                           # snapshot -i and click the candidate.
-chrome-use press Enter                 # press a key at current focus (down+up)
+chrome-use press Enter                 # press a key at current focus (down+up).
+                                          # The output names where it landed
+                                          # ("Pressed Enter → textarea[name=q]").
+chrome-use press Enter --selector @e2  # focus the target first (alias --on) —
+                                          # each CLI call is its own process, so
+                                          # don't assume focus stayed put
 chrome-use press Control+a             # key combination
 chrome-use keydown d                   # HOLD a key down (no auto-release)
 chrome-use keyup d                     # release it — pair them to hold-to-move

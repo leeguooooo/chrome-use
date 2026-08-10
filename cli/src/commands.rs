@@ -894,25 +894,64 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
         // === Keyboard ===
         "press" | "key" => {
-            let key = rest.iter().find(|a| !a.starts_with("--")).ok_or_else(|| {
-                ParseError::MissingArguments {
-                    context: "press".to_string(),
-                    usage: "press <key> [--hold <ms>]",
+            // Scan positionally so a flag's VALUE is never mistaken for the key
+            // (`press --selector "textarea[name=q]" Enter` must press Enter, not
+            // the selector).
+            let mut key: Option<&str> = None;
+            let mut hold: Option<u64> = None;
+            let mut selector: Option<&str> = None;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i] {
+                    // `--hold <ms>`: hold the key down for <ms> then release, timed
+                    // inside the daemon (one round-trip, no shell-sleep jitter) —
+                    // for games and hold-to-charge where keydown+sleep+keyup over 3
+                    // round-trips is too imprecise.
+                    "--hold" => {
+                        hold = Some(rest.get(i + 1).and_then(|s| s.parse::<u64>().ok()).ok_or(
+                            ParseError::MissingArguments {
+                                context: "press --hold".to_string(),
+                                usage: "press <key> --hold <ms>",
+                            },
+                        )?);
+                        i += 2;
+                    }
+                    // `--selector <css|@ref>`: focus the target before the key, so
+                    // the press can't land on whatever the page left focused (#167).
+                    "--selector" | "--on" => {
+                        // A following flag means the value was omitted. Storing
+                        // it would fail later as "element --hold not found",
+                        // which reads like a page problem, not a typo.
+                        selector = Some(
+                            rest.get(i + 1)
+                                .copied()
+                                .filter(|v| !v.starts_with("--"))
+                                .ok_or(ParseError::MissingArguments {
+                                    context: "press --selector".to_string(),
+                                    usage: "press <key> --selector <css|@ref>",
+                                })?,
+                        );
+                        i += 2;
+                    }
+                    arg if arg.starts_with("--") => i += 1,
+                    arg => {
+                        if key.is_none() {
+                            key = Some(arg);
+                        }
+                        i += 1;
+                    }
                 }
+            }
+            let key = key.ok_or_else(|| ParseError::MissingArguments {
+                context: "press".to_string(),
+                usage: "press <key> [--selector <css|@ref>] [--hold <ms>]",
             })?;
             let mut c = json!({ "id": id, "action": "press", "key": key });
-            // `--hold <ms>`: hold the key down for <ms> then release, timed inside
-            // the daemon (one round-trip, no shell-sleep jitter) — for games and
-            // hold-to-charge where keydown+sleep+keyup over 3 round-trips is too
-            // imprecise.
-            if let Some(i) = rest.iter().position(|a| *a == "--hold") {
-                let ms = rest.get(i + 1).and_then(|s| s.parse::<u64>().ok()).ok_or(
-                    ParseError::MissingArguments {
-                        context: "press --hold".to_string(),
-                        usage: "press <key> --hold <ms>",
-                    },
-                )?;
+            if let Some(ms) = hold {
                 c["hold"] = json!(ms);
+            }
+            if let Some(sel) = selector {
+                c["selector"] = json!(sel);
             }
             Ok(c)
         }
@@ -5216,6 +5255,37 @@ mod tests {
         // Missing/invalid duration is an error, not a silent no-hold.
         assert!(parse_command(&args("press d --hold"), &default_flags()).is_err());
         assert!(parse_command(&args("press d --hold abc"), &default_flags()).is_err());
+    }
+
+    #[test]
+    fn test_press_selector_focuses_a_target() {
+        let cmd = parse_command(
+            &args("press Enter --selector textarea[name=q]"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["key"], "Enter");
+        assert_eq!(cmd["selector"], "textarea[name=q]");
+
+        // --on is the shorthand alias.
+        let aliased = parse_command(&args("press Enter --on @e12"), &default_flags()).unwrap();
+        assert_eq!(aliased["selector"], "@e12");
+
+        // A flag's value must never be mistaken for the key, whatever the order.
+        let leading = parse_command(
+            &args("press --selector textarea[name=q] Enter"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(leading["key"], "Enter");
+        assert_eq!(leading["selector"], "textarea[name=q]");
+
+        // Missing selector value is an error, not a silent no-focus press —
+        // including when the next token is another flag.
+        assert!(parse_command(&args("press Enter --selector"), &default_flags()).is_err());
+        assert!(
+            parse_command(&args("press Enter --selector --hold 100"), &default_flags()).is_err()
+        );
     }
 
     #[test]
