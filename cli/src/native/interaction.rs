@@ -695,10 +695,16 @@ pub async fn fill(
             // while press still reported success (#167). Only restore when the
             // blur didn't hand focus to something else: a page that
             // deliberately advances focus on blur keeps its own target.
+            // Resolve the DEEPEST active element from the document, not from
+            // el's own root: a blur handler that moves focus into a *different*
+            // shadow root leaves el's root empty, and restoring off that would
+            // steal the focus the page just placed.
             try {{
                 const doc = el.ownerDocument;
-                const root = (el.getRootNode && el.getRootNode()) || doc;
-                const ae = root && root.activeElement;
+                let ae = doc && doc.activeElement;
+                while (ae && ae.shadowRoot && ae.shadowRoot.activeElement) {{
+                    ae = ae.shadowRoot.activeElement;
+                }}
                 if (!ae || ae === doc.body || ae === doc.documentElement) {{
                     el.focus({{ preventScroll: true }});
                 }}
@@ -1641,9 +1647,28 @@ pub async fn dispatch_single_key(
     key: &str,
     event_type: &str,
 ) -> Result<(), String> {
+    dispatch_single_key_with_modifiers(client, session_id, key, event_type, None).await
+}
+
+/// [`dispatch_single_key`] carrying a CDP modifier bitmask (1 = Alt, 2 = Control,
+/// 4 = Meta, 8 = Shift).
+///
+/// `press <chord> --hold` used to drop the chord's modifiers, so
+/// `press Control+a --hold 500` held a plain `a` while still reporting the chord
+/// back as pressed.
+pub async fn dispatch_single_key_with_modifiers(
+    client: &CdpClient,
+    session_id: &str,
+    key: &str,
+    event_type: &str,
+    modifiers: Option<i32>,
+) -> Result<(), String> {
     let (key_name, code, key_code) = named_key_info(key);
-    // Printable text is only meaningful on key-down; key-up never inserts.
-    let text = if event_type == "keyDown" {
+    // Printable text is only meaningful on key-down; key-up never inserts. A
+    // Control/Meta chord is a command (Ctrl+A = select-all), not text input, so
+    // it carries no text either — same rule as `press_key_with_modifiers`.
+    let has_command_modifier = modifiers.is_some_and(|m| m & (2 | 4) != 0);
+    let text = if event_type == "keyDown" && !has_command_modifier {
         key_text(&key_name)
     } else {
         None
@@ -1659,7 +1684,7 @@ pub async fn dispatch_single_key(
                 unmodified_text: text,
                 windows_virtual_key_code: Some(key_code),
                 native_virtual_key_code: Some(key_code),
-                modifiers: None,
+                modifiers,
             },
             Some(session_id),
         )

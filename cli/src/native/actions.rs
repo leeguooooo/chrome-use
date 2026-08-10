@@ -4518,11 +4518,26 @@ async fn handle_press(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // duration is precise (no shell-sleep / round-trip jitter). For games
     // (hold-to-move/charge) and any press-and-hold interaction.
     if let Some(ms) = cmd.get("hold").and_then(|v| v.as_u64()) {
-        interaction::dispatch_single_key(&mgr.client, &dispatch_session, &actual_key, "keyDown")
-            .await?;
+        // Carry the chord's modifiers through both halves: a held `Control+a`
+        // that dropped its Control would report the chord back while holding a
+        // plain `a`.
+        interaction::dispatch_single_key_with_modifiers(
+            &mgr.client,
+            &dispatch_session,
+            &actual_key,
+            "keyDown",
+            modifiers,
+        )
+        .await?;
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-        interaction::dispatch_single_key(&mgr.client, &dispatch_session, &actual_key, "keyUp")
-            .await?;
+        interaction::dispatch_single_key_with_modifiers(
+            &mgr.client,
+            &dispatch_session,
+            &actual_key,
+            "keyUp",
+            modifiers,
+        )
+        .await?;
         return Ok(press_result(
             key,
             target,

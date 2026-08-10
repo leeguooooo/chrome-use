@@ -61,7 +61,8 @@ chrome-use dblclick @e1        # Double-click
 chrome-use focus @e1           # Focus element
 chrome-use fill @e2 "text"     # Clear and type
 chrome-use type @e2 "text"     # Type without clearing (add --clear to clear first, --delay <ms> for per-key delay)
-chrome-use press Enter         # Press key (alias: key)
+chrome-use press Enter         # Press key at current focus (alias: key); output names the target
+chrome-use press Enter --selector @e2  # Focus the target first (alias: --on)
 chrome-use press Control+a     # Key combination
 chrome-use keydown Shift       # Hold key down
 chrome-use keyup Shift         # Release key

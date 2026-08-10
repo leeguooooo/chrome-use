@@ -16,14 +16,21 @@
       <input id="go" name="go" type="submit" value="Search" />
     </form>
 
-    <p id="log"></p>
+    <!--
+      The other half of the fix: fill restores focus only when the blur left it
+      on <body>. A page that deliberately advances focus on blur — a PIN/OTP
+      segment, a wizard step — must keep its own target, so #advance hands focus
+      to #next and fill must not take it back.
+    -->
+    <form id="wizard" onsubmit="return false">
+      <input id="advance" name="advance" type="text" />
+      <input id="next" name="next" type="text" />
+    </form>
 
     <script>
       window.__submitted = false;
-      // A page that deliberately advances focus on blur must keep its own
-      // target — fill's focus restore has to leave this one alone.
-      document.getElementById('q').addEventListener('input', () => {
-        document.getElementById('log').textContent = 'typed';
+      document.getElementById('advance').addEventListener('blur', () => {
+        document.getElementById('next').focus();
       });
     </script>
   </body>

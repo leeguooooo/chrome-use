@@ -2830,6 +2830,32 @@ async fn e2e_fill_then_press_enter_submits_the_form() {
         "Enter after fill must submit the form"
     );
 
+    // The other half: restoring focus must not override a page that moves focus
+    // on blur itself (#advance hands off to #next). Restore only when the blur
+    // left focus on <body>.
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "fill", "selector": "#advance", "value": "1234" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "8",
+            "action": "evaluate",
+            "script": "document.activeElement && document.activeElement.id"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        "next",
+        "fill must leave a page-driven focus handoff alone"
+    );
+
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
 }

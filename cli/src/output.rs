@@ -3787,9 +3787,13 @@ Core Commands:
   type <sel> <text>          Type into element
   fill <sel> <text>          Clear and fill (handles CodeMirror/Monaco/ProseMirror/
                              contenteditable; `--file <path>`/`--stdin` for large text)
-  press <key> [--hold <ms>]  Press key (Enter, Tab, Control+a). --hold keeps it
-                             down <ms> then releases — precise (in-daemon), for
-                             games/charge: `press d --hold 800`
+  press <key> [--selector <sel>] [--hold <ms>]
+                             Press key (Enter, Tab, Control+a) at the current
+                             focus; the output names where it landed. --selector
+                             focuses a target first (alias --on) when focus may
+                             have moved: `press Enter --selector "input[name=q]"`.
+                             --hold keeps it down <ms> then releases — precise
+                             (in-daemon), for games/charge: `press d --hold 800`
   keydown <key>              Hold a key down (no auto-release) — for games/shortcuts
   keyup <key>                Release a held key. Pair with keydown to hold-to-move:
                              `keydown d` … `keyup d`

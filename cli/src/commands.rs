@@ -919,12 +919,18 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     // `--selector <css|@ref>`: focus the target before the key, so
                     // the press can't land on whatever the page left focused (#167).
                     "--selector" | "--on" => {
-                        selector = Some(rest.get(i + 1).copied().ok_or(
-                            ParseError::MissingArguments {
-                                context: "press --selector".to_string(),
-                                usage: "press <key> --selector <css|@ref>",
-                            },
-                        )?);
+                        // A following flag means the value was omitted. Storing
+                        // it would fail later as "element --hold not found",
+                        // which reads like a page problem, not a typo.
+                        selector = Some(
+                            rest.get(i + 1)
+                                .copied()
+                                .filter(|v| !v.starts_with("--"))
+                                .ok_or(ParseError::MissingArguments {
+                                    context: "press --selector".to_string(),
+                                    usage: "press <key> --selector <css|@ref>",
+                                })?,
+                        );
                         i += 2;
                     }
                     arg if arg.starts_with("--") => i += 1,
@@ -5274,8 +5280,12 @@ mod tests {
         assert_eq!(leading["key"], "Enter");
         assert_eq!(leading["selector"], "textarea[name=q]");
 
-        // Missing selector value is an error, not a silent no-focus press.
+        // Missing selector value is an error, not a silent no-focus press —
+        // including when the next token is another flag.
         assert!(parse_command(&args("press Enter --selector"), &default_flags()).is_err());
+        assert!(
+            parse_command(&args("press Enter --selector --hold 100"), &default_flags()).is_err()
+        );
     }
 
     #[test]
