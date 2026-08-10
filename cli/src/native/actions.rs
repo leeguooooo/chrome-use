@@ -7390,17 +7390,156 @@ async fn resolve_download_href(
         .map(ToString::to_string)
 }
 
+/// Refuse to pull more than this through a CDP `Runtime.evaluate` result. The
+/// bytes come back base64-encoded inside a JSON message (~1.33x), and over the
+/// relay that message crosses a WebSocket hop — a hundred-megabyte string is a
+/// way to hang the session, not a way to download a file.
+const BLOB_DOWNLOAD_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Read a `blob:` URL's bytes from inside the page and write them to `dest`.
+///
+/// `chrome.downloads` can't touch a blob URL — it is scoped to the document that
+/// created it, not to the extension — so `download-url` used to reject the scheme
+/// outright and leave page-rendered assets unreachable (#169). The only route
+/// that returns the *original* bytes is to fetch the blob where it's valid; the
+/// canvas/`toDataURL` workaround re-encodes and silently drops metadata such as a
+/// C2PA provenance manifest.
+///
+/// A blob registered by an iframe isn't fetchable from the top frame, so on
+/// failure we retry in each frame and report which one produced the bytes.
+async fn download_blob_url(
+    mgr: &BrowserManager,
+    iframe_sessions: &HashMap<String, String>,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<Value, String> {
+    let js = format!(
+        r#"(async () => {{
+            try {{
+                const res = await fetch({url});
+                if (!res.ok) return {{ ok: false, error: 'fetch returned HTTP ' + res.status }};
+                const blob = await res.blob();
+                if (blob.size > {max}) {{
+                    return {{ ok: false, tooLarge: true, size: blob.size }};
+                }}
+                const dataUrl = await new Promise((resolve, reject) => {{
+                    const fr = new FileReader();
+                    fr.onload = () => resolve(String(fr.result));
+                    fr.onerror = () => reject(fr.error || new Error('FileReader failed'));
+                    fr.readAsDataURL(blob);
+                }});
+                const comma = dataUrl.indexOf(',');
+                return {{
+                    ok: true,
+                    b64: comma < 0 ? '' : dataUrl.slice(comma + 1),
+                    size: blob.size,
+                    type: blob.type || ''
+                }};
+            }} catch (e) {{
+                return {{ ok: false, error: String((e && e.message) || e) }};
+            }}
+        }})()"#,
+        url = serde_json::to_string(url).unwrap_or_default(),
+        max = BLOB_DOWNLOAD_MAX_BYTES,
+    );
+
+    // Top frame first — the common case, and the only attempt most blobs need.
+    let mut attempt = mgr.evaluate(&js, None).await.unwrap_or(Value::Null);
+    let mut resolved_in = "top".to_string();
+
+    if !attempt.get("ok").and_then(Value::as_bool).unwrap_or(false)
+        && !attempt
+            .get("tooLarge")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        let session_id = mgr.active_session_id()?.to_string();
+        let frames =
+            super::element::collect_all_frames_text(&mgr.client, &session_id, iframe_sessions)
+                .await
+                .unwrap_or_default();
+        for frame in frames.iter().filter(|f| f.kind != "top") {
+            let in_frame = mgr
+                .evaluate_in_frame(&js, &frame.frame_id, iframe_sessions)
+                .await
+                .unwrap_or(Value::Null);
+            let ok = in_frame.get("ok").and_then(Value::as_bool).unwrap_or(false);
+            let too_large = in_frame
+                .get("tooLarge")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if ok || too_large {
+                attempt = in_frame;
+                resolved_in = frame.url.clone();
+                break;
+            }
+        }
+    }
+
+    if attempt
+        .get("tooLarge")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let size = attempt.get("size").and_then(Value::as_u64).unwrap_or(0);
+        return Err(format!(
+            "blob: download is {size} bytes, over the {BLOB_DOWNLOAD_MAX_BYTES}-byte limit for \
+             reading bytes through the page. Use the asset's http(s) URL if it has one."
+        ));
+    }
+    if !attempt.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        let detail = attempt
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("the blob URL was not fetchable in any frame");
+        return Err(format!(
+            "blob: download failed — {detail}. A blob URL is only valid in the document that \
+             created it and dies with that document, so re-read it from a fresh snapshot of the \
+             page that rendered it."
+        ));
+    }
+
+    let b64 = attempt
+        .get("b64")
+        .and_then(Value::as_str)
+        .ok_or("blob: download returned no data")?;
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+        .map_err(|e| format!("blob: download returned undecodable data: {e}"))?;
+    std::fs::write(dest, &bytes).map_err(|e| format!("Failed to write {}: {e}", dest.display()))?;
+
+    Ok(json!({
+        "path": dest.to_string_lossy(),
+        "url": url,
+        "bytes": bytes.len(),
+        "contentType": attempt.get("type").and_then(Value::as_str).unwrap_or(""),
+        "frame": resolved_in,
+    }))
+}
+
 async fn handle_download_url(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
     let url = cmd
         .get("url")
         .and_then(Value::as_str)
         .ok_or("Missing 'url' parameter")?;
     let parsed = url::Url::parse(url).map_err(|e| format!("Invalid download URL: {}", e))?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("Invalid download URL: expected http:// or https://".to_string());
+    if !matches!(parsed.scheme(), "http" | "https" | "blob") {
+        return Err("Invalid download URL: expected http://, https:// or blob:".to_string());
     }
 
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+
+    // A blob never goes through the extension's download machinery — its bytes
+    // live in the page, and that's where we read them (#169).
+    if parsed.scheme() == "blob" {
+        let path_str = cmd.get("path").and_then(Value::as_str).ok_or(
+            "blob: downloads need an explicit destination — the bytes are read from the page, \
+             so there is no browser download to inherit a filename from: \
+             `download-url <blob:…> <path>`",
+        )?;
+        let (_, dest) = prepare_download_destination(path_str)?;
+        return download_blob_url(mgr, &state.iframe_sessions, url, &dest).await;
+    }
+
     if !relay_supports_downloads(mgr).await {
         return Err(
             "URL-initiated downloads require ab-connect 0.5.13 or newer with the downloads permission"

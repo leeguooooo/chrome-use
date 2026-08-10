@@ -100,9 +100,40 @@ pub fn run_update_check() {
     }
 }
 
+/// Should the "update available" line actually be printed?
+///
+/// The notice shares stderr with real errors, so a programmatic caller that
+/// reports "chrome-use failed, here is its stderr" was quoting housekeeping as
+/// part of the failure (#170). Print it only where a human reads it:
+///
+/// - stderr must be a TTY — the conventional split, and the one that fixes
+///   every wrapper without the wrapper having to opt out;
+/// - `--json` runs are machine-facing by definition, TTY or not;
+/// - `CHROME_USE_NO_UPDATE_NOTICE` and the de-facto `NO_UPDATE_NOTIFIER`
+///   silence it explicitly.
+///
+/// This gates the *notice* only. The daily background version check — and an
+/// opted-in auto-upgrade — still run, so a later interactive command is right.
+fn update_notice_visible() -> bool {
+    update_notice_visible_from(
+        std::env::var_os("CHROME_USE_NO_UPDATE_NOTICE").is_some()
+            || std::env::var_os("NO_UPDATE_NOTIFIER").is_some(),
+        std::env::args().any(|a| a == "--json"),
+        std::io::IsTerminal::is_terminal(&std::io::stderr()),
+    )
+}
+
+/// The decision behind [`update_notice_visible`], split out so it's testable
+/// without a real TTY (under `cargo test` stderr is captured, so the live
+/// function would answer "no" to everything).
+fn update_notice_visible_from(silenced: bool, json_output: bool, stderr_is_tty: bool) -> bool {
+    !silenced && !json_output && stderr_is_tty
+}
+
 /// Non-blocking "update available" notice. Called once per command run:
 /// - prints a one-line hint to **stderr** (never stdout, so `--json` is clean)
-///   when a cached release is newer than the running binary;
+///   when a cached release is newer than the running binary — and only when a
+///   human is there to read it, see [`update_notice_visible`];
 /// - refreshes the cached latest version at most once a day via a **detached**
 ///   background process, so the current command never waits on the network.
 ///
@@ -162,11 +193,15 @@ pub fn maybe_notify_update() {
                     .stderr(Stdio::null())
                     .spawn();
             }
-            eprintln!(
-                "{} auto-updating chrome-use → v{latest} in the background (you have {CURRENT_VERSION}; takes effect on your next run)",
-                color::warning_indicator()
-            );
-        } else {
+            // The upgrade itself still runs when nobody's watching; only the
+            // announcement is gated (#170).
+            if update_notice_visible() {
+                eprintln!(
+                    "{} auto-updating chrome-use → v{latest} in the background (you have {CURRENT_VERSION}; takes effect on your next run)",
+                    color::warning_indicator()
+                );
+            }
+        } else if update_notice_visible() {
             let hint = if cfg!(windows) {
                 ""
             } else {
@@ -335,5 +370,26 @@ pub fn run_upgrade() {
             eprintln!("  curl -fsSL {} | sh", INSTALL_URL);
             exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_notice_only_reaches_a_human_at_a_terminal() {
+        // The case from #170: a wrapper captures stderr, and the notice ended up
+        // quoted back to the end user as half of a failure message.
+        assert!(!update_notice_visible_from(false, false, false));
+        assert!(update_notice_visible_from(false, false, true));
+    }
+
+    #[test]
+    fn update_notice_stays_out_of_json_runs_and_honours_the_opt_out() {
+        // --json is machine-facing whether or not a TTY is attached.
+        assert!(!update_notice_visible_from(false, true, true));
+        // CHROME_USE_NO_UPDATE_NOTICE / NO_UPDATE_NOTIFIER win over everything.
+        assert!(!update_notice_visible_from(true, false, true));
     }
 }
