@@ -689,6 +689,20 @@ pub async fn fill(
             fire('change');
             try {{ el.blur(); }} catch (e) {{}}
             fire('focusout');                          // blur-triggered lookups/validation
+            // ...then put focus BACK on the field. The blur above left
+            // document.activeElement on <body>, so the very next `press Enter`
+            // was dispatched at the document and the form never submitted —
+            // while press still reported success (#167). Only restore when the
+            // blur didn't hand focus to something else: a page that
+            // deliberately advances focus on blur keeps its own target.
+            try {{
+                const doc = el.ownerDocument;
+                const root = (el.getRootNode && el.getRootNode()) || doc;
+                const ae = root && root.activeElement;
+                if (!ae || ae === doc.body || ae === doc.documentElement) {{
+                    el.focus({{ preventScroll: true }});
+                }}
+            }} catch (e) {{}}
             return 'input';
         }}"#,
         val = serde_json::to_string(value).unwrap_or_default(),
@@ -2020,6 +2034,29 @@ pub async fn focus(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(), String> {
+    focus_reporting_session(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Focus an element and return the CDP session it resolved in.
+///
+/// Callers that follow the focus with an input event — `press --selector` — need
+/// the frame's session so the key is dispatched where the element actually
+/// lives, not at the main frame (#167).
+pub async fn focus_reporting_session(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<String, String> {
     let (object_id, effective_session_id) = resolve_element_object_id(
         client,
         session_id,
@@ -2043,7 +2080,60 @@ pub async fn focus(
         )
         .await?;
 
-    Ok(())
+    Ok(effective_session_id)
+}
+
+/// A short CSS-ish descriptor of `document.activeElement` — `textarea[name="q"]`,
+/// `button#send`, or `body` when nothing is focused.
+///
+/// Keyboard events go to whatever holds focus, so a key command that reports
+/// success tells the agent nothing about *where* the key landed. Reporting the
+/// target turns a silent no-op into an observable one (#167).
+pub async fn active_element_descriptor(client: &CdpClient, session_id: &str) -> Option<String> {
+    let js = r#"(() => {
+        // Walk into shadow roots: document.activeElement stops at the host.
+        let el = document.activeElement;
+        while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+        if (!el) return 'none';
+        let out = el.tagName ? el.tagName.toLowerCase() : String(el);
+        if (el.id) out += '#' + el.id;
+        const name = el.getAttribute && el.getAttribute('name');
+        if (name) out += '[name="' + name + '"]';
+        return out;
+    })()"#;
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: js.to_string(),
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+
+    if result.exception_details.is_some() {
+        return None;
+    }
+    result.result.value?.as_str().map(String::from)
+}
+
+/// Does a key landing on `<body>` mean it provably did nothing?
+///
+/// Enter is the one key with no document-level default action: with nothing
+/// focused it neither submits, activates, nor scrolls. Arrows scroll, Tab moves
+/// focus, Backspace navigates back — those are all legitimate on `<body>`, so
+/// warning about them would be noise (#167).
+pub fn key_needs_focus(key_name: &str) -> bool {
+    key_name.eq_ignore_ascii_case("enter") || key_name.eq_ignore_ascii_case("return")
+}
+
+/// Is `descriptor` (from [`active_element_descriptor`]) a "nothing is focused" value?
+pub fn descriptor_is_unfocused(descriptor: &str) -> bool {
+    matches!(descriptor, "body" | "html" | "none")
 }
 
 pub async fn clear(

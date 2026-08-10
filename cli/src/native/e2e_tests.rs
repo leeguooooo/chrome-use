@@ -39,6 +39,7 @@ fn native_test_fixture_html(name: &str) -> &'static str {
         "iframe_button_probe" => include_str!("test_fixtures/iframe_button_probe.html"),
         "monaco_fill_probe" => include_str!("test_fixtures/monaco_fill_probe.html"),
         "ref_reuse_probe" => include_str!("test_fixtures/ref_reuse_probe.html"),
+        "enter_submit_probe" => include_str!("test_fixtures/enter_submit_probe.html"),
         _ => panic!("Unknown native test fixture: {}", name),
     }
 }
@@ -2747,6 +2748,162 @@ async fn e2e_hover_scroll_press() {
     .await;
     assert_success(&resp);
     assert_eq!(get_data(&resp)["pressed"], "Enter");
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Issue #167: `fill` ended with `el.blur()`, so `document.activeElement` was
+/// `<body>` by the time the next `press Enter` ran. The key went to the document,
+/// the form never submitted, and press still printed a clean success. Assert the
+/// whole chain: fill leaves the field focused, Enter reaches it, the form submits.
+#[tokio::test]
+#[ignore]
+async fn e2e_fill_then_press_enter_submits_the_form() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "navigate",
+            "url": native_test_fixture_url("enter_submit_probe")
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "fill", "selector": "#q", "value": "test query" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // The field — not <body> — still holds focus after the fill.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": "document.activeElement && document.activeElement.id"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        "q",
+        "fill must leave focus on the field it filled"
+    );
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "press", "key": "Enter" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["pressed"], "Enter");
+    assert_eq!(data["target"], "input#q[name=\"q\"]");
+    assert!(
+        data.get("warning").is_none(),
+        "a key that landed on the field should not warn: {data}"
+    );
+
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "window.__submitted" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        true,
+        "Enter after fill must submit the form"
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Issue #167: each CLI invocation is a separate process, so focus can be
+/// anywhere by the time `press` runs. `--selector` pins the target, and an Enter
+/// with nothing focused reports a warning instead of a bare success.
+#[tokio::test]
+#[ignore]
+async fn e2e_press_selector_pins_the_target_and_unfocused_enter_warns() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "navigate",
+            "url": native_test_fixture_url("enter_submit_probe")
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // Nothing focused: Enter provably does nothing, so say so.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "press", "key": "Enter" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["target"], "body");
+    let warning = data["warning"]
+        .as_str()
+        .expect("unfocused Enter must warn instead of reporting a clean success");
+    assert!(warning.contains("--selector"), "warning: {warning}");
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "window.__submitted" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        false,
+        "the warning must describe a real no-op"
+    );
+
+    // `--selector` focuses first, so the same Enter now reaches the form.
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "press", "key": "Enter", "selector": "#q" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["target"], "input#q[name=\"q\"]");
+    assert!(data.get("warning").is_none(), "{data}");
+
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "window.__submitted" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], true);
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);

@@ -795,6 +795,31 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             }
             return;
         }
+        // Key press: name the element the key went to, so a keystroke that
+        // landed nowhere doesn't read as a plain ✓ Done (issue #167).
+        if action == Some("press") {
+            if let Some(key) = data.get("pressed").and_then(|v| v.as_str()) {
+                let warning = data.get("warning").and_then(|v| v.as_str());
+                let indicator = if warning.is_some() {
+                    color::warning_indicator()
+                } else {
+                    color::success_indicator()
+                };
+                match data.get("target").and_then(|v| v.as_str()) {
+                    Some(target) => println!(
+                        "{} Pressed {} {}",
+                        indicator,
+                        key,
+                        color::dim(&format!("→ {target}"))
+                    ),
+                    None => println!("{} Pressed {}", indicator, key),
+                }
+                if let Some(w) = warning {
+                    eprintln!("{} {}", color::warning_indicator(), w);
+                }
+                return;
+            }
+        }
         // Tab switch
         if matches!(action, Some("tab_switch" | "tab_adopt")) {
             if let Some(tab_id) = data.get("tabId").and_then(|v| v.as_str()) {
@@ -1911,9 +1936,13 @@ Examples:
             r##"
 chrome-use press - Press a key or key combination
 
-Usage: chrome-use press <key>
+Usage: chrome-use press <key> [--selector <css|@ref>] [--hold <ms>]
 
 Presses a key or key combination. Supports special keys and modifiers.
+
+The key goes to whatever the page currently has focused, so the output names
+that element ("Pressed Enter → textarea[name=q]"). Use --selector to focus a
+target first when you can't be sure focus is where you left it.
 
 Aliases: key
 
@@ -1926,12 +1955,17 @@ Special Keys:
 Modifiers (combine with +):
   Control, Alt, Shift, Meta
 
+Options:
+  --selector <css|@ref>  Focus this element before pressing (alias: --on)
+  --hold <ms>            Hold the key down for <ms> before releasing
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
 
 Examples:
   chrome-use press Enter
+  chrome-use press Enter --selector "textarea[name=q]"
   chrome-use press Tab
   chrome-use press Control+a
   chrome-use press Control+Shift+s

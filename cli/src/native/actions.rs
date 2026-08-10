@@ -4491,18 +4491,84 @@ async fn handle_press(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // Parse modifier+key chords like "Control+a", "Shift+Enter", "Control+Shift+a"
     let (actual_key, modifiers) = parse_key_chord(key);
 
+    // `--selector`: focus the target before the key, so the press lands on the
+    // element the caller means even though each CLI invocation is a separate
+    // process that inherits whatever focus the page happens to hold (#167).
+    // The focus resolves the element's own frame; dispatch into that session so
+    // a field inside an iframe gets the key instead of the main frame.
+    let dispatch_session = match cmd.get("selector").and_then(|v| v.as_str()) {
+        Some(sel) => {
+            interaction::focus_reporting_session(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                sel,
+                &state.iframe_sessions,
+            )
+            .await?
+        }
+        None => session_id.clone(),
+    };
+
+    // Where the key is about to land. Read it BEFORE dispatching: Enter often
+    // navigates, and after a navigation there is no activeElement left to name.
+    let target = interaction::active_element_descriptor(&mgr.client, &dispatch_session).await;
+
     // `--hold <ms>`: keyDown, wait, keyUp — all inside the daemon so the hold
     // duration is precise (no shell-sleep / round-trip jitter). For games
     // (hold-to-move/charge) and any press-and-hold interaction.
     if let Some(ms) = cmd.get("hold").and_then(|v| v.as_u64()) {
-        interaction::dispatch_single_key(&mgr.client, &session_id, &actual_key, "keyDown").await?;
+        interaction::dispatch_single_key(&mgr.client, &dispatch_session, &actual_key, "keyDown")
+            .await?;
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-        interaction::dispatch_single_key(&mgr.client, &session_id, &actual_key, "keyUp").await?;
-        return Ok(json!({ "pressed": key, "heldMs": ms }));
+        interaction::dispatch_single_key(&mgr.client, &dispatch_session, &actual_key, "keyUp")
+            .await?;
+        return Ok(press_result(
+            key,
+            target,
+            &actual_key,
+            json!({ "heldMs": ms }),
+        ));
     }
 
-    interaction::press_key_with_modifiers(&mgr.client, &session_id, &actual_key, modifiers).await?;
-    Ok(json!({ "pressed": key }))
+    interaction::press_key_with_modifiers(&mgr.client, &dispatch_session, &actual_key, modifiers)
+        .await?;
+    Ok(press_result(key, target, &actual_key, json!({})))
+}
+
+/// Build the `press` response, naming the element the key went to and warning
+/// when it provably went nowhere.
+///
+/// `press` used to report a bare `✓ Done` no matter what — including for an
+/// Enter dispatched with nothing focused, which neither submits nor activates
+/// anything. That made a swallowed keystroke indistinguishable from a working
+/// one (#167).
+fn press_result(key: &str, target: Option<String>, actual_key: &str, extra: Value) -> Value {
+    let mut out = json!({ "pressed": key });
+    let obj = out.as_object_mut().expect("press_result is an object");
+    if let Some(extra) = extra.as_object() {
+        for (k, v) in extra {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(ref t) = target {
+        obj.insert("target".to_string(), json!(t));
+        if interaction::key_needs_focus(actual_key) && interaction::descriptor_is_unfocused(t) {
+            let where_it_went = if t == "none" {
+                "nothing is focused".to_string()
+            } else {
+                format!("activeElement is <{t}>")
+            };
+            obj.insert(
+                "warning".to_string(),
+                json!(format!(
+                    "{key} landed on no editable target ({where_it_went}), so it submitted and activated nothing. \
+                     Focus the field first: `press {key} --selector \"<css|@ref>\"`."
+                )),
+            );
+        }
+    }
+    out
 }
 
 /// Parse a key chord string like "Control+a" or "Control+Shift+Enter" into
@@ -12588,6 +12654,56 @@ fn error_response(id: &str, error: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn press_names_the_element_the_key_landed_on() {
+        let result = press_result(
+            "Enter",
+            Some("textarea[name=\"q\"]".into()),
+            "Enter",
+            json!({}),
+        );
+        assert_eq!(result["pressed"], "Enter");
+        assert_eq!(result["target"], "textarea[name=\"q\"]");
+        // Focused target: nothing to warn about.
+        assert!(result.get("warning").is_none());
+    }
+
+    #[test]
+    fn press_enter_with_nothing_focused_warns_instead_of_reporting_a_clean_success() {
+        let result = press_result("Enter", Some("body".into()), "Enter", json!({}));
+        let warning = result["warning"].as_str().expect("warning");
+        assert!(warning.contains("no editable target"));
+        assert!(warning.contains("--selector"));
+
+        // Same for an unfocused document with no activeElement at all.
+        let none = press_result("Enter", Some("none".into()), "Enter", json!({}));
+        assert!(none["warning"]
+            .as_str()
+            .expect("warning")
+            .contains("nothing is focused"));
+    }
+
+    #[test]
+    fn press_does_not_warn_for_keys_that_act_on_the_document() {
+        // Arrows scroll, Tab moves focus, Backspace navigates back — landing on
+        // <body> is legitimate for all of them, so no warning.
+        for key in ["ArrowDown", "Tab", "Backspace", "/"] {
+            let result = press_result(key, Some("body".into()), key, json!({}));
+            assert!(
+                result.get("warning").is_none(),
+                "{key} on <body> should not warn"
+            );
+        }
+    }
+
+    #[test]
+    fn press_hold_keeps_its_duration_alongside_the_target() {
+        let result = press_result("d", Some("body".into()), "d", json!({ "heldMs": 800 }));
+        assert_eq!(result["pressed"], "d");
+        assert_eq!(result["heldMs"], 800);
+        assert_eq!(result["target"], "body");
+    }
 
     #[tokio::test]
     async fn tab_duplicate_failure_preserves_active_tab_context() {

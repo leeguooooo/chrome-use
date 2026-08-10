@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>enter submit probe</title>
+  </head>
+  <body>
+    <!--
+      Issue #167: a search-style form. `fill` used to blur the field, so the
+      following `press Enter` was dispatched at <body> and never reached the
+      form — the CLI still printed a clean success. The submit handler below
+      records what actually happened so the test can tell the two apart.
+    -->
+    <form id="search" onsubmit="window.__submitted = true; return false">
+      <input id="q" name="q" type="text" />
+      <input id="go" name="go" type="submit" value="Search" />
+    </form>
+
+    <p id="log"></p>
+
+    <script>
+      window.__submitted = false;
+      // A page that deliberately advances focus on blur must keep its own
+      // target — fill's focus restore has to leave this one alone.
+      document.getElementById('q').addEventListener('input', () => {
+        document.getElementById('log').textContent = 'typed';
+      });
+    </script>
+  </body>
+</html>
