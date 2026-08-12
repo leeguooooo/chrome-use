@@ -27,6 +27,15 @@ use serde_json::Value;
 use std::process::Command;
 use std::time::Instant;
 
+/// Returns `(session, launch_a_browser, we_own_and_close_it)`.
+fn resolve_session(explicit: bool, session: &str, force_launch: bool) -> (String, bool, bool) {
+    if explicit {
+        (session.to_string(), force_launch, false)
+    } else {
+        ("cu-test".to_string(), true, true)
+    }
+}
+
 pub fn run_test(suite_path: &str, flags: &Flags) -> i32 {
     let text = match std::fs::read_to_string(suite_path) {
         Ok(t) => t,
@@ -65,13 +74,12 @@ pub fn run_test(suite_path: &str, flags: &Flags) -> i32 {
     };
 
     // A dedicated launched browser by default (deterministic, re-runnable). If
-    // the user named a --session, target that existing one instead.
-    let (session, do_launch) = if flags.session == "default" {
-        ("cu-test".to_string(), true)
-    } else {
-        (flags.session.clone(), flags.force_launch)
-    };
-    let owns_session = session == "cu-test";
+    // the user named a --session, target that existing one instead. Keying this
+    // on `session == "default"` was wrong twice over (issue #181): `--session
+    // default` was indistinguishable from no flag at all, and an agent-derived
+    // session name looked like an explicit one.
+    let (session, do_launch, owns_session) =
+        resolve_session(flags.session_explicit, &flags.session, flags.force_launch);
 
     let mut base: Vec<String> = vec!["--session".into(), session.clone()];
     if do_launch {
@@ -80,6 +88,20 @@ pub fn run_test(suite_path: &str, flags: &Flags) -> i32 {
     if let Some(p) = &flags.profile {
         base.push("--profile".into());
         base.push(p.clone());
+    }
+    // Without these the suite would silently run against the default relay
+    // profile while the user's own commands hit the pinned/verified one — the
+    // exact "logged in by hand, logged out under `test`" mismatch in #181.
+    if let Some(b) = &flags.browser {
+        base.push("--browser".into());
+        base.push(b.clone());
+    }
+    if let Some(a) = &flags.as_account {
+        base.push("--as".into());
+        base.push(a.clone());
+        if flags.as_strict {
+            base.push("--as-strict".into());
+        }
     }
 
     let artifacts_dir = flags
@@ -477,6 +499,26 @@ fn slug(name: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn explicit_session_is_honoured_even_when_named_default() {
+        // issue #181: `--session default` used to be indistinguishable from no
+        // flag at all, so the suite silently ran in a fresh `cu-test` browser
+        // with none of the connected session's logins.
+        assert_eq!(
+            resolve_session(true, "default", false),
+            ("default".to_string(), false, false)
+        );
+        assert_eq!(
+            resolve_session(true, "work", false),
+            ("work".to_string(), false, false)
+        );
+        // An agent-derived name with no `--session` is still not explicit.
+        assert_eq!(
+            resolve_session(false, "cu-myrepo-0a1b2c", false),
+            ("cu-test".to_string(), true, true)
+        );
+    }
 
     #[test]
     fn step_mapping() {

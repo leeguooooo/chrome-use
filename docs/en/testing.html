@@ -89,7 +89,7 @@
       <ul>
         <li>Exit code is <strong>0</strong> when every case passes, <strong>1</strong> if any fails &mdash; drop it straight into CI.</li>
         <li>By default it <strong>launches a brand-new isolated browser</strong> in a <code>cu-test</code> session (deterministic, reproducible) and closes it when done.</li>
-        <li>Pass <code>--session &lt;name&gt;</code> to run against an <strong>already-connected session</strong> (for example a real Chrome attached via <code>chrome-use extension connect</code>).</li>
+        <li>Pass <code>--session &lt;name&gt;</code> (<code>--session default</code> counts) to run against an <strong>already-connected session</strong> instead, reusing its logins and leaving it open afterwards. <code>--browser</code> / <code>--as</code> / <code>--profile</code> are forwarded to every step, so a suite can target one specific connected Chrome profile (for example a real Chrome attached via <code>chrome-use extension connect</code>).</li>
         <li>Failing cases automatically save a screenshot to <code>cu-test-artifacts/&lt;case&gt;.png</code>.</li>
       </ul>
 

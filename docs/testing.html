@@ -87,7 +87,7 @@
       <ul>
         <li>全部用例通过退出码为 <strong>0</strong>，任一失败为 <strong>1</strong> —— 直接丢进 CI。</li>
         <li>默认在一个 <code>cu-test</code> 会话里<strong>启动全新的隔离浏览器</strong>（确定、可复现），跑完即关。</li>
-        <li>传 <code>--session &lt;name&gt;</code> 可对着一个<strong>已连接的会话</strong>跑（比如通过 <code>chrome-use extension connect</code> 接上的真实 Chrome）。</li>
+        <li>传 <code>--session &lt;name&gt;</code>（<code>--session default</code> 也算）可对着一个<strong>已连接的会话</strong>跑，复用它的登录态，跑完不关闭。<code>--browser</code> / <code>--as</code> / <code>--profile</code> 会转发给每一步，可以精确指定某个已连接的 Chrome 配置（比如通过 <code>chrome-use extension connect</code> 接上的真实 Chrome）。</li>
         <li>失败的用例会自动把截图存到 <code>cu-test-artifacts/&lt;case&gt;.png</code>。</li>
       </ul>
 

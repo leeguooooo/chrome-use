@@ -390,6 +390,13 @@ pub struct Flags {
     pub headed: bool,
     pub debug: bool,
     pub session: String,
+    /// Whether `session` came from the user (`--session`, `AGENT_BROWSER_SESSION`,
+    /// config) rather than from `default_session_name()`. `test` needs the
+    /// distinction: it defaults to its own `cu-test` browser, but must honour an
+    /// explicitly named session — comparing against the literal `"default"`
+    /// silently ignored `--session default` and mis-read agent-derived names as
+    /// explicit (issue #181).
+    pub session_explicit: bool,
     pub headers: Option<String>,
     pub executable_path: Option<String>,
     pub cdp: Option<String>,
@@ -717,8 +724,9 @@ pub fn parse_flags(args: &[String]) -> Flags {
         debug: env_var_is_truthy("AGENT_BROWSER_DEBUG") || config.debug.unwrap_or(false),
         session: env::var("AGENT_BROWSER_SESSION")
             .ok()
-            .or(config.session)
+            .or(config.session.clone())
             .unwrap_or_else(default_session_name),
+        session_explicit: env::var("AGENT_BROWSER_SESSION").is_ok() || config.session.is_some(),
         headers: config.headers,
         executable_path: env::var("AGENT_BROWSER_EXECUTABLE_PATH")
             .ok()
@@ -875,6 +883,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--session" => {
                 if let Some(s) = args.get(i + 1) {
                     flags.session = s.clone();
+                    flags.session_explicit = true;
                     i += 1;
                 }
             }

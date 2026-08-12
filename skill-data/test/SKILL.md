@@ -15,8 +15,12 @@ chrome-use test <suite.yaml> [--launch | --session <name>] [--json]
 
 - Exit code **0** if all cases pass, **1** if any fail → drop it straight into CI.
 - Default: launches a fresh isolated browser (deterministic, repeatable) in a
-  `cu-test` session and closes it after. Pass `--session <name>` to run against an
-  already-connected session (e.g. the live Chrome via `chrome-use extension connect`).
+  `cu-test` session and closes it after. Pass `--session <name>` (including
+  `--session default`) to run against an already-connected session instead — the
+  suite then reuses that session's logins and is left open when the run ends.
+  `--browser` / `--as` / `--profile` are forwarded to every step, so a suite can
+  target one specific connected Chrome profile (e.g. the live Chrome via
+  `chrome-use extension connect`).
 - Failed cases auto-save a screenshot to `cu-test-artifacts/<case>.png`.
 
 ## Suite format (YAML)
