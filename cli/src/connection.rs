@@ -121,11 +121,15 @@ pub struct RelayRecoveryLock {
 /// concurrent `chrome-use` invocations both observed "no daemon exists," both
 /// spawned one, and raced on the port file. That race is the root cause behind
 /// wedged daemons holding stale debugger attachments after concurrent agents
-/// collide. `fs2::FileExt::lock_exclusive` maps to `flock(LOCK_EX)` on Unix and
-/// `LockFileEx` on Windows, so this now actually locks on both.
+/// collide. `std::fs::File::lock` is `flock(LOCK_EX)` on Unix and `LockFileEx`
+/// on Windows, so this now actually locks on both — no third-party crate.
+///
+/// The wait is unbounded on purpose: the OS drops the lock when the holder
+/// exits, so the only way to block forever is a live peer that is itself stuck,
+/// and timing out would just replace a wait with the concurrent-spawn race this
+/// exists to prevent. It is announced instead — a silent multi-second stall
+/// during daemon startup is indistinguishable from a hang.
 fn acquire_file_lock(path: &std::path::Path, label: &str) -> Result<fs::File, String> {
-    use fs2::FileExt;
-
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create {label} lock directory: {e}"))?;
@@ -136,8 +140,14 @@ fn acquire_file_lock(path: &std::path::Path, label: &str) -> Result<fs::File, St
         .truncate(false)
         .open(path)
         .map_err(|e| format!("Failed to open {label} lock {}: {e}", path.display()))?;
-    file.lock_exclusive()
-        .map_err(|e| format!("Failed to acquire {label} lock {}: {}", path.display(), e))?;
+    if file.try_lock().is_err() {
+        eprintln!(
+            "{} waiting for another chrome-use process to release the {label} lock...",
+            crate::color::warning_indicator()
+        );
+        file.lock()
+            .map_err(|e| format!("Failed to acquire {label} lock {}: {}", path.display(), e))?;
+    }
     Ok(file)
 }
 
@@ -1242,8 +1252,6 @@ mod tests {
 
     #[test]
     fn test_acquire_file_lock_excludes_concurrent_holder_on_this_platform() {
-        use fs2::FileExt;
-
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("test.lock");
 
@@ -1261,7 +1269,7 @@ mod tests {
             .open(&path)
             .expect("should open contender handle");
         assert!(
-            contender.try_lock_exclusive().is_err(),
+            contender.try_lock().is_err(),
             "second handle must not acquire the lock while the first holds it"
         );
 
@@ -1271,7 +1279,7 @@ mod tests {
         // the lock — the RAII-drop semantics `SessionLifecycleLock` and
         // `RelayRecoveryLock` depend on.
         contender
-            .try_lock_exclusive()
+            .try_lock()
             .expect("lock must be free once the first holder is dropped");
     }
 

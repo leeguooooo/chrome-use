@@ -106,25 +106,6 @@ pub(crate) fn should_track_target(target: &TargetInfo) -> bool {
         && (target.url.is_empty() || !is_internal_chrome_target(&target.url))
 }
 
-/// Pick which discovered target should become the ACTIVE tab when adopting a
-/// batch of pre-existing page targets. A target that already reports
-/// `attached: true` *before we've attached to it* has a live remote-debugging
-/// client on it right now — almost always a previous daemon for this same
-/// session that wedged (crashed without detaching, or is itself hung talking
-/// to Chrome) rather than a clean handoff. Re-attaching to it still succeeds
-/// (CDP allows multiple attached clients per target via flatten sessions),
-/// which is exactly the trap: `connect_auto_with_fresh_tab`'s
-/// `Runtime.evaluate` liveness probe then hits that same stuck
-/// renderer/session and hangs for the full 30s CDP call cap, and that hang
-/// repeats on every iteration of `retry_relay_connect_after_wait`'s 45s/3s
-/// retry loop — one stuck tab turns into minutes of silent churn. So: prefer
-/// the first target nobody else is already holding. `None` means every
-/// candidate is already attached and the caller should fall back to creating
-/// a guaranteed-fresh tab instead of gambling on a possibly-wedged one.
-fn pick_unattached_target_index(targets: &[TargetInfo]) -> Option<usize> {
-    targets.iter().position(|t| t.attached != Some(true))
-}
-
 /// Origin + path of a URL, dropping the query string and fragment, for
 /// `--reuse-tab` matching. SPA/SSO URLs carry volatile `?client_id=…&state=…`
 /// and `#/route` parts, so two opens of the "same" page rarely match
@@ -1311,12 +1292,6 @@ impl BrowserManager {
             // scoped getTargets to our own tab group (#40) — so `page_targets` are
             // all ours: adopt them (this restores follow-popup + cross-session
             // adopt under isolation, since foreign tabs were already filtered out).
-            //
-            // Decide the ACTIVE tab up front, before attaching to anything — see
-            // `pick_unattached_target_index` for why an already-attached candidate
-            // must never be the one we probe.
-            let active_hint = pick_unattached_target_index(&page_targets);
-
             for target in &page_targets {
                 let attach_result: AttachToTargetResult = self
                     .client
@@ -1342,23 +1317,10 @@ impl BrowserManager {
                     target_type: target.target_type.clone(),
                 });
             }
-
-            match active_hint {
-                Some(index) => {
-                    self.active_page_index = index;
-                    self.pin_active_target();
-                    let session_id = self.pages[index].session_id.clone();
-                    self.enable_domains(&session_id).await?;
-                }
-                None => {
-                    // Every candidate target was already attached (issue: stale/wedged
-                    // daemons hold their debugger session open) — adopting any of them
-                    // risks the `Runtime.evaluate` liveness-probe hang. Open a
-                    // guaranteed-fresh tab instead; `tab_new` sets the active index and
-                    // enables domains itself.
-                    self.tab_new(None, None).await?;
-                }
-            }
+            self.active_page_index = 0;
+            self.pin_active_target();
+            let session_id = self.pages[0].session_id.clone();
+            self.enable_domains(&session_id).await?;
         }
 
         Ok(())
@@ -4142,55 +4104,6 @@ mod tests {
         };
 
         assert!(!should_track_target(&target));
-    }
-
-    // === Stale/Wedged Target Adoption Tests (Fix 3: `attached: true` guard) ===
-
-    fn target_with_attached(target_id: &str, attached: Option<bool>) -> TargetInfo {
-        TargetInfo {
-            target_id: target_id.to_string(),
-            target_type: "page".to_string(),
-            title: String::new(),
-            url: "https://example.com".to_string(),
-            attached,
-            browser_context_id: None,
-        }
-    }
-
-    #[test]
-    fn pick_unattached_target_index_prefers_first_unattached_target() {
-        let targets = vec![
-            target_with_attached("t0", Some(true)),
-            target_with_attached("t1", None),
-            target_with_attached("t2", Some(false)),
-        ];
-        // t0 already has a live client on it (possibly a wedged prior daemon) —
-        // skip it in favor of t1, the first candidate nobody else is holding.
-        assert_eq!(pick_unattached_target_index(&targets), Some(1));
-    }
-
-    #[test]
-    fn pick_unattached_target_index_treats_missing_attached_as_unattached() {
-        // A target with no `attached` field reported at all (some relay/CDP
-        // responses omit it) must count as usable, not as held.
-        let targets = vec![target_with_attached("t0", None)];
-        assert_eq!(pick_unattached_target_index(&targets), Some(0));
-    }
-
-    #[test]
-    fn pick_unattached_target_index_returns_none_when_everything_is_attached() {
-        // Every candidate is already held — the caller must fall back to
-        // creating a fresh tab rather than probing a possibly-wedged one.
-        let targets = vec![
-            target_with_attached("t0", Some(true)),
-            target_with_attached("t1", Some(true)),
-        ];
-        assert_eq!(pick_unattached_target_index(&targets), None);
-    }
-
-    #[test]
-    fn pick_unattached_target_index_on_empty_list_returns_none() {
-        assert_eq!(pick_unattached_target_index(&[]), None);
     }
 
     #[test]
