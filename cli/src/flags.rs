@@ -530,8 +530,8 @@ const AGENT_ID_SUFFIX_DENYLIST: &[&str] = &["XDG_SESSION_ID", "GNOME_DESKTOP_SES
 /// convention. Env iteration order is unspecified, so hits are sorted to keep the
 /// derived session name stable across invocations — an unstable name would spawn
 /// a fresh daemon on every command.
-fn scan_conventional_agent_id(vars: &[(String, String)]) -> Option<String> {
-    let mut hits: Vec<String> = vars
+fn scan_conventional_agent_id(vars: &[(String, String)]) -> Option<(String, String)> {
+    let mut hits: Vec<(String, String)> = vars
         .iter()
         .filter(|(k, v)| {
             !v.is_empty()
@@ -540,8 +540,10 @@ fn scan_conventional_agent_id(vars: &[(String, String)]) -> Option<String> {
                 && !AGENT_ID_VARS.contains(&k.as_str())
                 && !TERMINAL_ID_VARS.contains(&k.as_str())
         })
-        // Key included so two harnesses exporting the same value still differ.
-        .map(|(k, v)| format!("{k}={v}"))
+        // Key included in the id so two harnesses exporting the same value still
+        // differ; also reported as the source, so `doctor` can say which var the
+        // session was keyed on.
+        .map(|(k, v)| (k.clone(), format!("{k}={v}")))
         .collect();
     hits.sort();
     hits.into_iter().next()
@@ -570,16 +572,37 @@ fn default_session_name() -> String {
 /// env to test this would race every other test that reads env — and in a
 /// threaded test binary that is undefined behaviour, not just flakiness.
 fn pick_agent_id(vars: &[(String, String)]) -> Option<String> {
+    pick_agent_id_with_source(vars).map(|(_, id)| id)
+}
+
+/// As [`pick_agent_id`], but also reports WHICH env var the id came from.
+///
+/// The convention scan can key the session on a var nobody here has heard of,
+/// and a wrong hit is close to undebuggable from the outside: the session name
+/// silently changes, so the tab group, the daemon and any `keep`/handoff state
+/// all move with it. `chrome-use doctor` prints this so the answer to "why am I
+/// on a different session?" is one command away.
+fn pick_agent_id_with_source(vars: &[(String, String)]) -> Option<(String, String)> {
     let lookup = |name: &str| {
         vars.iter()
             .find(|(k, v)| k == name && !v.is_empty())
-            .map(|(_, v)| v.clone())
+            .map(|(_, v)| (name.to_string(), v.clone()))
     };
     let first_set = |names: &[&str]| names.iter().find_map(|n| lookup(n));
 
     first_set(AGENT_ID_VARS)
         .or_else(|| scan_conventional_agent_id(vars))
         .or_else(|| first_set(TERMINAL_ID_VARS))
+}
+
+/// The session name this process would derive with no `--session` /
+/// `AGENT_BROWSER_SESSION`, plus the env var it was keyed on (`None` when
+/// nothing stable was found and the name is the historical `default`).
+pub fn describe_default_session() -> (String, Option<String>) {
+    let vars: Vec<(String, String)> = env::vars().collect();
+    let picked = pick_agent_id_with_source(&vars);
+    let source = picked.as_ref().map(|(k, _)| k.clone());
+    (session_name_for(picked.map(|(_, id)| id)), source)
 }
 
 /// Render the session name for a chosen agent id. `None` keeps the historical
@@ -1972,6 +1995,36 @@ mod tests {
         // A different task (different id) -> a different session, no collision.
         let two = session_name_for(pick_agent_id(&env(&[("CODEX_THREAD_ID", "thread-two")])));
         assert_ne!(one, two, "two agents must not collide");
+    }
+
+    #[test]
+    fn the_derivation_reports_which_var_it_keyed_on() {
+        // doctor prints this; without it, a session silently keyed on some
+        // unknown harness var is close to undebuggable from the outside.
+        let explicit = pick_agent_id_with_source(&env(&[("CODEX_THREAD_ID", "t1")]));
+        assert_eq!(
+            explicit,
+            Some(("CODEX_THREAD_ID".to_string(), "t1".to_string()))
+        );
+
+        // A convention hit reports the var name, while the id itself keeps the
+        // `KEY=VALUE` form so two harnesses sharing a value still differ.
+        let scanned = pick_agent_id_with_source(&env(&[("SOMEFUTUREAGENT_SESSION_ID", "t1")]));
+        assert_eq!(
+            scanned,
+            Some((
+                "SOMEFUTUREAGENT_SESSION_ID".to_string(),
+                "SOMEFUTUREAGENT_SESSION_ID=t1".to_string()
+            ))
+        );
+
+        let terminal = pick_agent_id_with_source(&env(&[("WT_SESSION", "tab-guid")]));
+        assert_eq!(
+            terminal,
+            Some(("WT_SESSION".to_string(), "tab-guid".to_string()))
+        );
+
+        assert_eq!(pick_agent_id_with_source(&env(&[])), None);
     }
 
     #[test]

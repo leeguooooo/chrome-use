@@ -35,6 +35,28 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         )),
     }
 
+    // Which session this shell resolves to, and why. The name decides the tab
+    // group, the daemon port and where `keep`/handoff state lives, and it can be
+    // derived from an env var this build has never heard of (any
+    // `<PRODUCT>_SESSION_ID`-style name) — so "why am I on a different session
+    // than I expected?" needs an answer that doesn't involve reading the source.
+    let (derived, source) = crate::flags::describe_default_session();
+    let detail = match source {
+        Some(var) => format!("Default session {derived} (derived from {var})"),
+        None => format!("Default session {derived} (no per-agent env id found)"),
+    };
+    // Reported as the DEFAULT, not as "the session you are on": `--session`, the
+    // config file and `AGENT_BROWSER_SESSION` all override it, and doctor has no
+    // command line to inspect.
+    let detail = match std::env::var("AGENT_BROWSER_SESSION")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        Some(explicit) => format!("{detail}; overridden by AGENT_BROWSER_SESSION={explicit}"),
+        None => detail,
+    };
+    checks.push(Check::new("env.session", category, Status::Pass, detail));
+
     let state_dir = get_state_dir();
     let socket_dir = get_socket_dir();
 

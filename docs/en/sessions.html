@@ -161,9 +161,15 @@
 
       <p>
         When <code>--session</code> is omitted, chrome-use derives a stable per-agent session from supported
-        runner IDs. Codex tasks use <code>CODEX_THREAD_ID</code> automatically; other runners can provide
-        <code>AGENT_BROWSER_SESSION_ID</code>. A plain shell without a runner ID retains the
-        <code>default</code> session. To set an explicit shell default, use
+        runner IDs. Codex tasks use <code>CODEX_THREAD_ID</code> automatically, Claude Code uses
+        <code>CLAUDE_PID</code>, and other runners can provide <code>AGENT_BROWSER_SESSION_ID</code> — a runner
+        nobody here has heard of is picked up too, as long as it exports a
+        <code>&lt;PRODUCT&gt;_SESSION_ID</code> / <code>_THREAD_ID</code> / <code>_CONVERSATION_ID</code> variable.
+        Failing all of those it falls back to a terminal ID (<code>WT_SESSION</code>,
+        <code>TERM_SESSION_ID</code>, …), and only a shell with none of them retains the
+        <code>default</code> session. Run <code>chrome-use doctor</code> and read the
+        <code>Default session</code> line to see which session this shell resolves to and which variable it
+        was derived from. To set an explicit shell default, use
         <code>AGENT_BROWSER_SESSION=myapp</code>. Close a session with <code>close</code> when you no longer
         need it, and use <code>session list</code> to see which sessions are still active:
       </p>
