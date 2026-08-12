@@ -56,6 +56,11 @@ chrono = "0.4"
 urlencoding = "2"
 rust-embed = "8"
 serde_yaml = "0.9"
+# Cross-platform advisory file locking (flock on Unix, LockFileEx on Windows)
+# for the session-lifecycle / relay-recovery locks in connection.rs — see the
+# comment on `acquire_file_lock` for why Windows needs a REAL lock here, not
+# the previous no-op stub.
+fs2 = "0.4.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

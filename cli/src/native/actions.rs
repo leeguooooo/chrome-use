@@ -1888,6 +1888,14 @@ fn should_create_fresh_tab_after_connect(page_count: usize) -> bool {
 /// Connect to a running Chrome via auto-discovery. Target discovery creates an
 /// owned scratch tab when the session has no pages, so reuse that tab instead of
 /// creating a duplicate. Keep a zero-page fallback for defensive recovery.
+///
+/// The `Runtime.evaluate` probe below assumes `connect_auto` already steered
+/// clear of a target that some other client has held attached since before we
+/// connected — `BrowserManager::pick_unattached_target_index` (in
+/// `native/browser.rs`) is what makes that guarantee. Without it, this probe
+/// could land on a wedged daemon's stale attachment and hang for the full 30s
+/// CDP call cap on every pass of `retry_relay_connect_after_wait`'s 45s/3s
+/// retry loop below — minutes of silent churn instead of one clear error.
 async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
     let mut mgr = BrowserManager::connect_auto().await?;
     if should_create_fresh_tab_after_connect(mgr.page_count()) {
