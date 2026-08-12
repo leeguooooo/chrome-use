@@ -27,13 +27,44 @@ use serde_json::Value;
 use std::process::Command;
 use std::time::Instant;
 
-/// Returns `(session, launch_a_browser, we_own_and_close_it)`.
+/// Returns `(session, launch_a_browser, we_own_and_close_it)`. Ownership tracks
+/// "did we launch this browser", not the session name: `--launch` is also turned
+/// on implicitly under `CI`, and a browser we started must be closed by us even
+/// when the session was named by the user.
 fn resolve_session(explicit: bool, session: &str, force_launch: bool) -> (String, bool, bool) {
-    if explicit {
-        (session.to_string(), force_launch, false)
+    let (session, do_launch) = if explicit {
+        (session.to_string(), force_launch)
     } else {
-        ("cu-test".to_string(), true, true)
+        ("cu-test".to_string(), true)
+    };
+    (session, do_launch, do_launch)
+}
+
+/// The flags every step's sub-invocation inherits. Without `--browser` / `--as`
+/// the suite would silently run against the default relay profile while the
+/// user's own commands hit the pinned/verified one — the exact "logged in by
+/// hand, logged out under `test`" mismatch in issue #181.
+fn base_args(session: &str, do_launch: bool, flags: &Flags) -> Vec<String> {
+    let mut base: Vec<String> = vec!["--session".into(), session.to_string()];
+    if do_launch {
+        base.push("--launch".into());
     }
+    if let Some(p) = &flags.profile {
+        base.push("--profile".into());
+        base.push(p.clone());
+    }
+    if let Some(b) = &flags.browser {
+        base.push("--browser".into());
+        base.push(b.clone());
+    }
+    if let Some(a) = &flags.as_account {
+        base.push("--as".into());
+        base.push(a.clone());
+        if flags.as_strict {
+            base.push("--as-strict".into());
+        }
+    }
+    base
 }
 
 pub fn run_test(suite_path: &str, flags: &Flags) -> i32 {
@@ -81,28 +112,7 @@ pub fn run_test(suite_path: &str, flags: &Flags) -> i32 {
     let (session, do_launch, owns_session) =
         resolve_session(flags.session_explicit, &flags.session, flags.force_launch);
 
-    let mut base: Vec<String> = vec!["--session".into(), session.clone()];
-    if do_launch {
-        base.push("--launch".into());
-    }
-    if let Some(p) = &flags.profile {
-        base.push("--profile".into());
-        base.push(p.clone());
-    }
-    // Without these the suite would silently run against the default relay
-    // profile while the user's own commands hit the pinned/verified one — the
-    // exact "logged in by hand, logged out under `test`" mismatch in #181.
-    if let Some(b) = &flags.browser {
-        base.push("--browser".into());
-        base.push(b.clone());
-    }
-    if let Some(a) = &flags.as_account {
-        base.push("--as".into());
-        base.push(a.clone());
-        if flags.as_strict {
-            base.push("--as-strict".into());
-        }
-    }
+    let base = base_args(&session, do_launch, flags);
 
     let artifacts_dir = flags
         .download_path
@@ -518,6 +528,62 @@ mod tests {
             resolve_session(false, "cu-myrepo-0a1b2c", false),
             ("cu-test".to_string(), true, true)
         );
+        // `--launch` (also implicit under CI) on a named session: we started the
+        // browser, so we close it — otherwise it leaks with no cleanup owner.
+        assert_eq!(
+            resolve_session(true, "default", true),
+            ("default".to_string(), true, true)
+        );
+    }
+
+    #[test]
+    fn every_step_inherits_the_browser_pinning_flags() {
+        let mut flags = crate::flags::parse_flags(&["x".to_string()]);
+        flags.profile = Some("work".into());
+        flags.browser = Some("me@example.com".into());
+        flags.as_account = Some("chatgpt/huayue".into());
+        flags.as_strict = true;
+        assert_eq!(
+            base_args("default", false, &flags),
+            vec![
+                "--session",
+                "default",
+                "--profile",
+                "work",
+                "--browser",
+                "me@example.com",
+                "--as",
+                "chatgpt/huayue",
+                "--as-strict"
+            ]
+        );
+        assert!(base_args("cu-test", true, &flags).contains(&"--launch".to_string()));
+    }
+
+    #[test]
+    fn an_empty_session_is_not_an_explicit_one() {
+        // `AGENT_BROWSER_SESSION=` / `--session ""` must fall back to the
+        // isolated default rather than forwarding an empty session name (#181).
+        let flags = crate::flags::parse_flags(
+            &"--session  test suite.yaml"
+                .split(' ')
+                .map(String::from)
+                .collect::<Vec<_>>(),
+        );
+        assert!(!flags.session_explicit);
+        assert_ne!(flags.session, "");
+    }
+
+    #[test]
+    fn parse_flags_marks_an_explicit_default_session() {
+        let flags = crate::flags::parse_flags(
+            &"--session default test suite.yaml"
+                .split(' ')
+                .map(String::from)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(flags.session, "default");
+        assert!(flags.session_explicit);
     }
 
     #[test]

@@ -722,11 +722,18 @@ pub fn parse_flags(args: &[String]) -> Flags {
         json: env_var_is_truthy("AGENT_BROWSER_JSON") || config.json.unwrap_or(false),
         headed: env_var_is_truthy("AGENT_BROWSER_HEADED") || config.headed.unwrap_or(false),
         debug: env_var_is_truthy("AGENT_BROWSER_DEBUG") || config.debug.unwrap_or(false),
+        // An empty value is "unset", not "a session named empty string" — else
+        // `AGENT_BROWSER_SESSION=` would look explicit and `test` would forward
+        // an empty session name instead of isolating in `cu-test` (#181).
         session: env::var("AGENT_BROWSER_SESSION")
             .ok()
             .or(config.session.clone())
+            .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(default_session_name),
-        session_explicit: env::var("AGENT_BROWSER_SESSION").is_ok() || config.session.is_some(),
+        session_explicit: env::var("AGENT_BROWSER_SESSION")
+            .ok()
+            .or(config.session.clone())
+            .is_some_and(|s| !s.trim().is_empty()),
         headers: config.headers,
         executable_path: env::var("AGENT_BROWSER_EXECUTABLE_PATH")
             .ok()
@@ -882,8 +889,10 @@ pub fn parse_flags(args: &[String]) -> Flags {
             }
             "--session" => {
                 if let Some(s) = args.get(i + 1) {
-                    flags.session = s.clone();
-                    flags.session_explicit = true;
+                    if !s.trim().is_empty() {
+                        flags.session = s.clone();
+                        flags.session_explicit = true;
+                    }
                     i += 1;
                 }
             }
