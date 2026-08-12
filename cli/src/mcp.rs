@@ -971,6 +971,22 @@ fn call_screenshot(arguments: &Value) -> Result<Value, ProtocolError> {
 /// the response for no benefit when the file is right there on disk.
 const MAX_INLINE_IMAGE_BYTES: u64 = 2_000_000;
 
+/// Env override for [`MAX_INLINE_IMAGE_BYTES`]. `0` turns inlining off entirely,
+/// for hosts that bill on payload size or agents that should read the page
+/// structurally (`snapshot`) rather than looking at pictures of it.
+const MAX_INLINE_IMAGE_BYTES_VAR: &str = "CHROME_USE_MCP_MAX_INLINE_IMAGE_BYTES";
+
+/// Resolved inline budget. Parsed per call rather than cached: an MCP server is
+/// long-lived, and a stale budget from process start would ignore a host that
+/// re-execs us with a different one. A malformed value falls back to the
+/// default instead of failing the screenshot.
+fn max_inline_image_bytes() -> u64 {
+    std::env::var(MAX_INLINE_IMAGE_BYTES_VAR)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(MAX_INLINE_IMAGE_BYTES)
+}
+
 /// Identify the image format from its magic bytes.
 ///
 /// Deliberately NOT from the file extension: the caller chooses the output path,
@@ -1000,6 +1016,13 @@ fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
 /// back text-only is indistinguishable from a successful one, which leaves the
 /// agent blind and unaware of it.
 fn attach_screenshot_image(result: &mut Value) {
+    attach_screenshot_image_within(result, max_inline_image_bytes());
+}
+
+/// The body of [`attach_screenshot_image`] with the budget passed in, so tests
+/// exercise every branch without touching process env — an env-reading test
+/// here would race the other tests in this binary, which run in parallel.
+fn attach_screenshot_image_within(result: &mut Value, budget: u64) {
     let Some(path) = result
         .get("structuredContent")
         .and_then(|s| s.get("response"))
@@ -1010,22 +1033,30 @@ fn attach_screenshot_image(result: &mut Value) {
     };
     let path = std::path::PathBuf::from(path);
 
+    // Inlining switched off by the host: the path in the text block is the whole
+    // contract again, so say nothing — this is a configured outcome, not a
+    // failure the agent needs to reason about.
+    if budget == 0 {
+        return;
+    }
+
     // Never fail the screenshot itself because the inline copy didn't work.
     let note = match std::fs::metadata(&path) {
         Err(e) => format!("Screenshot saved but could not be inlined: {e}"),
-        Ok(meta) if meta.len() > MAX_INLINE_IMAGE_BYTES => format!(
-            "Screenshot saved but too large to inline ({} bytes > {} limit). \
-             Re-run with a smaller maxWidth/scale, or read the file at the path above.",
+        Ok(meta) if meta.len() > budget => format!(
+            "Screenshot saved but too large to inline ({} bytes > {} limit, \
+             override with {}). Re-run with a smaller maxWidth/scale, or read \
+             the file at the path above.",
             meta.len(),
-            MAX_INLINE_IMAGE_BYTES
+            budget,
+            MAX_INLINE_IMAGE_BYTES_VAR
         ),
         Ok(_) => match std::fs::read(&path) {
             Err(e) => format!("Screenshot saved but could not be inlined: {e}"),
             Ok(bytes) => match sniff_image_mime(&bytes) {
-                None => format!(
-                    "Saved file at the path above is not a recognized image \
+                None => "Saved file at the path above is not a recognized image \
                      (PNG/JPEG/WebP), so it was not inlined — you cannot see it."
-                ),
+                    .to_string(),
                 Some(mime) => {
                     use base64::Engine;
                     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -1946,14 +1977,14 @@ mod tests {
 
     #[test]
     fn screenshot_is_inlined_as_an_image_block() {
-        let dir = std::env::temp_dir().join("chrome-use-mcp-img-test");
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         let png = dir.join("shot.png");
         // Not a real PNG; the encoder only cares about the bytes and extension.
         std::fs::write(&png, b"\x89PNG\r\n\x1a\nfake-pixels").unwrap();
 
         let mut result = screenshot_result(png.to_str().unwrap());
-        attach_screenshot_image(&mut result);
+        attach_screenshot_image_within(&mut result, MAX_INLINE_IMAGE_BYTES);
 
         let imgs = image_blocks(&result);
         assert_eq!(imgs.len(), 1, "expected exactly one image block");
@@ -1965,22 +1996,18 @@ mod tests {
         assert_eq!(decoded, b"\x89PNG\r\n\x1a\nfake-pixels");
         // The original text block must survive for existing consumers.
         assert_eq!(result["content"][0]["type"], "text");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn jpeg_screenshot_gets_jpeg_mime() {
-        let dir = std::env::temp_dir().join("chrome-use-mcp-jpg-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let jpg = dir.join("shot.jpg");
+        let tmp = tempfile::tempdir().unwrap();
+        let jpg = tmp.path().join("shot.jpg");
         std::fs::write(&jpg, b"\xff\xd8\xff-fake").unwrap();
 
         let mut result = screenshot_result(jpg.to_str().unwrap());
-        attach_screenshot_image(&mut result);
+        attach_screenshot_image_within(&mut result, MAX_INLINE_IMAGE_BYTES);
 
         assert_eq!(image_blocks(&result)[0]["mimeType"], "image/jpeg");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1993,7 +2020,7 @@ mod tests {
                 .to_str()
                 .unwrap(),
         );
-        attach_screenshot_image(&mut result);
+        attach_screenshot_image_within(&mut result, MAX_INLINE_IMAGE_BYTES);
 
         assert!(image_blocks(&result).is_empty());
         let texts: Vec<&str> = result["content"]
@@ -2010,13 +2037,12 @@ mod tests {
 
     #[test]
     fn oversize_capture_explains_the_limit() {
-        let dir = std::env::temp_dir().join("chrome-use-mcp-big-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let png = dir.join("huge.png");
+        let tmp = tempfile::tempdir().unwrap();
+        let png = tmp.path().join("huge.png");
         std::fs::write(&png, vec![0u8; (MAX_INLINE_IMAGE_BYTES + 1) as usize]).unwrap();
 
         let mut result = screenshot_result(png.to_str().unwrap());
-        attach_screenshot_image(&mut result);
+        attach_screenshot_image_within(&mut result, MAX_INLINE_IMAGE_BYTES);
 
         assert!(image_blocks(&result).is_empty(), "must not inline oversize");
         let texts: Vec<&str> = result["content"]
@@ -2029,8 +2055,6 @@ mod tests {
             texts.iter().any(|t| t.contains("too large to inline")),
             "expected a size explanation, got {texts:?}"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2038,33 +2062,30 @@ mod tests {
         // The caller picks the output path and the daemon writes PNG bytes to
         // whatever name it is given, so `path: "shot.jpg"` must NOT become
         // image/jpeg — a client decoding by mimeType would get garbage.
-        let dir = std::env::temp_dir().join("chrome-use-mcp-mislabel-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let lying = dir.join("actually-a-png.jpg");
+        let tmp = tempfile::tempdir().unwrap();
+        let lying = tmp.path().join("actually-a-png.jpg");
         std::fs::write(&lying, b"\x89PNG\r\n\x1a\npixels").unwrap();
 
         let mut result = screenshot_result(lying.to_str().unwrap());
-        attach_screenshot_image(&mut result);
+        attach_screenshot_image_within(&mut result, MAX_INLINE_IMAGE_BYTES);
 
         assert_eq!(
             image_blocks(&result)[0]["mimeType"],
             "image/png",
             "mime must come from the bytes, not the extension"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_non_image_file_is_explained_not_silently_skipped() {
         // Anything that isn't a decodable image must still tell the agent it
         // cannot see — a silently text-only result looks like success.
-        let dir = std::env::temp_dir().join("chrome-use-mcp-nonimage-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let pdf = dir.join("report.pdf");
+        let tmp = tempfile::tempdir().unwrap();
+        let pdf = tmp.path().join("report.pdf");
         std::fs::write(&pdf, b"%PDF-1.7\nnot an image").unwrap();
 
         let mut result = screenshot_result(pdf.to_str().unwrap());
-        attach_screenshot_image(&mut result);
+        attach_screenshot_image_within(&mut result, MAX_INLINE_IMAGE_BYTES);
 
         assert!(image_blocks(&result).is_empty());
         let texts: Vec<&str> = result["content"]
@@ -2077,7 +2098,48 @@ mod tests {
             texts.iter().any(|t| t.contains("not a recognized image")),
             "expected an explanation, got {texts:?}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_zero_budget_disables_inlining_without_a_note() {
+        // Switching inlining off is a host decision, not a failure: the agent
+        // asked for a file on disk and got one. Appending "you cannot see it"
+        // on every capture would be noise the agent can do nothing about.
+        let tmp = tempfile::tempdir().unwrap();
+        let png = tmp.path().join("shot.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\npixels").unwrap();
+
+        let mut result = screenshot_result(png.to_str().unwrap());
+        attach_screenshot_image_within(&mut result, 0);
+
+        assert!(image_blocks(&result).is_empty());
+        assert_eq!(
+            result["content"].as_array().unwrap().len(),
+            1,
+            "no extra block of any kind when inlining is off"
+        );
+    }
+
+    #[test]
+    fn the_budget_override_is_read_from_the_environment() {
+        let guard = crate::test_utils::EnvGuard::new(&[MAX_INLINE_IMAGE_BYTES_VAR]);
+
+        guard.remove(MAX_INLINE_IMAGE_BYTES_VAR);
+        assert_eq!(max_inline_image_bytes(), MAX_INLINE_IMAGE_BYTES);
+
+        guard.set(MAX_INLINE_IMAGE_BYTES_VAR, "4096");
+        assert_eq!(max_inline_image_bytes(), 4096);
+
+        guard.set(MAX_INLINE_IMAGE_BYTES_VAR, "0");
+        assert_eq!(
+            max_inline_image_bytes(),
+            0,
+            "0 must mean 'off', not 'unset'"
+        );
+
+        // Garbage must not fail the screenshot — fall back to the default.
+        guard.set(MAX_INLINE_IMAGE_BYTES_VAR, "two megabytes");
+        assert_eq!(max_inline_image_bytes(), MAX_INLINE_IMAGE_BYTES);
     }
 
     #[test]
