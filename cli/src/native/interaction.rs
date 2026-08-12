@@ -39,6 +39,32 @@ pub fn cursor_known_off() -> bool {
     CURSOR_STATE.load(std::sync::atomic::Ordering::Relaxed) == 2
 }
 
+/// Consecutive inconclusive `ABExt.driveCursor` replies (`no-tab`, `bad-coords`,
+/// a shape we don't recognize) before the cursor is treated as off. Those are
+/// transient in principle, so one of them must not disable the cursor — but an
+/// extension that returns them *every* time would otherwise make every click pay
+/// a rect lookup, two round trips and [`CURSOR_LEAD_MS`] forever.
+const CURSOR_INCONCLUSIVE_LIMIT: u8 = 3;
+
+static CURSOR_INCONCLUSIVE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// What one `ABExt.driveCursor` reply says about the overlay: `Some(state)` to
+/// move [`CURSOR_STATE`] there, `None` when the reply proves nothing.
+///
+/// Split out from the round trip so the decision table is unit-testable — the
+/// caller needs a live CDP client, this doesn't.
+fn cursor_state_from_reply(drawn: Option<bool>, reason: Option<&str>) -> Option<u8> {
+    match (drawn, reason) {
+        (Some(true), _) => Some(1),
+        // Only an explicit `disabled` proves the overlay is off. `no-tab` and
+        // `bad-coords` are transient — caching them on the first sighting would
+        // silently kill the cursor (and the hide-during-screenshot that depends
+        // on it) for the daemon's whole life.
+        (Some(false), Some("disabled")) => Some(2),
+        _ => None,
+    }
+}
+
 /// Mirror a DOM-dispatched click onto the on-page cursor overlay.
 ///
 /// The extension mirrors `Input.dispatchMouseEvent` automatically, but a relay
@@ -58,23 +84,32 @@ async fn drive_cursor(client: &CdpClient, session_id: &str, x: f64, y: f64, clic
         )
         .await;
     match reply {
-        // Only an explicit `disabled` proves the overlay is off. `no-tab` and
-        // `bad-coords` are transient — caching them would silently kill the
-        // cursor (and the hide-during-screenshot) for the daemon's whole life.
         Ok(v) => {
             let drawn = v.get("drawn").and_then(serde_json::Value::as_bool);
             let reason = v.get("reason").and_then(serde_json::Value::as_str);
-            let next = match (drawn, reason) {
-                (Some(true), _) => 1,
-                (Some(false), Some("disabled")) => 2,
-                _ => return, // transient: leave the state as-is and retry later
-            };
-            CURSOR_STATE.store(next, Ordering::Relaxed);
+            match cursor_state_from_reply(drawn, reason) {
+                Some(next) => {
+                    CURSOR_INCONCLUSIVE.store(0, Ordering::Relaxed);
+                    CURSOR_STATE.store(next, Ordering::Relaxed);
+                }
+                // Inconclusive: keep the state, but stop retrying forever.
+                None => {
+                    let seen = CURSOR_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed) + 1;
+                    if seen >= CURSOR_INCONCLUSIVE_LIMIT {
+                        let _ = CURSOR_STATE.compare_exchange(
+                            0,
+                            2,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        );
+                    }
+                }
+            }
         }
         // An extension predating `ABExt.driveCursor` errors every time. Stop
-        // paying resolve + two round trips + the lead delay on every click — but
-        // only if the cursor has never worked; a hiccup shouldn't disable a
-        // cursor we've already seen drawing.
+        // paying the rect lookup + two round trips + the lead delay on every
+        // click — but only if the cursor has never worked; a hiccup shouldn't
+        // disable a cursor we've already seen drawing.
         Err(_) => {
             let _ = CURSOR_STATE.compare_exchange(0, 2, Ordering::Relaxed, Ordering::Relaxed);
         }
@@ -148,24 +183,6 @@ pub async fn click(
         && click_count == 1
         && crate::connect::relay_url().is_some()
     {
-        // Show the cursor travelling to the target before the DOM click fires.
-        // Skipped entirely once we know the overlay is off, so the default path
-        // costs nothing. Resolution failures just mean no cursor, never no click.
-        if CURSOR_STATE.load(std::sync::atomic::Ordering::Relaxed) != 2 {
-            if let Ok((cx, cy, _w, _h, cursor_session)) = resolve_element_center(
-                client,
-                session_id,
-                ref_map,
-                selector_or_ref,
-                iframe_sessions,
-            )
-            .await
-            {
-                drive_cursor(client, &cursor_session, cx, cy, false).await;
-                tokio::time::sleep(std::time::Duration::from_millis(CURSOR_LEAD_MS)).await;
-                drive_cursor(client, &cursor_session, cx, cy, true).await;
-            }
-        }
         return dom_click(
             client,
             session_id,
@@ -349,6 +366,7 @@ async fn dom_click(
         iframe_sessions,
     )
     .await?;
+    show_cursor_travelling_to(client, session_id, &effective_session_id, &object_id).await;
     client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
@@ -364,6 +382,65 @@ async fn dom_click(
         .await?;
     wait_for_paint_settled(client, &effective_session_id).await;
     Ok(())
+}
+
+/// Move the on-page cursor onto the element a DOM click is about to hit, then
+/// mark the click — the visible half of what `Input.dispatchMouseEvent` gives
+/// for free on the coordinate path.
+///
+/// The centre comes from the object we already resolved for the click, not from
+/// a second `resolve_element_center`: that would re-run identity verification
+/// and occlusion checks for a purely cosmetic overlay, and could resolve a
+/// *different* node than the one being clicked if the page moved in between.
+///
+/// Skipped for an element inside an iframe: `getBoundingClientRect` there is
+/// frame-local, and the overlay lives in the top document, so the cursor would
+/// be drawn somewhere the element isn't. Best-effort throughout — no cursor is
+/// always better than no click.
+async fn show_cursor_travelling_to(
+    client: &CdpClient,
+    page_session_id: &str,
+    effective_session_id: &str,
+    object_id: &str,
+) {
+    // The overlay is an extension feature: on a browser we launched ourselves
+    // there is nobody to answer `ABExt.driveCursor`.
+    if CURSOR_STATE.load(std::sync::atomic::Ordering::Relaxed) == 2
+        || effective_session_id != page_session_id
+        || crate::connect::relay_url().is_none()
+    {
+        return;
+    }
+    let rect = client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: "function() { const r = this.getBoundingClientRect(); \
+                     return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }"
+                    .to_string(),
+                object_id: Some(object_id.to_string()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(effective_session_id),
+        )
+        .await;
+    let Some(value) = rect
+        .ok()
+        .and_then(|v| v.get("result")?.get("value").cloned())
+    else {
+        return;
+    };
+    let (Some(x), Some(y)) = (
+        value.get("x").and_then(Value::as_f64),
+        value.get("y").and_then(Value::as_f64),
+    ) else {
+        return;
+    };
+    drive_cursor(client, page_session_id, x, y, false).await;
+    tokio::time::sleep(std::time::Duration::from_millis(CURSOR_LEAD_MS)).await;
+    drive_cursor(client, page_session_id, x, y, true).await;
 }
 
 /// Trusted activation of an element inside an iframe (issue #39). Focuses the
@@ -2891,5 +2968,39 @@ mod tests {
         assert_eq!(key_text("ArrowUp"), None);
         assert_eq!(key_text("Backspace"), None);
         assert_eq!(key_text("Delete"), None);
+    }
+
+    #[test]
+    fn a_drawn_cursor_marks_the_overlay_on() {
+        assert_eq!(cursor_state_from_reply(Some(true), None), Some(1));
+        // `drawn: true` wins regardless of any reason riding along.
+        assert_eq!(cursor_state_from_reply(Some(true), Some("no-tab")), Some(1));
+    }
+
+    #[test]
+    fn only_an_explicit_disabled_switches_the_cursor_off() {
+        assert_eq!(
+            cursor_state_from_reply(Some(false), Some("disabled")),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn transient_refusals_prove_nothing_about_the_overlay() {
+        // `no-tab` happens when the session's tab isn't registered yet on the
+        // first click; `bad-coords` when the element resolved to something
+        // degenerate. Treating either as "off" would kill the cursor — and the
+        // hide-during-screenshot that rides on the same state — for the rest of
+        // the daemon's life, so both must stay inconclusive.
+        assert_eq!(cursor_state_from_reply(Some(false), Some("no-tab")), None);
+        assert_eq!(
+            cursor_state_from_reply(Some(false), Some("bad-coords")),
+            None
+        );
+        // An unrecognized shape (a newer/older extension) is inconclusive too,
+        // never a silent "off".
+        assert_eq!(cursor_state_from_reply(None, None), None);
+        assert_eq!(cursor_state_from_reply(Some(false), None), None);
+        assert_eq!(cursor_state_from_reply(None, Some("something-new")), None);
     }
 }
