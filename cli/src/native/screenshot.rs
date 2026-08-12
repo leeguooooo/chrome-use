@@ -134,8 +134,15 @@ pub async fn take_screenshot(
         false
     };
 
+    // Hide the agent cursor so it isn't baked into an image the model then
+    // reasons about (it would read as page content). Skipped when the overlay is
+    // known to be off; best-effort either way.
+    set_cursor_visible(client, session_id, false).await;
+
     let base64 =
         capture_screenshot_base64(client, session_id, ref_map, options, iframe_sessions).await;
+
+    set_cursor_visible(client, session_id, true).await;
 
     if overlay_injected {
         let _ = remove_annotation_overlay(client, session_id).await;
@@ -170,6 +177,21 @@ pub async fn take_screenshot(
         base64,
         annotations,
     })
+}
+
+/// Show/hide the extension's cursor overlay around a capture. No-op on a launched
+/// browser or an extension that predates `ABExt.setCursorVisible`.
+async fn set_cursor_visible(client: &CdpClient, session_id: &str, visible: bool) {
+    if crate::native::interaction::cursor_known_off() || crate::connect::relay_url().is_none() {
+        return;
+    }
+    let _ = client
+        .send_command_typed::<_, serde_json::Value>(
+            "ABExt.setCursorVisible",
+            &serde_json::json!({ "sessionId": session_id, "visible": visible }),
+            None,
+        )
+        .await;
 }
 
 async fn capture_screenshot_base64(

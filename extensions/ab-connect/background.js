@@ -706,6 +706,56 @@ async function handleForwardCdpCommand(msg) {
     return { ungrouped: tabId ?? null }
   }
 
+  // Drive the on-page cursor explicitly. `maybeDriveCursor` below mirrors
+  // `Input.dispatchMouseEvent`, but on the relay a left click is dispatched
+  // through the DOM instead (see `prefer_dom_dispatch` in the daemon), which
+  // never produces a mouse event for it to mirror — so those clicks were
+  // invisible even with the overlay switched on. The daemon resolves the element
+  // centre and calls this directly for that path. No-op when the cursor is off.
+  if (method === 'ABExt.driveCursor') {
+    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    const x = Number(params?.x)
+    const y = Number(params?.y)
+    // `reason` matters: the daemon caches "disabled" to stop paying for the round
+    // trip, but must NOT cache a transient no-tab (a session tab not registered
+    // yet on the first click) — that would switch the cursor off for the rest of
+    // the daemon's life, including the hide-during-screenshot it depends on.
+    if (!cursorEnabled) return { drawn: false, reason: 'disabled' }
+    if (tabId == null) return { drawn: false, reason: 'no-tab' }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return { drawn: false, reason: 'bad-coords' }
+    }
+    await sendCdpToTab(tabId, 'Runtime.evaluate', {
+      // Clear `display` first: a screenshot whose restore round-trip failed would
+      // otherwise leave the overlay hidden forever (the draw path only touches
+      // opacity/transform), so drawing self-heals it.
+      expression:
+        '(function(){try{var c=window.__abCursor;if(c&&c.host)c.host.style.display="";}catch(e){}})();' +
+        cursorOverlayExpression(x, y, !!params?.click),
+      returnByValue: false,
+      awaitPromise: false,
+    }).catch(() => {})
+    return { drawn: true }
+  }
+
+  // Hide/show the overlay around a capture so the cursor doesn't end up baked
+  // into screenshots the agent then reasons about.
+  if (method === 'ABExt.setCursorVisible') {
+    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    if (!cursorEnabled || tabId == null) return { applied: false }
+    const show = !!params?.visible
+    await sendCdpToTab(tabId, 'Runtime.evaluate', {
+      expression:
+        '(function(){try{var c=window.__abCursor;if(!c||!c.host)return;' +
+        'c.host.style.display=' +
+        (show ? '""' : '"none"') +
+        ';}catch(e){}})()',
+      returnByValue: false,
+      awaitPromise: false,
+    }).catch(() => {})
+    return { applied: true }
+  }
+
   // On-demand adopt of a PRE-EXISTING tab (the user's own, or another session's).
   // Since we no longer eagerly attach the user's tabs (banner!), `adopt <spec>`
   // can't find them via the already-attached target list — so discover by

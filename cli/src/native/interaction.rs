@@ -21,6 +21,66 @@ fn prefer_dom_dispatch(ref_map: &RefMap, selector_or_ref: &str) -> bool {
     ref_map.ref_is_in_iframe(selector_or_ref) || crate::connect::relay_url().is_some()
 }
 
+/// How long the cursor is shown travelling to the target before the click fires.
+/// Without a lead the overlay and the click land in the same frame and the click
+/// reads as instantaneous — you see the aftermath, never the movement.
+const CURSOR_LEAD_MS: u64 = 250;
+
+/// Whether the extension's cursor overlay is switched on: 0 = unknown, 1 = on,
+/// 2 = off. The overlay is an extension-side setting the daemon can't read, so we
+/// learn it from the first `ABExt.driveCursor` reply and then stop paying for the
+/// round trip when it's off (the common case). Toggling the setting takes effect
+/// on the next daemon start.
+static CURSOR_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// True once we've confirmed the overlay is switched off, so callers can skip
+/// cursor round trips entirely on the default path.
+pub fn cursor_known_off() -> bool {
+    CURSOR_STATE.load(std::sync::atomic::Ordering::Relaxed) == 2
+}
+
+/// Mirror a DOM-dispatched click onto the on-page cursor overlay.
+///
+/// The extension mirrors `Input.dispatchMouseEvent` automatically, but a relay
+/// click goes through the DOM and produces no such event — so with the overlay
+/// enabled the pointer sat motionless while things got clicked. Best-effort
+/// throughout: a failure here must never fail the click.
+async fn drive_cursor(client: &CdpClient, session_id: &str, x: f64, y: f64, click: bool) {
+    use std::sync::atomic::Ordering;
+    if CURSOR_STATE.load(Ordering::Relaxed) == 2 {
+        return;
+    }
+    let reply = client
+        .send_command_typed::<_, serde_json::Value>(
+            "ABExt.driveCursor",
+            &serde_json::json!({ "sessionId": session_id, "x": x, "y": y, "click": click }),
+            None,
+        )
+        .await;
+    match reply {
+        // Only an explicit `disabled` proves the overlay is off. `no-tab` and
+        // `bad-coords` are transient — caching them would silently kill the
+        // cursor (and the hide-during-screenshot) for the daemon's whole life.
+        Ok(v) => {
+            let drawn = v.get("drawn").and_then(serde_json::Value::as_bool);
+            let reason = v.get("reason").and_then(serde_json::Value::as_str);
+            let next = match (drawn, reason) {
+                (Some(true), _) => 1,
+                (Some(false), Some("disabled")) => 2,
+                _ => return, // transient: leave the state as-is and retry later
+            };
+            CURSOR_STATE.store(next, Ordering::Relaxed);
+        }
+        // An extension predating `ABExt.driveCursor` errors every time. Stop
+        // paying resolve + two round trips + the lead delay on every click — but
+        // only if the cursor has never worked; a hiccup shouldn't disable a
+        // cursor we've already seen drawing.
+        Err(_) => {
+            let _ = CURSOR_STATE.compare_exchange(0, 2, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+}
+
 pub async fn click(
     client: &CdpClient,
     session_id: &str,
@@ -88,6 +148,24 @@ pub async fn click(
         && click_count == 1
         && crate::connect::relay_url().is_some()
     {
+        // Show the cursor travelling to the target before the DOM click fires.
+        // Skipped entirely once we know the overlay is off, so the default path
+        // costs nothing. Resolution failures just mean no cursor, never no click.
+        if CURSOR_STATE.load(std::sync::atomic::Ordering::Relaxed) != 2 {
+            if let Ok((cx, cy, _w, _h, cursor_session)) = resolve_element_center(
+                client,
+                session_id,
+                ref_map,
+                selector_or_ref,
+                iframe_sessions,
+            )
+            .await
+            {
+                drive_cursor(client, &cursor_session, cx, cy, false).await;
+                tokio::time::sleep(std::time::Duration::from_millis(CURSOR_LEAD_MS)).await;
+                drive_cursor(client, &cursor_session, cx, cy, true).await;
+            }
+        }
         return dom_click(
             client,
             session_id,
