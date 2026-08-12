@@ -1715,6 +1715,12 @@ mod tests {
 
     #[test]
     fn test_build_args_headed_no_headless_flag() {
+        // Must hold the env lock: `test_build_args_allow_headless_escape` sets
+        // AGENT_BROWSER_ALLOW_HEADLESS=1, and this test reads it through
+        // build_chrome_args. Without the guard the two race and this one sees
+        // the other's value, producing a spurious --window-size failure.
+        let g = EnvGuard::new(&["AGENT_BROWSER_ALLOW_HEADLESS"]);
+        g.remove("AGENT_BROWSER_ALLOW_HEADLESS");
         let opts = LaunchOptions {
             headless: false,
             ..Default::default()

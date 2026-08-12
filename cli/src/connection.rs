@@ -96,9 +96,12 @@ impl Connection {
 ///
 /// A CLI invocation holds this across relay recovery and daemon startup so two
 /// processes cannot unlink, stop, or replace the same session concurrently.
-/// The kernel releases the lock automatically if the holder exits.
+/// The OS releases the lock automatically when the holder exits (or this
+/// struct drops), because dropping `_file` closes the fd/handle the lock is
+/// held on — on Unix that releases the `flock`, on Windows the matching
+/// `UnlockFile` isn't even required: an open handle's `LockFileEx` region is
+/// released when the handle is closed.
 pub struct SessionLifecycleLock {
-    #[cfg(unix)]
     _file: fs::File,
 }
 
@@ -107,14 +110,26 @@ pub struct SessionLifecycleLock {
 /// The native-messaging host is shared by every session, so only one process
 /// may restart it while the relay endpoint is absent.
 pub struct RelayRecoveryLock {
-    #[cfg(unix)]
     _file: fs::File,
 }
 
-#[cfg(unix)]
+/// Acquire a cross-platform, cross-process exclusive advisory lock on `path`,
+/// blocking until it's available.
+///
+/// Was `#[cfg(unix)]`-only (flock via libc) with a `#[cfg(not(unix))]` stub
+/// that returned an empty struct locking NOTHING — so on Windows two
+/// concurrent `chrome-use` invocations both observed "no daemon exists," both
+/// spawned one, and raced on the port file. That race is the root cause behind
+/// wedged daemons holding stale debugger attachments after concurrent agents
+/// collide. `std::fs::File::lock` is `flock(LOCK_EX)` on Unix and `LockFileEx`
+/// on Windows, so this now actually locks on both — no third-party crate.
+///
+/// The wait is unbounded on purpose: the OS drops the lock when the holder
+/// exits, so the only way to block forever is a live peer that is itself stuck,
+/// and timing out would just replace a wait with the concurrent-spawn race this
+/// exists to prevent. It is announced instead — a silent multi-second stall
+/// during daemon startup is indistinguishable from a hang.
 fn acquire_file_lock(path: &std::path::Path, label: &str) -> Result<fs::File, String> {
-    use std::os::unix::io::AsRawFd;
-
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create {label} lock directory: {e}"))?;
@@ -125,41 +140,27 @@ fn acquire_file_lock(path: &std::path::Path, label: &str) -> Result<fs::File, St
         .truncate(false)
         .open(path)
         .map_err(|e| format!("Failed to open {label} lock {}: {e}", path.display()))?;
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(format!(
-            "Failed to acquire {label} lock {}: {}",
-            path.display(),
-            std::io::Error::last_os_error()
-        ));
+    if file.try_lock().is_err() {
+        eprintln!(
+            "{} waiting for another chrome-use process to release the {label} lock...",
+            crate::color::warning_indicator()
+        );
+        file.lock()
+            .map_err(|e| format!("Failed to acquire {label} lock {}: {}", path.display(), e))?;
     }
     Ok(file)
 }
 
 pub fn lock_session_lifecycle(session: &str) -> Result<SessionLifecycleLock, String> {
-    #[cfg(unix)]
-    {
-        let path = get_socket_dir().join(format!("{session}.lifecycle.lock"));
-        let file = acquire_file_lock(&path, "session lifecycle")?;
-        Ok(SessionLifecycleLock { _file: file })
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = session;
-        Ok(SessionLifecycleLock {})
-    }
+    let path = get_socket_dir().join(format!("{session}.lifecycle.lock"));
+    let file = acquire_file_lock(&path, "session lifecycle")?;
+    Ok(SessionLifecycleLock { _file: file })
 }
 
 pub fn lock_relay_recovery() -> Result<RelayRecoveryLock, String> {
-    #[cfg(unix)]
-    {
-        let path = config_home().join("relay-recovery.lock");
-        let file = acquire_file_lock(&path, "relay recovery")?;
-        Ok(RelayRecoveryLock { _file: file })
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(RelayRecoveryLock {})
-    }
+    let path = config_home().join("relay-recovery.lock");
+    let file = acquire_file_lock(&path, "relay recovery")?;
+    Ok(RelayRecoveryLock { _file: file })
 }
 
 /// Brand-compat config directory basename. The project renamed
@@ -1221,6 +1222,66 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
 mod tests {
     use super::*;
     use crate::test_utils::EnvGuard;
+
+    // === Cross-Platform File Lock Tests (Fix for the Windows no-op stub) ===
+    //
+    // `acquire_file_lock` takes its path as a plain argument rather than
+    // reading it from the environment, so these run with no env var
+    // mutation — safe under this test binary's parallel execution and the
+    // shared `ENV_MUTEX` other tests here rely on.
+
+    #[test]
+    fn test_acquire_file_lock_creates_file_and_returns_open_handle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test.lock");
+
+        let file = acquire_file_lock(&path, "test").expect("should acquire lock");
+        assert!(path.exists());
+        drop(file);
+    }
+
+    #[test]
+    fn test_acquire_file_lock_creates_missing_parent_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("nested").join("dir").join("test.lock");
+
+        let file = acquire_file_lock(&path, "test").expect("should acquire lock");
+        assert!(path.exists());
+        drop(file);
+    }
+
+    #[test]
+    fn test_acquire_file_lock_excludes_concurrent_holder_on_this_platform() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test.lock");
+
+        let held = acquire_file_lock(&path, "test").expect("first lock should succeed");
+
+        // A second, independent handle on the SAME path must NOT be able to
+        // take the exclusive lock while the first is held. This is exactly
+        // the Windows regression Fix 1 closes: the old `#[cfg(not(unix))]`
+        // branch returned an empty struct locking nothing, so two concurrent
+        // `chrome-use` invocations on Windows both believed the lock was
+        // free and raced on daemon startup.
+        let contender = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&path)
+            .expect("should open contender handle");
+        assert!(
+            contender.try_lock().is_err(),
+            "second handle must not acquire the lock while the first holds it"
+        );
+
+        drop(held);
+
+        // Dropping the first handle closes its fd/handle, which must release
+        // the lock — the RAII-drop semantics `SessionLifecycleLock` and
+        // `RelayRecoveryLock` depend on.
+        contender
+            .try_lock()
+            .expect("lock must be free once the first holder is dropped");
+    }
 
     #[test]
     fn test_get_socket_dir_explicit_override() {
