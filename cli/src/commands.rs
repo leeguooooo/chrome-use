@@ -4578,6 +4578,7 @@ mod tests {
     fn default_flags() -> Flags {
         Flags {
             session: "test".to_string(),
+            session_explicit: true,
             json: false,
             headed: false,
             debug: false,
