@@ -470,11 +470,28 @@ pub struct Flags {
 /// that can separate two agents working in the SAME directory (the exact case a
 /// cwd-based name cannot). `AGENT_BROWSER_SESSION_ID` lets a runner inject its
 /// own id explicitly (e.g. cmux can export it per agent).
+///
+/// Resolution runs in three tiers: these explicit agent ids, then any var
+/// following the `<PRODUCT>_SESSION_ID` convention (see [`AGENT_ID_SUFFIXES`]),
+/// then [`TERMINAL_ID_VARS`]. Agent ids must outrank terminal ids — two agents
+/// sharing one terminal tab have distinct agent ids but the SAME `WT_SESSION` /
+/// `TMUX_PANE`, so keying on the terminal would collapse them onto one daemon.
+///
+/// Every id here is inherited by child processes, so a `chrome-use` invoked from
+/// an agent's shell tool resolves to the same session as one invoked by that
+/// agent's MCP server.
 const AGENT_ID_VARS: &[&str] = &[
     "AGENT_BROWSER_SESSION_ID",
+    "OPENCODE_PID",
     "CODEX_THREAD_ID",
     "CMUX_SURFACE_ID",
     "CMUX_CLAUDE_PID",
+    "CLAUDE_PID",
+];
+
+/// Per-terminal ids. Coarser than an agent id (one tab can host several agents),
+/// so these are the last resort before falling back to `default`.
+const TERMINAL_ID_VARS: &[&str] = &[
     "GHOSTTY_SURFACE_ID",
     "TERM_SESSION_ID",
     "ITERM_SESSION_ID",
@@ -483,7 +500,52 @@ const AGENT_ID_VARS: &[&str] = &[
     "TMUX_PANE",
     "STY",
     "WINDOWID",
+    "WT_SESSION",
+    // macOS Terminal.app. Listed here (not left to the convention scan) because
+    // it is per-TERMINAL, not per-agent: two agents in one tab share it. Kept
+    // after TERM_SESSION_ID/ITERM_SESSION_ID so existing macOS users keep the
+    // name they already derive.
+    "SHELL_SESSION_ID",
 ];
+
+/// Naming conventions agent harnesses already follow for a per-session/per-task
+/// id. Matching the CONVENTION rather than a list of products is what makes this
+/// work for a harness nobody here has heard of: any tool exporting
+/// `<PRODUCT>_SESSION_ID` (Claude Code), `<PRODUCT>_THREAD_ID`, or
+/// `<PRODUCT>_CONVERSATION_ID` gets isolation with no change here.
+const AGENT_ID_SUFFIXES: &[&str] = &["_SESSION_ID", "_THREAD_ID", "_CONVERSATION_ID"];
+
+/// Vars that match [`AGENT_ID_SUFFIXES`] but are shared by every process in a
+/// login session or desktop. Keying on one would give every concurrent agent the
+/// SAME name — precisely the collision this mechanism exists to prevent — so they
+/// are excluded rather than silently trusted.
+///
+/// `GNOME_DESKTOP_SESSION_ID` is the dangerous one: modern gnome-session exports
+/// it as the literal constant `this-is-deprecated`, so on a GNOME desktop EVERY
+/// agent would derive an identical name. It also sorts early enough to outrank a
+/// genuine per-task id.
+const AGENT_ID_SUFFIX_DENYLIST: &[&str] = &["XDG_SESSION_ID", "GNOME_DESKTOP_SESSION_ID"];
+
+/// Find a per-agent id from any harness following the `AGENT_ID_SUFFIXES`
+/// convention. Env iteration order is unspecified, so hits are sorted to keep the
+/// derived session name stable across invocations — an unstable name would spawn
+/// a fresh daemon on every command.
+fn scan_conventional_agent_id(vars: &[(String, String)]) -> Option<String> {
+    let mut hits: Vec<String> = vars
+        .iter()
+        .filter(|(k, v)| {
+            !v.is_empty()
+                && AGENT_ID_SUFFIXES.iter().any(|s| k.ends_with(s))
+                && !AGENT_ID_SUFFIX_DENYLIST.contains(&k.as_str())
+                && !AGENT_ID_VARS.contains(&k.as_str())
+                && !TERMINAL_ID_VARS.contains(&k.as_str())
+        })
+        // Key included so two harnesses exporting the same value still differ.
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    hits.sort();
+    hits.into_iter().next()
+}
 
 /// Auto-derive the default session so concurrent agents don't all collide on one
 /// shared `default` tab group. A session name maps to its own tab group AND
@@ -497,10 +559,34 @@ const AGENT_ID_VARS: &[&str] = &[
 /// `default` — unchanged behaviour, since there's nothing stable to isolate on.
 /// `--session` / `AGENT_BROWSER_SESSION` are resolved before this and override it.
 fn default_session_name() -> String {
-    let Some(agent_id) = AGENT_ID_VARS
-        .iter()
-        .find_map(|v| env::var(v).ok().filter(|s| !s.is_empty()))
-    else {
+    session_name_for(pick_agent_id(&env::vars().collect::<Vec<_>>()))
+}
+
+/// Choose the id to key the session on, in tier order: an explicit/known agent
+/// id, then any var following the `<PRODUCT>_SESSION_ID` convention, then a
+/// terminal id.
+///
+/// Takes the environment as an argument rather than reading it. Mutating process
+/// env to test this would race every other test that reads env — and in a
+/// threaded test binary that is undefined behaviour, not just flakiness.
+fn pick_agent_id(vars: &[(String, String)]) -> Option<String> {
+    let lookup = |name: &str| {
+        vars.iter()
+            .find(|(k, v)| k == name && !v.is_empty())
+            .map(|(_, v)| v.clone())
+    };
+    let first_set = |names: &[&str]| names.iter().find_map(|n| lookup(n));
+
+    first_set(AGENT_ID_VARS)
+        .or_else(|| scan_conventional_agent_id(vars))
+        .or_else(|| first_set(TERMINAL_ID_VARS))
+}
+
+/// Render the session name for a chosen agent id. `None` keeps the historical
+/// `default` behaviour — with nothing stable to isolate on, there is nothing to
+/// isolate.
+fn session_name_for(agent_id: Option<String>) -> String {
+    let Some(agent_id) = agent_id else {
         return "default".to_string();
     };
     let tag = format!("{:06x}", session_hash(&agent_id) & 0x00ff_ffff);
@@ -1858,27 +1944,103 @@ mod tests {
         assert!(sanitize_session_component(&"a".repeat(100)).len() <= 24);
     }
 
+    fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
     #[test]
     fn default_session_isolates_concurrent_agents() {
         use crate::validation::is_valid_session_name;
-        let guard = EnvGuard::new(AGENT_ID_VARS);
-        for &v in AGENT_ID_VARS {
-            guard.remove(v);
-        }
-        // Plain shell with no per-agent id → unchanged "default" behaviour.
-        assert_eq!(default_session_name(), "default");
+        // Plain shell with no per-agent id -> unchanged "default" behaviour.
+        assert_eq!(session_name_for(pick_agent_id(&env(&[]))), "default");
 
         // Codex exposes one stable id per task. Recognizing it is what keeps
         // concurrent Codex tasks in the same checkout off the shared `default`
         // daemon (issue #149).
-        guard.set("CODEX_THREAD_ID", "thread-one-uuid");
-        let one = default_session_name();
+        let one = session_name_for(pick_agent_id(&env(&[("CODEX_THREAD_ID", "thread-one")])));
         assert!(one.starts_with("cu-"), "got {one}");
         assert!(is_valid_session_name(&one));
-        assert_eq!(one, default_session_name(), "must be stable across calls");
+        assert_eq!(
+            one,
+            session_name_for(pick_agent_id(&env(&[("CODEX_THREAD_ID", "thread-one")]))),
+            "must be stable across calls"
+        );
 
-        // A different task (different id) → a different session, no collision.
-        guard.set("CODEX_THREAD_ID", "thread-two-uuid");
-        assert_ne!(one, default_session_name(), "two agents must not collide");
+        // A different task (different id) -> a different session, no collision.
+        let two = session_name_for(pick_agent_id(&env(&[("CODEX_THREAD_ID", "thread-two")])));
+        assert_ne!(one, two, "two agents must not collide");
+    }
+
+    #[test]
+    fn unknown_harness_is_isolated_by_convention() {
+        // A harness this build has never heard of, following the usual naming.
+        let one = pick_agent_id(&env(&[("SOMEFUTUREAGENT_SESSION_ID", "task-one")]));
+        let two = pick_agent_id(&env(&[("SOMEFUTUREAGENT_SESSION_ID", "task-two")]));
+        assert!(one.is_some(), "conventional id should be recognized");
+        assert_ne!(
+            one, two,
+            "an unrecognized harness must still isolate its concurrent tasks"
+        );
+        assert!(session_name_for(one).starts_with("cu-"));
+    }
+
+    #[test]
+    fn agent_id_outranks_terminal_id() {
+        // Two agents sharing ONE terminal tab have the same WT_SESSION but their
+        // own agent ids. The agent id has to win, or they collapse onto a single
+        // daemon and stomp each other's refs -- the exact clash this prevents.
+        let tab = ("WT_SESSION", "same-terminal-tab-guid");
+        let one = pick_agent_id(&env(&[tab, ("SOMEFUTUREAGENT_SESSION_ID", "agent-one")]));
+        let two = pick_agent_id(&env(&[tab, ("SOMEFUTUREAGENT_SESSION_ID", "agent-two")]));
+        assert_ne!(one, two, "agent id must outrank the shared terminal id");
+
+        // With no agent id at all, the terminal id still beats nothing.
+        let terminal_only = pick_agent_id(&env(&[tab]));
+        assert_eq!(terminal_only.as_deref(), Some("same-terminal-tab-guid"));
+        assert_ne!(session_name_for(terminal_only), "default");
+    }
+
+    #[test]
+    fn shared_login_session_ids_are_not_mistaken_for_agent_ids() {
+        // These match the convention but are identical for every process in one
+        // login -- trusting one would give all agents the SAME session, which is
+        // the bug, not the fix. GNOME literally exports the constant string
+        // "this-is-deprecated", so every agent on a GNOME desktop would collide.
+        assert_eq!(pick_agent_id(&env(&[("XDG_SESSION_ID", "3")])), None);
+        assert_eq!(
+            pick_agent_id(&env(&[("GNOME_DESKTOP_SESSION_ID", "this-is-deprecated")])),
+            None
+        );
+        assert_eq!(
+            session_name_for(pick_agent_id(&env(&[("XDG_SESSION_ID", "3")]))),
+            "default"
+        );
+    }
+
+    #[test]
+    fn per_terminal_ids_never_outrank_a_real_agent_id() {
+        // SHELL_SESSION_ID (macOS Terminal.app) ends in _SESSION_ID and would
+        // otherwise be picked up by the convention scan and beat a genuine
+        // per-agent id -- but it is per-TERMINAL, so two agents in one tab share
+        // it. It must resolve in the terminal tier, i.e. only as a last resort.
+        let shell = ("SHELL_SESSION_ID", "one-terminal-tab");
+        let a = pick_agent_id(&env(&[shell, ("SOMEFUTUREAGENT_SESSION_ID", "agent-a")]));
+        let b = pick_agent_id(&env(&[shell, ("SOMEFUTUREAGENT_SESSION_ID", "agent-b")]));
+        assert_ne!(a, b, "two agents in one terminal must not collide");
+
+        // Alone, it is still better than falling back to `default`.
+        assert_eq!(
+            pick_agent_id(&env(&[shell])).as_deref(),
+            Some("one-terminal-tab")
+        );
+
+        // And macOS users already keyed on TERM_SESSION_ID keep that name.
+        assert_eq!(
+            pick_agent_id(&env(&[shell, ("TERM_SESSION_ID", "iterm-guid")])).as_deref(),
+            Some("iterm-guid")
+        );
     }
 }
