@@ -149,9 +149,13 @@
 
       <p>
         省略 <code>--session</code> 时，chrome-use 会优先从受支持的运行器 ID 派生稳定的独立会话。
-        Codex 任务会自动使用 <code>CODEX_THREAD_ID</code>，其他运行器可以提供
-        <code>AGENT_BROWSER_SESSION_ID</code>。没有运行器 ID 的普通 shell 仍使用
-        <code>default</code>。想显式设置当前 shell 的默认会话，用
+        Codex 任务会自动使用 <code>CODEX_THREAD_ID</code>，Claude Code 用 <code>CLAUDE_PID</code>，
+        其他运行器可以提供 <code>AGENT_BROWSER_SESSION_ID</code>；没在名单里的运行器，只要导出
+        <code>&lt;产品名&gt;_SESSION_ID</code> / <code>_THREAD_ID</code> / <code>_CONVERSATION_ID</code>
+        这类变量也会被自动识别。都没有时退回到终端 ID（<code>WT_SESSION</code>、
+        <code>TERM_SESSION_ID</code> 等），仍然什么都没有的普通 shell 才用 <code>default</code>。
+        想知道当前 shell 到底会落到哪个会话、是靠哪个变量派生的，跑 <code>chrome-use doctor</code>
+        看 <code>Default session</code> 那一行。想显式设置当前 shell 的默认会话，用
         <code>AGENT_BROWSER_SESSION=myapp</code>。会话不需要时用 <code>close</code> 关掉，用
         <code>session list</code> 看还有哪些活跃会话：
       </p>
