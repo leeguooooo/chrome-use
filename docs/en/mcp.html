@@ -109,7 +109,7 @@
         <tbody>
           <tr><td><code>chrome_use_hover</code></td><td>Hover the pointer over an element</td></tr>
           <tr><td><code>chrome_use_select</code></td><td>Pick an option in a <code>&lt;select&gt;</code> dropdown</td></tr>
-          <tr><td><code>chrome_use_screenshot</code></td><td>Capture a screenshot (output only, not for reading)</td></tr>
+          <tr><td><code>chrome_use_screenshot</code></td><td>Capture a screenshot; the result carries an MCP image block alongside the file path (still read pages with <code>snapshot</code> — a capture is for confirming what something looks like). <code>CHROME_USE_MCP_MAX_INLINE_IMAGE_BYTES</code> changes the inline budget; <code>0</code> returns the path only</td></tr>
           <tr><td><code>chrome_use_scroll</code></td><td>Scroll the page or a container</td></tr>
           <tr><td><code>chrome_use_tabs</code></td><td>List, open, natively duplicate, adopt without navigation, inspect browser-level state, close, or switch this session's tabs</td></tr>
           <tr><td><code>chrome_use_extract</code></td><td>Scrape the page into structured JSON by schema</td></tr>
