@@ -3726,6 +3726,14 @@ fn absolutize_saved_path(p: &str) -> String {
         .unwrap_or_else(|_| p.to_string())
 }
 
+/// Whether a resolved capture target is one that cannot hold page content —
+/// an empty URL or a blank/new-tab page (issue #184). Used to tell "the tab
+/// really is blank" (fine, capture it) from "we're driving a real page but the
+/// capture session landed on a blank one" (a drift, and an error).
+fn is_blank_capture_target(url: &str) -> bool {
+    url.is_empty() || url == "about:blank" || url == "about:newtab"
+}
+
 async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let annotate = cmd
         .get("annotate")
@@ -3833,6 +3841,29 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
         }),
     };
 
+    // Verify the CDP session we are about to capture is really attached to the
+    // tab this session is driving (issue #184). On the extension relay a page
+    // whose real Chrome profile injects extension frames could leave the capture
+    // session pointing at an extension-owned `about:blank` renderer while
+    // `tabs`/`snapshot` still reported the right page — the shot came back a
+    // blank image under a `✓`. A screenshot is the one verb whose output an
+    // agent cannot sanity-check, so a target it cannot confirm must fail loudly
+    // rather than write a plausible-looking file.
+    let live_url = mgr.get_url().await.unwrap_or_default();
+    let tracked_url = mgr.cached_active_url();
+    if is_blank_capture_target(&live_url) && !is_blank_capture_target(&tracked_url) {
+        return Err(format!(
+            "screenshot target drifted: this session is driving {tracked_url}, but its CDP \
+             session is attached to {} — the capture would be a blank image. Re-pin the tab \
+             (`chrome-use tab <ref>` or `chrome-use adopt <url>`) and retry.",
+            if live_url.is_empty() {
+                "an unknown target"
+            } else {
+                live_url.as_str()
+            }
+        ));
+    }
+
     if annotate {
         state.ref_map.clear();
         let _ = snapshot::take_snapshot(
@@ -3898,10 +3929,10 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
     // Stamp which page was captured so a screenshot of the wrong tab is obvious
     // (issue #8.1: relay sessions can drift to whatever tab the user activated).
-    if let Ok(url) = mgr.get_url().await {
-        if !url.is_empty() {
-            response["origin"] = json!(url);
-        }
+    // Reuses the URL read from the capture session before the shot (issue #184),
+    // so the stamp names the target that was actually captured.
+    if !live_url.is_empty() {
+        response["origin"] = json!(live_url);
     }
 
     Ok(response)
@@ -12807,6 +12838,21 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use super::is_blank_capture_target;
+
+    // issue #184: a screenshot must not report ✓ when its capture session is on a
+    // blank target while the session is driving a real page.
+    #[test]
+    fn blank_capture_targets_are_recognised() {
+        assert!(is_blank_capture_target(""));
+        assert!(is_blank_capture_target("about:blank"));
+        assert!(is_blank_capture_target("about:newtab"));
+        assert!(!is_blank_capture_target(
+            "http://127.0.0.1:8791/design.html"
+        ));
+        assert!(!is_blank_capture_target("https://example.com/"));
+    }
+
     use super::*;
 
     #[test]

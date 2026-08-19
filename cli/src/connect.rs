@@ -240,8 +240,20 @@ pub fn run_connect(args: &[String], json: bool) {
         println!("  Web Store extension id: {STORE_EXTENSION_ID}");
         println!("  unpacked/dev extension id: {EXTENSION_ID}");
         println!("  expected extension version: {expected_extension_version}");
-        match live_extension_version {
-            Some(ver) => println!("✓ live extension version: {ver}"),
+        // An outdated live extension used to print a plain ✓ next to a
+        // different "expected" number, leaving the reader to diff two version
+        // strings and with nothing to run (issue #183). Say which it is, and
+        // how to fix it.
+        match &live_extension_version {
+            Some(ver) if ver == expected_extension_version => {
+                println!("✓ live extension version: {ver}")
+            }
+            Some(ver) => println!(
+                "  ! live extension version: {ver} — OUTDATED (expected \
+                 {expected_extension_version}).\n\
+                 \x20   Update it at chrome://extensions (turn on Developer mode → Update), or \
+                 reload the unpacked build."
+            ),
             None => {
                 println!("  live extension version: unknown (relay has not reported hello yet)")
             }
@@ -1412,6 +1424,7 @@ struct ChromeExtensionStatus {
 
 fn chrome_profile_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
+    #[cfg(not(target_os = "windows"))]
     if let Some(config) = dirs::config_dir() {
         #[cfg(target_os = "macos")]
         {
@@ -1435,9 +1448,24 @@ fn chrome_profile_roots() -> Vec<PathBuf> {
                 roots.push(config.join(sub));
             }
         }
-        #[cfg(target_os = "windows")]
-        {
-            roots.push(config.join("Google").join("Chrome").join("User Data"));
+    }
+    // Windows keeps browser profiles under LOCALAPPDATA, not the Roaming
+    // AppData that `config_dir()` returns — reading the wrong root made every
+    // Windows install report "0 profiles found / not found in any Chrome
+    // profile" even while the relay was up and driving one (issue #183).
+    #[cfg(target_os = "windows")]
+    if let Some(local) = dirs::data_local_dir() {
+        for sub in [
+            "Google/Chrome",
+            "Google/Chrome Beta",
+            "Google/Chrome SxS",
+            "Chromium",
+        ] {
+            let mut root = local.clone();
+            for part in sub.split('/') {
+                root.push(part);
+            }
+            roots.push(root.join("User Data"));
         }
     }
     roots
