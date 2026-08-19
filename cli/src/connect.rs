@@ -1724,6 +1724,10 @@ pub enum ExtVersionVerdict {
     BehindStore { store: String },
     /// Live IS the newest published build; the bundled one isn't out yet.
     NewestPublished { store: String },
+    /// Live is newer than anything published, yet still behind the bundled
+    /// build — an intermediate unpacked build. Saying "you're on the published
+    /// build" here would be false, so it gets its own verdict.
+    AheadOfStore { store: String },
     /// Behind the bundled build, and the Store version is unknown (offline).
     BehindBundledStoreUnknown,
     /// Live is newer than the bundled build (unpacked dev build).
@@ -1743,7 +1747,10 @@ pub fn classify_ext_version(live: &str, bundled: &str, store: Option<&str>) -> E
         Some(s) if crate::upgrade::version_is_newer(s, live) => ExtVersionVerdict::BehindStore {
             store: s.to_string(),
         },
-        Some(s) => ExtVersionVerdict::NewestPublished {
+        Some(s) if s == live => ExtVersionVerdict::NewestPublished {
+            store: s.to_string(),
+        },
+        Some(s) => ExtVersionVerdict::AheadOfStore {
             store: s.to_string(),
         },
         None => ExtVersionVerdict::BehindBundledStoreUnknown,
@@ -1772,6 +1779,11 @@ pub fn ext_version_line(live: &str, bundled: &str, store: Option<&str>) -> Strin
              \x20   and nothing is broken. To run the bundled build now, load \
              extensions/ab-connect unpacked."
         ),
+        ExtVersionVerdict::AheadOfStore { store } => format!(
+            "✓ live extension version: {live} — ahead of everything published on the Web Store \
+             ({store}),\n\
+             \x20   behind the {bundled} this CLI bundles: an intermediate unpacked build."
+        ),
         ExtVersionVerdict::BehindBundledStoreUnknown => format!(
             "  live extension version: {live} (this CLI bundles {bundled}; couldn't reach the \
              Web Store\n\
@@ -1787,6 +1799,10 @@ pub fn ext_version_line(live: &str, bundled: &str, store: Option<&str>) -> Strin
 /// version already differs from the bundled one, and any failure (offline, CI,
 /// proxy) degrades to `None` rather than blocking a diagnostic command.
 /// `curl` matches how the CLI does its other version checks (see `upgrade`).
+/// `prodversion` only gates `minimum_chrome_version` constraints; ab-connect
+/// declares none, and the service answers with 0.5.12 even for prodversion=90 —
+/// so a fixed value is safe here. Were that ever to change, the service replies
+/// `noupdate`, which degrades to "Store version unknown", never a false claim.
 pub fn store_extension_version() -> Option<String> {
     let url = format!(
         "{UPDATE_URL}?response=updatecheck&prodversion=140.0&acceptformat=crx3\
@@ -3258,9 +3274,12 @@ mod tests {
 
     #[test]
     fn store_update_response_yields_the_published_version() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><gupdate protocol="2.0">\
-<app appid="knfcmbamhjmaonkfnjhldjedeobeafmk" status="ok"><updatecheck \
-codebase="https://x/KNFC_0_5_12_0.crx" status="ok" version="0.5.12"/></app></gupdate>"#;
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><gupdate protocol="2.0">"#,
+            r#"<app appid="knfcmbamhjmaonkfnjhldjedeobeafmk" status="ok">"#,
+            r#"<updatecheck codebase="https://x/KNFC_0_5_12_0.crx" status="ok" version="0.5.12"/>"#,
+            r#"</app></gupdate>"#,
+        );
         assert_eq!(
             parse_store_update_version(xml).as_deref(),
             Some("0.5.12"),

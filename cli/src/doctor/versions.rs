@@ -68,7 +68,19 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                              this CLI bundles {expected_ext}, not published yet"
                     ),
                 )),
-                _ => checks.push(
+                connect::ExtVersionVerdict::AheadOfStore { store } => checks.push(Check::new(
+                    "versions.extension",
+                    category,
+                    Status::Pass,
+                    format!(
+                        "extension {ext} — ahead of the published {store}, behind the bundled \
+                         {expected_ext} (intermediate unpacked build)"
+                    ),
+                )),
+                // The guard above already excludes Current / AheadOfBundled.
+                connect::ExtVersionVerdict::Current
+                | connect::ExtVersionVerdict::AheadOfBundled
+                | connect::ExtVersionVerdict::BehindBundledStoreUnknown => checks.push(
                     Check::new(
                         "versions.extension",
                         category,
