@@ -647,7 +647,23 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use tab t3                   <span class="du-cmt"># switch the session to one of them</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>              <span class="du-cmt"># drive it like any normal session</span>
 <span class="du-prompt">$</span> chrome-use extension status         <span class="du-cmt"># is the host installed?</span>
-<span class="du-prompt">$</span> chrome-use extension uninstall      <span class="du-cmt"># remove the host manifest</span></code></pre>
+<span class="du-prompt">$</span> chrome-use extension uninstall      <span class="du-cmt"># remove the host manifest</span>
+
+<span class="du-cmt"># macOS: skip the policy profile that puts Chrome in managed mode</span>
+<span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--no-profile</span>
+<span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--all-profiles</span>   <span class="du-cmt"># open the Store page in each missing profile</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">⚠️ The macOS policy profile means a managed Chrome</div>
+        The setup wizard's "silent, every profile at once" route makes Chrome "managed by your organization":
+        <strong>the "Use secure DNS" (DoH) setting is disabled and locked</strong>
+        (<a href="https://github.com/leeguooooo/chrome-use/issues/187">#187</a>), and the extension becomes
+        "installed by your administrator" with no manual update/remove button
+        (<a href="https://github.com/leeguooooo/chrome-use/issues/186">#186</a>).
+        Skip it with <code>--no-profile</code>, or undo it with
+        <code>profiles remove -identifier com.leeguoo.chrome-use.connect</code> (Chrome then uninstalls the
+        policy-installed extension — re-add it from the Store). <code>chrome-use extension status</code> always
+        reports where you stand.
       </div>
       <p>
         <code>chrome-use status</code> distinguishes an installed manifest from a runnable native-host launcher.
