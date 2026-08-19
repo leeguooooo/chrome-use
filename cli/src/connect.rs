@@ -172,7 +172,11 @@ pub fn run_connect(args: &[String], json: bool) {
             if cfg!(target_os = "macos") {
                 println!(
                     "  To fully remove the extension, delete the \"chrome-use connect\" profile\n\
-                     in System Settings → Profiles (or run: profiles remove -identifier {PROFILE_ID})."
+                     in System Settings → Profiles (or run: profiles remove -identifier {PROFILE_ID}).\n\
+                     That also takes Chrome out of \"managed by your organization\" mode, so the\n\
+                     \"Use secure DNS\" setting is yours again (#187) — and Chrome uninstalls the\n\
+                     extension the policy installed. To keep driving Chrome without the policy,\n\
+                     re-add the extension per profile from {STORE_URL}."
                 );
                 let (approved, old_ids) = approved_config_profiles();
                 let _ = approved;
@@ -199,6 +203,17 @@ pub fn run_connect(args: &[String], json: bool) {
     let profiles = chrome_profiles();
     let policy = managed_policy_state();
     let (_, old_ids) = approved_config_profiles();
+    // Only ask the Web Store when the numbers already disagree — the happy path
+    // stays network-free, and the answer is what decides whether the user has
+    // anything to update to at all (#186).
+    let version_mismatch = [
+        live_extension_version.as_deref(),
+        extension_status.as_ref().and_then(|s| s.version.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|v| v != expected_extension_version);
+    let store_extension_version = version_mismatch.then(store_extension_version).flatten();
     if json {
         println!(
             "{}",
@@ -215,6 +230,8 @@ pub fn run_connect(args: &[String], json: bool) {
                     },
                     "extensionId": EXTENSION_ID,
                     "expectedExtensionVersion": expected_extension_version,
+                    "bundledExtensionVersion": expected_extension_version,
+                    "storeExtensionVersion": store_extension_version,
                     "liveExtensionVersion": live_extension_version,
                     "relayUp": relay_url.is_some(),
                     "relayUrl": relay_url,
@@ -239,20 +256,21 @@ pub fn run_connect(args: &[String], json: bool) {
         }
         println!("  Web Store extension id: {STORE_EXTENSION_ID}");
         println!("  unpacked/dev extension id: {EXTENSION_ID}");
-        println!("  expected extension version: {expected_extension_version}");
+        println!("  bundled extension version (ships with this CLI): {expected_extension_version}");
         // An outdated live extension used to print a plain ✓ next to a
         // different "expected" number, leaving the reader to diff two version
         // strings and with nothing to run (issue #183). Say which it is, and
-        // how to fix it.
+        // how to fix it — but only call it outdated when a NEWER build is
+        // actually published (#186): the bundled version regularly runs ahead
+        // of the Web Store, and "Update" cannot install what isn't released.
         match &live_extension_version {
-            Some(ver) if ver == expected_extension_version => {
-                println!("✓ live extension version: {ver}")
-            }
             Some(ver) => println!(
-                "  ! live extension version: {ver} — OUTDATED (expected \
-                 {expected_extension_version}).\n\
-                 \x20   Update it at chrome://extensions (turn on Developer mode → Update), or \
-                 reload the unpacked build."
+                "{}",
+                ext_version_line(
+                    ver,
+                    expected_extension_version,
+                    store_extension_version.as_deref()
+                )
             ),
             None => {
                 println!("  live extension version: unknown (relay has not reported hello yet)")
@@ -278,7 +296,11 @@ pub fn run_connect(args: &[String], json: bool) {
             ),
         }
         if let Some(status) = extension_status {
-            print_chrome_extension_status(&status, expected_extension_version);
+            print_chrome_extension_status(
+                &status,
+                expected_extension_version,
+                store_extension_version.as_deref(),
+            );
         } else {
             println!("  Chrome profile extension status: not found in any Chrome profile");
         }
@@ -314,14 +336,22 @@ pub fn run_connect(args: &[String], json: bool) {
             }
         }
         match &policy {
-            PolicyState::Active => println!(
-                "{}",
-                if zh {
-                    "  ✓ 静默安装策略：已生效（缺失的 profile 会在 Chrome 重启时装上）"
-                } else {
-                    "  ✓ silent-install policy: active (missing profiles install on Chrome restart)"
-                }
-            ),
+            PolicyState::Active => {
+                println!(
+                    "{}",
+                    if zh {
+                        "  ✓ 静默安装策略：已生效（缺失的 profile 会在 Chrome 重启时装上）"
+                    } else {
+                        "  ✓ silent-install policy: active (missing profiles install on Chrome restart)"
+                    }
+                );
+                // The policy is also why Chrome says "managed by your
+                // organization", why the extension has no manual update/remove
+                // button (#186), and why Secure DNS is locked (#187). Status is
+                // where people come looking for that answer — so answer it here,
+                // with the way out, instead of leaving a bare ✓.
+                println!("{}", managed_mode_notice(zh));
+            }
             PolicyState::Stale(entry) => {
                 if zh {
                     println!(
@@ -369,7 +399,9 @@ pub fn run_connect(args: &[String], json: bool) {
     }
 }
 
-/// `extension install [--no-open] [--all-profiles]` — the guided setup.
+/// `extension install [--no-open] [--all-profiles] [--no-profile]` — the guided
+/// setup. `--no-profile` never writes the macOS policy profile, so Chrome never
+/// enters managed mode (#187); the Web Store route covers the install instead.
 ///
 /// Everything that CAN be automatic is: the native-messaging host (user-level,
 /// shared by every profile) is written outright, and the state of every Chrome
@@ -461,6 +493,12 @@ fn run_install_windows(json: bool, host_paths: &[String]) {
 fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
     let no_open = args.iter().any(|a| a == "--no-open");
     let all_profiles = args.iter().any(|a| a == "--all-profiles");
+    // Opting out of the managed-policy route entirely (#187): approving it puts
+    // Chrome in "managed by your organization" mode, which Chrome uses to
+    // disable settings it reserves on managed browsers — Secure DNS (DoH) among
+    // them, which broke DoH-dependent sites for the reporter. Users who want
+    // the Web-Store-only path must be able to say so up front.
+    let no_profile = args.iter().any(|a| a == "--no-profile");
 
     let profiles = chrome_profiles();
     let missing: Vec<&ChromeProfileInfo> =
@@ -485,7 +523,7 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
 
     // Path A: write + open the policy profile, unless it's already doing its
     // job or the user explicitly chose the per-profile route.
-    let policy_needed = policy != PolicyState::Active && !all_profiles;
+    let policy_needed = wants_policy_profile(&policy, all_profiles, no_profile);
     let mobileconfig = if policy_needed {
         Some(install_force_install_profile(no_open))
     } else {
@@ -507,6 +545,7 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
                         "staleProfileIds": old_ids,
                         "profileId": PROFILE_ID,
                     },
+                    "noProfile": no_profile,
                     "profile": mobileconfig.as_ref().and_then(|r| r.as_ref().ok().map(|p| p.display().to_string())),
                     "profileError": mobileconfig.as_ref().and_then(|r| r.as_ref().err().cloned()),
                     "profiles": profiles,
@@ -685,9 +724,11 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
                         if no_open { "写好" } else { "打开" },
                         path.display()
                     );
+                    println!("{}", managed_mode_tradeoff(zh));
                     println!(
                         "  B) 每个 profile 点一下：chrome-use extension install --all-profiles\n\
-                         \x20    会在每个缺失的 profile 里打开商店安装页 —— 逐个点「加入 Chrome」。"
+                         \x20    会在每个缺失的 profile 里打开商店安装页 —— 逐个点「加入 Chrome」。\n\
+                         \x20    Chrome 不会进入受管理状态，扩展仍由商店自动更新。"
                     );
                 } else {
                     println!("  Pick ONE:");
@@ -702,10 +743,12 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
                         if no_open { "wrote" } else { "opened" },
                         path.display()
                     );
+                    println!("{}", managed_mode_tradeoff(zh));
                     println!(
                         "  B) One click per profile: chrome-use extension install --all-profiles\n\
                          \x20    opens the Web Store page inside each missing profile — press\n\
-                         \x20    \"Add to Chrome\" in each."
+                         \x20    \"Add to Chrome\" in each. Chrome stays unmanaged and the Store\n\
+                         \x20    keeps the extension updated."
                     );
                 }
                 if cfg!(target_os = "macos") && !no_open && interactive_tty() {
@@ -727,7 +770,26 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
                     );
                 }
             }
-            None => {}
+            // `--no-profile`: the user opted out of managed mode, so there is no
+            // policy to approve — say what to do instead of printing nothing (#187).
+            None => {
+                if zh {
+                    println!(
+                        "  已跳过策略描述文件（--no-profile）：Chrome 不会进入受管理状态，\n\
+                         \x20 「使用安全 DNS」也不受影响。改为每个 profile 手动装一次扩展：\n\
+                         \x20   chrome-use extension install --all-profiles\n\
+                         \x20   （或自行在各 profile 里打开 {STORE_URL} 点「加入 Chrome」）"
+                    );
+                } else {
+                    println!(
+                        "  Policy profile skipped (--no-profile): Chrome stays unmanaged and your\n\
+                         \x20 \"Use secure DNS\" setting is untouched. Install the extension per\n\
+                         \x20 profile instead:\n\
+                         \x20   chrome-use extension install --all-profiles\n\
+                         \x20   (or open {STORE_URL} in each profile and press \"Add to Chrome\")"
+                    );
+                }
+            }
         }
     }
 
@@ -1646,6 +1708,188 @@ fn managed_policy_state() -> PolicyState {
     }
 }
 
+/// What a live extension version actually means, given the build this CLI
+/// bundles AND the newest build published on the Chrome Web Store.
+///
+/// The middle case is the one that matters: a Web Store user is pinned to the
+/// newest **published** build, which is regularly older than the version in
+/// this repo (0.5.16 bundled while the Store still served 0.5.12 — #186).
+/// Calling that "OUTDATED" and telling them to hit Update sends them after a
+/// build that does not exist yet.
+#[derive(Debug, PartialEq)]
+pub enum ExtVersionVerdict {
+    /// Live == bundled.
+    Current,
+    /// Live is behind a build the user can actually install today.
+    BehindStore { store: String },
+    /// Live IS the newest published build; the bundled one isn't out yet.
+    NewestPublished { store: String },
+    /// Behind the bundled build, and the Store version is unknown (offline).
+    BehindBundledStoreUnknown,
+    /// Live is newer than the bundled build (unpacked dev build).
+    AheadOfBundled,
+}
+
+/// Classify the live extension version. `store` is the newest version the Web
+/// Store serves, when we managed to ask.
+pub fn classify_ext_version(live: &str, bundled: &str, store: Option<&str>) -> ExtVersionVerdict {
+    if live == bundled {
+        return ExtVersionVerdict::Current;
+    }
+    if crate::upgrade::version_is_newer(live, bundled) {
+        return ExtVersionVerdict::AheadOfBundled;
+    }
+    match store {
+        Some(s) if crate::upgrade::version_is_newer(s, live) => ExtVersionVerdict::BehindStore {
+            store: s.to_string(),
+        },
+        Some(s) => ExtVersionVerdict::NewestPublished {
+            store: s.to_string(),
+        },
+        None => ExtVersionVerdict::BehindBundledStoreUnknown,
+    }
+}
+
+/// The `live extension version:` line for `extension status`, phrased by what
+/// the user can actually do about it.
+pub fn ext_version_line(live: &str, bundled: &str, store: Option<&str>) -> String {
+    match classify_ext_version(live, bundled, store) {
+        ExtVersionVerdict::Current => format!("✓ live extension version: {live}"),
+        ExtVersionVerdict::AheadOfBundled => format!(
+            "✓ live extension version: {live} (newer than the {bundled} this CLI bundles — \
+             unpacked dev build)"
+        ),
+        ExtVersionVerdict::BehindStore { store } => format!(
+            "  ! live extension version: {live} — OUTDATED, the Web Store serves {store}.\n\
+             \x20   Update it at chrome://extensions (turn on Developer mode → Update), or \
+             reload the unpacked build."
+        ),
+        ExtVersionVerdict::NewestPublished { store } => format!(
+            "✓ live extension version: {live} — the newest build published on the Web Store \
+             ({store}).\n\
+             \x20   This CLI bundles {bundled}, which isn't published yet: there is nothing to \
+             update to,\n\
+             \x20   and nothing is broken. To run the bundled build now, load \
+             extensions/ab-connect unpacked."
+        ),
+        ExtVersionVerdict::BehindBundledStoreUnknown => format!(
+            "  live extension version: {live} (this CLI bundles {bundled}; couldn't reach the \
+             Web Store\n\
+             \x20   to see which build is published — offline?). If a newer one exists: \
+             chrome://extensions\n\
+             \x20   → Developer mode → Update."
+        ),
+    }
+}
+
+/// Ask the Chrome Web Store's update service which version it currently serves
+/// for our extension. Best-effort and short-fused: this only runs when the live
+/// version already differs from the bundled one, and any failure (offline, CI,
+/// proxy) degrades to `None` rather than blocking a diagnostic command.
+/// `curl` matches how the CLI does its other version checks (see `upgrade`).
+pub fn store_extension_version() -> Option<String> {
+    let url = format!(
+        "{UPDATE_URL}?response=updatecheck&prodversion=140.0&acceptformat=crx3\
+         &x=id%3D{STORE_EXTENSION_ID}%26uc"
+    );
+    let out = std::process::Command::new("curl")
+        .args(["-fsSL", "--max-time", "4", &url])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    parse_store_update_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Pull `version="x.y.z"` out of the update service's XML response. The
+/// `updatecheck` element carries it; `status="noupdate"`/error responses don't,
+/// and yield `None`.
+fn parse_store_update_version(xml: &str) -> Option<String> {
+    let tag = xml.split("<updatecheck").nth(1)?;
+    let v = tag.split("version=\"").nth(1)?;
+    let v = v.split('"').next()?.trim();
+    (!v.is_empty() && v.chars().next().is_some_and(|c| c.is_ascii_digit())).then(|| v.to_string())
+}
+
+/// Should this `extension install` run write + queue the macOS policy profile?
+/// Only when it isn't already doing its job, the user didn't pick the
+/// per-profile Web Store route, and didn't opt out of managed mode with
+/// `--no-profile` (#187).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn wants_policy_profile(policy: &PolicyState, all_profiles: bool, no_profile: bool) -> bool {
+    *policy != PolicyState::Active && !all_profiles && !no_profile
+}
+
+/// What approving the policy profile costs the user, spelled out where they can
+/// still say no. Chrome treats ANY policy as "managed by your organization",
+/// and on a managed browser it locks settings it doesn't let managed users
+/// change — Secure DNS (DoH) is the one that bit #187 — and marks the extension
+/// "installed by your administrator", which removes the manual update/remove
+/// buttons (#186). Neither is something we can policy our way out of: the
+/// managed badge IS the force-install mechanism. So disclose it and give the
+/// exit.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn managed_mode_tradeoff(zh: bool) -> String {
+    if zh {
+        format!(
+            "     代价（批准前请先读）：Chrome 会变成「由贵单位管理」状态 ——\n\
+             \x20      · 「使用安全 DNS (DoH)」会被 Chrome 停用并锁死（#187）；自定义 DoH\n\
+             \x20        依赖者（如访问 linux.do）请改选 B。\n\
+             \x20      · 扩展会显示「由管理员安装」：没有手动更新/删除按钮（#186），\n\
+             \x20        更新交给 Chrome 自动进行（约每 5 小时一次，商店源）。\n\
+             \x20      随时可退出：profiles remove -identifier {PROFILE_ID}\n\
+             \x20      （或跳过这一步：chrome-use extension install --no-profile）"
+        )
+    } else {
+        format!(
+            "     What it costs (read before approving): Chrome switches to \"managed by\n\
+             \x20      your organization\" —\n\
+             \x20      · Chrome disables and locks the \"Use secure DNS\" (DoH) setting (#187);\n\
+             \x20        if you rely on a custom DoH resolver, pick B instead.\n\
+             \x20      · The extension shows as \"installed by your administrator\": no manual\n\
+             \x20        update/remove button (#186); Chrome auto-updates it from the Web\n\
+             \x20        Store (~every 5h) instead.\n\
+             \x20      Reversible any time: profiles remove -identifier {PROFILE_ID}\n\
+             \x20      (or skip this step up front: chrome-use extension install --no-profile)"
+        )
+    }
+}
+
+/// The consequences of a live force-install policy, printed by `extension
+/// status` — the two things users file issues about (#186 "the extension is
+/// managed and I can't update it", #187 "Secure DNS is locked") plus how to
+/// update now and how to leave managed mode without losing the extension.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn managed_mode_notice(zh: bool) -> String {
+    if zh {
+        format!(
+            "  ! 因此 Chrome 处于「由贵单位管理」状态，代价有两个：\n\
+             \x20   · 扩展显示「由管理员安装」——没有手动更新/删除按钮（#186）。\n\
+             \x20     更新由 Chrome 自动从商店拉取（约每 5 小时）；想立刻更新：\n\
+             \x20     chrome://extensions → 打开右上角「开发者模式」→ 点「更新」。\n\
+             \x20   · 「使用安全 DNS (DoH)」被 Chrome 停用并锁死（#187）。\n\
+             \x20   想退出受管理状态（自定义 DoH 会恢复）：\n\
+             \x20     profiles remove -identifier {PROFILE_ID}\n\
+             \x20   注意：移除策略后 Chrome 会一并卸载它装的扩展。之后在每个 profile 里\n\
+             \x20   打开 {STORE_URL}\n\
+             \x20   点一次「加入 Chrome」即可 —— 同一个扩展，照样自动更新，且可自行管理。"
+        )
+    } else {
+        format!(
+            "  ! That policy is also why Chrome is \"managed by your organization\":\n\
+             \x20   · the extension shows as \"installed by your administrator\" — no manual\n\
+             \x20     update/remove button (#186). Chrome auto-updates it from the Web Store\n\
+             \x20     (~every 5h); to update now: chrome://extensions → Developer mode →\n\
+             \x20     Update.\n\
+             \x20   · Chrome disables and locks the \"Use secure DNS\" (DoH) setting (#187).\n\
+             \x20   To leave managed mode (your custom DoH comes back):\n\
+             \x20     profiles remove -identifier {PROFILE_ID}\n\
+             \x20   Removing the policy also uninstalls the extension it installed — re-add it\n\
+             \x20   per profile from {STORE_URL}\n\
+             \x20   (\"Add to Chrome\"): same extension, still auto-updating, yours to manage."
+        )
+    }
+}
+
 /// Whether an enterprise/managed-Chrome policy BLOCKS our extension — the
 /// "您的管理员已屏蔽此内容 / Your administrator has blocked this" case (distinct
 /// from force-install). True when our id is in `ExtensionInstallBlocklist`, or
@@ -1939,7 +2183,11 @@ fn parse_chrome_extension_status(
     }
 }
 
-fn print_chrome_extension_status(status: &ChromeExtensionStatus, expected_version: &str) {
+fn print_chrome_extension_status(
+    status: &ChromeExtensionStatus,
+    expected_version: &str,
+    store_version: Option<&str>,
+) {
     let source = if status.id == STORE_EXTENSION_ID {
         "Web Store"
     } else {
@@ -1952,9 +2200,14 @@ fn print_chrome_extension_status(status: &ChromeExtensionStatus, expected_versio
     );
     if let Some(ver) = &status.version {
         println!("  active manifest version: {ver}");
-        if crate::upgrade::version_is_newer(expected_version, ver) {
+        // Only nag when a newer build is actually installable — being behind
+        // the bundled version while sitting on the newest PUBLISHED one is the
+        // normal state for Web Store users, not a problem to fix (#186).
+        if let ExtVersionVerdict::BehindStore { store } =
+            classify_ext_version(ver, expected_version, store_version)
+        {
             println!(
-                "! active extension is older than bundled {expected_version}; open chrome://extensions, accept pending permissions/reload, or restart Chrome"
+                "! active extension {ver} is older than the published {store}; open chrome://extensions, accept pending permissions/reload, or restart Chrome"
             );
         }
     }
@@ -2937,6 +3190,112 @@ mod tests {
         assert!(!cfg.contains("updates.xml"), "no self-hosted update feed");
         assert!(cfg.contains(PROFILE_ID));
         assert!(cfg.contains("leeguoo.com"));
+    }
+
+    #[test]
+    fn no_profile_opts_out_of_the_managed_policy_route() {
+        // #187: approving the policy makes Chrome managed, which locks Secure
+        // DNS — `--no-profile` must mean we never write or queue it, whatever
+        // the current policy state is.
+        for policy in [
+            PolicyState::Absent,
+            PolicyState::Stale("x;y".into()),
+            PolicyState::Unknown,
+        ] {
+            assert!(
+                wants_policy_profile(&policy, false, false),
+                "{policy:?} with no opt-out should still offer the policy"
+            );
+            assert!(!wants_policy_profile(&policy, false, true), "--no-profile");
+            assert!(
+                !wants_policy_profile(&policy, true, false),
+                "--all-profiles picks the Web Store route"
+            );
+        }
+        // Already doing its job — nothing to write.
+        assert!(!wants_policy_profile(&PolicyState::Active, false, false));
+    }
+
+    #[test]
+    fn a_live_extension_is_only_outdated_when_a_newer_one_is_published() {
+        // #186: the bundled build runs ahead of the Web Store (0.5.16 bundled
+        // while the Store served 0.5.12). A Web Store user IS up to date there;
+        // calling it OUTDATED and pointing at Update chases a build that does
+        // not exist.
+        assert_eq!(
+            classify_ext_version("0.5.12", "0.5.16", Some("0.5.12")),
+            ExtVersionVerdict::NewestPublished {
+                store: "0.5.12".into()
+            }
+        );
+        assert_eq!(
+            classify_ext_version("0.5.10", "0.5.16", Some("0.5.12")),
+            ExtVersionVerdict::BehindStore {
+                store: "0.5.12".into()
+            }
+        );
+        assert_eq!(
+            classify_ext_version("0.5.16", "0.5.16", Some("0.5.12")),
+            ExtVersionVerdict::Current
+        );
+        assert_eq!(
+            classify_ext_version("0.5.17", "0.5.16", Some("0.5.12")),
+            ExtVersionVerdict::AheadOfBundled
+        );
+        // Offline: don't invent a verdict either way.
+        assert_eq!(
+            classify_ext_version("0.5.12", "0.5.16", None),
+            ExtVersionVerdict::BehindBundledStoreUnknown
+        );
+
+        // The line the user reads must not say OUTDATED for the published build,
+        // and must say it when a newer build really is out there.
+        let published = ext_version_line("0.5.12", "0.5.16", Some("0.5.12"));
+        assert!(!published.contains("OUTDATED"), "{published}");
+        assert!(published.starts_with('✓'), "{published}");
+        assert!(ext_version_line("0.5.10", "0.5.16", Some("0.5.12")).contains("OUTDATED"));
+    }
+
+    #[test]
+    fn store_update_response_yields_the_published_version() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><gupdate protocol="2.0">\
+<app appid="knfcmbamhjmaonkfnjhldjedeobeafmk" status="ok"><updatecheck \
+codebase="https://x/KNFC_0_5_12_0.crx" status="ok" version="0.5.12"/></app></gupdate>"#;
+        assert_eq!(
+            parse_store_update_version(xml).as_deref(),
+            Some("0.5.12"),
+            "must read the updatecheck version, not the codebase filename"
+        );
+        // No update element (unlisted/removed item) → no claim.
+        assert_eq!(parse_store_update_version("<gupdate></gupdate>"), None);
+        assert_eq!(parse_store_update_version(""), None);
+    }
+
+    #[test]
+    fn managed_mode_texts_name_both_costs_and_the_way_out() {
+        // Both issues this text answers must stay answerable from the output
+        // alone: what managed mode costs (#186 no manual update/remove, #187
+        // Secure DNS locked) and the exact command that undoes it.
+        for zh in [false, true] {
+            let notice = managed_mode_notice(zh);
+            let tradeoff = managed_mode_tradeoff(zh);
+            for text in [&notice, &tradeoff] {
+                assert!(text.contains(PROFILE_ID), "removal command must be shown");
+                assert!(text.contains("DNS"), "the DoH lockdown must be named");
+            }
+            assert!(
+                notice.contains("chrome://extensions"),
+                "status must say how to force an update now"
+            );
+            assert!(
+                notice.contains(STORE_URL),
+                "status must say how to keep the extension after un-managing"
+            );
+            assert!(
+                tradeoff.contains("--no-profile"),
+                "the pre-approval text must offer the opt-out"
+            );
+        }
     }
 
     #[test]

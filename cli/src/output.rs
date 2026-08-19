@@ -4030,6 +4030,19 @@ MCP:
 Setup:
   install                    Install browser binaries
   install --with-deps        Also install system dependencies (Linux)
+  extension install          Guided setup for driving your real Chrome. On macOS it
+                             offers a policy profile that installs the extension into
+                             every profile silently — that also puts Chrome in
+                             "managed by your organization" mode, which locks the
+                             "Use secure DNS" setting and removes the extension's
+                             manual update/remove buttons. --no-profile skips it (Web
+                             Store route instead); --all-profiles opens the Store page
+                             in each profile; --no-open writes the policy without
+                             queueing it.
+  extension status           Host/relay/extension versions, driving profile, per-profile
+                             coverage, and what the install policy currently costs
+  extension uninstall        Remove the native-messaging host (+ tells you how to drop
+                             the policy profile and leave managed mode)
   upgrade                    Upgrade to the latest version
   doctor [--fix]             Diagnose install; auto-clean stale files
   dashboard start            Start the observability dashboard

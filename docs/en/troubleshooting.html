@@ -272,6 +272,44 @@
         extension/relay background.
       </div>
 
+      <h2>Chrome says "managed by your organization" / Secure DNS is locked / the extension won't update</h2>
+      <p>
+        All three come from one thing: the macOS configuration profile
+        (<code>com.leeguoo.chrome-use.connect</code>) that installs the extension into every profile
+        silently. Chrome treats <em>any</em> policy as managed mode, and that costs you:
+      </p>
+      <ul>
+        <li><strong>The "Use secure DNS" (DoH) setting is disabled and locked</strong> — sites that depend
+          on a custom DoH resolver stop resolving
+          (<a href="https://github.com/leeguooooo/chrome-use/issues/187">#187</a>).</li>
+        <li>The extension is marked <strong>"installed by your administrator"</strong>: no manual
+          update/remove button
+          (<a href="https://github.com/leeguooooo/chrome-use/issues/186">#186</a>).</li>
+      </ul>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">Leaving managed mode</span>
+        </div>
+<pre><code><span class="du-cmt"># where you stand right now (costs + the way out):</span>
+<span class="du-prompt">$</span> chrome-use extension status
+
+<span class="du-cmt"># drop the policy profile — your custom DoH comes back immediately</span>
+<span class="du-prompt">$</span> profiles remove -identifier com.leeguoo.chrome-use.connect
+
+<span class="du-cmt"># Chrome uninstalls the extension it installed; re-add it from the Store (one click per profile)</span>
+<span class="du-prompt">$</span> chrome-use extension install --no-profile --all-profiles</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ "The extension is behind" is often not a problem</div>
+        The <strong>bundled</strong> version in <code>extension status</code> is the one in this repo's
+        source. Web Store review takes time, so it regularly runs ahead of what the Store serves. The CLI
+        now asks the Store before judging: if you're on the <strong>newest published</strong> build it no
+        longer says OUTDATED and no longer sends you after an update that doesn't exist — it only points
+        at <code>chrome://extensions</code> → Developer mode → Update when a newer build really is out.
+        To run the source build, load <code>extensions/ab-connect</code> unpacked.
+      </div>
+
       <h2>You read the wrong page</h2>
       <p>
         <code>eval</code>, <code>screenshot</code>, and <code>network requests</code> all print the page they actually ran on

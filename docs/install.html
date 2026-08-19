@@ -167,6 +167,32 @@ programs.chrome-use = {
         再从应用商店手动装一次扩展即可（Windows 没有 macOS 那套静默强制安装）。之后 <code>chrome-use open</code> 一样驱动你已登录的 Chrome。
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">⚠️ macOS：那个「策略描述文件」会让 Chrome 进入受管理状态</div>
+        <p>
+          <code>extension install</code> 在 macOS 上会提供一条「静默装进所有 profile」的路径：批准一个
+          <code>ExtensionInstallForcelist</code> 策略描述文件。它确实一劳永逸，但代价是 Chrome 会变成
+          <strong>「由贵单位管理」</strong>：
+        </p>
+        <ul>
+          <li><strong>「使用安全 DNS (DoH)」被停用并锁死</strong>——依赖自定义 DoH 的站点（如 <code>linux.do</code>）会解析失败（<a href="https://github.com/leeguooooo/chrome-use/issues/187">#187</a>）。</li>
+          <li>扩展显示<strong>「由管理员安装」</strong>：没有手动更新/删除按钮，更新交给 Chrome 自动从商店拉取（<a href="https://github.com/leeguooooo/chrome-use/issues/186">#186</a>）。</li>
+        </ul>
+        <p>
+          不想要就跳过它——从商店装扩展的效果完全一样，只是每个 profile 要点一次「加入 Chrome」：
+        </p>
+<pre><code><span class="du-prompt">$</span> chrome-use extension install --no-profile      <span class="du-cmt"># 不写策略描述文件</span>
+<span class="du-prompt">$</span> chrome-use extension install --all-profiles    <span class="du-cmt"># 在每个缺失的 profile 里打开商店页</span></code></pre>
+        <p>
+          已经批准过、想退出受管理状态（自定义 DoH 会立刻恢复）：
+        </p>
+<pre><code><span class="du-prompt">$</span> profiles remove -identifier com.leeguoo.chrome-use.connect</code></pre>
+        <p>
+          注意：移除策略后 Chrome 会一并卸载它装的扩展——之后在每个 profile 里从商店重新「加入 Chrome」即可，
+          还是同一个扩展、照样自动更新，而且这次归你自己管。<code>chrome-use extension status</code> 会实时告诉你当前处于哪种状态。
+        </p>
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 不想碰你的真实 Chrome？</div>
         用 <code>chrome-use --launch open &lt;url&gt;</code> 开一个全新的、隔离的空 profile 浏览器（上全套反检测补丁），

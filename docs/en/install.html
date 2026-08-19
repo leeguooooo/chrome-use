@@ -168,6 +168,33 @@ programs.chrome-use = {
         then you add the extension once from the Web Store (Windows has no macOS-style silent force-install). After that, <code>chrome-use open</code> drives your logged-in Chrome the same way.
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">⚠️ macOS: the policy profile puts Chrome in managed mode</div>
+        <p>
+          On macOS, <code>extension install</code> offers a "silent, every profile at once" route:
+          approve an <code>ExtensionInstallForcelist</code> configuration profile. It really is
+          install-once-and-forget, but it also makes Chrome
+          <strong>"managed by your organization"</strong>:
+        </p>
+        <ul>
+          <li><strong>Chrome disables and locks the "Use secure DNS" (DoH) setting</strong> — sites that depend on a custom DoH resolver (e.g. <code>linux.do</code>) stop resolving (<a href="https://github.com/leeguooooo/chrome-use/issues/187">#187</a>).</li>
+          <li>The extension shows as <strong>"installed by your administrator"</strong>: no manual update/remove button; Chrome auto-updates it from the Web Store instead (<a href="https://github.com/leeguooooo/chrome-use/issues/186">#186</a>).</li>
+        </ul>
+        <p>
+          Skip it if you'd rather not — the Web Store route gets you the same extension, just one
+          click per profile:
+        </p>
+<pre><code><span class="du-prompt">$</span> chrome-use extension install --no-profile      <span class="du-cmt"># never writes the policy profile</span>
+<span class="du-prompt">$</span> chrome-use extension install --all-profiles    <span class="du-cmt"># opens the Store page in each missing profile</span></code></pre>
+        <p>Already approved it and want out (your custom DoH comes back immediately):</p>
+<pre><code><span class="du-prompt">$</span> profiles remove -identifier com.leeguoo.chrome-use.connect</code></pre>
+        <p>
+          Note: removing the policy also uninstalls the extension it installed — re-add it per
+          profile from the Web Store. Same extension, still auto-updating, and yours to manage.
+          <code>chrome-use extension status</code> always reports which state you're in.
+        </p>
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Don't want to touch your real Chrome?</div>
         Use <code>chrome-use --launch open &lt;url&gt;</code> to spin up a brand-new, isolated blank-profile browser (with the full anti-detection patch set),
