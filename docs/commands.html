@@ -632,7 +632,19 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use tab t3                   <span class="du-cmt"># 把会话切到其中一个</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>              <span class="du-cmt"># 像普通会话一样驱动它</span>
 <span class="du-prompt">$</span> chrome-use extension status         <span class="du-cmt"># 宿主是否已安装？</span>
-<span class="du-prompt">$</span> chrome-use extension uninstall      <span class="du-cmt"># 移除宿主清单</span></code></pre>
+<span class="du-prompt">$</span> chrome-use extension uninstall      <span class="du-cmt"># 移除宿主清单</span>
+
+<span class="du-cmt"># macOS：跳过那个会让 Chrome 进入受管理状态的策略描述文件</span>
+<span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--no-profile</span>
+<span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--all-profiles</span>   <span class="du-cmt"># 在每个缺失的 profile 里打开商店页</span></code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">⚠ macOS 的策略描述文件 = 受管理的 Chrome</div>
+        安装向导里那条「静默装进所有 profile」会让 Chrome 变成「由贵单位管理」：
+        <strong>「使用安全 DNS (DoH)」被停用并锁死</strong>（<a href="https://github.com/leeguooooo/chrome-use/issues/187">#187</a>），
+        扩展也变成「由管理员安装」、没有手动更新/删除按钮（<a href="https://github.com/leeguooooo/chrome-use/issues/186">#186</a>）。
+        用 <code>--no-profile</code> 跳过，或用 <code>profiles remove -identifier com.leeguoo.chrome-use.connect</code> 退出
+        （Chrome 会一并卸载它装的扩展，从商店重装即可）。当前状态随时可查：<code>chrome-use extension status</code>。
       </div>
       <p>
         <code>chrome-use status</code> 会区分「已安装清单」和「launcher 确实指向可执行文件」；

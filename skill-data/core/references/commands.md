@@ -411,12 +411,26 @@ One-time setup:
 chrome-use extension install        # writes the native-messaging host manifest
 ```
 
+On macOS the guided setup also offers a policy profile that installs the
+extension into every Chrome profile silently. It works, but it puts Chrome in
+**"managed by your organization"** mode: Chrome then disables and locks the
+"Use secure DNS" (DoH) setting (#187) and marks the extension "installed by
+your administrator" — no manual update/remove button (#186). Skip it with
+`chrome-use extension install --no-profile` (Web Store route instead); undo an
+approved one with `profiles remove -identifier com.leeguoo.chrome-use.connect`,
+which also uninstalls the extension the policy installed (re-add it from the
+Store). `chrome-use extension status` reports which state the machine is in.
+
 The native-messaging host accepts **both** extension origins, so either install
 works — but prefer the Store build:
 
 1. **Chrome Web Store (recommended)** — one-click *Add to Chrome*:
    <https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk>
    Restart-stable and auto-updating (store id `knfcmbamhjmaonkfnjhldjedeobeafmk`).
+   NOTE: the Store serves the newest **published** build, which is regularly
+   older than the version bundled with the CLI (review latency). `extension
+   status` asks the Store before calling anything OUTDATED — being on the
+   newest published build is fine, not a problem to fix.
 2. **Load unpacked (dev)** — load `<repo>/extensions/ab-connect` from source;
    its pinned `key` gives the stable id `ciiljdlhd…`. NOTE: Load-unpacked
    extensions can be disabled/dropped on Chrome restart (Developer-mode handling),

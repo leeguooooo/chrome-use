@@ -21,6 +21,14 @@ One-time setup:
    `extensions/ab-connect`. Load-unpacked can be disabled on Chrome restart, so
    prefer the Store build for unattended setups.)
 
+> **macOS: the "silent, all profiles" policy makes Chrome managed.** Approving
+> the configuration profile `extension install` offers puts Chrome in "managed by
+> your organization" mode — which locks the "Use secure DNS" (DoH) setting (#187)
+> and strips the extension's manual update/remove buttons (#186). Use
+> `chrome-use extension install --no-profile` to never write it, or
+> `profiles remove -identifier com.leeguoo.chrome-use.connect` to undo it (Chrome
+> then uninstalls the policy-installed extension — re-add it from the Store).
+
 Once installed, plain `chrome-use open <url>` auto-connects through the
 extension relay — `auto_connect_cdp` **prefers the live relay over a raw
 `--remote-debugging-port`**, so Chrome 136+'s "Allow remote debugging?" consent

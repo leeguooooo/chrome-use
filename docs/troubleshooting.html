@@ -257,6 +257,39 @@
         <a href="/real-chrome.html">驱动真实 Chrome</a>。
       </div>
 
+      <h2>Chrome 变成「由贵单位管理」／安全 DNS 被锁／扩展更新不了</h2>
+      <p>
+        这三件事同一个来源：macOS 上那个用来<strong>静默把扩展装进所有 profile</strong> 的策略描述文件
+        （<code>com.leeguoo.chrome-use.connect</code>）。Chrome 只要看见任何策略就进入受管理状态，随之而来：
+      </p>
+      <ul>
+        <li><strong>「使用安全 DNS (DoH)」被停用并锁死</strong>——依赖自定义 DoH 的站点会解析失败
+          （<a href="https://github.com/leeguooooo/chrome-use/issues/187">#187</a>）。</li>
+        <li>扩展标为<strong>「由管理员安装」</strong>，没有手动更新／删除按钮
+          （<a href="https://github.com/leeguooooo/chrome-use/issues/186">#186</a>）。</li>
+      </ul>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">退出受管理状态</span>
+        </div>
+<pre><code><span class="du-cmt"># 当前状态（含代价与出路）：</span>
+<span class="du-prompt">$</span> chrome-use extension status
+
+<span class="du-cmt"># 移除策略描述文件——自定义 DoH 立刻恢复</span>
+<span class="du-prompt">$</span> profiles remove -identifier com.leeguoo.chrome-use.connect
+
+<span class="du-cmt"># Chrome 会一并卸载它装的扩展，从商店重新装一次即可（每个 profile 点一下）</span>
+<span class="du-prompt">$</span> chrome-use extension install --no-profile --all-profiles</code></pre>
+      </div>
+      <div class="du-callout note">
+        <div class="du-callout-title">「扩展版本落后」不一定是问题</div>
+        <code>extension status</code> 里的 <strong>bundled</strong> 是本仓库源码里的版本，商店上架要审核，
+        所以它经常比商店版新。CLI 现在会去问一次商店：你手上的就是<strong>已发布的最新版</strong>时不会再报
+        OUTDATED，也不会让你去点一个根本不存在的更新；只有商店确实有更新的版本时才提示
+        <code>chrome://extensions</code> → 开发者模式 → 更新。想跑源码里的新版，只能用「加载已解压的扩展程序」。
+      </div>
+
       <h2>读到了错误的页面</h2>
       <p>
         <code>eval</code>、<code>screenshot</code>、<code>network requests</code> 都会把实际运行所在的页面打到 stderr：

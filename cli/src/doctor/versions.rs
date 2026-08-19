@@ -39,20 +39,64 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     // from the extension manifest) is what we expect to be running.
     let expected_ext = env!("AB_CONNECT_VERSION");
     match connect::relay_ext_version() {
+        // Behind the bundled build is only a WARNING when a newer build is
+        // actually published — the bundled version routinely runs ahead of the
+        // Web Store, and telling people to hit Update for a build that isn't
+        // released is a dead end (#186). Ask the Store before judging.
         Some(ext) if upgrade::version_is_newer(expected_ext, &ext) => {
-            checks.push(
-                Check::new(
+            let store = connect::store_extension_version();
+            match connect::classify_ext_version(&ext, expected_ext, store.as_deref()) {
+                connect::ExtVersionVerdict::BehindStore { store } => checks.push(
+                    Check::new(
+                        "versions.extension",
+                        category,
+                        Status::Warn,
+                        format!("extension {ext} is behind the published {store}"),
+                    )
+                    .with_fix(
+                        "update ab-connect in Chrome: chrome://extensions \u{2192} \
+                         Developer mode \u{2192} Update (or reload the unpacked build)"
+                            .to_string(),
+                    ),
+                ),
+                connect::ExtVersionVerdict::NewestPublished { store } => checks.push(Check::new(
                     "versions.extension",
                     category,
-                    Status::Warn,
-                    format!("extension {ext} is behind the bundled {expected_ext}"),
-                )
-                .with_fix(
-                    "update ab-connect in Chrome: chrome://extensions \u{2192} reload \
-                     (or wait for the Web Store auto-update)"
-                        .to_string(),
+                    Status::Pass,
+                    format!(
+                        "extension {ext} — newest published on the Web Store ({store}); \
+                             this CLI bundles {expected_ext}, not published yet"
+                    ),
+                )),
+                connect::ExtVersionVerdict::AheadOfStore { store } => checks.push(Check::new(
+                    "versions.extension",
+                    category,
+                    Status::Pass,
+                    format!(
+                        "extension {ext} — ahead of the published {store}, behind the bundled \
+                         {expected_ext} (intermediate unpacked build)"
+                    ),
+                )),
+                // The guard above already excludes Current / AheadOfBundled.
+                connect::ExtVersionVerdict::Current
+                | connect::ExtVersionVerdict::AheadOfBundled
+                | connect::ExtVersionVerdict::BehindBundledStoreUnknown => checks.push(
+                    Check::new(
+                        "versions.extension",
+                        category,
+                        Status::Info,
+                        format!(
+                            "extension {ext} is behind the bundled {expected_ext} \
+                             (Web Store version unknown — offline?)"
+                        ),
+                    )
+                    .with_fix(
+                        "if a newer build is published: chrome://extensions \u{2192} \
+                         Developer mode \u{2192} Update"
+                            .to_string(),
+                    ),
                 ),
-            );
+            }
         }
         Some(ext) => {
             checks.push(Check::new(

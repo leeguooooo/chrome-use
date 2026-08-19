@@ -90,6 +90,19 @@
       </ul>
 
       <div class="du-callout note">
+        <div class="du-callout-title">⚠ macOS: don't approve the policy profile by reflex</div>
+        The setup wizard offers a "silent, every profile at once" route (the configuration profile
+        <code>com.leeguoo.chrome-use.connect</code>). It puts Chrome in "managed by your organization" mode:
+        <strong>the "Use secure DNS" (DoH) setting is disabled and locked</strong>
+        (<a href="https://github.com/leeguooooo/chrome-use/issues/187">#187</a>), and the extension is marked
+        "installed by your administrator" with no manual update/remove button
+        (<a href="https://github.com/leeguooooo/chrome-use/issues/186">#186</a>).
+        A Web Store install needs none of that — pass <code>--no-profile</code> to skip it, or undo an approved one
+        with <code>profiles remove -identifier com.leeguoo.chrome-use.connect</code> (Chrome then uninstalls the
+        policy-installed extension; re-add it from the Store).
+      </div>
+
+      <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Dev-build fallback (Load unpacked)</div>
         <code>chrome://extensions</code> → turn on <strong>Developer mode</strong> → <em>Load unpacked</em> →
         pick <code>extensions/ab-connect</code>. Note: a load-unpacked extension may be disabled after Chrome restarts,

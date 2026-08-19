@@ -87,6 +87,17 @@
       </ul>
 
       <div class="du-callout note">
+        <div class="du-callout-title">⚠ macOS：别顺手批准那个策略描述文件</div>
+        安装向导会提供一条「静默装进所有 profile」的路径（配置描述文件 <code>com.leeguoo.chrome-use.connect</code>）。
+        它会让 Chrome 进入「由贵单位管理」状态：<strong>「使用安全 DNS (DoH)」被停用并锁死</strong>
+        （<a href="https://github.com/leeguooooo/chrome-use/issues/187">#187</a>），扩展也会标成「由管理员安装」、
+        没有手动更新/删除按钮（<a href="https://github.com/leeguooooo/chrome-use/issues/186">#186</a>）。
+        商店安装完全不需要它——加 <code>--no-profile</code> 即可跳过；已经批准过的用
+        <code>profiles remove -identifier com.leeguoo.chrome-use.connect</code> 退出（Chrome 会一并卸载它装的扩展，
+        再从商店装回来即可）。
+      </div>
+
+      <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 开发版兜底（Load unpacked）</div>
         <code>chrome://extensions</code> → 打开 <strong>Developer mode</strong> → <em>Load unpacked</em> →
         选 <code>extensions/ab-connect</code>。注意：Load-unpacked 装的扩展在 Chrome 重启后可能被禁用，
