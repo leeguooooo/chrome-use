@@ -3968,6 +3968,10 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // flat colour while the page says it laid out real content, the pixels did not
     // come from this page — say so instead of printing a bare ✓ over a blank file.
     // Skipped for --selector / --clip, where a uniform region is an ordinary result.
+    //
+    // Runs after the downscale on purpose: the scan then reads the capped image
+    // (2000px longest edge) rather than a raw full-page capture, and downscaling
+    // a uniform image leaves it uniform, so the verdict is unchanged either way.
     let mut capture_warning: Option<String> = None;
     if options.selector.is_none() && options.clip.is_none() {
         if let Some(color) = uniform_image_color(&result.path) {
