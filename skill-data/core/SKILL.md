@@ -1212,8 +1212,8 @@ flat colour while the page reports real layout and text, the capture is
 reported with `⚠` and a warning instead of a plain `✓` — the shot is still
 saved, but don't feed it to a vision model without confirming the target
 first (`chrome-use eval "location.href"`, then re-pin with `tab` / `adopt`).
-A page that genuinely is one colour never triggers this, and `--selector` /
-`--clip` captures are exempt.
+A page that genuinely is one colour never triggers this, and `--selector`,
+`--clip` and `--annotate` captures are exempt.
 
 **Fill / type doesn't work**
 Some custom input components intercept key events. Try:

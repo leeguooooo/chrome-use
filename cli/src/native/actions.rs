@@ -3735,8 +3735,9 @@ fn is_blank_capture_target(url: &str) -> bool {
 }
 
 /// The single RGBA colour every pixel of `path` shares, or `None` when the image
-/// holds more than one colour (or can't be read). Early-exits on the first pixel
-/// that differs, so a real screenshot costs a couple of comparisons.
+/// holds more than one colour (or can't be read). Decoding the file is
+/// unconditional; only the pixel walk early-exits, which it almost always does on
+/// the first differing pixel of a real capture.
 fn uniform_image_color(path: &str) -> Option<[u8; 4]> {
     let img = image::open(path).ok()?.to_rgba8();
     let mut px = img.pixels();
@@ -3967,13 +3968,18 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // Independent of the URL guard above (issue #184): if the saved image is one
     // flat colour while the page says it laid out real content, the pixels did not
     // come from this page — say so instead of printing a bare ✓ over a blank file.
-    // Skipped for --selector / --clip, where a uniform region is an ordinary result.
     //
-    // Runs after the downscale on purpose: the scan then reads the capped image
-    // (2000px longest edge) rather than a raw full-page capture, and downscaling
-    // a uniform image leaves it uniform, so the verdict is unchanged either way.
+    // Placed after the downscale so the scan decodes the capped image (2000px
+    // longest edge) instead of a raw full-page capture; downscaling a uniform
+    // image leaves it uniform, so the verdict is the same either way.
+    //
+    // Three exemptions, all because the check would cost more than it's worth:
+    // --selector / --clip, where a uniform region is an ordinary result; and
+    // --annotate, which skips the downscale (overlays must stay aligned) and so
+    // would have us decode a full-size capture — an annotated shot already
+    // signals a missed target by coming back with an empty ref legend.
     let mut capture_warning: Option<String> = None;
-    if options.selector.is_none() && options.clip.is_none() {
+    if !annotate && options.selector.is_none() && options.clip.is_none() {
         if let Some(color) = uniform_image_color(&result.path) {
             let probe = mgr
                 .evaluate(

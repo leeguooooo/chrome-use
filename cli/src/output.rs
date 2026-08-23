@@ -2302,8 +2302,8 @@ Pass --hide-scrollbars false when launching to keep native scrollbars visible.
 A capture that comes back a single flat colour while the page reports real
 layout and text is saved with a warning instead of a plain checkmark — the
 pixels did not come from the page you think they did. Confirm the target with
-`chrome-use eval "location.href"`, then re-pin the tab and retry. [selector]
-and --clip captures are exempt (a uniform region is normal there).
+`chrome-use eval "location.href"`, then re-pin the tab and retry. [selector],
+--clip and --annotate captures are exempt.
 
 Options:
   --full, -f           Capture full page (not just viewport)
