@@ -1207,6 +1207,14 @@ If that URL isn't the page you expected (the active tab drifted), re-`open`
 your target URL — don't trust the result. Treat the stamp as a built-in
 sanity check on every read.
 
+`screenshot` also checks the pixels it just wrote. If the image is a single
+flat colour while the page reports real layout and text, the capture is
+reported with `⚠` and a warning instead of a plain `✓` — the shot is still
+saved, but don't feed it to a vision model without confirming the target
+first (`chrome-use eval "location.href"`, then re-pin with `tab` / `adopt`).
+A page that genuinely is one colour never triggers this, and `--selector`,
+`--clip` and `--annotate` captures are exempt.
+
 **Fill / type doesn't work**
 Some custom input components intercept key events. Try:
 

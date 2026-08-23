@@ -297,6 +297,14 @@
         如果这个 URL 不是你预期的页面（活动标签页漂移了），重新 <code>open</code> 你的目标 URL——别信这次结果。
         把这枚戳记当成每一次读取自带的健全性检查。
       </p>
+      <p>
+        <code>screenshot</code> 还会回头看一眼自己刚写出的像素。如果整张图是<strong>一种纯色</strong>，
+        而页面明明报告了真实的布局高度和文字，这次捕获就不是从这个页面来的——命令会打
+        <code>⚠</code> 和一条警告，而不是干净的 <code>✓</code>。文件照常保存，但在确认目标之前
+        别把它喂给视觉模型：先 <code>chrome-use eval "location.href"</code>，再用
+        <code>tab</code> / <code>adopt</code> 重新钉住标签页。真的就是纯色的页面不会触发，
+        <code>[selector]</code>、<code>--clip</code> 和 <code>--annotate</code> 的截图也豁免。
+      </p>
 
       <hr class="du-divider" />
 

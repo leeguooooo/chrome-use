@@ -983,6 +983,95 @@ async fn e2e_iframe_button_click_is_trusted() {
 // Screenshot
 // ---------------------------------------------------------------------------
 
+/// Issue #184: a `✓` screenshot must not silently be a blank image. The URL
+/// guard only catches a drift the capture session itself admits to, so a second,
+/// transport-independent check reads the pixels back: one flat colour over a page
+/// that reports real layout is reported as a warning instead of a plain success.
+///
+/// The failing capture is simulated with `opacity: 0` — the page lays out 2000px
+/// and `innerText` still returns the text, but nothing is painted, which is
+/// exactly the shape of a capture that missed its renderer.
+#[tokio::test]
+#[ignore]
+async fn e2e_screenshot_flags_a_flat_capture_over_a_content_page() {
+    const BODY: &str = "<p>DEEPSPACE SIGNAL — a page with real, laid-out content.</p>\
+         <p>Second paragraph so innerText is comfortably past the threshold.</p>";
+
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // Control: an ordinary painted page of the same size must NOT warn.
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "setcontent",
+            "html": format!(
+                "<html><body style=\"margin:0\"><div style=\"height:2000px\">{BODY}</div></body></html>"
+            ),
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "screenshot", "fullPage": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp).get("warning").is_none(),
+        "A painted page must not raise a blank-capture warning: {}",
+        serde_json::to_string_pretty(get_data(&resp)).unwrap_or_default()
+    );
+    let _ = std::fs::remove_file(get_data(&resp)["path"].as_str().unwrap());
+
+    // Same layout, same innerText, nothing painted.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "setcontent",
+            "html": format!(
+                "<html><body style=\"margin:0\"><div style=\"height:2000px;opacity:0\">{BODY}</div></body></html>"
+            ),
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "screenshot", "fullPage": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let warning = get_data(&resp)
+        .get("warning")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "A flat capture over a content page must warn: {}",
+                serde_json::to_string_pretty(get_data(&resp)).unwrap_or_default()
+            )
+        });
+    assert!(
+        warning.contains("issue #184"),
+        "Warning should point at the issue: {warning}"
+    );
+    assert!(
+        warning.contains("single flat colour"),
+        "Warning should say what it saw: {warning}"
+    );
+    let _ = std::fs::remove_file(get_data(&resp)["path"].as_str().unwrap());
+}
+
 #[tokio::test]
 #[ignore]
 async fn e2e_screenshot() {

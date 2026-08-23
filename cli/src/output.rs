@@ -1157,11 +1157,16 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         if let Some(path) = data.get("path").and_then(|v| v.as_str()) {
             match action.unwrap_or("") {
                 "screenshot" => {
-                    println!(
-                        "{} Screenshot saved to {}",
-                        color::success_indicator(),
-                        color::green(path)
-                    );
+                    // A capture the daemon could not vouch for is not a plain
+                    // success — a blank image under a green ✓ is exactly what
+                    // issue #184 reported, so the indicator has to carry the doubt.
+                    let warning = data.get("warning").and_then(|v| v.as_str());
+                    let indicator = if warning.is_some() {
+                        color::warning_indicator()
+                    } else {
+                        color::success_indicator()
+                    };
+                    println!("{} Screenshot saved to {}", indicator, color::green(path));
                     // Stamp which page was captured (mirrors `eval @ url`) so a
                     // screenshot of the wrong/drifted tab is obvious (issue #8.1).
                     if let Some(o) = data
@@ -1170,6 +1175,9 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                         .filter(|o| !o.is_empty())
                     {
                         eprintln!("screenshot @ {o}");
+                    }
+                    if let Some(w) = warning {
+                        eprintln!("{} {}", color::warning_indicator(), w);
                     }
                     if let Some(annotations) = data.get("annotations").and_then(|v| v.as_array()) {
                         // Cap the printed legend on dense pages (it can be
@@ -2290,6 +2298,12 @@ Captures a screenshot of the current page. If no path is provided,
 saves to a temporary directory with a generated filename.
 Headless Chromium screenshots hide native scrollbars for consistent image output.
 Pass --hide-scrollbars false when launching to keep native scrollbars visible.
+
+A capture that comes back a single flat colour while the page reports real
+layout and text is saved with a warning instead of a plain checkmark — the
+pixels did not come from the page you think they did. Confirm the target with
+`chrome-use eval "location.href"`, then re-pin the tab and retry. [selector],
+--clip and --annotate captures are exempt.
 
 Options:
   --full, -f           Capture full page (not just viewport)

@@ -3734,6 +3734,54 @@ fn is_blank_capture_target(url: &str) -> bool {
     url.is_empty() || url == "about:blank" || url == "about:newtab"
 }
 
+/// The single RGBA colour every pixel of `path` shares, or `None` when the image
+/// holds more than one colour (or can't be read). Decoding the file is
+/// unconditional; only the pixel walk early-exits, which it almost always does on
+/// the first differing pixel of a real capture.
+fn uniform_image_color(path: &str) -> Option<[u8; 4]> {
+    let img = image::open(path).ok()?.to_rgba8();
+    let mut px = img.pixels();
+    let first = px.next()?.0;
+    if px.any(|p| p.0 != first) {
+        return None;
+    }
+    Some(first)
+}
+
+/// Second, transport-independent check that a `✓` screenshot isn't a blank image
+/// (issue #184, reporter suggestion 3). The URL guard only catches a drift the
+/// capture session itself admits to; in the original report `location.href` read
+/// correct on a later call while the pixels had come from somewhere else, so the
+/// image is the only remaining witness. A capture that is one flat colour while
+/// the page reports real laid-out content is that witness.
+///
+/// A warning rather than an error: a page genuinely CAN be a single colour, and a
+/// false alarm must not cost the user a screenshot that was fine.
+fn uniform_capture_warning(
+    color: Option<[u8; 4]>,
+    page_height: u64,
+    text_len: u64,
+) -> Option<String> {
+    let [r, g, b, _a] = color?;
+    // Only suspicious when the page claims content to paint. A freshly-opened
+    // tab or a truly empty document captures as one colour legitimately.
+    if page_height < UNIFORM_CAPTURE_MIN_HEIGHT || text_len < UNIFORM_CAPTURE_MIN_TEXT {
+        return None;
+    }
+    Some(format!(
+        "the capture is a single flat colour (#{r:02x}{g:02x}{b:02x}) while the page reports \
+         {page_height}px of layout and {text_len} characters of text — unless this page really \
+         is blank, the pixels did not come from it (issue #184). Confirm the target with \
+         `chrome-use eval \"location.href\"`, then re-pin the tab (`chrome-use tab <ref>` or \
+         `chrome-use adopt <url>`) and retry."
+    ))
+}
+
+/// Layout height (px) below which a one-colour capture is unremarkable.
+const UNIFORM_CAPTURE_MIN_HEIGHT: u64 = 400;
+/// Rendered text length below which a one-colour capture is unremarkable.
+const UNIFORM_CAPTURE_MIN_TEXT: u64 = 20;
+
 async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let annotate = cmd
         .get("annotate")
@@ -3917,6 +3965,38 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
         resized = downscale_screenshot(&result.path, scale, max_w, max_h, default_edge);
     }
 
+    // Independent of the URL guard above (issue #184): if the saved image is one
+    // flat colour while the page says it laid out real content, the pixels did not
+    // come from this page — say so instead of printing a bare ✓ over a blank file.
+    //
+    // Placed after the downscale so the scan decodes the capped image (2000px
+    // longest edge) instead of a raw full-page capture; downscaling a uniform
+    // image leaves it uniform, so the verdict is the same either way.
+    //
+    // Three exemptions, all because the check would cost more than it's worth:
+    // --selector / --clip, where a uniform region is an ordinary result; and
+    // --annotate, which skips the downscale (overlays must stay aligned) and so
+    // would have us decode a full-size capture — an annotated shot already
+    // signals a missed target by coming back with an empty ref legend.
+    let mut capture_warning: Option<String> = None;
+    if !annotate && options.selector.is_none() && options.clip.is_none() {
+        if let Some(color) = uniform_image_color(&result.path) {
+            let probe = mgr
+                .evaluate(
+                    "(() => ({ h: document.documentElement ? document.documentElement.scrollHeight : 0, \
+                       t: document.body ? (document.body.innerText || '').trim().length : 0 }))()",
+                    None,
+                )
+                .await
+                .unwrap_or(Value::Null);
+            capture_warning = uniform_capture_warning(
+                Some(color),
+                probe.get("h").and_then(|v| v.as_u64()).unwrap_or(0),
+                probe.get("t").and_then(|v| v.as_u64()).unwrap_or(0),
+            );
+        }
+    }
+
     let mut response = json!({ "path": absolutize_saved_path(&result.path) });
     if let Some((w, h)) = resized {
         response["width"] = json!(w);
@@ -3933,6 +4013,9 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // so the stamp names the target that was actually captured.
     if !live_url.is_empty() {
         response["origin"] = json!(live_url);
+    }
+    if let Some(w) = capture_warning {
+        response["warning"] = json!(w);
     }
 
     Ok(response)
@@ -12851,6 +12934,54 @@ mod tests {
             "http://127.0.0.1:8791/design.html"
         ));
         assert!(!is_blank_capture_target("https://example.com/"));
+    }
+
+    // issue #184 (reporter suggestion 3): the URL guard only catches a drift the
+    // capture session admits to. These cover the second witness — the pixels.
+    #[test]
+    fn uniform_capture_warns_only_when_the_page_has_content_to_paint() {
+        let flat = Some([255u8, 253, 245, 255]);
+        // The reported case: a full page of laid-out content, one flat colour.
+        let w = uniform_capture_warning(flat, 4439, 1284).expect("should warn");
+        assert!(w.contains("#fffdf5"), "names the colour: {w}");
+        assert!(w.contains("4439px"), "names the layout height: {w}");
+        assert!(w.contains("issue #184"), "points at the issue: {w}");
+
+        // A genuinely blank page is allowed to capture as one colour.
+        assert!(uniform_capture_warning(flat, 4439, 0).is_none());
+        assert!(uniform_capture_warning(flat, 120, 1284).is_none());
+        // A capture with more than one colour is never suspicious.
+        assert!(uniform_capture_warning(None, 4439, 1284).is_none());
+    }
+
+    #[test]
+    fn uniform_image_color_detects_flat_and_non_flat_images() {
+        let dir = std::env::temp_dir().join(format!("chrome-use-uniform-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let flat_path = dir.join("flat.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 253, 245, 255]))
+            .save(&flat_path)
+            .unwrap();
+        assert_eq!(
+            uniform_image_color(flat_path.to_str().unwrap()),
+            Some([255, 253, 245, 255])
+        );
+
+        // One stray pixel is enough to make it a real capture.
+        let mixed_path = dir.join("mixed.png");
+        let mut mixed = image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 253, 245, 255]));
+        mixed.put_pixel(4, 4, image::Rgba([0, 0, 0, 255]));
+        mixed.save(&mixed_path).unwrap();
+        assert_eq!(uniform_image_color(mixed_path.to_str().unwrap()), None);
+
+        // An unreadable path is not a blank capture.
+        assert_eq!(
+            uniform_image_color(dir.join("missing.png").to_str().unwrap()),
+            None
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     use super::*;
