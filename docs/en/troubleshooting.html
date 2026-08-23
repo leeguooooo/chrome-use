@@ -317,6 +317,16 @@
         If that URL isn't the page you expected (the active tab drifted), re-<code>open</code> your target URL—don't trust
         this result. Treat that stamp as a sanity check that ships with every read.
       </p>
+      <p>
+        <code>screenshot</code> also looks back at the pixels it just wrote. If the whole image is a
+        <strong>single flat colour</strong> while the page reports real layout height and text, the capture
+        didn't come from that page — the command prints <code>⚠</code> and a warning instead of a clean
+        <code>✓</code>. The file is still saved, but confirm the target before feeding it to a vision model:
+        run <code>chrome-use eval "location.href"</code>, then re-pin the tab with <code>tab</code> /
+        <code>adopt</code>. A page that genuinely is one colour never trips this, and
+        <code>[selector]</code> / <code>--clip</code> captures are exempt — a uniform region is an ordinary
+        result there.
+      </p>
 
       <hr class="du-divider" />
 

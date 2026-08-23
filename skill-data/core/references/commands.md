@@ -113,6 +113,12 @@ chrome-use pdf output.pdf      # Save as PDF
 Headless Chromium screenshots hide native scrollbars for consistent image output.
 Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
 
+A capture that comes back a single flat colour while the page reports real
+layout and text is saved with `⚠` and a warning instead of a plain `✓` — the
+capture did not come from the page you think it did (issue #184). `--selector`
+and `--clip` captures are exempt, since a uniform region is an ordinary result
+there.
+
 ## Video Recording
 
 ```bash

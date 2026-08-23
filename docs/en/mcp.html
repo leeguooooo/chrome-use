@@ -65,6 +65,18 @@
         use <code>chrome-use mcp</code> on this page.
       </div>
 
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ My IDE isn't on that list</div>
+        Those lists are examples, not an allowlist. There are only two questions, in this order:
+        <strong>1. Can it run terminal commands for me?</strong> If yes (CodeBuddy, Trae, Windsurf,
+        Cline, Continue, Zed all can), use the <a href="/en/install.html">CLI + skill</a> — install
+        <code>chrome-use</code> and let the agent type <code>chrome-use snapshot -i</code> directly.
+        No further wiring. <strong>2. No shell, but it can register an MCP server?</strong> Then use
+        the Claude Desktop block above: <code>command</code> <code>chrome-use</code>, <code>args</code>
+        <code>["mcp"]</code>. stdio MCP is a generic protocol — the config looks the same everywhere.
+        A host that can do neither can't be connected.
+      </div>
+
       <hr class="du-divider" />
 
       <h2>The 12 core tools</h2>
