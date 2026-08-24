@@ -263,9 +263,9 @@ chrome-use tab select t2                    # Explicit switch syntax
 chrome-use tab adopt "example.com/stuck"   # Adopt without navigating
 chrome-use tab inspect t2                   # Browser metadata without page JS
 chrome-use tab docs                         # Switch to tab by label
-chrome-use tab close                        # Close current tab
-chrome-use tab close t2                     # Close tab by id
-chrome-use tab close docs                   # Close tab by label
+chrome-use tab close                        # Close current session-created tab
+chrome-use tab close t2                     # Close a session-created tab by id
+chrome-use tab close docs                   # Close a session-created tab by label
 chrome-use window new                       # New window
 ```
 
@@ -287,6 +287,10 @@ chrome-use click @e1                  # ref click on docs
 chrome-use tab app                    # switch to app
 chrome-use tab close docs             # close by label
 ```
+
+On external or extension-connected Chrome, tab rows include ownership:
+`created`, `adopted`, or `foreign`. Select only created or adopted tabs. Close
+only created tabs; adopted and foreign tabs remain user-owned.
 
 Labels are never auto-generated, never rewritten on navigation, and must be
 unique within a session. To interact with another tab, switch to it first:

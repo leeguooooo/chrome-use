@@ -150,8 +150,8 @@ them for control.
 > pick an explicit name, or set them to the **same** value across agents to make
 > them deliberately *share* one tab group.
 
-**Strict multi-agent isolation.** A session over the relay tracks and drives
-**only the tabs it created** (its own group). A pop-up that **your own action
+**Strict multi-agent isolation.** A session over the relay drives **only the tabs
+it created or explicitly adopted**. A pop-up that **your own action
 opened** — e.g. the OAuth account-chooser window from a "Sign in with Google"
 click — is followed and drivable as part of your session (switch to it and drive
 the chooser). But it does **not** adopt the user's existing tabs, other agents'
@@ -159,9 +159,10 @@ tabs, or *unrelated* pop-ups (a login window the user opened on their own is
 theirs), so several agents (and other tools opening tabs) can work in the same
 real Chrome concurrently without ever dropping or stealing each other's tabs —
 another agent's tab churn can't make your bound tab vanish or drift your commands
-onto the wrong page. Consequence: `tab list` shows only *your* session's tabs; to
-drive a specific page, navigate to it in your own tab instead of expecting a
-pre-existing or popped-up tab to appear in the list.
+onto the wrong page. `tab list` may surface other tabs for recovery, but marks
+them `foreign`; they cannot be selected or closed. Use `adopt` as the explicit
+opt-in before driving one. Adopted tabs remain user-owned and cannot be closed by
+the session.
 
 > **No debugger banner on the user's pages.** The extension attaches Chrome's
 > debugger **only to tabs the agent owns** (ones it created, or that you `adopt`),

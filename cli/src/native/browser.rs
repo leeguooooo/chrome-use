@@ -219,8 +219,9 @@ fn resolve_active_index(
 const BOUND_TAB_GONE: &str =
     "the tab this session was driving can no longer be resolved (it was closed, or a flaky \
      relay snapshot dropped it). Refusing to silently retarget — that could read/click the \
-     wrong tab. Run `tab list`; if it is present, use `tab select <ref>` or `tab adopt <url>` \
-     without navigating. If it is absent, re-open the target URL with `open <url>`.";
+     wrong tab. Run `tab list`; select it only if ownership is `created` or `adopted`, \
+     otherwise use `tab adopt <url|targetId>` without navigating. If it is absent, re-open \
+     the target URL with `open <url>`.";
 
 /// Message when a relay session has no tab of its own to route a command to.
 const NO_OWNED_TAB: &str =
@@ -434,6 +435,38 @@ fn active_index_is_owned(
         .unwrap_or(false)
 }
 
+// External Chrome tabs stay user-owned unless this daemon created them. Adoption
+// grants drive access only; it deliberately never grants deletion rights.
+fn tab_close_is_allowed(
+    browser_is_external: bool,
+    target_id: &str,
+    created_targets: &HashSet<String>,
+) -> bool {
+    !browser_is_external || created_targets.contains(target_id)
+}
+
+fn tab_switch_is_allowed(
+    browser_is_external: bool,
+    target_id: &str,
+    owned_targets: &HashSet<String>,
+) -> bool {
+    !browser_is_external || owned_targets.contains(target_id)
+}
+
+fn tab_ownership(
+    target_id: &str,
+    created_targets: &HashSet<String>,
+    adopted_targets: &HashSet<String>,
+) -> &'static str {
+    if created_targets.contains(target_id) {
+        "created"
+    } else if adopted_targets.contains(target_id) {
+        "adopted"
+    } else {
+        "foreign"
+    }
+}
+
 /// Whether a CDP error means the bound relay target is gone — the tab was
 /// closed, navigated across processes (renderer swap), or lost after an
 /// extension/service-worker restart, and the relay could not re-attach. The
@@ -497,8 +530,9 @@ pub fn to_ai_friendly_error(error: &str) -> String {
         return "the tab this command was driving is gone — it navigated across processes (e.g. \
                 an OAuth/SSO redirect), was closed, or the relay lost it. The session did NOT \
                 silently retarget, since that could read or click the wrong tab. Run `tab list` \
-                first. If the tab is listed, preserve it with `tab select <ref>` or \
-                `tab adopt <url-substring>`; use `tab inspect <ref>` when its renderer is stuck. \
+                first. If the tab is listed as `created` or `adopted`, preserve it with \
+                `tab select <ref>`; otherwise use `tab adopt <url-substring|targetId>`. Use \
+                `tab inspect <ref>` when its renderer is stuck. \
                 Only if it is absent, re-open it with `open <url>` / `navigate <url>`, then \
                 re-`snapshot`."
             .to_string();
@@ -2234,6 +2268,11 @@ impl BrowserManager {
                     "title": p.title,
                     "url": p.url,
                     "type": p.target_type,
+                    "ownership": tab_ownership(
+                        &p.target_id,
+                        &self.created_targets,
+                        &self.adopted_targets,
+                    ),
                     // A dangling relay pin is a deliberate tombstone after the
                     // bound tab disappears. Do not render a surviving scratch
                     // tab as active merely because the lenient index fallback
@@ -2990,6 +3029,18 @@ impl BrowserManager {
             return Err("Cannot close the last tab".to_string());
         }
 
+        let target = &self.pages[target_index];
+        if !tab_close_is_allowed(
+            self.browser_process.is_none(),
+            &target.target_id,
+            &self.created_targets,
+        ) {
+            return Err(format!(
+                "Refusing to close tab {} because this session did not create it",
+                format_tab_id(target.tab_id)
+            ));
+        }
+
         let page = self.pages.remove(target_index);
         self.update_active_page_after_removal(target_index);
         let closed_tab_id = page.tab_id;
@@ -3643,6 +3694,17 @@ impl BrowserManager {
             .iter()
             .position(|p| p.tab_id == tab_id)
             .ok_or_else(|| format!("Tab ID {} not found", tab_id))?;
+        let target = &self.pages[index];
+        if !tab_switch_is_allowed(
+            self.browser_process.is_none(),
+            &target.target_id,
+            &self.owned_targets(),
+        ) {
+            return Err(format!(
+                "Refusing to select tab {} because this session did not create or adopt it",
+                format_tab_id(target.tab_id)
+            ));
+        }
         self.tab_switch(index).await
     }
 
@@ -4422,6 +4484,36 @@ mod tests {
     fn active_not_owned_when_no_pages() {
         let created = HashSet::new();
         assert!(!active_index_is_owned(&[], None, 0, &created));
+    }
+
+    #[test]
+    fn external_tab_close_requires_session_created_target() {
+        let created = HashSet::from(["OURS".to_string()]);
+
+        assert!(tab_close_is_allowed(true, "OURS", &created));
+        assert!(!tab_close_is_allowed(true, "ADOPTED", &created));
+        assert!(!tab_close_is_allowed(true, "FOREIGN", &created));
+        assert!(tab_close_is_allowed(false, "FOREIGN", &created));
+    }
+
+    #[test]
+    fn external_tab_switch_requires_owned_target() {
+        let owned = HashSet::from(["CREATED".to_string(), "ADOPTED".to_string()]);
+
+        assert!(tab_switch_is_allowed(true, "CREATED", &owned));
+        assert!(tab_switch_is_allowed(true, "ADOPTED", &owned));
+        assert!(!tab_switch_is_allowed(true, "FOREIGN", &owned));
+        assert!(tab_switch_is_allowed(false, "FOREIGN", &owned));
+    }
+
+    #[test]
+    fn tab_ownership_distinguishes_created_adopted_and_foreign_targets() {
+        let created = HashSet::from(["CREATED".to_string()]);
+        let adopted = HashSet::from(["ADOPTED".to_string()]);
+
+        assert_eq!(tab_ownership("CREATED", &created, &adopted), "created");
+        assert_eq!(tab_ownership("ADOPTED", &created, &adopted), "adopted");
+        assert_eq!(tab_ownership("FOREIGN", &created, &adopted), "foreign");
     }
 
     #[test]

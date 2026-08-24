@@ -314,6 +314,13 @@ so it still works when page JavaScript has blocked the renderer main thread.
 Runtime evaluation cannot finish while that thread is blocked, but the tab is
 kept selected and is no longer misreported as closed.
 
+On an external or extension-connected Chrome, `tab list` marks tabs as
+`created`, `adopted`, or `foreign`. `tab select` accepts only created or
+explicitly adopted tabs, and `tab close` accepts only tabs created by the
+current session. Use `tab adopt <url-substring|targetId>` before driving an
+existing tab; adopted tabs remain user-owned and cannot be closed by the
+session.
+
 On extension-connected Chrome, `tab inspect` requires ab-connect 0.5.16 or
 newer. If a tab liveness probe fails while the live extension is older than the
 bundled version, chrome-use reports the version mismatch instead of diagnosing

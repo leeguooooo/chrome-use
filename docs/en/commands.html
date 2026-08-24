@@ -414,7 +414,10 @@
       <p>
         <code>tab select &lt;ref&gt;</code> is equivalent to <code>tab &lt;ref&gt;</code>.
         <code>tab adopt &lt;URL substring|targetId&gt;</code> attaches an existing tab in the current session without
-        reloading it. <code>tab inspect &lt;ref&gt;</code> reads Chrome's browser-level tab metadata, so it can still
+        reloading it. On external or extension-connected Chrome, <code>tab list</code> marks tabs as
+        <code>created</code>, <code>adopted</code>, or <code>foreign</code>. Only created/adopted tabs can be selected,
+        and only tabs created by the current session can be closed; adopted tabs remain user-owned.
+        <code>tab inspect &lt;ref&gt;</code> reads Chrome's browser-level tab metadata, so it can still
         return URL, load status, discard/freeze state, and debugger attachment when page JavaScript blocks the
         renderer main thread. <code>eval</code> still cannot complete until that thread responds.
         On the extension relay, <code>tab inspect</code> requires ab-connect 0.5.16 or newer. A failed
