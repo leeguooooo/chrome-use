@@ -17,6 +17,16 @@ use super::element::{resolve_element_object_id, RefMap};
 /// the `ab-connect` extension, so each agent/session gets its own group.
 pub static DAEMON_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// How long `close()` may spend closing the tabs this session created before it
+/// gives up and lets the process exit (issue #192).
+///
+/// Sized against the two clocks that bracket it: the relay gives each CDP
+/// command 8s (`RELAY_COMMAND_TIMEOUT_MS`), and `kill_stale_daemon` force-kills
+/// us [`crate::connection::DAEMON_SHUTDOWN_GRACE`] after SIGTERM. Landing under
+/// the grace period means a slow relay costs us some tabs, not the clean exit —
+/// and the caller's SIGKILL is no longer what decides whether cleanup ran.
+pub const OWNED_TAB_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
+
 // ---------------------------------------------------------------------------
 // Launch validation
 // ---------------------------------------------------------------------------
@@ -371,6 +381,30 @@ fn debounced_prune_ids(
         }
     }
     prune
+}
+
+/// Which discovered targets a reconnecting daemon may reclaim as tabs THIS
+/// session created, so `close()` cleans them up instead of leaving them in the
+/// user's Chrome forever (issue #192).
+///
+/// `relay_scoped` carries the entire safety argument, which is why this is a
+/// function and not an inline `if`. When the relay accepted our group
+/// announcement it filters `Target.getTargets` down to our own Chrome tab
+/// group, whose title IS this session's name, and the only ways into that group
+/// are `Target.createTarget` carrying `agentGroup` and `ABExt.duplicateTab` —
+/// both agent-created. `adopt` deliberately does neither, so the user's own tabs
+/// can never be in the list. Without scoping the very same list may be the
+/// user's tabs and other sessions' tabs, and reclaiming there would hand us
+/// permission to close pages we must never touch (#36) — hence: nothing.
+fn reclaimable_as_created<'a, I>(relay_scoped: bool, targets: I) -> Vec<&'a str>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    if relay_scoped {
+        targets.into_iter().collect()
+    } else {
+        Vec::new()
+    }
 }
 
 /// Whether the resolved active page is a tab the session created (its target_id
@@ -1292,6 +1326,24 @@ impl BrowserManager {
             // scoped getTargets to our own tab group (#40) — so `page_targets` are
             // all ours: adopt them (this restores follow-popup + cross-session
             // adopt under isolation, since foreign tabs were already filtered out).
+            //
+            // When the relay scoped us, these tabs are also ours to CLOSE, and
+            // saying so here is what stops the leak in issue #192. `created_targets`
+            // lives only in this process, so a restarted daemon used to forget the
+            // tabs its own previous incarnation opened: they stayed in the user's
+            // Chrome, unowned by anyone, until Chrome ran out of memory. Chrome's
+            // tab group is the durable record we were missing — the group's title
+            // IS this session's name, and the ONLY ways into it are
+            // `Target.createTarget` with `agentGroup` and `ABExt.duplicateTab`,
+            // both agent-created (`adopt` deliberately neither groups nor marks
+            // owned, so the user's tabs can never appear here). A scoped target is
+            // therefore a tab a session with this name created, and reclaiming it
+            // restores the close-on-shutdown that its first daemon would have done.
+            for target_id in
+                reclaimable_as_created(scoped, page_targets.iter().map(|t| t.target_id.as_str()))
+            {
+                self.created_targets.insert(target_id.to_string());
+            }
             for target in &page_targets {
                 let attach_result: AttachToTargetResult = self
                     .client
@@ -1956,15 +2008,35 @@ impl BrowserManager {
             // Target.createTarget or native duplicate — never the user's
             // existing tabs or other sessions' — so this is always safe.
             // Best-effort per tab.
-            for target_id in self.created_targets.drain() {
-                let _ = self
-                    .client
-                    .send_command_typed::<_, Value>(
-                        "Target.closeTarget",
-                        &CloseTargetParams { target_id },
-                        None,
-                    )
-                    .await;
+            //
+            // Concurrently, under one deadline (issue #192). This used to await
+            // each close in turn, which loses tabs two ways: the relay's
+            // per-command budget is 8s (RELAY_COMMAND_TIMEOUT_MS in
+            // relay-timeout.js), so ONE wedged tab could outlast the caller's
+            // whole grace period and strand every tab behind it in the queue;
+            // and `session stop` force-kills us shortly after SIGTERM, so a
+            // sequential walk over N tabs never finished N round trips. Firing
+            // them together means one stuck tab costs only itself, and the total
+            // stays inside the shutdown budget the caller allows us.
+            let closes: Vec<_> = self
+                .created_targets
+                .drain()
+                .map(|target_id| {
+                    let client = Arc::clone(&self.client);
+                    async move {
+                        let params = CloseTargetParams { target_id };
+                        client
+                            .send_command_typed::<_, Value>("Target.closeTarget", &params, None)
+                            .await
+                    }
+                })
+                .collect();
+            if !closes.is_empty() {
+                let _ = tokio::time::timeout(
+                    OWNED_TAB_CLEANUP_BUDGET,
+                    futures_util::future::join_all(closes),
+                )
+                .await;
             }
         }
 
@@ -3957,6 +4029,39 @@ mod tests {
     fn test_format_tab_id() {
         assert_eq!(format_tab_id(1), "t1");
         assert_eq!(format_tab_id(42), "t42");
+    }
+
+    #[test]
+    fn reconnect_reclaims_scoped_targets_so_they_are_closed_on_shutdown() {
+        // #192: a restarted daemon must take back the tabs its own previous
+        // incarnation opened, or they stay in the user's Chrome forever.
+        assert_eq!(
+            reclaimable_as_created(true, ["A", "B"]),
+            vec!["A", "B"],
+            "a scoped relay list is this session's own tab group"
+        );
+    }
+
+    #[test]
+    fn reconnect_never_reclaims_unscoped_targets() {
+        // The red line (#36): without relay scoping the same list may hold the
+        // user's tabs and other sessions' tabs. Reclaiming them would mean
+        // close() deletes pages we never created.
+        assert!(reclaimable_as_created(false, ["USER_TAB", "OTHER_AGENT"]).is_empty());
+    }
+
+    #[test]
+    fn owned_tab_cleanup_fits_inside_the_shutdown_grace_period() {
+        // The #192 leak was exactly this relationship being inverted: cleanup
+        // needed longer than `session stop` was willing to wait, so the daemon
+        // was SIGKILLed mid-cleanup and its tabs survived. Whoever tunes either
+        // constant next has to keep cleanup strictly the shorter of the two.
+        assert!(
+            OWNED_TAB_CLEANUP_BUDGET < crate::connection::DAEMON_SHUTDOWN_GRACE,
+            "tab cleanup ({:?}) must finish before SIGKILL at {:?}",
+            OWNED_TAB_CLEANUP_BUDGET,
+            crate::connection::DAEMON_SHUTDOWN_GRACE,
+        );
     }
 
     #[test]

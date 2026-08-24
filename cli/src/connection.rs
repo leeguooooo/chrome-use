@@ -680,6 +680,24 @@ fn query_current_url(session: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// How long a daemon gets between SIGTERM and SIGKILL to shut down cleanly.
+///
+/// This is the deadline the tab cleanup in `BrowserManager::close()` runs
+/// against, so it must stay above [`native::browser::OWNED_TAB_CLEANUP_BUDGET`]
+/// with room for the rest of the teardown. It was 1s until issue #192: the
+/// relay allows each CDP command 8s, so a `Target.closeTarget` on a busy relay
+/// routinely outlived the grace period, the daemon was SIGKILLed mid-cleanup,
+/// and its tabs stayed open in the user's Chrome. Repeated across a collector's
+/// restart loop, those orphans accumulated until Chrome ran out of memory.
+///
+/// Raising this is close to free: the poll below breaks as soon as the process
+/// exits, so a healthy `session stop` still returns in a fraction of a second.
+/// Only a daemon that is genuinely still finishing work spends the budget.
+pub const DAEMON_SHUTDOWN_GRACE: Duration = Duration::from_secs(8);
+const DAEMON_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const DAEMON_SHUTDOWN_GRACE_POLLS: u32 =
+    (DAEMON_SHUTDOWN_GRACE.as_millis() / DAEMON_SHUTDOWN_POLL_INTERVAL.as_millis()) as u32;
+
 /// Kill a running daemon by reading its PID file and sending a kill signal.
 pub fn kill_stale_daemon(session: &str) {
     // Remove the socket first so no new connections reach the old daemon
@@ -697,9 +715,12 @@ pub fn kill_stale_daemon(session: &str) {
                 unsafe {
                     libc::kill(pid as i32, libc::SIGTERM);
                 }
-                // Wait up to 1s for graceful shutdown, then force-kill
-                for _ in 0..10 {
-                    thread::sleep(Duration::from_millis(100));
+                // Wait for graceful shutdown, then force-kill. The poll exits
+                // the moment the daemon is gone, so a healthy stop still
+                // returns in well under a second — the budget only gets spent
+                // when the daemon is genuinely still working.
+                for _ in 0..DAEMON_SHUTDOWN_GRACE_POLLS {
+                    thread::sleep(DAEMON_SHUTDOWN_POLL_INTERVAL);
                     if unsafe { libc::kill(pid as i32, 0) } != 0 {
                         break;
                     }

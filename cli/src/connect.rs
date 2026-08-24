@@ -300,6 +300,7 @@ pub fn run_connect(args: &[String], json: bool) {
                 &status,
                 expected_extension_version,
                 store_extension_version.as_deref(),
+                policy == PolicyState::Active,
             );
         } else {
             println!("  Chrome profile extension status: not found in any Chrome profile");
@@ -2200,10 +2201,55 @@ fn parse_chrome_extension_status(
     }
 }
 
+/// What to tell a user whose live extension is behind the published build.
+///
+/// Split by install route (#190). A Store install has a per-extension Update
+/// control and a permissions prompt to accept, so naming them is actionable. A
+/// policy force-install has neither: the row is greyed out under "installed by
+/// your administrator", Chrome grants new permissions itself, and updates land
+/// on Chrome's own schedule. Telling THAT user to "accept pending permissions"
+/// sends them looking for a button that does not exist on their screen.
+fn stale_extension_hint(live: &str, store: &str, managed_install: bool) -> String {
+    if managed_install {
+        format!(
+            "! active extension {live} is older than the published {store}. It was installed by \
+             policy, so Chrome updates it on its own schedule and grants any new permissions \
+             without asking — there is nothing to accept.\n\
+             \x20   To pull it now: chrome://extensions → enable Developer mode → Update \
+             (the toolbar button; the extension's own row has no update control), or restart \
+             Chrome."
+        )
+    } else {
+        format!(
+            "! active extension {live} is older than the published {store}; open \
+             chrome://extensions, accept pending permissions/reload, or restart Chrome"
+        )
+    }
+}
+
+/// Same split for an update Chrome has already downloaded but not activated.
+/// Restarting Chrome applies it either way; only the "accept permissions" half
+/// is Store-install-specific.
+fn pending_update_hint(active: &str, downloaded: &str, managed_install: bool) -> String {
+    if managed_install {
+        format!(
+            "! Chrome has a pending extension update: active {active} -> downloaded \
+             {downloaded}; restart Chrome to apply it (policy-installed: no permission \
+             prompt to accept)"
+        )
+    } else {
+        format!(
+            "! Chrome has a pending extension update: active {active} -> downloaded \
+             {downloaded}; restart Chrome or accept pending permissions"
+        )
+    }
+}
+
 fn print_chrome_extension_status(
     status: &ChromeExtensionStatus,
     expected_version: &str,
     store_version: Option<&str>,
+    managed_install: bool,
 ) {
     let source = if status.id == STORE_EXTENSION_ID {
         "Web Store"
@@ -2223,16 +2269,18 @@ fn print_chrome_extension_status(
         if let ExtVersionVerdict::BehindStore { store } =
             classify_ext_version(ver, expected_version, store_version)
         {
-            println!(
-                "! active extension {ver} is older than the published {store}; open chrome://extensions, accept pending permissions/reload, or restart Chrome"
-            );
+            println!("{}", stale_extension_hint(ver, &store, managed_install));
         }
     }
     if let Some(idle) = &status.idle_version {
         if status.version.as_deref() != Some(idle.as_str()) {
             println!(
-                "! Chrome has a pending extension update: active {} -> downloaded {idle}; restart Chrome or accept pending permissions",
-                status.version.as_deref().unwrap_or("unknown")
+                "{}",
+                pending_update_hint(
+                    status.version.as_deref().unwrap_or("unknown"),
+                    idle,
+                    managed_install,
+                )
             );
         }
     }
@@ -3231,6 +3279,37 @@ mod tests {
         }
         // Already doing its job — nothing to write.
         assert!(!wants_policy_profile(&PolicyState::Active, false, false));
+    }
+
+    #[test]
+    fn a_policy_installed_extension_is_never_told_to_accept_permissions() {
+        // #190: a forcelist install has no per-extension update control and no
+        // permission prompt — Chrome grants them itself. The Store wording sends
+        // that user hunting for a button their greyed-out row does not have.
+        let managed = stale_extension_hint("0.5.12", "0.5.17", true);
+        assert!(
+            !managed.contains("accept pending permissions"),
+            "managed hint must not name a prompt that never appears: {managed}"
+        );
+        assert!(managed.contains("Developer mode"), "{managed}");
+        assert!(managed.contains("without asking"), "{managed}");
+
+        // The Store install keeps the actionable wording.
+        let store = stale_extension_hint("0.5.12", "0.5.17", false);
+        assert!(store.contains("accept pending permissions"), "{store}");
+    }
+
+    #[test]
+    fn a_pending_update_only_mentions_permissions_for_store_installs() {
+        let managed = pending_update_hint("0.5.12", "0.5.17", true);
+        assert!(managed.contains("restart Chrome"), "{managed}");
+        assert!(
+            !managed.contains("or accept pending permissions"),
+            "{managed}"
+        );
+
+        let store = pending_update_hint("0.5.12", "0.5.17", false);
+        assert!(store.contains("accept pending permissions"), "{store}");
     }
 
     #[test]
