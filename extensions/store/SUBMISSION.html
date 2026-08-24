@@ -103,7 +103,10 @@ automate pages the user is working with, entirely on the user's machine and at t
   <tr><td class="field">nativeMessaging</td><td>The sole communication channel: a local native-messaging connection to the chrome-use CLI installed on the same machine. No network is used.</td></tr>
   <tr><td class="field">storage</td><td>Persist small local pairing/configuration state for the extension.</td></tr>
   <tr><td class="field">alarms</td><td>Keep the MV3 service worker alive during longer automation sessions.</td></tr>
+  <tr><td class="field">idle</td><td>Detect when the machine goes idle or wakes from sleep so the extension can clean up finished automation sessions and re-establish the local native-messaging connection. No idle data leaves the device.</td></tr>
   <tr><td class="field">webNavigation</td><td>Detect page loads/navigations so automation can wait for the right moment before acting.</td></tr>
+  <tr><td class="field">notifications</td><td>Show local status and error notices to the user (for example, that the connection to the local CLI was lost). Notifications are generated on-device; no data leaves the machine.</td></tr>
+  <tr><td class="field">identity, identity.email</td><td>Read the email of the Google account signed into the current Chrome profile (<code>chrome.identity.getProfileUserInfo</code>) purely to label which profile a local connection belongs to, so a user with several logged-in Chrome profiles can confirm the CLI is automating the intended account. The email is sent only to the paired local CLI over native messaging; it is never stored off-device or sent to any server. No OAuth token is requested (<code>getAuthToken</code> is not used).</td></tr>
   <tr><td class="field">host permissions（若被问）</td><td>The extension declares none; tab access is mediated through the debugger attach the user initiates.</td></tr>
 </table>
 
