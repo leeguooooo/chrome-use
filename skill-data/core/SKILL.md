@@ -114,8 +114,8 @@ transient relay drops — usually just retry the command.
 **Per-agent isolation is automatic:** each `--session <name>` gets its own colored
 Chrome tab group + dedicated daemon and drives only tabs it created or explicitly
 adopted, so
-concurrent agents share one real Chrome without cross-talk and never touch the
-user's tabs; an unset session auto-derives a stable per-agent name from supported
+concurrent agents share one real Chrome without cross-talk and never touch
+unadopted user tabs; an unset session auto-derives a stable per-agent name from supported
 runner IDs, including Codex's `CODEX_THREAD_ID`. Other runners can set
 `AGENT_BROWSER_SESSION_ID`. `adopt
 <url|targetId>` drives a pre-existing tab on demand; OAuth/SSO popups and
@@ -963,6 +963,9 @@ On external or extension-connected Chrome, `tab list` marks every row as
 `created`, `adopted`, or `foreign`. A session may select only created or adopted
 tabs and may close only created tabs. Use `tab adopt <url-substring|targetId>`
 before driving an existing tab; adoption never transfers permission to close it.
+Created ownership survives daemon restarts for the same named session and
+connected browser endpoint, allowing interrupted cleanup to resume without
+making adopted tabs closable.
 
 (`tabs` → the `tab` subcommand tree, and `get-text <sel>` → `get text <sel>` —
 common-guess aliases so you don't waste a round on the wrong spelling.)
@@ -1199,9 +1202,10 @@ before snapshotting.
 
 If the tab is still present but the page is white or frozen, do not reopen it
 and destroy the diagnostic state. Select it only when `tab list` marks it
-`created` or `adopted`; otherwise use `tab adopt <url-substring|targetId>` first,
-then `tab inspect <ref>`. A relay timeout means the
-renderer did not answer; it does not mean the tab disappeared.
+`created` or `adopted`; otherwise inspect its browser metadata directly with
+`tab inspect <targetId>`, and use `tab adopt <url-substring|targetId>` before
+selecting or driving it. A relay timeout means the renderer did not answer; it
+does not mean the tab disappeared.
 
 If `tab select` reports that the liveness probe did not complete, read the full
 warning before judging the renderer. An outdated or unknown ab-connect version

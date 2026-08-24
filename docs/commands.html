@@ -408,7 +408,8 @@
         <code>tab adopt &lt;URL 子串|targetId&gt;</code> 会在当前会话中附加现有标签，不刷新页面。
         在外部或扩展连接的 Chrome 中，<code>tab list</code> 会把标签标记为
         <code>created</code>、<code>adopted</code> 或 <code>foreign</code>。只有 created/adopted
-        标签可以切换，只有当前 session 创建的标签可以关闭；adopted 标签仍属于用户。
+        标签可以切换，只有当前 session 创建的标签可以关闭；adopted 标签仍属于用户。同名 session
+        连接同一浏览器端点重启后仍会恢复 created 所有权，因此中断的清理可以安全继续。
         <code>tab inspect &lt;ref&gt;</code> 只读取 Chrome 的标签元数据，因此 renderer 主线程被页面
         JavaScript 卡住时仍可返回 URL、加载状态、discard/freeze 状态与 debugger 附加状态。
         页面主线程恢复响应前，<code>eval</code> 仍无法完成。

@@ -300,7 +300,8 @@
         adopt the user's existing tabs, another agent's tabs, or <em>unrelated</em> popups (a login window the user opened is
         the user's). <code>tab list</code> may surface other tabs for recovery, but marks them <code>foreign</code>;
         they cannot be selected or closed. Use <code>adopt</code> as the explicit opt-in before driving one. Adopted tabs
-        remain user-owned and cannot be closed by the session.
+        remain user-owned and cannot be closed by the session. Created ownership survives daemon restarts for the same
+        named session and connected browser endpoint, so interrupted cleanup can resume safely.
       </p>
 
       <h2>No debugging banner on the user's pages</h2>

@@ -774,11 +774,11 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                     truncate_middle(url, 120)
                 };
                 let active = tab.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
-                let ownership = tab
+                let ownership_marker = tab
                     .get("ownership")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("foreign");
-                let ownership_marker = format!(" [{}]", ownership);
+                    .map(|ownership| format!(" [{}]", ownership))
+                    .unwrap_or_default();
                 let marker = if active {
                     color::cyan("→")
                 } else {
@@ -2826,17 +2826,17 @@ referring to the same tab across commands. Optional user-assigned labels
 accepted.
 
 Operations:
-  list                       List tabs with ids, labels, and ownership (default)
+  list                       List tabs with ids and labels (external: ownership too)
   new [url]                  Open a new tab
   new --label <name> [url]   Open a new tab with a label like `docs` or `app`
   duplicate [ref]            Natively duplicate a tab (current if no ref given)
   duplicate [ref] --label <name>
                              Natively duplicate and label a tab
-  select <ref>               Switch to a created or adopted tab
+  select <ref>               Switch tabs (external: created or adopted only)
   adopt <url|targetId>       Attach an existing tab without navigating it
   inspect <ref>              Read browser-level state (relay requires ab-connect 0.5.16+)
-  close [ref]                Close a session-created tab (current if omitted)
-  <ref>                      Switch to a created or adopted tab
+  close [ref]                Close a tab (external: session-created only)
+  <ref>                      Switch tabs (external: created or adopted only)
 
 Native duplication requires real Chrome connected through the chrome-use
 extension. It restores the previously visible foreground tab when complete.
@@ -3931,14 +3931,14 @@ Storage:
 
 Tabs:
   tab [new|duplicate|list|select|adopt|inspect|close|<ref>]
-                             Manage tabs (<ref> = t<N>, a label, or a CDP targetId)
+                             Manage tabs (<ref> = t<N> or label; inspect also accepts targetId)
   tab duplicate [ref] [--label <name>]
                              Natively duplicate on extension-connected real Chrome
-  tab list --full            Full URLs + ownership + stable targetId per tab
-  tab select <ref>           Select a tab created or adopted by this session
+  tab list --full            Full URLs + stable targetId (external: ownership too)
+  tab select <ref>           Select a tab (external: created or adopted only)
   tab adopt <url|targetId>   Attach an existing tab in the current session, no reload
   tab inspect <ref>          Browser metadata without page JS (ab-connect 0.5.16+ on relay)
-  tab close [ref]            Close only a tab created by this session
+  tab close [ref]            Close a tab (external: session-created only)
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning
                              a duplicate (matches origin+path; preserves state)
   adopt <url|targetId>       Read a PRE-EXISTING tab (the user's own, or another

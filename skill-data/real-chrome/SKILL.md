@@ -162,7 +162,8 @@ another agent's tab churn can't make your bound tab vanish or drift your command
 onto the wrong page. `tab list` may surface other tabs for recovery, but marks
 them `foreign`; they cannot be selected or closed. Use `adopt` as the explicit
 opt-in before driving one. Adopted tabs remain user-owned and cannot be closed by
-the session.
+the session. Created ownership persists across daemon restarts for the same named
+session and connected browser endpoint, so interrupted cleanup can resume safely.
 
 > **No debugger banner on the user's pages.** The extension attaches Chrome's
 > debugger **only to tabs the agent owns** (ones it created, or that you `adopt`),

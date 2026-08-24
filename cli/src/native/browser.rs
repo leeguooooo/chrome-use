@@ -1,3 +1,4 @@
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -384,46 +385,14 @@ fn debounced_prune_ids(
     prune
 }
 
-/// Which discovered targets a reconnecting daemon may reclaim as tabs THIS
-/// session created, so `close()` cleans them up instead of leaving them in the
-/// user's Chrome forever (issue #192).
-///
-/// **Currently: none.** Group membership looked like durable proof of authorship
-/// — the group title IS the session name, and on the extension side the only
-/// ways in are `Target.createTarget` with `agentGroup` and `ABExt.duplicateTab`,
-/// both agent-created. But the relay keeps its OWN `target_group` map, and that
-/// map is what scopes `Target.getTargets`. It has a second writer:
-/// `RelayState::route_client_command` re-tags a target into the adopter's group
-/// on `Target.attachToTarget` (`relay.rs`, cross-session adopt for #21), which
-/// is exactly the call `adopt_existing_target` makes. The repo's own
-/// `explicit_attach_tags_target_into_adopter_group` test pins that behaviour: a
-/// pre-existing USER tab lands in the adopter's scoped list.
-///
-/// So "in our scoped list" means "created by us OR adopted from the user", and
-/// those two are indistinguishable after a restart drops `created_targets`.
-/// Reclaiming the set would hand `close()` permission to delete a page the user
-/// asked us to read — the #36 red line. Leaking a tab is a bug; closing the
-/// user's tab is the thing this project refuses to do, so until authorship is
-/// recorded durably (PR #191 persists the created ids per session), a
-/// reconnecting daemon reclaims nothing and the orphans wait for that.
-///
-/// Caught by @forsakesoul in review of #191, after a wrong version of this
-/// function shipped in v1.5.95.
-fn reclaimable_as_created<'a, I>(_relay_scoped: bool, _targets: I) -> Vec<&'a str>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    Vec::new()
-}
-
-/// Whether the resolved active page is a tab the session created (its target_id
-/// is in `created_targets`). Pure core of [`BrowserManager::active_is_session_owned`]
-/// so the relay no-hijack rule is unit-testable without a live browser.
-fn active_index_is_owned(
+/// Whether the resolved active page is a tab this session may drive. Pure core
+/// of [`BrowserManager::active_is_drivable`] so the relay no-hijack rule is
+/// unit-testable without a live browser.
+fn active_index_is_drivable(
     pages: &[PageInfo],
     active_target_id: Option<&str>,
     active_page_index: usize,
-    created_targets: &HashSet<String>,
+    drivable_targets: &HashSet<String>,
 ) -> bool {
     pages
         .get(resolve_active_index(
@@ -431,12 +400,12 @@ fn active_index_is_owned(
             active_target_id,
             active_page_index,
         ))
-        .map(|p| created_targets.contains(&p.target_id))
+        .map(|p| drivable_targets.contains(&p.target_id))
         .unwrap_or(false)
 }
 
-// External Chrome tabs stay user-owned unless this daemon created them. Adoption
-// grants drive access only; it deliberately never grants deletion rights.
+/// External Chrome tabs stay user-owned unless this session created them.
+/// Adoption grants drive access only; it never grants deletion rights.
 fn tab_close_is_allowed(
     browser_is_external: bool,
     target_id: &str,
@@ -445,6 +414,7 @@ fn tab_close_is_allowed(
     !browser_is_external || created_targets.contains(target_id)
 }
 
+/// External Chrome may switch only to tabs this session created or adopted.
 fn tab_switch_is_allowed(
     browser_is_external: bool,
     target_id: &str,
@@ -453,18 +423,42 @@ fn tab_switch_is_allowed(
     !browser_is_external || owned_targets.contains(target_id)
 }
 
+/// Reports ownership only for external browsers, where deletion rights differ.
 fn tab_ownership(
+    browser_is_external: bool,
     target_id: &str,
     created_targets: &HashSet<String>,
     adopted_targets: &HashSet<String>,
-) -> &'static str {
-    if created_targets.contains(target_id) {
-        "created"
+) -> Option<&'static str> {
+    if !browser_is_external {
+        None
+    } else if created_targets.contains(target_id) {
+        Some("created")
     } else if adopted_targets.contains(target_id) {
-        "adopted"
+        Some("adopted")
     } else {
-        "foreign"
+        Some("foreign")
     }
+}
+
+/// Restores persisted created targets and adopts other relay-scoped targets.
+fn register_scoped_target_ownership(
+    target_ids: &[String],
+    created_targets: &HashSet<String>,
+    adopted_targets: &mut HashSet<String>,
+) {
+    adopted_targets.extend(
+        target_ids
+            .iter()
+            .filter(|target_id| !created_targets.contains(*target_id))
+            .cloned(),
+    );
+}
+
+/// A successful CDP round trip is not enough: the extension reports a missing
+/// or unclosable tab as `{ success: false }`.
+fn target_was_closed(result: &Result<CloseTargetResult, String>) -> bool {
+    result.as_ref().is_ok_and(|result| result.success)
 }
 
 /// Whether a CDP error means the bound relay target is gone — the tab was
@@ -1029,14 +1023,17 @@ impl BrowserManager {
         let mut manager = Self {
             client,
             browser_process: None,
-            ws_url,
+            ws_url: ws_url.clone(),
             pages: Vec::new(),
             active_page_index: 0,
             default_timeout_ms: 25_000,
             download_path: None,
             ignore_https_errors: false,
             visited_origins: HashSet::new(),
-            created_targets: HashSet::new(),
+            created_targets: DAEMON_SESSION
+                .get()
+                .map(|session| crate::connection::read_created_targets(session, &ws_url))
+                .unwrap_or_default(),
             adopted_targets: HashSet::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
@@ -1327,7 +1324,7 @@ impl BrowserManager {
                 )
                 .await?;
             // We created this tab — own it so close() can clean it up.
-            self.created_targets.insert(result.target_id.clone());
+            self.remember_created_target(&result.target_id);
 
             let attach_result: AttachToTargetResult = self
                 .client
@@ -1368,16 +1365,16 @@ impl BrowserManager {
             // scoped getTargets to our own tab group (#40) — so `page_targets` are
             // all ours: adopt them (this restores follow-popup + cross-session
             // adopt under isolation, since foreign tabs were already filtered out).
-            //
-            // Adopting them for RESOLUTION is safe and is all we do here. Taking
-            // them back as ours to CLOSE is not: see [`reclaimable_as_created`]
-            // for why a scoped target cannot be told apart from a user tab this
-            // session adopted, which is why that returns nothing today. The
-            // orphan-cleanup half of #192 waits on durable authorship (PR #191).
-            for target_id in
-                reclaimable_as_created(scoped, page_targets.iter().map(|t| t.target_id.as_str()))
-            {
-                self.created_targets.insert(target_id.to_string());
+            if scoped {
+                let target_ids: Vec<String> = page_targets
+                    .iter()
+                    .map(|target| target.target_id.clone())
+                    .collect();
+                register_scoped_target_ownership(
+                    &target_ids,
+                    &self.created_targets,
+                    &mut self.adopted_targets,
+                );
             }
             for target in &page_targets {
                 let attach_result: AttachToTargetResult = self
@@ -1509,8 +1506,8 @@ impl BrowserManager {
     /// On the shared real browser a fresh session also passively attaches to the
     /// user's existing tabs; those are NOT owned, and navigating one would
     /// clobber the user's page. Used to gate `navigate` on the relay.
-    fn active_is_session_owned(&self) -> bool {
-        active_index_is_owned(
+    fn active_is_drivable(&self) -> bool {
+        active_index_is_drivable(
             &self.pages,
             self.active_target_id.as_deref(),
             self.active_page_index,
@@ -1528,17 +1525,44 @@ impl BrowserManager {
             .collect()
     }
 
+    fn persist_created_targets(&self) {
+        if self.browser_process.is_none() {
+            if let Some(session) = DAEMON_SESSION.get() {
+                if let Err(error) = crate::connection::write_created_targets(
+                    session,
+                    &self.ws_url,
+                    &self.created_targets,
+                ) {
+                    eprintln!("Failed to persist tab ownership for session {session}: {error}");
+                }
+            }
+        }
+    }
+
+    fn remember_created_target(&mut self, target_id: &str) {
+        if self.created_targets.insert(target_id.to_string()) {
+            self.persist_created_targets();
+        }
+    }
+
+    fn forget_created_target(&mut self, target_id: &str) -> bool {
+        let removed = self.created_targets.remove(target_id);
+        if removed {
+            self.persist_created_targets();
+        }
+        removed
+    }
+
     /// Drop the page bound to `session_id` from the tracked list — used when the
     /// relay reports its tab is gone (issue #35) so the stale entry can't keep
-    /// resolving as active. Forgets ownership, unpins it if it was pinned, and
-    /// keeps `active_page_index` in range.
+    /// resolving as active. Keeps persisted created ownership so a later daemon
+    /// can recover an orphan if the relay falsely reported it gone.
     fn drop_page_by_session(&mut self, session_id: &str) {
         let Some(pos) = self.pages.iter().position(|p| p.session_id == session_id) else {
             return;
         };
         let target_id = self.pages[pos].target_id.clone();
         self.pages.remove(pos);
-        self.created_targets.remove(&target_id);
         self.adopted_targets.remove(&target_id);
         if self.active_target_id.as_deref() == Some(target_id.as_str()) {
             self.active_target_id = None;
@@ -1660,7 +1684,7 @@ impl BrowserManager {
         // the user's (and other sessions') tabs are never hijacked. Off the relay
         // (a browser we launched) reusing the active tab is correct, so this is
         // gated on `agent_group()`.
-        if self.agent_group().is_some() && !self.active_is_session_owned() {
+        if self.agent_group().is_some() && !self.active_is_drivable() {
             self.tab_new(None, None).await?;
         }
         let mut session_id = self.active_session_id()?.to_string();
@@ -2053,25 +2077,40 @@ impl BrowserManager {
             // sequential walk over N tabs never finished N round trips. Firing
             // them together means one stuck tab costs only itself, and the total
             // stays inside the shutdown budget the caller allows us.
-            let closes: Vec<_> = self
+            let mut closes: FuturesUnordered<_> = self
                 .created_targets
-                .drain()
+                .iter()
+                .cloned()
                 .map(|target_id| {
                     let client = Arc::clone(&self.client);
                     async move {
-                        let params = CloseTargetParams { target_id };
-                        client
-                            .send_command_typed::<_, Value>("Target.closeTarget", &params, None)
-                            .await
+                        let params = CloseTargetParams {
+                            target_id: target_id.clone(),
+                        };
+                        let result = client
+                            .send_command_typed::<_, CloseTargetResult>(
+                                "Target.closeTarget",
+                                &params,
+                                None,
+                            )
+                            .await;
+                        (target_id, result)
                     }
                 })
                 .collect();
             if !closes.is_empty() {
-                let _ = tokio::time::timeout(
-                    OWNED_TAB_CLEANUP_BUDGET,
-                    futures_util::future::join_all(closes),
-                )
+                let remaining_before_cleanup = self.created_targets.len();
+                let _ = tokio::time::timeout(OWNED_TAB_CLEANUP_BUDGET, async {
+                    while let Some((target_id, result)) = closes.next().await {
+                        if target_was_closed(&result) {
+                            self.created_targets.remove(&target_id);
+                        }
+                    }
+                })
                 .await;
+                if self.created_targets.len() != remaining_before_cleanup {
+                    self.persist_created_targets();
+                }
             }
         }
 
@@ -2153,7 +2192,7 @@ impl BrowserManager {
     /// and idle-shutdown (the agent is leaving it for the user). Returns true if it
     /// was owned. Used by `keep`.
     pub fn unown_target(&mut self, target_id: &str) -> bool {
-        self.created_targets.remove(target_id)
+        self.forget_created_target(target_id)
     }
 
     /// Returns true if this manager was connected via CDP (as opposed to local launch).
@@ -2191,7 +2230,7 @@ impl BrowserManager {
             )
             .await?;
         // We created this tab — own it so close() can clean it up.
-        self.created_targets.insert(result.target_id.clone());
+        self.remember_created_target(&result.target_id);
 
         let attach_result: AttachToTargetResult = self
             .client
@@ -2257,7 +2296,7 @@ impl BrowserManager {
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                json!({
+                let mut tab = json!({
                     "tabId": format_tab_id(p.tab_id),
                     // Stable CDP target id. Unlike `t<N>` (per-session, reassigned
                     // each connect) this is the same handle across every session
@@ -2268,11 +2307,6 @@ impl BrowserManager {
                     "title": p.title,
                     "url": p.url,
                     "type": p.target_type,
-                    "ownership": tab_ownership(
-                        &p.target_id,
-                        &self.created_targets,
-                        &self.adopted_targets,
-                    ),
                     // A dangling relay pin is a deliberate tombstone after the
                     // bound tab disappears. Do not render a surviving scratch
                     // tab as active merely because the lenient index fallback
@@ -2282,7 +2316,16 @@ impl BrowserManager {
                     } else {
                         i == active
                     },
-                })
+                });
+                if let Some(ownership) = tab_ownership(
+                    self.browser_process.is_none(),
+                    &p.target_id,
+                    &self.created_targets,
+                    &self.adopted_targets,
+                ) {
+                    tab["ownership"] = json!(ownership);
+                }
+                tab
             })
             .collect()
     }
@@ -2399,7 +2442,7 @@ impl BrowserManager {
             // opened a popup/new tab) is ours — record it as owned so it's tracked,
             // protected from churn-pruning, and cleaned up on close, consistent with
             // strict multi-agent isolation (we only ever own tabs we created/opened).
-            self.created_targets.insert(target.target_id.clone());
+            self.remember_created_target(&target.target_id);
             self.add_background_page(page.clone());
             let _ = self.enable_domains(&attach.session_id).await;
             if opened.is_none() {
@@ -2428,6 +2471,15 @@ impl BrowserManager {
             .collect();
         let live_ids: HashSet<String> = live.iter().map(|t| t.target_id.clone()).collect();
         let on_relay = self.agent_group().is_some();
+        if on_relay && self.relay_scoped {
+            let target_ids: Vec<String> =
+                live.iter().map(|target| target.target_id.clone()).collect();
+            register_scoped_target_ownership(
+                &target_ids,
+                &self.created_targets,
+                &mut self.adopted_targets,
+            );
+        }
         // When the relay scopes getTargets to our group (#40), `live` is already
         // only our own tabs, so adopting unknown ones is safe (a freshly-opened
         // pop-up). Without scoping, keep strict isolation: never adopt a tab we
@@ -2490,6 +2542,7 @@ impl BrowserManager {
         };
         for tid in &gone {
             self.relay_target_misses.remove(tid);
+            self.adopted_targets.remove(tid);
             self.remove_page_by_target_id(tid);
         }
 
@@ -2677,9 +2730,9 @@ impl BrowserManager {
             return;
         }
         for tid in blanks {
-            let _ = self
+            let close_result = self
                 .client
-                .send_command_typed::<_, Value>(
+                .send_command_typed::<_, CloseTargetResult>(
                     "Target.closeTarget",
                     &CloseTargetParams {
                         target_id: tid.clone(),
@@ -2687,7 +2740,9 @@ impl BrowserManager {
                     None,
                 )
                 .await;
-            self.created_targets.remove(&tid);
+            if target_was_closed(&close_result) {
+                self.forget_created_target(&tid);
+            }
             self.remove_page_by_target_id(&tid);
         }
         // Removing earlier pages shifts indices — re-pin the kept tab.
@@ -2700,10 +2755,10 @@ impl BrowserManager {
     /// Best-effort rollback for a tab that Chrome created but the daemon could
     /// not finish registering. The extension owns the underlying Chrome tab,
     /// so closing the stable target also clears its persisted ownership entry.
-    async fn discard_created_target(&self, target_id: &str) {
-        let _ = self
+    async fn discard_created_target(&mut self, target_id: &str) {
+        let close_result = self
             .client
-            .send_command_typed::<_, Value>(
+            .send_command_typed::<_, CloseTargetResult>(
                 "Target.closeTarget",
                 &CloseTargetParams {
                     target_id: target_id.to_string(),
@@ -2711,6 +2766,9 @@ impl BrowserManager {
                 None,
             )
             .await;
+        if target_was_closed(&close_result) {
+            self.forget_created_target(target_id);
+        }
     }
 
     pub async fn tab_new(
@@ -2753,7 +2811,7 @@ impl BrowserManager {
             )
             .await?;
         // We created this tab — own it so close() can clean it up.
-        self.created_targets.insert(result.target_id.clone());
+        self.remember_created_target(&result.target_id);
 
         let attach: AttachToTargetResult = self
             .client
@@ -2900,6 +2958,7 @@ impl BrowserManager {
                 None,
             )
             .await?;
+        self.remember_created_target(&duplicate.target_id);
 
         let attach: AttachToTargetResult = match self
             .client
@@ -2931,7 +2990,6 @@ impl BrowserManager {
             ));
         }
 
-        self.created_targets.insert(duplicate.target_id.clone());
         let source_target_id = source.target_id.clone();
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
@@ -3041,20 +3099,29 @@ impl BrowserManager {
             ));
         }
 
-        let page = self.pages.remove(target_index);
-        self.update_active_page_after_removal(target_index);
+        let page = &self.pages[target_index];
         let closed_tab_id = page.tab_id;
         let closed_label = page.label.clone();
-        let _ = self
+        let target_id = page.target_id.clone();
+        let close_result = self
             .client
-            .send_command_typed::<_, Value>(
+            .send_command_typed::<_, CloseTargetResult>(
                 "Target.closeTarget",
                 &CloseTargetParams {
-                    target_id: page.target_id,
+                    target_id: target_id.clone(),
                 },
                 None,
             )
-            .await;
+            .await?;
+        if !close_result.success {
+            return Err(format!(
+                "Chrome did not close tab {}",
+                format_tab_id(closed_tab_id)
+            ));
+        }
+        self.pages.remove(target_index);
+        self.update_active_page_after_removal(target_index);
+        self.forget_created_target(&target_id);
 
         let session_id = self.pages[self.active_page_index].session_id.clone();
         self.enable_domains(&session_id).await?;
@@ -4095,28 +4162,6 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_never_reclaims_deletion_rights_over_a_scoped_target() {
-        // The #36 red line, and a real regression: v1.5.95 reclaimed every
-        // scoped target as session-created, on the theory that tab-group
-        // membership proves we opened it. It does not. The relay re-tags a
-        // target into the adopter's group on `Target.attachToTarget` — the very
-        // call `adopt_existing_target` makes — so a USER tab this session
-        // adopted sits in the scoped list too, and after a restart drops
-        // `created_targets` the two are indistinguishable. Reclaiming meant
-        // `close()` could delete a page the user asked us to read.
-        //
-        // Scoped or not, authorship we cannot prove is authorship we do not get.
-        assert!(
-            reclaimable_as_created(true, ["OUR_TAB", "USER_TAB_WE_ADOPTED"]).is_empty(),
-            "a scoped list mixes tabs we created with user tabs we adopted"
-        );
-        assert!(
-            reclaimable_as_created(false, ["USER_TAB", "OTHER_AGENT"]).is_empty(),
-            "unscoped is even weaker evidence"
-        );
-    }
-
-    #[test]
     fn owned_tab_cleanup_fits_inside_the_shutdown_grace_period() {
         // The #192 leak was exactly this relationship being inverted: cleanup
         // needed longer than `session stop` was willing to wait, so the daemon
@@ -4466,7 +4511,12 @@ mod tests {
         // user's page); it has to open its own first.
         let pages = vec![page("USER_A"), page("USER_B")];
         let created = HashSet::new();
-        assert!(!active_index_is_owned(&pages, Some("USER_A"), 0, &created));
+        assert!(!active_index_is_drivable(
+            &pages,
+            Some("USER_A"),
+            0,
+            &created
+        ));
     }
 
     #[test]
@@ -4475,15 +4525,20 @@ mod tests {
         let mut created = HashSet::new();
         created.insert("OURS".to_string());
         // Active pinned to the tab we created → safe to navigate it.
-        assert!(active_index_is_owned(&pages, Some("OURS"), 1, &created));
+        assert!(active_index_is_drivable(&pages, Some("OURS"), 1, &created));
         // But pinned to the user's tab → not owned, even though we own another.
-        assert!(!active_index_is_owned(&pages, Some("USER_A"), 0, &created));
+        assert!(!active_index_is_drivable(
+            &pages,
+            Some("USER_A"),
+            0,
+            &created
+        ));
     }
 
     #[test]
     fn active_not_owned_when_no_pages() {
         let created = HashSet::new();
-        assert!(!active_index_is_owned(&[], None, 0, &created));
+        assert!(!active_index_is_drivable(&[], None, 0, &created));
     }
 
     #[test]
@@ -4494,6 +4549,15 @@ mod tests {
         assert!(!tab_close_is_allowed(true, "ADOPTED", &created));
         assert!(!tab_close_is_allowed(true, "FOREIGN", &created));
         assert!(tab_close_is_allowed(false, "FOREIGN", &created));
+    }
+
+    #[test]
+    fn deletion_rights_require_confirmed_target_close() {
+        assert!(target_was_closed(&Ok(CloseTargetResult { success: true })));
+        assert!(!target_was_closed(&Ok(CloseTargetResult {
+            success: false
+        })));
+        assert!(!target_was_closed(&Err("relay failed".to_string())));
     }
 
     #[test]
@@ -4511,9 +4575,53 @@ mod tests {
         let created = HashSet::from(["CREATED".to_string()]);
         let adopted = HashSet::from(["ADOPTED".to_string()]);
 
-        assert_eq!(tab_ownership("CREATED", &created, &adopted), "created");
-        assert_eq!(tab_ownership("ADOPTED", &created, &adopted), "adopted");
-        assert_eq!(tab_ownership("FOREIGN", &created, &adopted), "foreign");
+        assert_eq!(
+            tab_ownership(true, "CREATED", &created, &adopted),
+            Some("created")
+        );
+        assert_eq!(
+            tab_ownership(true, "ADOPTED", &created, &adopted),
+            Some("adopted")
+        );
+        assert_eq!(
+            tab_ownership(true, "FOREIGN", &created, &adopted),
+            Some("foreign")
+        );
+        assert_eq!(tab_ownership(false, "FOREIGN", &created, &adopted), None);
+    }
+
+    #[test]
+    fn scoped_but_unpersisted_target_never_gets_deletion_rights() {
+        let created = HashSet::from(["PERSISTED".to_string()]);
+        let mut adopted = HashSet::new();
+        let scoped_live = ["PERSISTED".to_string(), "UNKNOWN".to_string()];
+
+        register_scoped_target_ownership(&scoped_live, &created, &mut adopted);
+
+        assert_eq!(
+            tab_ownership(true, "PERSISTED", &created, &adopted),
+            Some("created")
+        );
+        assert_eq!(
+            tab_ownership(true, "UNKNOWN", &created, &adopted),
+            Some("adopted")
+        );
+        assert!(tab_close_is_allowed(true, "PERSISTED", &created));
+        assert!(!tab_close_is_allowed(true, "UNKNOWN", &created));
+
+        let owned = created.union(&adopted).cloned().collect();
+        assert!(tab_switch_is_allowed(true, "PERSISTED", &owned));
+        assert!(tab_switch_is_allowed(true, "UNKNOWN", &owned));
+
+        let pages = vec![page("PERSISTED"), page("UNKNOWN")];
+        assert_eq!(
+            strict_session_index(&pages, Some("PERSISTED"), 1, true, &owned).unwrap(),
+            0
+        );
+        assert_eq!(
+            strict_session_index(&pages, Some("UNKNOWN"), 0, true, &owned).unwrap(),
+            1
+        );
     }
 
     #[test]

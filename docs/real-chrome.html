@@ -284,7 +284,7 @@
         （切过去驱动那个选择器）。但它<strong>不会</strong>收编用户已有的标签页、其他 agent 的标签页，或<em>无关</em>的弹窗
         （用户自己开的登录窗口是用户的）。<code>tab list</code> 可能为恢复目的显示其他标签，但会将它们标记为
         <code>foreign</code>，不能直接切换或关闭。要驱动既存标签必须先显式 <code>adopt</code>；adopted 标签仍属于用户，
-        当前 session 不能关闭。
+        当前 session 不能关闭。同名 session 连接同一浏览器端点重启后仍会恢复 created 所有权，因此中断的清理可以安全继续。
       </p>
 
       <h2>用户页面上不会出现调试横幅</h2>

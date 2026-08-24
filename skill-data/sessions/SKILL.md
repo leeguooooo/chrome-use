@@ -52,8 +52,10 @@ tabs other sessions opened (and re-attached ones), not just its own. Each row is
 marked `created`, `adopted`, or `foreign`; foreign tabs cannot be selected or
 closed. Explicitly adopting by `targetId` lands session B on the stranded tab
 without reloading it, so a half-filled form survives. Adoption does not transfer
-permission to close the tab. Still, the simplest recovery for a session whose
-own tab died is to recover *that* session (reload / re-`open` / `daemon restart`).
+permission to close the tab. Created ownership persists across daemon restarts
+for the same name and connected browser endpoint, so interrupted cleanup can
+resume. Still, the simplest recovery for a session whose own tab died is to
+recover *that* session (reload / re-`open` / `daemon restart`).
 
 To avoid piling up duplicate tabs when you re-`open` the same entry URL on
 rebind, pass **`--reuse-tab`**: if a tab already shows that URL (matched by
