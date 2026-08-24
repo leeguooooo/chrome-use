@@ -387,24 +387,32 @@ fn debounced_prune_ids(
 /// session created, so `close()` cleans them up instead of leaving them in the
 /// user's Chrome forever (issue #192).
 ///
-/// `relay_scoped` carries the entire safety argument, which is why this is a
-/// function and not an inline `if`. When the relay accepted our group
-/// announcement it filters `Target.getTargets` down to our own Chrome tab
-/// group, whose title IS this session's name, and the only ways into that group
-/// are `Target.createTarget` carrying `agentGroup` and `ABExt.duplicateTab` —
-/// both agent-created. `adopt` deliberately does neither, so the user's own tabs
-/// can never be in the list. Without scoping the very same list may be the
-/// user's tabs and other sessions' tabs, and reclaiming there would hand us
-/// permission to close pages we must never touch (#36) — hence: nothing.
-fn reclaimable_as_created<'a, I>(relay_scoped: bool, targets: I) -> Vec<&'a str>
+/// **Currently: none.** Group membership looked like durable proof of authorship
+/// — the group title IS the session name, and on the extension side the only
+/// ways in are `Target.createTarget` with `agentGroup` and `ABExt.duplicateTab`,
+/// both agent-created. But the relay keeps its OWN `target_group` map, and that
+/// map is what scopes `Target.getTargets`. It has a second writer:
+/// `RelayState::route_client_command` re-tags a target into the adopter's group
+/// on `Target.attachToTarget` (`relay.rs`, cross-session adopt for #21), which
+/// is exactly the call `adopt_existing_target` makes. The repo's own
+/// `explicit_attach_tags_target_into_adopter_group` test pins that behaviour: a
+/// pre-existing USER tab lands in the adopter's scoped list.
+///
+/// So "in our scoped list" means "created by us OR adopted from the user", and
+/// those two are indistinguishable after a restart drops `created_targets`.
+/// Reclaiming the set would hand `close()` permission to delete a page the user
+/// asked us to read — the #36 red line. Leaking a tab is a bug; closing the
+/// user's tab is the thing this project refuses to do, so until authorship is
+/// recorded durably (PR #191 persists the created ids per session), a
+/// reconnecting daemon reclaims nothing and the orphans wait for that.
+///
+/// Caught by @forsakesoul in review of #191, after a wrong version of this
+/// function shipped in v1.5.95.
+fn reclaimable_as_created<'a, I>(_relay_scoped: bool, _targets: I) -> Vec<&'a str>
 where
     I: IntoIterator<Item = &'a str>,
 {
-    if relay_scoped {
-        targets.into_iter().collect()
-    } else {
-        Vec::new()
-    }
+    Vec::new()
 }
 
 /// Whether the resolved active page is a tab the session created (its target_id
@@ -1327,18 +1335,11 @@ impl BrowserManager {
             // all ours: adopt them (this restores follow-popup + cross-session
             // adopt under isolation, since foreign tabs were already filtered out).
             //
-            // When the relay scoped us, these tabs are also ours to CLOSE, and
-            // saying so here is what stops the leak in issue #192. `created_targets`
-            // lives only in this process, so a restarted daemon used to forget the
-            // tabs its own previous incarnation opened: they stayed in the user's
-            // Chrome, unowned by anyone, until Chrome ran out of memory. Chrome's
-            // tab group is the durable record we were missing — the group's title
-            // IS this session's name, and the ONLY ways into it are
-            // `Target.createTarget` with `agentGroup` and `ABExt.duplicateTab`,
-            // both agent-created (`adopt` deliberately neither groups nor marks
-            // owned, so the user's tabs can never appear here). A scoped target is
-            // therefore a tab a session with this name created, and reclaiming it
-            // restores the close-on-shutdown that its first daemon would have done.
+            // Adopting them for RESOLUTION is safe and is all we do here. Taking
+            // them back as ours to CLOSE is not: see [`reclaimable_as_created`]
+            // for why a scoped target cannot be told apart from a user tab this
+            // session adopted, which is why that returns nothing today. The
+            // orphan-cleanup half of #192 waits on durable authorship (PR #191).
             for target_id in
                 reclaimable_as_created(scoped, page_targets.iter().map(|t| t.target_id.as_str()))
             {
@@ -4032,22 +4033,25 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_reclaims_scoped_targets_so_they_are_closed_on_shutdown() {
-        // #192: a restarted daemon must take back the tabs its own previous
-        // incarnation opened, or they stay in the user's Chrome forever.
-        assert_eq!(
-            reclaimable_as_created(true, ["A", "B"]),
-            vec!["A", "B"],
-            "a scoped relay list is this session's own tab group"
+    fn reconnect_never_reclaims_deletion_rights_over_a_scoped_target() {
+        // The #36 red line, and a real regression: v1.5.95 reclaimed every
+        // scoped target as session-created, on the theory that tab-group
+        // membership proves we opened it. It does not. The relay re-tags a
+        // target into the adopter's group on `Target.attachToTarget` — the very
+        // call `adopt_existing_target` makes — so a USER tab this session
+        // adopted sits in the scoped list too, and after a restart drops
+        // `created_targets` the two are indistinguishable. Reclaiming meant
+        // `close()` could delete a page the user asked us to read.
+        //
+        // Scoped or not, authorship we cannot prove is authorship we do not get.
+        assert!(
+            reclaimable_as_created(true, ["OUR_TAB", "USER_TAB_WE_ADOPTED"]).is_empty(),
+            "a scoped list mixes tabs we created with user tabs we adopted"
         );
-    }
-
-    #[test]
-    fn reconnect_never_reclaims_unscoped_targets() {
-        // The red line (#36): without relay scoping the same list may hold the
-        // user's tabs and other sessions' tabs. Reclaiming them would mean
-        // close() deletes pages we never created.
-        assert!(reclaimable_as_created(false, ["USER_TAB", "OTHER_AGENT"]).is_empty());
+        assert!(
+            reclaimable_as_created(false, ["USER_TAB", "OTHER_AGENT"]).is_empty(),
+            "unscoped is even weaker evidence"
+        );
     }
 
     #[test]
