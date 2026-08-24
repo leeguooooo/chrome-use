@@ -1713,7 +1713,8 @@ fn managed_policy_state() -> PolicyState {
 ///
 /// The middle case is the one that matters: a Web Store user is pinned to the
 /// newest **published** build, which is regularly older than the version in
-/// this repo (0.5.16 bundled while the Store still served 0.5.12 — #186).
+/// this repo — whenever a bundled build is waiting on Web Store review. #186
+/// was the worst of it: 0.5.16 bundled against a Store still serving 0.5.12.
 /// Calling that "OUTDATED" and telling them to hit Update sends them after a
 /// build that does not exist yet.
 #[derive(Debug, PartialEq)]
@@ -1800,8 +1801,8 @@ pub fn ext_version_line(live: &str, bundled: &str, store: Option<&str>) -> Strin
 /// proxy) degrades to `None` rather than blocking a diagnostic command.
 /// `curl` matches how the CLI does its other version checks (see `upgrade`).
 /// `prodversion` only gates `minimum_chrome_version` constraints; ab-connect
-/// declares none, and the service answers with 0.5.12 even for prodversion=90 —
-/// so a fixed value is safe here. Were that ever to change, the service replies
+/// declares none, and the service answers with the newest published version
+/// even for prodversion=90 — so a fixed value is safe here. Were that ever to change, the service replies
 /// `noupdate`, which degrades to "Store version unknown", never a false claim.
 pub fn store_extension_version() -> Option<String> {
     let url = format!(
@@ -3234,10 +3235,12 @@ mod tests {
 
     #[test]
     fn a_live_extension_is_only_outdated_when_a_newer_one_is_published() {
-        // #186: the bundled build runs ahead of the Web Store (0.5.16 bundled
-        // while the Store served 0.5.12). A Web Store user IS up to date there;
-        // calling it OUTDATED and pointing at Update chases a build that does
-        // not exist.
+        // #186: the bundled build runs ahead of the Web Store whenever a
+        // release is waiting on review (0.5.16 bundled while the Store still
+        // served 0.5.12). A Web Store user IS up to date there; calling it
+        // OUTDATED and pointing at Update chases a build that does not exist.
+        // The versions below stay as a fixture — the gap reopens with the next
+        // unpublished build, so this case must keep working.
         assert_eq!(
             classify_ext_version("0.5.12", "0.5.16", Some("0.5.12")),
             ExtVersionVerdict::NewestPublished {
