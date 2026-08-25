@@ -120,10 +120,20 @@ async fn send_raw_http_request(port: u64, request: &str) -> String {
     String::from_utf8(response).expect("HTTP response should be utf-8")
 }
 
-async fn spawn_html_server(
-    html: String,
-    request_count: usize,
-) -> (u16, tokio::task::JoinHandle<()>) {
+/// Serve `html` on a loopback port until the caller aborts the returned task.
+///
+/// Deliberately unbounded. This used to serve a fixed number of requests and
+/// then drop the listener, which made the fixture race the browser: Chrome
+/// opens more connections than a navigation strictly needs — a favicon probe, a
+/// speculative preconnect, a retry after an idle socket closes — and promises
+/// nothing about how many or when. Any connection arriving after the count was
+/// spent hit a closed port and surfaced as `net::ERR_CONNECTION_REFUSED`, which
+/// failed the test looking exactly like a product bug (it cost a release
+/// investigation on v1.5.97 before being identified as fixture noise). Raising
+/// the count would only have made it rarer; serving until teardown removes the
+/// race. Read/write errors are ignored for the same reason — an abandoned
+/// speculative connection is normal browser behaviour, not a test failure.
+async fn spawn_html_server(html: String) -> (u16, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("HTTP listener should bind");
@@ -132,11 +142,7 @@ async fn spawn_html_server(
         .expect("HTTP listener should have an address")
         .port();
     let task = tokio::spawn(async move {
-        for _ in 0..request_count {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .expect("HTTP server should accept a connection");
+        while let Ok((mut stream, _)) = listener.accept().await {
             let mut request = [0_u8; 4096];
             let _ = stream.read(&mut request).await;
             let response = format!(
@@ -144,10 +150,7 @@ async fn spawn_html_server(
                 html.len(),
                 html
             );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("HTTP response should be written");
+            let _ = stream.write_all(response.as_bytes()).await;
         }
     });
     (port, task)
@@ -313,7 +316,7 @@ window.addEventListener("message", (event) => {{
 parent.postMessage("iframe-probe-loaded", "*");
 </script>"#
     );
-    let (iframe_port, iframe_task) = spawn_html_server(iframe_page, 1).await;
+    let (iframe_port, iframe_task) = spawn_html_server(iframe_page).await;
     let page = format!(
         r#"<!doctype html>
 <title>WebSocket network probe</title>
@@ -336,7 +339,7 @@ window.startNetworkProbes = () => {{
 }};
 </script>"#
     );
-    let (http_port, http_task) = spawn_html_server(page, 2).await;
+    let (http_port, http_task) = spawn_html_server(page).await;
 
     let mut state = DaemonState::new();
     let launch = execute_command(
@@ -1334,7 +1337,7 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
     assert_success(&resp);
 
     let (fixture_port, fixture_server) =
-        spawn_html_server(native_test_fixture_html("monaco_fill_probe").to_string(), 1).await;
+        spawn_html_server(native_test_fixture_html("monaco_fill_probe").to_string()).await;
     state
         .browser
         .as_ref()
@@ -1573,9 +1576,9 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
-    fixture_server
-        .await
-        .expect("Monaco fixture server should shut down");
+    // Abort rather than await: the server now runs until torn down, so waiting
+    // for it to finish on its own would hang forever.
+    fixture_server.abort();
 }
 
 // ---------------------------------------------------------------------------
