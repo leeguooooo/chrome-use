@@ -3534,7 +3534,7 @@ async fn handle_keep(state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
     let target_id = mgr.active_target_id()?.to_string();
     let session_id = mgr.active_session_id()?.to_string();
-    let was_owned = mgr.unown_target(&target_id);
+    let was_owned = mgr.unown_target(&target_id)?;
     // Best-effort: ask the extension to ungroup the tab (relay only; no-ops on a
     // launched browser or an older extension that doesn't know ABExt.ungroupTab).
     let _ = mgr

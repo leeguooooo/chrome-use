@@ -1525,32 +1525,39 @@ impl BrowserManager {
             .collect()
     }
 
-    fn persist_created_targets(&self) {
+    fn persist_created_targets(&self) -> Result<(), String> {
         if self.browser_process.is_none() {
             if let Some(session) = DAEMON_SESSION.get() {
-                if let Err(error) = crate::connection::write_created_targets(
+                crate::connection::write_created_targets(
                     session,
                     &self.ws_url,
                     &self.created_targets,
-                ) {
-                    eprintln!("Failed to persist tab ownership for session {session}: {error}");
-                }
+                )
+                .map_err(|error| {
+                    format!("Failed to persist tab ownership for session {session}: {error}")
+                })?;
             }
         }
+        Ok(())
     }
 
     fn remember_created_target(&mut self, target_id: &str) {
         if self.created_targets.insert(target_id.to_string()) {
-            self.persist_created_targets();
+            if let Err(error) = self.persist_created_targets() {
+                eprintln!("{error}");
+            }
         }
     }
 
-    fn forget_created_target(&mut self, target_id: &str) -> bool {
+    fn forget_created_target(&mut self, target_id: &str) -> Result<bool, String> {
         let removed = self.created_targets.remove(target_id);
         if removed {
-            self.persist_created_targets();
+            if let Err(error) = self.persist_created_targets() {
+                self.created_targets.insert(target_id.to_string());
+                return Err(error);
+            }
         }
-        removed
+        Ok(removed)
     }
 
     /// Drop the page bound to `session_id` from the tracked list — used when the
@@ -2108,7 +2115,9 @@ impl BrowserManager {
                 })
                 .await;
                 if self.created_targets.len() != remaining_before_cleanup {
-                    self.persist_created_targets();
+                    if let Err(error) = self.persist_created_targets() {
+                        eprintln!("{error}");
+                    }
                 }
             }
         }
@@ -2188,9 +2197,10 @@ impl BrowserManager {
     }
 
     /// Stop owning a tab — drop it from `created_targets` so it survives `close()`
-    /// and idle-shutdown (the agent is leaving it for the user). Returns true if it
-    /// was owned. Used by `keep`.
-    pub fn unown_target(&mut self, target_id: &str) -> bool {
+    /// and idle-shutdown (the agent is leaving it for the user). Returns whether it
+    /// was owned, and fails if the durable ownership record cannot be updated.
+    /// Used by `keep`.
+    pub fn unown_target(&mut self, target_id: &str) -> Result<bool, String> {
         self.forget_created_target(target_id)
     }
 
@@ -2392,7 +2402,7 @@ impl BrowserManager {
         // pop-up can't be told apart from a foreign tab, so adopt nothing. When the
         // relay IS scoping (#40), getTargets returns only our group, so a tab that
         // appeared after our own action is genuinely ours (a pop-up) — adopt it.
-        if self.agent_group().is_some() && !self.relay_scoped {
+        if self.browser_process.is_none() && (self.agent_group().is_none() || !self.relay_scoped) {
             return None;
         }
         let result: GetTargetsResult = self
@@ -2740,7 +2750,9 @@ impl BrowserManager {
                 )
                 .await;
             if target_was_closed(&close_result) {
-                self.forget_created_target(&tid);
+                if let Err(error) = self.forget_created_target(&tid) {
+                    eprintln!("{error}");
+                }
                 self.remove_page_by_target_id(&tid);
             }
         }
@@ -2766,7 +2778,9 @@ impl BrowserManager {
             )
             .await;
         if target_was_closed(&close_result) {
-            self.forget_created_target(target_id);
+            if let Err(error) = self.forget_created_target(target_id) {
+                eprintln!("{error}");
+            }
         }
     }
 
@@ -3120,7 +3134,7 @@ impl BrowserManager {
         }
         self.pages.remove(target_index);
         self.update_active_page_after_removal(target_index);
-        self.forget_created_target(&target_id);
+        self.forget_created_target(&target_id)?;
 
         let session_id = self.pages[self.active_page_index].session_id.clone();
         self.enable_domains(&session_id).await?;
