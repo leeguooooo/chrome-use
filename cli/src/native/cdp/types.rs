@@ -181,6 +181,11 @@ pub struct CloseTargetParams {
     pub target_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CloseTargetResult {
+    pub success: bool,
+}
+
 // Target events
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]

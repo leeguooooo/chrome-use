@@ -112,9 +112,10 @@ transient relay drops — usually just retry the command.
   pins this session to one (sticky per session).
 
 **Per-agent isolation is automatic:** each `--session <name>` gets its own colored
-Chrome tab group + dedicated daemon and drives ONLY the tabs it created, so
-concurrent agents share one real Chrome without cross-talk and never touch the
-user's tabs; an unset session auto-derives a stable per-agent name from supported
+Chrome tab group + dedicated daemon and drives only tabs it created or explicitly
+adopted, so
+concurrent agents share one real Chrome without cross-talk and never touch
+unadopted user tabs; an unset session auto-derives a stable per-agent name from supported
 runner IDs, including Codex's `CODEX_THREAD_ID`. Other runners can set
 `AGENT_BROWSER_SESSION_ID`. `adopt
 <url|targetId>` drives a pre-existing tab on demand; OAuth/SSO popups and
@@ -958,6 +959,14 @@ chrome-use tab inspect t2           # browser metadata; no page JavaScript
 chrome-use tab close t2             # close tab t2
 ```
 
+On external or extension-connected Chrome, `tab list` marks every row as
+`created`, `adopted`, or `foreign`. A session may select only created or adopted
+tabs and may close only created tabs. Use `tab adopt <url-substring|targetId>`
+before driving an existing tab; adoption never transfers permission to close it.
+Created ownership survives daemon restarts for the same named session and
+connected browser endpoint, allowing interrupted cleanup to resume without
+making adopted tabs closable.
+
 (`tabs` → the `tab` subcommand tree, and `get-text <sel>` → `get text <sel>` —
 common-guess aliases so you don't waste a round on the wrong spelling.)
 
@@ -967,7 +976,7 @@ integers are **not** accepted — use `t2`, not `2`. After switching, refs from 
 prior snapshot on a different tab no longer apply — re-snapshot.
 
 For a white-screen or unresponsive existing tab, use `tab adopt
-<url-substring|targetId>` and `tab select <ref>` to preserve the page rather
+<url-substring|targetId>` before `tab select <ref>` to preserve the page rather
 than reopening it. `tab inspect <ref>` reads browser-level URL/status,
 discard/freeze state, and debugger attachment without evaluating page
 JavaScript. A renderer blocked by an infinite JavaScript loop cannot complete
@@ -994,8 +1003,9 @@ the shell default. Codex tasks get distinct defaults automatically through
 `CODEX_THREAD_ID`; other runners can set `AGENT_BROWSER_SESSION_ID`. True
 multi-agent isolation needs the **extension-connect path**
 (per-session tab groups) — raw `--cdp <port>` does NOT isolate. Reach a specific tab
-across sessions via its stable CDP `targetId` (`tab list --full` → `tab <targetId>`,
-adopts without reload); `--reuse-tab` avoids duplicate tabs on rebind.
+across sessions via its stable CDP `targetId` (`tab list --full` →
+`tab adopt <targetId>`, without reload); `--reuse-tab` avoids duplicate tabs on
+rebind.
 
 Reset stuck state with `chrome-use daemon status` / `daemon restart` — restarts the
 session daemon workers without touching the relay or closing any tabs.
@@ -1191,9 +1201,11 @@ right one. For multi-redirect SSO flows, re-open the **stable entry URL**
 before snapshotting.
 
 If the tab is still present but the page is white or frozen, do not reopen it
-and destroy the diagnostic state. Use `tab select <ref>` or `tab adopt
-<url-substring|targetId>`, then `tab inspect <ref>`. A relay timeout means the
-renderer did not answer; it does not mean the tab disappeared.
+and destroy the diagnostic state. Select it only when `tab list` marks it
+`created` or `adopted`; otherwise inspect its browser metadata directly with
+`tab inspect <targetId>`, and use `tab adopt <url-substring|targetId>` before
+selecting or driving it. A relay timeout means the renderer did not answer; it
+does not mean the tab disappeared.
 
 If `tab select` reports that the liveness probe did not complete, read the full
 warning before judging the renderer. An outdated or unknown ab-connect version

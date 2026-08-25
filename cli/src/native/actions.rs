@@ -3534,7 +3534,7 @@ async fn handle_keep(state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
     let target_id = mgr.active_target_id()?.to_string();
     let session_id = mgr.active_session_id()?.to_string();
-    let was_owned = mgr.unown_target(&target_id);
+    let was_owned = mgr.unown_target(&target_id)?;
     // Best-effort: ask the extension to ungroup the tab (relay only; no-ops on a
     // launched browser or an older extension that doesn't know ABExt.ungroupTab).
     let _ = mgr
@@ -6890,9 +6890,10 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // Re-sync first so a tab opened by another session, or one that re-attached
     // after a cross-process nav, is adoptable from here (issue #21).
     mgr.resync_targets().await.ok();
-    // A CDP `targetId` (shown in `tab list`) is stable across sessions, so accept
-    // it directly for adopting a specific pre-existing tab — falling back to the
-    // per-session `t<N>` / label form.
+    // A CDP `targetId` (shown in `tab list`) is stable across sessions, so resolve
+    // it directly before falling back to the per-session `t<N>` / label form.
+    // `tab_switch_by_id` still refuses foreign targets; callers must explicitly
+    // `tab adopt <targetId>` before driving a pre-existing tab.
     let tab_id = match mgr.tab_id_for_target(tab_ref_str) {
         Some(id) => id,
         None => {

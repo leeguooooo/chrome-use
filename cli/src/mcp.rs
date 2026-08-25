@@ -477,13 +477,13 @@ fn extended_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_TABS,
-            "description": "List, open, duplicate, adopt, inspect, close, or switch browser tabs.",
+            "description": "List browser tabs, open or duplicate tabs, explicitly adopt existing tabs, inspect tabs, close tabs, or switch tabs. External Chrome listings include ownership; there, close accepts only session-created tabs and switch accepts only created/adopted tabs.",
             "inputSchema": build_schema(obj(&[
                 ("action", json!({ "type": "string", "enum": ["list", "new", "duplicate", "adopt", "inspect", "close", "switch"], "description": "Tab operation to perform." })),
                 ("url", json!({ "type": "string", "description": "With action=new: URL to open in the new tab." })),
                 ("spec", json!({ "type": "string", "description": "With action=adopt: URL substring or stable target ID of an existing tab." })),
                 ("label", json!({ "type": "string", "description": "With action=new or duplicate: assign this label to the new tab (--label)." })),
-                ("tabId", json!({ "type": "string", "description": "Tab id, label, or stable target ID. Required for action=switch or inspect; optional for action=close or duplicate (defaults to current tab)." })),
+                ("tabId", json!({ "type": "string", "description": "Tab id, label, or stable target ID. On external Chrome, switch accepts created/adopted tabs and close accepts only session-created tabs. Required for action=switch or inspect; optional for action=close or duplicate (defaults to current tab)." })),
                 ("activate", json!({ "type": "boolean", "description": "With action=switch: also raise the tab to the foreground (--activate)." })),
                 ("full", json!({ "type": "boolean", "description": "With action=list: emit untruncated tab URLs (--full)." })),
             ]), &["action"]),

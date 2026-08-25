@@ -44,14 +44,18 @@ a tab that was filled in a session whose handle later died — use the **stable 
 
 ```bash
 chrome-use tab list --full --session B   # re-syncs live tabs; prints `target: <id>` per row
-chrome-use tab <targetId> --session B    # adopt that exact tab, NO reload (state preserved)
+chrome-use tab adopt <targetId> --session B # explicitly adopt it, NO reload
 ```
 
 `tab list` re-discovers the live tab set on every call, so a fresh session sees
-tabs other sessions opened (and re-attached ones), not just its own. Adopting by
-`targetId` lands session B on the stranded tab without reloading it, so a
-half-filled form survives. Still, the simplest recovery for a session whose own
-tab died is to recover *that* session (reload / re-`open` / `daemon restart`).
+tabs other sessions opened (and re-attached ones), not just its own. Each row is
+marked `created`, `adopted`, or `foreign`; foreign tabs cannot be selected or
+closed. Explicitly adopting by `targetId` lands session B on the stranded tab
+without reloading it, so a half-filled form survives. Adoption does not transfer
+permission to close the tab. Created ownership persists across daemon restarts
+for the same name and connected browser endpoint, so interrupted cleanup can
+resume. Still, the simplest recovery for a session whose own tab died is to
+recover *that* session (reload / re-`open` / `daemon restart`).
 
 To avoid piling up duplicate tabs when you re-`open` the same entry URL on
 rebind, pass **`--reuse-tab`**: if a tab already shows that URL (matched by

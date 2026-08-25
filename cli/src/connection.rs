@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -246,6 +248,78 @@ fn get_version_path(session: &str) -> PathBuf {
 /// won't trigger surprise navigation.
 pub fn get_restore_url_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.restore-url", session))
+}
+
+fn get_created_targets_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{}.created-targets.json", session))
+}
+
+#[derive(Deserialize, Serialize)]
+struct CreatedTargetRegistry {
+    endpoint_sha256: String,
+    target_ids: Vec<String>,
+}
+
+fn endpoint_sha256(endpoint: &str) -> String {
+    format!("{:x}", Sha256::digest(endpoint.as_bytes()))
+}
+
+/// Read the target IDs this named session created in an earlier daemon lifetime.
+/// Missing, malformed, or endpoint-mismatched state fails closed: no tab receives
+/// deletion rights.
+pub fn read_created_targets(session: &str, endpoint: &str) -> HashSet<String> {
+    fs::read_to_string(get_created_targets_path(session))
+        .ok()
+        .and_then(|value| serde_json::from_str::<CreatedTargetRegistry>(&value).ok())
+        .filter(|registry| registry.endpoint_sha256 == endpoint_sha256(endpoint))
+        .map(|registry| registry.target_ids)
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// Persist deletion rights across daemon restarts. An empty set removes the
+/// sidecar so stale session names do not accumulate empty registry files.
+pub fn write_created_targets(
+    session: &str,
+    endpoint: &str,
+    targets: &HashSet<String>,
+) -> Result<(), String> {
+    let path = get_created_targets_path(session);
+    if targets.is_empty() {
+        return match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.to_string()),
+        };
+    }
+    fs::create_dir_all(get_socket_dir()).map_err(|error| error.to_string())?;
+    let mut target_ids: Vec<String> = targets.iter().cloned().collect();
+    target_ids.sort_unstable();
+    let encoded = serde_json::to_vec(&CreatedTargetRegistry {
+        endpoint_sha256: endpoint_sha256(endpoint),
+        target_ids,
+    })
+    .map_err(|error| error.to_string())?;
+    let temporary_path = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = fs::File::create(&temporary_path).map_err(|error| error.to_string())?;
+        file.write_all(&encoded)
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        match fs::rename(&temporary_path, &path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                fs::remove_file(&path).map_err(|error| error.to_string())?;
+                fs::rename(&temporary_path, &path).map_err(|error| error.to_string())
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary_path);
+    }
+    result
 }
 
 /// Clean up stale socket and PID files for a session
@@ -1302,6 +1376,37 @@ mod tests {
         contender
             .try_lock()
             .expect("lock must be free once the first holder is dropped");
+    }
+
+    #[test]
+    fn created_target_registry_survives_daemon_restart_cleanup() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        _guard.set(
+            "AGENT_BROWSER_SOCKET_DIR",
+            dir.path().to_str().expect("utf-8 tempdir"),
+        );
+        _guard.remove("XDG_RUNTIME_DIR");
+        let expected =
+            std::collections::HashSet::from(["created-a".to_string(), "created-b".to_string()]);
+
+        write_created_targets("restartable", "ws://relay/browser", &expected)
+            .expect("persist created targets");
+        cleanup_stale_files("restartable");
+
+        assert_eq!(
+            read_created_targets("restartable", "ws://relay/browser"),
+            expected
+        );
+        assert!(read_created_targets("restartable", "ws://other/browser").is_empty());
+
+        let replacement = HashSet::from(["created-c".to_string()]);
+        write_created_targets("restartable", "ws://relay/browser", &replacement)
+            .expect("replace created targets");
+        assert_eq!(
+            read_created_targets("restartable", "ws://relay/browser"),
+            replacement
+        );
     }
 
     #[test]

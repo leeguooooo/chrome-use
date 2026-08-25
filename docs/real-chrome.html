@@ -279,11 +279,12 @@
       </div>
 
       <p>
-        一个 session（走 relay）只跟踪并驱动<strong>它自己创建的标签页</strong>。<strong>你自己的动作</strong>打开的弹窗——
+        一个 session（走 relay）只驱动<strong>它自己创建或显式 adopt 的标签页</strong>。<strong>你自己的动作</strong>打开的弹窗——
         比如点「Sign in with Google」弹出的 OAuth 账号选择窗口——会被跟随、可作为你 session 的一部分来驱动
         （切过去驱动那个选择器）。但它<strong>不会</strong>收编用户已有的标签页、其他 agent 的标签页，或<em>无关</em>的弹窗
-        （用户自己开的登录窗口是用户的）。结论：<code>tab list</code> 只显示<em>你这个 session</em> 的标签页；
-        要驱动某个具体页面，就在你自己的标签页里导航过去，别指望一个已存在或弹出来的标签页出现在列表里。
+        （用户自己开的登录窗口是用户的）。<code>tab list</code> 可能为恢复目的显示其他标签，但会将它们标记为
+        <code>foreign</code>，不能直接切换或关闭。要驱动既存标签必须先显式 <code>adopt</code>；adopted 标签仍属于用户，
+        当前 session 不能关闭。同名 session 连接同一浏览器端点重启后仍会恢复 created 所有权，因此中断的清理可以安全继续。
       </p>
 
       <h2>用户页面上不会出现调试横幅</h2>

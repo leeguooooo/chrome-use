@@ -294,12 +294,14 @@
       </div>
 
       <p>
-        A session (over the relay) tracks and drives only <strong>the tabs it created itself</strong>. Popups opened by
+        A session (over the relay) drives only <strong>the tabs it created or explicitly adopted</strong>. Popups opened by
         <strong>your own actions</strong>—like the OAuth account picker that pops up when you click "Sign in with Google"—are
         followed and can be driven as part of your session (switch over and drive that picker). But it <strong>does not</strong>
         adopt the user's existing tabs, another agent's tabs, or <em>unrelated</em> popups (a login window the user opened is
-        the user's). Bottom line: <code>tab list</code> shows only <em>your session's</em> tabs; to drive a specific page,
-        navigate to it in one of your own tabs—don't expect an existing or popped-up tab to appear in the list.
+        the user's). <code>tab list</code> may surface other tabs for recovery, but marks them <code>foreign</code>;
+        they cannot be selected or closed. Use <code>adopt</code> as the explicit opt-in before driving one. Adopted tabs
+        remain user-owned and cannot be closed by the session. Created ownership survives daemon restarts for the same
+        named session and connected browser endpoint, so interrupted cleanup can resume safely.
       </p>
 
       <h2>No debugging banner on the user's pages</h2>

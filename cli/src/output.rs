@@ -774,19 +774,30 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                     truncate_middle(url, 120)
                 };
                 let active = tab.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+                let ownership_marker = tab
+                    .get("ownership")
+                    .and_then(|v| v.as_str())
+                    .map(|ownership| format!(" [{}]", ownership))
+                    .unwrap_or_default();
                 let marker = if active {
                     color::cyan("→")
                 } else {
                     " ".to_string()
                 };
                 if let Some(label) = tab_label {
-                    println!("{} [{}] {} {} - {}", marker, tab_id, label, title, url);
+                    println!(
+                        "{} [{}]{} {} {} - {}",
+                        marker, tab_id, ownership_marker, label, title, url
+                    );
                 } else {
-                    println!("{} [{}] {} - {}", marker, tab_id, title, url);
+                    println!(
+                        "{} [{}]{} {} - {}",
+                        marker, tab_id, ownership_marker, title, url
+                    );
                 }
                 // `--full` also surfaces the stable cross-session CDP targetId so
-                // a stranded tab can be adopted from another session via
-                // `tab <targetId>` (issue #21).
+                // a stranded tab can be explicitly adopted from another session
+                // via `tab adopt <targetId>` (issue #21).
                 if full {
                     if let Some(target_id) = tab.get("targetId").and_then(|v| v.as_str()) {
                         println!("      {}", color::dim(&format!("target: {}", target_id)));
@@ -2815,22 +2826,26 @@ referring to the same tab across commands. Optional user-assigned labels
 accepted.
 
 Operations:
-  list                       List open tabs with their ids and labels (default)
+  list                       List tabs with ids and labels (external: ownership too)
   new [url]                  Open a new tab
   new --label <name> [url]   Open a new tab with a label like `docs` or `app`
   duplicate [ref]            Natively duplicate a tab (current if no ref given)
   duplicate [ref] --label <name>
                              Natively duplicate and label a tab
-  select <ref>               Switch to a tab (explicit alias for `<ref>`)
+  select <ref>               Switch tabs (external: created or adopted only)
   adopt <url|targetId>       Attach an existing tab without navigating it
   inspect <ref>              Read browser-level state (relay requires ab-connect 0.5.16+)
-  close [ref]                Close a tab (current if no ref given)
-  <ref>                      Switch to a tab
+  close [ref]                Close a tab (external: session-created only)
+  <ref>                      Switch tabs (external: created or adopted only)
 
 Native duplication requires real Chrome connected through the chrome-use
 extension. It restores the previously visible foreground tab when complete.
 The duplicate becomes chrome-use's internal active tab. There is no URL-based
 fallback for launched Chrome, raw CDP, Lightpanda, or cloud providers.
+
+External and extension-connected Chrome tab rows are marked `created`,
+`adopted`, or `foreign`. Foreign tabs must be explicitly adopted before they
+can be selected. Adopted and foreign tabs cannot be closed by the session.
 
 Global Options:
   --json               Output as JSON
@@ -3916,15 +3931,14 @@ Storage:
 
 Tabs:
   tab [new|duplicate|list|select|adopt|inspect|close|<ref>]
-                             Manage tabs (<ref> = t<N>, a label, or a CDP targetId)
+                             Manage tabs (<ref> = t<N> or label; inspect also accepts targetId)
   tab duplicate [ref] [--label <name>]
                              Natively duplicate on extension-connected real Chrome
-  tab list --full            Full URLs + stable cross-session targetId per tab
-  tab <targetId>             Adopt a specific tab (incl. another session's) by its
-                             stable targetId, no reload — preserves in-page state
-  tab select <ref>           Explicit switch syntax (same as `tab <ref>`)
+  tab list --full            Full URLs + stable targetId (external: ownership too)
+  tab select <ref>           Select a tab (external: created or adopted only)
   tab adopt <url|targetId>   Attach an existing tab in the current session, no reload
   tab inspect <ref>          Browser metadata without page JS (ab-connect 0.5.16+ on relay)
+  tab close [ref]            Close a tab (external: session-created only)
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning
                              a duplicate (matches origin+path; preserves state)
   adopt <url|targetId>       Read a PRE-EXISTING tab (the user's own, or another
