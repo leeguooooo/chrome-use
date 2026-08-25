@@ -233,7 +233,7 @@ const NO_OWNED_TAB: &str =
 
 /// Strict session-index resolution for routing READ/CLICK commands.
 ///
-/// On the relay (shared real browser) the lenient [`resolve_active_index`] falls
+/// On a guarded external browser the lenient [`resolve_active_index`] falls
 /// back to `active_page_index` when the pinned target isn't found — and after
 /// foreign-tab churn that index can point at an unrelated tab, so an
 /// `eval`/`snapshot`/`click` would land on it (issue #52, a safety risk).
@@ -241,24 +241,23 @@ const NO_OWNED_TAB: &str =
 /// The relay keeps a STABLE `target_id` across navigations (verified live), so a
 /// present pin resolves on every normal command — a pin that genuinely can't be
 /// found means the bound tab is gone, which we surface as a loud error instead of
-/// drifting. With no pin set (e.g. before the first `open`), or off the relay
-/// (a browser we launched, no foreign tabs), behave leniently — unchanged.
+/// drifting. A browser we launched has no foreign tabs and stays lenient.
 fn strict_session_index(
     pages: &[PageInfo],
     active_target_id: Option<&str>,
     active_page_index: usize,
-    on_relay: bool,
-    created_targets: &HashSet<String>,
+    ownership_guarded: bool,
+    drivable_targets: &HashSet<String>,
 ) -> Result<usize, String> {
-    if on_relay {
-        // Prefer the pin — it must resolve to a tab this session owns.
+    if ownership_guarded {
+        // Prefer the pin — it must resolve to a tab this session may drive.
         if let Some(tid) = active_target_id {
             return pages
                 .iter()
-                .position(|p| p.target_id == tid && created_targets.contains(&p.target_id))
+                .position(|p| p.target_id == tid && drivable_targets.contains(&p.target_id))
                 .ok_or_else(|| BOUND_TAB_GONE.to_string());
         }
-        // No pin: resolve only to a tab THIS session owns. The lenient fallback
+        // No pin: resolve only to a tab this session may drive. The lenient fallback
         // would return `active_page_index`, which after foreign-tab churn can
         // point at the user's / another agent's tab — and a read/click would land
         // on it (issue #52). Each agent is scoped to its own group; using a tab
@@ -266,7 +265,7 @@ fn strict_session_index(
         let i = resolve_active_index(pages, None, active_page_index);
         if pages
             .get(i)
-            .is_some_and(|p| created_targets.contains(&p.target_id))
+            .is_some_and(|p| drivable_targets.contains(&p.target_id))
         {
             return Ok(i);
         }
@@ -1043,6 +1042,7 @@ impl BrowserManager {
         };
 
         if direct_page {
+            manager.adopted_targets.insert("provider-page".to_string());
             let tab_id = manager.assign_tab_id();
             manager.pages.push(PageInfo {
                 tab_id,
@@ -1601,7 +1601,7 @@ impl BrowserManager {
             &self.pages,
             self.active_target_id.as_deref(),
             self.active_page_index,
-            self.agent_group().is_some(),
+            self.browser_process.is_none(),
             &self.owned_targets(),
         )?;
         self.pages
@@ -1681,10 +1681,9 @@ impl BrowserManager {
         // navigated (clobbered) the user's page: in dogfooding an `open` replaced a
         // half-filled form with the target site. If the active tab isn't one we
         // created, open our own tab in this session's group and navigate THAT, so
-        // the user's (and other sessions') tabs are never hijacked. Off the relay
-        // (a browser we launched) reusing the active tab is correct, so this is
-        // gated on `agent_group()`.
-        if self.agent_group().is_some() && !self.active_is_drivable() {
+        // the user's (and other sessions') tabs are never hijacked. This applies
+        // to raw CDP too; only a browser process we launched is unrestricted.
+        if self.browser_process.is_none() && !self.active_is_drivable() {
             self.tab_new(None, None).await?;
         }
         let mut session_id = self.active_session_id()?.to_string();
@@ -4718,12 +4717,13 @@ mod tests {
         assert_eq!(resolve_active_index(&pages, Some("A"), 2), 0);
     }
 
-    // issue #52: read/click resolution on the relay must NOT silently fall back
-    // to active_page_index when the pin can't be resolved — that's how a command
-    // drifts onto a foreign tab. The relay keeps a stable target_id across navs,
-    // so a present pin resolves normally; only a genuinely-gone tab errors.
+    // issue #52: read/click resolution on a guarded external browser must NOT
+    // silently fall back to active_page_index when the pin can't be resolved —
+    // that's how a command drifts onto a foreign tab. The relay keeps a stable
+    // target_id across navs, so a present pin resolves normally; only a
+    // genuinely-gone tab errors.
     #[test]
-    fn strict_session_index_relay_pin_found_resolves() {
+    fn strict_session_index_external_pin_found_resolves() {
         let pages = vec![page("A"), page("B")];
         let owned = HashSet::from(["A".to_string()]);
         assert_eq!(
@@ -4733,7 +4733,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_session_index_relay_dangling_pin_errors() {
+    fn strict_session_index_external_dangling_pin_errors() {
         let pages = vec![page("A"), page("Z")];
         let owned = HashSet::from(["A".to_string()]);
         // active_page_index points at the foreign "Z"; lenient would drift there.
@@ -4741,8 +4741,9 @@ mod tests {
     }
 
     #[test]
-    fn strict_session_index_relay_no_pin_resolves_owned_else_refuses() {
-        // No pin on the relay: resolve only if the active tab is OURS; never drift
+    fn strict_session_index_external_no_pin_resolves_drivable_else_refuses() {
+        // No pin on an external browser: resolve only if the active tab is
+        // drivable; never drift
         // onto a foreign/foreground tab (issue #52).
         let pages = vec![page("A"), page("B")];
         let owns_b = HashSet::from(["B".to_string()]);
@@ -4756,8 +4757,8 @@ mod tests {
     }
 
     #[test]
-    fn strict_session_index_off_relay_dangling_pin_stays_lenient() {
-        // Off the relay (launched browser, no foreign tabs) behavior is unchanged.
+    fn strict_session_index_launched_browser_dangling_pin_stays_lenient() {
+        // A launched browser has no foreign tabs, so behavior stays lenient.
         let pages = vec![page("A"), page("B")];
         let owned = HashSet::new();
         assert_eq!(
