@@ -2741,8 +2741,8 @@ impl BrowserManager {
                 .await;
             if target_was_closed(&close_result) {
                 self.forget_created_target(&tid);
+                self.remove_page_by_target_id(&tid);
             }
-            self.remove_page_by_target_id(&tid);
         }
         // Removing earlier pages shifts indices — re-pin the kept tab.
         if let Some(i) = self.pages.iter().position(|p| p.target_id == keep) {
