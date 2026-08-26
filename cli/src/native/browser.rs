@@ -4994,6 +4994,25 @@ mod tests {
     }
 
     /// Errors containing "not found" but NOT "element" should pass through unchanged.
+    /// The relay now appends per-command context to its timeout message
+    /// (in-flight count, oldest in-flight, worker age — issue #193). The
+    /// friendly rewrite must keep that context visible: it is the only place the
+    /// driver ever sees why the command timed out, and the prefix match that
+    /// selects this branch must not be thrown off by the suffix.
+    #[test]
+    fn test_to_ai_friendly_error_relay_timeout_keeps_diagnostics() {
+        let m = to_ai_friendly_error(
+            "relay timeout after 8000ms: chrome.debugger.sendCommand(Page.navigate). \
+             [diag in-flight=4 oldest-in-flight=21000ms worker-age=93000ms]",
+        );
+        assert!(m.contains("in-flight=4"));
+        assert!(m.contains("worker-age=93000ms"));
+        assert!(
+            m.contains("tab inspect <ref>"),
+            "still the relay-timeout hint"
+        );
+    }
+
     #[test]
     fn test_to_ai_friendly_error_ignores_non_element_not_found() {
         let err = "Chrome not found. Install Chrome or use --executable-path.";
