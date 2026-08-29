@@ -986,6 +986,115 @@ async fn e2e_iframe_button_click_is_trusted() {
 // Screenshot
 // ---------------------------------------------------------------------------
 
+/// Issue #197: inserting an annotated screenshot into snapshot -> act must not
+/// invalidate the ref the snapshot just published. The target keeps a high ref
+/// after SPA-like DOM churn; a hard map clear inside screenshot used to
+/// renumber it to e1 and make the old ref unknown.
+#[tokio::test]
+#[ignore]
+async fn e2e_annotated_screenshot_preserves_preceding_snapshot_ref() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let decoys = (0..12)
+        .map(|i| format!("<button class='decoy'>decoy-{i}</button>"))
+        .collect::<String>();
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "setcontent",
+            "html": format!(
+                "<html><body>{decoys}<button id='target' onclick='window.__clicked=true'>target</button></body></html>"
+            ),
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // Mint refs for the decoys first so the target cannot coincidentally be e1.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let before = get_data(&resp)["snapshot"].as_str().unwrap_or("");
+    let target_ref = before
+        .lines()
+        .find(|line| line.contains("button \"target\""))
+        .and_then(|line| line.split("ref=").nth(1))
+        .map(|value| value.trim_end_matches(']').trim().to_string())
+        .unwrap_or_else(|| panic!("target ref missing from snapshot:\n{before}"));
+    assert_ne!(target_ref, "e1");
+
+    // Simulate an SPA remount that removes earlier controls while preserving the
+    // target DOM node. The immediately preceding snapshot still publishes the
+    // same high ref for the unchanged target.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "eval",
+            "expression": "document.querySelectorAll('.decoy').forEach(el => el.remove())",
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp)["snapshot"]
+            .as_str()
+            .unwrap_or("")
+            .contains(&format!("ref={target_ref}")),
+        "target ref should survive same-document churn"
+    );
+
+    let screenshot = std::env::temp_dir().join(format!(
+        "chrome-use-annotated-ref-{}.png",
+        std::process::id()
+    ));
+    let resp = execute_command(
+        &json!({
+            "id": "6",
+            "action": "screenshot",
+            "annotate": true,
+            "path": screenshot.to_string_lossy(),
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "click", "selector": target_ref }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "eval", "expression": "window.__clicked === true" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], true);
+
+    let _ = std::fs::remove_file(screenshot);
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 /// Issue #184: a `✓` screenshot must not silently be a blank image. The URL
 /// guard only catches a drift the capture session itself admits to, so a second,
 /// transport-independent check reads the pixels back: one flat colour over a page

@@ -105,7 +105,8 @@ connect` (alias `reconnect`) is the explicit form, and the CLI self-heals
 transient relay drops — usually just retry the command.
 
 - **`--launch`** opens an isolated, empty test profile (no cookies/login/extensions,
-  relay off) — use when a clean browser is fine.
+  relay off) — use when a clean browser is fine. On macOS this path disables
+  Chrome's code-sign clone so interrupted automation sessions do not leak disk.
 - **`--profile auto`** (or `AGENT_BROWSER_PROFILE=auto`) reuses the user's real
   Chrome profile — real cookies, login, extensions.
 - Many profiles? `chrome-use browsers` lists connected ones; `--browser <id|email>`
@@ -943,6 +944,8 @@ Headless Chromium screenshots hide native scrollbars for consistent image output
 Pass `--hide-scrollbars false` when launching to keep native scrollbars visible.
 
 `--annotate` is designed for multimodal models: each label `[N]` maps to ref `@eN`.
+It refreshes annotations as another snapshot of the same document, so it does
+not invalidate refs from the snapshot immediately before it.
 
 ### Handle multiple pages via tabs
 
@@ -1206,6 +1209,13 @@ and destroy the diagnostic state. Select it only when `tab list` marks it
 `tab inspect <targetId>`, and use `tab adopt <url-substring|targetId>` before
 selecting or driving it. A relay timeout means the renderer did not answer; it
 does not mean the tab disappeared.
+
+For an explicit `open`/`navigate`, ab-connect 0.5.18 and newer recover a
+renderer-scoped `Page.navigate` timeout through Chrome's browser-level tab API.
+The command returns a warning but keeps the same session and tab. Other methods
+such as `eval` still fail while the page main thread is blocked. On reconnect,
+the extension also validates every attached Chrome tab before re-announcing it,
+so dead bootstrap `about:blank` records are dropped instead of becoming active.
 
 If `tab select` reports that the liveness probe did not complete, read the full
 warning before judging the renderer. An outdated or unknown ab-connect version

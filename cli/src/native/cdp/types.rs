@@ -223,6 +223,11 @@ pub struct PageNavigateResult {
     pub frame_id: String,
     pub loader_id: Option<String>,
     pub error_text: Option<String>,
+    /// Extension-relay recovery path used when a renderer-scoped
+    /// `Page.navigate` timed out but browser-level `chrome.tabs.update` accepted
+    /// the same URL (#193). Direct CDP implementations omit this field.
+    #[serde(default)]
+    pub relay_fallback: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

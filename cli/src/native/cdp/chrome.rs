@@ -205,6 +205,26 @@ fn write_temp_profile_label(dir: &std::path::Path) {
 }
 
 fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
+    let mut disabled_features = vec!["Translate".to_string()];
+    // Chrome's macOS code-sign clone protects a long-running interactive app
+    // across an in-place update. Short-lived automation profiles do not need it,
+    // and an interrupted Chrome leaves each APFS clone behind until its blocks
+    // become gigabytes of real disk usage after later Chrome updates (#195).
+    #[cfg(target_os = "macos")]
+    disabled_features.push("MacAppCodeSignClone".to_string());
+    for feature in options
+        .args
+        .iter()
+        .filter_map(|arg| arg.strip_prefix("--disable-features="))
+        .flat_map(|features| features.split(','))
+        .map(str::trim)
+        .filter(|feature| !feature.is_empty())
+    {
+        if !disabled_features.iter().any(|existing| existing == feature) {
+            disabled_features.push(feature.to_string());
+        }
+    }
+
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
@@ -221,7 +241,7 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         "--disable-popup-blocking".to_string(),
         "--disable-prompt-on-repost".to_string(),
         "--disable-sync".to_string(),
-        "--disable-features=Translate".to_string(),
+        format!("--disable-features={}", disabled_features.join(",")),
         "--enable-features=NetworkService,NetworkServiceInProcess".to_string(),
         "--metrics-recording-only".to_string(),
     ];
@@ -324,7 +344,16 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         args.push(format!("--window-size={},{}", w, h));
     }
 
-    args.extend(options.args.iter().cloned());
+    // Custom disabled-feature lists were merged above so a later duplicate
+    // switch cannot overwrite the macOS clone guard (Chrome uses one effective
+    // feature list). Preserve every other custom argument verbatim.
+    args.extend(
+        options
+            .args
+            .iter()
+            .filter(|arg| !arg.starts_with("--disable-features="))
+            .cloned(),
+    );
 
     if should_disable_sandbox(&args) {
         args.push("--no-sandbox".to_string());
@@ -1822,6 +1851,41 @@ mod tests {
             .args
             .iter()
             .any(|a| a.contains("--disable-features") && a.contains("Translate")));
+        if let Some(ref dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn test_build_args_merges_custom_disabled_features() {
+        let opts = LaunchOptions {
+            args: vec!["--disable-features=OptimizationHints,Translate".to_string()],
+            ..Default::default()
+        };
+        let result = build_chrome_args(&opts).unwrap();
+        let switches: Vec<&String> = result
+            .args
+            .iter()
+            .filter(|arg| arg.starts_with("--disable-features="))
+            .collect();
+        assert_eq!(switches.len(), 1);
+        assert!(switches[0].contains("Translate"));
+        assert!(switches[0].contains("OptimizationHints"));
+        #[cfg(target_os = "macos")]
+        assert!(switches[0].contains("MacAppCodeSignClone"));
+        if let Some(ref dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_build_args_disables_mac_app_code_sign_clone() {
+        let opts = LaunchOptions::default();
+        let result = build_chrome_args(&opts).unwrap();
+        assert!(result.args.iter().any(|arg| {
+            arg.starts_with("--disable-features=") && arg.contains("MacAppCodeSignClone")
+        }));
         if let Some(ref dir) = result.temp_user_data_dir {
             let _ = std::fs::remove_dir_all(dir);
         }

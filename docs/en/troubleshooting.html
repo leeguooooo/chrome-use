@@ -200,6 +200,9 @@
         renderer is unresponsive. On the extension relay, <code>tab inspect</code> requires ab-connect 0.5.16 or
         newer. If the warning says the live extension is behind the bundled version, open
         <code>chrome://extensions</code>, update or reload ab-connect, then retry.
+        From ab-connect 0.5.18, explicit navigation recovers a renderer-scoped <code>Page.navigate</code> timeout
+        through the browser-level tab API. Reconnect also validates attached Chrome tab IDs and drops dead
+        bootstrap <code>about:blank</code> records before rebuilding the tab list.
         When an infinite JavaScript loop blocks the page main thread, <code>eval</code> cannot complete
         until that thread responds. Do not reload away the diagnostic state merely to restore evaluation.
         <br /><br />

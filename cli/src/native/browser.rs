@@ -1775,6 +1775,7 @@ impl BrowserManager {
                         frame_id: String::new(),
                         loader_id: None,
                         error_text: None,
+                        relay_fallback: None,
                     }
                 } else {
                     return Err(e);
@@ -1782,6 +1783,13 @@ impl BrowserManager {
             }
             Err(e) => return Err(e),
         };
+
+        if let Some(ref fallback) = nav_result.relay_fallback {
+            nav_warning = Some(format!(
+                "The page renderer did not answer `Page.navigate` within the relay budget; \
+                 navigation recovered through {fallback} without restarting the session."
+            ));
+        }
 
         if let Some(ref error_text) = nav_result.error_text {
             // `data:` URLs abort over the extension relay: chrome.debugger /

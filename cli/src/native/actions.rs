@@ -3913,7 +3913,11 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     if annotate {
-        state.ref_map.clear();
+        // An annotated screenshot is an observation of the current document, not
+        // a navigation boundary. `take_snapshot` calls `begin_snapshot`, which
+        // refreshes live entries while preserving backend-node identities. A
+        // hard clear here reset numbering to e1 and invalidated refs captured by
+        // the immediately preceding snapshot (issue #197).
         let _ = snapshot::take_snapshot(
             &mgr.client,
             &session_id,

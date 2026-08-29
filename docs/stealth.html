@@ -162,6 +162,10 @@ Cloudflare Turnstile (nowsecure.nl)  passed</code></pre>
         对隔离 / launched 浏览器，用<strong>原生覆盖</strong>把关键指纹对齐到你想要的身份——全都不是 JS 谎言，
         测谎器抓不到。这些开关只作用于 <code>--launch</code>：
       </p>
+      <p>
+        macOS 上的 launched Chrome 还会禁用 <code>MacAppCodeSignClone</code>。短生命周期自动化不需要
+        Chrome 为原地更新准备的代码签名克隆；禁用后，即使会话被强制结束，也不会留下随后膨胀占盘的 APFS 克隆。
+      </p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>

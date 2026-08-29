@@ -83,6 +83,12 @@
 <span class="du-prompt">$</span> chrome-use connect 9222        <span class="du-cmt"># 通过 CDP 端口连接</span></code></pre>
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">页面线程卡死时的导航恢复</div>
+        ab-connect 0.5.18 及以上版本会在 <code>Page.navigate</code> 超时后，通过 Chrome 的浏览器级
+        标签 API 重试这次明确导航。命令会返回警告并保留原 session，不再要求重启整个 session。
+      </div>
+
       <p>
         导航前的准备可以用 <code>batch</code> 在一轮里排好队 —— 先干净启动，再依次注册拦截 / Cookie，最后导航。
         适合 SSR-only 调试（只放行 <code>--resource-type script</code> 之外）、受保护来源鉴权，或抓取干净的

@@ -487,6 +487,10 @@ switches still invalidate refs. `snapshot -i` also surfaces deliberate cursor
 styles such as `grab` and `col-resize`, plus compact DOM anchors for otherwise
 indistinguishable generic controls.
 
+`screenshot --annotate` refreshes its labels from the current document without
+hard-resetting that identity map. A ref from the immediately preceding snapshot
+therefore remains valid when the page did not navigate or switch tabs.
+
 ## Downloads
 
 With ab-connect 0.5.13 or newer, URL downloads and download history use Chrome's
@@ -618,10 +622,17 @@ We deliberately **don't ship our own bot detector** — the strongest, most hone
 
 - **Auto-connect is default** — `chrome-use open <url>` drives your existing Chrome instead of launching a new one
 - **Extension-relay transport** — a one-click Chrome Web Store extension + native messaging, so there's no debug port and no "Allow remote debugging?" dialog
+- **Blocked-page recovery** — if a renderer does not answer `Page.navigate`, the relay retries that explicit navigation through Chrome's browser-level tab API; other sessions remain independent
+- **Relay tab reconciliation** — reconnect validates Chrome tab IDs before re-announcing them, so a dead bootstrap `about:blank` cannot remain active beside the recovered page
 - **CDP-native stealth** — anti-detection via Chrome/CDP overrides rather than JS patches; zero patches when attached to your real Chrome, full patches only for `--launch`
 - **Humanize** — human-like cursor trajectories + adaptive anti-bot handling
 - **Multi-agent isolation** — concurrent agents share one real Chrome via per-session tab groups; Codex tasks auto-isolate through `CODEX_THREAD_ID`
 - **Silent operation** — runs in the background; never steals your foreground tab
+
+On macOS, launched Chrome instances include
+`--disable-features=MacAppCodeSignClone`. Automation does not need Chrome's
+in-place-update clone, and disabling it prevents interrupted sessions from
+leaving gigabyte-scale APFS clones behind.
 
 <sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); the projects have since diverged substantially.</sub>
 
