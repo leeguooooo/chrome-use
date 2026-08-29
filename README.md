@@ -489,7 +489,8 @@ indistinguishable generic controls.
 
 `screenshot --annotate` refreshes its labels from the current document without
 hard-resetting that identity map. A ref from the immediately preceding snapshot
-therefore remains valid when the page did not navigate or switch tabs.
+remains valid when the document and referenced node are unchanged and the page
+did not navigate or switch tabs.
 
 ## Downloads
 

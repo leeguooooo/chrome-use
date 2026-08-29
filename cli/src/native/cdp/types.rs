@@ -227,7 +227,17 @@ pub struct PageNavigateResult {
     /// `Page.navigate` timed out but browser-level `chrome.tabs.update` accepted
     /// the same URL (#193). Direct CDP implementations omit this field.
     #[serde(default)]
-    pub relay_fallback: Option<String>,
+    pub relay_fallback: Option<RelayNavigateFallback>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayNavigateFallback {
+    pub method: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1787,7 +1787,8 @@ impl BrowserManager {
         if let Some(ref fallback) = nav_result.relay_fallback {
             nav_warning = Some(format!(
                 "The page renderer did not answer `Page.navigate` within the relay budget; \
-                 navigation recovered through {fallback} without restarting the session."
+                 navigation recovered through {} without restarting the session.",
+                fallback.method
             ));
         }
 
@@ -1842,8 +1843,25 @@ impl BrowserManager {
             }
         }
 
-        let page_url = self.get_url().await.unwrap_or_else(|_| url.to_string());
-        let title = self.get_title().await.unwrap_or_default();
+        // A browser-level fallback is specifically used because the renderer did
+        // not answer. Do not immediately issue two more renderer-bound reads and
+        // turn an 8-second recovery into roughly 24 seconds. chrome.tabs.update
+        // returned browser metadata with the accepted/pending URL; normal CDP
+        // navigation keeps the richer page-scoped reads.
+        let (page_url, title) = match nav_result.relay_fallback.as_ref() {
+            Some(fallback) => (
+                if fallback.url.is_empty() {
+                    url.to_string()
+                } else {
+                    fallback.url.clone()
+                },
+                fallback.title.clone(),
+            ),
+            None => (
+                self.get_url().await.unwrap_or_else(|_| url.to_string()),
+                self.get_title().await.unwrap_or_default(),
+            ),
+        };
 
         // Track visited origin for cross-origin localStorage collection in save_state
         if let Ok(parsed) = url::Url::parse(&page_url) {

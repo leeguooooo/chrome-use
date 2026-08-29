@@ -24,7 +24,10 @@ import {
 } from './download-manager.js'
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js'
 import { reconcileAttachedTabEntries, resolveFirstLiveTab } from './tab-liveness.js'
-import { navigateTabWithBrowserFallback } from './tab-navigation.js'
+import {
+  canUseBrowserNavigationFallback,
+  navigateTabWithBrowserFallback,
+} from './tab-navigation.js'
 import { targetInfoForTab } from './target-info.js'
 
 const HOST_NAME = 'com.agent_browser.connect'
@@ -993,7 +996,7 @@ async function handleForwardCdpCommand(msg) {
   }
   // Mirror agent mouse activity to the friendly on-page cursor (opt-in; best-effort).
   maybeDriveCursor(tabId, method, params)
-  if (method === 'Page.navigate' && !childSid) {
+  if (canUseBrowserNavigationFallback(method, params, childSid)) {
     return await navigateTabWithBrowserFallback(params, {
       navigateWithDebugger: () => sendCdpToTab(tabId, method, params),
       isRelayTimeoutError,
@@ -1141,10 +1144,9 @@ async function reattachOwnedTabs() {
       continue
     }
     if (!eligible(tab)) {
-      // Preserve the existing behavior for a live but temporarily restricted
-      // page (including a deliberately staged about:blank). The missing-tab
-      // branch above is the only state that proves a relay record is phantom.
-      unmarkOwned(tabId)
+      // A live but temporarily restricted page (including a deliberately staged
+      // about:blank) can become eligible later. Keep ownership so a later pass
+      // retries it; only a browser-confirmed missing tab is phantom (#196).
       continue
     }
     if (nativeDuplicateTabs.has(tabId)) continue

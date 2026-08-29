@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { navigateTabWithBrowserFallback } from './tab-navigation.js'
+import {
+  canUseBrowserNavigationFallback,
+  navigateTabWithBrowserFallback,
+} from './tab-navigation.js'
 
 function timeoutError() {
   const error = new Error('relay timeout after 8000ms: Page.navigate')
@@ -14,7 +17,10 @@ function fixture(overrides = {}) {
   const deps = {
     navigateWithDebugger: async () => ({ frameId: 'frame-1', loaderId: 'loader-1' }),
     isRelayTimeoutError: (error) => error?.name === 'RelayTimeoutError',
-    updateTab: async (url) => calls.push(['updateTab', url]),
+    updateTab: async (url) => {
+      calls.push(['updateTab', url])
+      return { pendingUrl: url, url: 'https://example.com/old', title: 'Old title' }
+    },
     ...overrides,
   }
   return { calls, deps }
@@ -40,8 +46,22 @@ test('renderer timeout recovers through browser-level navigation (#193)', async 
   assert.deepEqual(result, {
     frameId: '',
     loaderId: null,
-    relayFallback: 'browser-level chrome.tabs.update',
+    relayFallback: {
+      method: 'browser-level chrome.tabs.update',
+      url: 'https://example.com/heavy',
+      title: '',
+    },
   })
+})
+
+test('browser fallback is limited to top-level navigation', () => {
+  assert.equal(canUseBrowserNavigationFallback('Page.navigate', {}, null), true)
+  assert.equal(
+    canUseBrowserNavigationFallback('Page.navigate', { frameId: 'child-frame' }, null),
+    false,
+  )
+  assert.equal(canUseBrowserNavigationFallback('Page.navigate', {}, 'child-session'), false)
+  assert.equal(canUseBrowserNavigationFallback('Runtime.evaluate', {}, null), false)
 })
 
 test('unrelated debugger errors are not hidden by the fallback', async () => {
