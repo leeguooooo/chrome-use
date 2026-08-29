@@ -3860,7 +3860,8 @@ Core Commands:
   friction [--json|--clear]  Local log of failed commands (what's painful to
                              drive) — local only, never uploaded
   screenshot [path]          Take screenshot (auto-downscaled to ≤2000px long edge;
-                             --max-width/--max-height/--scale to override)
+                             --max-width/--max-height/--scale to override; --annotate
+                             refreshes labels without invalidating existing refs)
   pdf <path>                 Save as PDF
   canvas list                List <canvas> elements (size, type) on the page
   canvas capture [sel] [path]  Save a canvas's rendered pixels to PNG — for
@@ -3882,6 +3883,8 @@ Navigation:
   back                       Go back
   forward                    Go forward
   reload                     Reload page
+  On the extension relay, a renderer-blocked Page.navigate falls back to
+  browser-level navigation instead of restarting the whole session.
 
 Get Info:  chrome-use get <what> [selector]
   text, html, value, attr <name>, title, url, count, box, styles, cdp-url
@@ -3935,6 +3938,7 @@ Tabs:
   tab duplicate [ref] [--label <name>]
                              Natively duplicate on extension-connected real Chrome
   tab list --full            Full URLs + stable targetId (external: ownership too)
+                             Dead relay tab records are removed on reconnect.
   tab select <ref>           Select a tab (external: created or adopted only)
   tab adopt <url|targetId>   Attach an existing tab in the current session, no reload
   tab inspect <ref>          Browser metadata without page JS (ab-connect 0.5.16+ on relay)
@@ -4093,6 +4097,7 @@ Authentication:
   --auto-connect             Connect to a running Chrome (DEFAULT - shares cookies/sessions)
                              Tip: enable CDP via chrome://inspect/#remote-debugging
   --launch, --new            Launch a fresh browser instead of connecting to existing
+                             (macOS disables Chrome code-sign clones to prevent crash leaks)
   --headers <json>           HTTP headers scoped to URL's origin (e.g., Authorization bearer token)
 
 Options:

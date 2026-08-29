@@ -187,6 +187,11 @@ Cloudflare Turnstile (nowsecure.nl)  passed</code></pre>
         you want—none of them are JS lies,
         so lie-detectors can't catch them. These switches only apply to <code>--launch</code>:
       </p>
+      <p>
+        On macOS, launched Chrome also disables <code>MacAppCodeSignClone</code>. A short-lived automation browser
+        does not need Chrome's in-place-update clone, and disabling it prevents killed sessions from leaving APFS
+        clones that consume real disk after later Chrome updates.
+      </p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>

@@ -86,6 +86,13 @@
 <span class="du-prompt">$</span> chrome-use connect 9222        <span class="du-cmt"># connect over a CDP port</span></code></pre>
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">Blocked renderer recovery</div>
+        With ab-connect 0.5.18 or newer, an explicit <code>open</code> or <code>navigate</code> whose
+        renderer-scoped <code>Page.navigate</code> call times out is retried through Chrome's browser-level
+        tab API. The command returns a warning and keeps the same session instead of restarting it.
+      </div>
+
       <p>
         You can line up all the pre-navigation setup in one shot with <code>batch</code> — launch cleanly, register
         interceptors / cookies in order, then navigate. This suits SSR-only debugging (block everything except

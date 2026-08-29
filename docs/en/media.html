@@ -93,6 +93,8 @@
         <code>--full</code> captures the full scroll height rather than just the visible area.
         <code>--annotate</code> is for multimodal models: each label <code>[N]</code> maps to
         <code>@eN</code> in the snapshot, making it easy to line up an image with the structured snapshot.
+        It refreshes labels without hard-resetting same-document ref identity, so a ref from the immediately
+        preceding snapshot remains usable after the capture.
       </p>
 
       <h3>Scaling and clipping</h3>

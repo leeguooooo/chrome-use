@@ -82,6 +82,9 @@ chrome-use click @e12
 
 Refs are stable for the same backend DOM node across snapshots in one document.
 Navigation and tab switches invalidate the identity map.
+An annotated screenshot refreshes that same-document snapshot without a hard
+reset, so inserting `screenshot --annotate` between snapshot and click does not
+renumber unchanged controls.
 
 ```bash
 # Get initial snapshot

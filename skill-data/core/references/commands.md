@@ -21,6 +21,12 @@ chrome-use close           # Close browser (aliases: quit, exit)
 chrome-use connect 9222    # Connect to browser via CDP port
 ```
 
+With ab-connect 0.5.18 or newer, a `Page.navigate` relay timeout on a blocked
+renderer retries the same explicit URL through `chrome.tabs.update`. The
+command reports a warning and preserves the session instead of requiring a
+restart. On macOS, `--launch` also disables `MacAppCodeSignClone` so a killed
+automation browser does not leave an APFS code-sign clone behind.
+
 ### Pre-navigation setup (one-turn batch)
 
 ```bash

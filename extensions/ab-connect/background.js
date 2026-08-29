@@ -23,6 +23,11 @@ import {
   startDownload,
 } from './download-manager.js'
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js'
+import { reconcileAttachedTabEntries, resolveFirstLiveTab } from './tab-liveness.js'
+import {
+  canUseBrowserNavigationFallback,
+  navigateTabWithBrowserFallback,
+} from './tab-navigation.js'
 import { targetInfoForTab } from './target-info.js'
 
 const HOST_NAME = 'com.agent_browser.connect'
@@ -796,13 +801,23 @@ async function handleForwardCdpCommand(msg) {
   if (method === 'ABExt.inspectTab') {
     const requestedSession = String(params?.sessionId || '')
     const requestedTarget = String(params?.targetId || '')
-    const tabId =
-      tabIdFromSession(requestedSession) ??
-      tabForSession(requestedSession) ??
-      tabForTarget(requestedTarget)
-    if (tabId == null) throw new Error('inspectTab: no tab matches the requested session or target')
-    const tab = await chrome.tabs.get(tabId).catch(() => null)
-    if (!tab) throw new Error(`inspectTab: Chrome tab ${tabId} no longer exists`)
+    // A cross-process navigation can move a stable target to a new Chrome tabId.
+    // Prefer the target/session maps, but verify each candidate against
+    // chrome.tabs before falling back to the tabId encoded in an old session.
+    const candidates = [
+      tabForTarget(requestedTarget),
+      tabForSession(requestedSession),
+      tabIdFromSession(requestedSession),
+    ]
+    const resolved = await resolveFirstLiveTab(candidates, (tabId) => chrome.tabs.get(tabId))
+    if (!resolved) {
+      const knownTabId = candidates.find((tabId) => tabId != null)
+      if (knownTabId != null) {
+        throw new Error(`inspectTab: Chrome tab ${knownTabId} no longer exists`)
+      }
+      throw new Error('inspectTab: no tab matches the requested session or target')
+    }
+    const { tabId, tab } = resolved
     const entry = tabs.get(tabId)
     return {
       chromeTabId: tabId,
@@ -981,6 +996,17 @@ async function handleForwardCdpCommand(msg) {
   }
   // Mirror agent mouse activity to the friendly on-page cursor (opt-in; best-effort).
   maybeDriveCursor(tabId, method, params)
+  if (canUseBrowserNavigationFallback(method, params, childSid)) {
+    return await navigateTabWithBrowserFallback(params, {
+      navigateWithDebugger: () => sendCdpToTab(tabId, method, params),
+      isRelayTimeoutError,
+      updateTab: (url) =>
+        withRelayTimeout(
+          chrome.tabs.update(tabId, { url }),
+          'chrome.tabs.update(Page.navigate fallback)',
+        ),
+    })
+  }
   return await sendCdpToTab(tabId, method, params, childSid)
 }
 
@@ -1112,8 +1138,15 @@ async function reattachOwnedTabs() {
   await loadOwnedTabs()
   for (const tabId of [...ownedTabs]) {
     const tab = await chrome.tabs.get(tabId).catch(() => null)
-    if (!tab || !eligible(tab)) {
+    if (!tab) {
+      detachTab(tabId, true)
       unmarkOwned(tabId)
+      continue
+    }
+    if (!eligible(tab)) {
+      // A live but temporarily restricted page (including a deliberately staged
+      // about:blank) can become eligible later. Keep ownership so a later pass
+      // retries it; only a browser-confirmed missing tab is phantom (#196).
       continue
     }
     if (nativeDuplicateTabs.has(tabId)) continue
@@ -1152,7 +1185,16 @@ async function announceAttachedTab(tabId, entry, targetInfo, scopeHints) {
 }
 
 async function reannounceAttachedTabs() {
-  for (const [tabId, entry] of tabs.entries()) {
+  // The worker can miss `tabs.onRemoved` while its native-messaging port is
+  // down. Validate browser-level tab ids before rebuilding relay state so a
+  // dead bootstrap about:blank cannot be re-announced as the active target
+  // beside the real recovered page (#196).
+  const { live } = await reconcileAttachedTabEntries([...tabs.entries()], {
+    getTab: (tabId) => chrome.tabs.get(tabId),
+    detach: (tabId) => detachTab(tabId, true),
+    unmarkOwned,
+  })
+  for (const [tabId, entry] of live) {
     // Re-send live browser metadata and the group hint so the relay can rebuild
     // target state without asking the possibly frozen renderer.
     await announceAttachedTab(tabId, entry)

@@ -191,6 +191,8 @@
         通过扩展连接时，<code>tab inspect</code> 需要 ab-connect 0.5.16 或更新版本；
         如果警告显示当前扩展落后于 CLI 内置版本，请打开 <code>chrome://extensions</code>
         更新或重新加载 ab-connect 后重试。
+        ab-connect 0.5.18 起，明确导航遇到 <code>Page.navigate</code> 超时时会改走浏览器级标签 API；
+        重新连接时也会核对 Chrome 标签 ID，死掉的启动页 <code>about:blank</code> 不会再混进标签清单。
         页面 JavaScript 用无限循环阻塞主线程时，<code>eval</code> 在主线程恢复前不可能完成；
         不要为了恢复 eval 而刷新掉需要诊断的现场。
         <br /><br />
