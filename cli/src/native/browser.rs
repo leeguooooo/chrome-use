@@ -1855,7 +1855,7 @@ impl BrowserManager {
                 } else {
                     fallback.url.clone()
                 },
-                fallback.title.clone(),
+                sanitize_title(&fallback.title),
             ),
             None => (
                 self.get_url().await.unwrap_or_else(|_| url.to_string()),
