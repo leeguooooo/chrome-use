@@ -118,7 +118,9 @@ adopted, so
 concurrent agents share one real Chrome without cross-talk and never touch
 unadopted user tabs; an unset session auto-derives a stable per-agent name from supported
 runner IDs, including Codex's `CODEX_THREAD_ID`. Other runners can set
-`AGENT_BROWSER_SESSION_ID`. `adopt
+`AGENT_BROWSER_SESSION_ID`. The derived name is `cu-<repo>-<tag>`; a command run
+from another directory reuses the live daemon carrying the same agent tag, so
+tabs and refs survive `cd` (explicit `--session` still wins). `adopt
 <url|targetId>` drives a pre-existing tab on demand; OAuth/SSO popups and
 cross-process redirects are followed automatically.
 
@@ -247,6 +249,9 @@ chrome-use snapshot -i -c              # compact (no empty structural nodes)
 chrome-use snapshot -i -d 3            # cap depth at 3 levels
 chrome-use snapshot -s "#main"         # scope to a CSS selector
 chrome-use snapshot -i -f "SSH|端口|应用"  # keep only matching lines + ancestors (regex)
+chrome-use snapshot -i --dom           # list actionable elements from a DOM walk
+                                          # (open + closed shadow roots); automatic
+                                          # when the AX tree yields no refs at all
 chrome-use snapshot -i --json          # machine-readable output
 ```
 
@@ -345,6 +350,14 @@ pierces closed shadow roots** — a closed-shadow `<button>` / `[role=button]`
 shows up as a normal `@ref`. So shadow-rendered controls with a11y semantics are
 clickable the usual way; only a bare non-semantic clickable `<div>` inside a
 *closed* root can slip past both the AX tree and the cursor-element scan.
+If the AX tree comes back with **no refs at all** (web-component SPAs such as
+developer.apple.com/contact, whose whole page lives inside shadow roots),
+`snapshot` / `snapshot -i` automatically lists actionable elements from a
+`DOM.getDocument(pierce:true)` walk (open and closed shadow roots, same-process
+child documents) instead of printing "(no interactive elements)". Those
+`[ref=eN]` work with `click`/`type`/`fill` like normal refs; the JSON carries
+`source: "dom"` plus a `note`, and roles/names are derived from tags and
+attributes. `snapshot --dom` forces that path.
 
 **Canvas / WebGL UIs (game boards, voice-room mic seats, map tiles, design
 canvases).** These paint to a `<canvas>` — there is **no DOM node and no
@@ -369,8 +382,11 @@ chrome-use click @e1 --new-tab         # open link in new tab instead of navigat
 chrome-use dblclick @e1                # double-click
 chrome-use hover @e1                   # hover
 chrome-use focus @e1                   # focus (useful before keyboard input)
-chrome-use fill @e2 "hello"            # clear then type
-chrome-use type @e2 " world"           # type without clearing
+chrome-use fill @e2 "hello"            # clear then type (verified by read-back;
+                                          # a mismatch error quotes both values and
+                                          # says when the page filtered non-Latin input)
+chrome-use type @e2 " world"           # type without clearing (read back too: ⚠
+                                          # warning, exit 0, if the page rewrote it)
 chrome-use type @e5 "201-0001" --key-events  # real keystrokes (not insertText) —
                                           # use for autocomplete/combobox fields that
                                           # only react to key events (e.g. a postal box
@@ -385,6 +401,11 @@ chrome-use type @e6 "ChatGPT" --enter  # type (real keystrokes, implies --key-ev
 chrome-use press Enter                 # press a key at current focus (down+up).
                                           # The output names where it landed
                                           # ("Pressed Enter → textarea[name=q]").
+                                          # A prior `click <input>` focuses it, also
+                                          # over the relay. ⚠ warning (exit 0) when a
+                                          # JS-only key (Arrow/Escape/Enter on a bare
+                                          # input) finds no key listener on the page:
+                                          # it cannot react, click the option instead.
 chrome-use press Enter --selector @e2  # focus the target first (alias --on) —
                                           # each CLI call is its own process, so
                                           # don't assume focus stayed put
@@ -511,11 +532,22 @@ pages → `find role/text/label` when you'd rather skip the snapshot → raw CSS
 occluded clicks). Don't retry a flaky structured locator three times; drop to
 `eval` and act on the DOM directly.
 
+Selectors starting with `//`, `/`, `(`, `./` or `..` are XPath automatically (no
+`xpath=` prefix). `text()` only tests the FIRST direct text node, so a label
+split across nodes (React `{a} - {b}`) or nested in a child never matches; use
+`contains(normalize-space(.), '…')`, `find "<label>"`, `text=<label>` or a
+snapshot `@ref`. "Element not found" keeps the selector plus the resolver's
+diagnosis, and an XPath with `text()` that matched nothing explains this.
+
 `click` auto-scrolls into view and, if the coordinate click is occluded, falls
 back to a DOM `.click()`. If a click *reports success but nothing happened* —
 classic for an autocomplete/menu `<li>` that closes on the input's blur — retry
 that one with `AGENT_BROWSER_CLICK_MODE=dom chrome-use click ...`, or just
-`chrome-use eval "<select the item via JS>"`.
+`chrome-use eval "<select the item via JS>"`. A DOM-dispatched click (the relay's
+default for left clicks) moves focus like a real click: the clicked element, its
+nearest focusable ancestor, or a label's control gets focus unless the handler
+already moved it, so `click <input>` then `press Meta+a` lands on that input. A
+plain `<li>` has no focusable target, so the input keeps focus and still selects.
 
 Click a raw pixel point when the only handle you have is a coordinate (canvas,
 a marker from a screenshot, a target with no stable selector):
@@ -1172,6 +1204,14 @@ Destructive actions require `--fix`. Exit code is `0` if all checks pass
 **"Ref not found" / "Element not found: @eN"**
 Page changed since the snapshot. Run `chrome-use snapshot -i` again,
 then use the new refs.
+
+**"Unknown ref @eN"**
+The error names the session that answered and says whether it holds any refs.
+"no snapshot has run in this session" means the command reached a different
+session than the one you snapshotted (another directory or terminal): run
+`chrome-use session list` and pin with `--session <name>`. If it lists a ref
+range instead, the page changed; re-snapshot. Sessions are now reused across
+`cd` for the same agent tag, so this mostly shows up with a different terminal.
 
 **Element exists in the DOM but not in the snapshot**
 It's probably off-screen or not yet rendered. Try:

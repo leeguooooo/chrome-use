@@ -117,7 +117,18 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use click <span class="du-str">"#submit"</span>
 <span class="du-prompt">$</span> chrome-use fill <span class="du-str">"input[name=email]"</span> <span class="du-str">"user@test.com"</span>
-<span class="du-prompt">$</span> chrome-use click <span class="du-str">"button.primary"</span></code></pre>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">"button.primary"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">"//button[@type='submit']"</span>   <span class="du-cmt"># starts with //, /, (, ./ or .. = XPath, no xpath= prefix needed</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ XPath text() only tests the first direct text node</div>
+        <code>//button[text()='Save']</code> never matches when the text is split across nodes (React's
+        <code>{a} - {b}</code>) or nested in a child element. Use <code>contains(normalize-space(.), '…')</code>, or
+        <code>find "&lt;label&gt;"</code> / <code>text=&lt;label&gt;</code> / <code>snapshot -i</code> + <code>@ref</code>.
+        When an XPath containing <code>text()</code> matches nothing, the error explains this gotcha, and
+        "Element not found" now keeps the selector and the resolver's specific diagnosis instead of always blaming a
+        closed shadow root / cross-origin iframe.
       </div>
 
       <hr class="du-divider" />

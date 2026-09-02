@@ -82,6 +82,15 @@
         or just use <code>eval</code> to select that item in the page.
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ DOM-dispatched clicks move focus too</div>
+        Over the extension relay a left click is dispatched through the DOM. It now hands focus to the clicked
+        element (or its nearest focusable ancestor / a label's control) like a real click, unless the click handler
+        already moved focus. So <code>click &lt;input&gt;</code> followed by <code>press Meta+a</code> lands on that
+        input, not on the previously focused field. A plain <code>&lt;li&gt;</code> has no focusable target, so the
+        autocomplete trick above still holds.
+      </div>
+
       <hr class="du-divider" />
 
       <!-- ============ Typing text ============ -->
@@ -127,6 +136,16 @@
         that actually gets typed.
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Page rewrote the input? type warns, fill errors</div>
+        After <code>type</code> the field is read back: if it does not contain the typed text, a ⚠ warning quotes
+        what was written and what the field now holds (exit 0, JSON gains <code>readBack</code>). A <code>fill</code>
+        verification failure quotes both values too, e.g. <code>read back "" after writing "狛江市"</code>; when every
+        non-ASCII character vanished while ASCII survived, it says the page filtered non-Latin input (a Latin-only /
+        masked field), so re-typing will not help. Both deliver CJK fine on normal fields; these messages are about
+        pages that rewrite input.
+      </div>
+
       <hr class="du-divider" />
 
       <!-- ============ Keyboard ============ -->
@@ -146,6 +165,16 @@
 <span class="du-prompt">$</span> chrome-use keydown d                   <span class="du-cmt"># hold a key down (no auto release)</span>
 <span class="du-prompt">$</span> chrome-use keyup d                     <span class="du-cmt"># release—use as a pair to "hold to move"</span>
                                        <span class="du-cmt"># in a game: keydown d; sleep; keyup d</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ A warning when the key provably did nothing</div>
+        For keys whose only effect depends on page JavaScript (Arrow/Home/End/PageUp/PageDown on a text field,
+        Escape, Enter on a bare input outside a form), <code>press</code> probes for keydown/keyup/keypress listeners
+        on the focused element, its ancestors, document and window. With none found it still exits 0 but prints a
+        ⚠ warning that the page cannot react to the key and suggests <code>click</code>ing the option instead; the
+        JSON gains <code>keyListeners: &lt;count&gt;</code>. Chords (Ctrl/Meta+key), Tab, Backspace, printable keys and
+        native defaults are not probed.
       </div>
 
       <div class="du-callout note">

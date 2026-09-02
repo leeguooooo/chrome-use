@@ -129,6 +129,7 @@
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>         <span class="du-cmt"># interactive elements only (recommended)</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-c</span>         <span class="du-cmt"># compact output</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-d</span> 3       <span class="du-cmt"># limit depth to 3</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--dom</span>   <span class="du-cmt"># actionable elements from a DOM walk (pierces shadow roots; automatic when the AX tree has no refs)</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span> <span class="du-cmt"># scope to a CSS selector</span></code></pre>
       </div>
       <div class="du-callout tip">
@@ -152,7 +153,7 @@
 <span class="du-prompt">$</span> chrome-use focus @e1           <span class="du-cmt"># focus the element</span>
 <span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># clear then type</span>
 <span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># type directly (no clear)</span>
-<span class="du-prompt">$</span> chrome-use press Enter         <span class="du-cmt"># press a key (alias: key)</span>
+<span class="du-prompt">$</span> chrome-use press Enter         <span class="du-cmt"># press a key (alias: key); ⚠ warns when the page has no listener for it</span>
 <span class="du-prompt">$</span> chrome-use press Control+a     <span class="du-cmt"># key combo</span>
 <span class="du-prompt">$</span> chrome-use keydown Shift       <span class="du-cmt"># hold a key down</span>
 <span class="du-prompt">$</span> chrome-use keyup Shift         <span class="du-cmt"># release a key</span>
@@ -169,12 +170,16 @@
 <span class="du-prompt">$</span> chrome-use download-url https://example.com/file.pdf ./file.pdf
 <span class="du-prompt">$</span> chrome-use downloads <span class="du-flag">--limit</span> 10 <span class="du-flag">--json</span> <span class="du-cmt"># machine-readable Chrome downloads</span></code></pre>
       </div>
-      <p><code>fill</code> reads the resulting control or rich-editor model value back and compares it exactly before reporting success. If Monaco hides its model API, one trusted editor paste is verified through the editor's copy handler and the browser clipboard is restored afterward. An unverifiable paste or mismatched readback is an error, not a silent success.</p>
+      <p><code>fill</code> reads the resulting control or rich-editor model value back and compares it exactly before reporting success. If Monaco hides its model API, one trusted editor paste is verified through the editor's copy handler and the browser clipboard is restored afterward. An unverifiable paste or mismatched readback is an error, not a silent success. The error quotes both values (e.g. <code>read back "" after writing "狛江市"</code>); when every non-ASCII character vanished while ASCII survived it says the page filtered non-Latin input (a Latin-only / masked field), so re-typing will not help. <code>type</code> reads the field back too: if it does not contain the typed text, a ⚠ warning is printed (exit 0, JSON gains <code>readBack</code>).</p>
+      <p><code>press</code> probes, for keys whose only effect depends on page JavaScript (Arrow/Home/End/PageUp/PageDown on a text field, Escape, Enter on a bare input outside a form), whether any keydown/keyup/keypress listener exists from the focused element up to window. With none found it still exits 0 but prints a ⚠ warning that the page cannot react to the key and suggests <code>click</code>ing the option instead (JSON gains <code>keyListeners</code>). Chords, Tab, Backspace and printable keys are not probed.</p>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ Click "succeeds but nothing happens"</div>
         Autocomplete / menu <code>&lt;li&gt;</code> items often close when the input loses focus. If <code>click</code>
         reports success but the page doesn't react, retry that click with <code>AGENT_BROWSER_CLICK_MODE=dom</code> —
-        DOM dispatch doesn't move focus the way a real pointer does, so the option still gets selected.
+        a plain <code>&lt;li&gt;</code> has no focusable target, so the input keeps focus and the option still gets selected.
+        Note that a DOM-dispatched click (the relay's default for left clicks) now moves focus like a real click: the clicked
+        element, its nearest focusable ancestor, or a label's control receives focus unless the handler already moved it,
+        so <code>click &lt;input&gt;</code> then <code>press Meta+a</code> lands on that input rather than the previously focused field.
       </div>
 
       <!-- ============================================================ -->

@@ -148,6 +148,19 @@ chrome-use snapshot -i
 chrome-use close
 ```
 
+The derived name is `cu-<repo>-<tag>`: `<tag>` comes from the agent/terminal
+ID and `<repo>` is only the cwd basename. Running a command from another
+directory would mint a different name and hit a fresh daemon with no refs, so
+when a live daemon already carries the same agent tag under another prefix,
+that session is reused and your tabs and refs survive a `cd`. Explicit
+`--session <name>` / `AGENT_BROWSER_SESSION` still win.
+
+An "Unknown ref" error names the session that answered and says whether it
+holds any refs. "no snapshot has run in this session" means the command reached
+a different session than the one you snapshotted (another directory or
+terminal): run `chrome-use session list` and pin with `--session`. If it lists
+the ref range it does have, the page changed since the snapshot.
+
 ## Session Cleanup
 
 ```bash

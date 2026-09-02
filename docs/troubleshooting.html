@@ -99,6 +99,12 @@
         或已经发生导航/切换标签页。同一文档里的同一个 backend DOM 节点会跨 snapshot 保持 ref，
         弹窗插入/删除不会再让后续控件整体改号。遇到错误时重新快照，确认当前节点与 ref。
       </p>
+      <p>
+        「Unknown ref」是另一回事：它会说明是哪个会话在应答、这个会话有没有 ref。提示「此会话尚未运行过 snapshot」
+        说明命令打到了另一个会话（比如在别的目录或终端做的快照），用 <code>session list</code> 找到它并用
+        <code>--session</code> 钉住；同一个 agent tag 现在会跨 <code>cd</code> 复用守护进程，见
+        <a href="/sessions.html">会话与并发</a>。如果报错列出了它实际持有的 ref 范围，那就是页面变了，重新快照即可。
+      </p>
 
       <div class="du-code">
         <div class="du-code-head">
@@ -220,8 +226,11 @@
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 说明</div>
-        升级后 agent 主动驱动自己的标签页时，提示条仍会短暂出现（这是 <code>chrome.debugger</code> API 的固有行为），
-        任务结束 detach 后自动消失。若想连这一段也静音，跑一次
+        升级后 agent 主动驱动自己的标签页时，提示条仍会短暂出现（这是 <code>chrome.debugger</code> API 的固有行为）。
+        扩展 0.5.19 起它会自己消失：某个标签页 30 秒没有 agent 活动，扩展就释放该标签的调试器，提示条随之消失；
+        标签仍被中继记着，下一条命令会透明地重新 attach（已启用的 CDP domain 会重放）。时长在扩展选项页
+        「Release idle tabs after」里可调（0 = 从不释放）。点提示条上的 Cancel 现在会被尊重，agent 下一条命令之前不会自动重连。
+        代价：被动采集（network / console 日志）在释放期间会漏掉事件。若想连这一段也静音，跑一次
         <code>chrome-use extension connect --silent</code>——它会在确认后重启 Chrome 并带上
         <code>--silent-debugger-extension-api</code>，标签页和登录态由 Chrome 自动恢复，之后彻底无提示条。
         背景与方案取舍见 <a href="/debugger-banner-silence.html">深入：静音 debugger 提示条</a>。

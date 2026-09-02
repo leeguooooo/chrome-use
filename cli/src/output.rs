@@ -1652,6 +1652,18 @@ Usage: chrome-use click <selector> [--new-tab]
 Clicks on the specified element. The selector can be a CSS selector,
 XPath, or an element reference from snapshot (e.g., @e1).
 
+A selector starting with `//`, `/`, `(`, `./` or `..` is treated as XPath
+automatically (no `xpath=` prefix). Note that `text()` only tests the FIRST
+direct text node, so a label split across nodes (React `{a} - {b}`) or nested
+in a child never matches; use `contains(normalize-space(.), '...')`,
+`find "<label>"`, `text=<label>`, or `snapshot -i` + @ref instead. An
+"Element not found" error keeps the selector and the resolver's diagnosis.
+
+Over the extension relay a left click is dispatched through the DOM. The
+clicked element (or its nearest focusable ancestor / a label's control)
+receives keyboard focus like a real click, so `click <input>` followed by
+`press Meta+a` lands on that input.
+
 A bare-number argument is treated as a viewport coordinate, not a
 selector — `click 449 320` clicks the pixel point (no element needed).
 
@@ -1706,7 +1718,11 @@ The written value is read back from the control or editor model and compared
 exactly before success is reported. If Monaco hides its model API, fill uses
 one trusted editor paste, reads the selected model back through the editor's
 copy handler, and restores the browser clipboard. If that cannot be verified,
-fill fails loudly instead of reporting a false success.
+fill fails loudly instead of reporting a false success. Verification
+errors quote both values (`read back "" after writing "狛江市"`); when every
+non-ASCII character vanished while ASCII survived, the error says the page
+filtered non-Latin input (a Latin-only / masked field), so re-typing the
+same text will not help.
 For framework inputs (React/Vue/Angular) the value goes through the native
 setter so the form registers it (no more "pristine" Save no-ops).
 
@@ -1734,6 +1750,11 @@ Usage: chrome-use type <selector> <text>
 
 Types text into the specified element character by character.
 Unlike fill, this does not clear existing content first.
+
+After typing, the field is read back. If it does not contain the typed
+text (the page rewrote or filtered the input), a ⚠ warning quotes what was
+typed and what the field now holds; the exit code stays 0 and the JSON
+gains `readBack`.
 
 Options:
   --key-events         Send real per-character keyDown/keyUp instead of
@@ -1969,7 +1990,18 @@ Presses a key or key combination. Supports special keys and modifiers.
 
 The key goes to whatever the page currently has focused, so the output names
 that element ("Pressed Enter → textarea[name=q]"). Use --selector to focus a
-target first when you can't be sure focus is where you left it.
+target first when you can't be sure focus is where you left it. A preceding
+`click <input>` moves focus to that input, also over the extension relay
+where clicks are DOM-dispatched, so click-then-press works.
+
+For keys whose only effect depends on page JavaScript (Arrow/Home/End/
+PageUp/PageDown on a text field, Escape, Enter on a bare input outside a
+form) press probes for keydown/keyup/keypress listeners on the focused
+element, its ancestors, document and window. With none found it still
+exits 0 but prints a ⚠ warning that the page cannot react to the key
+(click the option instead); the JSON gains `keyListeners: <count>`. Chords
+(Control/Meta+key), Tab, Backspace, printable keys and native defaults are
+not probed.
 
 Aliases: key
 
@@ -2397,6 +2429,13 @@ Options:
                        ancestor context; refs preserved. For desktop-shell apps
                        (Synology DSM, NAS/router panels) where one snapshot holds
                        many windows. e.g. -f "SSH|端口|应用|确定"
+  --dom                List actionable elements from a DOM walk (open AND closed
+                       shadow roots, same-process child documents) instead of
+                       the accessibility tree. Used automatically when the AX
+                       tree yields no refs at all (web-component SPAs whose
+                       whole page lives in shadow roots); the JSON then carries
+                       `source: "dom"` plus a `note`, and roles/names are
+                       derived from tags and attributes. Refs work as usual.
 
 Global Options:
   --json               Output as JSON
@@ -2408,6 +2447,7 @@ Examples:
   chrome-use snapshot -i --urls
   chrome-use snapshot --compact --depth 5
   chrome-use snapshot -s "#main-content"
+  chrome-use snapshot -i --dom             # force the shadow-root DOM walk
 "##
         }
 

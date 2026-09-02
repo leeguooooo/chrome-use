@@ -1397,7 +1397,7 @@ chrome.debugger.onDetach.addListener((source, reason) =>
     // The swapped-in process needs a moment to settle; retry with backoff.
     for (let i = 0; i < 6; i++) {
       await new Promise((r) => setTimeout(r, 250 + i * 200))
-      if (tabs.get(tabId)?.attached !== undefined && tabs.get(tabId).attached !== false) return // already re-attached (e.g. via onUpdated)
+      if (tabs.get(tabId)?.attached) return // already re-attached (e.g. via onUpdated)
       if (nativeDuplicateTabs.has(tabId)) return
       const tab = await chrome.tabs.get(tabId).catch(() => null)
       if (!tab || !eligible(tab)) return // tab gone or now a restricted page

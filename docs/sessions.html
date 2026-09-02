@@ -160,6 +160,16 @@
         <code>session list</code> 看还有哪些活跃会话：
       </p>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 换目录不会丢会话</div>
+        派生出的名字是 <code>cu-&lt;repo&gt;-&lt;tag&gt;</code>：<code>&lt;tag&gt;</code> 来自 agent / 终端 id，
+        <code>&lt;repo&gt;</code> 只是当前目录的 basename。以前换个目录执行就会造出另一个名字、打到一个没有任何 ref 的新守护进程
+        （报 「Unknown ref」）。现在只要有一个活着的守护进程带着同一个 agent tag（前缀不同），就会复用它，
+        agent 的标签和 ref 跨 <code>cd</code> 保留。显式 <code>--session &lt;name&gt;</code> / <code>AGENT_BROWSER_SESSION</code> 仍然优先。
+        「Unknown ref」报错现在会说明是哪个会话在应答、它有没有 ref：一个都没有时提示「此会话尚未运行过 snapshot；如果你在别的目录或终端做的快照，
+        用 <code>session list</code> 找到它并用 <code>--session</code> 钉住」，否则列出它实际持有的 ref 范围。
+      </div>
+
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>

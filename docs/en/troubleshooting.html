@@ -104,6 +104,13 @@
         within one document, so inserting or removing a modal does not renumber later controls. Re-snapshot to confirm
         the current node and ref.
       </p>
+      <p>
+        "Unknown ref" is a different case: the error names the session that answered and says whether it holds any refs.
+        "no snapshot has run in this session" means the command reached another session (you snapshotted from a different
+        directory or terminal); run <code>session list</code> and pin with <code>--session</code>. The same agent tag now
+        reuses its daemon across <code>cd</code>, see <a href="/en/sessions.html">Sessions &amp; concurrency</a>. If the
+        error lists the ref range the session does have, the page changed; just re-snapshot.
+      </p>
 
       <div class="du-code">
         <div class="du-code-head">
@@ -233,7 +240,12 @@
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Note</div>
         After upgrading, the bar still appears briefly while an agent is actively driving its own tabs (inherent to
-        the <code>chrome.debugger</code> API) and disappears once the session detaches. To silence even that window,
+        the <code>chrome.debugger</code> API). Since extension 0.5.19 it goes away by itself: after 30 seconds without
+        agent activity on a tab the extension releases the debugger from it and the bar disappears; the tab stays known
+        to the relay and the next command re-attaches transparently, replaying the enabled CDP domains. The delay is
+        configurable on the extension options page ("Release idle tabs after", 0 = never). Clicking Cancel on the bar
+        is now honoured: no automatic re-attach until the agent's next command. Trade-off: passive captures
+        (network / console logging) miss events during a released interval. To silence even that window,
         run <code>chrome-use extension connect --silent</code> once—after a confirmation it restarts Chrome with
         <code>--silent-debugger-extension-api</code>; tabs and logins are restored by Chrome itself, and the bar is
         gone for good. Background and trade-offs in <a href="/debugger-banner-silence.html">the deep-dive (Chinese)</a>.

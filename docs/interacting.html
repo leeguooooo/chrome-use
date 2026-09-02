@@ -82,6 +82,14 @@
         或直接用 <code>eval</code> 在页面里选中那一项。
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ DOM 派发的点击也会移动焦点</div>
+        扩展中继下左键点击是通过 DOM 派发的。它现在会像真实点击一样把焦点交给被点元素
+        （或最近的可聚焦祖先 / label 对应的控件），除非点击处理器已经自己移动了焦点。
+        所以 <code>click &lt;input&gt;</code> 之后 <code>press Meta+a</code> 落在这个输入框上，
+        不再落到上一个焦点字段。普通 <code>&lt;li&gt;</code> 没有可聚焦目标，上面的 autocomplete 技巧依然成立。
+      </div>
+
       <hr class="du-divider" />
 
       <!-- ============ 输入文本 ============ -->
@@ -125,6 +133,15 @@
         两者都是各自独立的 flag，不会污染实际打进去的文本。
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 页面改写了输入？type 会警告，fill 会报错</div>
+        <code>type</code> 打完会回读字段：如果里面没有刚输入的文本，会打印 ⚠ 警告，引用写入的内容和字段当前的值
+        （退出码仍为 0，JSON 多出 <code>readBack</code>）。<code>fill</code> 校验失败时的报错同样引用两边的值，
+        例如 <code>read back "" after writing "狛江市"</code>；若非 ASCII 字符全部消失而 ASCII 仍在，
+        会指出页面过滤了非拉丁输入（仅限拉丁 / 带掩码的字段），重打一遍没有用。正常字段上两者都能正确输入中日韩文，
+        这些提示针对的是会改写输入的页面。
+      </div>
+
       <hr class="du-divider" />
 
       <!-- ============ 键盘 ============ -->
@@ -147,6 +164,14 @@
 <span class="du-prompt">$</span> chrome-use keydown d                   <span class="du-cmt"># 按住某键不放（不自动抬起）</span>
 <span class="du-prompt">$</span> chrome-use keyup d                     <span class="du-cmt"># 抬起——成对用来「按住移动」</span>
                                        <span class="du-cmt"># 游戏里：keydown d; sleep; keyup d</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 按键「确实什么都没做」时会有警告</div>
+        对只靠页面 JavaScript 才有效果的键（文本框上的 Arrow/Home/End/PageUp/PageDown、Escape、表单外裸输入框上的 Enter），
+        <code>press</code> 会探测从焦点元素、祖先到 document / window 有没有 keydown/keyup/keypress 监听器。
+        一个都没有时仍退出 0，但会打印 ⚠ 警告说明页面无法响应该键，建议直接 <code>click</code> 目标选项；
+        JSON 多出 <code>keyListeners: &lt;count&gt;</code>。组合键（Ctrl/Meta+键）、Tab、Backspace、可打印字符和原生默认行为不探测。
       </div>
 
       <div class="du-callout note">

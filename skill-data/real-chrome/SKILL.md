@@ -171,7 +171,14 @@ session and connected browser endpoint, so interrupted cleanup can resume safely
 > browser" bar never covers a page they're working in (it only appears on attached
 > tabs, and the agent's are background tabs). `adopt <url>` attaches that one tab
 > on demand (the bar then shows on *that* tab — it's the one you asked to drive).
-> No Chrome restart, fully seamless.
+> No Chrome restart, fully seamless. Since extension 0.5.19 the bar also goes
+> away by itself: after 30 s without agent activity on a tab the extension
+> releases the debugger from it, the tab stays known to the relay, and the next
+> command re-attaches transparently (enabled domains are replayed). The delay is
+> configurable on the extension options page ("Release idle tabs after", 0 =
+> never). Clicking Cancel on the bar is honoured until the agent's next command.
+> Trade-off: passive captures (network/console logging) miss events during a
+> released interval.
 
 > **Need to read a tab the user already has open?** Use `chrome-use adopt
 > <url-substring|targetId>` — it finds that pre-existing tab (the user's own, or

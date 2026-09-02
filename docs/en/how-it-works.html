@@ -138,7 +138,7 @@
         Its permission footprint is 7 items, with no <code>&lt;all_urls&gt;</code>. Two properties that matter for fingerprinting:
       </p>
       <ol>
-        <li>it <strong>attaches only to the agent's own tabs</strong>. The page you're looking at is never attached, so you never see the "chrome-use has started debugging this browser" banner (since extension 0.5.5, it attaches only agent-owned tabs).</li>
+        <li>it <strong>attaches only to the agent's own tabs</strong>. The page you're looking at is never attached, so you never see the "chrome-use has started debugging this browser" banner (since extension 0.5.5, it attaches only agent-owned tabs; since 0.5.19 an agent tab idle for 30 seconds releases its debugger, so the banner clears itself and the next command re-attaches transparently).</li>
         <li>this path <strong>injects no JS patches</strong>. The page sees your real Chrome, real cookies, real fingerprint, so CreepJS reads 0% bot. The anti-detection isn't disguise; there's simply nothing to disguise (see <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>).</li>
       </ol>
       <p>In other words, the extension is the only process in the chain that touches the page, and it touches it with the same protocol as DevTools.</p>

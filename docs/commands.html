@@ -123,7 +123,8 @@
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>         <span class="du-cmt"># 仅可交互元素（推荐）</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-c</span>         <span class="du-cmt"># 精简输出</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-d</span> 3       <span class="du-cmt"># 限制深度为 3</span>
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span> <span class="du-cmt"># 限定到 CSS 选择器范围</span></code></pre>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span> <span class="du-cmt"># 限定到 CSS 选择器范围</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--dom</span>   <span class="du-cmt"># 从 DOM 遍历列出可操作元素（穿透 shadow root；AX 树无 ref 时自动启用）</span></code></pre>
       </div>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 小贴士</div>
@@ -145,7 +146,7 @@
 <span class="du-prompt">$</span> chrome-use focus @e1           <span class="du-cmt"># 聚焦元素</span>
 <span class="du-prompt">$</span> chrome-use fill @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># 清空后输入</span>
 <span class="du-prompt">$</span> chrome-use type @e2 <span class="du-str">"text"</span>     <span class="du-cmt"># 直接输入（不清空）</span>
-<span class="du-prompt">$</span> chrome-use press Enter         <span class="du-cmt"># 在当前焦点按键（别名：key），输出报告落点</span>
+<span class="du-prompt">$</span> chrome-use press Enter         <span class="du-cmt"># 在当前焦点按键（别名：key），输出报告落点；页面没有监听器时 ⚠ 警告</span>
 <span class="du-prompt">$</span> chrome-use press Enter --selector @e2  <span class="du-cmt"># 先聚焦目标再按（别名：--on）</span>
 <span class="du-prompt">$</span> chrome-use press Control+a     <span class="du-cmt"># 组合键</span>
 <span class="du-prompt">$</span> chrome-use keydown Shift       <span class="du-cmt"># 按住键</span>
@@ -163,11 +164,13 @@
 <span class="du-prompt">$</span> chrome-use download-url https://example.com/file.pdf ./file.pdf
 <span class="du-prompt">$</span> chrome-use downloads <span class="du-flag">--limit</span> 10 <span class="du-flag">--json</span> <span class="du-cmt"># 机器可读的 Chrome 下载记录</span></code></pre>
       </div>
-      <p><code>fill</code> 会在返回成功前回读控件或富编辑器 model，并精确比较结果。若 Monaco 隐藏了 model API，则通过一次可信的编辑器 paste 写入，再通过编辑器 copy 处理器精确回读，并在结束后恢复浏览器剪贴板。paste 无法校验或回读不一致时会报错，不会静默成功。</p>
+      <p><code>fill</code> 会在返回成功前回读控件或富编辑器 model，并精确比较结果。若 Monaco 隐藏了 model API，则通过一次可信的编辑器 paste 写入，再通过编辑器 copy 处理器精确回读，并在结束后恢复浏览器剪贴板。paste 无法校验或回读不一致时会报错，不会静默成功。报错会同时引用两边的值（如 <code>read back "" after writing "狛江市"</code>）；若非 ASCII 字符全部消失而 ASCII 仍在，会明确指出页面过滤了非拉丁输入（仅限拉丁 / 带掩码的字段），重打一遍没有用。<code>type</code> 也会回读：字段里没有刚输入的文本时打印 ⚠ 警告（退出码仍为 0，JSON 多出 <code>readBack</code>）。</p>
+      <p><code>press</code> 对只靠页面 JavaScript 才有效果的键（文本框上的 Arrow/Home/End/PageUp/PageDown、Escape、表单外裸输入框上的 Enter）会探测从焦点元素到 window 有没有 keydown/keyup/keypress 监听器；一个都没有时仍退出 0，但打印 ⚠ 警告说明页面无法响应该键，建议直接 <code>click</code> 目标选项（JSON 多出 <code>keyListeners</code>）。组合键、Tab、Backspace、可打印字符不探测。</p>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 点击"成功但没反应"</div>
         自动补全 / 菜单 <code>&lt;li&gt;</code> 项常在输入框失焦时关闭。若 <code>click</code> 报成功但页面没反应，
-        用 <code>AGENT_BROWSER_CLICK_MODE=dom</code> 重试该次点击 —— DOM 派发不会像真实指针那样移动焦点，选项仍会被选中。
+        用 <code>AGENT_BROWSER_CLICK_MODE=dom</code> 重试该次点击 —— 普通 <code>&lt;li&gt;</code> 没有可聚焦目标，输入框保持焦点，选项仍会被选中。
+        注意 DOM 派发的点击（扩展中继下左键点击的默认方式）现在会像真实点击一样移动焦点：被点元素、最近的可聚焦祖先或 label 对应的控件会获得焦点（除非点击处理器已经自己移动了焦点），所以 <code>click &lt;input&gt;</code> 再 <code>press Meta+a</code> 落在这个输入框上，而不是上一个焦点。
       </div>
 
       <!-- ============================================================ -->
