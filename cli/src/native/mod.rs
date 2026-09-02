@@ -14,6 +14,8 @@ pub mod cookies;
 pub mod daemon;
 #[allow(dead_code)]
 pub mod diff;
+
+pub mod dom_snapshot;
 #[allow(dead_code)]
 pub mod element;
 #[allow(dead_code)]

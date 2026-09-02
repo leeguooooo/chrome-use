@@ -429,7 +429,7 @@ impl DaemonState {
             safari_driver: None,
             webdriver_backend: None,
             backend_type: BackendType::Cdp,
-            ref_map: RefMap::new(),
+            ref_map: RefMap::with_session_label(env::var("AGENT_BROWSER_SESSION").ok().as_deref()),
             domain_filter: Arc::new(RwLock::new(
                 env::var("AGENT_BROWSER_ALLOWED_DOMAINS")
                     .ok()
@@ -3659,6 +3659,50 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     )
     .await?;
 
+    // DOM-walk fallback (issue #206). On some web-component SPAs the AX tree
+    // comes back as a few bare `generic` nodes with nothing to ref — even
+    // though the page is fully rendered inside (open) shadow roots and a
+    // screenshot shows headings, links and a form. Rather than print
+    // "(no interactive elements)" and leave the agent hand-writing a
+    // shadow-root walker in `eval`, list the actionable elements straight from
+    // `DOM.getDocument(pierce:true)`. `snapshot --dom` forces this path.
+    let dom_forced = cmd.get("dom").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mut dom_note: Option<String> = None;
+    let tree = if options.selector.is_none()
+        && (dom_forced || state.ref_map.entries_sorted().is_empty())
+    {
+        match snapshot::take_dom_snapshot(
+            &mgr.client,
+            &session_id,
+            &mut state.ref_map,
+            state.active_frame_id.as_deref(),
+        )
+        .await
+        {
+            Ok((dom_tree, n)) if dom_forced || n > 0 => {
+                dom_note = Some(if dom_forced {
+                    "Listed from a DOM walk (snapshot --dom): open and closed shadow roots and \
+                     same-process child documents are pierced; roles/names are derived from \
+                     tags and attributes, not the accessibility tree. Refs work with click/type/fill."
+                        .to_string()
+                } else {
+                    "The accessibility tree for this page was empty (its content lives inside \
+                     shadow DOM), so this listing comes from a DOM walk through the shadow roots. \
+                     Roles/names are derived from tags and attributes; refs work with click/type/fill."
+                        .to_string()
+                });
+                if n == 0 {
+                    "(no interactive elements)".to_string()
+                } else {
+                    dom_tree
+                }
+            }
+            _ => tree,
+        }
+    } else {
+        tree
+    };
+
     // `--filter <regex>` (issue #65): for desktop-shell web apps (Synology DSM,
     // NAS/router panels) one snapshot holds many app windows — keep only the
     // matching lines + their ancestor context so the target controls aren't
@@ -3684,6 +3728,10 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     let ref_count = refs.len();
     let mut out = json!({ "snapshot": tree, "origin": url, "refs": refs });
+    if let Some(note) = dom_note {
+        out["note"] = json!(note);
+        out["source"] = json!("dom");
+    }
 
     // Auto-trigger: if this domain has site adapters, surface them so the agent
     // pulls structured data instead of walking the tree. `with_site_hint` reads
@@ -4497,8 +4545,31 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     .await?;
     if commit_enter {
         interaction::commit_with_enter(&mgr.client, &session_id).await?;
+        return Ok(json!({ "typed": text, "committed": commit_enter }));
     }
-    Ok(json!({ "typed": text, "committed": commit_enter }))
+    // Read the field back and say so when the page rewrote what was typed. A
+    // Latin-only address form silently dropped every CJK character while `type`
+    // still reported ✓ Done (issue #203); the keystrokes were delivered, the
+    // page's own input filter discarded them. Warning, not error: masks and
+    // formatters legitimately rewrite input, and the read-back lets the agent
+    // judge.
+    let mut out = json!({ "typed": text, "committed": commit_enter });
+    if let Some((read_back, warning)) = interaction::read_back_after_type(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        text,
+        &state.iframe_sessions,
+    )
+    .await
+    {
+        out["readBack"] = json!(read_back);
+        if let Some(w) = warning {
+            out["warning"] = json!(w);
+        }
+    }
+    Ok(out)
 }
 
 /// Atomic combobox select: `pick <selector> --option "<text>"`. Opens the control
@@ -4664,9 +4735,39 @@ async fn handle_press(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         ));
     }
 
+    // Does the page even listen for this key? A custom dropdown whose only
+    // commit path is a mouse `onclick` has no keydown handler at all, so
+    // `press ArrowDown` / `press Enter` dispatched fine, changed nothing, and
+    // still printed a cheerful ✓ — costing rounds of retries before the agent
+    // gave up on the keyboard path (issue #202). Probe BEFORE dispatching (Enter
+    // may navigate away) and only for keys whose browser default does nothing
+    // useful on this target; a probe failure is silence, never an error.
+    let key_listeners = if interaction::key_effect_depends_on_listeners(
+        &actual_key,
+        modifiers,
+        target.as_deref(),
+    ) {
+        interaction::count_key_listeners_on_active_element(&mgr.client, &dispatch_session).await
+    } else {
+        None
+    };
+
     interaction::press_key_with_modifiers(&mgr.client, &dispatch_session, &actual_key, modifiers)
         .await?;
-    Ok(press_result(key, target, &actual_key, json!({})))
+    let mut out = press_result(key, target.clone(), &actual_key, json!({}));
+    if let Some(found) = key_listeners {
+        out["keyListeners"] = json!(found);
+        if found == 0 && out.get("warning").is_none() {
+            let where_it_went = target.as_deref().unwrap_or("the focused element");
+            out["warning"] = json!(format!(
+                "{key} reached <{where_it_went}>, but no keydown/keyup/keypress listener is registered \
+                 on it, its ancestors, document or window — the page cannot react to this key beyond \
+                 the browser default, so nothing app-visible happened. If this was meant to drive a \
+                 custom dropdown/list, `click` the option itself (`snapshot -i` lists it)."
+            ));
+        }
+    }
+    Ok(out)
 }
 
 /// Build the `press` response, naming the element the key went to and warning
@@ -9296,7 +9397,7 @@ async fn handle_frame(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
             let entry = state
                 .ref_map
                 .get(&ref_id)
-                .ok_or_else(|| format!("Unknown ref: {}", ref_id))?;
+                .ok_or_else(|| state.ref_map.unknown_ref_error(&ref_id))?;
             let backend_node_id = entry
                 .backend_node_id
                 .ok_or_else(|| format!("Ref {} has no backend node id", ref_id))?;

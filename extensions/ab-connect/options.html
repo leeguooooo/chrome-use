@@ -174,8 +174,19 @@
   <section class="card">
     <h2>The “started debugging this browser” bar</h2>
     <p class="lead">chrome-use drives Chrome via the DevTools protocol, so Chrome shows
-      that bar. It can’t be hidden at runtime — but a one-time restart with a startup
-      flag removes it (your tabs &amp; logins are restored automatically).</p>
+      that bar while an agent is driving a tab. The debugger is released automatically
+      once a tab has been idle for a while, so the bar disappears between tasks; a
+      one-time restart with a startup flag removes it entirely (your tabs &amp; logins
+      are restored automatically).</p>
+    <div class="row">
+      <div class="grow">
+        <div class="name">Release idle tabs after</div>
+        <div class="hint">Seconds without agent activity before the debugger detaches
+          from a tab (the bar goes away). The next command re-attaches automatically.
+          0 keeps tabs attached until the session ends.</div>
+      </div>
+      <input type="number" id="optIdleSecs" min="0" max="3600" step="5" style="width:5.5em" />
+    </div>
     <div class="cmd">
       <code id="silentCmd">chrome-use extension connect --silent</code>
       <button class="btn" id="copyCmd">Copy</button>

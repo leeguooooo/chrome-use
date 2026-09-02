@@ -101,7 +101,11 @@
   <h2>现在怎么做</h2>
   <aside class="now">
     <p><strong>大多数人根本不用管这条提示条。</strong> 扩展 0.5.5 起，agent 只 attach 自己新建的标签页，
-    你正在看的标签页不会被 attach，也就不会弹这条横幅（链路原理见 <a href="/how-it-works.html">它怎么工作</a>）。</p>
+    你正在看的标签页不会被 attach，也就不会弹这条横幅（链路原理见 <a href="/how-it-works.html">它怎么工作</a>）。
+    扩展 0.5.19 起，连 agent 自己标签页上的横幅也会自行消失：某个标签 30 秒没有 agent 活动就释放调试器，
+    标签仍被中继记着，下一条命令透明地重新 attach 并重放已启用的 domain。时长在扩展选项页
+    「Release idle tabs after」里可调（0 = 从不释放）；点 Cancel 现在会被尊重，agent 下一条命令之前不再自动重连。
+    代价是被动采集（network / console 日志）在释放期间会漏事件。</p>
   </aside>
   <p>万一你确实撞见它（某个 agent 标签页被 attach、横幅碍事），跑一次下面这条，在提示处按回车即可：</p>
   <pre><code>chrome-use extension connect

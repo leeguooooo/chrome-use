@@ -149,7 +149,7 @@
         权限足迹是 7 项，没有 <code>&lt;all_urls&gt;</code>。两条对指纹重要的性质：
       </p>
       <ol>
-        <li>它<strong>只附加 agent 自己的标签</strong>。你正在看的页面不会被 attach，也就不会出现「chrome-use 已开始调试此浏览器」的横幅（扩展 0.5.5 起，只 attach agent 拥有的标签）。</li>
+        <li>它<strong>只附加 agent 自己的标签</strong>。你正在看的页面不会被 attach，也就不会出现「chrome-use 已开始调试此浏览器」的横幅（扩展 0.5.5 起，只 attach agent 拥有的标签；0.5.19 起，agent 标签页闲置 30 秒会自动释放调试器，横幅自行消失，下一条命令再透明重连）。</li>
         <li>这条路径<strong>不注入任何 JS 补丁</strong>。页面看到的就是你真实的 Chrome、真实的 cookie、真实的指纹，所以 CreepJS 测出来是 0% bot。反检测靠的不是伪装，是根本没有东西需要伪装（见 <a href="/stealth.html">反检测与隐身</a>）。</li>
       </ol>
       <p>换句话说，扩展是整条链路里唯一碰得到页面的进程，而它碰页面的方式和 DevTools 是同一套协议。</p>

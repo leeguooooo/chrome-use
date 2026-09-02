@@ -66,6 +66,7 @@ chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚�
 ![架构](assets/architecture.png)
 
 每个 `--session` 拿到**自己的彩色标签组**，多个 agent 共用同一个真实浏览器、互不干扰，也不动你自己的标签页。
+省略 `--session` 时会按 agent/终端 id 派生 `cu-<目录名>-<tag>`；换到别的目录执行时会复用已经带着同一个 agent tag 的守护进程，标签和 ref 不会因为 `cd` 丢失（显式 `--session` / `AGENT_BROWSER_SESSION` 优先）。
 
 ## 为什么用扩展（而非裸调试端口）
 

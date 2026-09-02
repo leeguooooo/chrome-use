@@ -92,6 +92,10 @@ own tabs. When `--session` is omitted, chrome-use derives a stable per-agent
 session from supported runner IDs, including Codex's `CODEX_THREAD_ID`. A plain
 shell with no runner ID retains the `default` session; set
 `AGENT_BROWSER_SESSION_ID` or pass `--session` for parallel workers there.
+The derived name is `cu-<repo>-<tag>`, where `<repo>` is only the cwd
+basename: a command run from another directory reuses the live daemon that
+already carries the same agent tag, so an agent keeps its tabs and refs across
+`cd`. Explicit `--session` / `AGENT_BROWSER_SESSION` always win.
 
 Manage those workers with `chrome-use session list`, stop one gracefully with
 `chrome-use session stop [name]`, or reclaim all session daemons with
@@ -481,11 +485,23 @@ Bare descriptions never click automatically. Candidate rows include role/name,
 visible text, computed cursor, and compact `id` / `data-testid` / class selector
 anchors so you can choose an explicit follow-up action.
 
+Selectors starting with `//`, `/`, `(`, `./` or `..` are treated as XPath
+automatically (no `xpath=` prefix). Keep in mind that `text()` only tests the
+first direct text node, so a label split across nodes (React `{a} - {b}`) or
+nested in a child never matches; use `contains(normalize-space(.), '…')`,
+`find "<label>"`, or a snapshot `@ref` instead. "Element not found" errors keep
+the selector and the resolver's diagnosis, and an XPath with `text()` that
+matched nothing explains this gotcha.
+
 Within the same document, unchanged DOM nodes keep their `@ref` across repeated
 snapshots even when a modal or list inserts other nodes. Navigation and tab
 switches still invalidate refs. `snapshot -i` also surfaces deliberate cursor
 styles such as `grab` and `col-resize`, plus compact DOM anchors for otherwise
-indistinguishable generic controls.
+indistinguishable generic controls. When the accessibility tree yields no refs
+at all (web-component SPAs whose whole page lives inside shadow roots),
+`snapshot` automatically lists actionable elements from a DOM walk through open
+and closed shadow roots; those refs work with `click`/`type`/`fill` like any
+other, the JSON says `source: "dom"`, and `snapshot --dom` forces that path.
 
 `screenshot --annotate` refreshes its labels from the current document without
 hard-resetting that identity map. A ref from the immediately preceding snapshot

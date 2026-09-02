@@ -71,6 +71,7 @@
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-u</span>              <span class="du-cmt"># include href url on links</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-c</span>              <span class="du-cmt"># compact: drop empty structural nodes</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-d</span> 3            <span class="du-cmt"># depth limit of 3 levels</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--dom</span>            <span class="du-cmt"># list actionable elements from a DOM walk (pierces shadow roots)</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--json</span>             <span class="du-cmt"># machine-readable output</span></code></pre>
       </div>
 
@@ -286,6 +287,17 @@ URL: https://example.com/login
         Only a <strong>semantically empty</strong> clickable <code>&lt;div&gt;</code> inside a closed root
         can dodge both the AX tree and the cursor-element scan.
       </div>
+
+      <h3>Whole page inside shadow roots: automatic DOM-walk fallback</h3>
+      <p>
+        Some web-component SPAs (developer.apple.com/contact, for example) render the entire page inside shadow
+        roots and the accessibility tree comes back with no refs at all. <code>snapshot</code> / <code>snapshot -i</code>
+        then no longer print "(no interactive elements)": they automatically list actionable elements from a
+        <code>DOM.getDocument(pierce:true)</code> walk (open and closed shadow roots, same-process child documents).
+        Those <code>[ref=eN]</code> work with <code>click</code> / <code>type</code> / <code>fill</code> like normal refs;
+        the JSON carries <code>source: "dom"</code> plus a <code>note</code> line, and roles / names are derived from
+        tags and attributes. <code>snapshot --dom</code> forces that path.
+      </p>
 
       <hr class="du-divider" />
 

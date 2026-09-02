@@ -4,13 +4,13 @@
 // Opens standalone (file://) too, with a friendly demo state, so the design is
 // viewable without the extension context.
 
-const DEFAULTS = { ab_notify: false, ab_cursor: false, ab_sites: [] }
+const DEFAULTS = { ab_notify: false, ab_cursor: false, ab_sites: [], ab_idle_detach_secs: 30 }
 const hasChrome = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync
 
 // ---- elements ----
 const el = (id) => document.getElementById(id)
 const dot = el('dot'), statusLabel = el('statusLabel'), statusSub = el('statusSub'), tabPill = el('tabPill')
-const optNotify = el('optNotify'), optCursor = el('optCursor')
+const optNotify = el('optNotify'), optCursor = el('optCursor'), optIdleSecs = el('optIdleSecs')
 const sitesBox = el('sites'), siteInput = el('siteInput')
 const saved = el('saved')
 
@@ -91,12 +91,18 @@ el('ver').textContent = hasChrome ? 'v' + chrome.runtime.getManifest().version :
 loadSettings((s) => {
   optNotify.checked = !!s.ab_notify
   optCursor.checked = !!s.ab_cursor
+  optIdleSecs.value = Number.isFinite(Number(s.ab_idle_detach_secs)) ? Number(s.ab_idle_detach_secs) : 30
   sites = Array.isArray(s.ab_sites) ? s.ab_sites.slice() : []
   renderSites()
 })
 
 optNotify.addEventListener('change', () => save({ ab_notify: optNotify.checked }))
 optCursor.addEventListener('change', () => save({ ab_cursor: optCursor.checked }))
+optIdleSecs.addEventListener('change', () => {
+  const n = Math.max(0, Math.min(3600, Number(optIdleSecs.value) || 0))
+  optIdleSecs.value = n
+  save({ ab_idle_detach_secs: n })
+})
 el('addSite').addEventListener('click', addSite)
 siteInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSite() })
 

@@ -116,7 +116,16 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use click <span class="du-str">"#submit"</span>
 <span class="du-prompt">$</span> chrome-use fill <span class="du-str">"input[name=email]"</span> <span class="du-str">"user@test.com"</span>
-<span class="du-prompt">$</span> chrome-use click <span class="du-str">"button.primary"</span></code></pre>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">"button.primary"</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">"//button[@type='submit']"</span>   <span class="du-cmt"># 以 //、/、(、./ 或 .. 开头即视为 XPath，无需 xpath= 前缀</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ XPath 的 text() 只看第一个直接文本节点</div>
+        <code>//button[text()='Save']</code> 在文本被拆成多个节点（React 的 <code>{a} - {b}</code>）或嵌在子元素里时永远匹配不到。
+        改用 <code>contains(normalize-space(.), '…')</code>，或者 <code>find "&lt;label&gt;"</code> / <code>text=&lt;label&gt;</code> /
+        <code>snapshot -i</code> + <code>@ref</code>。带 <code>text()</code> 的 XPath 匹配为空时，报错会直接解释这个坑；
+        「Element not found」也会保留原选择器和解析器的具体诊断，不再一律归咎于 closed shadow root / 跨源 iframe。
       </div>
 
       <hr class="du-divider" />

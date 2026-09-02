@@ -310,7 +310,9 @@
         The extension attaches Chrome's debugger <strong>only to agent-owned tabs</strong> (ones it created, or ones you
         <code>adopt</code>), never to the user's own tabs—so Chrome's "chrome-use started debugging this browser" banner
         never covers a page the user is using (it only shows on attached tabs, and the agent's are all background tabs).
-        No Chrome restart, fully seamless.
+        No Chrome restart, fully seamless. Since extension 0.5.19 an agent tab idle for 30 seconds releases its debugger
+        automatically and the banner disappears; the next command re-attaches transparently (the delay is configurable on
+        the extension options page, 0 = never).
       </div>
 
       <h2>Read a tab the user already has open: adopt</h2>

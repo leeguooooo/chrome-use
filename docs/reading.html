@@ -71,6 +71,7 @@
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-u</span>              <span class="du-cmt"># 链接上带出 href url</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-c</span>              <span class="du-cmt"># 紧凑：去掉空的结构节点</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-d</span> 3            <span class="du-cmt"># 深度上限 3 层</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--dom</span>            <span class="du-cmt"># 从 DOM 遍历列出可操作元素（穿透 shadow root）</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">--json</span>             <span class="du-cmt"># 机器可读输出</span></code></pre>
       </div>
 
@@ -285,6 +286,16 @@ URL: https://example.com/login
         只有 closed root 里那种<strong>无语义</strong>的可点击 <code>&lt;div&gt;</code>
         才可能同时躲过 AX 树和光标元素扫描。
       </div>
+
+      <h3>整页都在 shadow root 里：自动退回 DOM 遍历</h3>
+      <p>
+        有些 Web Components 单页应用（如 developer.apple.com/contact）整个页面都渲染在 shadow root 里，
+        可访问性树一个 ref 都给不出。这时 <code>snapshot</code> / <code>snapshot -i</code> 不再打印
+        「(no interactive elements)」，而是自动改用 <code>DOM.getDocument(pierce:true)</code> 遍历
+        （open 与 closed shadow root、同进程子文档）列出可操作元素。这些 <code>[ref=eN]</code> 照常可用于
+        <code>click</code> / <code>type</code> / <code>fill</code>；JSON 里带 <code>source: "dom"</code> 和一行
+        <code>note</code> 说明来源，role / name 由标签和属性推导。<code>snapshot --dom</code> 可强制走这条路径。
+      </p>
 
       <hr class="du-divider" />
 

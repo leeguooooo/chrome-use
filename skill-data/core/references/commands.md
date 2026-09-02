@@ -51,6 +51,7 @@ chrome-use snapshot -i         # Interactive elements only (recommended)
 chrome-use snapshot -c         # Compact output
 chrome-use snapshot -d 3       # Limit depth to 3
 chrome-use snapshot -s "#main" # Scope to CSS selector
+chrome-use snapshot -i --dom   # Actionable elements from a DOM walk (open + closed shadow roots); automatic when the AX tree has no refs
 chrome-use read <url>          # Fetch a URL as agent-readable markdown/text (prefers .md/llms.txt, HTML→markdown fallback)
 chrome-use read                # No URL: read the rendered DOM of the active tab
 chrome-use read <url> --outline        # Heading outline only
@@ -67,7 +68,7 @@ chrome-use dblclick @e1        # Double-click
 chrome-use focus @e1           # Focus element
 chrome-use fill @e2 "text"     # Clear and type
 chrome-use type @e2 "text"     # Type without clearing (add --clear to clear first, --delay <ms> for per-key delay)
-chrome-use press Enter         # Press key at current focus (alias: key); output names the target
+chrome-use press Enter         # Press key at current focus (alias: key); output names the target; ⚠ warns when the page has no listener for a JS-only key
 chrome-use press Enter --selector @e2  # Focus the target first (alias: --on)
 chrome-use press Control+a     # Key combination
 chrome-use keydown Shift       # Hold key down
@@ -82,6 +83,23 @@ chrome-use scrollintoview @e1  # Scroll element into view (alias: scrollinto)
 chrome-use drag @e1 @e2        # Drag and drop
 chrome-use upload @e1 file.pdf # Upload files
 ```
+
+`type` reads the field back and prints a ⚠ warning (exit 0, JSON `readBack`)
+when the page rewrote or filtered what was typed. `fill` verification errors
+quote both values (`read back "" after writing "狛江市"`) and say when every
+non-ASCII character vanished while ASCII survived (a Latin-only / masked
+field), so re-typing will not help. `press` warns (exit 0, JSON `keyListeners`)
+when a JavaScript-only key (Arrow/Home/End/PageUp/PageDown on a text field,
+Escape, Enter on a bare input outside a form) finds no keydown/keyup/keypress
+listener from the focused element up to window: the page cannot react, click
+the option instead. Chords, Tab, Backspace and printable keys are not probed.
+
+Selectors starting with `//`, `/`, `(`, `./` or `..` are XPath automatically
+(no `xpath=` prefix). `text()` only tests the FIRST direct text node, so text
+split across nodes (React `{a} - {b}`) or nested in a child never matches; use
+`contains(normalize-space(.), '…')`, `find "<label>"`, `text=<label>` or a
+snapshot `@ref`. "Element not found" keeps the selector and the resolver's
+diagnosis instead of always blaming a closed shadow root or cross-origin iframe.
 
 ## Get Information
 
@@ -619,9 +637,15 @@ click. If that fails (a floating layer fails the occlusion guard, or the point
 won't resolve) it falls back to a DOM-dispatched `.click()` on the intended
 element. If a click *reports success but the page didn't react* — common for
 autocomplete/menu `<li>` items that close on the input's blur — retry that one
-with `AGENT_BROWSER_CLICK_MODE=dom` (a DOM dispatch doesn't move focus the way a
-real pointer press does, so the item still selects). `=coord` disables the
+with `AGENT_BROWSER_CLICK_MODE=dom` (a plain `<li>` has no focusable target, so
+the input keeps focus and the item still selects). `=coord` disables the
 fallback when you specifically want a hard failure on occlusion.
+
+A DOM-dispatched click (the relay's default for left clicks) moves keyboard
+focus like a real click: the clicked element, its nearest focusable ancestor,
+or a label's control receives focus unless the click handler already moved it.
+So `click <input>` followed by `press Meta+a` lands on that input, not on the
+previously focused field.
 
 ### Stealth / anti-detection knobs (fork)
 

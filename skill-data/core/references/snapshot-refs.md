@@ -196,6 +196,24 @@ chrome-use click @e5
 - Empty iframes or iframes with no interactive content are omitted from the output
 - To scope a snapshot to a single iframe, use `frame @ref` then `snapshot -i`
 
+## Shadow-root pages (DOM walk fallback)
+
+Some web-component SPAs (developer.apple.com/contact, for example) render the
+whole page inside shadow roots and the accessibility tree comes back with no
+refs at all. Instead of printing "(no interactive elements)", `snapshot` and
+`snapshot -i` then list actionable elements from a `DOM.getDocument(pierce:true)`
+walk that covers open and closed shadow roots and same-process child documents.
+
+```bash
+chrome-use snapshot -i          # automatic fallback when the AX tree has no refs
+chrome-use snapshot -i --dom    # force the DOM walk
+```
+
+**Key details:**
+- Refs from the DOM listing (`[ref=eN]`) work with `click`, `type` and `fill` like normal refs
+- The JSON carries `source: "dom"` and a `note` saying the listing came from the DOM walk
+- Roles and names are derived from tags and attributes, so they are coarser than AX roles
+
 ## Troubleshooting
 
 ### "Ref not found" Error
@@ -204,6 +222,20 @@ chrome-use click @e5
 # Element may have been replaced or removed — re-snapshot
 chrome-use snapshot -i
 ```
+
+### "Unknown ref" Error
+
+The message names the session that answered and says whether it holds any refs.
+"no snapshot has run in this session" means the command reached a different
+session than the one you snapshotted (another directory or terminal):
+
+```bash
+chrome-use session list                 # find the session that has your refs
+chrome-use --session <name> click @e4   # pin it
+```
+
+If the error lists the ref range the session does have, the page changed since
+the snapshot; re-snapshot instead.
 
 ### Element Not Visible in Snapshot
 
