@@ -1550,7 +1550,10 @@ async fn verify_fill_value(
 /// Latin-only address field, issue #203) rather than the keystrokes failing.
 pub(crate) fn fill_mismatch_detail(expected: &str, actual: &str) -> String {
     let mut detail = if actual.is_empty() && !expected.is_empty() {
-        format!("read back an empty value after writing {}", quote_short(expected))
+        format!(
+            "read back an empty value after writing {}",
+            quote_short(expected)
+        )
     } else {
         format!(
             "read back {} ({} chars) after writing {} ({} chars)",
@@ -1644,7 +1647,12 @@ pub async fn read_back_after_type(
 /// Whitespace is normalized (textarea/contenteditable read-backs fold it), and
 /// a CRLF/LF difference never counts.
 pub(crate) fn type_read_back_warning(typed: &str, actual: &str) -> Option<String> {
-    let norm = |s: &str| s.replace("\r\n", "\n").split_whitespace().collect::<Vec<_>>().join(" ");
+    let norm = |s: &str| {
+        s.replace("\r\n", "\n")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     let t = norm(typed);
     let a = norm(actual);
     if t.is_empty() || a.contains(&t) {
@@ -3144,7 +3152,10 @@ mod tests {
         assert!(d.contains("\"狛江市\""), "{d}");
         assert!(d.contains("Only the ASCII characters survived"), "{d}");
         let d = fill_mismatch_detail("西野川1-25-57", "1-25-57");
-        assert!(d.contains("\"1-25-57\"") && d.contains("\"西野川1-25-57\""), "{d}");
+        assert!(
+            d.contains("\"1-25-57\"") && d.contains("\"西野川1-25-57\""),
+            "{d}"
+        );
         assert!(d.contains("Latin-only"), "{d}");
         // Pure-ASCII mismatch: no CJK diagnosis.
         let d = fill_mismatch_detail("hello", "hell");
@@ -3164,16 +3175,52 @@ mod tests {
     #[test]
     fn test_key_effect_depends_on_listeners() {
         // Arrows on a bare text input do nothing without a handler (#202).
-        assert!(key_effect_depends_on_listeners("ArrowDown", None, Some("input#q")));
-        assert!(key_effect_depends_on_listeners("Enter", None, Some("input[name=\"x\"]")));
-        assert!(key_effect_depends_on_listeners("Escape", None, Some("div#modal")));
+        assert!(key_effect_depends_on_listeners(
+            "ArrowDown",
+            None,
+            Some("input#q")
+        ));
+        assert!(key_effect_depends_on_listeners(
+            "Enter",
+            None,
+            Some("input[name=\"x\"]")
+        ));
+        assert!(key_effect_depends_on_listeners(
+            "Escape",
+            None,
+            Some("div#modal")
+        ));
         // Native defaults / chords / unfocused targets are left alone.
-        assert!(!key_effect_depends_on_listeners("ArrowDown", None, Some("select#s")));
-        assert!(!key_effect_depends_on_listeners("Enter", None, Some("textarea#t")));
-        assert!(!key_effect_depends_on_listeners("Enter", None, Some("button#go")));
-        assert!(!key_effect_depends_on_listeners("Tab", None, Some("input#q")));
-        assert!(!key_effect_depends_on_listeners("a", Some(4), Some("input#q")));
-        assert!(!key_effect_depends_on_listeners("ArrowDown", None, Some("body")));
+        assert!(!key_effect_depends_on_listeners(
+            "ArrowDown",
+            None,
+            Some("select#s")
+        ));
+        assert!(!key_effect_depends_on_listeners(
+            "Enter",
+            None,
+            Some("textarea#t")
+        ));
+        assert!(!key_effect_depends_on_listeners(
+            "Enter",
+            None,
+            Some("button#go")
+        ));
+        assert!(!key_effect_depends_on_listeners(
+            "Tab",
+            None,
+            Some("input#q")
+        ));
+        assert!(!key_effect_depends_on_listeners(
+            "a",
+            Some(4),
+            Some("input#q")
+        ));
+        assert!(!key_effect_depends_on_listeners(
+            "ArrowDown",
+            None,
+            Some("body")
+        ));
         assert!(!key_effect_depends_on_listeners("ArrowDown", None, None));
     }
 

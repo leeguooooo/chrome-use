@@ -4978,7 +4978,10 @@ mod tests {
     #[test]
     fn test_to_ai_friendly_error_not_found() {
         let m = to_ai_friendly_error("Element not found: #save");
-        assert!(m.starts_with("Element not found: #save"), "selector kept: {m}");
+        assert!(
+            m.starts_with("Element not found: #save"),
+            "selector kept: {m}"
+        );
         // directs to snapshot -i (which pierces closed shadow / cross-origin iframes)
         assert!(m.contains("snapshot -i") && m.contains("shadow root"));
     }

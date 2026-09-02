@@ -72,7 +72,11 @@ pub fn render(elems: &[DomElem], refs: &[String]) -> String {
         } else {
             format!(" {:?}", el.name)
         };
-        lines.push(format!("{indent}- {}{name} [{}]", el.role, attrs.join(", ")));
+        lines.push(format!(
+            "{indent}- {}{name} [{}]",
+            el.role,
+            attrs.join(", ")
+        ));
     }
     lines.join("\n")
 }
@@ -130,10 +134,20 @@ fn text_of(node: &Value, out: &mut String) {
         }
         return;
     }
-    for child in node.get("children").and_then(Value::as_array).into_iter().flatten() {
+    for child in node
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         text_of(child, out);
     }
-    for sr in node.get("shadowRoots").and_then(Value::as_array).into_iter().flatten() {
+    for sr in node
+        .get("shadowRoots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         text_of(sr, out);
     }
 }
@@ -158,10 +172,20 @@ fn collect_label_texts(node: &Value, out: &mut std::collections::HashMap<String,
             }
         }
     }
-    for child in node.get("children").and_then(Value::as_array).into_iter().flatten() {
+    for child in node
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         collect_label_texts(child, out);
     }
-    for sr in node.get("shadowRoots").and_then(Value::as_array).into_iter().flatten() {
+    for sr in node
+        .get("shadowRoots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         collect_label_texts(sr, out);
     }
     if let Some(doc) = node.get("contentDocument") {
@@ -211,7 +235,11 @@ fn classify(node: &Value, labels: &std::collections::HashMap<String, String>) ->
                 }
             }
             "BUTTON" | "SUMMARY" => "button".to_string(),
-            "INPUT" => match attr(node, "type").unwrap_or("text").to_ascii_lowercase().as_str() {
+            "INPUT" => match attr(node, "type")
+                .unwrap_or("text")
+                .to_ascii_lowercase()
+                .as_str()
+            {
                 "hidden" => return None,
                 "checkbox" => "checkbox".to_string(),
                 "radio" => "radio".to_string(),
@@ -231,7 +259,10 @@ fn classify(node: &Value, labels: &std::collections::HashMap<String, String>) ->
             }
             _ => {
                 let ce = attr(node, "contenteditable").map(|v| v.to_ascii_lowercase());
-                if matches!(ce.as_deref(), Some("") | Some("true") | Some("plaintext-only")) {
+                if matches!(
+                    ce.as_deref(),
+                    Some("") | Some("true") | Some("plaintext-only")
+                ) {
                     "textbox".to_string()
                 } else if has_attr(node, "onclick") {
                     "button".to_string()
@@ -335,10 +366,20 @@ fn walk(
             return;
         }
     }
-    for child in node.get("children").and_then(Value::as_array).into_iter().flatten() {
+    for child in node
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         walk(child, labels, frame_depth, pending_frame_label, out);
     }
-    for sr in node.get("shadowRoots").and_then(Value::as_array).into_iter().flatten() {
+    for sr in node
+        .get("shadowRoots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         walk(sr, labels, frame_depth, pending_frame_label, out);
     }
     if let Some(doc) = node.get("contentDocument") {
@@ -378,12 +419,27 @@ mod tests {
         let mut host = el("APP-ROOT", 1, &[], vec![]);
         host["shadowRoots"] = json!([shadow(vec![
             el("H1", 2, &[], vec![text("Contact Us")]),
-            el("A", 3, &[("href", "/topic")], vec![text(" Developer  Program ")]),
+            el(
+                "A",
+                3,
+                &[("href", "/topic")],
+                vec![text(" Developer  Program ")]
+            ),
             el("BUTTON", 4, &[("disabled", "")], vec![text("Continue")]),
             el("LABEL", 5, &[("for", "email")], vec![text("Email address")]),
-            el("INPUT", 6, &[("id", "email"), ("type", "email"), ("required", "")], vec![]),
+            el(
+                "INPUT",
+                6,
+                &[("id", "email"), ("type", "email"), ("required", "")],
+                vec![]
+            ),
             el("INPUT", 7, &[("type", "hidden"), ("name", "csrf")], vec![]),
-            el("DIV", 8, &[("style", "display: none")], vec![el("BUTTON", 9, &[], vec![text("hidden")])]),
+            el(
+                "DIV",
+                8,
+                &[("style", "display: none")],
+                vec![el("BUTTON", 9, &[], vec![text("hidden")])]
+            ),
             el("SCRIPT", 10, &[], vec![text("var x = 1")]),
         ])]);
         let doc = json!({ "nodeType": 9, "nodeName": "#document", "children": [el("BODY", 0, &[], vec![host])] });
@@ -407,11 +463,30 @@ mod tests {
             0,
             &[],
             vec![
-                el("INPUT", 1, &[("type", "checkbox"), ("checked", ""), ("aria-label", "Agree")], vec![]),
+                el(
+                    "INPUT",
+                    1,
+                    &[
+                        ("type", "checkbox"),
+                        ("checked", ""),
+                        ("aria-label", "Agree"),
+                    ],
+                    vec![],
+                ),
                 el("INPUT", 2, &[("type", "submit"), ("value", "Send")], vec![]),
                 el("DIV", 3, &[("role", "button")], vec![text("Custom")]),
-                el("DIV", 4, &[("contenteditable", "true"), ("placeholder", "Write…")], vec![]),
-                el("SELECT", 5, &[("name", "country")], vec![el("OPTION", 6, &[("selected", "")], vec![text("JP")])]),
+                el(
+                    "DIV",
+                    4,
+                    &[("contenteditable", "true"), ("placeholder", "Write…")],
+                    vec![],
+                ),
+                el(
+                    "SELECT",
+                    5,
+                    &[("name", "country")],
+                    vec![el("OPTION", 6, &[("selected", "")], vec![text("JP")])],
+                ),
                 el("DIV", 7, &[("role", "presentation")], vec![text("nope")]),
                 el("SPAN", 8, &[], vec![text("plain")]),
                 el("A", 9, &[], vec![text("no href")]),
@@ -419,7 +494,10 @@ mod tests {
         );
         let doc = json!({ "nodeType": 9, "nodeName": "#document", "children": [body] });
         let elems = collect_interactive(&doc);
-        let got: Vec<(String, String)> = elems.iter().map(|e| (e.role.clone(), e.name.clone())).collect();
+        let got: Vec<(String, String)> = elems
+            .iter()
+            .map(|e| (e.role.clone(), e.name.clone()))
+            .collect();
         assert_eq!(
             got,
             vec![

@@ -573,8 +573,14 @@ async fn confirmed_backend_node_id(
     // Verify against the DOM instead: the node must still exist and be the same
     // kind of element the snapshot listed.
     if entry.dom_sourced {
-        return verify_dom_sourced_ref(client, effective_session_id, backend_node_id, ref_id, entry)
-            .await;
+        return verify_dom_sourced_ref(
+            client,
+            effective_session_id,
+            backend_node_id,
+            ref_id,
+            entry,
+        )
+        .await;
     }
 
     let RefCheck::Suspect(err) = verify_ref_identity(
@@ -2415,7 +2421,10 @@ mod tests {
         let empty = RefMap::with_session_label(Some("cu-tools-3f9a1c"));
         let e = empty.unknown_ref_error("e240");
         assert!(e.starts_with("Unknown ref: e240"), "{e}");
-        assert!(e.contains("cu-tools-3f9a1c") && e.contains("NO snapshot refs"), "{e}");
+        assert!(
+            e.contains("cu-tools-3f9a1c") && e.contains("NO snapshot refs"),
+            "{e}"
+        );
         assert!(e.contains("--session"), "{e}");
 
         let mut m = RefMap::with_session_label(Some("s3"));
@@ -2622,7 +2631,10 @@ mod tests {
     fn test_bare_xpath_is_detected_without_prefix() {
         // `//…`, `/…`, `(…)`, `./…`, `..` can't start a CSS selector, so they are
         // XPath even without the `xpath=` prefix (issue #202).
-        assert_eq!(xpath_of("//*[contains(text(),'x')]"), Some("//*[contains(text(),'x')]"));
+        assert_eq!(
+            xpath_of("//*[contains(text(),'x')]"),
+            Some("//*[contains(text(),'x')]")
+        );
         assert_eq!(xpath_of("(//li)[2]"), Some("(//li)[2]"));
         assert_eq!(xpath_of("./span"), Some("./span"));
         assert_eq!(xpath_of("xpath=//a"), Some("//a"));

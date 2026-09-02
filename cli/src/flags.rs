@@ -2090,7 +2090,10 @@ mod tests {
             "cu-repo-a-3f9a1c"
         );
         // The candidate itself is live → keep it (no surprise switch).
-        let live = vec!["cu-repo-a-3f9a1c".to_string(), "cu-repo-b-3f9a1c".to_string()];
+        let live = vec![
+            "cu-repo-a-3f9a1c".to_string(),
+            "cu-repo-b-3f9a1c".to_string(),
+        ];
         assert_eq!(
             reuse_live_session_name("cu-repo-b-3f9a1c", "3f9a1c", &live),
             "cu-repo-b-3f9a1c"
@@ -2107,7 +2110,10 @@ mod tests {
             reuse_live_session_name("cu-repo-b-3f9a1c", "3f9a1c", &live),
             "cu-3f9a1c"
         );
-        assert_eq!(reuse_live_session_name("cu-x-3f9a1c", "3f9a1c", &[]), "cu-x-3f9a1c");
+        assert_eq!(
+            reuse_live_session_name("cu-x-3f9a1c", "3f9a1c", &[]),
+            "cu-x-3f9a1c"
+        );
     }
 
     #[test]
