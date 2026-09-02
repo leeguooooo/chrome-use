@@ -114,6 +114,10 @@ pub struct RefEntry {
     /// AX fingerprint captured at snapshot time, used by adaptive relocation when
     /// the node is gone and the role/name/nth re-query also fails.
     pub fingerprint: Option<ElementFingerprint>,
+    /// Minted by the DOM-walk fallback snapshot (issue #206), not the AX tree.
+    /// Such a ref is verified against the DOM (the node still exists) rather
+    /// than the accessibility tree, which on that page had nothing to compare.
+    pub dom_sourced: bool,
 }
 
 pub struct RefMap {
@@ -121,6 +125,8 @@ pub struct RefMap {
     next_ref: usize,
     stable_refs: HashMap<StableRefKey, StableRefEntry>,
     snapshot_generation: u64,
+    /// The session this map belongs to, for error messages. Empty = unknown.
+    session_label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -152,7 +158,54 @@ impl RefMap {
             next_ref: 1,
             stable_refs: HashMap::new(),
             snapshot_generation: 0,
+            session_label: String::new(),
         }
+    }
+
+    /// A map that knows which session it serves, so "Unknown ref" can name it.
+    pub fn with_session_label(session: Option<&str>) -> Self {
+        let mut m = Self::new();
+        m.session_label = session.unwrap_or("").to_string();
+        m
+    }
+
+    /// The error for a `@ref` this map does not hold. Says WHICH session
+    /// answered and whether it has any refs at all: an agent that `cd`-ed into
+    /// another directory (or ran from another terminal) hits a different session
+    /// whose map is empty, and a bare "Unknown ref" read like a stale-page
+    /// problem — several rounds of re-snapshotting later the working directory
+    /// turned out to be the cause (issue #205).
+    pub fn unknown_ref_error(&self, ref_id: &str) -> String {
+        let session = if self.session_label.is_empty() {
+            String::new()
+        } else {
+            format!(" `{}`", self.session_label)
+        };
+        if self.map.is_empty() {
+            return format!(
+                "Unknown ref: {ref_id} — session{session} has NO snapshot refs at all: no `snapshot` \
+                 has run in this session yet (or the page navigated since). If you took the \
+                 snapshot from another directory or terminal, it lives in a different session: \
+                 `session list` shows them; pin one with `--session <name>` or \
+                 AGENT_BROWSER_SESSION=<name>. Otherwise run `snapshot -i` here and use its refs."
+            );
+        }
+        let mut ids: Vec<usize> = self
+            .map
+            .keys()
+            .filter_map(|k| k.strip_prefix('e').and_then(|n| n.parse().ok()))
+            .collect();
+        ids.sort_unstable();
+        let range = match (ids.first(), ids.last()) {
+            (Some(lo), Some(hi)) if lo != hi => format!(", e{lo}…e{hi}"),
+            (Some(lo), _) => format!(", e{lo}"),
+            _ => String::new(),
+        };
+        format!(
+            "Unknown ref: {ref_id} — not in the current snapshot of session{session} ({} refs{range}). \
+             Refs are re-minted by each `snapshot`; run `snapshot -i` again and use a fresh ref.",
+            self.map.len()
+        )
     }
 
     /// Start a new snapshot of the same document.
@@ -245,8 +298,16 @@ impl RefMap {
                 selector: None,
                 frame_id: frame_id.map(|s| s.to_string()),
                 fingerprint: None,
+                dom_sourced: false,
             },
         );
+    }
+
+    /// Flag a ref as minted by the DOM-walk fallback snapshot (#206).
+    pub fn mark_dom_sourced(&mut self, ref_id: &str) {
+        if let Some(entry) = self.map.get_mut(ref_id) {
+            entry.dom_sourced = true;
+        }
     }
 
     /// Attach an AX fingerprint to an existing ref (set during snapshot, used by
@@ -275,6 +336,7 @@ impl RefMap {
                 selector: Some(selector),
                 frame_id: None,
                 fingerprint: None,
+                dom_sourced: false,
             },
         );
     }
@@ -506,6 +568,15 @@ async fn confirmed_backend_node_id(
         return Ok(backend_node_id);
     }
 
+    // A DOM-fallback ref (#206) came from a page whose accessibility tree was
+    // empty, so an AX identity probe would only ever say "not in the tree".
+    // Verify against the DOM instead: the node must still exist and be the same
+    // kind of element the snapshot listed.
+    if entry.dom_sourced {
+        return verify_dom_sourced_ref(client, effective_session_id, backend_node_id, ref_id, entry)
+            .await;
+    }
+
     let RefCheck::Suspect(err) = verify_ref_identity(
         client,
         effective_session_id,
@@ -571,7 +642,7 @@ pub async fn resolve_element_center(
     if let Some(ref_id) = parse_ref(selector_or_ref) {
         let entry = ref_map
             .get(&ref_id)
-            .ok_or_else(|| format!("Unknown ref: {}", ref_id))?;
+            .ok_or_else(|| ref_map.unknown_ref_error(&ref_id))?;
 
         let effective_session_id =
             resolve_frame_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
@@ -685,7 +756,7 @@ pub async fn resolve_element_object_id(
     if let Some(ref_id) = parse_ref(selector_or_ref) {
         let entry = ref_map
             .get(&ref_id)
-            .ok_or_else(|| format!("Unknown ref: {}", ref_id))?;
+            .ok_or_else(|| ref_map.unknown_ref_error(&ref_id))?;
 
         let effective_session_id =
             resolve_frame_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
@@ -798,6 +869,9 @@ pub async fn resolve_element_object_id(
         // inner <span>, not the real <input>, so the CSS selector matches nothing
         // and the generic "closed shadow root / cross-origin iframe" hint sends
         // people down the wrong path (#90.4). Point at the closest textual match.
+        if let Some(hint) = xpath_miss_hint(selector_or_ref) {
+            return Err(format!("Element not found: {}\n{}", selector_or_ref, hint));
+        }
         if let Some(hint) = suggest_textual_match(client, session_id, selector_or_ref).await {
             return Err(format!("Element not found: {}. {}", selector_or_ref, hint));
         }
@@ -937,6 +1011,37 @@ fn resolve_frame_session<'a>(
         .and_then(|fid| iframe_sessions.get(fid))
         .map(|s| s.as_str())
         .unwrap_or(session_id)
+}
+
+/// DOM-side identity check for a ref minted by the DOM-walk fallback (#206):
+/// `DOM.describeNode` must still resolve the backend node, and its tag must be
+/// the one the snapshot classified. Anything else means the page re-rendered
+/// and the agent needs a fresh `snapshot`.
+async fn verify_dom_sourced_ref(
+    client: &CdpClient,
+    session_id: &str,
+    backend_node_id: i64,
+    ref_id: &str,
+    entry: &RefEntry,
+) -> Result<i64, String> {
+    let described: Result<Value, String> = tokio::time::timeout(
+        identity_probe_budget(),
+        client.send_command(
+            "DOM.describeNode",
+            Some(serde_json::json!({ "backendNodeId": backend_node_id })),
+            Some(session_id),
+        ),
+    )
+    .await
+    .unwrap_or_else(|_| Err("probe timed out".to_string()));
+    match described {
+        Ok(v) if v.get("node").is_some() => Ok(backend_node_id),
+        _ => Err(format!(
+            "Ref {ref_id} ({} \"{}\", from the DOM fallback snapshot) is no longer in the \
+             document — the page re-rendered. Run `snapshot -i` again and use a fresh ref.",
+            entry.role, entry.name
+        )),
+    }
 }
 
 /// Verify that the cached backendNodeId still has the same accessible role
@@ -1273,8 +1378,44 @@ pub(super) fn extract_ax_string(value: &Option<AXValue>) -> String {
 }
 
 /// Build a JS expression that finds a DOM element by CSS selector or XPath.
+/// The XPath expression a selector denotes, if it is one. An explicit `xpath=`
+/// prefix always wins; a bare selector that starts like a location path (`//`,
+/// `/`, `(`, `./`, `..`) is XPath too — none of those can begin a CSS
+/// selector, and feeding `//*[contains(text(),'x')]` to `querySelector` used to
+/// throw, fall through to the visible-text matcher, and report the row as
+/// "not found" even though it was right there (issue #202).
+pub(crate) fn xpath_of(selector: &str) -> Option<&str> {
+    if let Some(x) = selector.strip_prefix("xpath=") {
+        return Some(x);
+    }
+    let t = selector.trim_start();
+    if t.starts_with('/') || t.starts_with('(') || t.starts_with("./") || t.starts_with("..") {
+        return Some(selector);
+    }
+    None
+}
+
+/// The XPath `text()` gotcha, spelled out for the error message. `text()` is a
+/// node-set; `contains(text(), …)` string-converts only its FIRST node, so a
+/// row rendered as `<div>{a} - {b}</div>` (three sibling text nodes) or a label
+/// nested in a child element never matches — the row is visible, open, in the
+/// light DOM, and the selector still misses (issue #202).
+pub(crate) fn xpath_miss_hint(selector: &str) -> Option<String> {
+    let xpath = xpath_of(selector)?;
+    if !xpath.contains("text()") {
+        return None;
+    }
+    Some(
+        "Hint: XPath `text()` matches only the FIRST direct text node of an element, so text \
+         split across nodes (React `{a} - {b}`) or nested in a child never matches. Use \
+         `contains(normalize-space(.), '…')` on the element instead, or skip XPath: `find \
+         \"<label>\"` / `text=<label>` / `snapshot -i` and act on the @ref."
+            .to_string(),
+    )
+}
+
 fn build_find_element_js(selector: &str) -> String {
-    if let Some(xpath) = selector.strip_prefix("xpath=") {
+    if let Some(xpath) = xpath_of(selector) {
         return format!(
             "document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue",
             serde_json::to_string(xpath).unwrap_or_default()
@@ -1316,7 +1457,7 @@ fn build_find_element_js(selector: &str) -> String {
 
 /// Build a JS expression that counts matching DOM elements by CSS selector or XPath.
 fn build_count_elements_js(selector: &str) -> String {
-    if let Some(xpath) = selector.strip_prefix("xpath=") {
+    if let Some(xpath) = xpath_of(selector) {
         format!(
             "document.evaluate({}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength",
             serde_json::to_string(xpath).unwrap_or_default()
@@ -1372,7 +1513,10 @@ async fn resolve_by_selector(
 
     match (x, y) {
         (Some(x), Some(y)) => Ok((x, y)),
-        _ => Err(format!("Element not found: {}", selector)),
+        _ => match xpath_miss_hint(selector) {
+            Some(hint) => Err(format!("Element not found: {}\n{}", selector, hint)),
+            None => Err(format!("Element not found: {}", selector)),
+        },
     }
 }
 
@@ -2265,6 +2409,24 @@ mod tests {
     }
 
     #[test]
+    fn test_unknown_ref_error_says_whether_the_session_has_any_refs() {
+        // Empty map: the agent is talking to a session that never snapshotted —
+        // typically after a `cd` moved it onto another session (#205).
+        let empty = RefMap::with_session_label(Some("cu-tools-3f9a1c"));
+        let e = empty.unknown_ref_error("e240");
+        assert!(e.starts_with("Unknown ref: e240"), "{e}");
+        assert!(e.contains("cu-tools-3f9a1c") && e.contains("NO snapshot refs"), "{e}");
+        assert!(e.contains("--session"), "{e}");
+
+        let mut m = RefMap::with_session_label(Some("s3"));
+        m.add("e1".to_string(), Some(1), "link", "a", None);
+        m.add("e7".to_string(), Some(2), "button", "b", None);
+        let e = m.unknown_ref_error("e240");
+        assert!(e.contains("2 refs, e1…e7"), "{e}");
+        assert!(e.contains("snapshot -i"), "{e}");
+    }
+
+    #[test]
     fn test_parse_ref_equals_prefix() {
         assert_eq!(parse_ref("ref=e1"), Some("e1".to_string()));
     }
@@ -2454,6 +2616,32 @@ mod tests {
         let js = build_selector_js("xpath=//button[@id='ok']");
         assert!(js.contains("document.evaluate(\"//button[@id='ok']\", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)"));
         assert!(!js.contains("document.querySelector"));
+    }
+
+    #[test]
+    fn test_bare_xpath_is_detected_without_prefix() {
+        // `//…`, `/…`, `(…)`, `./…`, `..` can't start a CSS selector, so they are
+        // XPath even without the `xpath=` prefix (issue #202).
+        assert_eq!(xpath_of("//*[contains(text(),'x')]"), Some("//*[contains(text(),'x')]"));
+        assert_eq!(xpath_of("(//li)[2]"), Some("(//li)[2]"));
+        assert_eq!(xpath_of("./span"), Some("./span"));
+        assert_eq!(xpath_of("xpath=//a"), Some("//a"));
+        assert_eq!(xpath_of("#id"), None);
+        assert_eq!(xpath_of(".class > a"), None);
+        assert_eq!(xpath_of("button"), None);
+        let js = build_selector_js("//button[@id='ok']");
+        assert!(js.contains("document.evaluate(\"//button[@id='ok']\""));
+        assert!(build_count_elements_js("//li").contains("snapshotLength"));
+    }
+
+    #[test]
+    fn test_xpath_text_miss_gets_the_split_text_hint() {
+        let hint = xpath_miss_hint("//*[contains(text(),'LudoAdmin')]").unwrap();
+        assert!(hint.contains("FIRST direct text node"));
+        assert!(hint.contains("normalize-space(.)"));
+        // Only XPath that actually uses text() earns the hint.
+        assert!(xpath_miss_hint("//button[@id='ok']").is_none());
+        assert!(xpath_miss_hint("#missing").is_none());
     }
 
     #[test]

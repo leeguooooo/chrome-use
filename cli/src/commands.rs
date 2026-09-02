@@ -1474,6 +1474,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "-u" | "--urls" => {
                         obj.insert("urls".to_string(), json!(true));
                     }
+                    "--dom" => {
+                        obj.insert("dom".to_string(), json!(true));
+                    }
                     "-d" | "--depth" => {
                         if let Some(d) = rest.get(i + 1) {
                             if let Ok(n) = d.parse::<i32>() {

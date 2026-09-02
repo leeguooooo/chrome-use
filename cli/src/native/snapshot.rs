@@ -30,6 +30,12 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "Iframe",
 ];
 
+/// Whether `role` is one `snapshot -i` lists as actionable (shared with the
+/// DOM-walk fallback so both paths label controls the same way).
+pub fn is_interactive_role(role: &str) -> bool {
+    INTERACTIVE_ROLES.contains(&role)
+}
+
 const CONTENT_ROLES: &[&str] = &[
     "heading",
     "cell",
@@ -394,6 +400,59 @@ impl RoleNameTracker {
 /// `frame_id` so clicks resolve into the right frame (issue #36). Capped to keep
 /// a pathological frame tree from blowing up the snapshot.
 const MAX_IFRAME_DEPTH: usize = 3;
+
+/// DOM-walk fallback snapshot (issue #206). Reads the whole document with
+/// `pierce: true` — open AND closed shadow roots, same-process child documents
+/// — and lists the actionable elements with refs keyed by `backendNodeId`, so
+/// `click @ref` / `type @ref` / `fill @ref` work as with AX-minted refs.
+/// Returns the rendered listing and the number of elements found. Used when
+/// the AX tree came back empty on a page that clearly has content, or on
+/// demand via `snapshot --dom`.
+pub async fn take_dom_snapshot(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &mut RefMap,
+    frame_id: Option<&str>,
+) -> Result<(String, usize), String> {
+    client
+        .send_command_no_params("DOM.enable", Some(session_id))
+        .await?;
+    let doc: Value = client
+        .send_command(
+            "DOM.getDocument",
+            Some(serde_json::json!({ "depth": -1, "pierce": true })),
+            Some(session_id),
+        )
+        .await?;
+    let root = doc
+        .get("root")
+        .ok_or_else(|| "DOM.getDocument returned no root".to_string())?;
+    let elems = super::dom_snapshot::collect_interactive(root);
+    let mut tracker = RoleNameTracker::new();
+    let mut refs: Vec<String> = Vec::with_capacity(elems.len());
+    let mut nths: Vec<usize> = Vec::with_capacity(elems.len());
+    for (idx, el) in elems.iter().enumerate() {
+        nths.push(tracker.track(&el.role, &el.name, idx));
+    }
+    let duplicates = tracker.get_duplicates();
+    for (el, nth) in elems.iter().zip(nths) {
+        let key = format!("{}:{}", el.role, el.name);
+        let actual_nth = duplicates.contains_key(&key).then_some(nth);
+        let ref_id = ref_map.snapshot_ref(Some(el.backend_node_id), frame_id, &el.role, &el.name);
+        ref_map.add_with_frame(
+            ref_id.clone(),
+            Some(el.backend_node_id),
+            &el.role,
+            &el.name,
+            actual_nth,
+            frame_id,
+        );
+        ref_map.mark_dom_sourced(&ref_id);
+        refs.push(ref_id);
+    }
+    let count = elems.len();
+    Ok((super::dom_snapshot::render(&elems, &refs), count))
+}
 
 pub async fn take_snapshot(
     client: &CdpClient,

@@ -29,6 +29,12 @@ import {
   navigateTabWithBrowserFallback,
 } from './tab-navigation.js'
 import { targetInfoForTab } from './target-info.js'
+import {
+  IDLE_DETACH_DEFAULT_SECS,
+  idleDetachMsFrom,
+  rememberReplayable as rememberReplayableIn,
+  selectIdleTabs,
+} from './idle-detach.js'
 
 const HOST_NAME = 'com.agent_browser.connect'
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i
@@ -394,13 +400,24 @@ function setBadge(tabId, kind) {
 let cursorEnabled = false
 let notifyEnabled = false
 let lastConnected = null
+// Idle auto-detach (issue #201): release chrome.debugger from a tab after this
+// long with no CDP traffic, so Chrome's "started debugging this browser" bar
+// shows only while an agent is actually driving — like Codex's own extension —
+// instead of staying up for hours after the last command. The tab stays known
+// to the relay (same `cb-tab-<id>` session); the next command re-attaches and
+// replays the enabled domains transparently. 0 = never detach (old behaviour).
+let idleDetachMs = IDLE_DETACH_DEFAULT_SECS * 1000
 
 function loadUxSettings() {
   try {
-    chrome.storage.sync.get({ ab_cursor: false, ab_notify: false }, (s) => {
-      cursorEnabled = !!s.ab_cursor
-      notifyEnabled = !!s.ab_notify
-    })
+    chrome.storage.sync.get(
+      { ab_cursor: false, ab_notify: false, ab_idle_detach_secs: IDLE_DETACH_DEFAULT_SECS },
+      (s) => {
+        cursorEnabled = !!s.ab_cursor
+        notifyEnabled = !!s.ab_notify
+        idleDetachMs = idleDetachMsFrom(s.ab_idle_detach_secs)
+      },
+    )
   } catch {}
 }
 loadUxSettings()
@@ -409,6 +426,7 @@ try {
     if (area !== 'sync') return
     if ('ab_cursor' in ch) cursorEnabled = !!ch.ab_cursor.newValue
     if ('ab_notify' in ch) notifyEnabled = !!ch.ab_notify.newValue
+    if ('ab_idle_detach_secs' in ch) idleDetachMs = idleDetachMsFrom(ch.ab_idle_detach_secs.newValue)
   })
 } catch {}
 
@@ -830,7 +848,7 @@ async function handleForwardCdpCommand(msg) {
       audible: Boolean(tab.audible),
       discarded: Boolean(tab.discarded),
       frozen: Boolean(tab.frozen),
-      debuggerAttached: Boolean(entry),
+      debuggerAttached: Boolean(entry && entry.attached !== false),
       windowId: tab.windowId,
     }
   }
@@ -986,6 +1004,27 @@ async function handleForwardCdpCommand(msg) {
       ? sessionId
       : undefined
 
+  // Idle auto-detach bookkeeping (issue #201): re-attach a released tab before
+  // the command and count in-flight commands so the sweep never detaches under
+  // a running one. State-setting commands are remembered for replay.
+  const entry = tabs.get(tabId)
+  if (entry && entry.attached === false) await reattachTab(tabId, entry)
+  if (entry) {
+    entry.inflight++
+    entry.lastActivity = Date.now()
+    if (!childSid) rememberReplayable(entry, method, params)
+  }
+  try {
+    return await dispatchToTab(tabId, method, params, childSid)
+  } finally {
+    if (entry) {
+      entry.inflight = Math.max(0, entry.inflight - 1)
+      entry.lastActivity = Date.now()
+    }
+  }
+}
+
+async function dispatchToTab(tabId, method, params, childSid) {
   // Re-enabling Runtime can leave a stale state; bounce it (matches upstream).
   if (method === 'Runtime.enable') {
     try {
@@ -1014,7 +1053,8 @@ async function handleForwardCdpCommand(msg) {
 
 async function attachTab(tabId, transactionIsActive) {
   const existing = tabs.get(tabId)
-  if (existing) return existing
+  if (existing && existing.attached !== false) return existing
+  if (existing) return await reattachTab(tabId, existing)
   const dbg = { tabId }
   try {
     await withRelayTimeout(
@@ -1086,7 +1126,7 @@ async function attachTab(tabId, transactionIsActive) {
     throw new Error('attachTab: duplicate transaction cancelled')
   }
   const sessionId = `cb-tab-${tabId}`
-  const entry = { sessionId, targetId }
+  const entry = newTabEntry(sessionId, targetId, true)
   tabs.set(tabId, entry)
   sessionToTab.set(sessionId, tabId)
   rememberSessionTarget(sessionId, targetId)
@@ -1109,6 +1149,85 @@ async function attachTab(tabId, transactionIsActive) {
     'chrome.debugger.sendCommand(Target.setAutoAttach)',
   ).catch(() => {})
   return entry
+}
+
+function newTabEntry(sessionId, targetId, attached) {
+  return {
+    sessionId,
+    targetId,
+    // false while idle-detached (issue #201): the relay still knows the tab, the
+    // debugger is simply released until the next command.
+    attached,
+    lastActivity: Date.now(),
+    inflight: 0,
+    // State-setting commands (X.enable, Emulation.set*, …) the daemon sent on
+    // this tab, replayed after an idle re-attach so the session looks untouched.
+    replay: new Map(),
+  }
+}
+
+function rememberReplayable(entry, method, params) {
+  if (entry && entry.replay) rememberReplayableIn(entry.replay, method, params)
+}
+
+// Re-attach an idle-detached tab and restore its session state. The `cb-tab-<id>`
+// session id is stable, so the daemon's binding needs no update.
+async function reattachTab(tabId, entry) {
+  if (entry.attached !== false) return entry
+  if (entry.reattaching) return await entry.reattaching
+  entry.reattaching = (async () => {
+    const dbg = { tabId }
+    try {
+      await withRelayTimeout(chrome.debugger.attach(dbg, '1.3'), 'chrome.debugger.attach')
+    } catch (e) {
+      const msg = String((e && e.message) || e)
+      if (!/already attached|already being debugged/i.test(msg)) throw e
+    }
+    entry.attached = true
+    entry.userDetached = false
+    entry.lastActivity = Date.now()
+    setBadge(tabId, port ? 'on' : 'connecting')
+    const arm = async (method, params) => {
+      try {
+        await withRelayTimeout(
+          chrome.debugger.sendCommand(dbg, method, params),
+          `chrome.debugger.sendCommand(${method})`,
+        )
+      } catch {}
+    }
+    await arm('Page.enable')
+    await arm('Target.setAutoAttach', { autoAttach: true, flatten: true, waitForDebuggerOnStart: false })
+    for (const { method, params } of entry.replay.values()) {
+      if (method === 'Page.enable' || method === 'Target.setAutoAttach') continue
+      await arm(method, params)
+    }
+    return entry
+  })()
+  try {
+    return await entry.reattaching
+  } finally {
+    entry.reattaching = null
+  }
+}
+
+// Release the debugger from a tab with no CDP traffic for `idleDetachMs`, but
+// keep the relay's record of it: no Target.detachedFromTarget goes to the host,
+// so the daemon keeps its session and the next command transparently
+// re-attaches. Child (OOPIF) sessions die with the attachment; Target.setAutoAttach
+// re-announces them on re-attach.
+function softDetachTab(tabId, entry, reason) {
+  if (!entry || entry.attached === false) return
+  entry.attached = false
+  entry.lastActivity = Date.now()
+  if (reason === 'user') entry.userDetached = true
+  for (const [sid, tid] of childSessionToTab.entries()) if (tid === tabId) childSessionToTab.delete(sid)
+  if (reason !== 'user') chrome.debugger.detach({ tabId }).catch(() => {})
+}
+
+function sweepIdleTabs() {
+  for (const tabId of selectIdleTabs(tabs.entries(), Date.now(), idleDetachMs)) {
+    softDetachTab(tabId, tabs.get(tabId), 'idle')
+  }
 }
 
 function detachTab(tabId, notify) {
@@ -1150,14 +1269,41 @@ async function reattachOwnedTabs() {
       continue
     }
     if (nativeDuplicateTabs.has(tabId)) continue
-    if (!tabs.has(tabId)) {
-      try {
-        await attachTab(tabId)
-      } catch {
-        // Restricted page or transient — leave owned; next pass retries.
-      }
-    }
+    if (!tabs.has(tabId)) await announceOwnedTabLazily(tabId)
   }
+}
+
+// Make an owned tab known to the relay again WITHOUT attaching the debugger
+// (issue #201): the targetId comes from chrome.debugger.getTargets(), which
+// needs no attachment and shows no banner. The first command re-attaches. Falls
+// back to a real attach only when the target can't be identified that way.
+async function announceOwnedTabLazily(tabId) {
+  let info = null
+  try {
+    info = targetInfoForTab(
+      await withRelayTimeout(chrome.debugger.getTargets(), 'chrome.debugger.getTargets'),
+      tabId,
+    )
+  } catch {}
+  if (!info || !info.targetId) {
+    try {
+      await attachTab(tabId)
+    } catch {
+      // Restricted page or transient — leave owned; next pass retries.
+    }
+    return
+  }
+  // A debugger attachment lingering from a previous worker instance keeps the
+  // banner up with nobody driving; release it. (An attachment that isn't ours —
+  // DevTools — makes the call fail harmlessly.)
+  await chrome.debugger.detach({ tabId }).catch(() => {})
+  const sessionId = `cb-tab-${tabId}`
+  const entry = newTabEntry(sessionId, String(info.targetId), false)
+  tabs.set(tabId, entry)
+  sessionToTab.set(sessionId, tabId)
+  rememberSessionTarget(sessionId, entry.targetId)
+  setBadge(tabId, port ? 'on' : 'connecting')
+  await announceAttachedTab(tabId, entry, info)
 }
 
 async function announceAttachedTab(tabId, entry, targetInfo, scopeHints) {
@@ -1226,6 +1372,17 @@ chrome.debugger.onDetach.addListener((source, reason) =>
   void whenReady(async () => {
     const tabId = source.tabId
     if (!tabId) return
+    const known = tabs.get(tabId)
+    // Our own idle release (#201) — nothing to recover, the entry is kept.
+    if (known && known.attached === false) return
+    // The user clicked Cancel on the debugger bar: honour it. Keep the tab known
+    // (no detachedFromTarget to the host, no owned-tab re-attach from the alarm —
+    // that is what made the bar come back within seconds) and re-attach only when
+    // the agent's next command needs the tab.
+    if (reason === 'canceled_by_user' && known) {
+      softDetachTab(tabId, known, 'user')
+      return
+    }
     detachTab(tabId, true)
     // A cross-process navigation (e.g. an SSO redirect like
     // login.account.rakuten.com that swaps the render process / spawns OOPIFs)
@@ -1240,7 +1397,7 @@ chrome.debugger.onDetach.addListener((source, reason) =>
     // The swapped-in process needs a moment to settle; retry with backoff.
     for (let i = 0; i < 6; i++) {
       await new Promise((r) => setTimeout(r, 250 + i * 200))
-      if (tabs.has(tabId)) return // already re-attached (e.g. via onUpdated)
+      if (tabs.get(tabId)?.attached !== undefined && tabs.get(tabId).attached !== false) return // already re-attached (e.g. via onUpdated)
       if (nativeDuplicateTabs.has(tabId)) return
       const tab = await chrome.tabs.get(tabId).catch(() => null)
       if (!tab || !eligible(tab)) return // tab gone or now a restricted page
@@ -1303,7 +1460,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) =>
       await announceAttachedTab(tabId, attached)
       return
     }
-    if (changeInfo.status === 'complete' && eligible(tab) && !tabs.has(tabId) && port) {
+    // Only tabs that are ours (agent-created) or opened BY ours (an OAuth popup
+    // that was still about:blank when created) — never the user's own tabs.
+    const ours =
+      ownedTabs.has(tabId) ||
+      (typeof tab?.openerTabId === 'number' &&
+        (ownedTabs.has(tab.openerTabId) || tabs.has(tab.openerTabId)))
+    if (changeInfo.status === 'complete' && eligible(tab) && !tabs.has(tabId) && port && ours) {
       try {
         await attachTab(tabId)
       } catch {}
@@ -1377,6 +1540,7 @@ function scheduleKeepalivePing() {
   if (keepaliveTimer) clearTimeout(keepaliveTimer)
   keepaliveTimer = setTimeout(() => {
     keepaliveTimer = null
+    sweepIdleTabs()
     if (!port) return // disconnected; connectHost() will restart the loop
     postToHost({ method: 'ping' }) // host pongs (or ignores); the send is what matters
     scheduleKeepalivePing()
@@ -1391,6 +1555,7 @@ chrome.alarms.create('keepalive', { periodInMinutes: 0.4 })
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== 'keepalive') return
   void whenReady(() => {
+    sweepIdleTabs()
     if (!port) connectHost()
     else {
       void reattachOwnedTabs()

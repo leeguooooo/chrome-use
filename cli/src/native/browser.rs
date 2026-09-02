@@ -567,16 +567,26 @@ pub fn to_ai_friendly_error(error: &str) -> String {
             .to_string();
     }
     if lower.contains("element not found") || lower.contains("no element") {
+        // The resolver already diagnosed the miss (an XPath `text()` gotcha, a
+        // placeholder rendered on an inner span, …): keep that verbatim — the old
+        // wholesale replacement threw the selector AND the hint away and always
+        // blamed a closed shadow root / cross-origin iframe, two rare causes that
+        // sent people down the wrong path (issue #202).
+        if error.contains("Hint:") || error.contains("Run `snapshot -i`") {
+            return error.to_string();
+        }
         // Selectors / `find` match the page DOM, which can't see inside a CLOSED
         // shadow root or a cross-origin iframe — but `snapshot -i` (the CDP
         // accessibility tree) pierces both. Also nudge to verify the exact
         // label, since translations differ (real case: LinkedIn's Save button is
         // labelled 收藏, not 保存 — issue #55).
-        return "Element not found in the page DOM. If it's inside a CLOSED shadow root or a \
-                cross-origin iframe, selectors/`find` can't reach it — run `snapshot -i` (it \
-                pierces both via the accessibility tree) and `click` the @ref. Also verify the \
-                exact label/text: translations differ (e.g. a \"Save\" button may be labelled 收藏)."
-            .to_string();
+        return format!(
+            "{error}\nHint: the selector matched nothing in the page DOM. Check the exact \
+             label/text first (translations differ: a \"Save\" button may be labelled 收藏), and \
+             for text matching prefer `find \"<label>\"` / `snapshot -i` + @ref over CSS/XPath. \
+             If the element lives in a CLOSED shadow root or a cross-origin iframe, selectors/`find` \
+             can't reach it — `snapshot -i` pierces both via the accessibility tree."
+        );
     }
     error.to_string()
 }
@@ -4967,10 +4977,18 @@ mod tests {
 
     #[test]
     fn test_to_ai_friendly_error_not_found() {
-        let m = to_ai_friendly_error("Element not found");
-        assert!(m.starts_with("Element not found"));
+        let m = to_ai_friendly_error("Element not found: #save");
+        assert!(m.starts_with("Element not found: #save"), "selector kept: {m}");
         // directs to snapshot -i (which pierces closed shadow / cross-origin iframes)
         assert!(m.contains("snapshot -i") && m.contains("shadow root"));
+    }
+
+    #[test]
+    fn test_to_ai_friendly_error_not_found_keeps_a_specific_diagnosis() {
+        // A resolver that already explained the miss must not have its
+        // explanation replaced by the generic shadow-root/iframe guess (#202).
+        let specific = "Element not found: //*[contains(text(),'x')]\nHint: XPath `text()` matches only the FIRST direct text node";
+        assert_eq!(to_ai_friendly_error(specific), specific);
     }
 
     #[test]

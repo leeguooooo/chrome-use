@@ -568,7 +568,64 @@ fn scan_conventional_agent_id(vars: &[(String, String)]) -> Option<(String, Stri
 /// `default` — unchanged behaviour, since there's nothing stable to isolate on.
 /// `--session` / `AGENT_BROWSER_SESSION` are resolved before this and override it.
 fn default_session_name() -> String {
-    session_name_for(pick_agent_id(&env::vars().collect::<Vec<_>>()))
+    let picked = pick_agent_id(&env::vars().collect::<Vec<_>>());
+    let candidate = session_name_for(picked.clone());
+    match picked {
+        Some(agent_id) => {
+            reuse_live_session_name(&candidate, &session_tag(&agent_id), &live_session_names())
+        }
+        None => candidate,
+    }
+}
+
+/// Session names that currently have a daemon socket / pid file, i.e. the
+/// sessions an agent could already be driving.
+fn live_session_names() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(crate::connection::get_socket_dir()) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.strip_suffix(".sock")
+                .or_else(|| name.strip_suffix(".pid"))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Keep one agent on ONE session when it changes directory.
+///
+/// The derived name is `cu-<repo>-<tag>`: `<tag>` is the agent's identity, the
+/// repo basename only a readable prefix. Taken literally per invocation, a
+/// helper step that `cd`s into another directory to read local data mints a
+/// different name, lands on a fresh daemon with no snapshot, and every `@ref`
+/// from the previous step fails as "Unknown ref" — with nothing hinting at the
+/// working directory as the cause (issue #205). So when a live daemon already
+/// carries this agent's tag under another prefix, reuse that name: the tab
+/// group, refs and state stay put across `cd`. Explicit `--session` /
+/// `AGENT_BROWSER_SESSION` never reach here.
+fn reuse_live_session_name(candidate: &str, tag: &str, live: &[String]) -> String {
+    if live.iter().any(|n| n == candidate) {
+        return candidate.to_string();
+    }
+    let bare = format!("cu-{tag}");
+    let suffix = format!("-{tag}");
+    let mut matches: Vec<&String> = live
+        .iter()
+        .filter(|n| *n == &bare || (n.starts_with("cu-") && n.ends_with(&suffix)))
+        .collect();
+    matches.sort();
+    matches
+        .first()
+        .map(|n| (*n).clone())
+        .unwrap_or_else(|| candidate.to_string())
+}
+
+/// The short identity tag a session name ends with.
+fn session_tag(agent_id: &str) -> String {
+    format!("{:06x}", session_hash(agent_id) & 0x00ff_ffff)
 }
 
 /// Choose the id to key the session on, in tier order: an explicit/known agent
@@ -619,7 +676,7 @@ fn session_name_for(agent_id: Option<String>) -> String {
     let Some(agent_id) = agent_id else {
         return "default".to_string();
     };
-    let tag = format!("{:06x}", session_hash(&agent_id) & 0x00ff_ffff);
+    let tag = session_tag(&agent_id);
     let repo = env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -2013,6 +2070,35 @@ mod tests {
         // A different task (different id) -> a different session, no collision.
         let two = session_name_for(pick_agent_id(&env(&[("CODEX_THREAD_ID", "thread-two")])));
         assert_ne!(one, two, "two agents must not collide");
+    }
+
+    #[test]
+    fn cd_keeps_the_agent_on_its_live_session() {
+        // Same agent tag, different repo prefix → reuse the live one (#205).
+        let live = vec!["cu-repo-a-3f9a1c".to_string(), "default".to_string()];
+        assert_eq!(
+            reuse_live_session_name("cu-repo-b-3f9a1c", "3f9a1c", &live),
+            "cu-repo-a-3f9a1c"
+        );
+        // The candidate itself is live → keep it (no surprise switch).
+        let live = vec!["cu-repo-a-3f9a1c".to_string(), "cu-repo-b-3f9a1c".to_string()];
+        assert_eq!(
+            reuse_live_session_name("cu-repo-b-3f9a1c", "3f9a1c", &live),
+            "cu-repo-b-3f9a1c"
+        );
+        // A different agent's session never gets borrowed.
+        let live = vec!["cu-repo-a-ffffff".to_string()];
+        assert_eq!(
+            reuse_live_session_name("cu-repo-b-3f9a1c", "3f9a1c", &live),
+            "cu-repo-b-3f9a1c"
+        );
+        // A tag-only name (cwd unreadable) also matches.
+        let live = vec!["cu-3f9a1c".to_string()];
+        assert_eq!(
+            reuse_live_session_name("cu-repo-b-3f9a1c", "3f9a1c", &live),
+            "cu-3f9a1c"
+        );
+        assert_eq!(reuse_live_session_name("cu-x-3f9a1c", "3f9a1c", &[]), "cu-x-3f9a1c");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
@@ -371,7 +371,7 @@ async fn dom_click(
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
-                function_declaration: "function() { this.click(); }".to_string(),
+                function_declaration: DOM_CLICK_WITH_FOCUS_JS.to_string(),
                 object_id: Some(object_id),
                 arguments: None,
                 return_by_value: Some(true),
@@ -383,6 +383,43 @@ async fn dom_click(
     wait_for_paint_settled(client, &effective_session_id).await;
     Ok(())
 }
+
+/// `element.click()` plus the focus move a REAL mouse click performs.
+///
+/// A synthetic `.click()` fires the click handlers but never moves keyboard
+/// focus, so on the relay (where a left click is DOM-dispatched by default)
+/// `click <input>` followed by `press Meta+a` / `press Backspace` landed on
+/// whichever field was focused BEFORE the click — one step behind, and on a
+/// half-filled form that select-all + delete wiped the wrong field (issue #204).
+/// Mirror what a trusted click does: focus the nearest focusable element
+/// (the input itself, or a focusable ancestor such as a `<label>`'s control /
+/// a `[tabindex]` wrapper) unless the click handler already moved focus
+/// elsewhere. Focus is deliberately NOT touched when nothing focusable is
+/// involved: blurring the current field on a click into empty space would fire
+/// blur-validation the page did not ask for.
+const DOM_CLICK_WITH_FOCUS_JS: &str = r#"function() {
+    const el = this;
+    const doc = el.ownerDocument || document;
+    const deepActive = () => {
+        let ae = doc.activeElement;
+        while (ae && ae.shadowRoot && ae.shadowRoot.activeElement) ae = ae.shadowRoot.activeElement;
+        return ae;
+    };
+    const before = deepActive();
+    el.click();
+    const after = deepActive();
+    if (after !== before) return 'moved-by-handler';
+    const focusable = el.closest
+        ? el.closest('input, textarea, select, button, a[href], [contenteditable=""], [contenteditable="true"], [tabindex], summary')
+        : null;
+    let target = focusable;
+    if (!target && el.tagName === 'LABEL' && el.control) target = el.control;
+    if (!target) return 'no-focusable';
+    if (target.disabled) return 'disabled';
+    if (target === after || (target.contains && target.contains(after))) return 'already';
+    try { target.focus({ preventScroll: true }); } catch (e) { return 'focus-failed'; }
+    return 'focused';
+}"#;
 
 /// Move the on-page cursor onto the element a DOM click is about to hit, then
 /// mark the click — the visible half of what `Input.dispatchMouseEvent` gives
@@ -1498,19 +1535,127 @@ async fn verify_fill_value(
     // HTML text controls normalize CRLF to LF. Compare that standardized form
     // while preserving every other byte, including leading spaces in YAML.
     if !fill_values_match(expected, actual, engine) {
-        let detail = if actual.is_empty() && !expected.is_empty() {
-            "read back an empty value".to_string()
-        } else {
-            format!(
-                "read back {} characters after writing {}",
-                actual.chars().count(),
-                expected.chars().count()
-            )
-        };
-        return Err(format!("fill verification failed for {engine}: {detail}"));
+        return Err(format!(
+            "fill verification failed for {engine}: {}",
+            fill_mismatch_detail(expected, actual)
+        ));
     }
 
     Ok(())
+}
+
+/// Describe a fill/type read-back mismatch so truncation is VISIBLE: what was
+/// written, what the field holds now, and — when every non-ASCII character
+/// vanished while the ASCII survived — that the page filtered the input (a
+/// Latin-only address field, issue #203) rather than the keystrokes failing.
+pub(crate) fn fill_mismatch_detail(expected: &str, actual: &str) -> String {
+    let mut detail = if actual.is_empty() && !expected.is_empty() {
+        format!("read back an empty value after writing {}", quote_short(expected))
+    } else {
+        format!(
+            "read back {} ({} chars) after writing {} ({} chars)",
+            quote_short(actual),
+            actual.chars().count(),
+            quote_short(expected),
+            expected.chars().count()
+        )
+    };
+    if non_ascii_was_dropped(expected, actual) {
+        detail.push_str(
+            ". Only the ASCII characters survived: the page rejected the non-Latin text (a \
+             Latin-only / masked field), so re-typing won't help — check the field's input \
+             rules or supply a romanized value",
+        );
+    }
+    detail
+}
+
+/// True when `expected` carried non-ASCII characters and none of them made it
+/// into `actual`, while `actual` is otherwise consistent with the ASCII part.
+pub(crate) fn non_ascii_was_dropped(expected: &str, actual: &str) -> bool {
+    let non_ascii: Vec<char> = expected.chars().filter(|c| !c.is_ascii()).collect();
+    if non_ascii.is_empty() {
+        return false;
+    }
+    !actual.chars().any(|c| non_ascii.contains(&c))
+}
+
+fn quote_short(s: &str) -> String {
+    const MAX: usize = 60;
+    if s.chars().count() <= MAX {
+        format!("{s:?}")
+    } else {
+        let head: String = s.chars().take(MAX).collect();
+        format!("{:?}…", head)
+    }
+}
+
+/// After `type`, read the field's current value and compare it with what was
+/// typed. Returns `(read_back, warning)`; `None` when the value can't be read
+/// (non-editable target, probe failure) so the caller stays silent. `type`
+/// appends, so the check is containment, not equality.
+pub async fn read_back_after_type(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    typed: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Option<(String, Option<String>)> {
+    if typed.trim().is_empty() {
+        return None;
+    }
+    let (object_id, effective_session_id) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await
+    .ok()?;
+    wait_for_paint_settled(client, &effective_session_id).await;
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: read_editable_value_function(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await
+        .ok()?;
+    if result.exception_details.is_some() {
+        return None;
+    }
+    let data = result.result.value?;
+    if !data.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return None;
+    }
+    let actual = data.get("value").and_then(Value::as_str)?.to_string();
+    Some((actual.clone(), type_read_back_warning(typed, &actual)))
+}
+
+/// The warning `type` attaches when the field does not hold what was typed.
+/// Whitespace is normalized (textarea/contenteditable read-backs fold it), and
+/// a CRLF/LF difference never counts.
+pub(crate) fn type_read_back_warning(typed: &str, actual: &str) -> Option<String> {
+    let norm = |s: &str| s.replace("\r\n", "\n").split_whitespace().collect::<Vec<_>>().join(" ");
+    let t = norm(typed);
+    let a = norm(actual);
+    if t.is_empty() || a.contains(&t) {
+        return None;
+    }
+    Some(format!(
+        "the field does not contain what was typed: {}. The keystrokes were delivered; \
+         the page rewrote or rejected them (an input filter, mask or formatter). Verify with \
+         `get value` before moving on",
+        fill_mismatch_detail(typed, actual)
+    ))
 }
 
 fn fill_values_match(expected: &str, actual: &str, engine: &str) -> bool {
@@ -2316,6 +2461,154 @@ pub fn descriptor_is_unfocused(descriptor: &str) -> bool {
     matches!(descriptor, "body" | "html" | "none")
 }
 
+/// Would this key do anything app-visible ONLY if the page listens for it?
+///
+/// Arrow/Home/End/Page keys on a text field just move the caret, Escape has no
+/// default, and Enter outside a form/button/textarea submits nothing — so on a
+/// target with no key listener they provably no-op (issue #202). Keys with a
+/// real browser default (Tab moves focus, Backspace deletes, printable keys
+/// insert, Enter in a `<form>` submits) are left alone, as are command chords
+/// (Ctrl/Meta + key): select-all/copy work without any listener.
+pub fn key_effect_depends_on_listeners(
+    key_name: &str,
+    modifiers: Option<i32>,
+    target_descriptor: Option<&str>,
+) -> bool {
+    if modifiers.is_some_and(|m| m & (2 | 4) != 0) {
+        return false;
+    }
+    let Some(target) = target_descriptor else {
+        return false;
+    };
+    if descriptor_is_unfocused(target) {
+        // Nothing focused: `press_result` already warns for Enter; arrows scroll.
+        return false;
+    }
+    let tag = target.split(['#', '[', '.']).next().unwrap_or("");
+    let text_like = matches!(tag, "input" | "textarea") || target.contains("contenteditable");
+    match key_name.to_ascii_lowercase().as_str() {
+        "arrowup" | "arrowdown" | "arrowleft" | "arrowright" | "home" | "end" | "pageup"
+        | "pagedown" => text_like && tag != "select",
+        "escape" => true,
+        // Enter: a textarea inserts a newline, a button/link activates, and a
+        // field inside a <form> submits — only a bare input has no default. The
+        // form membership isn't in the descriptor, so the probe below also
+        // reports it and the caller stays quiet when a form would submit.
+        "enter" => tag == "input",
+        _ => false,
+    }
+}
+
+/// Count keydown/keyup/keypress listeners reachable from the focused element:
+/// on the element itself, every ancestor (React 17+ delegates at the root
+/// container, older React and jQuery at `document`), the document and the
+/// window. Uses `DOMDebugger.getEventListeners`, which sees `addEventListener`
+/// registrations AND `onkeydown` attributes/properties. Returns `None` when the
+/// probe can't run (no focused element, budget exhausted) or when the element
+/// is inside a `<form>` where Enter has a submit default — the caller then
+/// stays silent rather than guessing. Best-effort and capped: one
+/// `getEventListeners` per ancestor, at most ~40 calls, 1.5s overall.
+pub async fn count_key_listeners_on_active_element(
+    client: &CdpClient,
+    session_id: &str,
+) -> Option<usize> {
+    tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        count_key_listeners_inner(client, session_id),
+    )
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn count_key_listeners_inner(client: &CdpClient, session_id: &str) -> Option<usize> {
+    // Collect [active element, ...ancestors, document, window] as ONE remote
+    // array so the listener walk needs no per-node DOM traversal round-trips.
+    let chain: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: r#"(() => {
+                    let el = document.activeElement;
+                    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+                    if (!el || el === document.body || el === document.documentElement) return null;
+                    if (el.form || (el.closest && el.closest('form'))) return null;
+                    const out = [];
+                    let n = el;
+                    while (n && out.length < 40) {
+                        out.push(n);
+                        n = n.parentNode || (n.host ? n.host : null);
+                        if (n && n.nodeType === 11) n = n.host;
+                    }
+                    if (!out.includes(document)) out.push(document);
+                    out.push(window);
+                    return out;
+                })()"#
+                    .to_string(),
+                return_by_value: Some(false),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    if chain.exception_details.is_some() {
+        return None;
+    }
+    let array_id = chain.result.object_id?;
+    let props: Value = client
+        .send_command(
+            "Runtime.getProperties",
+            Some(json!({ "objectId": array_id, "ownProperties": true })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    let mut node_ids: Vec<String> = Vec::new();
+    for p in props.get("result").and_then(Value::as_array)? {
+        let name = p.get("name").and_then(Value::as_str).unwrap_or("");
+        if name.parse::<usize>().is_err() {
+            continue;
+        }
+        if let Some(oid) = p
+            .get("value")
+            .and_then(|v| v.get("objectId"))
+            .and_then(Value::as_str)
+        {
+            node_ids.push(oid.to_string());
+        }
+    }
+    if node_ids.is_empty() {
+        return None;
+    }
+    let mut found = 0usize;
+    for oid in node_ids {
+        let listeners: Value = client
+            .send_command(
+                "DOMDebugger.getEventListeners",
+                Some(json!({ "objectId": oid })),
+                Some(session_id),
+            )
+            .await
+            .ok()?;
+        if let Some(list) = listeners.get("listeners").and_then(Value::as_array) {
+            found += list
+                .iter()
+                .filter(|l| {
+                    matches!(
+                        l.get("type").and_then(Value::as_str),
+                        Some("keydown") | Some("keyup") | Some("keypress")
+                    )
+                })
+                .count();
+        }
+        if found > 0 {
+            break;
+        }
+    }
+    Some(found)
+}
+
 pub async fn clear(
     client: &CdpClient,
     session_id: &str,
@@ -2841,6 +3134,47 @@ mod tests {
             "first line different line",
             "contenteditable"
         ));
+    }
+
+    #[test]
+    fn test_fill_mismatch_detail_shows_both_values_and_flags_dropped_cjk() {
+        // Issue #203: the old message said "read back an empty value" and nothing
+        // else, so a Latin-only field silently eating CJK looked like a transport bug.
+        let d = fill_mismatch_detail("狛江市", "");
+        assert!(d.contains("\"狛江市\""), "{d}");
+        assert!(d.contains("Only the ASCII characters survived"), "{d}");
+        let d = fill_mismatch_detail("西野川1-25-57", "1-25-57");
+        assert!(d.contains("\"1-25-57\"") && d.contains("\"西野川1-25-57\""), "{d}");
+        assert!(d.contains("Latin-only"), "{d}");
+        // Pure-ASCII mismatch: no CJK diagnosis.
+        let d = fill_mismatch_detail("hello", "hell");
+        assert!(!d.contains("ASCII"), "{d}");
+        assert!(d.contains("(4 chars)") && d.contains("(5 chars)"), "{d}");
+    }
+
+    #[test]
+    fn test_type_read_back_warning_only_when_text_is_missing() {
+        assert!(type_read_back_warning("狛江市", "東京都狛江市").is_none());
+        let w = type_read_back_warning("西野川1-25-57", "1-25-57").unwrap();
+        assert!(w.contains("rewrote or rejected"), "{w}");
+        assert!(w.contains("ASCII"), "{w}");
+        assert!(type_read_back_warning("", "x").is_none());
+    }
+
+    #[test]
+    fn test_key_effect_depends_on_listeners() {
+        // Arrows on a bare text input do nothing without a handler (#202).
+        assert!(key_effect_depends_on_listeners("ArrowDown", None, Some("input#q")));
+        assert!(key_effect_depends_on_listeners("Enter", None, Some("input[name=\"x\"]")));
+        assert!(key_effect_depends_on_listeners("Escape", None, Some("div#modal")));
+        // Native defaults / chords / unfocused targets are left alone.
+        assert!(!key_effect_depends_on_listeners("ArrowDown", None, Some("select#s")));
+        assert!(!key_effect_depends_on_listeners("Enter", None, Some("textarea#t")));
+        assert!(!key_effect_depends_on_listeners("Enter", None, Some("button#go")));
+        assert!(!key_effect_depends_on_listeners("Tab", None, Some("input#q")));
+        assert!(!key_effect_depends_on_listeners("a", Some(4), Some("input#q")));
+        assert!(!key_effect_depends_on_listeners("ArrowDown", None, Some("body")));
+        assert!(!key_effect_depends_on_listeners("ArrowDown", None, None));
     }
 
     #[test]
