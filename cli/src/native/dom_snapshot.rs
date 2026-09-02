@@ -314,10 +314,10 @@ fn classify(node: &Value, labels: &std::collections::HashMap<String, String>) ->
     }
     let name = cap(name, 80);
 
-    if role == "checkbox" || role == "radio" {
-        if has_attr(node, "checked") || attr(node, "aria-checked") == Some("true") {
-            attrs.push("checked".to_string());
-        }
+    if (role == "checkbox" || role == "radio")
+        && (has_attr(node, "checked") || attr(node, "aria-checked") == Some("true"))
+    {
+        attrs.push("checked".to_string());
     }
     if role == "option" && has_attr(node, "selected") {
         attrs.push("selected".to_string());
