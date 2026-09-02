@@ -5065,8 +5065,10 @@ mod tests {
 
     #[test]
     fn test_to_ai_friendly_error_catches_no_element() {
+        // The original text (which names the selector) is kept and the
+        // guidance is appended, instead of replacing the whole message (#202).
         let m = to_ai_friendly_error("No element found for css 'x'");
-        assert!(m.starts_with("Element not found"));
+        assert!(m.starts_with("No element found for css 'x'"), "{m}");
         assert!(m.contains("snapshot -i"));
     }
 

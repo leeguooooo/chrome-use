@@ -666,7 +666,16 @@ pub fn describe_default_session() -> (String, Option<String>) {
     let vars: Vec<(String, String)> = env::vars().collect();
     let picked = pick_agent_id_with_source(&vars);
     let source = picked.as_ref().map(|(k, _)| k.clone());
-    (session_name_for(picked.map(|(_, id)| id)), source)
+    let Some((_, agent_id)) = picked else {
+        return (session_name_for(None), source);
+    };
+    // Same reuse rule as `default_session_name`, so `doctor` names the session
+    // a command from this directory would actually join (#205).
+    let candidate = session_name_for(Some(agent_id.clone()));
+    (
+        reuse_live_session_name(&candidate, &session_tag(&agent_id), &live_session_names()),
+        source,
+    )
 }
 
 /// Render the session name for a chosen agent id. `None` keeps the historical

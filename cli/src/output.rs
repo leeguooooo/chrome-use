@@ -1519,8 +1519,18 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
 
-        // Default success
-        println!("{} Done", color::success_indicator());
+        // Default success. A soft warning carried in the data (e.g. `type`
+        // read back a value that does not contain what was typed, #203) must
+        // not hide behind a bare ✓ — surface it on stderr.
+        let data_warning = data.get("warning").and_then(|v| v.as_str());
+        if data_warning.is_some() {
+            println!("{} Done", color::warning_indicator());
+        } else {
+            println!("{} Done", color::success_indicator());
+        }
+        if let Some(w) = data_warning {
+            eprintln!("{} {}", color::warning_indicator(), w);
+        }
     } else {
         // Success response with no data payload — still confirm the command ran
         // instead of printing nothing (a silent exit 0 looks like a no-op and
