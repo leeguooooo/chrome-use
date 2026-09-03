@@ -313,7 +313,18 @@
         No Chrome restart, fully seamless. Since extension 0.5.19 an agent tab idle for 30 seconds releases its debugger
         automatically and the banner disappears; the next command re-attaches transparently (the delay is configurable on
         the extension options page, 0 = never).
+        The session daemon's longer idle recycle also preserves agent-created tabs in real Chrome, including their
+        current URL and in-page state. Explicit <code>close</code> or <code>session stop</code> still cleans them up.
+        After idle exit, stop rediscovers the original browser and validates ownership. If that fails, reconnect
+        with the original connection options and run close; saved deletion rights are retained.
       </div>
+
+      <p>
+        Top-level relay navigation uses Chrome's browser-level tab API, matching an ordinary manual navigation instead
+        of leading with CDP <code>Page.navigate</code>. If a site still commits the same URL four times within eight
+        seconds, the next command reports a reload loop with recovery guidance. Use a stable deep link or
+        <code>tab adopt</code> an already-rendered tab to preserve the page.
+      </p>
 
       <h2>Read a tab the user already has open: adopt</h2>
       <p>

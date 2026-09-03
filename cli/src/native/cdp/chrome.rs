@@ -2429,9 +2429,9 @@ mod tests {
             let mut buf = [0u8; 128];
             let read =
                 tokio::time::timeout(Duration::from_millis(500), stream.read(&mut buf)).await;
-            match read {
-                Ok(Ok(n)) => assert_eq!(n, 0, "resolve must not send a WS/CDP handshake"),
-                Ok(Err(_)) | Err(_) => {} // closed or nothing sent — both fine
+            // A read error or timeout also means no handshake bytes arrived.
+            if let Ok(Ok(n)) = read {
+                assert_eq!(n, 0, "resolve must not send a WS/CDP handshake");
             }
         });
 

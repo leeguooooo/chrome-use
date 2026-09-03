@@ -576,6 +576,89 @@ async fn e2e_lightpanda_auto_launch_can_open_page() {
 
 #[tokio::test]
 #[ignore]
+async fn e2e_idle_disconnect_stop_reclaims_only_created_tabs() {
+    let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+    let directory = tempfile::tempdir().unwrap();
+    guard.set(
+        "AGENT_BROWSER_SOCKET_DIR",
+        directory.path().to_str().unwrap(),
+    );
+    let session = "idle-stop-regression";
+    let mut state = DaemonState::new();
+    assert_success(
+        &execute_command(
+            &json!({"id":"1", "action":"launch", "headless":true}),
+            &mut state,
+        )
+        .await,
+    );
+    let manager = state.browser.as_ref().unwrap();
+    let endpoint = manager.get_cdp_url().to_string();
+    let untouched = manager.active_target_id().unwrap().to_string();
+    let external = super::cdp::client::CdpClient::connect(&endpoint)
+        .await
+        .unwrap();
+    let created = external
+        .send_command(
+            "Target.createTarget",
+            Some(json!({"url":"about:blank"})),
+            None,
+        )
+        .await
+        .unwrap();
+    let created_id = created["targetId"].as_str().unwrap().to_string();
+    crate::connection::write_created_targets(
+        session,
+        &endpoint,
+        &std::collections::HashSet::from([created_id.clone()]),
+    )
+    .unwrap();
+
+    // The external connection disappears as it does on idle recycling, while
+    // ownership survives daemon file cleanup. No browser manager remains to stop.
+    drop(external);
+    crate::connection::cleanup_stale_files(session);
+    assert!(crate::connection::has_created_targets(session));
+    assert!(
+        super::browser::close_persisted_session_tabs_at(session, "ws://wrong-browser")
+            .await
+            .is_err()
+    );
+    assert!(crate::connection::has_created_targets(session));
+    super::browser::close_persisted_session_tabs_at(session, &endpoint)
+        .await
+        .unwrap();
+    assert!(!crate::connection::has_created_targets(session));
+    // closeTarget acknowledges acceptance before Chrome removes the target.
+    let mut closed = false;
+    for _ in 0..50 {
+        let targets = manager
+            .client
+            .send_command("Target.getTargets", None, None)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = targets["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|target| target["targetId"].as_str())
+            .collect();
+        assert!(ids.contains(&untouched.as_str()));
+        if !ids.contains(&created_id.as_str()) {
+            closed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(
+        closed,
+        "created target should disappear after accepted close"
+    );
+    assert_success(&execute_command(&json!({"id":"99", "action":"close"}), &mut state).await);
+}
+
+#[tokio::test]
+#[ignore]
 async fn e2e_runtime_stream_enable_before_launch_attaches_and_disables() {
     let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_SESSION"]);
     let socket_dir = std::env::temp_dir().join(format!(
@@ -1425,6 +1508,63 @@ async fn e2e_form_interaction() {
     );
     assert!(snap.contains("textbox"), "Snapshot should show textbox");
     assert!(snap.contains("button"), "Snapshot should show button");
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Controlled selects need the platform setter plus both input/change events.
+/// The instance setter below models a framework value tracker: `select.value =`
+/// would touch it, while a real/native mutation deliberately bypasses it.
+#[tokio::test]
+#[ignore]
+async fn e2e_select_uses_native_setter_and_framework_events() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = r#"<select id="country"><option value="us">United States</option><option value="jp">Japan</option></select><script>
+      const select = document.getElementById('country');
+      const native = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+      let instanceSetterCalls = 0;
+      Object.defineProperty(select, 'value', {
+        configurable: true,
+        get() { return native.get.call(this); },
+        set(v) { instanceSetterCalls++; native.set.call(this, v); }
+      });
+      window.events = [];
+      select.addEventListener('input', () => events.push('input'));
+      select.addEventListener('change', () => events.push('change'));
+      window.result = () => ({ value: select.value, instanceSetterCalls, events });
+    </script>"#;
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "select", "selector": "#country", "values": "Japan" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "result()" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!({ "value": "jp", "instanceSetterCalls": 0, "events": ["input", "change"] })
+    );
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
@@ -6435,6 +6575,62 @@ async fn e2e_upload_no_input_does_not_navigate() {
     assert!(
         !url_after.starts_with("about:blank"),
         "tab navigated to about:blank"
+    );
+
+    let _ = std::fs::remove_file(&tmp);
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// React-style dropzones often consume the FileList synchronously and clear the
+/// input. Delivery succeeded and the CLI must return success with a soft warning.
+#[tokio::test]
+#[ignore]
+async fn e2e_upload_consumed_and_cleared_is_not_a_false_failure() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = r#"<input id="dropzone" type="file"><output id="accepted"></output><script>
+      dropzone.addEventListener('change', () => {
+        accepted.textContent = [...dropzone.files].map(file => file.name).join(',');
+        dropzone.value = '';
+      });
+    </script>"#;
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let tmp = std::env::temp_dir().join(format!("ab-upload-consumed-{}.txt", std::process::id()));
+    std::fs::write(&tmp, "accepted").unwrap();
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "upload", "selector": "#dropzone", "files": [tmp.to_string_lossy()] }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["attached"], 0);
+    assert!(get_data(&resp)["warning"]
+        .as_str()
+        .is_some_and(|warning| warning.contains("consumed or replaced")));
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "accepted.textContent" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        tmp.file_name().unwrap().to_string_lossy().as_ref()
     );
 
     let _ = std::fs::remove_file(&tmp);

@@ -76,12 +76,12 @@ chrome-use keyup Shift         # Release key
 chrome-use hover @e1           # Hover
 chrome-use check @e1           # Check checkbox
 chrome-use uncheck @e1         # Uncheck checkbox
-chrome-use select @e1 "value"  # Select dropdown option
+chrome-use select @e1 "value"  # Select by value/label; native setter commits controlled forms
 chrome-use select @e1 "a" "b"  # Select multiple options
 chrome-use scroll down 500     # Scroll page (default: down 300px)
 chrome-use scrollintoview @e1  # Scroll element into view (alias: scrollinto)
 chrome-use drag @e1 @e2        # Drag and drop
-chrome-use upload @e1 file.pdf # Upload files
+chrome-use upload @e1 file.pdf # Upload files; consumed/cleared dropzones warn but succeed
 ```
 
 `type` reads the field back and prints a ⚠ warning (exit 0, JSON `readBack`)

@@ -223,9 +223,9 @@ pub struct PageNavigateResult {
     pub frame_id: String,
     pub loader_id: Option<String>,
     pub error_text: Option<String>,
-    /// Extension-relay recovery path used when a renderer-scoped
-    /// `Page.navigate` timed out but browser-level `chrome.tabs.update` accepted
-    /// the same URL (#193). Direct CDP implementations omit this field.
+    /// Browser-level navigation metadata from the extension relay. Older relay
+    /// builds used this only as timeout recovery; newer builds use the browser
+    /// path first for manual-navigation parity (#193, #211).
     #[serde(default)]
     pub relay_fallback: Option<RelayNavigateFallback>,
 }
@@ -234,10 +234,23 @@ pub struct PageNavigateResult {
 #[serde(rename_all = "camelCase")]
 pub struct RelayNavigateFallback {
     pub method: String,
+    /// `None` means an older extension where this object represented recovery.
+    #[serde(default)]
+    pub recovered: Option<bool>,
     #[serde(default)]
     pub url: String,
     #[serde(default)]
     pub title: String,
+}
+
+impl PageNavigateResult {
+    /// Only genuine timeout recovery should skip renderer metadata reads.
+    /// A normal browser-level navigation still needs its final URL and title.
+    pub fn recovery_metadata(&self) -> Option<&RelayNavigateFallback> {
+        self.relay_fallback
+            .as_ref()
+            .filter(|fallback| fallback.recovered.unwrap_or(true))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

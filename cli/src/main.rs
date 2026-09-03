@@ -444,7 +444,33 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
                 }
                 exit(1);
             }
-            connection::kill_stale_daemon(target);
+            let stopped = (|| -> Result<(), String> {
+                let _lock = connection::lock_session_lifecycle(target)?;
+                connection::kill_stale_daemon(target);
+                if connection::has_created_targets(target) {
+                    let _ = native::browser::DAEMON_SESSION.set(target.to_string());
+                    tokio::runtime::Runtime::new()
+                        .map_err(|e| e.to_string())?
+                        .block_on(async {
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(20),
+                                native::browser::close_persisted_session_tabs(target),
+                            )
+                            .await
+                            .map_err(|_| "timed out reconnecting for tab cleanup".to_string())?
+                        })?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = stopped {
+                let message = format!("session stop incomplete: {error}. Reconnect this session to its original browser with the original connection options, then run close. Saved tab ownership was retained.");
+                if json_mode {
+                    print_json_error(&message);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), message);
+                }
+                exit(1);
+            }
             if json_mode {
                 print_json_value(json!({ "success": true, "data": { "stopped": target } }));
             } else {

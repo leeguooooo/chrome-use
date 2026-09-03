@@ -28,6 +28,66 @@ pub static DAEMON_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::ne
 /// and the caller's SIGKILL is no longer what decides whether cleanup ran.
 pub const OWNED_TAB_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 
+/// Close only persisted, endpoint-matched deletion rights without discovering,
+/// attaching to, or creating any other tabs. Used after an idle daemon exit.
+pub async fn close_persisted_session_tabs_at(session: &str, endpoint: &str) -> Result<(), String> {
+    let mut targets = crate::connection::read_created_targets(session, endpoint);
+    if targets.is_empty() {
+        return Err(
+            "the connected browser does not match the session's saved tab ownership".into(),
+        );
+    }
+    let client = Arc::new(CdpClient::connect(endpoint).await?);
+    close_created_targets(&client, &mut targets).await;
+    crate::connection::write_created_targets(session, endpoint, &targets)?;
+    if !targets.is_empty() {
+        return Err(format!(
+            "{} created tab(s) could not be closed; ownership was preserved",
+            targets.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Rediscover the original external browser rather than storing its possibly
+/// credential-bearing CDP URL. A mismatch fails closed and keeps deletion rights.
+pub async fn close_persisted_session_tabs(session: &str) -> Result<(), String> {
+    let endpoint = auto_connect_cdp().await?;
+    close_persisted_session_tabs_at(session, &endpoint).await
+}
+
+async fn close_created_targets(client: &Arc<CdpClient>, targets: &mut HashSet<String>) {
+    // Each future owns its id while completed closes mutate the same set.
+    #[allow(clippy::redundant_iter_cloned)]
+    let mut closes: FuturesUnordered<_> = targets
+        .iter()
+        .cloned()
+        .map(|target_id| {
+            let client = Arc::clone(client);
+            async move {
+                let result = client
+                    .send_command_typed::<_, CloseTargetResult>(
+                        "Target.closeTarget",
+                        &CloseTargetParams {
+                            target_id: target_id.clone(),
+                        },
+                        None,
+                    )
+                    .await;
+                (target_id, result)
+            }
+        })
+        .collect();
+    let _ = tokio::time::timeout(OWNED_TAB_CLEANUP_BUDGET, async {
+        while let Some((target_id, result)) = closes.next().await {
+            if target_was_closed(&result) {
+                targets.remove(&target_id);
+            }
+        }
+    })
+    .await;
+}
+
 // ---------------------------------------------------------------------------
 // Launch validation
 // ---------------------------------------------------------------------------
@@ -807,6 +867,15 @@ pub struct BrowserManager {
     /// real Chrome. Opt in via `AGENT_BROWSER_CAPTURE_CONSOLE=1` when you need the
     /// `console` / `errors` commands to return page output.
     pub capture_console: bool,
+}
+
+/// Result of delivering files to a page. A zero/unknown live input count is not
+/// a failure: React dropzones commonly consume the FileList and clear or replace
+/// the input synchronously from their change handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadOutcome {
+    pub attached_count: Option<u64>,
+    pub warning: Option<String>,
 }
 
 /// Whether console/error capture (and thus `Runtime.enable`) is opted into for this
@@ -1794,7 +1863,7 @@ impl BrowserManager {
             Err(e) => return Err(e),
         };
 
-        if let Some(ref fallback) = nav_result.relay_fallback {
+        if let Some(fallback) = nav_result.recovery_metadata() {
             nav_warning = Some(format!(
                 "The page renderer did not answer `Page.navigate` within the relay budget; \
                  navigation recovered through {} without restarting the session.",
@@ -1853,12 +1922,11 @@ impl BrowserManager {
             }
         }
 
-        // A browser-level fallback is specifically used because the renderer did
-        // not answer. Do not immediately issue two more renderer-bound reads and
-        // turn an 8-second recovery into roughly 24 seconds. chrome.tabs.update
-        // returned browser metadata with the accepted/pending URL; normal CDP
-        // navigation keeps the richer page-scoped reads.
-        let (page_url, title) = match nav_result.relay_fallback.as_ref() {
+        // Genuine timeout recovery must not immediately issue two more renderer
+        // reads and turn an 8-second recovery into roughly 24 seconds. Normal
+        // browser-level navigation, like direct CDP, reads the final URL/title
+        // after the lifecycle wait rather than returning pre-redirect metadata.
+        let (page_url, title) = match nav_result.recovery_metadata() {
             Some(fallback) => (
                 if fallback.url.is_empty() {
                     url.to_string()
@@ -2104,7 +2172,7 @@ impl BrowserManager {
             // Connected to the user's real Chrome: we must NOT close their
             // browser, but we DO own the tabs this session created. Close them so
             // they don't pile up in the user's window (in their per-session tab
-            // group) every time a session ends, idles out, or the daemon shuts
+            // group) every time a session explicitly ends or the daemon shuts
             // down. `created_targets` only holds tabs we made via
             // Target.createTarget or native duplicate — never the user's
             // existing tabs or other sessions' — so this is always safe.
@@ -2119,37 +2187,9 @@ impl BrowserManager {
             // sequential walk over N tabs never finished N round trips. Firing
             // them together means one stuck tab costs only itself, and the total
             // stays inside the shutdown budget the caller allows us.
-            let mut closes: FuturesUnordered<_> = self
-                .created_targets
-                .iter()
-                .cloned()
-                .map(|target_id| {
-                    let client = Arc::clone(&self.client);
-                    async move {
-                        let params = CloseTargetParams {
-                            target_id: target_id.clone(),
-                        };
-                        let result = client
-                            .send_command_typed::<_, CloseTargetResult>(
-                                "Target.closeTarget",
-                                &params,
-                                None,
-                            )
-                            .await;
-                        (target_id, result)
-                    }
-                })
-                .collect();
-            if !closes.is_empty() {
+            if !self.created_targets.is_empty() {
                 let remaining_before_cleanup = self.created_targets.len();
-                let _ = tokio::time::timeout(OWNED_TAB_CLEANUP_BUDGET, async {
-                    while let Some((target_id, result)) = closes.next().await {
-                        if target_was_closed(&result) {
-                            self.created_targets.remove(&target_id);
-                        }
-                    }
-                })
-                .await;
+                close_created_targets(&self.client, &mut self.created_targets).await;
                 if self.created_targets.len() != remaining_before_cleanup {
                     if let Err(error) = self.persist_created_targets() {
                         eprintln!("{error}");
@@ -3390,7 +3430,7 @@ impl BrowserManager {
         files: &[String],
         ref_map: &RefMap,
         iframe_sessions: &HashMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> Result<UploadOutcome, String> {
         let session_id = self.active_session_id()?;
 
         let (object_id, effective_session_id) =
@@ -3461,23 +3501,33 @@ impl BrowserManager {
             }
         }
 
-        // Verify the files actually attached and make sure the framework saw the
-        // change. `DOM.setFileInputFiles` fires a trusted `input`+`change`, but we
-        // also dispatch bubbling synthetic events as a belt-and-suspenders fallback
-        // for frameworks (Vue's `el-upload` `on-change`, React) that may have
-        // re-bound the listener — and only report success if `files.length > 0`,
-        // so "✓ Done" can never lie.
-        let attached = self
+        // `DOM.setFileInputFiles` (or the relay fallback above) has already
+        // delivered the files and fired input/change. Read the live input only
+        // as confirmation. React dropzones are allowed to consume the FileList
+        // and synchronously clear or replace the input; that is successful page
+        // behavior, not a rejected upload (#208).
+        match self
             .notify_and_count_file_input(&input_object_id, &effective_session_id)
-            .await?;
-        if attached == 0 {
-            return Err(
-                "file input is still empty after upload — the page did not accept the file(s)"
-                    .to_string(),
-            );
+            .await
+        {
+            Ok(attached) if attached > 0 => Ok(UploadOutcome {
+                attached_count: Some(attached),
+                warning: None,
+            }),
+            Ok(_) => Ok(UploadOutcome {
+                attached_count: Some(0),
+                warning: Some(
+                    "upload events were delivered, but the file input is now empty; the page may have consumed or replaced it (common for React dropzones)"
+                        .to_string(),
+                ),
+            }),
+            Err(error) => Ok(UploadOutcome {
+                attached_count: None,
+                warning: Some(format!(
+                    "upload events were delivered, but post-upload verification was unavailable: {error}"
+                )),
+            }),
         }
-
-        Ok(())
     }
 
     /// Given an arbitrary resolved element, return the object id of the
@@ -4203,6 +4253,31 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use tokio::time::sleep;
+
+    #[test]
+    fn relay_primary_navigation_reads_final_metadata_but_recovery_does_not() {
+        let mut payload = json!({
+            "frameId": "",
+            "relayFallback": {
+                "method": "browser-level chrome.tabs.update",
+                "url": "https://example.com/before-redirect",
+                "recovered": false
+            }
+        });
+        let primary: PageNavigateResult = serde_json::from_value(payload.clone()).unwrap();
+        assert!(primary.recovery_metadata().is_none());
+
+        payload["relayFallback"]["recovered"] = json!(true);
+        let recovery: PageNavigateResult = serde_json::from_value(payload.clone()).unwrap();
+        assert!(recovery.recovery_metadata().is_some());
+
+        payload["relayFallback"]
+            .as_object_mut()
+            .unwrap()
+            .remove("recovered");
+        let legacy: PageNavigateResult = serde_json::from_value(payload).unwrap();
+        assert!(legacy.recovery_metadata().is_some());
+    }
 
     #[test]
     fn test_format_tab_id() {

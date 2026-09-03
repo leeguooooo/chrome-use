@@ -3553,6 +3553,17 @@ async fn handle_keep(state: &mut DaemonState) -> Result<Value, String> {
 }
 
 async fn handle_close(state: &mut DaemonState) -> Result<Value, String> {
+    // A fresh daemon after idle has no manager, but still owns the external tabs
+    // recorded by its predecessor. Explicit close must not silently ignore them.
+    if state.browser.is_none() {
+        if let Some(session) = super::browser::DAEMON_SESSION.get() {
+            if crate::connection::has_created_targets(session) {
+                super::browser::close_persisted_session_tabs(session).await.map_err(|error| {
+                    format!("close incomplete: {error}. Reconnect with the original browser options and retry; saved tab ownership was retained.")
+                })?;
+            }
+        }
+    }
     if let Some(ref mgr) = state.browser {
         if let Some(ref session_name) = state.session_name {
             if let Ok(session_id) = mgr.active_session_id() {
@@ -8545,9 +8556,18 @@ async fn handle_upload(cmd: &Value, state: &DaemonState) -> Result<Value, String
         })
         .unwrap_or_default();
 
-    mgr.upload_files(selector, &files, &state.ref_map, &state.iframe_sessions)
+    let outcome = mgr
+        .upload_files(selector, &files, &state.ref_map, &state.iframe_sessions)
         .await?;
-    Ok(json!({ "uploaded": files.len(), "selector": selector }))
+    let mut result = json!({
+        "uploaded": files.len(),
+        "selector": selector,
+        "attached": outcome.attached_count,
+    });
+    if let Some(warning) = outcome.warning {
+        result["warning"] = json!(warning);
+    }
+    Ok(result)
 }
 
 async fn handle_addscript(cmd: &Value, state: &DaemonState) -> Result<Value, String> {

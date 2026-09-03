@@ -16,6 +16,12 @@ use super::cdp::client::CdpClient;
 use super::state;
 use super::stream::StreamServer;
 
+/// Idle recycling owns a launched browser process, but an external Chrome tab
+/// is durable user-visible state and must survive the daemon connection.
+fn should_close_browser_on_idle(is_external_connection: bool) -> bool {
+    !is_external_connection
+}
+
 pub async fn run_daemon(session: &str) {
     // Record this daemon's session so tabs it opens on the shared real Chrome
     // (via the ab-connect extension) land in a per-session Chrome tab group.
@@ -131,15 +137,12 @@ pub async fn run_daemon(session: &str) {
     }
 
     // Auto-shutdown the daemon after this many ms of inactivity (no commands
-    // received). On shutdown the daemon closes the tabs IT created (its per-session
-    // tab group), so an agent that finishes a task and just stops — without ever
-    // calling `close` — no longer leaves a pile of scratch tabs and a lingering
-    // tab group in the user's Chrome. The timer resets on every command, so active
-    // sessions are never interrupted; only genuinely-idle ones clean up.
+    // received). Locally launched browsers close; external browser tabs survive
+    // so their in-page state is preserved. Explicit session stop can reconnect
+    // and reclaim their persisted deletion rights. Each command resets the timer.
     //
     // Defaults to 10 minutes. Set AGENT_BROWSER_IDLE_TIMEOUT_MS to override, or 0
-    // to disable (keep the daemon alive forever — the old behaviour). Adopted
-    // tabs (the user's own, via `adopt`) are never closed: only `created_targets`.
+    // to disable (keep the daemon alive forever). Adopted tabs are never closed.
     const DEFAULT_IDLE_TIMEOUT_MS: u64 = 600_000;
     let idle_timeout_ms = match env::var("AGENT_BROWSER_IDLE_TIMEOUT_MS") {
         Ok(s) => s.trim().parse::<u64>().ok().filter(|&ms| ms > 0),
@@ -253,7 +256,14 @@ async fn run_socket_server(
             }, if idle_timeout_ms.is_some() => {
                 let mut s = state.lock().await;
                 if let Some(ref mut mgr) = s.browser {
-                    let _ = mgr.close().await;
+                    // A default idle timeout should reap a browser process that
+                    // we launched, but it must not delete the working tabs in the
+                    // user's real Chrome. Dropping the external CDP connection is
+                    // sufficient; persisted ownership lets the next daemon adopt
+                    // the same tab with its in-page state intact (#210).
+                    if should_close_browser_on_idle(mgr.is_cdp_connection()) {
+                        let _ = mgr.close().await;
+                    }
                 }
                 break;
             }
@@ -353,7 +363,11 @@ async fn run_socket_server(
             }, if idle_timeout_ms.is_some() => {
                 let mut s = state.lock().await;
                 if let Some(ref mut mgr) = s.browser {
-                    let _ = mgr.close().await;
+                    // Match the Unix daemon: an idle recycle disconnects from an
+                    // external Chrome without deleting session tabs (#210).
+                    if should_close_browser_on_idle(mgr.is_cdp_connection()) {
+                        let _ = mgr.close().await;
+                    }
                 }
                 let _ = fs::remove_file(&port_path);
                 break;
@@ -539,6 +553,12 @@ fn get_port_for_session(session: &str) -> u16 {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    fn idle_recycle_preserves_external_tabs_but_closes_launched_browser() {
+        assert!(!should_close_browser_on_idle(true));
+        assert!(should_close_browser_on_idle(false));
+    }
 
     #[cfg(windows)]
     #[test]

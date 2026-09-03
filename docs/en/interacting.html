@@ -194,6 +194,8 @@
         <code>select</code></strong> — since v1.5.72 <code>select</code> falls through to portal-aware
         logic on a non-native control (open → wait for options → click by visible text);
         <code>pick</code> is the explicit alias for the same behavior.
+        Native selects use the platform value/selected setters and dispatch both
+        <code>input</code> and <code>change</code>, so React/Vue controlled forms commit the new state.
       </p>
 
       <div class="du-code">
@@ -240,6 +242,8 @@
       <p>
         <code>upload</code> feeds a file to a file <code>&lt;input&gt;</code> or to a drop/paste-style editor (like X's
         composer). It also works over the extension relay.
+        If a React dropzone consumes the files and immediately clears or replaces its hidden input,
+        the command succeeds with a warning instead of falsely claiming that the page rejected the upload.
       </p>
 
       <div class="du-code">

@@ -2085,17 +2085,42 @@ pub async fn select_option(
 
             if (el.tagName === 'SELECT') {
                 const options = Array.from(el.options);
-                let matched = 0;
-                for (const opt of options) {
-                    const hit = vals.includes(opt.value) || vals.includes(norm(opt.textContent));
-                    opt.selected = hit;
-                    if (hit) matched++;
-                }
-                if (matched === 0) {
+                const matches = options.filter(opt =>
+                    vals.includes(opt.value) || vals.includes(norm(opt.textContent))
+                );
+                if (matches.length === 0) {
                     return { ok: false, kind: 'select', available: options.map(o => ({ value: o.value, label: norm(o.textContent) })) };
                 }
+
+                // Use the platform setters, not an instance-level `.value =` /
+                // `.selected =`. React installs value trackers on controlled
+                // controls; calling an instance setter can update that tracker
+                // before the event arrives, making React conclude that nothing
+                // changed. The native setters mutate the DOM while leaving the
+                // framework tracker stale, exactly like a user selection.
+                if (el.multiple) {
+                    const selectedSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLOptionElement.prototype, 'selected'
+                    )?.set;
+                    for (const opt of options) {
+                        const selected = matches.includes(opt);
+                        if (selectedSetter) selectedSetter.call(opt, selected);
+                        else opt.selected = selected;
+                    }
+                } else {
+                    const valueSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLSelectElement.prototype, 'value'
+                    )?.set;
+                    const value = matches[0].value;
+                    if (valueSetter) valueSetter.call(el, value);
+                    else el.value = value;
+                }
+
+                // React, Vue and browser-native listeners differ on which event
+                // they observe. Fire both after the native mutation.
+                el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
-                return { ok: true, matched, kind: 'select' };
+                return { ok: true, matched: el.multiple ? matches.length : 1, kind: 'select', value: el.value };
             }
 
             // Custom combobox: open the control (so a portalled menu mounts), poll
