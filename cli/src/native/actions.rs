@@ -3553,6 +3553,17 @@ async fn handle_keep(state: &mut DaemonState) -> Result<Value, String> {
 }
 
 async fn handle_close(state: &mut DaemonState) -> Result<Value, String> {
+    // A fresh daemon after idle has no manager, but still owns the external tabs
+    // recorded by its predecessor. Explicit close must not silently ignore them.
+    if state.browser.is_none() {
+        if let Some(session) = super::browser::DAEMON_SESSION.get() {
+            if crate::connection::has_created_targets(session) {
+                super::browser::close_persisted_session_tabs(session).await.map_err(|error| {
+                    format!("close incomplete: {error}. Reconnect with the original browser options and retry; saved tab ownership was retained.")
+                })?;
+            }
+        }
+    }
     if let Some(ref mgr) = state.browser {
         if let Some(ref session_name) = state.session_name {
             if let Ok(session_id) = mgr.active_session_id() {
