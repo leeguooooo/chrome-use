@@ -254,6 +254,14 @@ fn get_created_targets_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.created-targets.json", session))
 }
 
+/// Ownership survives idle daemon exit; explicit stop must not silently ignore it.
+pub fn has_created_targets(session: &str) -> bool {
+    fs::read_to_string(get_created_targets_path(session))
+        .ok()
+        .and_then(|value| serde_json::from_str::<CreatedTargetRegistry>(&value).ok())
+        .is_some_and(|registry| !registry.target_ids.is_empty())
+}
+
 #[derive(Deserialize, Serialize)]
 struct CreatedTargetRegistry {
     endpoint_sha256: String,

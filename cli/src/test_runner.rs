@@ -506,13 +506,13 @@ fn slug(name: &str) -> String {
 }
 
 fn ok() -> &'static str {
-    "\x1b[32m✓\x1b[0m"
+    crate::color::success_indicator()
 }
 fn cross() -> &'static str {
-    "\x1b[31m✗\x1b[0m"
+    crate::color::error_indicator()
 }
-fn err() -> &'static str {
-    "\x1b[31merror:\x1b[0m"
+fn err() -> String {
+    crate::color::red("error:")
 }
 
 #[cfg(test)]

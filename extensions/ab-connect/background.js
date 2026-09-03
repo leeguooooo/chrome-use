@@ -33,6 +33,8 @@ import {
   newReloadState,
   recordNavigationCommit,
   resetReloadLoop,
+  transferReloadState,
+  RELOAD_LOOP_WINDOW_MS,
 } from './reload-loop.js'
 import { targetInfoForTab } from './target-info.js'
 import {
@@ -660,6 +662,9 @@ async function recoverSessionTab(sessionId) {
       if (t && t.tabId != null) {
         const tab = await chrome.tabs.get(t.tabId).catch(() => null)
         if (eligible(tab)) {
+          // Preserve the diagnostic before attach yields; commits during the
+          // replacement window must contribute to the same reload history.
+          transferReloadState(reloadStates, tabId, t.tabId)
           try {
             await attachTab(t.tabId)
             if (tabs.has(t.tabId)) {
@@ -1506,7 +1511,12 @@ chrome.tabs.onRemoved.addListener(
   (tabId) =>
     void whenReady(() => {
       nativeDuplicateTabs.delete(tabId)
-      reloadStates.delete(tabId)
+      // Keep a short tombstone for stable-target recovery after onRemoved.
+      // Genuine closed tabs expire, while a replacement can transfer the state.
+      const removedState = reloadStates.get(tabId)
+      setTimeout(() => {
+        if (reloadStates.get(tabId) === removedState) reloadStates.delete(tabId)
+      }, RELOAD_LOOP_WINDOW_MS)
       unmarkOwned(tabId)
       detachTab(tabId, true)
     }),
@@ -1518,7 +1528,7 @@ chrome.tabs.onRemoved.addListener(
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (!details || details.frameId !== 0) return
   const entry = tabs.get(details.tabId)
-  if (!entry && !ownedTabs.has(details.tabId)) return
+  if (!entry && !ownedTabs.has(details.tabId) && !reloadStates.has(details.tabId)) return
   let reloadState = entry?.reloadState || reloadStates.get(details.tabId)
   if (!reloadState) {
     reloadState = newReloadState()

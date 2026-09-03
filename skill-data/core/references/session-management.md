@@ -167,6 +167,9 @@ The background daemon recycles after its idle timeout. In a real/external
 Chrome this disconnects without closing session-created tabs, so their URL and
 in-page state survive until the next command reconnects. Explicit `close` or
 `session stop` remains the intentional cleanup path and closes created tabs.
+After idle exit, stop rediscovers the browser and validates persisted ownership.
+If rediscovery fails or identifies another browser, reconnect using the original
+connection options and run close; stop reports failure and retains ownership.
 
 ```bash
 # Close specific session

@@ -182,6 +182,7 @@ ab-connect，然后重试。
 扩展中继的 Chrome debugger 调用也有明确超时，跨进程跳转后的坏句柄会返回恢复提示，不再无限挂起。
 默认的 daemon 空闲回收会保留真实 Chrome 中由 session 创建的标签页，包括当前 URL 与页内状态；
 显式执行 `close` 或 `session stop` 仍会关闭这些标签页。
+空闲退出后，`session stop` 会重新发现原浏览器并校验所有权再清理；若无法匹配，会明确报告未完成并保留记录，供使用原连接选项重连后执行 `close`。
 
 ### 独立模式（`--launch`）
 

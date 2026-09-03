@@ -8,6 +8,14 @@ export function newReloadState() {
   return { url: '', commits: [], detectedAt: 0 }
 }
 
+/** Carry a stable target's history across a Chrome tab-id replacement. */
+export function transferReloadState(states, oldTabId, newTabId) {
+  const state = states.get(oldTabId) || states.get(newTabId) || newReloadState()
+  states.set(newTabId, state)
+  if (oldTabId !== newTabId) states.delete(oldTabId)
+  return state
+}
+
 /** Record one committed top-frame navigation and return the current diagnosis. */
 export function recordNavigationCommit(state, url, now = Date.now()) {
   if (!state || typeof url !== 'string' || !url) return null

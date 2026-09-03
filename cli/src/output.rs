@@ -3307,6 +3307,9 @@ Usage:
 Manage isolated browser sessions, daemon lifecycle, and ownership handoff.
 If a registered daemon loses its socket, the next browser command stops the
 unreachable worker and starts a clean replacement for the same session.
+After idle recycling, stop reconnects to reclaim the session's created tabs.
+If the original browser cannot be rediscovered, ownership is retained and the
+command asks you to reconnect with the original options and run close.
 
 Operations:
   (none)               Show the current session owner

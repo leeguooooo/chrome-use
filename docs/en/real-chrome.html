@@ -315,6 +315,8 @@
         the extension options page, 0 = never).
         The session daemon's longer idle recycle also preserves agent-created tabs in real Chrome, including their
         current URL and in-page state. Explicit <code>close</code> or <code>session stop</code> still cleans them up.
+        After idle exit, stop rediscovers the original browser and validates ownership. If that fails, reconnect
+        with the original connection options and run close; saved deletion rights are retained.
       </div>
 
       <p>

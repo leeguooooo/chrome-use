@@ -330,6 +330,9 @@ without granting adopted tabs deletion rights.
 The default daemon idle recycle preserves session-created tabs in an external or
 extension-connected Chrome, including their current URL and in-page state. An
 explicit `close` or `session stop` still closes the session-created tabs.
+After an idle exit, `session stop` rediscovers the original browser and checks
+its saved ownership before closing tabs. If that browser cannot be matched,
+it reports incomplete cleanup and retains ownership for a later reconnect.
 
 On extension-connected Chrome, `tab inspect` requires ab-connect 0.5.16 or
 newer. If a tab liveness probe fails while the live extension is older than the

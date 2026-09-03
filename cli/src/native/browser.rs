@@ -28,6 +28,66 @@ pub static DAEMON_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::ne
 /// and the caller's SIGKILL is no longer what decides whether cleanup ran.
 pub const OWNED_TAB_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 
+/// Close only persisted, endpoint-matched deletion rights without discovering,
+/// attaching to, or creating any other tabs. Used after an idle daemon exit.
+pub async fn close_persisted_session_tabs_at(session: &str, endpoint: &str) -> Result<(), String> {
+    let mut targets = crate::connection::read_created_targets(session, endpoint);
+    if targets.is_empty() {
+        return Err(
+            "the connected browser does not match the session's saved tab ownership".into(),
+        );
+    }
+    let client = Arc::new(CdpClient::connect(endpoint).await?);
+    close_created_targets(&client, &mut targets).await;
+    crate::connection::write_created_targets(session, endpoint, &targets)?;
+    if !targets.is_empty() {
+        return Err(format!(
+            "{} created tab(s) could not be closed; ownership was preserved",
+            targets.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Rediscover the original external browser rather than storing its possibly
+/// credential-bearing CDP URL. A mismatch fails closed and keeps deletion rights.
+pub async fn close_persisted_session_tabs(session: &str) -> Result<(), String> {
+    let endpoint = auto_connect_cdp().await?;
+    close_persisted_session_tabs_at(session, &endpoint).await
+}
+
+async fn close_created_targets(client: &Arc<CdpClient>, targets: &mut HashSet<String>) {
+    // Each future owns its id while completed closes mutate the same set.
+    #[allow(clippy::redundant_iter_cloned)]
+    let mut closes: FuturesUnordered<_> = targets
+        .iter()
+        .cloned()
+        .map(|target_id| {
+            let client = Arc::clone(client);
+            async move {
+                let result = client
+                    .send_command_typed::<_, CloseTargetResult>(
+                        "Target.closeTarget",
+                        &CloseTargetParams {
+                            target_id: target_id.clone(),
+                        },
+                        None,
+                    )
+                    .await;
+                (target_id, result)
+            }
+        })
+        .collect();
+    let _ = tokio::time::timeout(OWNED_TAB_CLEANUP_BUDGET, async {
+        while let Some((target_id, result)) = closes.next().await {
+            if target_was_closed(&result) {
+                targets.remove(&target_id);
+            }
+        }
+    })
+    .await;
+}
+
 // ---------------------------------------------------------------------------
 // Launch validation
 // ---------------------------------------------------------------------------
@@ -2112,7 +2172,7 @@ impl BrowserManager {
             // Connected to the user's real Chrome: we must NOT close their
             // browser, but we DO own the tabs this session created. Close them so
             // they don't pile up in the user's window (in their per-session tab
-            // group) every time a session ends, idles out, or the daemon shuts
+            // group) every time a session explicitly ends or the daemon shuts
             // down. `created_targets` only holds tabs we made via
             // Target.createTarget or native duplicate — never the user's
             // existing tabs or other sessions' — so this is always safe.
@@ -2127,40 +2187,9 @@ impl BrowserManager {
             // sequential walk over N tabs never finished N round trips. Firing
             // them together means one stuck tab costs only itself, and the total
             // stays inside the shutdown budget the caller allows us.
-            // Every in-flight future must own its target id because completed
-            // targets are removed from the same set while other closes remain.
-            #[allow(clippy::redundant_iter_cloned)]
-            let mut closes: FuturesUnordered<_> = self
-                .created_targets
-                .iter()
-                .cloned()
-                .map(|target_id| {
-                    let client = Arc::clone(&self.client);
-                    async move {
-                        let params = CloseTargetParams {
-                            target_id: target_id.clone(),
-                        };
-                        let result = client
-                            .send_command_typed::<_, CloseTargetResult>(
-                                "Target.closeTarget",
-                                &params,
-                                None,
-                            )
-                            .await;
-                        (target_id, result)
-                    }
-                })
-                .collect();
-            if !closes.is_empty() {
+            if !self.created_targets.is_empty() {
                 let remaining_before_cleanup = self.created_targets.len();
-                let _ = tokio::time::timeout(OWNED_TAB_CLEANUP_BUDGET, async {
-                    while let Some((target_id, result)) = closes.next().await {
-                        if target_was_closed(&result) {
-                            self.created_targets.remove(&target_id);
-                        }
-                    }
-                })
-                .await;
+                close_created_targets(&self.client, &mut self.created_targets).await;
                 if self.created_targets.len() != remaining_before_cleanup {
                     if let Err(error) = self.persist_created_targets() {
                         eprintln!("{error}");

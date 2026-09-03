@@ -297,6 +297,7 @@
         下一条命令再透明地重新 attach（时长在扩展选项页可调，0 = 从不释放）。
         session daemon 更长周期的空闲回收也会保留真实 Chrome 中由 agent 创建的标签页，包括当前 URL 和页内状态；
         显式执行 <code>close</code> 或 <code>session stop</code> 仍会正常清理这些标签页。
+        空闲退出后，stop 会重新发现原浏览器并校验所有权；无法匹配时保留记录并报错，需用原连接选项重连后执行 close。
       </div>
 
       <p>

@@ -6,6 +6,7 @@ import {
   newReloadState,
   recordNavigationCommit,
   resetReloadLoop,
+  transferReloadState,
 } from './reload-loop.js'
 
 test('four rapid commits to the same URL expose a reload loop (#211)', () => {
@@ -35,4 +36,16 @@ test('a detected loop expires after the page stays put', () => {
   }
   assert.ok(activeReloadLoop(state, 9000))
   assert.equal(activeReloadLoop(state, 13000), null)
+})
+
+test('stable-target recovery retains commits before the replacement attaches', () => {
+  const states = new Map([[10, newReloadState()]])
+  const original = states.get(10)
+  for (const at of [1000, 2000, 3000]) recordNavigationCommit(original, 'https://example.com/apps', at)
+  const replacement = transferReloadState(states, 10, 20)
+  assert.equal(replacement, original)
+  assert.equal(states.has(10), false)
+  assert.equal(states.get(20), original)
+  assert.equal(recordNavigationCommit(states.get(20), 'https://example.com/apps', 4000).count, 4)
+  assert.equal(transferReloadState(states, 10, 20), original)
 })
