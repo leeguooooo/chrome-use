@@ -1360,6 +1360,7 @@ mod tests {
         // free and raced on daemon startup.
         let contender = fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&path)
             .expect("should open contender handle");

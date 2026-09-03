@@ -295,7 +295,15 @@
         永远不会盖住用户正在用的页面（它只出现在被 attach 的标签页上，而 agent 的都是后台标签页）。
         无需重启 Chrome，完全无缝。扩展 0.5.19 起，agent 标签页 30 秒没有活动就会自动释放调试器、横幅消失，
         下一条命令再透明地重新 attach（时长在扩展选项页可调，0 = 从不释放）。
+        session daemon 更长周期的空闲回收也会保留真实 Chrome 中由 agent 创建的标签页，包括当前 URL 和页内状态；
+        显式执行 <code>close</code> 或 <code>session stop</code> 仍会正常清理这些标签页。
       </div>
+
+      <p>
+        relay 的顶层导航现在优先走 Chrome 浏览器级标签页 API，更接近普通手动导航，而不是先用 CDP
+        <code>Page.navigate</code>。如果站点仍在八秒内向同一 URL 连续提交四次，下一条命令会明确报告重载环并给出恢复建议。
+        可改用稳定的深链接，或用 <code>tab adopt</code> 接管一个已经渲染好的标签页来保留现场。
+      </p>
 
       <h2>读取用户已经打开的标签页：adopt</h2>
       <p>

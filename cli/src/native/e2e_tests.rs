@@ -1430,6 +1430,63 @@ async fn e2e_form_interaction() {
     assert_success(&resp);
 }
 
+/// Controlled selects need the platform setter plus both input/change events.
+/// The instance setter below models a framework value tracker: `select.value =`
+/// would touch it, while a real/native mutation deliberately bypasses it.
+#[tokio::test]
+#[ignore]
+async fn e2e_select_uses_native_setter_and_framework_events() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = r#"<select id="country"><option value="us">United States</option><option value="jp">Japan</option></select><script>
+      const select = document.getElementById('country');
+      const native = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+      let instanceSetterCalls = 0;
+      Object.defineProperty(select, 'value', {
+        configurable: true,
+        get() { return native.get.call(this); },
+        set(v) { instanceSetterCalls++; native.set.call(this, v); }
+      });
+      window.events = [];
+      select.addEventListener('input', () => events.push('input'));
+      select.addEventListener('change', () => events.push('change'));
+      window.result = () => ({ value: select.value, instanceSetterCalls, events });
+    </script>"#;
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "select", "selector": "#country", "values": "Japan" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "result()" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!({ "value": "jp", "instanceSetterCalls": 0, "events": ["input", "change"] })
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 /// Regression coverage for issue #138. Synology DSM exposes Monaco's hidden
 /// textarea as a textbox, so the command must resolve the owning model, replace
 /// multiline content atomically, and verify the exact value before succeeding.
@@ -6435,6 +6492,62 @@ async fn e2e_upload_no_input_does_not_navigate() {
     assert!(
         !url_after.starts_with("about:blank"),
         "tab navigated to about:blank"
+    );
+
+    let _ = std::fs::remove_file(&tmp);
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// React-style dropzones often consume the FileList synchronously and clear the
+/// input. Delivery succeeded and the CLI must return success with a soft warning.
+#[tokio::test]
+#[ignore]
+async fn e2e_upload_consumed_and_cleared_is_not_a_false_failure() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = r#"<input id="dropzone" type="file"><output id="accepted"></output><script>
+      dropzone.addEventListener('change', () => {
+        accepted.textContent = [...dropzone.files].map(file => file.name).join(',');
+        dropzone.value = '';
+      });
+    </script>"#;
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let tmp = std::env::temp_dir().join(format!("ab-upload-consumed-{}.txt", std::process::id()));
+    std::fs::write(&tmp, "accepted").unwrap();
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "upload", "selector": "#dropzone", "files": [tmp.to_string_lossy()] }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["attached"], 0);
+    assert!(get_data(&resp)["warning"]
+        .as_str()
+        .is_some_and(|warning| warning.contains("consumed or replaced")));
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "accepted.textContent" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        tmp.file_name().unwrap().to_string_lossy().as_ref()
     );
 
     let _ = std::fs::remove_file(&tmp);

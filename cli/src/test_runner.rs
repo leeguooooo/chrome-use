@@ -505,6 +505,16 @@ fn slug(name: &str) -> String {
     s.trim_matches('-').to_lowercase()
 }
 
+fn ok() -> &'static str {
+    "\x1b[32m✓\x1b[0m"
+}
+fn cross() -> &'static str {
+    "\x1b[31m✗\x1b[0m"
+}
+fn err() -> &'static str {
+    "\x1b[31merror:\x1b[0m"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,14 +645,4 @@ mod tests {
         // Selectors with quotes must embed safely.
         assert_eq!(js(r#"a"b"#), r#""a\"b""#);
     }
-}
-
-fn ok() -> &'static str {
-    "\x1b[32m✓\x1b[0m"
-}
-fn cross() -> &'static str {
-    "\x1b[31m✗\x1b[0m"
-}
-fn err() -> &'static str {
-    "\x1b[31merror:\x1b[0m"
 }

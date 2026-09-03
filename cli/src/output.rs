@@ -1862,7 +1862,10 @@ chrome-use select - Select a dropdown option
 
 Usage: chrome-use select <selector> <value...>
 
-Selects one or more options in a <select> dropdown by value.
+Selects one or more options by value or visible label. Native <select>
+controls use platform setters plus input/change events so React and Vue
+controlled forms commit the selection. Custom ARIA/react-select controls
+are opened and matched through their visible option list.
 
 Global Options:
   --json               Output as JSON
@@ -1897,7 +1900,9 @@ chrome-use upload - Upload files
 
 Usage: chrome-use upload <selector> <files...>
 
-Uploads one or more files to a file input element.
+Uploads one or more files to a file input element. If a React-style dropzone
+consumes the FileList and clears/replaces the input, delivery remains successful
+and a warning explains that the live input could not retain the files.
 
 Global Options:
   --json               Output as JSON

@@ -809,6 +809,15 @@ pub struct BrowserManager {
     pub capture_console: bool,
 }
 
+/// Result of delivering files to a page. A zero/unknown live input count is not
+/// a failure: React dropzones commonly consume the FileList and clear or replace
+/// the input synchronously from their change handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadOutcome {
+    pub attached_count: Option<u64>,
+    pub warning: Option<String>,
+}
+
 /// Whether console/error capture (and thus `Runtime.enable`) is opted into for this
 /// daemon. Defaults to `false` so the common automation path leaves no Runtime-domain
 /// fingerprint. Set `AGENT_BROWSER_CAPTURE_CONSOLE=1` (or `true`) to turn it on.
@@ -1794,7 +1803,11 @@ impl BrowserManager {
             Err(e) => return Err(e),
         };
 
-        if let Some(ref fallback) = nav_result.relay_fallback {
+        if let Some(fallback) = nav_result
+            .relay_fallback
+            .as_ref()
+            .filter(|fallback| fallback.recovered.unwrap_or(true))
+        {
             nav_warning = Some(format!(
                 "The page renderer did not answer `Page.navigate` within the relay budget; \
                  navigation recovered through {} without restarting the session.",
@@ -2119,6 +2132,9 @@ impl BrowserManager {
             // sequential walk over N tabs never finished N round trips. Firing
             // them together means one stuck tab costs only itself, and the total
             // stays inside the shutdown budget the caller allows us.
+            // Every in-flight future must own its target id because completed
+            // targets are removed from the same set while other closes remain.
+            #[allow(clippy::redundant_iter_cloned)]
             let mut closes: FuturesUnordered<_> = self
                 .created_targets
                 .iter()
@@ -3390,7 +3406,7 @@ impl BrowserManager {
         files: &[String],
         ref_map: &RefMap,
         iframe_sessions: &HashMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> Result<UploadOutcome, String> {
         let session_id = self.active_session_id()?;
 
         let (object_id, effective_session_id) =
@@ -3461,23 +3477,33 @@ impl BrowserManager {
             }
         }
 
-        // Verify the files actually attached and make sure the framework saw the
-        // change. `DOM.setFileInputFiles` fires a trusted `input`+`change`, but we
-        // also dispatch bubbling synthetic events as a belt-and-suspenders fallback
-        // for frameworks (Vue's `el-upload` `on-change`, React) that may have
-        // re-bound the listener — and only report success if `files.length > 0`,
-        // so "✓ Done" can never lie.
-        let attached = self
+        // `DOM.setFileInputFiles` (or the relay fallback above) has already
+        // delivered the files and fired input/change. Read the live input only
+        // as confirmation. React dropzones are allowed to consume the FileList
+        // and synchronously clear or replace the input; that is successful page
+        // behavior, not a rejected upload (#208).
+        match self
             .notify_and_count_file_input(&input_object_id, &effective_session_id)
-            .await?;
-        if attached == 0 {
-            return Err(
-                "file input is still empty after upload — the page did not accept the file(s)"
-                    .to_string(),
-            );
+            .await
+        {
+            Ok(attached) if attached > 0 => Ok(UploadOutcome {
+                attached_count: Some(attached),
+                warning: None,
+            }),
+            Ok(_) => Ok(UploadOutcome {
+                attached_count: Some(0),
+                warning: Some(
+                    "upload events were delivered, but the file input is now empty; the page may have consumed or replaced it (common for React dropzones)"
+                        .to_string(),
+                ),
+            }),
+            Err(error) => Ok(UploadOutcome {
+                attached_count: None,
+                warning: Some(format!(
+                    "upload events were delivered, but post-upload verification was unavailable: {error}"
+                )),
+            }),
         }
-
-        Ok(())
     }
 
     /// Given an arbitrary resolved element, return the object id of the

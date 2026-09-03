@@ -415,7 +415,7 @@ chrome-use keyup d                     # release it — pair them to hold-to-mov
                                           # in a game: `keydown d; sleep; keyup d`
 chrome-use check @e3                   # check checkbox
 chrome-use uncheck @e3                 # uncheck
-chrome-use select @e4 "option-value"   # native <select> only
+chrome-use select @e4 "option-value"   # native <select> (React/Vue-safe native setter)
 chrome-use select @e4 "a" "b"          # select multiple
 chrome-use pick @e4 --option "Europe"  # ANY combobox (react-select / ARIA /
                                           # native): opens it, waits for the menu
@@ -429,7 +429,8 @@ chrome-use upload @e5 file1.pdf        # upload file(s) — works over the exten
                                           # chrome.debugger forbids setFileInputFiles, so the
                                           # file's bytes are streamed into the page and rebuilt as
                                           # a File there (chunked under native-messaging's 1 MiB cap).
-                                          # Works on file <input>s and drop/paste composers (e.g. X).
+                                          # A consumed/cleared React dropzone returns exit 0 with
+                                          # a warning instead of falsely reporting rejection.
 chrome-use scroll down 500             # scroll page (up/down/left/right)
 chrome-use scroll down 700 --at 640,400 # wheel at a pixel — scrolls a cross-origin
                                           # iframe (Payments/Stripe/checkout/KYC) that

@@ -327,6 +327,10 @@ session. Created ownership is persisted by session name and connected browser
 endpoint across daemon restarts, so an interrupted cleanup can safely resume
 without granting adopted tabs deletion rights.
 
+The default daemon idle recycle preserves session-created tabs in an external or
+extension-connected Chrome, including their current URL and in-page state. An
+explicit `close` or `session stop` still closes the session-created tabs.
+
 On extension-connected Chrome, `tab inspect` requires ab-connect 0.5.16 or
 newer. If a tab liveness probe fails while the live extension is older than the
 bundled version, chrome-use reports the version mismatch instead of diagnosing
@@ -639,7 +643,8 @@ We deliberately **don't ship our own bot detector** — the strongest, most hone
 
 - **Auto-connect is default** — `chrome-use open <url>` drives your existing Chrome instead of launching a new one
 - **Extension-relay transport** — a one-click Chrome Web Store extension + native messaging, so there's no debug port and no "Allow remote debugging?" dialog
-- **Blocked-page recovery** — if a renderer does not answer `Page.navigate`, the relay retries that explicit navigation through Chrome's browser-level tab API; other sessions remain independent
+- **Browser-level relay navigation** — top-level `open`/`navigate` uses Chrome's normal tab API first, matching manual navigation and avoiding sites that loop or stall on CDP-driven navigation; CDP remains the fallback
+- **Reload-loop diagnosis** — four rapid commits to the same URL surface an actionable error instead of returning an empty, unstable DOM
 - **Relay tab reconciliation** — reconnect validates Chrome tab IDs before re-announcing them, so a dead bootstrap `about:blank` cannot remain active beside the recovered page
 - **CDP-native stealth** — anti-detection via Chrome/CDP overrides rather than JS patches; zero patches when attached to your real Chrome, full patches only for `--launch`
 - **Humanize** — human-like cursor trajectories + adaptive anti-bot handling

@@ -28,6 +28,12 @@ import {
   canUseBrowserNavigationFallback,
   navigateTabWithBrowserFallback,
 } from './tab-navigation.js'
+import {
+  activeReloadLoop,
+  newReloadState,
+  recordNavigationCommit,
+  resetReloadLoop,
+} from './reload-loop.js'
 import { targetInfoForTab } from './target-info.js'
 import {
   IDLE_DETACH_DEFAULT_SECS,
@@ -46,6 +52,8 @@ let port = null
 let hostConnected = false
 /** tabId -> { sessionId, targetId } */
 const tabs = new Map()
+/** tabId -> reload history, retained across debugger/process re-attachments. */
+const reloadStates = new Map()
 /** sessionId -> tabId (main session per tab) */
 const sessionToTab = new Map()
 /** child (OOPIF/worker) sessionId -> tabId */
@@ -1008,6 +1016,20 @@ async function handleForwardCdpCommand(msg) {
   // the command and count in-flight commands so the sweep never detaches under
   // a running one. State-setting commands are remembered for replay.
   const entry = tabs.get(tabId)
+  if (entry && (method === 'Page.navigate' || method === 'Page.reload')) {
+    // An explicit navigation/reload is a recovery action. Do not let the prior
+    // page's diagnosis prevent the caller from escaping it.
+    resetReloadLoop(entry.reloadState)
+  } else if (entry) {
+    const loop = activeReloadLoop(entry.reloadState)
+    if (loop) {
+      throw new Error(
+        `reload loop detected: ${loop.count} top-level commits to ${loop.url} within ` +
+          `${loop.windowMs}ms. The page is repeatedly replacing itself, so its DOM is not ` +
+          `stable enough to drive. Try a deep link or adopt an already-rendered tab.`,
+      )
+    }
+  }
   if (entry && entry.attached === false) await reattachTab(tabId, entry)
   if (entry) {
     entry.inflight++
@@ -1038,11 +1060,10 @@ async function dispatchToTab(tabId, method, params, childSid) {
   if (canUseBrowserNavigationFallback(method, params, childSid)) {
     return await navigateTabWithBrowserFallback(params, {
       navigateWithDebugger: () => sendCdpToTab(tabId, method, params),
-      isRelayTimeoutError,
       updateTab: (url) =>
         withRelayTimeout(
           chrome.tabs.update(tabId, { url }),
-          'chrome.tabs.update(Page.navigate fallback)',
+          'chrome.tabs.update(Page.navigate)',
         ),
     })
   }
@@ -1126,7 +1147,7 @@ async function attachTab(tabId, transactionIsActive) {
     throw new Error('attachTab: duplicate transaction cancelled')
   }
   const sessionId = `cb-tab-${tabId}`
-  const entry = newTabEntry(sessionId, targetId, true)
+  const entry = newTabEntry(tabId, sessionId, targetId, true)
   tabs.set(tabId, entry)
   sessionToTab.set(sessionId, tabId)
   rememberSessionTarget(sessionId, targetId)
@@ -1151,7 +1172,12 @@ async function attachTab(tabId, transactionIsActive) {
   return entry
 }
 
-function newTabEntry(sessionId, targetId, attached) {
+function newTabEntry(tabId, sessionId, targetId, attached) {
+  let reloadState = reloadStates.get(tabId)
+  if (!reloadState) {
+    reloadState = newReloadState()
+    reloadStates.set(tabId, reloadState)
+  }
   return {
     sessionId,
     targetId,
@@ -1163,6 +1189,9 @@ function newTabEntry(sessionId, targetId, attached) {
     // State-setting commands (X.enable, Emulation.set*, …) the daemon sent on
     // this tab, replayed after an idle re-attach so the session looks untouched.
     replay: new Map(),
+    // Top-frame commit history used to turn an otherwise silent same-URL
+    // reload storm into an actionable command error (#211).
+    reloadState,
   }
 }
 
@@ -1298,7 +1327,7 @@ async function announceOwnedTabLazily(tabId) {
   // DevTools — makes the call fail harmlessly.)
   await chrome.debugger.detach({ tabId }).catch(() => {})
   const sessionId = `cb-tab-${tabId}`
-  const entry = newTabEntry(sessionId, String(info.targetId), false)
+  const entry = newTabEntry(tabId, sessionId, String(info.targetId), false)
   tabs.set(tabId, entry)
   sessionToTab.set(sessionId, tabId)
   rememberSessionTarget(sessionId, entry.targetId)
@@ -1477,10 +1506,26 @@ chrome.tabs.onRemoved.addListener(
   (tabId) =>
     void whenReady(() => {
       nativeDuplicateTabs.delete(tabId)
+      reloadStates.delete(tabId)
       unmarkOwned(tabId)
       detachTab(tabId, true)
     }),
 )
+
+// `tabs.onUpdated` can collapse repeated reloads into ambiguous loading states.
+// webNavigation gives one committed event per top-level document, which is the
+// stable signal needed to diagnose a rapid same-URL loop (#211).
+chrome.webNavigation.onCommitted.addListener((details) => {
+  if (!details || details.frameId !== 0) return
+  const entry = tabs.get(details.tabId)
+  if (!entry && !ownedTabs.has(details.tabId)) return
+  let reloadState = entry?.reloadState || reloadStates.get(details.tabId)
+  if (!reloadState) {
+    reloadState = newReloadState()
+    reloadStates.set(details.tabId, reloadState)
+  }
+  recordNavigationCommit(reloadState, details.url)
+})
 
 // ---- bootstrap + keepalive ------------------------------------------------
 

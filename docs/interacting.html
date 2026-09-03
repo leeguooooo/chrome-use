@@ -190,6 +190,8 @@
         <strong>自定义组合框（react-select / ARIA 等）都可以用 <code>select</code></strong>——
         自 v1.5.72 起，<code>select</code> 遇到非原生控件会自动走 portal-aware 逻辑（开控件→等选项→按可见文本点）；
         <code>pick</code> 是同一能力的显式别名。
+        原生下拉使用平台自带的 value/selected setter，并同时触发 <code>input</code> 与
+        <code>change</code>，因此 React/Vue 受控表单也会提交新状态。
       </p>
 
       <div class="du-code">
@@ -232,6 +234,7 @@
       <p>
         <code>upload</code> 给文件 <code>&lt;input&gt;</code> 或拖拽/粘贴式的编辑器（如 X 的输入框）投喂文件。
         它在扩展中继模式下也能工作。
+        React dropzone 消费文件后立即清空或替换隐藏 input 时，命令会成功并给出提示，不再误报页面拒绝了上传。
       </p>
 
       <div class="du-code">

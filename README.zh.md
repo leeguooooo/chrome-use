@@ -180,6 +180,8 @@ ab-connect，然后重试。
 若点击触发原生 `confirm()` 或 `prompt()`，click 会返回待处理 dialog，而不是把会话卡死；
 接着运行 `chrome-use dialog status` 与 `chrome-use dialog accept|dismiss` 即可。
 扩展中继的 Chrome debugger 调用也有明确超时，跨进程跳转后的坏句柄会返回恢复提示，不再无限挂起。
+默认的 daemon 空闲回收会保留真实 Chrome 中由 session 创建的标签页，包括当前 URL 与页内状态；
+显式执行 `close` 或 `session stop` 仍会关闭这些标签页。
 
 ### 独立模式（`--launch`）
 
@@ -373,6 +375,8 @@ CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不�
 
 - **默认 auto-connect** —— `chrome-use open` 连你现有的 Chrome 而非启新的
 - **扩展中继传输** —— 一键安装的 Chrome 商店扩展 + 原生消息，无调试端口、无 "Allow remote debugging?" 弹框
+- **浏览器级中继导航** —— 顶层 `open`/`navigate` 优先走 Chrome 的普通标签页 API，更接近手动导航；CDP 作为回退
+- **重载环诊断** —— 同一 URL 在短时间内连续提交四次会明确报错，不再返回空白且不稳定的 DOM
 - **CDP 原生隐身** —— 反检测走 Chrome/CDP 覆盖而非 JS 补丁；连真实 Chrome 零补丁，仅 `--launch` 用全补丁
 - **Humanize** —— 类人光标轨迹 + 自适应反爬处理
 - **多 agent 隔离** —— 多个 agent 通过 per-session 标签组共享同一个真实 Chrome，互不串扰

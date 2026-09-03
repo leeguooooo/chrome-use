@@ -8545,9 +8545,18 @@ async fn handle_upload(cmd: &Value, state: &DaemonState) -> Result<Value, String
         })
         .unwrap_or_default();
 
-    mgr.upload_files(selector, &files, &state.ref_map, &state.iframe_sessions)
+    let outcome = mgr
+        .upload_files(selector, &files, &state.ref_map, &state.iframe_sessions)
         .await?;
-    Ok(json!({ "uploaded": files.len(), "selector": selector }))
+    let mut result = json!({
+        "uploaded": files.len(),
+        "selector": selector,
+        "attached": outcome.attached_count,
+    });
+    if let Some(warning) = outcome.warning {
+        result["warning"] = json!(warning);
+    }
+    Ok(result)
 }
 
 async fn handle_addscript(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
