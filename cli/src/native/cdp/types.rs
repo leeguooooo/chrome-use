@@ -243,6 +243,16 @@ pub struct RelayNavigateFallback {
     pub title: String,
 }
 
+impl PageNavigateResult {
+    /// Only genuine timeout recovery should skip renderer metadata reads.
+    /// A normal browser-level navigation still needs its final URL and title.
+    pub fn recovery_metadata(&self) -> Option<&RelayNavigateFallback> {
+        self.relay_fallback
+            .as_ref()
+            .filter(|fallback| fallback.recovered.unwrap_or(true))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameNavigatedEvent {

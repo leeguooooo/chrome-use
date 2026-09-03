@@ -1803,11 +1803,7 @@ impl BrowserManager {
             Err(e) => return Err(e),
         };
 
-        if let Some(fallback) = nav_result
-            .relay_fallback
-            .as_ref()
-            .filter(|fallback| fallback.recovered.unwrap_or(true))
-        {
+        if let Some(fallback) = nav_result.recovery_metadata() {
             nav_warning = Some(format!(
                 "The page renderer did not answer `Page.navigate` within the relay budget; \
                  navigation recovered through {} without restarting the session.",
@@ -1866,12 +1862,11 @@ impl BrowserManager {
             }
         }
 
-        // A browser-level fallback is specifically used because the renderer did
-        // not answer. Do not immediately issue two more renderer-bound reads and
-        // turn an 8-second recovery into roughly 24 seconds. chrome.tabs.update
-        // returned browser metadata with the accepted/pending URL; normal CDP
-        // navigation keeps the richer page-scoped reads.
-        let (page_url, title) = match nav_result.relay_fallback.as_ref() {
+        // Genuine timeout recovery must not immediately issue two more renderer
+        // reads and turn an 8-second recovery into roughly 24 seconds. Normal
+        // browser-level navigation, like direct CDP, reads the final URL/title
+        // after the lifecycle wait rather than returning pre-redirect metadata.
+        let (page_url, title) = match nav_result.recovery_metadata() {
             Some(fallback) => (
                 if fallback.url.is_empty() {
                     url.to_string()
@@ -4229,6 +4224,31 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use tokio::time::sleep;
+
+    #[test]
+    fn relay_primary_navigation_reads_final_metadata_but_recovery_does_not() {
+        let mut payload = json!({
+            "frameId": "",
+            "relayFallback": {
+                "method": "browser-level chrome.tabs.update",
+                "url": "https://example.com/before-redirect",
+                "recovered": false
+            }
+        });
+        let primary: PageNavigateResult = serde_json::from_value(payload.clone()).unwrap();
+        assert!(primary.recovery_metadata().is_none());
+
+        payload["relayFallback"]["recovered"] = json!(true);
+        let recovery: PageNavigateResult = serde_json::from_value(payload.clone()).unwrap();
+        assert!(recovery.recovery_metadata().is_some());
+
+        payload["relayFallback"]
+            .as_object_mut()
+            .unwrap()
+            .remove("recovered");
+        let legacy: PageNavigateResult = serde_json::from_value(payload).unwrap();
+        assert!(legacy.recovery_metadata().is_some());
+    }
 
     #[test]
     fn test_format_tab_id() {
