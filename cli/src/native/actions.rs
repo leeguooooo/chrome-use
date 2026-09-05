@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, oneshot, RwLock};
 
 use crate::connection::{get_restore_url_path, get_socket_dir};
 
+use super::a11y;
 use super::auth;
 use super::browser::{should_track_target, BrowserManager, WaitUntil};
 use super::cdp::chrome::LaunchOptions;
@@ -751,8 +752,22 @@ impl DaemonState {
     }
 
     pub async fn drain_cdp_events_background(&mut self) {
-        let drained = self.drain_cdp_events();
-        self.apply_drained_events(drained).await;
+        // Arming auto-attach on a freshly attached iframe session (see
+        // apply_drained_events) makes Chrome report that frame's own existing
+        // cross-origin children — and it does so before the setAutoAttach
+        // response returns, so those attach events are already queued once the
+        // pass completes. Drain again so a nested frame is registered in the
+        // same command that discovered its parent, instead of one command late
+        // (#214: the first `snapshot -i` after `open` must already see it).
+        // Bounded: each pass only continues if it armed new sessions.
+        for _ in 0..3 {
+            let drained = self.drain_cdp_events();
+            let armed_new_sessions = !drained.attached_iframe_sessions.is_empty();
+            self.apply_drained_events(drained).await;
+            if !armed_new_sessions {
+                break;
+            }
+        }
     }
 
     async fn apply_drained_events(&mut self, drained: DrainedEvents) {
@@ -794,6 +809,26 @@ impl DaemonState {
                 let _ = mgr
                     .client
                     .send_command_no_params("Accessibility.enable", Some(iframe_sid.as_str()))
+                    .await;
+                // Auto-attach is per-session, not inherited (#214). The page
+                // session's `Target.setAutoAttach` only reaches frames whose
+                // parent target IS the page, so a cross-origin iframe nested
+                // inside this cross-origin iframe never attached: `snapshot -i`
+                // pierced Stripe Connect's onboarding frame but not the bank
+                // picker popup frame inside it. Arm the same flattened
+                // auto-attach on every child session as it arrives, so the
+                // next level down attaches the same way this one did.
+                let _ = mgr
+                    .client
+                    .send_command(
+                        "Target.setAutoAttach",
+                        Some(serde_json::json!({
+                            "autoAttach": true,
+                            "waitForDebuggerOnStart": false,
+                            "flatten": true
+                        })),
+                        Some(iframe_sid.as_str()),
+                    )
                     .await;
                 if self.har_recording || self.request_tracking {
                     let _ = mgr
@@ -1373,27 +1408,37 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // Drain and apply pending CDP events (console, errors, screencast frames, target lifecycle)
     state.drain_cdp_events_background().await;
 
+    // `a11y <url>` performs a real navigation before auditing. Gate both the
+    // audit and the compound navigation so an audit cannot bypass navigation
+    // policy or confirmation rules.
+    let mut gated_actions = vec![action];
+    if action == "a11y" && cmd.get("url").and_then(|v| v.as_str()).is_some() {
+        gated_actions.push("navigate");
+    }
+
     // Hot-reload and check action policy
     if let Some(ref mut policy) = state.policy {
         let _ = policy.reload();
-        match policy.check(action) {
-            PolicyResult::Allow => {}
-            PolicyResult::Deny(reason) => {
-                return error_response(
-                    &id,
-                    &format!("Action '{}' denied by policy: {}", action, reason),
-                );
-            }
-            PolicyResult::RequiresConfirmation => {
-                state.pending_confirmation = Some(PendingConfirmation {
-                    action: action.to_string(),
-                    cmd: cmd.clone(),
-                });
-                return json!({
-                    "id": id,
-                    "success": true,
-                    "data": { "confirmation_required": true, "action": action },
-                });
+        for gated_action in &gated_actions {
+            match policy.check(gated_action) {
+                PolicyResult::Allow => {}
+                PolicyResult::Deny(reason) => {
+                    return error_response(
+                        &id,
+                        &format!("Action '{}' denied by policy: {}", gated_action, reason),
+                    );
+                }
+                PolicyResult::RequiresConfirmation => {
+                    state.pending_confirmation = Some(PendingConfirmation {
+                        action: (*gated_action).to_string(),
+                        cmd: cmd.clone(),
+                    });
+                    return json!({
+                        "id": id,
+                        "success": true,
+                        "data": { "confirmation_required": true, "action": gated_action },
+                    });
+                }
             }
         }
     }
@@ -1401,20 +1446,22 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // Check AGENT_BROWSER_CONFIRM_ACTIONS (category-based, independent of policy file)
     if action != "confirm" && action != "deny" {
         if let Some(ref ca) = state.confirm_actions {
-            if ca.requires_confirmation(action) {
-                state.pending_confirmation = Some(PendingConfirmation {
-                    action: action.to_string(),
-                    cmd: cmd.clone(),
-                });
-                return json!({
-                    "id": id,
-                    "success": true,
-                    "data": {
-                        "confirmation_required": true,
-                        "confirmation_id": id,
-                        "action": action,
-                    },
-                });
+            for gated_action in &gated_actions {
+                if ca.requires_confirmation(gated_action) {
+                    state.pending_confirmation = Some(PendingConfirmation {
+                        action: (*gated_action).to_string(),
+                        cmd: cmd.clone(),
+                    });
+                    return json!({
+                        "id": id,
+                        "success": true,
+                        "data": {
+                            "confirmation_required": true,
+                            "confirmation_id": id,
+                            "action": gated_action,
+                        },
+                    });
+                }
             }
         }
     }
@@ -1657,6 +1704,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "react_renders_stop" => handle_react_renders_stop(cmd, state).await,
             "react_suspense" => handle_react_suspense(cmd, state).await,
             "vitals" => handle_vitals(cmd, state).await,
+            "a11y" => handle_a11y(cmd, state).await,
             "pushstate" => handle_pushstate(cmd, state).await,
             "clipboard" => handle_clipboard(cmd, state).await,
             "wheel" => handle_wheel(cmd, state).await,
@@ -1779,6 +1827,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     }
     let mut resp = match result {
         Ok(data) => success_response(&id, data),
+        // The accessibility engine already returns command-specific errors
+        // such as `No element matches selector: #main`. Keep that actionable
+        // detail instead of collapsing it into the generic locator guidance.
+        Err(e) if action == "a11y" => error_response(&id, &e),
         Err(e) => error_response(&id, &super::browser::to_ai_friendly_error(&e)),
     };
 
@@ -8888,6 +8940,34 @@ async fn handle_vitals(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     }
 }
 
+/// Run the vendored axe-core engine in private isolated worlds so the audit
+/// works under strict CSP and never trusts or mutates a page-owned `window.axe`.
+async fn handle_a11y(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    if cmd.get("url").and_then(|v| v.as_str()).is_some() {
+        let _ = handle_navigate(cmd, state).await?;
+        // Navigation can attach new out-of-process iframe sessions. Apply
+        // those events before installing axe into the complete frame tree.
+        state.drain_cdp_events_background().await;
+    }
+
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let tags = cmd.get("tags").and_then(|v| v.as_str());
+    let selector = cmd.get("selector").and_then(|v| v.as_str());
+    let session_id = mgr.active_session_id()?;
+    let raw = a11y::run_audit(
+        &mgr.client,
+        session_id,
+        &state.iframe_sessions,
+        tags,
+        selector,
+    )
+    .await?;
+    if let Some(err) = raw.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(raw)
+}
+
 async fn handle_pushstate(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let url = cmd
@@ -14136,6 +14216,27 @@ mod tests {
         assert_eq!(result["success"], true);
         assert_eq!(result["data"]["requestCount"], 1);
         let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn test_policy_denies_a11y_url_as_navigation_before_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join("policy.json");
+        fs::write(&policy_path, r#"{"deny":["navigate"]}"#).unwrap();
+
+        let mut state = DaemonState::new();
+        state.policy = Some(ActionPolicy::load(policy_path.to_str().unwrap()).unwrap());
+        let cmd = json!({
+            "action": "a11y",
+            "id": "a11y-navigation-denied",
+            "url": "https://example.com"
+        });
+
+        let response = execute_command(&cmd, &mut state).await;
+
+        assert_eq!(response["success"], false);
+        assert!(response["error"].as_str().unwrap().contains("navigate"));
+        assert!(state.browser.is_none());
     }
 
     #[test]

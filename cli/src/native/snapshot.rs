@@ -854,7 +854,14 @@ async fn take_snapshot_at_depth(
                 continue;
             };
             let ref_id = node.ref_id.as_deref().unwrap_or("");
-            if let Ok(child_fid) = resolve_iframe_frame_id(client, session_id, bid).await {
+            // The Iframe node came out of THIS level's AX tree, which for a
+            // cross-origin frame lives on `effective_session_id`, not the page
+            // session. Backend node ids are per-target, so describing it on the
+            // page session fails — silently — and nested cross-origin frames
+            // (a bank picker popup inside Stripe Connect's onboarding frame,
+            // #214) were never descended into even once their session was
+            // attached. Resolve the child's frame id where the node exists.
+            if let Ok(child_fid) = resolve_iframe_frame_id(client, effective_session_id, bid).await {
                 // Snapshot the child frame; errors are silently ignored
                 // (e.g. cross-origin iframes)
                 if let Ok(child_text) = Box::pin(take_snapshot_at_depth(
