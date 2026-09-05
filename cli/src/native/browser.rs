@@ -1761,6 +1761,25 @@ impl BrowserManager {
     }
 
     pub async fn navigate(&mut self, url: &str, wait_until: WaitUntil) -> Result<Value, String> {
+        // Refuse privileged Chrome pages on the relay BEFORE navigating (#213).
+        // The extension cannot attach a debugger to chrome:// / chrome-extension://
+        // / devtools://, so driving the session tab there did not fail — it
+        // silently made the tab unrecoverable ("the tab this command was driving
+        // is gone"), and `tab select` could not revive it; only an AppleScript
+        // navigation plus `tab adopt` got it back. A refusal the caller can read
+        // is strictly better than a dead tab it has to rescue.
+        //
+        // Only on the relay: a browser process we launched ourselves is
+        // unrestricted, and `chrome://` there is legitimate.
+        if self.agent_group().is_some() && is_internal_chrome_target(url) {
+            return Err(format!(
+                "refusing to navigate the session tab to a privileged Chrome page ({url}). \
+                 The extension relay cannot attach to chrome:// / chrome-extension:// / \
+                 devtools:// pages, and navigating there leaves the tab unrecoverable. \
+                 Open it by hand, or use `tab adopt <url-substring>` to drive a tab that \
+                 is already on it."
+            ));
+        }
         // On the shared real browser (extension relay), a fresh session only
         // passively attached to the user's existing tabs — it doesn't own any. The
         // pre-fix code made one of those the active tab, so the first `open` then
@@ -5203,6 +5222,34 @@ mod tests {
             "Timed out after 10000ms waiting for Lightpanda Target domain to initialize"
         ));
         assert!(err.contains("Target.setDiscoverTargets failed"));
+    }
+
+    /// #213: navigating the relay's session tab to a `chrome-extension://` URL
+    /// made it unrecoverable — not an error, just a dead tab that `tab select`
+    /// could not revive. The predicate that names those pages already existed;
+    /// it was only used to skip them during auto-connect, never as a guard on
+    /// the navigation itself.
+    #[test]
+    fn privileged_chrome_pages_are_the_ones_navigate_must_refuse() {
+        for url in [
+            "chrome://settings/",
+            "chrome-extension://abc123/popup.html",
+            "devtools://devtools/bundled/inspector.html",
+        ] {
+            assert!(
+                is_internal_chrome_target(url),
+                "{url} must be recognised as privileged so navigate() refuses it"
+            );
+        }
+        // Ordinary destinations must stay navigable — including about:blank,
+        // which `tab new` relies on.
+        for url in [
+            "https://example.com",
+            "http://localhost:3000",
+            "about:blank",
+        ] {
+            assert!(!is_internal_chrome_target(url), "{url} must stay navigable");
+        }
     }
 
     #[test]
