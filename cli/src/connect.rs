@@ -2020,6 +2020,116 @@ fn approved_config_profiles() -> (bool, Vec<&'static str>) {
     (approved, old)
 }
 
+/// Is a Chrome-family browser process alive at all? The extension relay can
+/// only come up inside a running browser, so with nothing running every wait
+/// for the relay is a wait for nothing (#213: `open` sat on "relay dropped —
+/// reconnecting…" for 98s with Chrome quit, then gave up with "no connected
+/// Chrome profiles" — and never once tried to start it).
+pub(crate) fn chrome_running() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        ["Google Chrome", "Google Chrome Beta", "Google Chrome Canary", "Chromium"]
+            .iter()
+            .any(|app| {
+                std::process::Command::new("pgrep")
+                    .args(["-x", app])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+            })
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        ["chrome", "google-chrome", "chromium", "chromium-browser"]
+            .iter()
+            .any(|bin| {
+                std::process::Command::new("pgrep")
+                    .args(["-x", bin])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+            })
+    }
+    #[cfg(not(unix))]
+    {
+        true // no cheap probe; keep the old behaviour (wait for the relay)
+    }
+}
+
+/// Which profile to start when Chrome is not running. `--browser <id|email>`
+/// wins when it names a profile; otherwise prefer a profile that actually has
+/// the extension (a relay can only come from there), then Chrome's own order
+/// (`Default`, `Profile 2`, …). Starting a specific profile is what skips the
+/// profile picker on multi-profile installs — the picker is a window with no
+/// tabs, so the relay never comes up behind it (#213).
+pub(crate) fn pick_launch_profile<'a>(
+    profiles: &'a [ChromeProfileInfo],
+    selector: Option<&str>,
+) -> Option<&'a ChromeProfileInfo> {
+    if let Some(sel) = selector.map(str::trim).filter(|s| !s.is_empty()) {
+        let lower = sel.to_ascii_lowercase();
+        if let Some(p) = profiles.iter().find(|p| {
+            p.dir.eq_ignore_ascii_case(sel)
+                || p.email.as_deref().is_some_and(|e| e.to_ascii_lowercase().contains(&lower))
+                || p.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(sel))
+        }) {
+            return Some(p);
+        }
+    }
+    profiles
+        .iter()
+        .find(|p| p.extension.is_some())
+        .or_else(|| profiles.first())
+}
+
+/// Start Chrome directly into one profile so the extension relay can come up.
+/// Returns a human description of what was launched, or None when nothing
+/// could be (no profiles found, unknown browser flavour, spawn failure).
+pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> {
+    let profiles = chrome_profiles();
+    let profile = pick_launch_profile(&profiles, selector)?;
+    let profile_arg = format!("--profile-directory={}", profile.dir);
+    let label = profile
+        .email
+        .clone()
+        .or_else(|| profile.name.clone())
+        .unwrap_or_else(|| profile.dir.clone());
+    let root = Path::new(&profile.root);
+    #[cfg(target_os = "macos")]
+    {
+        let app = match root.file_name().and_then(|s| s.to_str()) {
+            Some("Chrome") => "Google Chrome",
+            Some("Chrome Beta") => "Google Chrome Beta",
+            Some("Chrome Canary") => "Google Chrome Canary",
+            Some("Chromium") => "Chromium",
+            _ => return None,
+        };
+        let ok = std::process::Command::new("open")
+            .args(["-na", app, "--args", &profile_arg])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        return ok.then(|| format!("{app} ({label})"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let bin = match root.file_name().and_then(|s| s.to_str()) {
+            Some("google-chrome") => "google-chrome",
+            Some("google-chrome-beta") => "google-chrome-beta",
+            Some("google-chrome-unstable") => "google-chrome-unstable",
+            Some("chromium") => "chromium",
+            _ => return None,
+        };
+        let ok = std::process::Command::new(bin).arg(&profile_arg).spawn().is_ok();
+        return ok.then(|| format!("{bin} ({label})"));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (profile_arg, label, root);
+        None
+    }
+}
+
 /// Open the Web Store install page inside one specific Chrome profile, so the
 /// user's only remaining action is "Add to Chrome" in that window. (The Store
 /// button itself cannot be automated: Chrome detaches debuggers on
@@ -3047,6 +3157,58 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+
+    fn profile(dir: &str, email: Option<&str>, with_ext: bool) -> ChromeProfileInfo {
+        ChromeProfileInfo {
+            root: "/Users/x/Library/Application Support/Google/Chrome".to_string(),
+            dir: dir.to_string(),
+            name: Some(format!("name-{dir}")),
+            email: email.map(ToString::to_string),
+            extension: with_ext.then(|| ChromeExtensionStatus {
+                id: "knfcmbamhjmaonkfnjhldjedeobeafmk".to_string(),
+                name: Some("chrome-use".to_string()),
+                version: Some("0.5.20".to_string()),
+                path: None,
+                profile_file: "Secure Preferences".to_string(),
+                idle_version: None,
+                idle_path: None,
+                active_permissions: Vec::new(),
+                disable_reasons: Vec::new(),
+                active_bit: Some(true),
+                from_webstore: Some(true),
+            }),
+        }
+    }
+
+    // #213: with Chrome quit, `open` waited the full relay deadline and then
+    // failed without ever starting the browser. When we do start it, the
+    // profile choice decides whether the relay can come up at all (only a
+    // profile with the extension has one) and whether the multi-profile
+    // picker — a tabless window the relay never appears behind — is skipped.
+    #[test]
+    fn launch_profile_prefers_browser_selector_then_extension_then_default() {
+        let profiles = vec![
+            profile("Default", Some("personal@gmail.com"), false),
+            profile("Profile 2", Some("work@example.com"), true),
+            profile("Profile 7", Some("other@example.com"), true),
+        ];
+        // --browser matches by email substring, dir, or display name.
+        assert_eq!(pick_launch_profile(&profiles, Some("other@")).unwrap().dir, "Profile 7");
+        assert_eq!(pick_launch_profile(&profiles, Some("profile 2")).unwrap().dir, "Profile 2");
+        assert_eq!(pick_launch_profile(&profiles, Some("name-Default")).unwrap().dir, "Default");
+        // An unknown selector must not pick something random: fall back to the
+        // first profile that has the extension, since that is the only one a
+        // relay can come from.
+        assert_eq!(pick_launch_profile(&profiles, Some("nobody")).unwrap().dir, "Profile 2");
+        assert_eq!(pick_launch_profile(&profiles, None).unwrap().dir, "Profile 2");
+        // No extension anywhere: Chrome's own order (Default first).
+        let bare = vec![profile("Profile 3", None, false), profile("Default", None, false)];
+        let mut sorted = bare.clone();
+        sorted.sort_by_key(|p| p.sort_key());
+        assert_eq!(pick_launch_profile(&sorted, None).unwrap().dir, "Default");
+        // Nothing to launch from an empty list.
+        assert!(pick_launch_profile(&[], None).is_none());
+    }
 
     #[test]
     fn parse_launcher_target_quoted() {

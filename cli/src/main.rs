@@ -1948,6 +1948,23 @@ fn main() {
                     .args(["-f", "__nm-host"])
                     .output();
             }
+            // With no browser running there is no relay to wait for: the old
+            // path sat here for the full 45s deadline and then failed with "no
+            // connected Chrome profiles" without ever starting Chrome (#213).
+            // Start it into a specific profile (respecting --browser), which
+            // also sidesteps the profile picker on multi-profile installs.
+            if !connect::chrome_running() {
+                match connect::launch_chrome_for_relay(flags.browser.as_deref()) {
+                    Some(what) => eprintln!(
+                        "{} Chrome is not running — starting {what} so the extension relay can come up…",
+                        color::success_indicator()
+                    ),
+                    None => eprintln!(
+                        "{} Chrome is not running and no profile could be started — open Chrome, then rerun",
+                        color::error_indicator()
+                    ),
+                }
+            }
             eprint!(
                 "{} Chrome relay dropped — reconnecting…",
                 color::success_indicator()
