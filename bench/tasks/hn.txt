@@ -1,0 +1,7 @@
+# HN: navigate + observe loop. Stable public page, no login.
+navigate https://news.ycombinator.com
+snapshot -i
+navigate https://news.ycombinator.com/newest
+snapshot -i
+navigate https://news.ycombinator.com/ask
+snapshot -i

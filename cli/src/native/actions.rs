@@ -1549,16 +1549,19 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // url change, requests fired) instead of the agent running act→wait→snapshot→
     // diff by hand. Baseline into a THROWAWAY RefMap so a `@ref` the action uses
     // still resolves against the live state.ref_map.
-    const OBSERVABLE_ACTIONS: &[&str] = &[
-        "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "evaluate",
-    ];
-    let observe = cmd
+    let observe_requested = cmd
         .get("observe")
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
-        && OBSERVABLE_ACTIONS.contains(&action)
         && state.browser.is_some()
         && !matches!(state.backend_type, BackendType::WebDriver);
+    let observe = observe_requested && OBSERVABLE_ACTIONS.contains(&action);
+    // `navigate --observe`: a page swap shares no nodes with the previous tree,
+    // so a diff would be 100% removals plus 100% additions — strictly worse than
+    // the tree itself, and it pays for two snapshots. Return the fresh
+    // interactive snapshot instead, which is what collapses
+    // `navigate` + `snapshot` into one round trip.
+    let observe_navigation = observe_requested && NAVIGATION_OBSERVABLE_ACTIONS.contains(&action);
     let observe_baseline: Option<(String, String, usize)> = if observe {
         enable_request_tracking(state).await;
         let _ = state.drain_cdp_events();
@@ -1882,6 +1885,43 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
             if let Some(d) = data.as_object_mut() {
                 d.insert("observed".into(), Value::Object(observed));
+            }
+        }
+    }
+
+    // `--observe` is a global flag, so it reaches commands that cannot observe.
+    // Say so instead of succeeding silently: a bare `✓ Done` is exactly how a
+    // dropped observation hides, and that silence is what makes the flag look
+    // implemented when it is not.
+    if observe_requested && !observe && !observe_navigation {
+        if let Some(obj) = resp.as_object_mut() {
+            if obj.get("warning").is_none() {
+                obj.insert(
+                    "warning".to_string(),
+                    json!(format!(
+                        "`--observe` is not supported for `{}` and was ignored; it applies to \
+                         {} and {}.",
+                        action,
+                        OBSERVABLE_ACTIONS.join(", "),
+                        NAVIGATION_OBSERVABLE_ACTIONS.join(", ")
+                    )),
+                );
+            }
+        }
+    }
+
+    // `navigate --observe` (and reload/back/forward): attach the post-navigation
+    // interactive snapshot so the caller does not need a second `snapshot` call.
+    // This is the round trip that separated us from a `createBrowserTab` that
+    // returns the page's a11y tree with the tab.
+    if ok && observe_navigation {
+        let snap = observe_snapshot(state).await;
+        if let Some(obj) = resp.as_object_mut() {
+            let data = obj
+                .entry("data")
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Some(d) = data.as_object_mut() {
+                d.insert("observedSnapshot".into(), json!(snap));
             }
         }
     }
@@ -6391,6 +6431,18 @@ fn describe_expect(cmd: &Value) -> String {
 
 /// Cheap interactive+compact snapshot into a THROWAWAY RefMap (so it never
 /// disturbs the session's live `@ref`s) — the baseline/after capture for
+/// Mutating actions that observe by returning the a11y delta they caused.
+pub(crate) const OBSERVABLE_ACTIONS: &[&str] = &[
+    "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "evaluate",
+];
+
+/// Actions that replace the whole document. A cross-page diff shares no nodes
+/// with the previous tree, so it degenerates into 100% removals plus 100%
+/// additions — bigger than the tree itself and paying for two snapshots. These
+/// observe by returning the fresh snapshot instead.
+pub(crate) const NAVIGATION_OBSERVABLE_ACTIONS: &[&str] =
+    &["navigate", "reload", "back", "forward"];
+
 /// `--observe`. Returns "" on failure so a snapshot error never breaks the action.
 async fn observe_snapshot(state: &DaemonState) -> String {
     let Some(mgr) = state.browser.as_ref() else {
@@ -14681,5 +14733,45 @@ mod tests {
 
         assert_eq!(dialog.dialog_type, "confirm");
         assert_eq!(dialog.message, "Delete it?");
+    }
+
+    /// `--observe` routes by action kind: same-page mutations return a delta,
+    /// document replacements return the fresh tree. An action in BOTH lists
+    /// would attach two payloads and double the snapshot cost.
+    #[test]
+    fn observe_action_lists_are_disjoint() {
+        for action in OBSERVABLE_ACTIONS {
+            assert!(
+                !NAVIGATION_OBSERVABLE_ACTIONS.contains(action),
+                "`{action}` is in both observe lists"
+            );
+        }
+    }
+
+    /// A cross-page diff is 100% removals plus 100% additions, so `navigate`
+    /// must observe by snapshot, never by delta.
+    #[test]
+    fn navigation_actions_observe_by_snapshot_not_delta() {
+        for action in ["navigate", "reload", "back", "forward"] {
+            assert!(
+                NAVIGATION_OBSERVABLE_ACTIONS.contains(&action),
+                "`{action}` replaces the document but does not observe"
+            );
+            assert!(
+                !OBSERVABLE_ACTIONS.contains(&action),
+                "`{action}` would be diffed across a page swap"
+            );
+        }
+    }
+
+    /// The delta path stays on same-page mutations.
+    #[test]
+    fn same_page_mutations_observe_by_delta() {
+        for action in ["click", "fill", "select", "evaluate"] {
+            assert!(
+                OBSERVABLE_ACTIONS.contains(&action),
+                "`{action}` mutates the page but does not observe"
+            );
+        }
     }
 }
