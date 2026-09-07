@@ -636,10 +636,7 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                     ))
                 );
                 if let Some(next) = data.get("nextFrom").and_then(|v| v.as_i64()) {
-                    eprintln!(
-                        "{}",
-                        color::dim(&format!("read on with: --from {next}"))
-                    );
+                    eprintln!("{}", color::dim(&format!("read on with: --from {next}")));
                 }
             }
             return;
@@ -4551,7 +4548,12 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
     if let Some(url) = obs.get("urlChanged").and_then(|v| v.as_object()) {
         let from = url.get("from").and_then(|v| v.as_str()).unwrap_or("");
         let to = url.get("to").and_then(|v| v.as_str()).unwrap_or("");
-        println!("{} {} → {}", color::dim("observed url:"), from, color::cyan(to));
+        println!(
+            "{} {} → {}",
+            color::dim("observed url:"),
+            from,
+            color::cyan(to)
+        );
     }
     if let Some(delta) = obs.get("delta").and_then(|v| v.as_str()) {
         let added = obs.get("added").and_then(|v| v.as_i64()).unwrap_or(0);

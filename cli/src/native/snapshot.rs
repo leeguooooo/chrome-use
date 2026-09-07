@@ -2859,5 +2859,4 @@ mod tests {
         assert!(b.truncated());
         assert_eq!(b.next, 1);
     }
-
 }
