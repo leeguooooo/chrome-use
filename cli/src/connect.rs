@@ -1540,7 +1540,7 @@ fn chrome_profile_roots() -> Vec<PathBuf> {
 /// (one per account), and only profiles WITH the extension can be driven.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ChromeProfileInfo {
+pub(crate) struct ChromeProfileInfo {
     /// Browser data root, e.g. `…/Google/Chrome`.
     root: String,
     /// Profile directory name: `Default`, `Profile 2`, …
@@ -2094,6 +2094,9 @@ pub(crate) fn pick_launch_profile<'a>(
 /// Start Chrome directly into one profile so the extension relay can come up.
 /// Returns a human description of what was launched, or None when nothing
 /// could be (no profiles found, unknown browser flavour, spawn failure).
+// The per-platform cfg blocks each end in `return`: on macOS the block is
+// followed by the other two, so it is a statement, not the fn tail.
+#[allow(clippy::needless_return)]
 pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> {
     let profiles = chrome_profiles();
     let profile = pick_launch_profile(&profiles, selector)?;
