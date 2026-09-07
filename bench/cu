@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Logged chrome-use wrapper: records wall ms + bytes returned, then prints output.
 LOG="${CU_LOG:-bench/results/live.tsv}"
+# Honour CHROME_USE_BIN like replay.sh does. Defaulting to the PATH binary made
+# this wrapper silently benchmark the installed release against a freshly built
+# daemon — a version-mismatch restart on every call, and results from the old
+# binary. Same trap the README warns about; the harness itself fell into it.
+BIN="${CHROME_USE_BIN:-chrome-use}"
 [ -f "$LOG" ] || printf 'n\tms\tbytes\tcmd\n' > "$LOG"
 s=$(python3 -c 'import time;print(time.time())')
-out=$(chrome-use "$@" 2>&1); rc=$?
+out=$("$BIN" "$@" 2>&1); rc=$?
 ms=$(python3 -c "import time;print(int((time.time()-$s)*1000))")
 n=$(( $(wc -l < "$LOG") ))
 printf '%s\t%s\t%s\t%s\n' "$n" "$ms" "${#out}" "$*" >> "$LOG"

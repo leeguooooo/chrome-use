@@ -120,6 +120,11 @@ pub struct RefEntry {
     pub dom_sourced: bool,
 }
 
+/// `Clone` exists for `--observe`: the baseline snapshot must be numbered the
+/// way the live map would number it (so the post-action diff shows what changed,
+/// not a wholesale renumbering) while leaving the live map untouched (so the
+/// `@ref` the action is about to use still resolves).
+#[derive(Clone)]
 pub struct RefMap {
     map: HashMap<String, RefEntry>,
     next_ref: usize,

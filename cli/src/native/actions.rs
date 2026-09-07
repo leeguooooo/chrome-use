@@ -1843,7 +1843,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     if let (true, Some((url0, snap0, req_mark))) = (ok, observe_baseline) {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         let _ = state.drain_cdp_events();
-        let snap1 = observe_snapshot(state).await;
+        // Registering: the delta the caller reads names refs it will act on next.
+        let snap1 = observe_snapshot_registering(state).await;
         // Normalize trailing newline so the diff doesn't report a spurious
         // remove+add for the last line ("No newline at end of file").
         let d = super::diff::diff_snapshots(
@@ -1915,7 +1916,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // This is the round trip that separated us from a `createBrowserTab` that
     // returns the page's a11y tree with the tab.
     if ok && observe_navigation {
-        let snap = observe_snapshot(state).await;
+        let snap = observe_snapshot_registering(state).await;
         if let Some(obj) = resp.as_object_mut() {
             let data = obj
                 .entry("data")
@@ -6486,6 +6487,41 @@ pub(crate) const OBSERVABLE_ACTIONS: &[&str] = &[
 pub(crate) const NAVIGATION_OBSERVABLE_ACTIONS: &[&str] =
     &["navigate", "reload", "back", "forward"];
 
+/// `--observe`, for the tree the caller is meant to ACT on: same as
+/// `observe_snapshot`, but mints the refs into the live session map.
+///
+/// The baseline snapshot must stay throwaway — it runs before the action, and
+/// clobbering the live map there would break the very `@ref` the action is
+/// about to use. Everything the caller *sees* is the post-action tree, and
+/// those refs have to be real: `--observe` used to print `[ref=e23]` lines that
+/// came back "Unknown ref", so the flag cost a round trip and then made you
+/// spend another one on `snapshot` anyway.
+async fn observe_snapshot_registering(state: &mut DaemonState) -> String {
+    let session_id = match state.browser.as_ref().map(|m| m.active_session_id()) {
+        Some(Ok(sid)) => sid.to_string(),
+        _ => return String::new(),
+    };
+    let options = snapshot::SnapshotOptions {
+        interactive: true,
+        compact: true,
+        ..Default::default()
+    };
+    state.ref_map.begin_snapshot();
+    let Some(mgr) = state.browser.as_ref() else {
+        return String::new();
+    };
+    snapshot::take_snapshot(
+        &mgr.client,
+        &session_id,
+        &options,
+        &mut state.ref_map,
+        state.active_frame_id.as_deref(),
+        &state.iframe_sessions,
+    )
+    .await
+    .unwrap_or_default()
+}
+
 /// `--observe`. Returns "" on failure so a snapshot error never breaks the action.
 async fn observe_snapshot(state: &DaemonState) -> String {
     let Some(mgr) = state.browser.as_ref() else {
@@ -6500,7 +6536,13 @@ async fn observe_snapshot(state: &DaemonState) -> String {
         compact: true,
         ..Default::default()
     };
-    let mut tmp = super::element::RefMap::new();
+    // Clone the live map rather than starting fresh: `begin_snapshot` keeps
+    // stable refs by backend-node identity (#155), so a virgin map numbers the
+    // same page differently. Diffing a virgin-numbered baseline against the
+    // live-numbered post-action tree reported every node as removed+added — a
+    // sort that changed one row read as "1 added, 29 removed".
+    let mut tmp = state.ref_map.clone();
+    tmp.begin_snapshot();
     snapshot::take_snapshot(
         &mgr.client,
         &session_id,
