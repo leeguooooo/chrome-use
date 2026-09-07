@@ -1498,6 +1498,24 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                             i += 1;
                         }
                     }
+                    // Output budget: cap the tree at N bytes, cut between nodes,
+                    // and report the cursor to read on from. `--from` resumes.
+                    "--max-bytes" => {
+                        if let Some(v) = rest.get(i + 1) {
+                            if let Ok(n) = v.parse::<u64>() {
+                                obj.insert("maxBytes".to_string(), json!(n));
+                                i += 1;
+                            }
+                        }
+                    }
+                    "--from" => {
+                        if let Some(v) = rest.get(i + 1) {
+                            if let Ok(n) = v.parse::<u64>() {
+                                obj.insert("from".to_string(), json!(n));
+                                i += 1;
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 i += 1;

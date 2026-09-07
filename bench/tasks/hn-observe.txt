@@ -1,0 +1,4 @@
+# Same HN task, one call per page instead of navigate+snapshot.
+navigate https://news.ycombinator.com --observe
+navigate https://news.ycombinator.com/newest --observe
+navigate https://news.ycombinator.com/ask --observe

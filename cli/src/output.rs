@@ -562,6 +562,13 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             if let Some(w) = data.get("warning").and_then(|v| v.as_str()) {
                 eprintln!("⚠ navigation: {w}");
             }
+            // `navigate --observe`: the post-navigation interactive snapshot rides
+            // along so the caller does not spend a second round trip on
+            // `snapshot`. The navigation branch returns before the generic
+            // success path, so render it here too.
+            if let Some(snap) = data.get("observedSnapshot").and_then(|v| v.as_str()) {
+                print_observed_snapshot(snap);
+            }
             return;
         }
         if let Some(cdp_url) = data.get("cdpUrl").and_then(|v| v.as_str()) {
@@ -601,6 +608,36 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             // <canvas>, so refs are a dead end — point at the screenshot path.
             if let Some(note) = data.get("note").and_then(|v| v.as_str()) {
                 eprintln!("{}", color::dim(note));
+            }
+            // `--max-bytes`/`--from`: say what was left out and how to read on.
+            // A budgeted tree that printed nothing about its own truncation is
+            // indistinguishable from a short page, which is the failure this
+            // whole feature exists to prevent.
+            if data
+                .get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                let nodes = data.get("nodes").and_then(|v| v.as_object());
+                let get = |k: &str| {
+                    nodes
+                        .and_then(|n| n.get(k))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0)
+                };
+                eprintln!(
+                    "{}",
+                    color::yellow(&format!(
+                        "truncated: nodes {}–{} of {} ({} omitted)",
+                        get("from"),
+                        get("to"),
+                        get("total"),
+                        get("omitted")
+                    ))
+                );
+                if let Some(next) = data.get("nextFrom").and_then(|v| v.as_i64()) {
+                    eprintln!("{}", color::dim(&format!("read on with: --from {next}")));
+                }
             }
             return;
         }
@@ -1627,6 +1664,17 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
 
+        // `--observe` payload. The daemon has always attached the post-action
+        // a11y delta under `data.observed`, but only `--json` ever showed it:
+        // text mode fell straight through to a bare `✓ Done` and dropped the
+        // whole thing, so the flag looked like a no-op to anyone not passing
+        // `--json`. Render it here so one call really does replace
+        // act → wait → snapshot → diff.
+        let observed = data.get("observed").and_then(|v| v.as_object());
+        // `navigate --observe` has no comparable baseline across a page swap, so
+        // the daemon attaches a fresh interactive snapshot instead of a delta.
+        let observed_snapshot = data.get("observedSnapshot").and_then(|v| v.as_str());
+
         // Default success. A soft warning carried in the data (e.g. `type`
         // read back a value that does not contain what was typed, #203) must
         // not hide behind a bare ✓ — surface it on stderr.
@@ -1638,6 +1686,11 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         }
         if let Some(w) = data_warning {
             eprintln!("{} {}", color::warning_indicator(), w);
+        }
+        if let Some(obs) = observed {
+            print_observed(obs);
+        } else if let Some(snap) = observed_snapshot {
+            print_observed_snapshot(snap);
         }
     } else {
         // Success response with no data payload — still confirm the command ran
@@ -2548,6 +2601,10 @@ Options:
   -c, --compact        Remove empty structural elements
   -d, --depth <n>      Limit tree depth
   -s, --selector <sel> Scope snapshot to CSS selector
+  --max-bytes <n>      Cap the tree at n bytes, cut between nodes (never
+                       mid-node). Reports what was omitted and a --from cursor.
+                       For long feeds/comment threads whose bulk is prose.
+  --from <n>           Resume a budgeted snapshot at node n.
   -f, --filter <regex> Keep only lines matching <regex> (case-insensitive) + their
                        ancestor context; refs preserved. For desktop-shell apps
                        (Synology DSM, NAS/router panels) where one snapshot holds
@@ -4470,6 +4527,78 @@ Hit a bug or rough edge? A 30-second issue genuinely sharpens this tool:
   https://github.com/leeguooooo/chrome-use/issues
 "#
     );
+}
+
+/// Render a `--observe` payload in text mode.
+///
+/// The daemon returns `changed` plus, when something moved, a unified `delta`
+/// over the interactive a11y tree, an `urlChanged` pair and the requests the
+/// action fired. Printing "no change" explicitly matters as much as printing
+/// the delta: a silent `✓ Done` is indistinguishable from the flag being
+/// ignored, which is exactly how this went unnoticed.
+fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
+    let changed = obs
+        .get("changed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !changed {
+        println!("{}", color::dim("observed: no change"));
+        return;
+    }
+    if let Some(url) = obs.get("urlChanged").and_then(|v| v.as_object()) {
+        let from = url.get("from").and_then(|v| v.as_str()).unwrap_or("");
+        let to = url.get("to").and_then(|v| v.as_str()).unwrap_or("");
+        println!(
+            "{} {} → {}",
+            color::dim("observed url:"),
+            from,
+            color::cyan(to)
+        );
+    }
+    if let Some(delta) = obs.get("delta").and_then(|v| v.as_str()) {
+        let added = obs.get("added").and_then(|v| v.as_i64()).unwrap_or(0);
+        let removed = obs.get("removed").and_then(|v| v.as_i64()).unwrap_or(0);
+        println!(
+            "{} {} added, {} removed",
+            color::dim("observed:"),
+            color::green(&added.to_string()),
+            color::red(&removed.to_string())
+        );
+        for line in delta.lines() {
+            // Skip the `--- before` / `+++ after` file headers: there are no
+            // files here, and they read as two phantom removals/additions.
+            if line.starts_with("--- ") || line.starts_with("+++ ") {
+                continue;
+            }
+            if line.starts_with('+') {
+                println!("{}", color::green(line));
+            } else if line.starts_with('-') {
+                println!("{}", color::red(line));
+            } else {
+                println!("{}", color::dim(line));
+            }
+        }
+    }
+    if let Some(reqs) = obs.get("requests").and_then(|v| v.as_array()) {
+        if !reqs.is_empty() {
+            println!("{} {}", color::dim("observed requests:"), reqs.len());
+            for r in reqs.iter().filter_map(|v| v.as_str()) {
+                println!("  {}", color::dim(r));
+            }
+        }
+    }
+}
+
+/// Render the fresh post-navigation snapshot that `navigate --observe` attaches.
+/// A cross-page diff would be 100% removals plus 100% additions, so navigation
+/// returns the new tree instead of a delta.
+fn print_observed_snapshot(snapshot: &str) {
+    if snapshot.trim().is_empty() {
+        println!("{}", color::dim("observed: (no interactive elements)"));
+        return;
+    }
+    println!("{}", color::dim("observed snapshot:"));
+    println!("{}", snapshot.trim_end());
 }
 
 fn print_snapshot_diff(data: &serde_json::Map<String, serde_json::Value>) {

@@ -2252,6 +2252,60 @@ fn count_indent(line: &str) -> usize {
 /// token cap and buries the target controls. `--filter "SSH|端口|应用|确定"` cuts
 /// it down to the few relevant lines (issue #65) — the productized form of the
 /// `| tail -80` workaround, but tree-aware and ref-preserving.
+/// What a budgeted snapshot left out, so the caller knows the tree is partial
+/// and how to read the rest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeBudget {
+    /// The kept slice of the tree.
+    pub tree: String,
+    /// Total nodes (lines) in the full tree, before budgeting.
+    pub total_nodes: usize,
+    /// Index of the first node in `tree`.
+    pub from: usize,
+    /// Index one past the last node in `tree`; also the cursor to resume at.
+    pub next: usize,
+}
+
+impl TreeBudget {
+    pub fn truncated(&self) -> bool {
+        self.from > 0 || self.next < self.total_nodes
+    }
+}
+
+/// Cut a snapshot to a byte budget on whole-node boundaries.
+///
+/// A snapshot of a comment thread or a long feed can run to hundreds of
+/// kilobytes, nearly all of it prose that has nothing to do with the element
+/// the caller is after. Truncating the string would leave the caller unable to
+/// tell a short page from a clipped one, and could sever a node mid-line so the
+/// last `[ref=eN]` no longer parses. So cut between nodes and report the range
+/// that was dropped plus the cursor to resume from.
+///
+/// At least one node is always returned, even when it alone exceeds the budget:
+/// an empty tree would read as "nothing on the page".
+pub fn budget_tree(tree: &str, max_bytes: usize, from: usize) -> TreeBudget {
+    let lines: Vec<&str> = tree.lines().collect();
+    let total_nodes = lines.len();
+    let from = from.min(total_nodes);
+    let mut used = 0usize;
+    let mut next = from;
+    for line in &lines[from..] {
+        // +1 for the newline this line will be joined with.
+        let cost = line.len() + 1;
+        if used + cost > max_bytes && next > from {
+            break;
+        }
+        used += cost;
+        next += 1;
+    }
+    TreeBudget {
+        tree: lines[from..next].join("\n"),
+        total_nodes,
+        from,
+        next,
+    }
+}
+
 pub fn filter_tree(tree: &str, pattern: &str) -> Result<String, String> {
     let re = regex_lite::Regex::new(&format!("(?i){pattern}"))
         .map_err(|e| format!("invalid --filter regex '{pattern}': {e}"))?;
@@ -2749,5 +2803,60 @@ mod tests {
         promote_hidden_inputs(&mut nodes, &cursor_elements);
 
         assert_eq!(nodes[0].role, "LabelText"); // unchanged
+    }
+    /// A budget must cut between nodes: a severed line would leave a dangling
+    /// `[ref=eN]` the caller cannot use, and no way to tell it was severed.
+    #[test]
+    fn budget_tree_cuts_on_node_boundaries() {
+        let tree = "- a [ref=e1]\n- b [ref=e2]\n- c [ref=e3]\n";
+        let b = budget_tree(tree, 20, 0);
+        assert!(b.truncated());
+        assert!(b.tree.lines().all(|l| l.ends_with(']')));
+        assert_eq!(b.total_nodes, 3);
+        assert_eq!(b.from, 0);
+    }
+
+    /// A tree that fits is not reported as truncated — otherwise every caller
+    /// passing a budget would be told to page through a complete page.
+    #[test]
+    fn budget_tree_untruncated_when_it_fits() {
+        let tree = "- a\n- b\n";
+        let b = budget_tree(tree, 10_000, 0);
+        assert!(!b.truncated());
+        assert_eq!(b.next, b.total_nodes);
+        assert_eq!(b.tree, "- a\n- b");
+    }
+
+    /// `--from` must resume exactly where the previous page stopped, with no
+    /// node repeated and none skipped.
+    #[test]
+    fn budget_tree_from_cursor_covers_every_node_once() {
+        let tree = (0..50)
+            .map(|i| format!("- node{i} [ref=e{i}]"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut seen: Vec<String> = Vec::new();
+        let mut from = 0;
+        loop {
+            let b = budget_tree(&tree, 64, from);
+            seen.extend(b.tree.lines().map(String::from));
+            if b.next >= b.total_nodes {
+                break;
+            }
+            assert!(b.next > from, "cursor must advance");
+            from = b.next;
+        }
+        assert_eq!(seen, tree.lines().collect::<Vec<_>>());
+    }
+
+    /// A single node bigger than the whole budget still comes back. Returning
+    /// nothing would read as an empty page.
+    #[test]
+    fn budget_tree_always_returns_at_least_one_node() {
+        let tree = "- an extremely long node label that alone blows the budget\n- b";
+        let b = budget_tree(tree, 5, 0);
+        assert_eq!(b.tree.lines().count(), 1);
+        assert!(b.truncated());
+        assert_eq!(b.next, 1);
     }
 }
