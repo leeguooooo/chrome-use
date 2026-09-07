@@ -786,6 +786,22 @@ moved. e.g. `chrome-use click @e8 --observe` → see the dialog/toast/row that
 appeared in one ~20-80 token reply. Use `expect` when you want a hard pass/fail
 gate; use `--observe` when you want to *see* what happened.
 
+`navigate`/`reload`/`back`/`forward` take `--observe` too, and return the
+post-navigation **snapshot** instead of a delta — across a page swap a diff
+shares no nodes with the old tree, so it would be 100% removals plus 100%
+additions. This is the one flag that collapses `navigate` + `snapshot` into a
+single call: `chrome-use navigate <url> --observe` gets you the page AND its
+interactive tree in one round trip. On a real task that halved the calls (6 → 3)
+at identical bytes returned.
+
+**Budget a huge tree — `snapshot --max-bytes <n>` / `--from <n>`.** A long
+comment thread or feed can snapshot to ~140 KB, nearly all of it prose unrelated
+to the element you want. Unlike `-i/-s/-d/-f`, a budget needs no advance
+knowledge of what you're looking for. It cuts between whole nodes (never a
+severed `[ref=eN]`) and tells you what it left out plus where to resume:
+`truncated: nodes 0-70 of 1908 (1838 omitted)` / `read on with: --from 70`.
+A tree that fits is never flagged truncated.
+
 **Optional steps — `--if-present` (alias `--optional`).** Add it to any selector
 action to make it a no-op success (`↷ skipped`, exit 0) when the target is
 absent, instead of erroring — no pre-check read needed, and flows stay
