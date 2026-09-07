@@ -226,7 +226,10 @@ Wire it into Claude Desktop's `claude_desktop_config.json`:
 Exposes a core profile of typed tools (`chrome_use_open` / `read` / `snapshot` /
 `click` / `fill` / `type` / `press` / `eval` / `wait` / `back` / `forward` /
 `reload`); each tool-call delegates to the same binary in `--json` mode. Use the
-absolute path as `command` if `chrome-use` isn't on the host's PATH.
+absolute path as `command` if `chrome-use` isn't on the host's PATH. Start with
+`chrome-use mcp --tools all` when the host also needs screenshots, accessibility
+audits, tabs, structured extraction, assertions, site adapters, uploads, downloads,
+or network interception.
 
 ## Command names
 
@@ -477,6 +480,27 @@ a screenshot. Assertions: `url` · `visible` · `hidden` · `text` · `count` ·
 · `eval`. Full guide: `chrome-use skills get test`. Deep-dive writeup (中文):
 [给前端写「单元测试」:chrome-use test 详解](https://blog.leeguoo.com/zh/posts/chrome-use-test-suite/).
 Found a regression? Add a case — the suite gets more valuable the more you use it.
+
+## Accessibility audits (`chrome-use a11y`)
+
+Run axe-core against the current page, or navigate and audit in one command. The
+engine is vendored into the binary, so it makes no CDN request, works under strict
+page CSP, and leaves any page-owned `window.axe` value untouched. Findings from
+same-origin and cross-origin iframes retain their frame selector paths.
+
+```bash
+chrome-use a11y                                  # audit the current page
+chrome-use a11y https://example.com              # navigate, then audit
+chrome-use a11y --tags wcag2a,wcag2aa            # filter by axe rule tags
+chrome-use a11y --selector "#main"               # scope to one subtree
+chrome-use a11y https://example.com --json        # structured CI/agent output
+```
+
+The text report lists each violation's impact, rule id, fix guidance, and failing
+selectors. JSON output includes counts plus trimmed `violations` and `incomplete`
+arrays. Audits require a CDP browser and are unavailable on Safari or iOS
+WebDriver sessions. MCP-only hosts can use `chrome_use_a11y` from the `all` tool
+profile.
 
 ## Finding elements and stable refs
 

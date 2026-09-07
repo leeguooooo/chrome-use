@@ -110,7 +110,7 @@
       <h2>Extended profile: --tools all</h2>
       <p>
         The default 12 tools cover most tasks. When a host needs more, add <code>--tools all</code> to
-        expand the profile from 12 to <strong>26 tools</strong> — the core 12 plus the ones below
+        expand the profile from 12 to <strong>27 tools</strong> — the core 12 plus the ones below
         (still not full CLI parity):
       </p>
 
@@ -122,6 +122,7 @@
           <tr><td><code>chrome_use_hover</code></td><td>Hover the pointer over an element</td></tr>
           <tr><td><code>chrome_use_select</code></td><td>Pick an option in a <code>&lt;select&gt;</code> dropdown</td></tr>
           <tr><td><code>chrome_use_screenshot</code></td><td>Capture a screenshot; the result carries an MCP image block alongside the file path (still read pages with <code>snapshot</code> — a capture is for confirming what something looks like). <code>CHROME_USE_MCP_MAX_INLINE_IMAGE_BYTES</code> changes the inline budget; <code>0</code> returns the path only</td></tr>
+          <tr><td><code>chrome_use_a11y</code></td><td>Run the embedded axe-core accessibility audit on the current page or an optional URL</td></tr>
           <tr><td><code>chrome_use_scroll</code></td><td>Scroll the page or a container</td></tr>
           <tr><td><code>chrome_use_tabs</code></td><td>List, open, natively duplicate, adopt without navigation, inspect browser-level state, close, or switch this session's tabs</td></tr>
           <tr><td><code>chrome_use_extract</code></td><td>Scrape the page into structured JSON by schema</td></tr>
@@ -141,7 +142,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-cmt"># 26-tool extended profile</span>
+<pre><code><span class="du-cmt"># 27-tool extended profile</span>
 <span class="du-prompt">$</span> chrome-use mcp <span class="du-flag">--tools</span> all</code></pre>
       </div>
 

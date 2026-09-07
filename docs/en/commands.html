@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Command Reference · chrome-use</title>
-  <meta name="description" content="A complete cheat sheet of every chrome-use command, alias, and flag: navigation, snapshots, interaction, network interception, tabs, React/Web Vitals, global options, and stealth knobs." />
+  <meta name="description" content="A complete cheat sheet of every chrome-use command, alias, and flag: navigation, snapshots, interaction, accessibility audits, network interception, tabs, React/Web Vitals, global options, and stealth knobs." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -594,6 +594,31 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use vitals [url] [<span class="du-flag">--json</span>]                 <span class="du-cmt"># LCP/CLS/TTFB/FCP/INP + hydration</span>
 <span class="du-prompt">$</span> chrome-use pushstate <span class="du-str">&lt;url&gt;</span>                       <span class="du-cmt"># SPA client-side navigation (auto-detects Next router)</span></code></pre>
       </div>
+
+      <!-- ============================================================ -->
+      <h2>Accessibility audits</h2>
+      <p>
+        <code>a11y</code> runs the axe-core engine embedded in the chrome-use binary. It does not fetch a CDN script,
+        works under strict page CSP, and preserves any page-owned <code>window.axe</code> value. The report includes
+        same-origin and cross-origin iframe findings with their frame selector paths. Safari and iOS WebDriver
+        sessions are not supported because the audit requires CDP.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">a11y</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use a11y                                  <span class="du-cmt"># audit the current page</span>
+<span class="du-prompt">$</span> chrome-use a11y https://example.com              <span class="du-cmt"># navigate, then audit</span>
+<span class="du-prompt">$</span> chrome-use a11y <span class="du-flag">--tags</span> wcag2a,wcag2aa            <span class="du-cmt"># filter by axe rule tags</span>
+<span class="du-prompt">$</span> chrome-use a11y <span class="du-flag">--selector</span> <span class="du-str">"#main"</span>               <span class="du-cmt"># scope to one subtree</span>
+<span class="du-prompt">$</span> chrome-use a11y https://example.com <span class="du-flag">--json</span>        <span class="du-cmt"># structured output</span></code></pre>
+      </div>
+      <p>
+        Text output lists impact, rule id, fix guidance, and failing selectors. JSON output contains counts plus
+        trimmed <code>violations</code> and <code>incomplete</code> arrays. MCP clients can call
+        <code>chrome_use_a11y</code> from the <code>all</code> tool profile.
+      </p>
 
       <!-- ============================================================ -->
       <h2>Debugging</h2>

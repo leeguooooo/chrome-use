@@ -130,6 +130,110 @@ fn format_stream_status_text(action: Option<&str>, data: &serde_json::Value) -> 
     }
 }
 
+pub(crate) fn format_a11y_text(data: &serde_json::Value) -> String {
+    let url = data.get("url").and_then(|v| v.as_str()).unwrap_or("-");
+    let version = data
+        .get("axeVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let counts = data.get("counts").cloned().unwrap_or_default();
+    let count = |key: &str| counts.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+
+    let mut lines = vec![
+        format!("url: {}", url),
+        format!(
+            "axe-core: {}  violations: {}  incomplete: {}  passes: {}",
+            version,
+            count("violations"),
+            count("incomplete"),
+            count("passes")
+        ),
+    ];
+
+    let render_results = |lines: &mut Vec<String>, results: &[serde_json::Value]| {
+        for result in results {
+            let id = result.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            let impact = result
+                .get("impact")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let help = result.get("help").and_then(|v| v.as_str()).unwrap_or("");
+            let node_count = result
+                .get("nodeCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            lines.push(format!(
+                "[{}] {}: {} ({} node{})",
+                impact,
+                id,
+                help,
+                node_count,
+                if node_count == 1 { "" } else { "s" }
+            ));
+            if let Some(help_url) = result.get("helpUrl").and_then(|v| v.as_str()) {
+                lines.push(format!("  {}", help_url));
+            }
+            if let Some(nodes) = result.get("nodes").and_then(|v| v.as_array()) {
+                for node in nodes {
+                    if let Some(target) = node.get("target").and_then(format_a11y_target) {
+                        lines.push(format!("  - {}", target));
+                    }
+                }
+                if node_count > nodes.len() as u64 {
+                    let remaining = node_count - nodes.len() as u64;
+                    lines.push(format!(
+                        "  … and {} more node{}",
+                        remaining,
+                        if remaining == 1 { "" } else { "s" }
+                    ));
+                }
+            }
+        }
+    };
+
+    if let Some(violations) = data.get("violations").and_then(|v| v.as_array()) {
+        if !violations.is_empty() {
+            lines.push(String::new());
+            render_results(&mut lines, violations);
+        }
+    }
+
+    if let Some(incomplete) = data.get("incomplete").and_then(|v| v.as_array()) {
+        if !incomplete.is_empty() {
+            lines.push(String::new());
+            lines.push("incomplete (needs manual review):".to_string());
+            render_results(&mut lines, incomplete);
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn format_a11y_target(target: &serde_json::Value) -> Option<String> {
+    match target {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Array(parts) => {
+            let rendered = parts
+                .iter()
+                .filter_map(|part| match part {
+                    serde_json::Value::Array(shadow_parts) => {
+                        let path = shadow_parts
+                            .iter()
+                            .filter_map(format_a11y_target)
+                            .collect::<Vec<_>>()
+                            .join(" >>> ");
+                        (!path.is_empty()).then_some(path)
+                    }
+                    _ => format_a11y_target(part),
+                })
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            (!rendered.is_empty()).then_some(rendered)
+        }
+        _ => None,
+    }
+}
+
 /// Shorten an over-long string by keeping its head and tail and eliding the
 /// middle, with a char count. Used so multi-KB URLs (JWT/OTP login links) don't
 /// flood `tab list`.
@@ -407,6 +511,10 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         }
         if let Some(output) = format_stream_status_text(action, data) {
             println!("{}", output);
+            return;
+        }
+        if action == Some("a11y") {
+            println!("{}", format_a11y_text(data));
             return;
         }
         if action == Some("storage_get") {
@@ -3757,6 +3865,35 @@ Examples:
 "##
         }
 
+        "a11y" => {
+            r##"
+chrome-use a11y - Run an axe-core accessibility audit
+
+Usage: chrome-use a11y [url] [options]
+
+Audits the current page, or navigates to the optional URL first. The vendored
+axe-core engine runs private partial audits across the page frame tree without
+a network request or page messaging. It works under strict CSP and does not
+trust or replace page-owned window.axe values. Accessibility audits require a
+CDP browser and are not available with Safari or iOS WebDriver sessions.
+
+Options:
+  --tags <tag1,tag2>    Run only rules matching these axe tags
+  -s, --selector <css> Scope the audit to a matching subtree
+  --json                Return structured violations and incomplete results
+
+Structured node targets preserve axe selector paths. Nested arrays identify
+shadow DOM boundaries, while multiple path entries identify frame boundaries.
+
+Examples:
+  chrome-use a11y
+  chrome-use a11y https://example.com
+  chrome-use a11y --tags wcag2a,wcag2aa
+  chrome-use a11y --selector "#main"
+  chrome-use a11y https://example.com --json
+"##
+        }
+
         "profiles" => {
             r##"
 chrome-use profiles - List available Chrome profiles
@@ -4041,6 +4178,11 @@ React (requires `open --enable react-devtools`):
 Performance:
   vitals [url] [--json]      Core Web Vitals (LCP/CLS/TTFB/FCP/INP) +
                              React hydration timing when profiling build detected
+
+Accessibility:
+  a11y [url] [--tags <t1,t2>] [--selector <css>] [--json]
+                             Run an offline axe-core accessibility audit on the
+                             current page (or URL), including iframe findings
 
 SPA:
   pushstate <url>            SPA client-side nav. Auto-detects window.next.router.push
@@ -4413,7 +4555,7 @@ pub fn print_version() {
 
 #[cfg(test)]
 mod tests {
-    use super::format_storage_text;
+    use super::{format_a11y_text, format_storage_text};
     use serde_json::json;
 
     #[test]
@@ -4478,5 +4620,55 @@ mod tests {
         let rendered = format_storage_text(&data).unwrap();
 
         assert_eq!(rendered, "No storage entries");
+    }
+
+    #[test]
+    fn test_format_a11y_text_summary() {
+        let data = json!({
+            "url": "https://example.com",
+            "axeVersion": "4.12.1",
+            "counts": { "violations": 1, "incomplete": 0, "passes": 24 },
+            "violations": [{
+                "id": "image-alt",
+                "impact": "critical",
+                "help": "Images must have alternative text",
+                "helpUrl": "https://dequeuniversity.com/rules/axe/4.12/image-alt",
+                "nodeCount": 2,
+                "nodes": [
+                    { "target": ["img.hero"] },
+                    { "target": ["#logo > img"] }
+                ]
+            }],
+            "incomplete": []
+        });
+
+        let rendered = format_a11y_text(&data);
+        assert!(rendered.contains("violations: 1  incomplete: 0  passes: 24"));
+        assert!(rendered.contains("[critical] image-alt"));
+        assert!(rendered.contains("  - img.hero"));
+    }
+
+    #[test]
+    fn test_format_a11y_text_preserves_shadow_and_frame_boundaries() {
+        let data = json!({
+            "url": "https://example.com",
+            "axeVersion": "4.12.1",
+            "counts": { "violations": 1, "incomplete": 0, "passes": 1 },
+            "violations": [{
+                "id": "image-alt",
+                "impact": "critical",
+                "help": "Images must have alternative text",
+                "nodeCount": 2,
+                "nodes": [
+                    { "target": [["#shadow-host", "img"]] },
+                    { "target": ["iframe", "#nested-image"] }
+                ]
+            }],
+            "incomplete": []
+        });
+
+        let rendered = format_a11y_text(&data);
+        assert!(rendered.contains("  - #shadow-host >>> img"));
+        assert!(rendered.contains("  - iframe -> #nested-image"));
     }
 }

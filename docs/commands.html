@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>命令参考 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 所有命令、别名与旗标的完整速查：导航、快照、交互、网络拦截、标签页、React/Web Vitals、全局选项与隐身开关。" />
+  <meta name="description" content="chrome-use 所有命令、别名与旗标的完整速查：导航、快照、交互、无障碍审计、网络拦截、标签页、React/Web Vitals、全局选项与隐身开关。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -578,6 +578,31 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use vitals [url] [<span class="du-flag">--json</span>]                 <span class="du-cmt"># LCP/CLS/TTFB/FCP/INP + hydration</span>
 <span class="du-prompt">$</span> chrome-use pushstate <span class="du-str">&lt;url&gt;</span>                       <span class="du-cmt"># SPA 客户端导航（自动探测 Next router）</span></code></pre>
       </div>
+
+      <!-- ============================================================ -->
+      <h2>无障碍审计</h2>
+      <p>
+        <code>a11y</code> 运行内嵌在 chrome-use 二进制里的 axe-core，不会临时下载 CDN 脚本。
+        即使页面启用了严格 CSP，审计也能运行；页面自己的 <code>window.axe</code> 不会被覆盖。
+        同源与跨域 iframe 的问题都会保留各自的 frame 选择器路径。该命令依赖 CDP，
+        Safari 和 iOS WebDriver 会直接返回不支持错误。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">a11y</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use a11y                                  <span class="du-cmt"># 审计当前页面</span>
+<span class="du-prompt">$</span> chrome-use a11y https://example.com              <span class="du-cmt"># 先导航，再审计</span>
+<span class="du-prompt">$</span> chrome-use a11y <span class="du-flag">--tags</span> wcag2a,wcag2aa            <span class="du-cmt"># 按 axe 规则标签过滤</span>
+<span class="du-prompt">$</span> chrome-use a11y <span class="du-flag">--selector</span> <span class="du-str">"#main"</span>               <span class="du-cmt"># 只审计一个子树</span>
+<span class="du-prompt">$</span> chrome-use a11y https://example.com <span class="du-flag">--json</span>        <span class="du-cmt"># 输出结构化结果</span></code></pre>
+      </div>
+      <p>
+        文本结果列出影响级别、规则 id、修复说明和失败选择器。JSON 结果包含计数、
+        <code>violations</code> 与 <code>incomplete</code> 数组。MCP 客户端可在
+        <code>all</code> 工具 profile 中调用 <code>chrome_use_a11y</code>。
+      </p>
 
       <!-- ============================================================ -->
       <h2>调试</h2>

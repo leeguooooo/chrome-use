@@ -47,6 +47,7 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
         };
     }
     if lower.contains("element not found")
+        || lower.contains("no element matches selector")
         || lower.contains("could not locate element")
         || lower.contains("unknown ref")
     {
@@ -132,6 +133,17 @@ mod tests {
             ErrorMetadata {
                 code: "stale_target",
                 retryable: true
+            }
+        );
+    }
+
+    #[test]
+    fn classifies_scoped_a11y_selector_misses() {
+        assert_eq!(
+            classify_error("No element matches selector: #main"),
+            ErrorMetadata {
+                code: "element_not_found",
+                retryable: false
             }
         );
     }

@@ -1342,6 +1342,25 @@ and [references/authentication.md](references/authentication.md).
 - **Parallel browsers / multi-session**: `chrome-use skills get sessions`
 - **React / Web Vitals introspection**: `chrome-use skills get react`
 
+## Accessibility audits
+
+Use the embedded axe-core engine to audit the current page or navigate and audit
+in one command. It works under strict page CSP, includes same-origin and
+cross-origin iframe findings, and leaves page-owned `window.axe` state unchanged.
+It requires a CDP browser and is unavailable on Safari or iOS WebDriver sessions.
+
+```bash
+chrome-use a11y                                  # Audit the current page
+chrome-use a11y https://example.com              # Navigate, then audit
+chrome-use a11y --tags wcag2a,wcag2aa            # Filter by axe rule tags
+chrome-use a11y --selector "#main"               # Scope to one subtree
+chrome-use a11y --json                           # Structured automation output
+```
+
+The default output lists violations and incomplete checks with failing selector
+paths. MCP-only hosts can use `chrome_use_a11y` from the `all` profile. See
+`references/commands.md` for the full result schema.
+
 ## React / Web Vitals (built-in, any React app)
 
 First-class React introspection on any React app (Next.js, Remix, Vite+React, CRA, …).

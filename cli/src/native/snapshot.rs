@@ -861,7 +861,8 @@ async fn take_snapshot_at_depth(
             // (a bank picker popup inside Stripe Connect's onboarding frame,
             // #214) were never descended into even once their session was
             // attached. Resolve the child's frame id where the node exists.
-            if let Ok(child_fid) = resolve_iframe_frame_id(client, effective_session_id, bid).await {
+            if let Ok(child_fid) = resolve_iframe_frame_id(client, effective_session_id, bid).await
+            {
                 // Snapshot the child frame; errors are silently ignored
                 // (e.g. cross-origin iframes)
                 if let Ok(child_text) = Box::pin(take_snapshot_at_depth(

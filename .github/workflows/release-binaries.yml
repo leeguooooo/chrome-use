@@ -93,9 +93,16 @@ jobs:
           # The binary inside every archive is named `chrome-use` (or .exe);
           # install.sh extracts that fixed name regardless of platform.
           cp "$src" "dist/chrome-use${{ matrix.ext }}"
+          cp LICENSE dist/LICENSE
+          cp cli/src/native/a11y/LICENSE-axe-core.txt dist/LICENSE-axe-core.txt
+          cp cli/src/native/a11y/LICENSE-axe-core-THIRD-PARTY.txt dist/LICENSE-axe-core-THIRD-PARTY.txt
           chmod +x "dist/chrome-use${{ matrix.ext }}" || true
           ( cd dist
-            tar czf "${{ matrix.asset }}.tar.gz" "chrome-use${{ matrix.ext }}"
+            tar czf "${{ matrix.asset }}.tar.gz" \
+              "chrome-use${{ matrix.ext }}" \
+              LICENSE \
+              LICENSE-axe-core.txt \
+              LICENSE-axe-core-THIRD-PARTY.txt
             if command -v sha256sum >/dev/null 2>&1; then
               sha256sum "${{ matrix.asset }}.tar.gz" > "${{ matrix.asset }}.tar.gz.sha256"
             else

@@ -9,7 +9,9 @@
     "scripts",
     "skills",
     "skill-data",
-    "extensions"
+    "extensions",
+    "cli/src/native/a11y/LICENSE-axe-core.txt",
+    "cli/src/native/a11y/LICENSE-axe-core-THIRD-PARTY.txt"
   ],
   "bin": {
     "chrome-use": "bin/chrome-use.js"

@@ -52,6 +52,7 @@ const DOCUMENTED_ACTIONS: &[&str] = &[
     "close",
     "snapshot",
     "screenshot",
+    "a11y",
     "click",
     "dblclick",
     "fill",
