@@ -2028,15 +2028,20 @@ fn approved_config_profiles() -> (bool, Vec<&'static str>) {
 pub(crate) fn chrome_running() -> bool {
     #[cfg(target_os = "macos")]
     {
-        ["Google Chrome", "Google Chrome Beta", "Google Chrome Canary", "Chromium"]
-            .iter()
-            .any(|app| {
-                std::process::Command::new("pgrep")
-                    .args(["-x", app])
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            })
+        [
+            "Google Chrome",
+            "Google Chrome Beta",
+            "Google Chrome Canary",
+            "Chromium",
+        ]
+        .iter()
+        .any(|app| {
+            std::process::Command::new("pgrep")
+                .args(["-x", app])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -2070,8 +2075,12 @@ pub(crate) fn pick_launch_profile<'a>(
         let lower = sel.to_ascii_lowercase();
         if let Some(p) = profiles.iter().find(|p| {
             p.dir.eq_ignore_ascii_case(sel)
-                || p.email.as_deref().is_some_and(|e| e.to_ascii_lowercase().contains(&lower))
-                || p.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(sel))
+                || p.email
+                    .as_deref()
+                    .is_some_and(|e| e.to_ascii_lowercase().contains(&lower))
+                || p.name
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(sel))
         }) {
             return Some(p);
         }
@@ -2120,7 +2129,10 @@ pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> 
             Some("chromium") => "chromium",
             _ => return None,
         };
-        let ok = std::process::Command::new(bin).arg(&profile_arg).spawn().is_ok();
+        let ok = std::process::Command::new(bin)
+            .arg(&profile_arg)
+            .spawn()
+            .is_ok();
         return ok.then(|| format!("{bin} ({label})"));
     }
     #[cfg(not(unix))]
@@ -3193,16 +3205,38 @@ mod tests {
             profile("Profile 7", Some("other@example.com"), true),
         ];
         // --browser matches by email substring, dir, or display name.
-        assert_eq!(pick_launch_profile(&profiles, Some("other@")).unwrap().dir, "Profile 7");
-        assert_eq!(pick_launch_profile(&profiles, Some("profile 2")).unwrap().dir, "Profile 2");
-        assert_eq!(pick_launch_profile(&profiles, Some("name-Default")).unwrap().dir, "Default");
+        assert_eq!(
+            pick_launch_profile(&profiles, Some("other@")).unwrap().dir,
+            "Profile 7"
+        );
+        assert_eq!(
+            pick_launch_profile(&profiles, Some("profile 2"))
+                .unwrap()
+                .dir,
+            "Profile 2"
+        );
+        assert_eq!(
+            pick_launch_profile(&profiles, Some("name-Default"))
+                .unwrap()
+                .dir,
+            "Default"
+        );
         // An unknown selector must not pick something random: fall back to the
         // first profile that has the extension, since that is the only one a
         // relay can come from.
-        assert_eq!(pick_launch_profile(&profiles, Some("nobody")).unwrap().dir, "Profile 2");
-        assert_eq!(pick_launch_profile(&profiles, None).unwrap().dir, "Profile 2");
+        assert_eq!(
+            pick_launch_profile(&profiles, Some("nobody")).unwrap().dir,
+            "Profile 2"
+        );
+        assert_eq!(
+            pick_launch_profile(&profiles, None).unwrap().dir,
+            "Profile 2"
+        );
         // No extension anywhere: Chrome's own order (Default first).
-        let bare = vec![profile("Profile 3", None, false), profile("Default", None, false)];
+        let bare = vec![
+            profile("Profile 3", None, false),
+            profile("Default", None, false),
+        ];
         let mut sorted = bare.clone();
         sorted.sort_by_key(|p| p.sort_key());
         assert_eq!(pick_launch_profile(&sorted, None).unwrap().dir, "Default");
