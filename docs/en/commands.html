@@ -130,7 +130,11 @@
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-c</span>         <span class="du-cmt"># compact output</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-d</span> 3       <span class="du-cmt"># limit depth to 3</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--dom</span>   <span class="du-cmt"># actionable elements from a DOM walk (pierces shadow roots; automatic when the AX tree has no refs)</span>
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span> <span class="du-cmt"># scope to a CSS selector</span></code></pre>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span> <span class="du-cmt"># scope to a CSS selector</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-f</span> <span class="du-str">"SSH|Save"</span>   <span class="du-cmt"># keep matching lines + their ancestors (refs intact)</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--diff</span>       <span class="du-cmt"># only what changed since the last snapshot</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000  <span class="du-cmt"># cut between nodes, report what was omitted + a cursor</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000 <span class="du-flag">--from</span> 70  <span class="du-cmt"># read on from where it stopped</span></code></pre>
       </div>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Tip</div>

@@ -135,6 +135,39 @@ URL: https://example.com/login
         window's container. The two can be stacked.
       </p>
 
+      <h3>Re-read a page for a few bytes</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">delta and budget</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--diff</span>            <span class="du-cmt"># only what changed since the last snapshot</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000  <span class="du-cmt"># cut between nodes, report what was omitted</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000 <span class="du-flag">--from</span> 70  <span class="du-cmt"># read on from where it stopped</span></code></pre>
+      </div>
+
+      <p>
+        After an action, most of the tree is what it was. <code>--diff</code> returns only the lines
+        that changed since <span class="mark">this session's last snapshot of the same page, with the
+        same options</span>: on a 143 KB HN comment thread, an unchanged re-read costs
+        <span class="mark">1 byte</span> instead of 143,490. With no valid baseline — no previous
+        snapshot, the page navigated, different options — it returns the full tree <em>and says
+        which</em>, because an empty diff and an unchanged page are indistinguishable.
+      </p>
+      <p>
+        <code>--max-bytes &lt;n&gt;</code> solves a different problem: unlike <code>-i/-s/-d/-f</code>,
+        a budget <span class="mark">needs no advance knowledge of what you are looking for</span>. It
+        cuts only on whole-node boundaries (truncating the string would leave a severed
+        <code>[ref=eN]</code>) and tells you what it left out and where to resume:
+        <code>truncated: nodes 0–70 of 1908 (1838 omitted)</code>.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ <code>--diff</code> or <code>--observe</code>?</div>
+        To see what <em>one action</em> changed, use <code>--observe</code> (it rides on the action).
+        To simply look at the page again, use <code>--diff</code> (it rides on <code>snapshot</code>).
+      </div>
+
       <h3>Validation errors show up too</h3>
       <p>
         When a form refuses to submit, the reason is appended to the <code>-i</code> output as a top-level

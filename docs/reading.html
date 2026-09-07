@@ -135,6 +135,37 @@ URL: https://example.com/login
         窗口的容器内。两者可以叠加使用。
       </p>
 
+      <h3>再读一次页面，只花几个字节</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">增量与预算</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--diff</span>            <span class="du-cmt"># 只回传相对上一张快照变化的部分</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000  <span class="du-cmt"># 按整节点裁剪，并说明漏了什么</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000 <span class="du-flag">--from</span> 70  <span class="du-cmt"># 从上次停下的地方续读</span></code></pre>
+      </div>
+
+      <p>
+        动作之后，树的绝大部分还是原样。<code>--diff</code> 只回传相对
+        <span class="mark">本会话上一张同页面、同选项</span>快照变化的行：一个 143 KB 的
+        HN 评论页，页面没动时再读一次只要 <span class="mark">1 个字节</span>，而不是 143,490。
+        没有有效基线时（没有上一张、页面变了、选项不同）它会退回整树<em>并说明是哪一种</em>——
+        因为一个空 diff 和「什么都没变」在调用方看来一模一样。
+      </p>
+      <p>
+        <code>--max-bytes &lt;n&gt;</code> 走另一条路：跟 <code>-i/-s/-d/-f</code> 不同，用预算
+        <span class="mark">不需要你事先知道要找什么</span>。它只在完整节点边界切开（截字符串会留下
+        残缺的 <code>[ref=eN]</code>），并告诉你漏掉了哪些、从哪继续：
+        <code>truncated: nodes 0–70 of 1908 (1838 omitted)</code>。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ <code>--diff</code> 还是 <code>--observe</code>？</div>
+        想知道<em>某一个动作</em>造成了什么变化，用 <code>--observe</code>（挂在动作上）；
+        单纯再看一眼页面，用 <code>--diff</code>（挂在 <code>snapshot</code> 上）。
+      </div>
+
       <h3>校验错误也会一并出现</h3>
       <p>
         当表单拒绝提交时，原因会作为顶层的 <code>alert</code> 行追加进

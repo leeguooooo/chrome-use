@@ -124,7 +124,11 @@
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-c</span>         <span class="du-cmt"># 精简输出</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-d</span> 3       <span class="du-cmt"># 限制深度为 3</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-s</span> <span class="du-str">"#main"</span> <span class="du-cmt"># 限定到 CSS 选择器范围</span>
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--dom</span>   <span class="du-cmt"># 从 DOM 遍历列出可操作元素（穿透 shadow root；AX 树无 ref 时自动启用）</span></code></pre>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--dom</span>   <span class="du-cmt"># 从 DOM 遍历列出可操作元素（穿透 shadow root；AX 树无 ref 时自动启用）</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-f</span> <span class="du-str">"SSH|确定"</span>  <span class="du-cmt"># 只保留匹配行 + 其祖先（refs 保持完整）</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--diff</span>       <span class="du-cmt"># 只回传相对上一张快照变化的部分</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000  <span class="du-cmt"># 按整节点裁剪，并说明漏了什么 + 续读游标</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000 <span class="du-flag">--from</span> 70  <span class="du-cmt"># 从上次停下的地方续读</span></code></pre>
       </div>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 小贴士</div>
