@@ -77,6 +77,11 @@ every page in the browsing context, including third-party iframes. For
 production-auditing tasks against sites that handle secrets, consider
 whether you want that global exposed during the session.
 
+`a11y` also evaluates vendored code, but only inside private isolated worlds.
+It restores the world-local `window.axe` descriptor after each run and makes no
+CDN request. The report can still contain short HTML snippets from failing
+nodes, so treat audit output as page data when deciding what to store or share.
+
 ## Network interception and automation artifacts
 
 - `network route` can fail or mock requests. Treat it the way you treat

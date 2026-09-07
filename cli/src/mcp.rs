@@ -44,6 +44,7 @@ const TOOL_RELOAD: &str = "chrome_use_reload";
 const TOOL_HOVER: &str = "chrome_use_hover";
 const TOOL_SELECT: &str = "chrome_use_select";
 const TOOL_SCREENSHOT: &str = "chrome_use_screenshot";
+const TOOL_A11Y: &str = "chrome_use_a11y";
 const TOOL_SCROLL: &str = "chrome_use_scroll";
 const TOOL_TABS: &str = "chrome_use_tabs";
 const TOOL_EXTRACT: &str = "chrome_use_extract";
@@ -460,6 +461,15 @@ fn extended_tools() -> Vec<Value> {
             ]), &[]),
         }),
         json!({
+            "name": TOOL_A11Y,
+            "description": "Run an offline axe-core accessibility audit on the current page or an optional URL, including iframe findings.",
+            "inputSchema": build_schema(obj(&[
+                ("url", json!({ "type": "string", "description": "Optional URL to navigate to before auditing." })),
+                ("tags", json!({ "type": "string", "description": "Comma-separated axe rule tags, such as wcag2a,wcag2aa." })),
+                ("selector", json!({ "type": "string", "description": "Optional CSS selector that scopes the audit to one subtree." })),
+            ]), &[]),
+        }),
+        json!({
             "name": TOOL_SCROLL,
             "description": "Scroll the page, an element, or a specific viewport point/frame.",
             "inputSchema": build_schema(obj(&[
@@ -641,6 +651,7 @@ fn is_known_tool(name: &str, profile: Profile) -> bool {
             TOOL_HOVER
                 | TOOL_SELECT
                 | TOOL_SCREENSHOT
+                | TOOL_A11Y
                 | TOOL_SCROLL
                 | TOOL_TABS
                 | TOOL_EXTRACT
@@ -689,6 +700,7 @@ fn call_tool(params: Option<&Value>, profile: Profile) -> Result<Value, Protocol
         TOOL_HOVER => call_hover(arguments),
         TOOL_SELECT => call_select(arguments),
         TOOL_SCREENSHOT => call_screenshot(arguments),
+        TOOL_A11Y => call_a11y(arguments),
         TOOL_SCROLL => call_scroll(arguments),
         TOOL_TABS => call_tabs(arguments),
         TOOL_EXTRACT => call_extract(arguments),
@@ -964,6 +976,23 @@ fn call_screenshot(arguments: &Value) -> Result<Value, ProtocolError> {
     let mut result = run_tool(arguments, args)?;
     attach_screenshot_image(&mut result);
     Ok(result)
+}
+
+/// `a11y [url] [--tags <csv>] [--selector <css>]`.
+fn call_a11y(arguments: &Value) -> Result<Value, ProtocolError> {
+    let mut args = vec!["a11y".to_string()];
+    if let Some(url) = optional_string(arguments, "url")? {
+        args.push(url);
+    }
+    if let Some(tags) = optional_string(arguments, "tags")? {
+        args.push("--tags".to_string());
+        args.push(tags);
+    }
+    if let Some(selector) = optional_string(arguments, "selector")? {
+        args.push("--selector".to_string());
+        args.push(selector);
+    }
+    run_tool(arguments, args)
 }
 
 /// Largest capture we will inline, in raw bytes before base64. A full-page
@@ -1870,6 +1899,7 @@ mod tests {
         TOOL_HOVER,
         TOOL_SELECT,
         TOOL_SCREENSHOT,
+        TOOL_A11Y,
         TOOL_SCROLL,
         TOOL_TABS,
         TOOL_EXTRACT,

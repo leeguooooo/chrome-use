@@ -106,7 +106,7 @@
       <h2>扩展 profile：--tools all</h2>
       <p>
         默认的 12 个工具够大多数任务用了。需要更多能力时加 <code>--tools all</code>，
-        把 profile 从 12 个扩到<strong>26 个工具</strong>——核心 12 个之外，再加上下面这些
+        把 profile 从 12 个扩到<strong>27 个工具</strong>。核心 12 个之外，再加上下面这些：
         （仍不是完整的 CLI 全集）：
       </p>
 
@@ -118,6 +118,7 @@
           <tr><td><code>chrome_use_hover</code></td><td>把鼠标悬停到某个元素上</td></tr>
           <tr><td><code>chrome_use_select</code></td><td>选中 <code>&lt;select&gt;</code> 下拉项</td></tr>
           <tr><td><code>chrome_use_screenshot</code></td><td>截图；结果里除了文件路径还会带一个 MCP image 块（读页面仍然用 <code>snapshot</code>，截图只用来确认视觉）。设 <code>CHROME_USE_MCP_MAX_INLINE_IMAGE_BYTES</code> 可调整内联上限，设 <code>0</code> 则只返回路径</td></tr>
+          <tr><td><code>chrome_use_a11y</code></td><td>对当前页面或指定 URL 运行内嵌的 axe-core 无障碍审计</td></tr>
           <tr><td><code>chrome_use_scroll</code></td><td>滚动页面或某个容器</td></tr>
           <tr><td><code>chrome_use_tabs</code></td><td>列出、新建、原生复制、无导航接管、浏览器级检查、关闭或切换本会话的标签</td></tr>
           <tr><td><code>chrome_use_extract</code></td><td>按 schema 把页面抓成结构化 JSON</td></tr>
@@ -137,7 +138,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-cmt"># 26 工具扩展 profile</span>
+<pre><code><span class="du-cmt"># 27 工具扩展 profile</span>
 <span class="du-prompt">$</span> chrome-use mcp <span class="du-flag">--tools</span> all</code></pre>
       </div>
 

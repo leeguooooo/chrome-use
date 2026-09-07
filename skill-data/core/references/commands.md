@@ -585,6 +585,27 @@ chrome-use vitals [url] [--json]                 # LCP/CLS/TTFB/FCP/INP + hydrat
 chrome-use pushstate <url>                       # SPA client-side nav (auto-detects Next router)
 ```
 
+## Accessibility audit
+
+Runs an embedded axe-core audit with no CDN fetch. The engine executes private
+partial audits through CDP across the active page's frame tree, so page CSP does
+not block it and page-provided `window.axe` values remain intact. Accessibility
+audits require a CDP browser and are unavailable on Safari or iOS WebDriver.
+
+```bash
+chrome-use a11y                                  # Audit the current page
+chrome-use a11y <url>                            # Navigate, then audit
+chrome-use a11y --tags wcag2a,wcag2aa            # Filter by axe rule tags
+chrome-use a11y --selector "#main"               # Scope to a subtree
+chrome-use a11y <url> --json                     # Structured results
+```
+
+JSON returns `counts` plus `violations` and `incomplete` arrays. Each rule has
+`id`, `impact`, `help`, `helpUrl`, `tags`, `nodeCount`, and up to ten `nodes`.
+Each node includes its axe `target` selector path, an HTML snippet, and
+`failureSummary`. Nested target arrays preserve shadow DOM boundaries; multiple
+path entries preserve iframe boundaries. Review `incomplete` rules manually.
+
 ## Init scripts
 
 ```bash

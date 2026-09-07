@@ -299,6 +299,57 @@ async fn e2e_launch_navigate_evaluate_close() {
 
 #[tokio::test]
 #[ignore]
+async fn e2e_a11y_reports_violations_and_selector_errors() {
+    let mut state = DaemonState::new();
+    let html = r#"<!doctype html><html><body><img src="missing.png"></body></html>"#;
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(&json!({ "id": "3", "action": "a11y" }), &mut state).await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert!(data["counts"]["violations"].as_u64().unwrap_or(0) >= 1);
+    assert!(data["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|rule| rule["id"] == "image-alt"));
+
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "a11y",
+            "selector": "#missing"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false);
+    assert_eq!(resp["code"], "element_not_found");
+    assert!(resp["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("No element matches selector: #missing"));
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+#[tokio::test]
+#[ignore]
 async fn e2e_network_requests_capture_websocket_connections() {
     let (websocket_port, websocket_task) = spawn_websocket_server(2).await;
     let iframe_page = format!(
