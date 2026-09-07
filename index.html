@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>chrome-use — 把你已经登录好的 Chrome 交给 AI agent</title>
+<meta name="description" content="chrome-use 让任意 AI agent 直接操作你自己正在用的、已登录的真实 Chrome：复用现成会话，原生消息无调试端口，CreepJS 实测 0% 机器人。" />
+<link rel="canonical" href="https://chrome-use.leeguoo.com/" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="chrome-use — 把你已经登录好的 Chrome 交给 AI agent" />
+<meta property="og:description" content="复用你现成的登录态，对反爬完全不可检测,因为它就是你的真实浏览器。" />
+<meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero.png" />
+<meta property="og:url" content="https://chrome-use.leeguoo.com/" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<!-- Google AdSense -->
+<meta name="google-adsense-account" content="ca-pub-4085449715128420" />
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4085449715128420" crossorigin="anonymous"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --t-bg: #0e1014;
+    --t-panel: #161a20;
+    --t-panel2: #0a0c10;
+    --t-border: #1f242c;
+    --t-text: #e8eef4;
+    --t-body: #c8d0d8;
+    --t-muted: #a8b2bd;
+    --t-dim: #6b7682;
+    --t-faint: #3a4250;
+    --t-green: #7ee787;
+    --t-red: #ff7b72;
+    --t-blue: #7cc7ff;
+    --t-purple: #c4a7e7;
+    --t-accent: #e0b341;
+    --t-accent-ink: #1a1408;
+    --t-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', ui-monospace, monospace;
+    --t-sans: 'Inter', 'Helvetica Neue', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --maxw: 1080px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--t-bg);
+    color: var(--t-body);
+    font-family: var(--t-sans);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(circle at 18% -8%, rgba(224,179,65,0.07), transparent 42%),
+      linear-gradient(var(--t-border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--t-border) 1px, transparent 1px);
+    background-size: auto, 56px 56px, 56px 56px;
+    background-position: 0 0, 0 0, 0 0;
+  }
+  a { color: var(--t-accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+  h1, h2, h3 { color: var(--t-text); line-height: 1.25; letter-spacing: -0.01em; }
+  code, kbd, .mono { font-family: var(--t-mono); }
+
+  /* top bar */
+  header.bar {
+    border-bottom: 1px solid var(--t-border);
+    background: rgba(10,12,16,0.72);
+    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 20;
+  }
+  .bar .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
+  .brand { font-family: var(--t-mono); font-weight: 700; color: var(--t-text); font-size: 15px; }
+  .brand .dot { color: var(--t-accent); }
+  .bar nav { margin-left: auto; display: flex; gap: 20px; font-size: 13.5px; }
+  .bar nav a { color: var(--t-muted); }
+  .bar nav a:hover { color: var(--t-text); text-decoration: none; }
+  .ghbtn {
+    font-family: var(--t-mono); font-size: 12.5px; color: var(--t-text);
+    border: 1px solid var(--t-border); border-radius: 4px; padding: 5px 11px;
+    background: var(--t-panel);
+  }
+  .ghbtn:hover { border-color: var(--t-accent); text-decoration: none; }
+
+  /* hero */
+  .hero { padding: 76px 0 40px; }
+  .eyebrow {
+    font-family: var(--t-mono); font-size: 12.5px; color: var(--t-accent);
+    letter-spacing: 0.04em; margin-bottom: 18px;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .eyebrow .blink { width: 7px; height: 7px; border-radius: 50%; background: var(--t-green); box-shadow: 0 0 8px var(--t-green); }
+  .hero h1 { font-size: clamp(30px, 5.2vw, 50px); margin: 0 0 20px; font-weight: 700; }
+  .hero h1 .amber { color: var(--t-accent); }
+  .lede { font-size: clamp(16px, 2vw, 19px); color: var(--t-muted); max-width: 680px; margin: 0 0 28px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    font-family: var(--t-mono); font-size: 13.5px; font-weight: 600;
+    border-radius: 5px; padding: 11px 18px; border: 1px solid transparent; cursor: pointer;
+  }
+  .btn-primary { background: var(--t-accent); color: var(--t-accent-ink); }
+  .btn-primary:hover { text-decoration: none; filter: brightness(1.07); }
+  .btn-ghost { background: var(--t-panel); color: var(--t-text); border-color: var(--t-border); }
+  .btn-ghost:hover { border-color: var(--t-accent); text-decoration: none; }
+
+  .hero-art { margin-top: 44px; border: 1px solid var(--t-border); border-radius: 10px; overflow: hidden; background: var(--t-panel2); }
+  .hero-art img { display: block; width: 100%; height: auto; }
+
+  /* terminal install block */
+  .term {
+    border: 1px solid var(--t-border); border-radius: 8px; overflow: hidden;
+    background: var(--t-panel2); margin: 18px 0 0; max-width: 680px;
+  }
+  .term .tt { display: flex; align-items: center; gap: 7px; padding: 9px 13px; border-bottom: 1px solid var(--t-border); background: var(--t-panel); }
+  .term .tt span { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .term .tt .r { background: #ff5f56; } .term .tt .y { background: #ffbd2e; } .term .tt .g { background: #27c93f; }
+  .term .tt .label { margin-left: 8px; font-family: var(--t-mono); font-size: 12px; color: var(--t-dim); }
+  .term pre { margin: 0; padding: 16px 18px; font-family: var(--t-mono); font-size: 13px; color: var(--t-text); overflow-x: auto; }
+  .term .prompt { color: var(--t-accent); user-select: none; }
+  .term .cmt { color: var(--t-dim); }
+
+  /* sections */
+  section { padding: 64px 0; border-top: 1px solid var(--t-border); }
+  .kicker { font-family: var(--t-mono); font-size: 12.5px; color: var(--t-accent); letter-spacing: 0.04em; margin-bottom: 12px; }
+  section h2 { font-size: clamp(23px, 3.4vw, 31px); margin: 0 0 16px; }
+  section .sub { color: var(--t-muted); max-width: 720px; margin: 0 0 36px; font-size: 16px; }
+
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { border: 1px solid var(--t-border); border-radius: 8px; background: var(--t-panel); padding: 22px; }
+  .card h3 { font-size: 16.5px; margin: 0 0 9px; }
+  .card h3 .no { font-family: var(--t-mono); color: var(--t-accent); margin-right: 8px; font-size: 14px; }
+  .card p { margin: 0; color: var(--t-muted); font-size: 14.5px; }
+
+  .split { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 40px; align-items: center; }
+  .split img { width: 100%; height: auto; border: 1px solid var(--t-border); border-radius: 10px; background: var(--t-panel2); }
+  .split h2 { margin-top: 0; }
+  .split ul { margin: 18px 0 0; padding: 0; list-style: none; }
+  .split li { padding: 9px 0 9px 26px; position: relative; color: var(--t-body); border-bottom: 1px dashed var(--t-border); }
+  .split li:last-child { border-bottom: 0; }
+  .split li::before { content: '▹'; position: absolute; left: 4px; color: var(--t-accent); }
+  .split li b { color: var(--t-text); }
+
+  /* comparison table */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--t-border); border-radius: 8px; }
+  table.cmp { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 640px; }
+  table.cmp th, table.cmp td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--t-border); }
+  table.cmp thead th { background: var(--t-panel); color: var(--t-text); font-weight: 600; font-family: var(--t-mono); font-size: 12.5px; }
+  table.cmp thead th.us { color: var(--t-accent); }
+  table.cmp tbody td:first-child { color: var(--t-body); }
+  table.cmp td.us { background: rgba(224,179,65,0.05); color: var(--t-text); }
+  table.cmp td.c { text-align: center; }
+  table.cmp tr:last-child td { border-bottom: 0; }
+  .yes { color: var(--t-green); } .no { color: var(--t-red); } .meh { color: var(--t-dim); }
+
+  /* stats */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .stat { border: 1px solid var(--t-border); border-radius: 8px; background: var(--t-panel); padding: 20px; text-align: center; }
+  .stat .n { font-family: var(--t-mono); font-size: 30px; font-weight: 700; color: var(--t-accent); }
+  .stat .l { color: var(--t-muted); font-size: 13px; margin-top: 4px; }
+
+  /* family */
+  .fam { display: flex; flex-wrap: wrap; gap: 14px; }
+  .fam a { flex: 1 1 200px; border: 1px solid var(--t-border); border-radius: 8px; background: var(--t-panel); padding: 18px 20px; color: var(--t-text); }
+  .fam a:hover { border-color: var(--t-accent); text-decoration: none; }
+  .fam .nm { font-family: var(--t-mono); font-weight: 600; }
+  .fam .ds { color: var(--t-muted); font-size: 13.5px; margin-top: 5px; }
+
+  footer { border-top: 1px solid var(--t-border); padding: 40px 0 60px; color: var(--t-dim); font-size: 13.5px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+  footer a { color: var(--t-muted); }
+  footer .sep { margin-left: auto; }
+
+  @media (max-width: 760px) {
+    .grid3, .stats { grid-template-columns: 1fr 1fr; }
+    .split { grid-template-columns: 1fr; gap: 24px; }
+    .bar nav { display: none; }
+    section { padding: 48px 0; }
+  }
+  @media (max-width: 460px) { .grid3, .stats { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <span class="brand">chrome<span class="dot">-</span>use</span>
+    <nav>
+      <a href="#why">为什么</a>
+      <a href="#how">原理</a>
+      <a href="#stealth">反检测</a>
+      <a href="#install">安装</a>
+    </nav>
+    <a class="ghbtn" href="https://github.com/leeguooooo/chrome-use" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</header>
+
+<main>
+  <!-- HERO -->
+  <div class="hero">
+    <div class="wrap">
+      <span class="eyebrow"><span class="blink"></span>*-use 家族 · 驱动你的真实设备</span>
+      <h1>把你<span class="amber">已经登录好</span>的 Chrome，<br />交给你的 AI agent。</h1>
+      <p class="lede">chrome-use 让任意 agent(Claude Code、Cursor、Codex、你自己的脚本)直接操作你<b style="color:var(--t-text)">现在正用着、已经登录了所有网站</b>的那个 Chrome。它在你的窗口里点击，你看着它干活，撞到验证码的瞬间你接管一下，它接着跑。</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#install">一行装好 →</a>
+        <a class="btn btn-ghost" href="https://github.com/leeguooooo/chrome-use" target="_blank" rel="noopener">看源码</a>
+      </div>
+      <div class="term">
+        <div class="tt"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">bash</span></div>
+        <pre><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</pre>
+      </div>
+      <div class="hero-art">
+        <img src="assets/landing/hero.png" alt="AI agent 操作你已登录的真实 Chrome，你随时可以接管" loading="eager" />
+      </div>
+    </div>
+  </div>
+
+  <!-- WHY -->
+  <section id="why">
+    <div class="wrap">
+      <div class="kicker">// 它解决什么</div>
+      <h2>不用开新 Chrome，不用重新登录，不用跟"你是不是机器人"较劲。</h2>
+      <p class="sub">常规自动化开的是一个空 profile 的全新浏览器：每个登录你重做，每个验证码你硬扛，最后还被网站标成自动化。chrome-use 直接用你现成的会话：cookies、登录态、指纹全是真的，因为它就是你的真实浏览器。</p>
+      <div class="grid3">
+        <div class="card">
+          <h3><span class="no">01</span>Playwright / Puppeteer</h3>
+          <p>它们启动空浏览器，每次重新登录、硬扛验证码，仍会被识别为自动化。chrome-use 复用你已有的会话。</p>
+        </div>
+        <div class="card">
+          <h3><span class="no">02</span>Claude 的 Chrome 插件</h3>
+          <p>很好用,但只能给 Claude 用。chrome-use 给任意 agent / CLI 用,同一套真实浏览器。</p>
+        </div>
+        <div class="card">
+          <h3><span class="no">03</span>裸调试端口（CDP）</h3>
+          <p>Chrome 136+ 每次连接都弹 "Allow remote debugging?"。chrome-use 走原生消息,商店一键装,之后零确认。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW -->
+  <section id="how">
+    <div class="wrap split">
+      <div>
+        <div class="kicker">// 工作原理</div>
+        <h2>全程在你本机,无网络端口、无 token、无远程服务器。</h2>
+        <ul>
+          <li>你的 <b>CLI</b> 通过 Chrome <b>原生消息</b>和一个小<b>浏览器扩展</b>通信,走本机进程间通道。</li>
+          <li>扩展用 <code>chrome.debugger</code> 驱动你指定的标签页,在你<b>已登录</b>的 Chrome 里操作。</li>
+          <li>每个 <code>--session</code> 拿到自己<b>彩色的标签组</b>,多个 agent 共用一个真实浏览器互不打架。</li>
+          <li>不走 <code>--remote-debugging-port</code>,所以<b>永不弹</b>那个调试确认框。</li>
+        </ul>
+      </div>
+      <img src="assets/landing/how.png" alt="CLI ↔ 扩展 ↔ 原生消息 ↔ 你的 Chrome,全本机闭环" loading="lazy" />
+    </div>
+  </section>
+
+  <!-- STEALTH -->
+  <section id="stealth">
+    <div class="wrap split">
+      <img src="assets/landing/stealth.png" alt="真实但不可检测的浏览器指纹" loading="lazy" />
+      <div>
+        <div class="kicker">// 反检测</div>
+        <h2>网站眼里,它 100% 是个人。</h2>
+        <p class="sub" style="margin-bottom:20px">因为它本来就是你的真实浏览器,不是模拟。我们把这件事拿去实测了。</p>
+        <div class="stats">
+          <div class="stat"><div class="n">0%</div><div class="l">CreepJS 机器人分</div></div>
+          <div class="stat"><div class="n">0%</div><div class="l">headless 特征</div></div>
+          <div class="stat"><div class="n">无</div><div class="l">Runtime.enable 泄漏</div></div>
+          <div class="stat"><div class="n">7</div><div class="l">权限,无 all_urls</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPARE -->
+  <section id="compare">
+    <div class="wrap">
+      <div class="kicker">// 横向对比</div>
+      <h2>要细节的看这里。</h2>
+      <p class="sub">同样是"驱动浏览器",差别在于:是不是你的真实登录态、弹不弹确认框、能不能多 agent 隔离。</p>
+      <div class="tablewrap">
+        <table class="cmp">
+          <thead>
+            <tr>
+              <th></th>
+              <th class="c">Claude in Chrome</th>
+              <th class="c">裸 CDP 端口</th>
+              <th class="c">Playwright 等</th>
+              <th class="c us">chrome-use</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>任意 agent / CLI 都能用</td><td class="c no">仅 Claude</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c us yes">✓</td></tr>
+            <tr><td>驱动你真实、已登录的 Chrome</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">空 profile</td><td class="c us yes">✓</td></tr>
+            <tr><td>不弹 "Allow remote debugging?"</td><td class="c yes">✓</td><td class="c no">每次都弹</td><td class="c meh">—</td><td class="c us yes">✓ 原生消息</td></tr>
+            <tr><td>真实指纹(CreepJS ~0%)</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">自动化特征</td><td class="c us yes">✓ 实测 0%</td></tr>
+            <tr><td>无 Runtime.enable 泄漏</td><td class="c meh">—</td><td class="c no">泄漏</td><td class="c no">泄漏</td><td class="c us yes">✓ 默认关</td></tr>
+            <tr><td>多 agent 共用一浏览器、标签组隔离</td><td class="c no">单 app</td><td class="c meh">无隔离</td><td class="c no">各开各的</td><td class="c us yes">✓</td></tr>
+            <tr><td>权限面</td><td class="c meh">16,含 all_urls</td><td class="c meh">完整 CDP</td><td class="c meh">完全控制</td><td class="c us yes">7,无 all_urls</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- INSTALL -->
+  <section id="install">
+    <div class="wrap">
+      <div class="kicker">// 安装</div>
+      <h2>一行装好,无 npm、无 token。</h2>
+      <p class="sub">从最新 GitHub Release 拉对应平台的预编译二进制,装好 <code>chrome-use</code>(带 <code>abs</code> 别名)。</p>
+      <div class="term">
+        <div class="tt"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">安装 CLI</span></div>
+        <pre><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</pre>
+      </div>
+      <div class="term">
+        <div class="tt"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">拉 AI agent 技能</span></div>
+        <pre><span class="cmt"># 把 Claude Code / Cursor 等的 SKILL.md 拉进当前项目</span>
+<span class="prompt">$</span> npx skills add leeguooooo/chrome-use</pre>
+      </div>
+      <p style="color:var(--t-muted);font-size:14px;margin-top:18px">Windows 用户从 <a href="https://github.com/leeguooooo/chrome-use/releases" target="_blank" rel="noopener">Releases 页</a>下载 <code>chrome-use-win32-x64.tar.gz</code>,把 <code>chrome-use.exe</code> 放进 PATH 即可。</p>
+    </div>
+  </section>
+
+  <!-- FAMILY -->
+  <section id="family">
+    <div class="wrap">
+      <div class="kicker">// *-use 家族</div>
+      <h2>驱动你已经在用的真实设备。</h2>
+      <p class="sub">同一个思路:不造模拟环境,直接接管你手里真实的、已登录的那一个。</p>
+      <div class="fam">
+        <a href="https://github.com/leeguooooo/chrome-use" target="_blank" rel="noopener">
+          <div class="nm">chrome-use</div>
+          <div class="ds">驱动你真实、已登录的 Chrome。</div>
+        </a>
+        <a href="https://github.com/leeguooooo" target="_blank" rel="noopener">
+          <div class="nm">iphone-use</div>
+          <div class="ds">驱动你真实的 iPhone。</div>
+        </a>
+        <a href="https://leeguoo.com" target="_blank" rel="noopener">
+          <div class="nm">leeguoo.com ↗</div>
+          <div class="ds">更多 *-use 工具与文章。</div>
+        </a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="brand">chrome<span class="dot">-</span>use</span>
+    <span>·  Apache-2.0</span>
+    <a href="https://github.com/leeguooooo/chrome-use" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/leeguooooo/chrome-use/blob/main/README.md" target="_blank" rel="noopener">English README</a>
+    <span class="sep"></span>
+    <span>Part of the <a href="https://leeguoo.com">leeguoo.com</a> *-use family</span>
+  </div>
+</footer>
+
+</body>
+</html>
