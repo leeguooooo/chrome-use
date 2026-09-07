@@ -609,6 +609,39 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             if let Some(note) = data.get("note").and_then(|v| v.as_str()) {
                 eprintln!("{}", color::dim(note));
             }
+            // `--max-bytes`/`--from`: say what was left out and how to read on.
+            // A budgeted tree that printed nothing about its own truncation is
+            // indistinguishable from a short page, which is the failure this
+            // whole feature exists to prevent.
+            if data
+                .get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                let nodes = data.get("nodes").and_then(|v| v.as_object());
+                let get = |k: &str| {
+                    nodes
+                        .and_then(|n| n.get(k))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0)
+                };
+                eprintln!(
+                    "{}",
+                    color::yellow(&format!(
+                        "truncated: nodes {}–{} of {} ({} omitted)",
+                        get("from"),
+                        get("to"),
+                        get("total"),
+                        get("omitted")
+                    ))
+                );
+                if let Some(next) = data.get("nextFrom").and_then(|v| v.as_i64()) {
+                    eprintln!(
+                        "{}",
+                        color::dim(&format!("read on with: --from {next}"))
+                    );
+                }
+            }
             return;
         }
         // Frame list (`chrome-use frames`)
@@ -2571,6 +2604,10 @@ Options:
   -c, --compact        Remove empty structural elements
   -d, --depth <n>      Limit tree depth
   -s, --selector <sel> Scope snapshot to CSS selector
+  --max-bytes <n>      Cap the tree at n bytes, cut between nodes (never
+                       mid-node). Reports what was omitted and a --from cursor.
+                       For long feeds/comment threads whose bulk is prose.
+  --from <n>           Resume a budgeted snapshot at node n.
   -f, --filter <regex> Keep only lines matching <regex> (case-insensitive) + their
                        ancestor context; refs preserved. For desktop-shell apps
                        (Synology DSM, NAS/router panels) where one snapshot holds

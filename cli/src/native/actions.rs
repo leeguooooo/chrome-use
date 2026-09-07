@@ -3829,8 +3829,51 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         })
         .collect();
 
+    // `--max-bytes` / `--from`: a comment thread or a long feed can snapshot to
+    // hundreds of kilobytes, nearly all of it prose unrelated to the element the
+    // caller wants — and every one of those bytes lands in an agent's context.
+    // Cut on whole-node boundaries and report what was dropped plus the cursor to
+    // resume from, so a clipped tree is never mistaken for a short page.
+    let budget = cmd
+        .get("maxBytes")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .filter(|n| *n > 0);
+    let from = cmd.get("from").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let mut budget_info: Option<snapshot::TreeBudget> = None;
+    let tree = match budget {
+        Some(max_bytes) => {
+            let b = snapshot::budget_tree(&tree, max_bytes, from);
+            let kept = b.tree.clone();
+            budget_info = Some(b);
+            kept
+        }
+        // `--from` without a budget still pages, it just has no upper bound.
+        None if from > 0 => {
+            let b = snapshot::budget_tree(&tree, usize::MAX, from);
+            let kept = b.tree.clone();
+            budget_info = Some(b);
+            kept
+        }
+        None => tree,
+    };
+
     let ref_count = refs.len();
     let mut out = json!({ "snapshot": tree, "origin": url, "refs": refs });
+    if let Some(b) = budget_info {
+        if b.truncated() {
+            out["truncated"] = json!(true);
+            out["nodes"] = json!({
+                "total": b.total_nodes,
+                "from": b.from,
+                "to": b.next,
+                "omitted": b.total_nodes - (b.next - b.from),
+            });
+            if b.next < b.total_nodes {
+                out["nextFrom"] = json!(b.next);
+            }
+        }
+    }
     if let Some(note) = dom_note {
         out["note"] = json!(note);
         out["source"] = json!("dom");
