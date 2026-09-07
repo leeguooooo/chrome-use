@@ -794,6 +794,15 @@ single call: `chrome-use navigate <url> --observe` gets you the page AND its
 interactive tree in one round trip. On a real task that halved the calls (6 → 3)
 at identical bytes returned.
 
+**Re-read a page for a few bytes — `snapshot --diff`.** After an action, most
+of the tree is what it was. `--diff` returns only the lines that changed since
+this session's last snapshot of the same page (same options): on a 143 KB HN
+comment thread, an unchanged re-read costs 1 byte instead of 143,490. With no
+valid baseline — no previous snapshot, the page navigated, different options —
+it returns the full tree and says which, because an empty diff and an unchanged
+page are indistinguishable. Use `--observe` when you want the delta caused by a
+specific action; use `--diff` when you are simply reading the page again.
+
 **Budget a huge tree — `snapshot --max-bytes <n>` / `--from <n>`.** A long
 comment thread or feed can snapshot to ~140 KB, nearly all of it prose unrelated
 to the element you want. Unlike `-i/-s/-d/-f`, a budget needs no advance

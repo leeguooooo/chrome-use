@@ -53,6 +53,7 @@ chrome-use snapshot -d 3       # Limit depth to 3
 chrome-use snapshot -s "#main" # Scope to CSS selector
 chrome-use snapshot -i --dom   # Actionable elements from a DOM walk (open + closed shadow roots); automatic when the AX tree has no refs
 chrome-use snapshot -i -f "SSH|Save"   # Keep matching lines + ancestor context (refs intact)
+chrome-use snapshot -i --diff  # Only what changed since this session's last snapshot of the same page
 chrome-use snapshot -i --max-bytes 4000   # Cap the tree; cuts between nodes, reports what it omitted
 chrome-use snapshot -i --max-bytes 4000 --from 70   # Read on from where the last one stopped
 chrome-use read <url>          # Fetch a URL as agent-readable markdown/text (prefers .md/llms.txt, HTML→markdown fallback)
