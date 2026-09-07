@@ -1500,6 +1500,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     // Output budget: cap the tree at N bytes, cut between nodes,
                     // and report the cursor to read on from. `--from` resumes.
+                    // Only what changed since this session's last snapshot of
+                    // the same page, with the same options.
+                    "--diff" => {
+                        obj.insert("diff".to_string(), json!(true));
+                    }
                     "--max-bytes" => {
                         if let Some(v) = rest.get(i + 1) {
                             if let Ok(n) = v.parse::<u64>() {

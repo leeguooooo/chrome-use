@@ -384,6 +384,12 @@ pub struct DaemonState {
     pub tracked_requests: Vec<TrackedRequest>,
     pub request_tracking: bool,
     pub active_frame_id: Option<String>,
+    /// Last `snapshot` this session produced, as (url, options fingerprint, tree).
+    /// `snapshot --diff` compares against it so a re-read of a mostly-unchanged
+    /// page costs a few lines instead of the whole tree. Keyed by url + options
+    /// because a diff across a navigation, or between `-i` and a full tree,
+    /// compares two unrelated documents and is worse than useless.
+    pub last_snapshot: Option<(String, String, String)>,
     /// Cross-origin iframe frame_id → dedicated CDP session_id.
     /// Populated by Target.attachedToTarget events from Target.setAutoAttach.
     pub iframe_sessions: HashMap<String, String>,
@@ -454,6 +460,7 @@ impl DaemonState {
             tracked_requests: Vec::new(),
             request_tracking: false,
             active_frame_id: None,
+            last_snapshot: None,
             iframe_sessions: HashMap::new(),
             origin_headers: Arc::new(RwLock::new(HashMap::new())),
             proxy_credentials: Arc::new(RwLock::new(None)),
@@ -3717,6 +3724,39 @@ async fn handle_close(state: &mut DaemonState) -> Result<Value, String> {
 // Phase 2 handlers
 // ---------------------------------------------------------------------------
 
+/// What `snapshot --diff` has to compare against.
+#[derive(Debug, PartialEq)]
+pub(crate) enum SnapshotDiffBasis<'a> {
+    /// A valid baseline for the same document, read with the same options.
+    Compare(&'a str),
+    /// No usable baseline; send the whole tree and say why. Silently emitting a
+    /// diff against a mismatched baseline would be worse than sending the tree:
+    /// an empty diff and an unchanged page look identical.
+    FullTree(&'static str),
+}
+
+/// Decide whether a stored snapshot can serve as the diff baseline.
+///
+/// A baseline is only valid for the same url read with the same options: a diff
+/// across a navigation, or between an `-i` tree and a full one, compares two
+/// unrelated documents and would report the entire page as replaced.
+pub(crate) fn snapshot_diff_basis<'a>(
+    last: Option<&'a (String, String, String)>,
+    url: &str,
+    opts_key: &str,
+) -> SnapshotDiffBasis<'a> {
+    match last {
+        None => SnapshotDiffBasis::FullTree("full tree: no previous snapshot in this session"),
+        Some((prev_url, _, _)) if prev_url != url => {
+            SnapshotDiffBasis::FullTree("full tree: the page changed since the last snapshot")
+        }
+        Some((_, prev_key, _)) if prev_key != opts_key => {
+            SnapshotDiffBasis::FullTree("full tree: different snapshot options than the last one")
+        }
+        Some((_, _, prev_tree)) => SnapshotDiffBasis::Compare(prev_tree),
+    }
+}
+
 async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     // Re-sync the active-tab pin before resolving it, mirroring `tab list` and
     // `screenshot` (issue #88). On relay auto-connect a background about:blank
@@ -3830,6 +3870,50 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         })
         .collect();
 
+    // `--diff`: return only what changed since this session's last snapshot of
+    // the same page. A re-read after a click is mostly the same tree; sending it
+    // whole is the single biggest avoidable cost in an agent's context. Falls
+    // back to the full tree — and says so — whenever there is nothing valid to
+    // compare against, because a diff shown without its baseline being real is
+    // indistinguishable from "nothing changed".
+    let want_diff = cmd.get("diff").and_then(|v| v.as_bool()).unwrap_or(false);
+    // Options fingerprint: diffing an `-i` tree against a full one, or two
+    // different `--selector` scopes, compares unrelated documents.
+    let opts_key = format!(
+        "i={} c={} d={:?} s={:?} u={} dom={}",
+        options.interactive,
+        options.compact,
+        options.depth,
+        options.selector,
+        options.urls,
+        dom_forced
+    );
+    let mut diff_note: Option<&'static str> = None;
+    let full_tree = tree.clone();
+    let tree = if want_diff {
+        match snapshot_diff_basis(state.last_snapshot.as_ref(), &url, &opts_key) {
+            SnapshotDiffBasis::Compare(prev_tree) => {
+                let d = diff::diff_snapshots(
+                    &format!("{}\n", prev_tree.trim_end()),
+                    &format!("{}\n", tree.trim_end()),
+                );
+                if d.changed {
+                    d.diff
+                } else {
+                    diff_note = Some("no change since the last snapshot");
+                    String::new()
+                }
+            }
+            SnapshotDiffBasis::FullTree(why) => {
+                diff_note = Some(why);
+                tree
+            }
+        }
+    } else {
+        tree
+    };
+    state.last_snapshot = Some((url.clone(), opts_key, full_tree));
+
     // `--max-bytes` / `--from`: a comment thread or a long feed can snapshot to
     // hundreds of kilobytes, nearly all of it prose unrelated to the element the
     // caller wants — and every one of those bytes lands in an agent's context.
@@ -3861,6 +3945,12 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     let ref_count = refs.len();
     let mut out = json!({ "snapshot": tree, "origin": url, "refs": refs });
+    if want_diff {
+        out["diffMode"] = json!(diff_note.is_none());
+        if let Some(n) = diff_note {
+            out["diffNote"] = json!(n);
+        }
+    }
     if let Some(b) = budget_info {
         if b.truncated() {
             out["truncated"] = json!(true);
@@ -7217,14 +7307,34 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // -tabId case the ext-0.4.9 targetId recovery (#24) self-heals within ~6s, so
     // we surface a warning rather than a hard error to avoid a false failure
     // during that window.
-    if mgr.evaluate("1", None).await.is_err() {
-        let warning = tab_liveness_probe_warning(
-            mgr.on_relay(),
-            crate::connect::relay_ext_version().as_deref(),
-            env!("AB_CONNECT_VERSION"),
-        );
-        if let Some(obj) = result.as_object_mut() {
-            obj.insert("warning".to_string(), json!(warning));
+    // The probe has to confirm we are driving the tab we were ASKED for, not
+    // merely that some renderer answers. `evaluate("1")` is satisfied by any
+    // page — including the one the session was wrongly pinned to — so a switch
+    // that never took effect still printed ✓ with the requested tab's title and
+    // url, and the very next command failed with the original error. An agent
+    // handed that loops: error → "recover" → ✓ → same error (issue #223).
+    let expected_url = result
+        .get("url")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    match mgr.evaluate("location.href", None).await {
+        Err(_) => {
+            let warning = tab_liveness_probe_warning(
+                mgr.on_relay(),
+                crate::connect::relay_ext_version().as_deref(),
+                env!("AB_CONNECT_VERSION"),
+            );
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("warning".to_string(), json!(warning));
+            }
+        }
+        Ok(actual) => {
+            let actual_url = actual.as_str().unwrap_or_default().to_string();
+            if let Some(expected) = expected_url.as_deref() {
+                if let Some(msg) = tab_switch_identity_error(tab_ref_str, expected, &actual_url) {
+                    return Err(msg);
+                }
+            }
         }
     }
 
@@ -7258,6 +7368,45 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     Ok(result)
+}
+
+/// Reject a tab switch that reported the requested tab but left the session
+/// driving a different document.
+///
+/// Returns `None` when the switch landed where it should. Compares origins
+/// only: a page may redirect or rewrite its path between the switch and the
+/// probe, and failing that would be a false alarm — but landing on another
+/// origin (typically a `chrome-extension://` page the session was stuck on)
+/// is never the tab that was asked for.
+pub(crate) fn tab_switch_identity_error(
+    requested: &str,
+    expected_url: &str,
+    actual_url: &str,
+) -> Option<String> {
+    // Compare scheme + host rather than `Origin::ascii_serialization`: that
+    // serializes every non-special scheme — `chrome-extension://` included — to
+    // the opaque "null", which would hide the exact case this check exists for.
+    let parts = |u: &str| {
+        url::Url::parse(u).ok().and_then(|p| {
+            let host = p.host_str().map(str::to_string)?;
+            Some((p.scheme().to_string(), host))
+        })
+    };
+    let (Some(want), Some(got)) = (parts(expected_url), parts(actual_url)) else {
+        // An unparseable or host-less url (`about:blank`, `data:`) on either
+        // side is not evidence of a bad switch.
+        return None;
+    };
+    if want == got {
+        return None;
+    }
+    Some(format!(
+        "tab {requested} was resolved to {expected_url}, but the session is still driving \
+         {actual_url} — the switch did not take effect. This is usually a relay session \
+         pinned to a page it can no longer leave. Re-open the target with `open <url>` \
+         (or `navigate <url>`) to rebind the session; `tab select` / `tab adopt` cannot \
+         recover it from here."
+    ))
 }
 
 /// Explain a failed tab liveness probe without treating it as proof that the
@@ -7306,7 +7455,24 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         Some(mgr) => mgr.tab_adopt(spec).await,
         None => Err("Browser not launched".to_string()),
     };
-    finish_tab_adopt(result, state)
+    let result = finish_tab_adopt(result, state)?;
+    // Same identity check as `tab select` (issue #223): adopt reported the
+    // requested tab's title and url while the session went on driving the page
+    // it was stuck on, so the documented recovery for a lost tab silently did
+    // nothing and the next command failed identically.
+    if let (Some(mgr), Some(expected)) = (
+        state.browser.as_mut(),
+        result.get("url").and_then(|v| v.as_str()),
+    ) {
+        if let Ok(actual) = mgr.evaluate("location.href", None).await {
+            if let Some(msg) =
+                tab_switch_identity_error(spec, expected, actual.as_str().unwrap_or_default())
+            {
+                return Err(msg);
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Commit the per-tab context reset only after the browser accepted an adopt.
@@ -14847,6 +15013,95 @@ mod tests {
                 "`{action}` would be diffed across a page swap"
             );
         }
+    }
+
+    /// The old probe ran `evaluate("1")`, which any page satisfies — including
+    /// the wrong one. A switch that never took effect printed ✓ with the
+    /// requested tab's title and url, and the next command failed identically.
+    #[test]
+    fn tab_switch_reports_a_switch_that_landed_elsewhere() {
+        let msg = tab_switch_identity_error(
+            "t1",
+            "https://www.saucedemo.com/",
+            "chrome-extension://abcdef/page.html",
+        );
+        assert!(
+            msg.is_some(),
+            "landing on another origin must not report success"
+        );
+        let msg = msg.unwrap();
+        assert!(msg.contains("did not take effect"));
+        assert!(msg.contains("chrome-extension://abcdef/page.html"));
+    }
+
+    /// A page that redirects or rewrites its path between the switch and the
+    /// probe is still the tab that was asked for — failing it would be a false
+    /// alarm, so only a different origin counts.
+    #[test]
+    fn tab_switch_tolerates_a_path_change_within_the_same_origin() {
+        assert!(tab_switch_identity_error(
+            "t1",
+            "https://www.saucedemo.com/",
+            "https://www.saucedemo.com/inventory.html",
+        )
+        .is_none());
+    }
+
+    /// An unparseable url on either side is not evidence of a bad switch.
+    #[test]
+    fn tab_switch_does_not_fail_on_an_unparseable_url() {
+        assert!(tab_switch_identity_error("t1", "about:blank", "https://a.example/").is_none());
+        assert!(tab_switch_identity_error("t1", "https://a.example/", "").is_none());
+    }
+
+    /// A diff against a baseline from a different page would report the whole
+    /// document as replaced — worse than just sending the tree.
+    #[test]
+    fn snapshot_diff_refuses_a_baseline_from_another_page() {
+        let last = (
+            "https://a.example/one".to_string(),
+            "i=true".to_string(),
+            "- button \"Go\"".to_string(),
+        );
+        let basis = snapshot_diff_basis(Some(&last), "https://a.example/two", "i=true");
+        assert!(matches!(basis, SnapshotDiffBasis::FullTree(_)));
+    }
+
+    /// An `-i` tree and a full tree are different documents; diffing them is
+    /// noise, so the baseline must match on options too.
+    #[test]
+    fn snapshot_diff_refuses_a_baseline_read_with_other_options() {
+        let last = (
+            "https://a.example/one".to_string(),
+            "i=true".to_string(),
+            "- button \"Go\"".to_string(),
+        );
+        let basis = snapshot_diff_basis(Some(&last), "https://a.example/one", "i=false");
+        assert!(matches!(basis, SnapshotDiffBasis::FullTree(_)));
+    }
+
+    /// With no baseline at all the caller gets the tree, never an empty diff —
+    /// an empty diff and an unchanged page are indistinguishable.
+    #[test]
+    fn snapshot_diff_without_a_baseline_returns_the_tree() {
+        assert!(matches!(
+            snapshot_diff_basis(None, "https://a.example/one", "i=true"),
+            SnapshotDiffBasis::FullTree(_)
+        ));
+    }
+
+    /// Same page, same options: this is the case the flag exists for.
+    #[test]
+    fn snapshot_diff_uses_a_matching_baseline() {
+        let last = (
+            "https://a.example/one".to_string(),
+            "i=true".to_string(),
+            "- button \"Go\"".to_string(),
+        );
+        assert_eq!(
+            snapshot_diff_basis(Some(&last), "https://a.example/one", "i=true"),
+            SnapshotDiffBasis::Compare("- button \"Go\"")
+        );
     }
 
     /// The delta path stays on same-page mutations.

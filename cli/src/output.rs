@@ -603,6 +603,12 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         let origin = data.get("origin").and_then(|v| v.as_str());
         // Snapshot
         if let Some(snapshot) = data.get("snapshot").and_then(|v| v.as_str()) {
+            // `--diff` fell back to a full tree, or found nothing changed. Say
+            // which: a diff printed without saying its baseline was missing
+            // reads exactly like "nothing changed".
+            if let Some(note) = data.get("diffNote").and_then(|v| v.as_str()) {
+                eprintln!("{}", color::dim(note));
+            }
             print_with_boundaries(snapshot, origin, opts);
             // Canvas-app hint: the tree was near-empty but the page paints to a
             // <canvas>, so refs are a dead end — point at the screenshot path.
@@ -2601,6 +2607,9 @@ Options:
   -c, --compact        Remove empty structural elements
   -d, --depth <n>      Limit tree depth
   -s, --selector <sel> Scope snapshot to CSS selector
+  --diff               Only what changed since this session's last snapshot of
+                       the same page (same options). Falls back to the full tree
+                       — and says why — when there is no valid baseline.
   --max-bytes <n>      Cap the tree at n bytes, cut between nodes (never
                        mid-node). Reports what was omitted and a --from cursor.
                        For long feeds/comment threads whose bulk is prose.
