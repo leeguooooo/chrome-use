@@ -529,6 +529,9 @@ fn target_was_closed(result: &Result<CloseTargetResult, String>) -> bool {
 /// fresh tab instead of erroring on every command until the user runs `tab new`.
 pub(crate) fn is_stale_target_error(error: &str) -> bool {
     let lower = error.to_lowercase();
+    if lower.contains("action_outcome_unknown:") {
+        return false;
+    }
     lower.contains("its tab is gone")
         || lower.contains("stale sessionid")
         || lower.contains("unknown sessionid")
@@ -562,6 +565,11 @@ pub(crate) fn navigation_committed(landed: &str, target: &str) -> bool {
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     let lower = error.to_lowercase();
+    // Preserve the no-replay instruction even when the nested cause is stale or
+    // timed out; generic transport recovery guidance could duplicate the action.
+    if lower.contains("action_outcome_unknown:") {
+        return error.to_string();
+    }
     // Top-level `await` in `eval` fails with a bare "await is not defined" /
     // "await is only valid in async" — unhelpful. Point at the wrapper (issue #65).
     if lower.contains("await is not defined")
@@ -5111,6 +5119,13 @@ mod tests {
             m.contains("await is not defined"),
             "keeps the original error"
         );
+    }
+
+    #[test]
+    fn unconfirmed_action_preserves_no_replay_guidance() {
+        let error = "action_outcome_unknown: Runtime.evaluate was not replayed. Original error: stale sessionId cb-tab-1; its tab is gone";
+        assert!(!is_stale_target_error(error));
+        assert_eq!(to_ai_friendly_error(error), error);
     }
 
     #[test]

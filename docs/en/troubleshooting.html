@@ -225,6 +225,7 @@
         When an infinite JavaScript loop blocks the page main thread, <code>eval</code> cannot complete
         until that thread responds. Do not reload away the diagnostic state merely to restore evaluation.
         <p>A restricted or detached child-frame command returns its error without detaching the parent tab. Top-level recovery retries against the recovered tab ID. Re-read the page before retrying a failed frame action.</p>
+        <p>For an interrupted top-level action, <code>action_outcome_unknown</code> means it may already have executed and was not replayed. JSON reports <code>retryable: false</code>. Observe the page before acting again.</p>
         <br /><br />
         Reopen the URL only when the tab is genuinely absent from the list.
         For multi-hop SSO flows, re-open the <strong>stable entry URL</strong> (not some intermediate redirect address),

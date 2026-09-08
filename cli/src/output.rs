@@ -4405,6 +4405,8 @@ Navigation:
   browser-level navigation instead of restarting the whole session.
   Child-frame access/detach errors do not detach the parent tab.
   Re-read the page before retrying a failed frame action.
+  action_outcome_unknown means an interrupted action may have executed; it was
+  not replayed (JSON retryable: false). Observe the page before acting again.
 
 Get Info:  chrome-use get <what> [selector]
   text, html, value, attr <name>, title, url, count, box, styles, cdp-url

@@ -100,3 +100,44 @@ test('recovery is bounded when the replacement also fails', async () => {
   assert.equal(attempts, 2)
   assert.equal(recoveries, 1)
 })
+
+test('an action that changes the page before detaching is not executed twice', async () => {
+  let submissions = 0
+  let recoveryCalls = 0
+  await assert.rejects(sendTabCommand(7, 'Runtime.evaluate', {
+    expression: 'document.querySelector("form").requestSubmit()',
+  }, undefined, {
+    async sendCommand() {
+      submissions++
+      throw new Error('Detached while handling command')
+    },
+    detachTab() { recoveryCalls++ },
+    async recoverSessionTab() { recoveryCalls++; return 7 },
+  }), /action_outcome_unknown:.*not replayed/)
+  assert.equal(submissions, 1)
+  assert.equal(recoveryCalls, 0)
+})
+
+test('explicit rejection before dispatch can reattach and execute an action once', async () => {
+  const f = fixture(new Error('Debugger is not attached to the tab with id: 7.'), 7)
+  await sendTabCommand(7, 'Input.insertText', { text: 'fixture' }, undefined, f.deps)
+  assert.equal(f.sent.length, 2)
+  assert.deepEqual(f.recovered, ['cb-tab-7'])
+})
+
+test('a lost reply after pre-dispatch recovery still forbids another action retry', async () => {
+  let attempts = 0
+  let submissions = 0
+  await assert.rejects(sendTabCommand(7, 'Runtime.evaluate', {}, undefined, {
+    async sendCommand() {
+      attempts++
+      if (attempts === 1) throw new Error('Debugger is not attached to the tab with id: 7.')
+      submissions++
+      throw new Error('Detached while handling command')
+    },
+    detachTab() {},
+    async recoverSessionTab() { return 7 },
+  }), /action_outcome_unknown:/)
+  assert.equal(attempts, 2)
+  assert.equal(submissions, 1)
+})

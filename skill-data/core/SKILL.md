@@ -126,6 +126,10 @@ transient relay drops — usually just retry the command.
 A restricted or detached child-frame command returns its error without detaching
 the parent tab. Top-level recovery retries against the recovered tab ID, rather
 than reusing an obsolete target. Re-read the page before retrying a failed frame action.
+If a top-level action is interrupted after dispatch, the relay does not replay it
+unless the command is safe to repeat or Chrome explicitly rejected it before dispatch.
+`action_outcome_unknown` means the action may already have executed; JSON reports
+`retryable: false`. Observe the current page before choosing another action.
 
 - **`--launch`** opens an isolated, empty test profile (no cookies/login/extensions,
   relay off) — use when a clean browser is fine. On macOS this path disables
