@@ -2407,12 +2407,118 @@ fn extract_properties(props: &Option<Vec<AXProperty>>) -> NodeProperties {
                 "required" => {
                     required = prop.value.value.as_ref().and_then(|v| v.as_bool());
                 }
-                _ => {}
+                // AX_DUMP_PROPS: ground truth for what Chrome actually sends on
+                // real pages. CDP has no "available actions" list, so any
+                // secondary-action support has to be derived from these — and
+                // the protocol reference is not evidence of what a given build
+                // emits for a given element.
+                other => {
+                    if let Ok(path) = std::env::var("AGENT_BROWSER_AX_DUMP_PROPS") {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&path)
+                        {
+                            let _ = writeln!(
+                                f,
+                                "{other}\t{}",
+                                prop.value
+                                    .value
+                                    .as_ref()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "-".into())
+                            );
+                        }
+                    }
+                }
             }
         }
     }
 
     (level, checked, expanded, selected, disabled, required)
+}
+
+/// What an element exposes beyond a plain click, derived from its computed
+/// accessibility properties.
+///
+/// CDP has no "available actions" list the way the macOS accessibility API
+/// does, but it does report the properties those actions follow from. Measured
+/// on Chrome (see `AGENT_BROWSER_AX_DUMP_PROPS`), a page of assorted controls
+/// yields `hasPopup` ("menu"/"listbox"/"dialog"), `pressed`, `valuemin`,
+/// `valuemax`, `valuetext`, `settable`, `readonly`, `multiselectable` and
+/// `orientation` — everything the actions below are inferred from.
+///
+/// The list is a contract, not a suggestion: an action that is not derived here
+/// must be refused rather than attempted, so a caller can never invoke an action
+/// this element does not actually support and read the resulting no-op as
+/// success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SecondaryAction {
+    Expand,
+    Collapse,
+    ShowMenu,
+    Increment,
+    Decrement,
+    Toggle,
+}
+
+impl SecondaryAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SecondaryAction::Expand => "expand",
+            SecondaryAction::Collapse => "collapse",
+            SecondaryAction::ShowMenu => "showMenu",
+            SecondaryAction::Increment => "increment",
+            SecondaryAction::Decrement => "decrement",
+            SecondaryAction::Toggle => "toggle",
+        }
+    }
+}
+
+/// The accessibility facts an action is derived from. Values are the raw CDP
+/// property values; `expanded`/`pressed` are three-state because "absent" and
+/// "present and false" mean different things — absent means the control does not
+/// expand at all.
+#[derive(Debug, Default, Clone)]
+pub struct AxActionFacts {
+    pub disabled: bool,
+    pub readonly: bool,
+    pub expanded: Option<bool>,
+    pub pressed: Option<bool>,
+    pub has_popup: Option<String>,
+    pub has_value_range: bool,
+}
+
+/// Derive the actions an element supports besides clicking it.
+///
+/// A disabled element supports none: offering `expand` on a control that cannot
+/// be operated invites a caller to spend a round trip discovering that.
+pub fn secondary_actions(facts: &AxActionFacts) -> Vec<SecondaryAction> {
+    if facts.disabled {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    match facts.expanded {
+        Some(false) => out.push(SecondaryAction::Expand),
+        Some(true) => out.push(SecondaryAction::Collapse),
+        None => {}
+    }
+    // `hasPopup: "false"` is how Chrome says "no popup" on some builds; only a
+    // real popup kind is an action.
+    if let Some(kind) = facts.has_popup.as_deref() {
+        if !kind.is_empty() && kind != "false" {
+            out.push(SecondaryAction::ShowMenu);
+        }
+    }
+    if facts.has_value_range && !facts.readonly {
+        out.push(SecondaryAction::Increment);
+        out.push(SecondaryAction::Decrement);
+    }
+    if facts.pressed.is_some() {
+        out.push(SecondaryAction::Toggle);
+    }
+    out
 }
 
 /// Build the set of texts to de-duplicate cursor-interactive elements against.
@@ -2804,6 +2910,108 @@ mod tests {
 
         assert_eq!(nodes[0].role, "LabelText"); // unchanged
     }
+    fn facts() -> AxActionFacts {
+        AxActionFacts::default()
+    }
+
+    /// Measured on Chrome: `aria-haspopup="menu"` on a collapsed button reports
+    /// both `hasPopup: "menu"` and `expanded: false`.
+    #[test]
+    fn menu_button_offers_expand_and_show_menu() {
+        let f = AxActionFacts {
+            expanded: Some(false),
+            has_popup: Some("menu".into()),
+            ..facts()
+        };
+        assert_eq!(
+            secondary_actions(&f),
+            vec![SecondaryAction::Expand, SecondaryAction::ShowMenu]
+        );
+    }
+
+    /// An already-open disclosure offers the opposite action, not the same one.
+    #[test]
+    fn an_expanded_element_offers_collapse() {
+        let f = AxActionFacts {
+            expanded: Some(true),
+            ..facts()
+        };
+        assert_eq!(secondary_actions(&f), vec![SecondaryAction::Collapse]);
+    }
+
+    /// Absent and false are different: a control with no `expanded` property
+    /// does not expand at all, and must not be offered `expand`.
+    #[test]
+    fn an_element_without_the_property_is_not_expandable() {
+        assert!(secondary_actions(&facts()).is_empty());
+    }
+
+    /// Measured: `<input type=number min max>` reports valuemin/valuemax.
+    #[test]
+    fn a_value_range_offers_increment_and_decrement() {
+        let f = AxActionFacts {
+            has_value_range: true,
+            ..facts()
+        };
+        assert_eq!(
+            secondary_actions(&f),
+            vec![SecondaryAction::Increment, SecondaryAction::Decrement]
+        );
+    }
+
+    /// A readonly control has a range but cannot be moved through it.
+    #[test]
+    fn a_readonly_range_is_not_incrementable() {
+        let f = AxActionFacts {
+            has_value_range: true,
+            readonly: true,
+            ..facts()
+        };
+        assert!(secondary_actions(&f).is_empty());
+    }
+
+    /// Measured: `aria-pressed` reports "true"/"false" — either way the control
+    /// toggles.
+    #[test]
+    fn a_pressed_property_offers_toggle_in_both_states() {
+        for state in [true, false] {
+            let f = AxActionFacts {
+                pressed: Some(state),
+                ..facts()
+            };
+            assert_eq!(secondary_actions(&f), vec![SecondaryAction::Toggle]);
+        }
+    }
+
+    /// Chrome reports `hasPopup: "false"` on some builds to mean "no popup".
+    /// Treating that string as a popup kind would offer `showMenu` on ordinary
+    /// buttons.
+    #[test]
+    fn has_popup_false_is_not_a_popup() {
+        for v in ["false", ""] {
+            let f = AxActionFacts {
+                has_popup: Some(v.into()),
+                ..facts()
+            };
+            assert!(secondary_actions(&f).is_empty(), "hasPopup={v:?}");
+        }
+    }
+
+    /// Offering actions on a disabled control invites a caller to spend a round
+    /// trip discovering it cannot be operated.
+    #[test]
+    fn a_disabled_element_offers_nothing() {
+        let f = AxActionFacts {
+            disabled: true,
+            expanded: Some(false),
+            has_popup: Some("menu".into()),
+            has_value_range: true,
+            pressed: Some(false),
+            ..facts()
+        };
+        assert!(secondary_actions(&f).is_empty());
+    }
+
     /// A budget must cut between nodes: a severed line would leave a dangling
     /// `[ref=eN]` the caller cannot use, and no way to tell it was severed.
     #[test]
