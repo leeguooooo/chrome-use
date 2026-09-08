@@ -2082,7 +2082,7 @@ fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
                 }
                 continue;
             }
-            if is_interactive_role(&n.role) {
+            if is_interactive_role(&n.role) || n.cursor_info.is_some() {
                 controls += 1;
                 continue;
             }
@@ -3096,6 +3096,11 @@ mod tests {
         nodes[2].name = "Folder".to_string();
         nodes.push(make_node("button", "Another product", Some(2)));
         nodes[0].children.push(5);
+        assert_eq!(control_context(&nodes, 4), None);
+        // Cursor-discovered controls count too; otherwise a mixed UI with one
+        // native button is mistaken for a single-action product card.
+        nodes[5].role = "generic".to_string();
+        nodes[5].cursor_info = Some(make_cursor_info(None, None, "Custom action"));
         assert_eq!(control_context(&nodes, 4), None);
     }
 
