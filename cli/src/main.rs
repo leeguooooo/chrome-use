@@ -1863,16 +1863,28 @@ fn main() {
         let cb_pick = if flags.no_choosebrowser {
             None
         } else {
-            target_url_for_choosebrowser(&clean)
-                .and_then(|u| choosebrowser::profile_directory_for_url(&u))
+            target_url_for_choosebrowser(&clean).and_then(|u| choosebrowser::profile_for_url(&u))
         };
-        if let Some((dir, choice)) = cb_pick {
+        if let Some((profile, choice)) = cb_pick {
             // A rule naming a profile the relay has no endpoint for means that
             // profile is not running the extension. Fall through to the
             // existing behaviour rather than failing: the rule is advice about
             // which account the site belongs to, not a requirement that it be
             // reachable right now.
-            if let Ok(url) = connect::relay_url_for_browser(&dir) {
+            // Select by email, not by directory name. The relay knows a profile
+            // by its own id or by the signed-in address; a directory name is
+            // not a dimension it has, so selecting with one matched nothing —
+            // silently, because a miss here is a legitimate "that profile isn't
+            // running the extension". The rules parsed correctly the whole time
+            // and the conclusion was simply never usable.
+            // A profile with no signed-in account gives the relay nothing to
+            // match on either, so there is nothing to try — fall through to the
+            // existing behaviour rather than inventing a selector.
+            let relay_url = profile
+                .email
+                .as_deref()
+                .and_then(|email| connect::relay_url_for_browser(email).ok());
+            if let Some(url) = relay_url {
                 flags.cdp = Some(url);
                 flags.auto_connect = false;
                 // Say where the choice came from. Without this the user sees
@@ -1881,7 +1893,7 @@ fn main() {
                 eprintln!(
                         "{} using Chrome profile {} — a ChooseBrowser rule routes this site there{}. Override with --browser <id|email>, or skip with --no-choosebrowser.",
                         color::dim("·"),
-                        dir,
+                        profile.directory,
                         choice
                             .rule_id
                             .as_deref()

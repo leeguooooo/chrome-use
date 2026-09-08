@@ -65,8 +65,10 @@ struct Rule {
     priority: i64,
     #[serde(default, rename = "createdAt")]
     created_at: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
+    /// `ruleId` in the file. The provenance line names it so the user can find
+    /// the rule that redirected them; without the rename it silently stayed
+    /// empty and the message said "a rule" with no way to look it up.
+    #[serde(default, rename = "ruleId")]
     rule_id: Option<String>,
     #[serde(default)]
     r#match: Match,
@@ -92,6 +94,23 @@ struct Action {
     kind: Option<String>,
     #[serde(default, rename = "bundleIdentifier")]
     bundle_identifier: Option<String>,
+}
+
+/// A profile the rule named, resolved against this machine.
+///
+/// Carries the email as well as the directory because they answer different
+/// questions and only one of them works for each. The relay identifies a
+/// connected profile by its own id or by email — a directory name is not a
+/// dimension it knows — so selecting with the directory silently matched
+/// nothing and the whole feature never fired. The directory is still what a
+/// person recognises, so it is what the provenance line shows.
+#[derive(Debug, PartialEq, Clone)]
+pub struct ResolvedProfile {
+    /// `Default`, `Profile 14` — this machine's on-disk name, for display.
+    pub directory: String,
+    /// The signed-in account, when there is one. This is what the relay can
+    /// actually match on.
+    pub email: Option<String>,
 }
 
 /// What a matched rule asks for: a Chrome profile identified by a key that
@@ -221,10 +240,17 @@ pub fn choose_for_url(rules_json: &str, url: &str) -> Option<ProfileChoice> {
 /// Compared case-insensitively against gaia id, then email, then display name,
 /// then the directory name itself — the same order the writer used when
 /// choosing what to store.
-pub fn resolve_profile_directory(local_state_json: &str, key: &str) -> Option<String> {
+pub fn resolve_profile_directory(local_state_json: &str, key: &str) -> Option<ResolvedProfile> {
     let state: serde_json::Value = serde_json::from_str(local_state_json).ok()?;
     let cache = state.get("profile")?.get("info_cache")?.as_object()?;
     let key = key.trim();
+    let email_of = |info: &serde_json::Value| {
+        info.get("user_name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
 
     for field in ["gaia_id", "user_name", "gaia_name", "name", "shortcut_name"] {
         for (dir, info) in cache {
@@ -233,22 +259,28 @@ pub fn resolve_profile_directory(local_state_json: &str, key: &str) -> Option<St
                 .and_then(|v| v.as_str())
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case(key))
             {
-                return Some(dir.clone());
+                return Some(ResolvedProfile {
+                    directory: dir.clone(),
+                    email: email_of(info),
+                });
             }
         }
     }
     // Last resort: the key may itself be a directory name, which the writer
     // falls back to when a profile has no identifying fields at all.
     cache
-        .keys()
-        .find(|dir| dir.eq_ignore_ascii_case(key))
-        .cloned()
+        .iter()
+        .find(|(dir, _)| dir.eq_ignore_ascii_case(key))
+        .map(|(dir, info)| ResolvedProfile {
+            directory: dir.clone(),
+            email: email_of(info),
+        })
 }
 
 /// The whole lookup, against the real files. `None` for every ordinary reason:
 /// ChooseBrowser is not installed, the format is newer than we understand, no
 /// rule covers this url, or the profile it names is not on this machine.
-pub fn profile_directory_for_url(url: &str) -> Option<(String, ProfileChoice)> {
+pub fn profile_for_url(url: &str) -> Option<(ResolvedProfile, ProfileChoice)> {
     // First path that both exists and yields a decision. A file that parses to
     // "no rule covers this url" is a real answer, so keep looking only while
     // nothing has answered at all.
@@ -262,8 +294,8 @@ pub fn profile_directory_for_url(url: &str) -> Option<(String, ProfileChoice)> {
     // A key that resolves to nothing means launching with no profile argument.
     // Falling back to *some other* profile would open the link as the wrong
     // identity, which is worse than opening it as the default one.
-    let dir = resolve_profile_directory(&local_state, &choice.key)?;
-    Some((dir, choice))
+    let profile = resolve_profile_directory(&local_state, &choice.key)?;
+    Some((profile, choice))
 }
 
 #[cfg(test)]
@@ -382,6 +414,19 @@ mod tests {
         );
     }
 
+    /// The provenance line names the rule so the user can find and edit it.
+    /// The field is `ruleId` in the file; without the rename it deserialized to
+    /// `None` and the message pointed at nothing.
+    #[test]
+    fn the_matched_rule_id_comes_back_for_the_provenance_line() {
+        let f = rules(
+            r#"{"ruleId":"github.com|/my-org*","match":{"domain":"github.com"},
+                "action":{"bundleIdentifier":"com.google.Chrome::profile::k"}}"#,
+        );
+        let got = choose_for_url(&f, "https://github.com/my-org/repo").unwrap();
+        assert_eq!(got.rule_id.as_deref(), Some("github.com|/my-org*"));
+    }
+
     /// A rule pointing at another browser, or at Chrome without a profile, is
     /// not a Chrome profile choice and must not be forced into one.
     #[test]
@@ -417,20 +462,28 @@ mod tests {
     fn a_portable_key_resolves_to_this_machines_directory() {
         let s = local_state();
         assert_eq!(
-            resolve_profile_directory(&s, "103695396640962395023").as_deref(),
+            resolve_profile_directory(&s, "103695396640962395023")
+                .map(|p| p.directory)
+                .as_deref(),
             Some("Default")
         );
         assert_eq!(
-            resolve_profile_directory(&s, "leo@gmail.com").as_deref(),
+            resolve_profile_directory(&s, "leo@gmail.com")
+                .map(|p| p.directory)
+                .as_deref(),
             Some("Default")
         );
         assert_eq!(
-            resolve_profile_directory(&s, "Work").as_deref(),
+            resolve_profile_directory(&s, "Work")
+                .map(|p| p.directory)
+                .as_deref(),
             Some("Profile 14")
         );
         // A profile with no account at all falls back to its directory name.
         assert_eq!(
-            resolve_profile_directory(&s, "Profile 7").as_deref(),
+            resolve_profile_directory(&s, "Profile 7")
+                .map(|p| p.directory)
+                .as_deref(),
             Some("Profile 7")
         );
     }
@@ -440,11 +493,15 @@ mod tests {
     fn key_matching_ignores_case_and_surrounding_space() {
         let s = local_state();
         assert_eq!(
-            resolve_profile_directory(&s, " work@example.com ").as_deref(),
+            resolve_profile_directory(&s, " work@example.com ")
+                .map(|p| p.directory)
+                .as_deref(),
             Some("Profile 14")
         );
         assert_eq!(
-            resolve_profile_directory(&s, "LEO@GMAIL.COM").as_deref(),
+            resolve_profile_directory(&s, "LEO@GMAIL.COM")
+                .map(|p| p.directory)
+                .as_deref(),
             Some("Default")
         );
     }
@@ -462,6 +519,49 @@ mod tests {
         );
         assert_eq!(resolve_profile_directory(&s, "999999999999"), None);
         assert_eq!(resolve_profile_directory(&s, ""), None);
+    }
+
+    /// The resolution must also carry something the **relay** can select on.
+    ///
+    /// This is the bug that made the whole feature dead on arrival: resolution
+    /// returned only the on-disk directory name, and the relay identifies a
+    /// connected profile by its own id or by the signed-in address — a
+    /// directory is not a dimension it has. Every lookup therefore missed, and
+    /// missed *silently*, because "that profile isn't running the extension" is
+    /// a legitimate outcome. The rules parsed perfectly the entire time.
+    ///
+    /// Unit tests on either side stayed green because the break was between
+    /// them, so this one asserts the property the caller actually needs.
+    #[test]
+    fn a_resolved_profile_carries_an_identity_the_relay_can_match() {
+        let s = local_state();
+        let signed_in = resolve_profile_directory(&s, "103695396640962395023").unwrap();
+        assert_eq!(signed_in.directory, "Default");
+        assert_eq!(
+            signed_in.email.as_deref(),
+            Some("leo@gmail.com"),
+            "the relay selects by email; without it the caller has nothing to pass"
+        );
+
+        // Resolving by any of the other fields must carry the email too — the
+        // key that matched says nothing about what the caller then needs.
+        assert_eq!(
+            resolve_profile_directory(&s, "Work")
+                .unwrap()
+                .email
+                .as_deref(),
+            Some("Work@Example.COM")
+        );
+    }
+
+    /// A profile with no signed-in account has no email to offer. That is not a
+    /// failure to report — the relay could not match it either — so the caller
+    /// simply falls through to its existing behaviour.
+    #[test]
+    fn a_profile_with_no_account_resolves_without_an_email() {
+        let resolved = resolve_profile_directory(&local_state(), "Profile 7").unwrap();
+        assert_eq!(resolved.directory, "Profile 7");
+        assert_eq!(resolved.email, None);
     }
 
     /// A url no rule covers is the ordinary case, not an error.
