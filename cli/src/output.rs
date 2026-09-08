@@ -622,6 +622,55 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             }
             return;
         }
+        // `paste`: name the path the content took. "Pasted" through the page's
+        // own handler and "pasted" through our fallback insert can produce very
+        // different documents in a rich editor, so the difference is printed.
+        if let Some(chars) = data.get("pasted").and_then(|v| v.as_u64()) {
+            let format = data
+                .get("format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("text");
+            let engine = data.get("engine").and_then(|v| v.as_str()).unwrap_or("");
+            println!(
+                "{} pasted {} chars as {} {}",
+                color::success_indicator(),
+                chars,
+                format,
+                color::dim(&format!("({engine})"))
+            );
+            return;
+        }
+        // `select-text`: say what was selected and where, so a caret placed at
+        // an offset you did not intend is visible before the next `type` lands
+        // in the wrong place.
+        if let Some(kind) = data.get("selectionType").and_then(|v| v.as_str()) {
+            let sel = data.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+            let start = data.get("start").and_then(|v| v.as_i64()).unwrap_or(0);
+            let end = data.get("end").and_then(|v| v.as_i64()).unwrap_or(0);
+            let engine = data.get("engine").and_then(|v| v.as_str()).unwrap_or("");
+            match kind {
+                "cursor_before" | "cursor_after" => println!(
+                    "{} caret at {} in {} {}",
+                    color::success_indicator(),
+                    start,
+                    sel,
+                    color::dim(&format!("({engine})"))
+                ),
+                _ => {
+                    let selected = data.get("selected").and_then(|v| v.as_str()).unwrap_or("");
+                    println!(
+                        "{} selected {:?} at {}-{} in {} {}",
+                        color::success_indicator(),
+                        selected,
+                        start,
+                        end,
+                        sel,
+                        color::dim(&format!("({engine})"))
+                    );
+                }
+            }
+            return;
+        }
         if let Some(done) = data.get("performed").and_then(|v| v.as_str()) {
             let r = data.get("ref").and_then(|v| v.as_str()).unwrap_or("");
             // A stalled expand/collapse must not wear a plain ✓.
@@ -659,6 +708,25 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 eprintln!("{}", color::dim(note));
             }
             print_with_boundaries(snapshot, origin, opts);
+            // `--with-screenshot`: the image is an output, so its path is
+            // reported and nothing more — the tree above is what the agent
+            // reads the page from.
+            if let Some(p) = data.get("screenshot").and_then(|v| v.as_str()) {
+                eprintln!("{} {}", color::dim("screenshot:"), p);
+            }
+            if let Some(e) = data.get("screenshotError").and_then(|v| v.as_str()) {
+                eprintln!(
+                    "{} --with-screenshot failed: {e}",
+                    color::warning_indicator()
+                );
+            }
+            // The adaptive wait hit its ceiling with the page still moving
+            // (#228). A mid-transition tree is indistinguishable from a settled
+            // one once printed, so this line is the only thing that separates
+            // them.
+            if let Some(w) = data.get("settleWarning").and_then(|v| v.as_str()) {
+                eprintln!("{} {}", color::warning_indicator(), w);
+            }
             // Canvas-app hint: the tree was near-empty but the page paints to a
             // <canvas>, so refs are a dead end — point at the screenshot path.
             if let Some(note) = data.get("note").and_then(|v| v.as_str()) {
@@ -1747,6 +1815,15 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         } else if let Some(snap) = observed_snapshot {
             print_observed_snapshot(snap);
         }
+        if let Some(p) = data.get("screenshot").and_then(|v| v.as_str()) {
+            eprintln!("{} {}", color::dim("screenshot:"), p);
+        }
+        if let Some(e) = data.get("screenshotError").and_then(|v| v.as_str()) {
+            eprintln!(
+                "{} --with-screenshot failed: {e}",
+                color::warning_indicator()
+            );
+        }
     } else {
         // Success response with no data payload — still confirm the command ran
         // instead of printing nothing (a silent exit 0 looks like a no-op and
@@ -2679,6 +2756,71 @@ Examples:
   chrome-use actions @e7          # see what it supports
   chrome-use do @e7 expand
   chrome-use do @e12 increment
+"##
+        }
+
+        "paste" => {
+            r##"
+chrome-use paste - Paste content with a MIME type, without using the clipboard
+
+Usage: chrome-use paste <text> [--format text|md|html] [--selector <sel>]
+
+Options:
+  --format <f>         text (default), md, or html
+  --selector <sel>     Target element/@ref (default: whatever has focus)
+
+In a rich-text editor, pasting and typing produce different documents:
+`type "<b>bold</b>"` gives you those eleven characters, `paste --format html`
+gives you bold text. Newlines differ too — `type` sends Enter, which submits
+or splits a block in most editors, while a paste inserts the line break.
+
+`md` inserts Markdown *source* as plain text (predictable: no renderer sits
+between what you passed and what lands).
+
+The user's real clipboard is never touched: the content rides on a synthetic
+ClipboardEvent, not through navigator.clipboard or Ctrl+V. Because such an
+event is untrusted it has no default action, so an editor that ignores it gets
+the content through a real insert instead; the reply names which path ran.
+If neither takes, the command fails rather than reporting a paste that did
+nothing.
+
+Examples:
+  chrome-use paste $'line one\nline two' --selector "#notes"   # $'...' so the shell sends a real newline
+  chrome-use paste "<b>bold</b> text" --format html --selector "#editor"
+  chrome-use paste "# Heading" --format md
+"##
+        }
+        "select-text" => {
+            r##"
+chrome-use select-text - Select a run of text inside an editable element
+
+Usage: chrome-use select-text <@ref|selector> <text> [options]
+
+Options:
+  --prefix <text>      Text immediately BEFORE the part you mean (disambiguation)
+  --suffix <text>      Text immediately AFTER it
+  --cursor-before      Place the caret before the match instead of selecting
+  --cursor-after       Place the caret after the match instead of selecting
+
+`fill` replaces the whole value and `type` appends; this is how you change one
+phrase inside a long field, or put the cursor somewhere and carry on typing.
+
+The prefix and suffix are context, not part of the selection: with
+`--prefix "please "` the text `confirm` is what gets selected, not
+`please confirm`. A phrase that appears more than once and has no
+disambiguation is refused with the count rather than resolved to the first
+one — and "not found" and "too many matches" are reported as the different
+problems they are.
+
+Works on <input>, <textarea> and contenteditable. Monaco and CodeMirror keep
+their own selection model and are refused with that reason: a DOM selection
+there looks applied and does nothing.
+
+Examples:
+  chrome-use select-text @e3 "tomorrow"
+  chrome-use select-text @e3 "confirm" --prefix "please "
+  chrome-use select-text @e3 "Hi Sam," --cursor-after
+  chrome-use type @e3 " thanks for the update"    # continues at the caret
 "##
         }
 
@@ -4194,6 +4336,15 @@ Core Commands:
   check <sel>                Check checkbox
   uncheck <sel>              Uncheck checkbox
   select <sel> <val...>      Select dropdown option
+  paste <text>               Paste content with a MIME type instead of typing it
+                             [--format text|md|html] [--selector <sel>]. Never
+                             touches the real clipboard, and a newline stays a
+                             newline instead of becoming Enter
+  select-text <sel> <text>   Select one run of text inside an editable element,
+                             or place the caret next to it. --prefix/--suffix
+                             disambiguate a repeated phrase (they are context,
+                             not part of the selection); --cursor-before /
+                             --cursor-after leave a caret instead of a selection
   drag <src> <dst>           Drag and drop
   upload <sel> <files...>    Upload files
   download <sel> <path>      Download file from an element
@@ -4201,6 +4352,10 @@ Core Commands:
                              URL is read from inside the page instead (byte-exact,
                              no re-encode) — path required
   downloads [--limit N]      List downloads (--clear clears history)
+  bringToFront               Surface the active tab in the user's window. Tabs are
+                             driven in the background, where document.visibilityState
+                             stays 'hidden' — this is the way to make a page that
+                             gates its UI on visibility render for real
   scroll <dir> [px]          Scroll (up/down/left/right)
   scrollintoview <sel>       Scroll element into view
   wait <sel|ms>              Wait for element or time
@@ -4504,6 +4659,16 @@ Options:
                              erroring when the target element is absent
   --observe                  After a mutating action, return only what changed
                              (a11y delta + url + requests) — skip act→snapshot→diff
+  --settle-ms <ms>           Ceiling on the wait before an observation captures
+                             (default 1000, or AGENT_BROWSER_SETTLE_MS). The wait
+                             ends early on DOM quiet + no in-flight request; a
+                             capture that hit the ceiling says so.
+  --no-settle                Capture immediately, without waiting for the page
+                             to stop changing
+  --with-screenshot <path>   Save the pixels alongside a structural observation
+                             (`snapshot`, or an action with `--observe`), from
+                             the same settled moment. The tree is what you read;
+                             the image is for looking at
   --model <name>             AI model for chat (or AI_GATEWAY_MODEL env)
   -v, --verbose              Show tool commands and their raw output
   -q, --quiet                Show only AI text responses (hide tool calls)
@@ -4556,6 +4721,8 @@ Environment:
   AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
   AGENT_BROWSER_DOWNLOAD_PATH    Default download directory for browser downloads
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default action timeout in ms (default: 25000)
+  AGENT_BROWSER_SETTLE_MS        Ceiling on the pre-observation wait in ms (default: 1000; 0 disables)
+  AGENT_BROWSER_SETTLE_QUIET_MS  DOM-quiet window that ends the wait early in ms (default: 100)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (default: 30)
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM session encryption
@@ -4642,8 +4809,19 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         .get("changed")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // How long the adaptive wait watched (#228). On "no change" this is the
+    // difference between "the page did nothing" and "we did not look": the
+    // wait keeps watching for a first reaction for half its ceiling before it
+    // is willing to say nothing happened.
+    let waited = obs
+        .get("settle")
+        .and_then(|s| s.get("waitedMs"))
+        .and_then(|v| v.as_u64());
     if !changed {
-        println!("{}", color::dim("observed: no change"));
+        match waited {
+            Some(ms) => println!("{}", color::dim(&format!("observed: no change ({ms}ms)"))),
+            None => println!("{}", color::dim("observed: no change")),
+        }
         return;
     }
     if let Some(url) = obs.get("urlChanged").and_then(|v| v.as_object()) {

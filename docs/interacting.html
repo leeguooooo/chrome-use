@@ -144,6 +144,55 @@
 
       <hr class="du-divider" />
 
+      <!-- ============ 字段内编辑 / 粘贴 ============ -->
+      <h2>字段内部编辑与带格式粘贴</h2>
+      <p>
+        <code>fill</code> 是整体替换，<code>type</code> 是追加。改一段写好的文字里的某一处、
+        或者只把光标放到某个位置继续写，这两个都做不到 —— 这是 <code>select-text</code> 的活。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">select-text</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use select-text @e3 <span class="du-str">"确认"</span> <span class="du-flag">--prefix</span> <span class="du-str">"请"</span>   <span class="du-cmt"># 选中「确认」，不含「请」</span>
+<span class="du-prompt">$</span> chrome-use select-text @e3 <span class="du-str">"Hi Sam,"</span> <span class="du-flag">--cursor-after</span>  <span class="du-cmt"># 只放光标</span>
+<span class="du-prompt">$</span> chrome-use type @e3 <span class="du-str">" 顺便说一句："</span>                <span class="du-cmt"># 从光标处继续输入</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 有多处匹配时它会拒绝，而不是替你挑第一个</div>
+        prefix / suffix 是<strong>消歧用的上下文</strong>，不属于被选中的内容。
+        「找不到」「找到了但上下文对不上」「有 N 处」是三条不同的提示 —— 解法本来就不同。
+        Monaco / CodeMirror 有自己的选区模型，会被点名拒绝：在那上面做 DOM 选区看起来成功、实际没发生。
+      </div>
+
+      <p>
+        富文本编辑器里，<strong>敲字和粘贴的结果不一样</strong>：<code>type "&lt;b&gt;粗体&lt;/b&gt;"</code>
+        得到的是这几个字符，<code>paste --format html</code> 得到的才是粗体。换行同理 ——
+        <code>type</code> 的换行会变成 Enter（在多数编辑器里等于提交或另起一块），<code>paste</code> 不会。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">paste</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use paste <span class="du-str">$'第一行\n第二行'</span> <span class="du-flag">--selector</span> <span class="du-str">"#notes"</span>  <span class="du-cmt"># $'...' 才是真换行</span>
+<span class="du-prompt">$</span> chrome-use paste <span class="du-str">"&lt;b&gt;粗体&lt;/b&gt;文字"</span> <span class="du-flag">--format</span> html <span class="du-flag">--selector</span> <span class="du-str">"#editor"</span>
+<span class="du-prompt">$</span> chrome-use paste <span class="du-str">"# 标题"</span> <span class="du-flag">--format</span> md            <span class="du-cmt"># Markdown 源码按纯文本插入</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ 全程不碰你的真实剪贴板</div>
+        内容走的是合成 <code>ClipboardEvent</code>，不调用 <code>navigator.clipboard</code>，也不模拟 Ctrl+V。
+        这种事件是 untrusted 的、没有默认行为：监听 paste 的编辑器从自己的 handler 拿到内容，
+        不监听的则走一次真实插入 —— 回复里会写明走的是哪条。两条都没生效时它报错，不会打 ✓。
+      </div>
+
+      <hr class="du-divider" />
+
       <!-- ============ 键盘 ============ -->
       <h2>键盘</h2>
       <p>

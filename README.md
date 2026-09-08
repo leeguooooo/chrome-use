@@ -523,6 +523,90 @@ diff and an unchanged page are indistinguishable.
 the string would leave a severed `[ref=eN]` you can neither use nor recognise as
 severed — and reports what it left out plus a cursor to resume from.
 
+## Waiting before a read
+
+An observation is only worth what the page was doing when it was taken.
+`snapshot` and `--observe` wait for the page to stop changing before they
+capture, so you do not have to guess a sleep:
+
+- the DOM has gone 100ms without a mutation,
+- no finite CSS transition or animation is still running (a spinner that loops
+  forever is ignored — it never ends),
+- and no request fired by the action you just ran is still in flight.
+
+Whichever takes longest wins, bounded by a 1 second ceiling. A static page
+costs about 100ms; a click that fires an XHR waits for the response instead of
+returning the pre-response tree as though it were the result.
+
+They differ in one way. A plain `snapshot` has no action to react to, so a still
+page is its answer. After a mutating action, `--observe` keeps watching for a
+first reaction for half the ceiling (500ms by default) before reporting
+`changed:false` — otherwise a control that renders on a 300ms timer reads as
+"nothing happened". Only actions that really change nothing pay that.
+
+When the ceiling expires with the page still moving, the reply says so rather
+than passing a mid-transition capture off as settled:
+
+```
+⚠ Page had not settled after 1000ms (request in flight still active) — this
+  capture may be mid-transition.
+```
+
+```bash
+chrome-use snapshot -i --settle-ms 3000   # raise the ceiling for a slow page
+chrome-use snapshot -i --no-settle        # capture now, mid-flight
+```
+
+Because the wait already happened, the pixels can ride along with it:
+
+```bash
+chrome-use snapshot -i --with-screenshot ./page.png
+chrome-use click @e8 --observe --with-screenshot ./after.png
+```
+
+Both captures come from that one settled moment — two separately-waited
+captures would describe two different states, which is worse than not combining
+them. The tree still goes to stdout and the image to disk: a screenshot is an
+output here, for looking at or attaching, never the way an agent reads a page.
+
+`AGENT_BROWSER_SETTLE_MS` sets the ceiling for every command (0 disables the
+wait) and `AGENT_BROWSER_SETTLE_QUIET_MS` sets the quiet window. Waiting for
+something *specific* is still `wait`'s job: the settle knows the page stopped,
+not that what you wanted appeared.
+
+## Editing inside a field, and pasting with a MIME type
+
+`fill` replaces a whole value and `type` appends. Two things that needs but
+neither does:
+
+```bash
+chrome-use select-text @e3 "confirm" --prefix "please "   # select one phrase
+chrome-use select-text @e3 "Hi Sam," --cursor-after       # place the caret
+chrome-use type @e3 " quick note:"                        # continues there
+
+chrome-use paste $'line one\nline two' --selector "#notes"
+chrome-use paste "<b>bold</b> text" --format html --selector "#editor"
+```
+
+`select-text` works on `<input>`, `<textarea>` and contenteditable. The prefix
+and suffix are context, not part of the selection: with `--prefix "please "` the
+selected text is `confirm`. A phrase that appears more than once is refused with
+the count rather than resolved to the first one, and "not found", "found but not
+with that context" and "too many matches" are three different messages, because
+they have three different fixes. Monaco and CodeMirror keep their own selection
+model and are refused by name — a DOM selection there looks applied and does
+nothing.
+
+`paste` matters wherever typing and pasting produce different documents:
+`type "<b>bold</b>"` gives you those eleven characters, `paste --format html`
+gives you bold text, and a newline stays a newline instead of becoming Enter.
+`--format md` inserts Markdown source as plain text. **The user's real clipboard
+is never touched** — the content rides on a synthetic ClipboardEvent, with no
+`navigator.clipboard` call and no Ctrl+V. Such an event is untrusted and so has
+no default action: an editor that listens gets it through its own handler, and
+one that ignores it gets a real insert instead. The reply names which path ran,
+and a paste that produced nothing is an error rather than a ✓.
+
 ## Actions beyond a click
 
 Some controls do more than click: a disclosure expands, a menu button opens a

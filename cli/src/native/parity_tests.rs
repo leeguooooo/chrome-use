@@ -61,6 +61,8 @@ const DOCUMENTED_ACTIONS: &[&str] = &[
     "hover",
     "scroll",
     "select",
+    "select_text",
+    "paste",
     "check",
     "uncheck",
     "wait",

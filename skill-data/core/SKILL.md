@@ -744,6 +744,33 @@ After any page-changing action, pick one:
 Avoid bare `wait 2000` except when debugging — it makes scripts slow and
 flaky. Timeouts default to 25 seconds.
 
+**Do not sleep before reading the page.** `snapshot` and `--observe` wait by
+themselves: before capturing they wait for the DOM to stop mutating, for finite
+transitions to finish, and for requests fired by the action to come back —
+whichever takes longest, up to a 1 second ceiling, and they return the moment
+the page goes quiet (a static page costs about 100ms, not the ceiling). A
+`wait 2000` in front of a snapshot buys nothing and costs two seconds. If the
+ceiling expires with the page still moving, the reply says so — `Page had not
+settled after 1000ms (request in flight still active) — this capture may be
+mid-transition. Re-read to confirm, or raise the ceiling with
+AGENT_BROWSER_SETTLE_MS.` — so re-read rather than trusting that tree.
+
+The two differ in one way. A plain `snapshot` has no action to react to, so a
+still page is its answer and it returns as soon as everything is quiet. After a
+mutating action, `--observe` keeps watching for a *first* reaction for half the
+ceiling (500ms by default) before it is willing to report `changed:false` —
+otherwise a control that renders on a 300ms timer reads as "nothing happened".
+Only actions that really change nothing pay that; anything that reacts ends the
+window at once. Spinners that loop forever are ignored on purpose; they never end. Tune
+with `--settle-ms <ms>` (or `AGENT_BROWSER_SETTLE_MS`) and switch it off with
+`--no-settle` when you deliberately want the page mid-flight. Since the wait
+already happened, `--with-screenshot <path>` saves the pixels from that same
+settled moment (`snapshot -i --with-screenshot ./page.png`, or an action with
+`--observe`) — the tree is still what you read the page from; the image is an
+output to look at or attach, and never a substitute for the structural read. Waiting for
+something *specific* is still `wait`'s job — the settle only knows that the
+page stopped, not that what you wanted appeared.
+
 ### Confirm an action worked — `expect`
 
 After acting, **assert the result instead of eyeballing a snapshot**. `expect`
@@ -793,6 +820,31 @@ additions. This is the one flag that collapses `navigate` + `snapshot` into a
 single call: `chrome-use navigate <url> --observe` gets you the page AND its
 interactive tree in one round trip. On a real task that halved the calls (6 → 3)
 at identical bytes returned.
+
+**Edit one phrase inside a field — `select-text`.** `fill` replaces the whole
+value and `type` appends, so changing a single word in a written paragraph, or
+placing the cursor and carrying on, used to need hand-written `eval`.
+`chrome-use select-text @e3 "confirm" --prefix "please "` selects exactly
+`confirm` (the prefix is context for finding it, not part of the selection);
+`--cursor-before` / `--cursor-after` leave a caret instead, so the next `type`
+lands there. Works on `<input>`, `<textarea>` and contenteditable. A phrase that
+appears more than once is refused with the count instead of resolved to the
+first one, and "not found", "found but not with that prefix/suffix" and "matches
+N places" are three different messages because they have three different fixes.
+Monaco and CodeMirror are refused by name — they keep their own selection model,
+where a DOM selection looks applied and does nothing; use `fill` there.
+
+**Paste with a MIME type — `paste`.** In a rich-text editor, typing and pasting
+produce different documents: `type "<b>bold</b>"` gives you those eleven
+characters, `chrome-use paste "<b>bold</b>" --format html --selector "#editor"`
+gives you bold text. Newlines are the other reason: `type` sends Enter, which in
+most editors submits or splits a block, while `paste` inserts the break — so
+prefer `paste` for multi-line content. `--format md` inserts Markdown source as
+plain text. **Your real clipboard is never touched**: the content rides on a
+synthetic ClipboardEvent, with no `navigator.clipboard` call and no Ctrl+V. Such
+an event is untrusted and has no default action, so an editor that listens gets
+it through its own handler and one that ignores it gets a real insert; the reply
+names which path ran, and a paste that changed nothing is an error, not a ✓.
 
 **Operate a control that click alone won't move — `actions` / `do`.** Some
 elements expose more than a click: a disclosure expands, a menu button opens a

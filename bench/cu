@@ -6,11 +6,15 @@ LOG="${CU_LOG:-bench/results/live.tsv}"
 # daemon — a version-mismatch restart on every call, and results from the old
 # binary. Same trap the README warns about; the harness itself fell into it.
 BIN="${CHROME_USE_BIN:-chrome-use}"
-[ -f "$LOG" ] || printf 'n\tms\tbytes\tcmd\n' > "$LOG"
+# The exit code is logged alongside the size (issue #231): a call that failed
+# and one that succeeded cost the same round trip, but only one of them did any
+# work, and a log that cannot tell them apart makes a run that fell over look
+# cheap.
+[ -f "$LOG" ] || printf 'n\tms\tbytes\trc\tcmd\n' > "$LOG"
 s=$(python3 -c 'import time;print(time.time())')
 out=$("$BIN" "$@" 2>&1); rc=$?
 ms=$(python3 -c "import time;print(int((time.time()-$s)*1000))")
 n=$(( $(wc -l < "$LOG") ))
-printf '%s\t%s\t%s\t%s\n' "$n" "$ms" "${#out}" "$*" >> "$LOG"
+printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$ms" "${#out}" "$rc" "$*" >> "$LOG"
 printf '%s\n' "$out"
 exit $rc

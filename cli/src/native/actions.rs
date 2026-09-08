@@ -383,6 +383,13 @@ pub struct DaemonState {
     pub routes: Arc<RwLock<Vec<RouteEntry>>>,
     pub tracked_requests: Vec<TrackedRequest>,
     pub request_tracking: bool,
+    /// Requests seen going out and not yet finished, as (requestId, start).
+    /// Feeds the adaptive settle (#228): a click that fires an XHR leaves the
+    /// DOM quiet for the whole round trip, so DOM stillness alone would report
+    /// the pre-response tree as the result. Tracked unconditionally — gating it
+    /// on `request_tracking` would make the wait blind unless someone happened
+    /// to ask for `network requests`.
+    pub in_flight_requests: Vec<(String, std::time::Instant)>,
     pub active_frame_id: Option<String>,
     /// Last `snapshot` this session produced, as (url, options fingerprint, tree).
     /// `snapshot --diff` compares against it so a re-read of a mostly-unchanged
@@ -459,6 +466,7 @@ impl DaemonState {
             routes: Arc::new(RwLock::new(Vec::new())),
             tracked_requests: Vec::new(),
             request_tracking: false,
+            in_flight_requests: Vec::new(),
             active_frame_id: None,
             last_snapshot: None,
             iframe_sessions: HashMap::new(),
@@ -499,6 +507,14 @@ impl DaemonState {
 
     fn reset_input_state(&mut self) {
         self.mouse_state = MouseState::default();
+    }
+
+    /// Requests still in flight that started at or after `since` — the network
+    /// half of the adaptive settle (#228). See `settle::pending_requests` for
+    /// why age matters: a stream never finishes, and waiting on one would hold
+    /// every observation to its ceiling.
+    pub fn pending_request_count(&self, since: std::time::Instant) -> usize {
+        super::settle::pending_requests(&self.in_flight_requests, since)
     }
 
     /// Create state with an optional stream client slot and server instance
@@ -837,12 +853,15 @@ impl DaemonState {
                         Some(iframe_sid.as_str()),
                     )
                     .await;
-                if self.har_recording || self.request_tracking {
-                    let _ = mgr
-                        .client
-                        .send_command_no_params("Network.enable", Some(iframe_sid.as_str()))
-                        .await;
-                }
+                // Unconditional, like the page session's own `Network.enable`:
+                // the adaptive settle (#228) counts in-flight requests, and an
+                // iframe whose Network domain was never enabled emits none — so
+                // a fetch driving an iframe's render would look like silence and
+                // the settle would call the page quiet before it was.
+                let _ = mgr
+                    .client
+                    .send_command_no_params("Network.enable", Some(iframe_sid.as_str()))
+                    .await;
                 // Hide automation markers in this cross-origin iframe session too.
                 apply_stealth_via_mgr(mgr, iframe_sid.as_str()).await;
             }
@@ -1016,10 +1035,13 @@ impl DaemonState {
                         false
                     };
 
-                    // Allow Network events from cross-origin iframe sessions
-                    // when HAR recording or request tracking is active.
+                    // Allow Network events from cross-origin iframe sessions. Not
+                    // gated on HAR/request tracking: the in-flight bookkeeping
+                    // below feeds the adaptive settle (#228), which must see an
+                    // iframe's requests whether or not anyone asked to record
+                    // them. The HAR and `network requests` arms stay gated
+                    // individually, so nothing else changes.
                     let iframe_network_event = !session_matches
-                        && (self.har_recording || self.request_tracking)
                         && event.method.starts_with("Network.")
                         && event
                             .session_id
@@ -1028,6 +1050,39 @@ impl DaemonState {
 
                     if !session_matches && !iframe_network_event {
                         continue;
+                    }
+
+                    // In-flight bookkeeping for the adaptive settle (#228),
+                    // separate from the tracking below because it must run
+                    // whether or not anyone asked for HAR or `network requests`.
+                    match event.method.as_str() {
+                        "Network.requestWillBeSent" => {
+                            if let Some(rid) =
+                                event.params.get("requestId").and_then(|v| v.as_str())
+                            {
+                                let now = std::time::Instant::now();
+                                // A redirect reuses the requestId; keep the
+                                // original start so the chain ages out together.
+                                if !self.in_flight_requests.iter().any(|(id, _)| id == rid) {
+                                    self.in_flight_requests.push((rid.to_string(), now));
+                                }
+                            }
+                            // Bounded: a page that streams forever would
+                            // otherwise grow this list for the session's life.
+                            if self.in_flight_requests.len() > 256 {
+                                let cutoff = std::time::Duration::from_secs(30);
+                                self.in_flight_requests
+                                    .retain(|(_, t)| t.elapsed() < cutoff);
+                            }
+                        }
+                        "Network.loadingFinished" | "Network.loadingFailed" => {
+                            if let Some(rid) =
+                                event.params.get("requestId").and_then(|v| v.as_str())
+                            {
+                                self.in_flight_requests.retain(|(id, _)| id != rid);
+                            }
+                        }
+                        _ => {}
                     }
 
                     match event.method.as_str() {
@@ -1580,6 +1635,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     } else {
         None
     };
+    // Marks the point the settle's network signal cares about: a request fired
+    // BY the action starts before the settle does, so anchoring on "now" here
+    // is what lets the wait see it (#228).
+    let action_started_at = std::time::Instant::now();
 
     // On the relay, a cross-process navigation (an OAuth/SSO redirect) can swap the
     // renderer and rotate the CDP sessionId out from under a non-navigate read or
@@ -1610,6 +1669,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "keep" => handle_keep(state).await,
             "stealth_status" => handle_stealth_status(state).await,
             "snapshot" => handle_snapshot(cmd, state).await,
+            "select_text" => handle_select_text(cmd, state).await,
+            "paste" => handle_paste(cmd, state).await,
             "actions" => handle_actions(cmd, state).await,
             "do" => handle_do_action(cmd, state).await,
             "screenshot" => handle_screenshot(cmd, state).await,
@@ -1850,7 +1911,17 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // and attach ONLY the delta vs the baseline (added/removed lines, url change,
     // requests fired). Collapses act→wait→snapshot→diff into one reply.
     if let (true, Some((url0, snap0, req_mark))) = (ok, observe_baseline) {
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        // Wait on signals, not on a number (#228). The 250ms this replaces was
+        // wrong in both directions: too short on a slow page, where the delta
+        // described a tree that no longer existed by the time the agent read
+        // it, and pure overhead on a static one.
+        let settled = super::settle::settle(
+            state,
+            super::settle::max_ms_for(cmd),
+            action_started_at,
+            true,
+        )
+        .await;
         let _ = state.drain_cdp_events();
         // Registering: the delta the caller reads names refs it will act on next.
         let snap1 = observe_snapshot_registering(state).await;
@@ -1877,6 +1948,13 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             })
             .unwrap_or_default();
         let mut observed = serde_json::Map::new();
+        // The diff is the authority on whether the action changed anything: a
+        // mutation made synchronously during dispatch happens before the wait's
+        // observer exists, so `sawChange` alone would report `false` next to a
+        // delta that plainly shows a change.
+        let mut settled = settled;
+        settled.mark_changed(d.changed || url0 != url1);
+        observed.insert("settle".into(), settled.to_json());
         observed.insert("changed".into(), json!(d.changed || url0 != url1));
         if d.changed {
             observed.insert("delta".into(), json!(d.diff));
@@ -1895,6 +1973,13 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
             if let Some(d) = data.as_object_mut() {
                 d.insert("observed".into(), Value::Object(observed));
+            }
+            // A delta captured off a page that never went quiet is a guess. Say
+            // so rather than letting it read like the settled result.
+            if let Some(w) = settled.warning() {
+                if obj.get("warning").is_none() {
+                    obj.insert("warning".to_string(), json!(w));
+                }
             }
         }
     }
@@ -1925,6 +2010,22 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // This is the round trip that separated us from a `createBrowserTab` that
     // returns the page's a11y tree with the tab.
     if ok && observe_navigation {
+        // `navigate` returns at its load state, which is before client-side
+        // routing, hydration and the first data fetch have finished. Settle on
+        // the page's own signals so the attached tree is the one the agent will
+        // act on, not the shell it briefly was (#228).
+        //
+        // No reaction window here, unlike a same-page action: the change a
+        // navigation makes has already happened, and what comes after it (an
+        // SPA's first data fetch) announces itself on the network signal. A
+        // fully static page would otherwise pay that window for nothing.
+        let settled = super::settle::settle(
+            state,
+            super::settle::max_ms_for(cmd),
+            action_started_at,
+            false,
+        )
+        .await;
         let snap = observe_snapshot_registering(state).await;
         if let Some(obj) = resp.as_object_mut() {
             let data = obj
@@ -1932,6 +2033,37 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
             if let Some(d) = data.as_object_mut() {
                 d.insert("observedSnapshot".into(), json!(snap));
+                d.insert("settle".into(), settled.to_json());
+            }
+            if let Some(w) = settled.warning() {
+                if obj.get("warning").is_none() {
+                    obj.insert("warning".to_string(), json!(w));
+                }
+            }
+        }
+    }
+
+    // `--with-screenshot <path>` on an observed action (issue #229): the pixels
+    // for the delta just reported, from the same settled moment. Only for an
+    // observation that actually happened — attaching an image to a command that
+    // observed nothing would be a picture of an unrelated instant.
+    if ok && (observe || observe_navigation) {
+        if let Some(path) = cmd.get("withScreenshot").and_then(|v| v.as_str()) {
+            let shot = companion_screenshot(path, state).await;
+            if let Some(obj) = resp.as_object_mut() {
+                let data = obj
+                    .entry("data")
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                if let Some(d) = data.as_object_mut() {
+                    match shot {
+                        Ok(saved) => {
+                            d.insert("screenshot".into(), json!(saved));
+                        }
+                        Err(e) => {
+                            d.insert("screenshotError".into(), json!(e));
+                        }
+                    }
+                }
             }
         }
     }
@@ -3945,6 +4077,22 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     if let Some(mgr) = state.browser.as_mut() {
         mgr.resync_targets().await.ok();
     }
+
+    // Wait for the page to stop changing before reading it (#228). `snapshot`
+    // used to capture the instant it was called, which on anything doing
+    // client-side rendering meant the caller read a shell, acted on refs that
+    // were about to be replaced, and blamed the refs. The wait is bounded and
+    // says so when it expires — see `settle`.
+    let settled = super::settle::settle(
+        state,
+        super::settle::max_ms_for(cmd),
+        super::settle::lookback(),
+        // No action of ours to react to: on a plain read, a still page is the
+        // answer, not a reason to keep waiting.
+        false,
+    )
+    .await;
+
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
@@ -4121,6 +4269,12 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     let ref_count = refs.len();
     let mut out = json!({ "snapshot": tree, "origin": url, "refs": refs });
+    out["settle"] = settled.to_json();
+    // A tree read off a page that was still moving is not the page's answer.
+    // Print that rather than let a mid-transition capture pass for a settled one.
+    if let Some(w) = settled.warning() {
+        out["settleWarning"] = json!(w);
+    }
     if want_diff {
         out["diffMode"] = json!(diff_note.is_none());
         if let Some(n) = diff_note {
@@ -4159,23 +4313,96 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     // (dogfood: the Dead Cell game). When the tree is sparse but a canvas
     // dominates the viewport, tell them to switch to the screenshot-driven path.
     if ref_count < 3 {
-        let canvas_js =
-            "(() => { const c = document.querySelector('canvas'); if (!c) return false; \
-                         const r = c.getBoundingClientRect(); \
-                         return r.width * r.height > innerWidth * innerHeight * 0.5; })()";
-        if let Ok(v) = mgr.evaluate(canvas_js, None).await {
-            if v.as_bool() == Some(true) {
-                out["note"] = json!(
-                    "This page renders to a <canvas> (game / WebGL / editor) and exposes almost no \
-                     accessibility tree — refs won't help. Use `screenshot` to see it, coordinate \
-                     `click <x> <y>` to interact, and `keydown`/`keyup`/`press` for keyboard \
-                     (hold-to-move: `keydown d` … `keyup d`)."
-                );
+        // One probe, two answers. The second is `document.visibilityState`
+        // (issue #215): a tab we drive in the background really is hidden —
+        // focus emulation does not change that — and a page that gates its UI
+        // on visibility renders its "background" branch, which reaches the
+        // agent as a page that is simply empty. Nothing in the tree says why,
+        // so an agent burns turns looking for controls that the page has
+        // deliberately not drawn.
+        let probe_js =
+            "(() => { const c = document.querySelector('canvas'); \
+                         const r = c && c.getBoundingClientRect(); \
+                         return { canvas: !!r && r.width * r.height > innerWidth * innerHeight * 0.5, \
+                                  hidden: document.visibilityState === 'hidden' }; })()";
+        if let Ok(v) = mgr.evaluate(probe_js, None).await {
+            let canvas = v.get("canvas").and_then(|c| c.as_bool()).unwrap_or(false);
+            let hidden = v.get("hidden").and_then(|h| h.as_bool()).unwrap_or(false);
+            if let Some(note) = sparse_tree_note(canvas, hidden) {
+                out["note"] = json!(note);
+            }
+        }
+    }
+
+    // `--with-screenshot <path>` (issue #229): the pixels for the tree above,
+    // taken from the state the settle already waited for rather than after a
+    // second wait of its own — two waits would describe two moments, which is
+    // worse than not combining them. Structure still goes to stdout; the image
+    // is written to disk and only its path is reported, because a screenshot is
+    // an output here, never the agent's way of reading the page.
+    if let Some(path) = cmd.get("withScreenshot").and_then(|v| v.as_str()) {
+        match companion_screenshot(path, state).await {
+            Ok(saved) => {
+                out["screenshot"] = json!(saved);
+            }
+            Err(e) => {
+                out["screenshotError"] = json!(e);
             }
         }
     }
 
     Ok(out)
+}
+
+/// Why a snapshot came back with almost nothing in it, when the page itself can
+/// say. Pure so the wording is testable without a browser.
+///
+/// Two causes look identical in the output — an empty tree — and neither is
+/// something the tree itself can express:
+///
+/// - the page paints to a `<canvas>` (game / WebGL / editor), so there is
+///   nothing to put in an accessibility tree in the first place;
+/// - the tab is **hidden**, and the page gates its UI on
+///   `document.visibilityState` (issue #215). We drive tabs in the background
+///   on purpose, and focus emulation does not make a background tab visible —
+///   so a page that does nothing while hidden is doing exactly what it was
+///   written to do, and the agent needs to be told that rather than left
+///   hunting for controls that were never drawn.
+fn sparse_tree_note(canvas: bool, hidden: bool) -> Option<String> {
+    match (canvas, hidden) {
+        (true, _) => Some(
+            "This page renders to a <canvas> (game / WebGL / editor) and exposes almost no \
+             accessibility tree — refs won't help. Use `screenshot` to see it, coordinate \
+             `click <x> <y>` to interact, and `keydown`/`keyup`/`press` for keyboard \
+             (hold-to-move: `keydown d` … `keyup d`)."
+                .to_string(),
+        ),
+        (false, true) => Some(
+            "This tab is hidden (document.visibilityState === 'hidden') — tabs are driven in the \
+             background, and focus emulation does not change that. A page that gates its UI on \
+             visibility will have rendered its background branch, which is why the tree looks \
+             empty. If this page needs to be visible, surface it with `chrome-use bringToFront` \
+             and read it again."
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+/// Take the screenshot that rides along with a structural observation
+/// (`--with-screenshot`, issue #229).
+///
+/// Delegates to the `screenshot` handler rather than reimplementing the
+/// capture: that path carries the target-drift and blank-image guards a
+/// screenshot needs, and a companion shot deserves them just as much as a
+/// standalone one.
+async fn companion_screenshot(path: &str, state: &mut DaemonState) -> Result<String, String> {
+    let resp = handle_screenshot(&json!({ "path": path }), state).await?;
+    Ok(resp
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or(path)
+        .to_string())
 }
 
 /// Resolve a (possibly relative) saved-file path to an absolute one so the CLI
@@ -4885,6 +5112,101 @@ async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     // Echo the input path used (input/contenteditable/codemirror5/monaco/select)
     // so the agent can confirm a rich editor was handled, not silently no-op'd (#41).
     Ok(json!({ "filled": selector, "engine": engine }))
+}
+
+/// `select-text` (issue #226): select one run of text inside an editable
+/// element, or place the caret before/after it.
+///
+/// The gap this closes: `fill` replaces the whole value and `type` appends, so
+/// changing one word in a written paragraph — or putting the cursor somewhere
+/// specific and carrying on — had no route but hand-written `eval`. Needing
+/// `eval` for something this ordinary is the signal that a feature is missing.
+async fn handle_select_text(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let selector = cmd
+        .get("selector")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'selector' parameter")?;
+    let text = cmd
+        .get("text")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'text' parameter")?;
+    let prefix = cmd.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+    let suffix = cmd.get("suffix").and_then(|v| v.as_str()).unwrap_or("");
+    let mode = interaction::SelectTextMode::parse(
+        cmd.get("selectionType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text"),
+    )?;
+
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+
+    let result = interaction::select_text(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        text,
+        prefix,
+        suffix,
+        mode,
+        &state.iframe_sessions,
+    )
+    .await?;
+
+    Ok(json!({
+        "selector": selector,
+        "engine": result.get("engine").cloned().unwrap_or(Value::Null),
+        "selected": result.get("selected").cloned().unwrap_or(Value::Null),
+        "start": result.get("start").cloned().unwrap_or(Value::Null),
+        "end": result.get("end").cloned().unwrap_or(Value::Null),
+        "selectionType": cmd
+            .get("selectionType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text"),
+    }))
+}
+
+/// `paste` (issue #227): put content into the page with a MIME type, without
+/// touching the user's real clipboard.
+///
+/// `type` and `paste` are not interchangeable in a rich-text editor: typing
+/// `<b>bold</b>` gives you those characters, pasting `text/html` gives you bold
+/// text. Newlines differ too — `type` sends Enter, which submits or splits a
+/// block in most editors, while a paste inserts the break.
+async fn handle_paste(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let text = cmd
+        .get("text")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'text' parameter")?;
+    let format = interaction::PasteFormat::parse(
+        cmd.get("format").and_then(|v| v.as_str()).unwrap_or("text"),
+    )?;
+    let selector = cmd.get("selector").and_then(|v| v.as_str());
+
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+
+    let result = interaction::paste_content(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        text,
+        format,
+        &state.iframe_sessions,
+    )
+    .await?;
+
+    Ok(json!({
+        "pasted": result.get("chars").cloned().unwrap_or(Value::Null),
+        "format": result.get("format").cloned().unwrap_or(Value::Null),
+        // Which path took the content: the page's own paste handler, or our
+        // insert after nobody listened. An agent debugging a rich editor needs
+        // to know which one it got.
+        "engine": result.get("engine").cloned().unwrap_or(Value::Null),
+        "target": selector.map(Value::from).unwrap_or(Value::Null),
+    }))
 }
 
 async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -13606,6 +13928,28 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    /// An empty tree has two very different causes, and the output cannot tell
+    /// them apart on its own (issues #206 and #215). Canvas wins when both
+    /// hold: a canvas app has no tree to render whether or not anyone is
+    /// looking at it, so "make it visible" would be the wrong advice.
+    #[test]
+    fn a_sparse_tree_says_which_of_the_two_reasons_it_is() {
+        let canvas = sparse_tree_note(true, false).expect("canvas gets a note");
+        assert!(canvas.contains("<canvas>"), "{canvas}");
+        assert!(canvas.contains("screenshot"), "{canvas}");
+
+        let hidden = sparse_tree_note(false, true).expect("a hidden tab gets a note");
+        assert!(hidden.contains("visibilityState"), "{hidden}");
+        // The advice has to be a command that exists and actually surfaces it.
+        assert!(hidden.contains("bringToFront"), "{hidden}");
+        // And it must not repeat the claim that #215 was filed against.
+        assert!(!hidden.contains("'visible'"), "{hidden}");
+
+        assert!(sparse_tree_note(true, true).unwrap().contains("<canvas>"));
+        // An ordinary page that is simply short gets no note at all.
+        assert!(sparse_tree_note(false, false).is_none());
+    }
+
     use super::is_blank_capture_target;
 
     // issue #184: a screenshot must not report ✓ when its capture session is on a

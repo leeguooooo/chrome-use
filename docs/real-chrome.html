@@ -338,10 +338,19 @@
 
       <h2>默认静默运行</h2>
       <p>
-        驱动用户的真实 Chrome 时，agent 完全在<strong>后台</strong>工作——新标签页开出来时不聚焦，agent 从不强制把某个标签页顶到前台，
-        并且焦点是模拟的，所以后台页面仍然会渲染、并报告 <code>visibilityState: 'visible'</code>。你什么都不用做；
-        只是别指望用户的视图跟着你跑（只有当你<strong>刻意</strong>想让用户看到某个标签页时，才用显式的 <code>bringToFront</code> 把它顶到前台）。
+        驱动用户的真实 Chrome 时，agent 完全在<strong>后台</strong>工作——新标签页开出来时不聚焦，agent 从不强制把某个标签页顶到前台。
+        焦点是模拟的，所以页面照常渲染、计时器照常跑，不会被后台节流。你什么都不用做；只是别指望用户的视图跟着你跑。
       </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 但后台标签页确实是「隐藏」的</div>
+        <code>document.visibilityState</code> 始终是 <code>'hidden'</code>——焦点模拟改不了它，CDP 也没有能改它的开关。
+        绝大多数页面不在乎。例外是那些<strong>刻意</strong>按可见性决定要不要工作的页面（不让后台标签页续着设备租约、视频播放器、
+        会暂停的游戏）：它们渲染的是「后台分支」，于是 <code>snapshot</code> 可能是空的，你以为会有的控件不在或用不了。
+        现在树接近为空且标签页隐藏时，<code>snapshot</code> 会把这件事说出来。遇到时用
+        <code>chrome-use bringToFront</code> 刻意把它顶到前台再读一次——这也是唯一会让用户视图跟着你跑的操作，
+        所以要刻意用，不要顺手用。
+      </div>
 
       <h2>行为层反-bot：拟人化输入</h2>
       <p>

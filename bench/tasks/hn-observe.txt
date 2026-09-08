@@ -1,4 +1,6 @@
 # Same HN task, one call per page instead of navigate+snapshot.
+#! assert url contains news.ycombinator.com/ask
+#! assert text body contains "Ask HN"
 navigate https://news.ycombinator.com --observe
 navigate https://news.ycombinator.com/newest --observe
 navigate https://news.ycombinator.com/ask --observe

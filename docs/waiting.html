@@ -91,6 +91,63 @@
 
       <hr class="du-divider" />
 
+      <!-- ============ SETTLE ============ -->
+      <h2>读之前它自己会等 — settle</h2>
+      <p>
+        一次观察值多少，取决于它拍下的那一刻页面在做什么。所以
+        <code>snapshot</code> 和 <code>--observe</code> <strong>会先等页面停下来再采集</strong>，
+        你不需要在前面自己塞一个 sleep：
+      </p>
+      <ul>
+        <li>DOM 连续 100ms 没有变更，</li>
+        <li>没有还在跑的有限时长过渡/动画（无限循环的 loading 转圈会被忽略——它永远不结束），</li>
+        <li>你刚触发的动作发出的请求都已经回来。</li>
+      </ul>
+      <p>
+        以最慢的那个为准，上限 1 秒。静态页面大约只花 100ms；
+        而一次触发 XHR 的点击会等到响应回来，而不是把「响应前的树」当成结果返回。
+      </p>
+
+      <p>
+        两者有一处不同：单独的 <code>snapshot</code> 没有动作要反应，页面静止就是答案，安静了立刻返回；
+        而动作之后的 <code>--observe</code> 会先花上限的一半（默认 500ms）盯着「有没有第一个反应」，
+        才肯报 <code>changed:false</code> —— 否则一个 300ms 后才渲染的控件会被读成「什么都没发生」。
+        这份代价只由真的什么都没做的动作承担；只要页面有反应，窗口立刻结束。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot -i <span class="du-flag">--settle-ms</span> 3000   <span class="du-cmt"># 慢页面：把上限调高</span>
+<span class="du-prompt">$</span> chrome-use snapshot -i <span class="du-flag">--no-settle</span>        <span class="du-cmt"># 就要中间态：不等，立刻采</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 上限到点了会说出来</div>
+        页面到上限还在动时，回复里会带一行
+        <code>Page had not settled after 1000ms (request in flight still active) — this capture
+        may be mid-transition. Re-read to confirm, or raise the ceiling with
+        AGENT_BROWSER_SETTLE_MS.</code>——意思是这张树可能是中间态，请重读一次再信它。
+        中间态被当成最终态返回，比慢更糟，所以这条永远不会被吞掉。
+      </div>
+
+      <p>
+        既然已经等过一次，像素就可以搭这趟车：<code>--with-screenshot &lt;path&gt;</code>
+        让 <code>snapshot</code> 或带 <code>--observe</code> 的动作在<strong>同一个稳定时刻</strong>
+        同时留下结构和截图（各等各的会得到两个时刻的东西，那比不合并还糟）。结构照旧走 stdout，
+        图片落盘并在输出里报路径 —— 截图在这里是<strong>输出</strong>，不是 agent 读页面的方式。
+      </p>
+
+      <p>
+        全局可用 <code>AGENT_BROWSER_SETTLE_MS</code>（设 0 关闭等待）和
+        <code>AGENT_BROWSER_SETTLE_QUIET_MS</code> 调。等<strong>某个具体条件</strong>
+        仍然是 <code>wait</code> 的活：settle 只知道页面停了，不知道你要的东西出现了没有。
+      </p>
+
+      <hr class="du-divider" />
+
       <!-- ============ EXPECT ============ -->
       <h2>确认动作生效 — expect</h2>
       <p>

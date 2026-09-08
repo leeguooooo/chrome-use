@@ -496,6 +496,17 @@ fn identity_probe_budget() -> std::time::Duration {
     }
 }
 
+/// What re-anchoring found, so the caller can tell "it is gone" from "there are
+/// several and they are indistinguishable" — two situations with two different
+/// fixes, which the old wording collapsed into "no element with that role and
+/// name is on the page now" (issue #224).
+struct Reanchor {
+    /// The node to act on, when exactly one could be identified.
+    target: Option<i64>,
+    /// How many nodes carry the ref's role + name right now.
+    candidates: usize,
+}
+
 /// Read the full accessibility tree and return the node the ref names.
 ///
 /// Prefers `cached` when that node still carries the ref's role + name — the
@@ -503,14 +514,23 @@ fn identity_probe_budget() -> std::time::Duration {
 /// even though nothing changed, and re-anchoring a still-correct ref onto a
 /// different same-labelled element would trade one mis-target for another.
 /// Otherwise falls back to the ref's `nth` match, the same rule the snapshot
-/// used to number duplicates. `None` when nothing carries that identity.
+/// used to number duplicates.
+///
+/// For a control with **no accessible name** — a bare `<select>`, an icon
+/// button — role + name matches every one of its kind on the page, so this
+/// second step has nothing to discriminate with, and a nameless ref whose node
+/// was replaced had no recovery path at all (issue #224). Those get one more
+/// signal before being given up on: the value the snapshot recorded. It is only
+/// ever used to narrow to exactly one candidate; narrowing to none, or still to
+/// several, keeps the refusal — the point is to recover the right element, not
+/// to relax the guard that stops us acting on the wrong one (#162).
 async fn reanchor_ref(
     client: &CdpClient,
     session_id: &str,
     entry: &RefEntry,
     cached: i64,
     iframe_sessions: &HashMap<String, String>,
-) -> Option<i64> {
+) -> Option<Reanchor> {
     let (ax_params, effective_session_id) =
         resolve_ax_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
     let tree: GetFullAXTreeResult = client
@@ -522,17 +542,66 @@ async fn reanchor_ref(
         .await
         .ok()?;
 
-    let matches: Vec<i64> = tree
+    let live: Vec<(i64, String)> = tree
         .nodes
         .iter()
         .filter(|n| !n.ignored.unwrap_or(false))
         .filter(|n| {
             extract_ax_string(&n.role) == entry.role && extract_ax_string(&n.name) == entry.name
         })
-        .filter_map(|n| n.backend_d_o_m_node_id)
+        .filter_map(|n| {
+            n.backend_d_o_m_node_id
+                .map(|id| (id, extract_ax_string(&n.value)))
+        })
         .collect();
 
-    pick_reanchor_target(&matches, cached, entry.nth)
+    let matches: Vec<i64> = live.iter().map(|(id, _)| *id).collect();
+    if let Some(id) = pick_reanchor_target(&matches, cached, entry.nth) {
+        return Some(Reanchor {
+            target: Some(id),
+            candidates: matches.len(),
+        });
+    }
+
+    let by_value = entry
+        .name
+        .is_empty()
+        .then(|| fingerprint_value(entry))
+        .flatten()
+        .and_then(|want| pick_by_value(&live, &want));
+
+    Some(Reanchor {
+        target: by_value,
+        candidates: matches.len(),
+    })
+}
+
+/// The value the snapshot recorded for a ref, if any — a nameless `<select>`
+/// showing "Name (A to Z)" carries its identity there and nowhere else.
+fn fingerprint_value(entry: &RefEntry) -> Option<String> {
+    entry
+        .fingerprint
+        .as_ref()
+        .and_then(|f| f.attrs.get("value"))
+        .filter(|v| !v.is_empty())
+        .cloned()
+}
+
+/// The one candidate carrying `want` as its value, or `None` when none or
+/// several do. Never "the first one": a value shared by two controls has told
+/// us nothing, and guessing is the mis-target the identity guard exists to
+/// prevent (#162).
+fn pick_by_value(live: &[(i64, String)], want: &str) -> Option<i64> {
+    let mut hit = None;
+    for (id, value) in live {
+        if value == want {
+            if hit.is_some() {
+                return None;
+            }
+            hit = Some(*id);
+        }
+    }
+    hit
 }
 
 /// Selection rule for [`reanchor_ref`], split out so it can be tested directly.
@@ -613,12 +682,14 @@ async fn confirmed_backend_node_id(
     // tree also re-confirms the cached node itself, so a probe that merely ran
     // out of budget on a busy page doesn't push a still-correct ref onto a
     // different element.
-    if let Ok(Some(id)) = tokio::time::timeout(
+    let reanchor = tokio::time::timeout(
         recovery_budget,
         reanchor_ref(client, session_id, entry, backend_node_id, iframe_sessions),
     )
     .await
-    {
+    .ok()
+    .flatten();
+    if let Some(id) = reanchor.as_ref().and_then(|r| r.target) {
         if id != backend_node_id {
             eprintln!(
                 "[ref] {ref_id} re-anchored to backendNodeId {id} ({} \"{}\")",
@@ -635,8 +706,46 @@ async fn confirmed_backend_node_id(
     .await
     {
         Ok(Some(id)) => Ok(id),
-        _ => Err(err),
+        // Nothing recovered it. Say which of the two situations this is: the
+        // element is gone, or several indistinguishable ones are on the page.
+        // "No element with that role and name" reads like the first even when
+        // it is the second, which sends the agent looking for something that
+        // has not happened (#224).
+        _ => Err(match reanchor.map(|r| r.candidates) {
+            Some(n) if n > 1 => indistinguishable_ref_error(ref_id, entry, n),
+            _ => err,
+        }),
     }
+}
+
+/// Error for a ref whose identity several live elements share — the nameless
+/// case, where role + name matches every control of its kind.
+///
+/// Refusing here is right (#162: acting on the wrong node is worse than
+/// failing), but the message has to name the real problem and a way out that
+/// works. A fresh `snapshot` does help: it numbers duplicates, so the new ref
+/// carries the ordinal this one lacked.
+fn indistinguishable_ref_error(ref_id: &str, entry: &RefEntry, candidates: usize) -> String {
+    let identity = if entry.name.is_empty() {
+        format!("{} with no accessible name", entry.role)
+    } else {
+        format!("{} \"{}\"", entry.role, entry.name)
+    };
+    let value_hint = match fingerprint_value(entry) {
+        Some(v) => format!(
+            " Its value was \"{v}\" at snapshot time, which did not single one of them out \
+             either — no live candidate carries it, or more than one does."
+        ),
+        None => String::new(),
+    };
+    format!(
+        "Ref {ref_id} could not be confirmed, and {candidates} elements on the page are \
+         [{identity}] — they cannot be told apart, so re-anchoring would be a guess rather than \
+         a recovery.{value_hint}\n\
+         Fix: take a fresh `snapshot` (it numbers duplicates, so the new ref carries the ordinal \
+         this one lacks), or address the element directly by CSS selector — `find` prints \
+         `id` / `data-testid` / class anchors for exactly this case."
+    )
 }
 
 /// Resolve a `@ref` or CSS selector to a click point. Returns
@@ -2628,6 +2737,60 @@ mod tests {
         assert!(err.contains("我的 agent"));
         assert!(err.contains("timed out"));
         assert!(err.contains("fresh `snapshot`"));
+    }
+
+    /// A nameless control's identity lives in its value, and that is the only
+    /// signal left once role + name has matched every `<select>` on the page
+    /// (issue #224). It may only ever narrow to exactly one.
+    #[test]
+    fn a_nameless_ref_is_recovered_by_the_value_the_snapshot_recorded() {
+        let live = vec![
+            (11, "Name (A to Z)".to_string()),
+            (12, "Price (low to high)".to_string()),
+        ];
+        assert_eq!(pick_by_value(&live, "Price (low to high)"), Some(12));
+        // Nothing carries it any more: that is not a licence to pick one.
+        assert_eq!(pick_by_value(&live, "Name (Z to A)"), None);
+        // Shared by two: the signal has told us nothing.
+        let dupes = vec![(11, "same".to_string()), (12, "same".to_string())];
+        assert_eq!(pick_by_value(&dupes, "same"), None);
+    }
+
+    /// The failure this issue is about is not "the element vanished" but "there
+    /// are several and nothing tells them apart". Reporting the second as the
+    /// first sends the agent hunting for a disappearance that never happened.
+    #[test]
+    fn an_indistinguishable_ref_says_so_instead_of_reporting_it_missing() {
+        let entry = RefEntry {
+            backend_node_id: Some(7),
+            role: "combobox".to_string(),
+            name: String::new(),
+            nth: None,
+            selector: None,
+            frame_id: None,
+            fingerprint: Some(ElementFingerprint {
+                tag: "combobox".to_string(),
+                attrs: [("value".to_string(), "Name (A to Z)".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            }),
+            dom_sourced: false,
+        };
+        let err = indistinguishable_ref_error("e7", &entry, 3);
+        assert!(err.contains("e7"), "{err}");
+        assert!(err.contains("3 elements"), "{err}");
+        assert!(err.contains("no accessible name"), "{err}");
+        assert!(err.contains("cannot be told apart"), "{err}");
+        // The old wording claimed the element was gone. It must not come back.
+        assert!(!err.contains("no element with that role and name"), "{err}");
+        // The value it had is worth saying: it is why the last signal failed.
+        assert!(err.contains("Name (A to Z)"), "{err}");
+        // And the way out has to be one that actually works for this case.
+        assert!(
+            err.contains("fresh `snapshot`") && err.contains("CSS selector"),
+            "{err}"
+        );
     }
 
     #[test]

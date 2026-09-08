@@ -194,11 +194,21 @@ browser has no headless/automation tells at all, so prefer it for anything
 anti-bot-sensitive.
 
 **Silent by default.** When driving the user's real Chrome the agent works
-entirely in the background — new tabs open un-focused, the agent never force-
-fronts a tab, and focus is emulated so the page still renders and reports
-`visibilityState: 'visible'`. You don't need to do anything; just don't expect
-the user's view to follow you (use the explicit `bringToFront` only if you
-deliberately want to surface a tab).
+entirely in the background — new tabs open un-focused and the agent never
+force-fronts a tab. Focus is emulated, so the page keeps rendering and keeps
+running timers instead of being throttled. You don't need to do anything; just
+don't expect the user's view to follow you.
+
+**But a background tab really is hidden.** `document.visibilityState` stays
+`'hidden'` — focus emulation does not change it, and no CDP override does
+either (issue #215). Almost nothing cares. The exception is a page that
+deliberately gates its UI on visibility (a device lease that must not be kept
+alive by a background tab, a video player, a game that pauses): it renders its
+background branch, so `snapshot` can come back empty and the controls you
+expect may be missing or unavailable. `snapshot` now says so when the tree is near-empty and the
+tab is hidden. When you hit that, surface the tab on purpose with
+`chrome-use bringToFront` and read it again — that is also the only thing that
+makes the user's view follow you, so use it deliberately, not by habit.
 
 **Human-like input for behavioural anti-bot.** Beyond fingerprint stealth,
 `--humanize off|fast|human` (or `AGENT_BROWSER_HUMANIZE`) makes clicks follow a

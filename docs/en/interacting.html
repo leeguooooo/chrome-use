@@ -148,6 +148,60 @@
 
       <hr class="du-divider" />
 
+      <!-- ============ Editing inside a field / pasting ============ -->
+      <h2>Editing inside a field, and pasting with a MIME type</h2>
+      <p>
+        <code>fill</code> replaces a whole value and <code>type</code> appends. Changing one phrase
+        inside written text, or placing the caret somewhere and carrying on, is neither — that is
+        what <code>select-text</code> is for.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">select-text</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use select-text @e3 <span class="du-str">"confirm"</span> <span class="du-flag">--prefix</span> <span class="du-str">"please "</span>  <span class="du-cmt"># selects `confirm`, not `please confirm`</span>
+<span class="du-prompt">$</span> chrome-use select-text @e3 <span class="du-str">"Hi Sam,"</span> <span class="du-flag">--cursor-after</span>       <span class="du-cmt"># a caret, not a selection</span>
+<span class="du-prompt">$</span> chrome-use type @e3 <span class="du-str">" quick note:"</span>                       <span class="du-cmt"># continues at the caret</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ A repeated phrase is refused, not resolved to the first one</div>
+        The prefix and suffix are context for finding the match, not part of the selection.
+        "Not found", "found but not with that context" and "matches N places" are three different
+        messages because they have three different fixes. Monaco and CodeMirror keep their own
+        selection model and are refused by name: a DOM selection there looks applied and does nothing.
+      </div>
+
+      <p>
+        In a rich-text editor, <strong>typing and pasting produce different documents</strong>:
+        <code>type "&lt;b&gt;bold&lt;/b&gt;"</code> gives you those eleven characters,
+        <code>paste --format html</code> gives you bold text. Newlines are the other reason —
+        <code>type</code> sends Enter, which submits or splits a block in most editors, while a
+        paste inserts the line break.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">paste</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use paste <span class="du-str">$'line one\nline two'</span> <span class="du-flag">--selector</span> <span class="du-str">"#notes"</span>  <span class="du-cmt"># $'...' sends a real newline</span>
+<span class="du-prompt">$</span> chrome-use paste <span class="du-str">"&lt;b&gt;bold&lt;/b&gt; text"</span> <span class="du-flag">--format</span> html <span class="du-flag">--selector</span> <span class="du-str">"#editor"</span>
+<span class="du-prompt">$</span> chrome-use paste <span class="du-str">"# Heading"</span> <span class="du-flag">--format</span> md            <span class="du-cmt"># Markdown source as plain text</span></code></pre>
+      </div>
+
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ Your real clipboard is never touched</div>
+        The content rides on a synthetic <code>ClipboardEvent</code> — no <code>navigator.clipboard</code>
+        call, no Ctrl+V. Such an event is untrusted and has no default action, so an editor that listens
+        gets it through its own handler and one that ignores it gets a real insert; the reply names which
+        path ran. If neither takes, the command fails rather than printing a ✓.
+      </div>
+
+      <hr class="du-divider" />
+
       <!-- ============ Keyboard ============ -->
       <h2>Keyboard</h2>
       <p>

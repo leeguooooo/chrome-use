@@ -33,6 +33,10 @@ pub(crate) const GLOBAL_BOOL_FLAGS: &[&str] = &[
     "--if-present",
     "--optional",
     "--observe",
+    // Adaptive wait before an observation (issue #228). Stripped here for the
+    // same reason: they are global, and a command's positional parsing must not
+    // see them.
+    "--no-settle",
     "--as-strict",
     "-v",
     "--verbose",
@@ -74,6 +78,8 @@ pub(crate) const GLOBAL_FLAGS_WITH_VALUE: &[&str] = &[
     "--confirm-actions",
     "--config",
     "--engine",
+    "--settle-ms",
+    "--with-screenshot",
     "--screenshot-dir",
     "--screenshot-quality",
     "--screenshot-format",
@@ -335,6 +341,8 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--model",
         "--humanize",
         "--window",
+        "--settle-ms",
+        "--with-screenshot",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -446,6 +454,16 @@ pub struct Flags {
     /// `--if-present`/`--optional`: skip a selector action (success {skipped})
     /// instead of erroring when the target element is absent (issue #65 followup).
     pub if_present: bool,
+    /// `--settle-ms <ms>`: ceiling on the adaptive wait an observation makes
+    /// before capturing (issue #228). `--no-settle` stamps `Some(0)`, which
+    /// skips the wait entirely. `None` means "use AGENT_BROWSER_SETTLE_MS, or
+    /// the default" — it is deliberately distinct from `Some(0)`.
+    pub settle_ms: Option<u64>,
+    /// `--with-screenshot <path>`: save the pixels alongside a structural
+    /// observation, captured from the same settled state (issue #229). The
+    /// image is an output — something to look at or attach — not an input for
+    /// the agent to read the page from.
+    pub with_screenshot: Option<String>,
     /// `--observe`: after a mutating action, return only what changed on the page
     /// (a11y delta + url + requests) instead of the agent re-snapshotting.
     pub observe: bool,
@@ -901,6 +919,8 @@ pub fn parse_flags(args: &[String]) -> Flags {
             || config.no_auto_dialog.unwrap_or(false),
         if_present: false,
         observe: false,
+        settle_ms: None,
+        with_screenshot: None,
         model: env::var("AI_GATEWAY_MODEL").ok().or(config.model),
         verbose: false,
         quiet: false,
@@ -1294,6 +1314,23 @@ pub fn parse_flags(args: &[String]) -> Flags {
             }
             "--observe" => {
                 flags.observe = true;
+            }
+            "--no-settle" => {
+                flags.settle_ms = Some(0);
+            }
+            "--settle-ms" => {
+                if let Some(s) = args.get(i + 1) {
+                    if let Ok(n) = s.parse::<u64>() {
+                        flags.settle_ms = Some(n);
+                    }
+                    i += 1;
+                }
+            }
+            "--with-screenshot" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.with_screenshot = Some(s.clone());
+                    i += 1;
+                }
             }
             "--model" => {
                 if let Some(s) = args.get(i + 1) {

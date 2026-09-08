@@ -8138,3 +8138,1066 @@ async fn e2e_a11y_preserves_sibling_frame_dom_order() {
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
 }
+
+// ---------------------------------------------------------------------------
+// Adaptive settle before an observation (#228)
+// ---------------------------------------------------------------------------
+
+/// HTTP server for the settle tests: `/slow` answers after `delay_ms`,
+/// everything else serves `html` immediately. The delayed route is the whole
+/// point — a fetch in flight leaves the DOM perfectly quiet, so it is the case
+/// a page-side "has the DOM stopped" wait cannot see on its own.
+async fn spawn_slow_fetch_server(
+    html: String,
+    delay_ms: u64,
+) -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("HTTP listener should bind");
+    let port = listener
+        .local_addr()
+        .expect("HTTP listener should have an address")
+        .port();
+    let task = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let html = html.clone();
+            tokio::spawn(async move {
+                let mut buf = [0_u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                let slow = request.starts_with("GET /slow");
+                if slow {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+                let (ctype, body) = if slow {
+                    ("text/plain; charset=utf-8", "late payload".to_string())
+                } else {
+                    ("text/html; charset=utf-8", html)
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    ctype,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    (port, task)
+}
+
+/// A click whose result renders 450ms later. The old fixed 250ms sleep captured
+/// the page before the button existed and reported that tree as the result —
+/// the silent wrong answer #228 exists to remove.
+///
+/// The control half matters as much as the assertion: with the wait switched
+/// off (`--no-settle`) the same click observes nothing, which is what proves
+/// the delta came from waiting rather than from the action being slow enough
+/// by luck.
+#[tokio::test]
+#[ignore]
+async fn e2e_settle_waits_for_a_late_render() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>late render</title>
+<button id="go">Go</button>
+<script>
+document.getElementById('go').addEventListener('click', () => {
+  setTimeout(() => {
+    const b = document.createElement('button');
+    b.textContent = 'Confirmed';
+    document.body.appendChild(b);
+  }, 450);
+});
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({
+            "id": "1",
+            "action": "launch",
+            "headless": true,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // Control: no wait, no observation. This is the old behaviour.
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "click",
+            "selector": "#go",
+            "observe": true,
+            "settleMs": 0
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(
+        observed["changed"],
+        json!(false),
+        "with the wait off, the late render must not be visible yet: {observed}"
+    );
+
+    let resp = execute_command(&json!({ "id": "4", "action": "reload" }), &mut state).await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "click",
+            "selector": "#go",
+            "observe": true,
+            "settleMs": 3000
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(observed["settle"]["quiet"], json!(true), "{observed}");
+    // The wait clearly outlasted its quiet window; the exact figure is the
+    // render's remaining time, which depends on how long the click dispatch
+    // itself took, so the delta below is the real assertion.
+    assert!(
+        observed["settle"]["waitedMs"].as_u64().unwrap_or(0) >= 200,
+        "the wait must have covered the late render: {observed}"
+    );
+    assert!(
+        observed["delta"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Confirmed"),
+        "the observed delta must carry the late-rendered button: {observed}"
+    );
+    assert!(
+        resp.get("warning").is_none(),
+        "a page that settled must not be flagged as mid-transition: {resp}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// The signal a page-side wait cannot see: the click fires a fetch, the DOM
+/// stays perfectly still for its whole round trip, and only the response
+/// renders anything. DOM quiet alone would report the pre-response tree.
+#[tokio::test]
+#[ignore]
+async fn e2e_settle_waits_for_an_in_flight_request() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>slow fetch</title>
+<button id="go">Go</button>
+<script>
+document.getElementById('go').addEventListener('click', async () => {
+  const r = await fetch('/slow');
+  const t = await r.text();
+  const b = document.createElement('button');
+  b.textContent = t;
+  document.body.appendChild(b);
+});
+</script>"##
+        .to_string();
+    let (port, server) = spawn_slow_fetch_server(page, 500).await;
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({
+            "id": "1",
+            "action": "launch",
+            "headless": true,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "click",
+            "selector": "#go",
+            "observe": true,
+            "settleMs": 4000
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(observed["settle"]["quiet"], json!(true), "{observed}");
+    assert!(
+        observed["delta"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("late payload"),
+        "the wait must outlast the request that renders the result: {observed}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// A static page must not pay for the wait. The old `--observe` slept 250ms
+/// whatever the page was doing; the signal-based wait returns as soon as the
+/// quiet window passes.
+#[tokio::test]
+#[ignore]
+async fn e2e_settle_is_cheap_on_a_static_page() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>static</title>
+<button>Only button</button>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({
+            "id": "1",
+            "action": "launch",
+            "headless": true,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["settle"]["quiet"], json!(true), "{data}");
+    let waited = data["settle"]["waitedMs"].as_u64().unwrap_or(u64::MAX);
+    assert!(
+        waited < 400,
+        "a static page must settle on its quiet window, not on the ceiling (waited {waited}ms)"
+    );
+    assert!(
+        data.get("settleWarning").is_none(),
+        "a settled page must not carry a mid-transition warning: {data}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// A page that never stops mutating must still return — and must say that what
+/// it returned may be mid-transition. A ceiling that expires quietly is the
+/// same silent success in a new place.
+///
+/// The 300ms ceiling here also pins the wait's own arithmetic: the last slice of
+/// the budget is too short to run a real quiet check, and a zero-length quiet
+/// window is satisfied the moment it is tested. That path once turned this exact
+/// page into a confident `quiet: true`.
+#[tokio::test]
+#[ignore]
+async fn e2e_settle_reports_its_ceiling_instead_of_hiding_it() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>never quiet</title>
+<button>Only button</button>
+<div id="churn"></div>
+<script>
+setInterval(() => {
+  const d = document.getElementById('churn');
+  d.textContent = String(Date.now());
+}, 10);
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({
+            "id": "1",
+            "action": "launch",
+            "headless": true,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "snapshot",
+            "interactive": true,
+            "settleMs": 300
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["settle"]["quiet"], json!(false), "{data}");
+    assert!(
+        data["settle"]["pending"]
+            .as_array()
+            .map(|a| a.iter().any(|v| v == "dom"))
+            .unwrap_or(false),
+        "the DOM was the thing still moving: {data}"
+    );
+    let warning = data["settleWarning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("mid-transition"),
+        "an expired ceiling must name what it means: {warning}"
+    );
+    // The tree still comes back — the wait is bounded, not blocking.
+    assert!(
+        data["snapshot"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Only button"),
+        "a page that never settles must still be readable: {data}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
+// select-text: select a run of text inside an editable element (#226)
+// ---------------------------------------------------------------------------
+
+/// The page every `select-text` test drives: one field of each family, each
+/// carrying a deliberately repeated phrase so the disambiguation path is
+/// exercised rather than assumed.
+fn select_text_fixture() -> String {
+    r##"<!doctype html><meta charset="utf-8"><title>select text</title>
+<textarea id="ta" rows="4" cols="60">Hi Sam, please confirm the meeting. Please confirm again.</textarea>
+<input id="in" value="one two three two">
+<div id="ce" contenteditable="true">Alpha beta gamma beta delta</div>
+<input id="mail" type="email" value="a@b.com">"##
+        .to_string()
+}
+
+async fn launch_on(port: u16, state: &mut DaemonState) {
+    let resp = execute_command(
+        &json!({
+            "id": "1",
+            "action": "launch",
+            "headless": true,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+        }),
+        state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+        state,
+    )
+    .await;
+    assert_success(&resp);
+}
+
+/// `<textarea>`, `<input>` and contenteditable are three different selection
+/// APIs, and the command is only useful if all three land — so all three are
+/// verified from the page's own state, not from the command's own report.
+#[tokio::test]
+#[ignore]
+async fn e2e_select_text_selects_in_each_editable_family() {
+    let (port, server) = spawn_html_server(select_text_fixture()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    // Textarea, disambiguated by prefix: "confirm" appears twice, and the
+    // prefix picks the first without becoming part of the selection.
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "select_text",
+            "selector": "#ta",
+            "text": "confirm",
+            "prefix": "please "
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["selected"], json!("confirm"));
+    assert_eq!(get_data(&resp)["engine"], json!("input"));
+
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": "(() => { const t = document.getElementById('ta'); \
+                       return t.value.slice(t.selectionStart, t.selectionEnd); })()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!("confirm"),
+        "the page's own selection must be the phrase, not the prefix plus it"
+    );
+
+    // Input, disambiguated by prefix: "two" appears twice.
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "select_text",
+            "selector": "#in",
+            "text": "two",
+            "prefix": "three "
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["start"], json!(14));
+
+    // Contenteditable goes through Range/Selection instead.
+    let resp = execute_command(
+        &json!({
+            "id": "6",
+            "action": "select_text",
+            "selector": "#ce",
+            "text": "gamma"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], json!("contenteditable"));
+    let resp = execute_command(
+        &json!({
+            "id": "7",
+            "action": "evaluate",
+            "script": "window.getSelection().toString()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], json!("gamma"));
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// "Not found" and "matches too many places" are different problems with
+/// different fixes. Reporting the second as the first sends the agent hunting
+/// for a typo that is not there — the exact confusion #224 records — so each
+/// has to say which it is.
+#[tokio::test]
+#[ignore]
+async fn e2e_select_text_separates_missing_from_ambiguous() {
+    let (port, server) = spawn_html_server(select_text_fixture()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "select_text", "selector": "#in", "text": "two" }),
+        &mut state,
+    )
+    .await;
+    let err = resp["error"].as_str().unwrap_or_default();
+    assert!(
+        err.contains("matches 2 places") && err.contains("--prefix"),
+        "an ambiguous match must say so and name the way out: {err}"
+    );
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "select_text", "selector": "#in", "text": "zebra" }),
+        &mut state,
+    )
+    .await;
+    let err = resp["error"].as_str().unwrap_or_default();
+    assert!(
+        err.contains("No text matching"),
+        "a missing phrase must not read like an ambiguous one: {err}"
+    );
+
+    // Present, but not with that context: a third, distinct answer.
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "select_text",
+            "selector": "#in",
+            "text": "two",
+            "prefix": "nine "
+        }),
+        &mut state,
+    )
+    .await;
+    let err = resp["error"].as_str().unwrap_or_default();
+    assert!(
+        err.contains("never with the prefix/suffix"),
+        "a context mismatch must not read as a missing phrase: {err}"
+    );
+
+    // A field that cannot hold a selection at all is refused with that reason,
+    // rather than reported as a selection that silently did nothing.
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "select_text", "selector": "#mail", "text": "a@b" }),
+        &mut state,
+    )
+    .await;
+    let err = resp["error"].as_str().unwrap_or_default();
+    assert!(
+        err.contains("does not support text selection"),
+        "an unselectable input must say why: {err}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// The cursor modes exist so the next `type` lands in the right place. Assert
+/// exactly that, end to end, rather than the offsets the command reports.
+#[tokio::test]
+#[ignore]
+async fn e2e_select_text_cursor_modes_place_the_next_type() {
+    let (port, server) = spawn_html_server(select_text_fixture()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "select_text",
+            "selector": "#ta",
+            "text": "Hi Sam,",
+            "selectionType": "cursor_after"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["start"], json!(7));
+    assert_eq!(get_data(&resp)["end"], json!(7));
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "type", "selector": "#ta", "text": " quick note:" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "evaluate",
+            "script": "document.getElementById('ta').value"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp)["result"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("Hi Sam, quick note: please confirm"),
+        "typing after `--cursor-after` must land at the caret, not at the end: {}",
+        get_data(&resp)["result"]
+    );
+
+    // Selecting text and typing replaces exactly that run — the "change one
+    // phrase in a long field" case that `fill` cannot express.
+    let resp = execute_command(
+        &json!({
+            "id": "6",
+            "action": "select_text",
+            "selector": "#ce",
+            "text": "gamma"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "type", "selector": "#ce", "text": "GAMMA" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({
+            "id": "8",
+            "action": "evaluate",
+            "script": "document.getElementById('ce').textContent"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!("Alpha beta GAMMA beta delta"),
+        "the rest of the field must survive"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
+// paste: content with a MIME type, without the user's clipboard (#227)
+// ---------------------------------------------------------------------------
+
+/// One field with no paste handler at all (the fallback path), one editor that
+/// handles `paste` itself and records what it was given (the event path), and a
+/// clipboard whose methods count their calls — because "we never touch the real
+/// clipboard" is a promise, and a promise nothing checks is a comment.
+fn paste_fixture() -> String {
+    r##"<!doctype html><meta charset="utf-8"><title>paste</title>
+<textarea id="notes" rows="4" cols="60"></textarea>
+<div id="plain" contenteditable="true"></div>
+<div id="editor" contenteditable="true"></div>
+<script>
+window.__clipboardCalls = 0;
+try {
+  navigator.clipboard.writeText = () => { window.__clipboardCalls++; return Promise.resolve(); };
+  navigator.clipboard.readText = () => { window.__clipboardCalls++; return Promise.resolve(''); };
+} catch (e) {}
+window.__seenHtml = null;
+document.getElementById('editor').addEventListener('paste', (e) => {
+  e.preventDefault();
+  window.__seenHtml = e.clipboardData.getData('text/html');
+  document.getElementById('editor').innerHTML = window.__seenHtml || e.clipboardData.getData('text/plain');
+});
+</script>"##
+        .to_string()
+}
+
+/// Multi-line text is one of the two reasons this command exists: `type` turns
+/// a newline into Enter, which submits or splits a block; a paste inserts the
+/// break. And the whole operation must leave the user's clipboard alone.
+#[tokio::test]
+#[ignore]
+async fn e2e_paste_inserts_multiline_without_touching_the_clipboard() {
+    let (port, server) = spawn_html_server(paste_fixture()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "paste",
+            "selector": "#notes",
+            "text": "line one\nline two"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["format"], json!("text"));
+
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": "document.getElementById('notes').value"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!("line one\nline two"),
+        "the newline must survive as a newline"
+    );
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "evaluate", "script": "window.__clipboardCalls" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!(0),
+        "we drive the user's real Chrome: their clipboard must be untouched"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// `--format html` has to reach an editor as `text/html` — that is the whole
+/// difference from `type`. Verified from the editor's own handler (what it was
+/// handed) and from the resulting markup.
+#[tokio::test]
+#[ignore]
+async fn e2e_paste_html_arrives_as_rich_content() {
+    let (port, server) = spawn_html_server(paste_fixture()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    // An editor that listens: the paste event carries the html to its handler.
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "paste",
+            "selector": "#editor",
+            "text": "<b>bold</b> text",
+            "format": "html"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["engine"],
+        json!("paste-event"),
+        "an editor that handles paste must be reached through its handler"
+    );
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "window.__seenHtml" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], json!("<b>bold</b> text"));
+
+    // A contenteditable with no handler: nothing listened, so the content is
+    // inserted for real — and still as markup, not as eleven characters.
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "paste",
+            "selector": "#plain",
+            "text": "<b>bold</b> text",
+            "format": "html"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], json!("insert-html"));
+    let resp = execute_command(
+        &json!({
+            "id": "6",
+            "action": "evaluate",
+            "script": "document.getElementById('plain').innerHTML"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp)["result"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("<b>bold</b>"),
+        "html must land as markup: {}",
+        get_data(&resp)["result"]
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Nameless controls: a @ref that role + name cannot tell apart (#224)
+// ---------------------------------------------------------------------------
+
+/// A bare `<select>` has no accessible name, so role + name — the signal a
+/// stale ref re-anchors on — matches every `<select>` on the page. The value it
+/// was showing is the one thing that still identifies it, and that is what this
+/// exercises: the node is replaced (stale backendNodeId) and a second nameless
+/// combobox appears, which is exactly the shape that used to be unrecoverable.
+#[tokio::test]
+#[ignore]
+async fn e2e_nameless_ref_recovers_by_the_value_it_was_showing() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>nameless select</title>
+<div id="host">
+  <select id="sort">
+    <option>Name (A to Z)</option>
+    <option>Price (low to high)</option>
+  </select>
+</div>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let tree = get_data(&resp)["snapshot"].as_str().unwrap_or_default();
+    let line = tree
+        .lines()
+        .find(|l| l.contains("combobox"))
+        .unwrap_or_else(|| panic!("no combobox in snapshot:\n{tree}"));
+    assert!(
+        line.contains("Name (A to Z)"),
+        "the value is the only identity a nameless control has: {line}"
+    );
+    let start = line.find("ref=").expect("line has a ref") + 4;
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_alphanumeric())
+        .unwrap_or(rest.len());
+    let sort_ref = format!("@{}", &rest[..end]);
+
+    // Replace the node (stale backendNodeId) and add a second nameless
+    // combobox, so role + name now matches two elements and the ref carries no
+    // ordinal to choose with.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": "(() => { const el = document.getElementById('sort'); \
+                       el.replaceWith(el.cloneNode(true)); \
+                       const extra = document.createElement('select'); \
+                       extra.innerHTML = '<option>Alpha</option><option>Beta</option>'; \
+                       document.getElementById('host').prepend(extra); \
+                       return true; })()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "select",
+            "selector": sort_ref,
+            "value": "Price (low to high)"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({
+            "id": "6",
+            "action": "evaluate",
+            "script": "document.getElementById('sort').value"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!("Price (low to high)"),
+        "the recovery must land on the control the ref named, not the new one"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// When the last signal cannot separate them either, the refusal stands — but
+/// it has to say that several elements are indistinguishable, not that the
+/// element is gone. The two have different fixes, and the old wording only
+/// described the one that had not happened.
+#[tokio::test]
+#[ignore]
+async fn e2e_nameless_ref_refusal_says_indistinguishable_not_missing() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>twin selects</title>
+<div id="host">
+  <select id="sort">
+    <option>Name (A to Z)</option>
+    <option>Price (low to high)</option>
+  </select>
+</div>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let tree = get_data(&resp)["snapshot"].as_str().unwrap_or_default();
+    let line = tree
+        .lines()
+        .find(|l| l.contains("combobox"))
+        .unwrap_or_else(|| panic!("no combobox in snapshot:\n{tree}"));
+    let start = line.find("ref=").expect("line has a ref") + 4;
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_alphanumeric())
+        .unwrap_or(rest.len());
+    let sort_ref = format!("@{}", &rest[..end]);
+
+    // Two twins now, same role, same (absent) name, same value — and the
+    // original node replaced so the cached id is stale.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": "(() => { const el = document.getElementById('sort'); \
+                       const twin = el.cloneNode(true); twin.removeAttribute('id'); \
+                       el.replaceWith(el.cloneNode(true)); \
+                       document.getElementById('host').prepend(twin); \
+                       return true; })()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "select",
+            "selector": sort_ref,
+            "value": "Price (low to high)"
+        }),
+        &mut state,
+    )
+    .await;
+    let err = resp["error"].as_str().unwrap_or_default();
+    assert!(
+        err.contains("cannot be told apart"),
+        "the refusal must name the real problem: {err}"
+    );
+    assert!(
+        !err.contains("no element with that role and name"),
+        "and must not claim the element disappeared: {err}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Structure and pixels from one call, at one moment (#229)
+// ---------------------------------------------------------------------------
+
+/// `--with-screenshot` exists to save a round trip, but its real constraint is
+/// that both captures describe the *same* state: they ride on the single
+/// settle the observation already performed (#228), instead of each waiting on
+/// its own and describing two different moments.
+#[tokio::test]
+#[ignore]
+async fn e2e_with_screenshot_saves_pixels_alongside_the_tree() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>with screenshot</title>
+<button id="go">Go</button>
+<div id="out"></div>
+<script>
+document.getElementById('go').addEventListener('click', () => {
+  document.getElementById('out').innerHTML = '<button>Appeared</button>';
+});
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let dir = std::env::temp_dir().join(format!(
+        "chrome-use-e2e-shot-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir should be creatable");
+    let snap_shot = dir.join("snapshot.png");
+    let observe_shot = dir.join("observe.png");
+
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "snapshot",
+            "interactive": true,
+            "withScreenshot": snap_shot.to_string_lossy()
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert!(
+        data["snapshot"].as_str().unwrap_or_default().contains("Go"),
+        "the tree is still the thing you read: {data}"
+    );
+    assert!(
+        data.get("screenshotError").is_none(),
+        "a companion capture that failed must say so, not be dropped: {data}"
+    );
+    let saved = data["screenshot"]
+        .as_str()
+        .expect("the saved path must be reported");
+    assert!(
+        std::fs::metadata(saved)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false),
+        "the reported path must hold a real image: {saved}"
+    );
+
+    // The same on an observed action: the delta and the pixels for it.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "click",
+            "selector": "#go",
+            "observe": true,
+            "withScreenshot": observe_shot.to_string_lossy()
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert!(
+        data["observed"]["delta"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Appeared"),
+        "the delta must be the post-action one: {data}"
+    );
+    let saved = data["screenshot"]
+        .as_str()
+        .expect("the saved path must be reported");
+    assert!(
+        std::fs::metadata(saved)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false),
+        "the reported path must hold a real image: {saved}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+    let _ = std::fs::remove_dir_all(&dir);
+}

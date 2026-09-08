@@ -76,7 +76,12 @@ one looked entirely reasonable on its own:
 
 `bench/` holds a no-model replay harness for before/after comparisons and a
 script that extracts a reference line from another agent's rollout log. See
-`bench/README.md`.
+`bench/README.md`. The harness records the facts these rules depend on rather
+than trusting you to remember them: which binary answered and its version,
+whether the daemon was warm, the machine's load, the exit code of every call,
+and whether the task reached the end state its `#! assert` line declares. A run
+that gave up halfway looks *cheaper* on round trips and bytes than one that
+finished, so a result without a verdict is not a result.
 
 ## Build and test
 
