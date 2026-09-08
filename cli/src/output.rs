@@ -4378,6 +4378,8 @@ Core Commands:
   snapshot                   Accessibility tree with refs (for AI)
   eval <js>                  Run JavaScript
   connect <port|url>         Connect to browser via CDP
+  debugger_access_denied: protected extension content blocks this tab; do not
+  loop on reattach. Use tab inspect <ref> for metadata or an isolated profile.
   Extension popup: Connected means the native host replied; Connecting means
   the reply is still pending. A host connection does not verify page liveness.
   reconnect                  Re-bind to the running Chrome's relay (alias for
@@ -4713,6 +4715,8 @@ Environment:
   AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
+  CHROME_USE_RELAY_DIR          Isolated relay registry directory; set the same
+                               absolute path in the native host and CLI
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path
   AGENT_BROWSER_EXTENSIONS       Comma-separated browser extension paths
   AGENT_BROWSER_INIT_SCRIPTS     Comma-separated paths to page init scripts

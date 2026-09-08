@@ -1,4 +1,5 @@
 import { withRelayTimeout } from './relay-timeout.js'
+import { isDebuggerAccessDenied, debuggerAccessError } from './debugger-access.js'
 
 // Reads and domain subscriptions can be repeated after a transport failure.
 // Runtime.evaluate/callFunctionOn and Input commands can change application state;
@@ -26,6 +27,7 @@ export async function sendTabCommand(tabId, method, params, childSessionId, deps
       `chrome.debugger.sendCommand(${method})`,
     )
   } catch (e) {
+    if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e)
     if (childSessionId) throw e
     const msg = String((e && e.message) || e)
     if (!/detached|not attached|target.*(closed|gone)|no target|cannot access|frame.*detached/i.test(msg)) {

@@ -366,6 +366,17 @@ unless the command is safe to repeat or Chrome explicitly rejected it before dis
 `action_outcome_unknown` means the action may already have executed; JSON reports
 `retryable: false`. Observe the current page before choosing another action.
 
+
+Chrome can refuse debugger access to an ordinary web tab containing another
+extension's protected iframe. `debugger_access_denied` is non-retryable; use
+`tab inspect <ref>` for browser metadata or a separate test profile. Reattaching
+does not remove this restriction.
+
+For isolated development, set `CHROME_USE_RELAY_DIR` to the same absolute
+directory in the native-host launcher and the CLI. This scopes relay discovery
+without changing HOME; combine it with unique session names and an explicit
+`--browser` ID. Omit it for ordinary shared-profile discovery.
+
 ### Standalone mode (`--launch`)
 
 Spawn a separate browser instead of attaching to your running Chrome:

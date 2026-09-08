@@ -25,3 +25,28 @@ Assert `changed:false`, `requestsTotal:25`, `requestsOmitted:5`, and exactly 20
 summaries with no embedded payload. Confirm that `network requests --json` still
 contains the complete captured URLs. The text response must show the summaries
 even when the page did not change.
+
+## Private relay and frame restrictions
+
+Start `bench/private-relay-browser.py` with a freshly built candidate CLI, Chrome
+for Testing, the ab-connect source directory, and `restricted-frame-extension`.
+It creates a private native-host registry and opens no remote debugging port.
+Use the state file's `registry` as `CHROME_USE_RELAY_DIR`, `socketDir` as
+`AGENT_BROWSER_SOCKET_DIR`, and an explicit browser ID from scoped `browsers`.
+Do not register this browser in shared discovery. Preserve unexpected user tabs
+before stopping any test browser.
+
+Serve these fixtures on loopback. The companion extension adds a protected
+extension iframe on `127.0.0.1`; `localhost` is the plain control. The native
+Chrome debugger should refuse the protected page with `debugger_access_denied`,
+while `tab list` / `tab inspect` remain available. This is an expected access
+restriction, not a successful content interaction.
+
+`bench/relay-isolation-check.py` checks two named sessions on the plain control:
+independent counters, navigation in one without changing the other, and foreign
+selection refusal (or earlier exclusion from discovery). It records actual
+responses and closes only its named sessions, including after failure. It omits
+other tabs from saved tab-list responses. Run it again while the protected page
+is foregrounded using an independent UI control, and verify focus stayed there.
+On macOS use the short socket directory in the state file; profile paths can
+exceed Unix socket path limits.

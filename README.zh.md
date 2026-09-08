@@ -190,6 +190,11 @@ ab-connect，然后重试。
 显式执行 `close` 或 `session stop` 仍会关闭这些标签页。
 空闲退出后，`session stop` 会重新发现原浏览器并校验所有权再清理；若无法匹配，会明确报告未完成并保留记录，供使用原连接选项重连后执行 `close`。
 
+
+普通网页嵌入另一个扩展的受限 iframe 时，Chrome 也可能拒绝整个标签的 debugger 访问。此时 `debugger_access_denied` 不建议重试；用 `tab inspect <ref>` 查浏览器级状态，或选用独立测试 profile。重新连接不能解除这项限制。
+
+隔离开发时，在原生主机启动脚本和 CLI 中把 `CHROME_USE_RELAY_DIR` 设为同一个绝对路径。它只隔离中继登记与发现，不修改 HOME；同时使用唯一 session 名和明确的 `--browser` ID。普通共享 profile 不需要设置该变量。
+
 ### 独立模式（`--launch`）
 
 ```bash

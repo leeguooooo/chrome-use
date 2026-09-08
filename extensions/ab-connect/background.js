@@ -41,6 +41,7 @@ import {
 import { targetInfoForTab } from './target-info.js'
 import { sendTabCommand } from './tab-command.js'
 import { HostConnectionState } from './host-connection.js'
+import { isDebuggerAccessDenied, debuggerAccessError } from './debugger-access.js'
 import {
   IDLE_DETACH_DEFAULT_SECS,
   idleDetachMsFrom,
@@ -658,6 +659,7 @@ async function recoverSessionTab(sessionId) {
         if (tabs.has(tabId)) return tabId
       } catch (e) {
         if (isRelayTimeoutError(e)) throw e
+        if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e)
         // Permanently off-limits (other extension's page etc.) — stop the tabId
         // fast-path and let the stable-targetId path below try a different tab.
         if (isPermanentAttachError(e)) break
@@ -701,6 +703,7 @@ async function recoverSessionTab(sessionId) {
             }
           } catch (e) {
             if (isRelayTimeoutError(e)) throw e
+            if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e)
             // The tab hosting our target is a page we can never attach to — no
             // amount of waiting fixes that, so give up the recovery now.
             if (isPermanentAttachError(e)) return null

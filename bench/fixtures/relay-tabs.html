@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Relay isolation fixture</title>
+<h1 id="identity"></h1>
+<button id="increment">Increment this tab</button>
+<p>Count: <output id="count">0</output></p>
+<a id="navigate">Navigate this tab</a>
+<script>
+  const id = new URL(location.href).searchParams.get('id') || 'alpha';
+  document.title = 'Relay ' + id;
+  document.querySelector('#identity').textContent = 'Relay ' + id;
+  document.querySelector('#increment').onclick = () => {
+    const count = document.querySelector('#count');
+    count.value = String(Number(count.value) + 1);
+  };
+  document.querySelector('#navigate').href = '/relay-tabs.html?id=' + encodeURIComponent(id + '-next');
+</script>
+</html>

@@ -529,6 +529,9 @@ fn target_was_closed(result: &Result<CloseTargetResult, String>) -> bool {
 /// fresh tab instead of erroring on every command until the user runs `tab new`.
 pub(crate) fn is_stale_target_error(error: &str) -> bool {
     let lower = error.to_lowercase();
+    if is_debugger_access_denied(error) {
+        return false;
+    }
     if lower.contains("action_outcome_unknown:") {
         return false;
     }
@@ -537,6 +540,14 @@ pub(crate) fn is_stale_target_error(error: &str) -> bool {
         || lower.contains("unknown sessionid")
         || lower.contains("no attached tab")
         || lower.contains("can no longer be resolved")
+}
+
+/// A Chrome access decision is not a lost tab and cannot be fixed by reattachment.
+fn is_debugger_access_denied(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("debugger_access_denied:")
+        || (lower.contains("cannot access a chrome-extension://")
+            && lower.contains("different extension"))
 }
 
 /// A CDP call that ran to its full time budget without the command promise ever
@@ -569,6 +580,12 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     // timed out; generic transport recovery guidance could duplicate the action.
     if lower.contains("action_outcome_unknown:") {
         return error.to_string();
+    }
+    if is_debugger_access_denied(error) {
+        if lower.contains("debugger_access_denied:") {
+            return error.to_string();
+        }
+        return format!("debugger_access_denied: Chrome blocked debugger access to protected extension content in this tab, which can be a child frame. Reattaching does not resolve this restriction. Use `tab inspect` for browser metadata or a separate test profile. Original error: {error}");
     }
     // Top-level `await` in `eval` fails with a bare "await is not defined" /
     // "await is only valid in async" — unhelpful. Point at the wrapper (issue #65).
@@ -1929,12 +1946,13 @@ impl BrowserManager {
                 // already ready, treat navigation as done (with a warning, carried
                 // in the response so the CLI can surface it) instead of failing.
                 // Only a still-loading document is a real failure.
-                let ready = self
-                    .evaluate_simple("document.readyState")
-                    .await
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_string))
-                    .unwrap_or_default();
+                let ready = match self.evaluate_simple("document.readyState").await {
+                    Err(cause) if is_debugger_access_denied(&cause) => return Err(cause),
+                    result => result
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_default(),
+                };
                 if ready == "interactive" || ready == "complete" {
                     nav_warning = Some(format!(
                         "`{}` didn't complete within the timeout, but the DOM is ready ({}) — \
@@ -4286,6 +4304,17 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use tokio::time::sleep;
+
+    #[test]
+    fn debugger_restriction_is_not_a_stale_target_retry() {
+        let raw = "Cannot access a chrome-extension:// URL of different extension";
+        let friendly = to_ai_friendly_error(raw);
+        assert!(friendly.starts_with("debugger_access_denied:"));
+        assert!(!is_stale_target_error(&friendly));
+        assert_eq!(to_ai_friendly_error(&friendly), friendly);
+        let unknown = format!("action_outcome_unknown: original {raw}");
+        assert_eq!(to_ai_friendly_error(&unknown), unknown);
+    }
 
     #[test]
     fn relay_primary_navigation_reads_final_metadata_but_recovery_does_not() {

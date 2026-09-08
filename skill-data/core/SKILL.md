@@ -168,6 +168,17 @@ clearance.
 
 Full detail: `chrome-use skills get real-chrome`
 
+
+Chrome can refuse debugger access to an ordinary web tab containing another
+extension's protected iframe. `debugger_access_denied` is non-retryable; use
+`tab inspect <ref>` for browser metadata or a separate test profile. Reattaching
+does not remove this restriction.
+
+For isolated development, set `CHROME_USE_RELAY_DIR` to the same absolute
+directory in the native-host launcher and the CLI. This scopes relay discovery
+without changing HOME; combine it with unique session names and an explicit
+`--browser` ID. Omit it for ordinary shared-profile discovery.
+
 ## Two ways to drive a page — and when to drop to `eval`
 
 You have a **real Chrome with the user's DOM**. Two layers, mix them freely:

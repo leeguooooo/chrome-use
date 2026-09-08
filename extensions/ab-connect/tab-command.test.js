@@ -34,7 +34,7 @@ test('a restricted child frame does not detach or rebind its healthy parent tab'
   const f = fixture(error)
   await assert.rejects(
     sendTabCommand(7, 'Accessibility.getFullAXTree', {}, 'child-frame', f.deps),
-    e => e === error,
+    /debugger_access_denied:/,
   )
   assert.equal(f.sent.length, 1)
   assert.deepEqual(f.sent[0].target, { tabId: 7, sessionId: 'child-frame' })
@@ -140,4 +140,13 @@ test('a lost reply after pre-dispatch recovery still forbids another action retr
   }), /action_outcome_unknown:/)
   assert.equal(attempts, 2)
   assert.equal(submissions, 1)
+})
+
+
+test('protected content in a top-level tab does not trigger futile reattachment', async () => {
+  const f = fixture(new Error('Cannot access a chrome-extension:// URL of different extension'))
+  await assert.rejects(sendTabCommand(7, 'Page.getFrameTree', {}, undefined, f.deps), /debugger_access_denied:/)
+  assert.equal(f.sent.length, 1)
+  assert.deepEqual(f.detached, [])
+  assert.deepEqual(f.recovered, [])
 })
