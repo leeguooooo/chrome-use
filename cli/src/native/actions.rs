@@ -8034,41 +8034,37 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
 }
 
 /// Reject a tab switch that reported the requested tab but left the session
-/// driving a different document.
+/// driving a page it could never have reached by navigating.
 ///
-/// Returns `None` when the switch landed where it should. Compares origins
-/// only: a page may redirect or rewrite its path between the switch and the
-/// probe, and failing that would be a false alarm — but landing on another
-/// origin (typically a `chrome-extension://` page the session was stuck on)
-/// is never the tab that was asked for.
+/// Returns `None` when the switch landed somewhere the requested tab plausibly
+/// could. Two things are deliberately *not* treated as proof of a failed
+/// switch, because between the switch and the probe a page is free to move:
+///
+/// * a different path on the same host — the ordinary case of a page settling;
+/// * a different **web** origin — an SSO bounce is exactly this shape.
+///
+/// Only an internal Chrome destination (`chrome-extension://`, `chrome://`,
+/// `devtools://`) is evidence: no navigation from a normal site arrives there,
+/// so it is the signature of a session pinned to a page it cannot leave.
+///
+/// The distinction matters because a false failure costs as much as a false
+/// success. Reporting a switch that worked as failed sends the caller to redo
+/// it, and redoing an action that already succeeded is how another tool in a
+/// side-by-side test lost the state it had built.
 pub(crate) fn tab_switch_identity_error(
     requested: &str,
     expected_url: &str,
     actual_url: &str,
 ) -> Option<String> {
-    // Compare scheme + host rather than `Origin::ascii_serialization`: that
-    // serializes every non-special scheme — `chrome-extension://` included — to
-    // the opaque "null", which would hide the exact case this check exists for.
-    let parts = |u: &str| {
-        url::Url::parse(u).ok().and_then(|p| {
-            let host = p.host_str().map(str::to_string)?;
-            Some((p.scheme().to_string(), host))
-        })
-    };
-    let (Some(want), Some(got)) = (parts(expected_url), parts(actual_url)) else {
-        // An unparseable or host-less url (`about:blank`, `data:`) on either
-        // side is not evidence of a bad switch.
-        return None;
-    };
-    if want == got {
+    if !super::browser::is_internal_chrome_target(actual_url) {
         return None;
     }
     Some(format!(
         "tab {requested} was resolved to {expected_url}, but the session is still driving \
-         {actual_url} — the switch did not take effect. This is usually a relay session \
-         pinned to a page it can no longer leave. Re-open the target with `open <url>` \
-         (or `navigate <url>`) to rebind the session; `tab select` / `tab adopt` cannot \
-         recover it from here."
+         {actual_url} — an internal Chrome page it cannot have navigated to, so the switch did \
+         not take effect. This is a relay session pinned to a page it can no longer leave. \
+         Re-open the target with `open <url>` (or `navigate <url>`) to rebind; `tab select` / \
+         `tab adopt` cannot recover it from here."
     ))
 }
 
@@ -15836,7 +15832,7 @@ mod tests {
     /// the wrong one. A switch that never took effect printed ✓ with the
     /// requested tab's title and url, and the next command failed identically.
     #[test]
-    fn tab_switch_reports_a_switch_that_landed_elsewhere() {
+    fn tab_switch_reports_a_switch_that_landed_on_an_internal_page() {
         let msg = tab_switch_identity_error(
             "t1",
             "https://www.saucedemo.com/",
@@ -15849,6 +15845,43 @@ mod tests {
         let msg = msg.unwrap();
         assert!(msg.contains("did not take effect"));
         assert!(msg.contains("chrome-extension://abcdef/page.html"));
+    }
+
+    /// A different **web** origin is not proof of a failed switch: an SSO bounce
+    /// puts the tab on another origin between the switch and the probe, and
+    /// calling that a failure sends the caller to redo a switch that worked.
+    ///
+    /// The cost is not hypothetical. In a side-by-side test, another tool hit a
+    /// false failure, retried a step that had already succeeded, and the reload
+    /// discarded the state it had built. A false failure is as expensive as a
+    /// false success, so the outcome here stays "unconfirmed" rather than
+    /// becoming a verdict the caller acts on.
+    #[test]
+    fn a_cross_origin_redirect_is_not_reported_as_a_failed_switch() {
+        assert!(tab_switch_identity_error(
+            "t1",
+            "https://app.example.com/",
+            "https://login.microsoftonline.com/oauth2/authorize",
+        )
+        .is_none());
+    }
+
+    /// Every internal Chrome scheme counts, and matching ignores case and
+    /// surrounding space because the url comes back from the page.
+    #[test]
+    fn every_internal_chrome_scheme_is_evidence_of_a_stuck_session() {
+        for landed in [
+            "chrome-extension://abcdef/page.html",
+            "chrome://settings",
+            "devtools://devtools/bundled/x.html",
+            "CHROME-EXTENSION://ABC/p.html",
+            " chrome://flags",
+        ] {
+            assert!(
+                tab_switch_identity_error("t1", "https://a.example/", landed).is_some(),
+                "{landed} is somewhere a driven tab cannot navigate to"
+            );
+        }
     }
 
     /// A page that redirects or rewrites its path between the switch and the
