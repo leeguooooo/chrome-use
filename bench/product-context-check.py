@@ -11,6 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--state-file', required=True)
 parser.add_argument('--port', type=int, required=True)
 parser.add_argument('--output', required=True)
+parser.add_argument('--layout', choices=['article', 'generic', 'nested', 'long'], default='article')
 args = parser.parse_args()
 s = json.loads(Path(args.state_file).read_text())
 env = dict(os.environ, CHROME_USE_RELAY_DIR=s['registry'],
@@ -31,7 +32,7 @@ def run(command):
 
 verdict, error = 'FAIL', None
 try:
-    observed = run(['open', f'http://127.0.0.1:{args.port}/product-context.html', '--observe'])
+    observed = run(['open', f'http://127.0.0.1:{args.port}/product-context.html?layout={args.layout}', '--observe'])
     choices = []
     for line in observed.splitlines():
         if not line.startswith('- button ') or 'disabled' in line:
@@ -41,7 +42,11 @@ try:
         assert ref and context, 'Actionable button lacks context: ' + line
         text = json.loads(context[1])
         price = re.search(r'Price: \$(\d+\.\d{2})', text)
-        assert price and 'In stock' in text and '[truncated]' not in text
+        assert price and 'In stock' in text
+        if args.layout == 'long':
+            assert '[truncated]' in text
+        else:
+            assert '[truncated]' not in text
         choices.append((float(price[1]), ref[1]))
     assert len(choices) == 2
     _, chosen = min(choices)

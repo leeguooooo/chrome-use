@@ -19,6 +19,31 @@
 </article>
 <output role="status" id="receipt">Cart empty</output>
 <script>
+const layout = new URLSearchParams(location.search).get('layout');
+if (layout === 'generic') {
+  for (const article of document.querySelectorAll('article')) {
+    const card = document.createElement('div');
+    card.dataset.product = article.dataset.product;
+    card.append(...article.childNodes);
+    article.replaceWith(card);
+  }
+}
+if (layout === 'nested') {
+  for (const button of document.querySelectorAll('button')) {
+    const outer = document.createElement('div');
+    const inner = document.createElement('div');
+    button.replaceWith(outer);
+    outer.append(inner);
+    inner.append(button);
+  }
+}
+if (layout === 'long') {
+  for (const article of document.querySelectorAll('article')) {
+    const description = document.createElement('p');
+    description.textContent = 'Long product description. '.repeat(100);
+    article.querySelector('h2').after(description);
+  }
+}
 const added = [];
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-add]');

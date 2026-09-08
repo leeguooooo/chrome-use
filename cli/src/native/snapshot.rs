@@ -2053,7 +2053,7 @@ fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
         parent = node.parent_idx;
         if !matches!(
             node.role.as_str(),
-            "article" | "listitem" | "row" | "group" | "generic"
+            "article" | "listitem" | "row" | "group" | "generic" | ""
         ) {
             continue;
         }
@@ -2093,6 +2093,9 @@ fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
         if (!semantic && headings == 0) || text.is_empty() {
             continue;
         }
+        // Short fields (for example price and availability) must not disappear
+        // behind a long description. Stable ordering preserves peers' order.
+        text.sort_by_key(|value| value.len() > 96);
         let mut context = text.join(" | ");
         if context.len() > 256 {
             let mut end = 256;
@@ -3009,6 +3012,16 @@ mod tests {
             control_context(&nodes, 3).as_deref(),
             Some("Folder | $9.00")
         );
+        // Ignored AX containers retain structural children but have no role.
+        nodes[0].role.clear();
+        assert_eq!(
+            control_context(&nodes, 3).as_deref(),
+            Some("Folder | $9.00")
+        );
+        nodes[2].name = "Description ".repeat(100);
+        nodes.push(make_node("StaticText", "Price: $9.00", None));
+        nodes[0].children.push(5);
+        assert!(control_context(&nodes, 3).unwrap().contains("Price: $9.00"));
         nodes[0].children.push(4);
         assert_eq!(control_context(&nodes, 3), None);
     }
