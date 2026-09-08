@@ -81,3 +81,9 @@ chrome-use 候选检查脚本有 3 条任务命令，第三条是独立读回验
 完整远端 E2E 在 97cfea82 与组合提交 bdd91311 均出现 e2e_snapshot_cursor_interactive 失败：卡片推断只统计标准角色，漏数 cursor/onclick 控件，普通按钮的 context 因此混入其他控件文字。候选将 cursor_info 控件一并计数，并增加混合控件歧义检查。定向真实 E2E 通过。
 
 本地完整 E2E 正在运行，拖拽用例出现失败，尚待最终错误与单独复现；不能声称完整本地测试通过。
+
+## 当前连接的拖拽判定
+
+本地完整 E2E 为 109 通过、1 失败，失败项是拖拽；单独运行再次失败。handler 用全局 relay 可发现性判断连接，导致独立启动浏览器也返回 DOM 拖拽结构，而测试期待坐标拖拽的 dragged:true。
+
+候选改用当前 BrowserManager.on_relay()，保留 iframe 与强制坐标分支。相同环境下定向拖拽 E2E 通过，鼠标移动携带 buttons=1 且源元素触发 dragstart。完整本地 E2E 已重新运行，结果待确认。

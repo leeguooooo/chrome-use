@@ -2191,6 +2191,7 @@ chrome-use drag - Drag and drop
 Usage: chrome-use drag <source> <target>
 
 Drags an element from source to target location.
+Routing follows this session, not another profile's extension connection.
 
 Global Options:
   --json               Output as JSON

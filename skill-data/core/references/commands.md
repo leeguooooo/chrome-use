@@ -120,6 +120,8 @@ chrome-use drag @e1 @e2        # Drag and drop
 chrome-use upload @e1 file.pdf # Upload files; consumed/cleared dropzones warn but succeed
 ```
 
+Drag mode follows the current session connection and target frame; an extension running in another Chrome profile does not change a launched browser’s drag mode.
+
 `type` reads the field back and prints a ⚠ warning (exit 0, JSON `readBack`)
 when the page rewrote or filtered what was typed. `fill` verification errors
 quote both values (`read back "" after writing "狛江市"`) and say when every

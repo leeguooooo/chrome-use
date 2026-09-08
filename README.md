@@ -799,6 +799,8 @@ When using `--launch` mode (standalone browser), a full suite of stealth patches
 
 Fingerprint stealth isn't the whole story — the strongest anti-bot vendors (Akamai, PerimeterX, DataDome) also score *behaviour*. A click that teleports the cursor to an element's exact centre with no approach path and zero press delay is a tell, **even though our CDP events are `isTrusted`**.
 
+Drag mode follows the current session connection and target frame; an extension running in another Chrome profile does not change a launched browser’s drag mode.
+
 With humanize on, the cursor moves like a hand: clicks follow a curved, decelerating Bézier path and land on a jittered point *inside* the element (never the dead centre); typing uses variable inter-keystroke timing; scrolling eases in segments; drags follow a curve. It's **adaptive** — every navigation is probed for known anti-bot vendors (cookies / scripts / globals) and a guarded page auto-escalates to full human motion, while ordinary sites stay instant (zero overhead).
 
 What the page's own `mousemove` stream sees (this *is* what a behavioural detector analyses):
