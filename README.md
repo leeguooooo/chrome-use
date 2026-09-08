@@ -880,6 +880,34 @@ Apache-2.0
 > Built by **leeguooooo** — field notes on AI agents, reverse engineering & Cloudflare Workers at **[blog.leeguoo.com](https://blog.leeguoo.com)** · follow on **[X @leeguooooo](https://x.com/leeguooooo)**
 
 <!-- use-family -->
+## Multi-profile Chrome: ChooseBrowser rules
+
+If you keep several Chrome profiles — work, personal, a client's — you already
+know which account each site belongs to, and you tell us with `--browser` every
+time.
+
+[ChooseBrowser](https://choosebrowser.leeguoo.com) is a macOS link router that
+stores that mapping. When it is installed, `chrome-use open <url>` without an
+explicit `--browser` follows the rule you already wrote for that site, and says
+so:
+
+```
+$ chrome-use open https://github.com/my-org/repo
+· using Chrome profile Profile 14 — a ChooseBrowser rule routes this site there
+  (github.com|/my-org*). Override with --browser <id|email>, or skip with
+  --no-choosebrowser.
+```
+
+Read-only, and invisible if you do not use it: no rules file means no behaviour
+change and no message. A rule naming a profile that is not running the extension
+falls back to the normal profile choice rather than opening the link as the
+wrong account.
+
+> **Disclosure:** ChooseBrowser is a paid macOS app (US$4.99, 7-day trial) by the
+> same author as chrome-use. This is a companion-tool note, not an independent
+> review. chrome-use needs none of it — the integration reads a file if it
+> happens to be there.
+
 ## The `*-use` family
 
 Small, composable CLIs that give an AI agent hands on one real thing. Same shape
