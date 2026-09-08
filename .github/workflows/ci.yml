@@ -59,6 +59,9 @@ jobs:
       - name: Check version sync
         run: node scripts/check-version-sync.js
 
+      - name: Test release notes extraction
+        run: node --test scripts/release-notes.test.js
+
       - name: Run extension tests
         if: steps.changes.outputs.run_heavy == 'true'
         run: node --test extensions/ab-connect/*.test.js
