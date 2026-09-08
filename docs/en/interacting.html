@@ -469,6 +469,16 @@
 <span class="du-prompt">$</span> chrome-use type @e <span class="du-str">"201-0001"</span> <span class="du-flag">--key-events</span></code></pre>
       </div>
 
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Never target the &lt;iframe&gt; element itself</div>
+        <code>focus</code> and <code>press</code> on an <code>Iframe</code> ref land on the
+        <strong>container</strong> in the parent document, so the keystroke goes to the parent page instead of the
+        field inside. Those commands now return a warning naming the frame boundary rather than a plain
+        <code>✓</code> on the wrong target. Go through the frame: <code>chrome-use frames</code> to list them, then
+        <code>chrome-use frame &lt;id&gt;</code> and act on a ref <em>inside</em> the frame, or
+        <code>chrome-use eval --frame &lt;id&gt; "…"</code>.
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Why by ref, not coordinates</div>
         Over the extension relay, these actions are dispatched via DOM in the element's <strong>own frame</strong>,

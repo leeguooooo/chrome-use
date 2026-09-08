@@ -219,7 +219,15 @@
         or <code>tab adopt</code>, then use <code>tab inspect</code> for browser-level state. A
         <code>relay timeout</code> means the renderer/debugger did not answer in time; it does not mean the tab
         disappeared. Likewise, a failed <code>tab select</code> liveness probe does not by itself prove that the
-        renderer is unresponsive. On the extension relay, <code>tab inspect</code> requires ab-connect 0.5.16 or
+        renderer is unresponsive.
+        <code>tab select</code> and <code>tab adopt</code> report one of three outcomes:
+        <code>verified: confirmed</code> (the probe answered from the new tab — drive it), an outright failure
+        naming a stale or closed target, or <code>verified: unconfirmed</code> — the switch was
+        <strong>requested</strong> but never confirmed, so the title and URL printed under it are what was asked
+        for, not a read of the live page. Repeating the switch does not fix an unconfirmed one; re-open the
+        target with <code>open &lt;url&gt;</code> instead. <code>tab inspect</code> reads browser-level metadata
+        over a different connection than driving uses, so a successful inspect is not evidence that the tab is
+        drivable. On the extension relay, <code>tab inspect</code> requires ab-connect 0.5.16 or
         newer. If the warning says the live extension is behind the bundled version, open
         <code>chrome://extensions</code>, update or reload ab-connect, then retry.
         From ab-connect 0.5.18, explicit navigation recovers a renderer-scoped <code>Page.navigate</code> timeout

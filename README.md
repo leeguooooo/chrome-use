@@ -203,6 +203,8 @@ npx skills add leeguooooo/chrome-use -g
 
 Either way the agent gets the right usage patterns and pre-approved bash permissions for `chrome-use` and `abs`; the skill self-heals a missing binary by re-running the `install.sh` one-liner above. Specialized guides (`electron`, `slack`, `agentcore`, …) are served by the binary itself via `chrome-use skills get <name>`, so instructions always match the installed version.
 
+Upgrading the binary does **not** move a SKILL.md already copied into a runner — that copy lives outside the binary. Refresh it with `chrome-use skills update` (`refresh` and `install` are the same command; add `--project` to install into `./` instead of globally).
+
 ### Use from an MCP client (Claude Desktop, etc.)
 
 Agents that run a shell should use the skill above (it's lighter). For hosts that

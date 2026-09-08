@@ -18,8 +18,62 @@ use super::stream::StreamServer;
 
 /// Idle recycling owns a launched browser process, but an external Chrome tab
 /// is durable user-visible state and must survive the daemon connection.
-fn should_close_browser_on_idle(is_external_connection: bool) -> bool {
-    !is_external_connection
+///
+/// A **handed-off** session is the same kind of durable state (issue #216).
+/// `session handoff` exists for exactly the flow that got burned there — the
+/// agent fills a form, a human types the secrets by hand — and reaping the
+/// window they are typing into is the one thing that must never happen while
+/// they are. Idle means "the agent stopped asking", which during a handoff is
+/// the normal state, not an abandoned one.
+fn should_close_browser_on_idle(is_external_connection: bool, handed_off: bool) -> bool {
+    !is_external_connection && !handed_off
+}
+
+/// Marker a reaping daemon leaves for its successor.
+///
+/// The daemon exits after reaping, so the next command runs in a process with
+/// no memory of the browser that was closed — and silently launches a fresh
+/// one. Without this file that replacement is invisible: the reply describes
+/// `about:blank` as though the page had simply navigated (#216).
+fn reaped_marker_path(session: &str) -> std::path::PathBuf {
+    crate::connection::get_socket_dir().join(format!("{session}.reaped"))
+}
+
+/// Record that this session's launched browser was closed by the idle timeout.
+///
+/// Best-effort: this runs from a daemon on its way out, with nobody left to
+/// report to. But losing the marker means the next command relaunches in
+/// silence -- the exact failure of issue #216 -- so make the write as likely
+/// to land as possible: the socket dir may not exist yet on a machine where no
+/// daemon has ever written a socket.
+pub fn mark_browser_reaped(session: &str, idle_ms: u64) {
+    let path = reaped_marker_path(session);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(e) = fs::write(
+        &path,
+        format!("the idle timeout closed it after {idle_ms}ms with no commands"),
+    ) {
+        if env::var("AGENT_BROWSER_DEBUG").is_ok() {
+            eprintln!(
+                "[daemon] failed to record the reaped-browser marker at {}: {e}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Read and clear the marker, if the previous daemon left one.
+pub fn take_reaped_marker(session: &str) -> Option<String> {
+    let path = reaped_marker_path(session);
+    let reason = fs::read_to_string(&path).ok()?;
+    let _ = fs::remove_file(&path);
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return None;
+    }
+    Some(reason.to_string())
 }
 
 pub async fn run_daemon(session: &str) {
@@ -255,14 +309,18 @@ async fn run_socket_server(
                 }
             }, if idle_timeout_ms.is_some() => {
                 let mut s = state.lock().await;
+                let session_id = s.session_id.clone();
+                let handed_off =
+                    crate::ownership::owner_of(&session_id) == crate::ownership::Owner::User;
                 if let Some(ref mut mgr) = s.browser {
                     // A default idle timeout should reap a browser process that
                     // we launched, but it must not delete the working tabs in the
                     // user's real Chrome. Dropping the external CDP connection is
                     // sufficient; persisted ownership lets the next daemon adopt
                     // the same tab with its in-page state intact (#210).
-                    if should_close_browser_on_idle(mgr.is_cdp_connection()) {
+                    if should_close_browser_on_idle(mgr.is_cdp_connection(), handed_off) {
                         let _ = mgr.close().await;
+                        mark_browser_reaped(&session_id, idle_timeout_ms.unwrap_or_default());
                     }
                 }
                 break;
@@ -362,11 +420,15 @@ async fn run_socket_server(
                 }
             }, if idle_timeout_ms.is_some() => {
                 let mut s = state.lock().await;
+                let session_id = s.session_id.clone();
+                let handed_off =
+                    crate::ownership::owner_of(&session_id) == crate::ownership::Owner::User;
                 if let Some(ref mut mgr) = s.browser {
                     // Match the Unix daemon: an idle recycle disconnects from an
                     // external Chrome without deleting session tabs (#210).
-                    if should_close_browser_on_idle(mgr.is_cdp_connection()) {
+                    if should_close_browser_on_idle(mgr.is_cdp_connection(), handed_off) {
                         let _ = mgr.close().await;
+                        mark_browser_reaped(&session_id, idle_timeout_ms.unwrap_or_default());
                     }
                 }
                 let _ = fs::remove_file(&port_path);
@@ -550,14 +612,53 @@ fn get_port_for_session(session: &str) -> u16 {
 }
 
 #[cfg(test)]
+mod idle_tests {
+    use super::*;
+
+    /// Idle means "the agent stopped asking". During a handoff that is the
+    /// normal state — a human is typing into the window — so reaping it there
+    /// is the one thing the timer must never do (issue #216).
+    #[test]
+    fn a_handed_off_session_is_never_reaped() {
+        // A launched browser is ours to recycle...
+        assert!(should_close_browser_on_idle(false, false));
+        // ...unless a human was handed the window.
+        assert!(!should_close_browser_on_idle(false, true));
+        // An external Chrome is never ours to close either way.
+        assert!(!should_close_browser_on_idle(true, false));
+        assert!(!should_close_browser_on_idle(true, true));
+    }
+
+    /// The reaping daemon exits, so the next command runs with no memory of the
+    /// browser that was closed. The marker is what lets its reply say the page
+    /// is gone instead of describing a fresh `about:blank` as the page.
+    #[test]
+    fn the_reaped_marker_survives_the_daemon_and_is_read_once() {
+        let session = format!("cu-test-reaped-{}", std::process::id());
+        let _ = fs::remove_file(reaped_marker_path(&session));
+
+        assert!(take_reaped_marker(&session).is_none());
+
+        mark_browser_reaped(&session, 600_000);
+        let reason = take_reaped_marker(&session).expect("a marker was written");
+        assert!(reason.contains("idle timeout"), "{reason}");
+        assert!(reason.contains("600000ms"), "{reason}");
+
+        // Read once: the next command must not repeat a warning about a browser
+        // it is already using.
+        assert!(take_reaped_marker(&session).is_none());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
     use super::*;
 
     #[test]
     fn idle_recycle_preserves_external_tabs_but_closes_launched_browser() {
-        assert!(!should_close_browser_on_idle(true));
-        assert!(should_close_browser_on_idle(false));
+        assert!(!should_close_browser_on_idle(true, false));
+        assert!(should_close_browser_on_idle(false, false));
     }
 
     #[cfg(windows)]

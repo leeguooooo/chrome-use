@@ -447,6 +447,16 @@
 <span class="du-prompt">$</span> chrome-use type @e <span class="du-str">"201-0001"</span> <span class="du-flag">--key-events</span></code></pre>
       </div>
 
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 不要把 &lt;iframe&gt; 元素本身当作目标</div>
+        对 <code>Iframe</code> ref 执行 <code>focus</code> / <code>press</code>，命中的是父文档里的
+        <strong>容器元素</strong>，按键会落到父页面而不是帧内的输入框。
+        现在这两个命令会返回一条指明帧边界的警告，而不是在错误目标上打一个干净的 <code>✓</code>。
+        请从帧内部操作：先用 <code>chrome-use frames</code> 列出所有帧，再
+        <code>chrome-use frame &lt;id&gt;</code> 并操作帧<em>内部</em>的 ref，或者用
+        <code>chrome-use eval --frame &lt;id&gt; "…"</code>。
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 为什么按 ref 而不是坐标</div>
         在扩展中继模式下，这些操作是通过 DOM 在元素<strong>自己的帧</strong>里派发的，

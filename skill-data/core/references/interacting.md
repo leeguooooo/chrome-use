@@ -109,6 +109,22 @@ foreground, so prefer refs. For below-the-fold content in such a frame, scroll i
 with `scroll down N --at x,y` (a pixel over the frame) or `--frame n`. For a
 postal/autocomplete box inside the frame, `type @e "…" --key-events`.
 
+**Never target the `<iframe>` element itself.** `focus` and `press` on an
+Iframe ref land on the *container* in the parent document — the keystroke goes
+to the parent page, not to the field inside. That used to read as a plain `✓`
+on the wrong target; it now returns a warning naming the boundary. When you see
+it, go through the frame instead: `frames` lists them, then `frame <id>` and
+act on a ref *inside* the frame, or `eval --frame <id> "…"`. Clicking an Iframe
+ref is the same trap in reverse — click the control inside, not the box around
+it.
+
+When a click makes a cross-origin frame appear (a payment sheet, an OAuth
+picker, a captcha overlay), the observation after that click reports it as
+`newFrames` with a note — the frame's *content* is not in the tree you just
+got. Follow the note into the frame instead of concluding the click did
+nothing. The ids it reports are accepted by `frame <id>` and `eval --frame
+<id>` directly.
+
 > **Caveat: `find` can't reach a CLOSED shadow root or a cross-origin iframe.**
 > `find`/selectors match the page DOM (`querySelectorAll`), so they error
 > "Element not found" for elements inside either — even though `snapshot -i` lists

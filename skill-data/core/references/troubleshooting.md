@@ -56,10 +56,25 @@ such as `eval` still fail while the page main thread is blocked. On reconnect,
 the extension also validates every attached Chrome tab before re-announcing it,
 so dead bootstrap `about:blank` records are dropped instead of becoming active.
 
-If `tab select` reports that the liveness probe did not complete, read the full
-warning before judging the renderer. An outdated or unknown ab-connect version
-can make the probe channel unavailable. `tab inspect` requires ab-connect
-0.5.16 or newer; update or reload it from `chrome://extensions` and retry.
+`tab select` and `tab adopt` report one of three outcomes, and the third is
+not a success:
+
+- `✓ … verified: confirmed` — the liveness probe answered from the new tab.
+  The switch happened; drive it.
+- a warning naming a stale/closed target — the switch failed outright.
+- `⚠ … verified: unconfirmed` — the switch was **requested** but never
+  confirmed. The tab printed under it is what was *asked for*, not what
+  answered. Do not treat the title/URL as a read of the live page.
+
+An unconfirmed switch is not fixed by repeating it: the probe already had its
+turn. Re-open the target instead (`open <url>` / `navigate <url>`). If you do
+retry and the next command fails the same way, the error says so and tells you
+to stop looping. `tab inspect <ref>` reads browser-level target metadata over
+the *browser* connection — it can succeed while driving that tab still fails,
+so a successful inspect is not evidence the tab is drivable. An outdated or
+unknown ab-connect version can also make the probe channel unavailable;
+`tab inspect` requires ab-connect 0.5.16 or newer, so update or reload it from
+`chrome://extensions` and retry.
 
 **Reads landing on the wrong page**
 `eval`, `screenshot`, and `network requests` print the page they ran

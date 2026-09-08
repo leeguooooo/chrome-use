@@ -9201,3 +9201,85 @@ document.getElementById('go').addEventListener('click', () => {
     server.abort();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// Frame boundaries: focus and keys do not cross into a frame (#218)
+// ---------------------------------------------------------------------------
+
+/// Focusing an `<iframe>` focuses the container, not the field inside it, and
+/// the next key goes to the container too. Every check the commands had said
+/// success — an element was focused, a key was dispatched — which is what made
+/// this a silent wrong target rather than a visible failure.
+#[tokio::test]
+#[ignore]
+async fn e2e_focus_and_press_on_a_frame_say_they_stopped_at_the_boundary() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>frame boundary</title>
+<iframe id="inner" name="inner" srcdoc="<input id='deep' name='deep'>"></iframe>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "focus", "selector": "#inner" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(
+        data["target"], "iframe#inner[name=\"inner\"]",
+        "focus must report where it landed: {data}"
+    );
+    let warning = data["warning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("frame element itself"),
+        "focusing a frame container must say so: {data}"
+    );
+    assert!(
+        warning.contains("frame <id>") && warning.contains("frames"),
+        "and must name the way in: {warning}"
+    );
+
+    // The key that follows goes to the container as well.
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "press", "key": "Enter" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["target"], "iframe#inner[name=\"inner\"]");
+    assert!(
+        data["warning"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("frame element itself"),
+        "a key that stopped at the frame boundary must not read as delivered: {data}"
+    );
+
+    // A normal field is unaffected: no frame warning where there is no frame.
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "evaluate",
+            "script": "(() => { const i = document.createElement('input'); i.id = 'top'; \
+                       document.body.appendChild(i); return true; })()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "focus", "selector": "#top" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["target"], "input#top");
+    assert!(data.get("warning").is_none(), "{data}");
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}

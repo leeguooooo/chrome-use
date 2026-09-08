@@ -208,6 +208,13 @@
         <code>tab adopt</code> 保留现场，再用 <code>tab inspect</code> 读取浏览器级状态。
         <code>relay timeout</code> 表示 renderer/debugger 没有及时回答，不代表标签已经消失。
         同样，<code>tab select</code> 的存活探针失败也不能单独证明 renderer 已无响应。
+        <code>tab select</code> 与 <code>tab adopt</code> 有三种结果：
+        <code>verified: confirmed</code>（探针从新标签页回答了，可以放心驱动）、明确失败（目标已失效或已关闭），
+        以及 <code>verified: unconfirmed</code>——切换只是<strong>发出了请求</strong>但没有得到确认，
+        此时打印出来的标题和 URL 是「请求的那个标签页」，不是对当前页面的读取。
+        未确认的切换重试也没用，请改为用 <code>open &lt;url&gt;</code> 重新打开目标。
+        <code>tab inspect</code> 走的是浏览器级连接，与驱动页面的通道不同，
+        因此 inspect 成功并不能证明该标签页可以被驱动。
         通过扩展连接时，<code>tab inspect</code> 需要 ab-connect 0.5.16 或更新版本；
         如果警告显示当前扩展落后于 CLI 内置版本，请打开 <code>chrome://extensions</code>
         更新或重新加载 ab-connect 后重试。
