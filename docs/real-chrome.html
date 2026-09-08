@@ -166,6 +166,45 @@
         错的 profile 上显示未登录 ≠ 登录丢失——先跑 <code>browsers</code>，再带上正确的 <code>--browser</code> 重跑。
       </div>
 
+      <h3>让规则替你选：ChooseBrowser</h3>
+      <p>
+        「哪个站点用哪个账号」这件事，你心里本来就有数，只是每次都要用
+        <code>--browser</code> 再说一遍。
+        <a href="https://choosebrowser.leeguoo.com">ChooseBrowser</a> 是一个 macOS 链接路由工具，
+        它把这份映射存了下来；装了它之后，<code>open</code> 在你<span class="mark">没显式指定
+        <code>--browser</code></span> 时会按你写的规则选 profile，并说明来源。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">规则生效时</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/my-org/repo
+<span class="du-cmt">· using Chrome profile Profile 14 — a ChooseBrowser rule routes this site there</span>
+<span class="du-cmt">  (github.com|/my-org*). Override with --browser &lt;id|email&gt;, or skip with --no-choosebrowser.</span></code></pre>
+      </div>
+
+      <p>
+        只读，没装的话完全无感——没有规则文件就不改变任何行为、也不打提示。
+        规则指向的 profile 如果没在跑扩展，会退回正常的 profile 选择，
+        <span class="mark">而不是退而求其次开进别的账号</span>：把链接开进错的账号，
+        那个身份能发帖、能下单、能替人发消息。
+      </p>
+      <p>
+        规则排在「猜最近聚焦的窗口」之前——规则是你写下的意图，比从你正看着哪个窗口做的推断可信。
+        只有 <code>open</code> / <code>goto</code> / <code>navigate</code> 这类会导航的命令才查它；
+        <code>snapshot</code>、<code>click</code> 作用在会话已经打开的东西上，不查。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 利益披露</div>
+        ChooseBrowser 是一款付费 macOS 应用（US$4.99，7 天试用），作者与 chrome-use 是同一人。
+        这是配套工具说明，不是独立第三方评价。chrome-use 不依赖它。
+      </div>
+
+      <hr class="du-divider" />
+
       <h2>--launch vs --profile auto</h2>
       <p>
         <code>--launch</code> 会开一个<strong>隔离的空白测试 profile</strong>——没有 cookie、没有登录、没有扩展

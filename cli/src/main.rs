@@ -1,5 +1,6 @@
 mod account;
 mod chat;
+mod choosebrowser;
 mod color;
 mod commands;
 mod connect;
@@ -175,6 +176,32 @@ fn session_command_route(sub: Option<&str>) -> SessionCommandRoute {
 /// extension renames the group, so the daemon is asked to do that; when it
 /// cannot (no daemon yet, or an older extension), the reply says which tabs the
 /// new name applies to rather than implying it applied to all of them.
+/// The url this invocation is about to open, for the ChooseBrowser lookup.
+///
+/// Only the commands that *navigate* carry one. A `snapshot` or a `click` acts
+/// on whatever the session already has open, so consulting a routing rule there
+/// would answer a question nobody asked — and could move the session to another
+/// profile mid-task.
+fn target_url_for_choosebrowser(argv: &[String]) -> Option<String> {
+    const NAVIGATES: &[&str] = &["open", "goto", "navigate"];
+    let verb = argv.first()?.as_str();
+    if !NAVIGATES.contains(&verb) {
+        return None;
+    }
+    let candidate = argv
+        .iter()
+        .skip(1)
+        .find(|a| !a.starts_with('-') && a.contains('.'))?;
+    // Accept what the user typed the way `open` does, so a bare host still
+    // routes: `open github.com` is the common shape.
+    let normalized = if candidate.contains("://") {
+        candidate.clone()
+    } else {
+        format!("https://{candidate}")
+    };
+    url::Url::parse(&normalized).ok().map(|u| u.to_string())
+}
+
 fn run_session_name(session: &str, json_mode: bool, zh: bool) {
     let requested: Vec<String> = std::env::args()
         .skip_while(|a| a != "name")
@@ -1836,8 +1863,56 @@ fn main() {
         // the agent lands on a logged-out profile. Default instead to the profile
         // the user is actively using (most recently focused window); if that's
         // ambiguous, keep the legacy default but warn loudly with how to pick.
+        //
+        // Before guessing from focus, though: the user may already have written
+        // down which account this site belongs to. ChooseBrowser stores exactly
+        // that mapping, and a rule they authored beats any inference we make
+        // from which window they happen to be looking at (issue #244).
+        let cb_pick = if flags.no_choosebrowser {
+            None
+        } else {
+            target_url_for_choosebrowser(&clean).and_then(|u| choosebrowser::profile_for_url(&u))
+        };
+        if let Some((profile, choice)) = cb_pick {
+            // A rule naming a profile the relay has no endpoint for means that
+            // profile is not running the extension. Fall through to the
+            // existing behaviour rather than failing: the rule is advice about
+            // which account the site belongs to, not a requirement that it be
+            // reachable right now.
+            // Select by email, not by directory name. The relay knows a profile
+            // by its own id or by the signed-in address; a directory name is
+            // not a dimension it has, so selecting with one matched nothing —
+            // silently, because a miss here is a legitimate "that profile isn't
+            // running the extension". The rules parsed correctly the whole time
+            // and the conclusion was simply never usable.
+            // A profile with no signed-in account gives the relay nothing to
+            // match on either, so there is nothing to try — fall through to the
+            // existing behaviour rather than inventing a selector.
+            let relay_url = profile
+                .email
+                .as_deref()
+                .and_then(|email| connect::relay_url_for_browser(email).ok());
+            if let Some(url) = relay_url {
+                flags.cdp = Some(url);
+                flags.auto_connect = false;
+                // Say where the choice came from. Without this the user sees
+                // a different account open than the window they were looking
+                // at, with nothing to explain it.
+                eprintln!(
+                        "{} using Chrome profile {} — a ChooseBrowser rule routes this site there{}. Override with --browser <id|email>, or skip with --no-choosebrowser.",
+                        color::dim("·"),
+                        profile.directory,
+                        choice
+                            .rule_id
+                            .as_deref()
+                            .map(|r| format!(" ({r})"))
+                            .unwrap_or_default(),
+                    );
+            }
+        }
+
         let profiles = connect::list_relay_profiles();
-        if profiles.len() >= 2 {
+        if flags.cdp.is_none() && profiles.len() >= 2 {
             match connect::most_recently_focused_profile() {
                 Some((id, email, ws)) => {
                     flags.cdp = Some(ws);
