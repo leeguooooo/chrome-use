@@ -902,8 +902,8 @@ $ chrome-use open https://github.com/my-org/repo
 
 Read-only, and invisible if you do not use it: no rules file means no behaviour
 change and no message. A rule naming a profile that is not running the extension
-falls back to the normal profile choice rather than opening the link as the
-wrong account.
+falls back to the normal profile choice. That fallback does not verify the site
+account; check its identity or pin `--browser` when a specific account is required.
 
 > **Disclosure:** ChooseBrowser is a paid macOS app (US$4.99, 7-day trial) by the
 > same author as chrome-use. This is a companion-tool note, not an independent
