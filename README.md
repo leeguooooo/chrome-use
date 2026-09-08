@@ -723,6 +723,14 @@ leaving gigabyte-scale APFS clones behind.
 
 <sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); the projects have since diverged substantially.</sub>
 
+## Contributing
+
+`AGENTS.md` carries the conventions for this codebase (where docs live, how to
+build and test, and two hard-won rules about silent successes and about
+measuring performance). [HANDOFF.md](HANDOFF.md) covers the current line of work
+on reducing what a browser task costs an agent: the benchmark data behind it,
+what shipped, and which open issue to pick up next.
+
 ## Contributors
 
 Thanks to everyone who has contributed to chrome-use!

@@ -1,6 +1,6 @@
 # bench — browser-agent round-trip benchmarks
 
-> **New here?** Read [HANDOFF.md](HANDOFF.md) first: why this work exists, what
+> **New here?** Read [../HANDOFF.md](../HANDOFF.md) first: why this work exists, what
 > shipped, and which open issue to pick up next.
 
 Measures the two costs an agent actually pays per browser task:

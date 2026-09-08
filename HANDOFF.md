@@ -1,7 +1,7 @@
 # Handoff: making chrome-use cheaper for agents to drive
 
 Written 2026-09-08, at the end of the first pass. If you are picking this up
-cold, read this first, then `bench/README.md`.
+cold, read this first, then `bench/README.md` for the measurement harness.
 
 ## Why this work exists
 

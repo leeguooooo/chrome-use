@@ -418,6 +418,13 @@ CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不�
 
 <sub>最初基于 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)（Apache-2.0）；两个项目已大幅分化。</sub>
 
+## 参与开发
+
+`AGENTS.md` 是这个仓库的约定（文档放在哪、怎么构建和测试，以及两条用教训换来的
+规矩：绝不发出假成功、怎么做性能测量）。[HANDOFF.md](HANDOFF.md) 是当前这条
+主线的交接文档 —— 降低一次浏览器任务对 agent 的开销：背后的基准数据、已经发了
+什么、接下来该拿哪个 issue 以及为什么是那个顺序。
+
 ## 贡献者
 
 感谢每一位为 chrome-use 做出贡献的人！
