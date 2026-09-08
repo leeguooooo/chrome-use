@@ -28,6 +28,9 @@ fn fixture() -> TempDir {
     tmp
 }
 
+/// Run `skills get` against the fixture and return stdout, stderr and the
+/// exit code -- all three, because a command can print the right thing and
+/// still tell its caller it failed.
 fn run(tmp: &TempDir, args: &[&str]) -> (String, String, i32) {
     let out = Command::new(BIN)
         .args(["skills", "get"])
@@ -43,6 +46,7 @@ fn run(tmp: &TempDir, args: &[&str]) -> (String, String, i32) {
     )
 }
 
+/// Stdout only, for the cases that assert on content rather than status.
 fn skills_get(tmp: &TempDir, args: &[&str]) -> String {
     run(tmp, args).0
 }
@@ -129,6 +133,9 @@ fn an_explicit_template_request_is_not_served_the_reference() {
 }
 
 /// Text mode separates several references instead of running them together.
+///
+/// Without a separator two files arrive as one run-on document, and a reader
+/// cannot tell where the first ends.
 #[test]
 fn two_references_in_text_mode_are_separated() {
     let tmp = fixture();

@@ -305,7 +305,8 @@ fn resolve_supplementary(skill_dir: &Path, stem: &str) -> Option<(String, String
 
 /// Split `core/waiting` into `("core", Some("waiting"))`, leaving a plain skill
 /// name alone. Only the first separator matters, so `core/references/waiting`
-/// keeps its subdirectory for [`resolve_supplementary`] to strip.
+/// hands `references/waiting` to [`resolve_supplementary`], which honours that
+/// directory rather than discarding it.
 fn split_reference_request(name: &str) -> (&str, Option<&str>) {
     match name.split_once('/') {
         Some((skill, rest)) if !skill.is_empty() && !rest.is_empty() => (skill, Some(rest)),
