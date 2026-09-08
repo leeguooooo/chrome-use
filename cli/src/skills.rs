@@ -509,11 +509,13 @@ fn run_get(
     // A request for references only leaves `targets` empty, which is success,
     // not the "no skill name" error below.
     //
-    // One reference keeps the flat shape it has always emitted -- a consumer
-    // reading `.content` off a single get must not break to fix a multi-get it
-    // never made. More than one nests under `references`, because the
-    // alternative is several top-level objects and no parser accepts that.
-    if !references.is_empty() {
+    // One reference on its own keeps the flat shape it has always emitted -- a
+    // consumer reading `.content` off a single get must not break to fix a
+    // multi-get it never made. Anything else nests, because the alternative is
+    // several top-level objects and no parser accepts that. A request mixing
+    // references and skills carries both in ONE document for the same reason:
+    // `--json` exists so a program can read the output.
+    if !references.is_empty() && targets.is_empty() {
         let doc = if references.len() == 1 {
             let mut obj = references.remove(0);
             if let Some(map) = obj.as_object_mut() {
@@ -524,9 +526,7 @@ fn run_get(
             json!({ "success": true, "references": references })
         };
         println!("{}", serde_json::to_string(&doc).unwrap_or_default());
-        if targets.is_empty() {
-            return;
-        }
+        return;
     }
 
     if targets.is_empty() {
@@ -574,13 +574,18 @@ fn run_get(
                 obj
             })
             .collect();
-        println!(
-            "{}",
-            serde_json::to_string(&json!({ "success": true, "data": items })).unwrap_or_default()
-        );
+        let mut doc = json!({ "success": true, "data": items });
+        if !references.is_empty() {
+            doc["references"] = json!(references);
+        }
+        println!("{}", serde_json::to_string(&doc).unwrap_or_default());
     } else {
         for (i, s) in targets.iter().enumerate() {
-            if i > 0 {
+            // References printed above are part of the same stream, so the
+            // first skill still needs a separator after them. Without one a
+            // reference runs straight into a SKILL.md whose own frontmatter
+            // opens with `---`, which reads as a separator but is not.
+            if i > 0 || printed_references > 0 {
                 println!("\n---\n");
             }
             let skill_md = s.dir.join("SKILL.md");

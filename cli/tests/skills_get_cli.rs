@@ -132,6 +132,59 @@ fn an_explicit_template_request_is_not_served_the_reference() {
     assert!(doc["content"].as_str().unwrap().contains("alpha reference"));
 }
 
+/// A request mixing a reference and a skill is still ONE JSON document.
+///
+/// The reference branch and the skill branch each printed their own top-level
+/// object, so asking for both produced two concatenated values -- the same
+/// unparseable output as the multi-reference case, by a different route.
+#[test]
+fn a_reference_and_a_skill_together_are_one_document() {
+    let tmp = fixture();
+    let (stdout, stderr, code) = run(&tmp, &["--json", "demo/alpha", "demo"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("not one document: {e}\n{stdout}"));
+    assert_eq!(doc["success"], serde_json::json!(true));
+
+    let refs = doc["references"]
+        .as_array()
+        .expect("the reference is carried");
+    assert_eq!(refs.len(), 1, "{doc}");
+    assert_eq!(
+        refs[0]["reference"],
+        serde_json::json!("references/alpha.md")
+    );
+
+    let data = doc["data"].as_array().expect("the skill is carried");
+    assert_eq!(data.len(), 1, "{doc}");
+    assert_eq!(data[0]["name"], serde_json::json!("demo"));
+}
+
+/// The same request in text mode separates the reference from the skill.
+///
+/// A SKILL.md opens with `---` frontmatter, so a reference printed directly
+/// above it runs into what looks like a separator but is the skill's own
+/// header -- the reader cannot tell where one ends.
+#[test]
+fn a_reference_and_a_skill_together_are_separated_in_text_mode() {
+    let tmp = fixture();
+    let (stdout, _, code) = run(&tmp, &["demo/alpha", "demo"]);
+    assert_eq!(code, 0);
+
+    let reference_end = stdout.find("alpha reference").expect("the reference") + 1;
+    let skill_start = stdout.find("name: demo").expect("the skill frontmatter");
+    let between = &stdout[reference_end..skill_start];
+    // The separator is a BLANK-LINE-delimited `---`. A bare `---\n` would also
+    // match the skill's own frontmatter opener, which is the very thing that
+    // makes unseparated output ambiguous -- an assertion accepting it passes
+    // on the bug.
+    assert!(
+        between.contains("\n\n---\n\n"),
+        "no separator between reference and skill: {stdout:?}"
+    );
+}
+
 /// Text mode separates several references instead of running them together.
 ///
 /// Without a separator two files arrive as one run-on document, and a reader
