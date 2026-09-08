@@ -47,6 +47,8 @@ single reference unless you genuinely need the whole set.
 
 ## The core loop
 
+Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or groups identified by a heading or one distinct linked product name and one action control. Named product links omit repeated context when their sibling action carries it. It preserves local text such as product prices without changing accessible names or refs. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
+
 Check `observed.status` as well as the action result. An unavailable observation
 does not mean the action failed; inspect current state instead of replaying it.
 

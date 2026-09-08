@@ -31,6 +31,7 @@
     <!-- ============================ PAGE CONTENT ============================ -->
     <main class="du-main">
 
+
       <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
           <path d="M30 6 l6 16 17 1 -13 11 5 16 -15 -9 -15 9 5 -16 -13 -11 17 -1z"/>
@@ -110,6 +111,7 @@
 
       <!-- ============================================================ -->
       <h2>快照（页面分析）</h2>
+      <p>交互快照会为邻近商品卡片、列表项、表格行或带标题的分组中的控件附加有限长度的 <code>context</code>，保留价格等局部文字，不改变控件名称与引用。只有一个商品链接名称和一个操作控件的局部分组也可提供上下文；上下文已附在操作控件上时，同名商品链接省略这段重复文字。交互快照和动作观察也保留 <code>status</code> 状态回执，限制文字长度并明确标记截断。上下文可能缺失或标记为截断；需要的信息不完整时，读取局部或完整快照。</p>
       <p>
         <code>snapshot</code> 拿到页面的结构化可访问性视图，是所有交互的起点。
         推荐 <code>snapshot -i</code>：只列可交互元素，输出精简、ref 齐全。
@@ -156,6 +158,7 @@
       <!-- ============================================================ -->
       <h2>交互操作</h2>
       <p>用 <code>snapshot</code> 拿到的 <code>@ref</code> 驱动真实浏览器：点击、输入、勾选、拖拽、上传。</p>
+      <p>拖拽方式取决于当前会话的连接及目标框架；其他 Chrome profile 中运行的扩展不会改变独立启动浏览器的拖拽方式。</p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>

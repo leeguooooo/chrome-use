@@ -537,6 +537,8 @@ profile.
 
 ## Reading a page for fewer bytes
 
+Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or groups identified by a heading or one distinct linked product name and one action control. Named product links omit repeated context when their sibling action carries it. It preserves local text such as product prices without changing accessible names or refs. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
+
 `snapshot -i` is the start of every interaction, and re-reading a page you just
 read is the largest avoidable cost in an agent's context. Two flags cut it:
 
@@ -796,6 +798,8 @@ When using `--launch` mode (standalone browser), a full suite of stealth patches
 ### Human-like input (behavioural stealth)
 
 Fingerprint stealth isn't the whole story — the strongest anti-bot vendors (Akamai, PerimeterX, DataDome) also score *behaviour*. A click that teleports the cursor to an element's exact centre with no approach path and zero press delay is a tell, **even though our CDP events are `isTrusted`**.
+
+Drag mode follows the current session connection and target frame; an extension running in another Chrome profile does not change a launched browser’s drag mode.
 
 With humanize on, the cursor moves like a hand: clicks follow a curved, decelerating Bézier path and land on a jittered point *inside* the element (never the dead centre); typing uses variable inter-keystroke timing; scrolling eases in segments; drags follow a curve. It's **adaptive** — every navigation is probed for known anti-bot vendors (cookies / scripts / globals) and a guarded page auto-escalates to full human motion, while ordinary sites stay instant (zero overhead).
 

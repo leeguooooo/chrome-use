@@ -892,8 +892,7 @@ async fn take_snapshot_at_depth(
 
         // Insert each child snapshot after its Iframe line in the output
         for (ref_id, child_text) in iframe_snapshots {
-            let marker = format!("[ref={}]", ref_id);
-            if let Some(pos) = output.find(&marker) {
+            if let Some(pos) = find_snapshot_ref(&output, &ref_id) {
                 // Find the end of the Iframe line
                 let line_end = output[pos..]
                     .find('\n')
@@ -2033,6 +2032,150 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
     (tree_nodes, root_indices)
 }
 
+/// Recover short, local text lost by interactive filtering without changing
+/// accessible names or ref identity. Never cross a nested item boundary or
+/// walk an unbounded subtree merely to annotate one control.
+fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
+    if !is_interactive_role(&nodes[idx].role) {
+        return None;
+    }
+    let mut parent = nodes[idx].parent_idx;
+    for _ in 0..4 {
+        let root = parent?;
+        let node = &nodes[root];
+        if matches!(
+            node.role.as_str(),
+            "RootWebArea" | "WebArea" | "dialog" | "document"
+        ) {
+            return None;
+        }
+        parent = node.parent_idx;
+        if !matches!(
+            node.role.as_str(),
+            "article" | "listitem" | "row" | "group" | "generic" | ""
+        ) {
+            continue;
+        }
+        let semantic = matches!(node.role.as_str(), "article" | "listitem" | "row");
+        let mut pending: Vec<usize> = node.children.iter().rev().copied().collect();
+        let mut visited = 0;
+        let mut headings = 0;
+        let mut link_names = Vec::new();
+        let mut controls = 0;
+        let mut text = Vec::new();
+        while let Some(child) = pending.pop() {
+            visited += 1;
+            if visited > 64 {
+                return None;
+            }
+            let n = &nodes[child];
+            if matches!(n.role.as_str(), "article" | "listitem" | "row") {
+                // An outer container must not mix sibling products or rows.
+                return None;
+            }
+            if n.role == "link" && !n.name.trim().is_empty() {
+                if !link_names.contains(&n.name) {
+                    link_names.push(n.name.clone());
+                }
+                if !text.contains(&n.name) {
+                    text.push(n.name.clone());
+                }
+                continue;
+            }
+            if is_interactive_role(&n.role) || n.cursor_info.is_some() {
+                controls += 1;
+                continue;
+            }
+            if n.role == "heading" {
+                headings += 1;
+                if headings > 1 {
+                    return None;
+                }
+            }
+            if matches!(n.role.as_str(), "heading" | "StaticText") && !n.name.trim().is_empty() {
+                let value = n.name.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !text.contains(&value) {
+                    text.push(value);
+                }
+            } else {
+                pending.extend(n.children.iter().rev().copied());
+            }
+        }
+        let linked_item = link_names.len() == 1 && controls == 1;
+        if (!semantic && headings == 0 && !linked_item) || text.is_empty() {
+            continue;
+        }
+        // A linked card's action already carries this context. Keep its named
+        // navigation links concise instead of repeating the same product block.
+        if linked_item && nodes[idx].role == "link" && nodes[idx].name == link_names[0] {
+            return None;
+        }
+        if text.len() == 1 && text[0] == nodes[idx].name {
+            return None;
+        }
+        // Short fields (for example price and availability) must not disappear
+        // behind a long description. Stable ordering preserves peers' order.
+        text.sort_by_key(|value| value.len() > 96);
+        let mut context = text.join(" | ");
+        if context.len() > 256 {
+            let mut end = 256;
+            while !context.is_char_boundary(end) {
+                end -= 1;
+            }
+            context.truncate(end);
+            context.push_str(" [truncated]");
+        }
+        return Some(context);
+    }
+    None
+}
+
+/// Keep live status receipts visible even when ordinary static text is
+/// filtered. Bound both traversal and UTF-8 output, and never mint action refs.
+fn status_summary(nodes: &[TreeNode], idx: usize) -> String {
+    let mut pending = vec![idx];
+    let mut parts = Vec::new();
+    let mut remaining = 512;
+    let mut truncated = false;
+    for _ in 0..64 {
+        let Some(current) = pending.pop() else { break };
+        let node = &nodes[current];
+        if current != idx && is_interactive_role(&node.role) {
+            continue;
+        }
+        if !node.name.is_empty() && (current == idx || node.role == "StaticText") {
+            let mut end = node.name.len().min(remaining);
+            while !node.name.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end > 0 {
+                parts.push(node.name[..end].to_string());
+            }
+            remaining = remaining.saturating_sub(end + 3);
+            if end < node.name.len() || remaining == 0 {
+                truncated = true;
+                break;
+            }
+        }
+        pending.extend(node.children.iter().rev().copied());
+    }
+    truncated |= !pending.is_empty();
+    let mut text = parts.join(" | ");
+    if truncated {
+        text.push_str(" [truncated]");
+    }
+    text
+}
+
+/// Ref attributes can be followed by context, modal, or future metadata.
+/// Match the attribute boundary so e2 never selects e20.
+fn find_snapshot_ref(output: &str, ref_id: &str) -> Option<usize> {
+    let prefix = format!("[ref={}", ref_id);
+    output.match_indices(&prefix).find_map(|(pos, _)| {
+        matches!(output.as_bytes().get(pos + prefix.len()), Some(b']' | b',')).then_some(pos)
+    })
+}
+
 fn render_tree(
     nodes: &[TreeNode],
     idx: usize,
@@ -2068,6 +2211,25 @@ fn render_tree(
             render_tree(nodes, child, indent, output, options);
         }
         return;
+    }
+
+    if options.interactive && role == "status" {
+        let summary = status_summary(nodes, idx);
+        if !summary.is_empty() {
+            output.push_str(&format!(
+                "{}- status: {}\n",
+                "  ".repeat(indent),
+                serde_json::to_string(&summary).unwrap_or_default()
+            ));
+        }
+        // Clickable status nodes must retain their own ref and cursor metadata.
+        // Non-actionable status nodes only need the summary and child controls.
+        if !node.has_ref {
+            for &child in &node.children {
+                render_tree(nodes, child, indent, output, options);
+            }
+            return;
+        }
     }
 
     if options.interactive && !node.has_ref {
@@ -2129,6 +2291,14 @@ fn render_tree(
 
     if let Some(ref ref_id) = node.ref_id {
         attrs.push(format!("ref={}", ref_id));
+    }
+
+    if options.interactive {
+        if let Some(context) = control_context(nodes, idx) {
+            if let Ok(encoded) = serde_json::to_string(&context) {
+                attrs.push(format!("context={}", encoded));
+            }
+        }
     }
 
     // Top-layer marker (issue #90): distinguishes controls inside the open
@@ -2807,6 +2977,163 @@ mod tests {
         node.name = name.to_string();
         node.backend_node_id = backend_node_id;
         node
+    }
+
+    #[test]
+    fn iframe_ref_marker_accepts_metadata_without_matching_longer_ids() {
+        let output = "- Iframe [ref=e20]\n- Iframe [ref=e2, context=\"Frame\"]\n";
+        assert_eq!(find_snapshot_ref(output, "e2"), output.find("[ref=e2,"));
+        assert_eq!(find_snapshot_ref("- Iframe [ref=e2]", "e2"), Some(9));
+        assert_eq!(find_snapshot_ref("- Iframe [ref=e20]", "e2"), None);
+    }
+
+    #[test]
+    fn interactive_status_receipt_survives_compaction() {
+        let mut nodes = vec![
+            make_node("status", "", None),
+            make_node("StaticText", "Cart: folder", None),
+            make_node("button", "Undo", Some(7)),
+        ];
+        nodes[0].children = vec![1, 2];
+        nodes[2].has_ref = true;
+        nodes[2].ref_id = Some("e7".to_string());
+        let options = SnapshotOptions {
+            interactive: true,
+            ..Default::default()
+        };
+        let mut output = String::new();
+        render_tree(&nodes, 0, 0, &mut output, &options);
+        let compact = compact_tree(&output, true);
+        assert!(compact.contains("- status: \"Cart: folder\""));
+        assert!(compact.contains("button \"Undo\" [ref=e7]"));
+        nodes[0].has_ref = true;
+        nodes[0].ref_id = Some("e8".to_string());
+        let mut clickable = String::new();
+        render_tree(&nodes, 0, 0, &mut clickable, &options);
+        assert!(clickable.contains("status [ref=e8]"));
+        assert!(clickable.contains("Cart: folder"));
+        nodes[1].name = "字".repeat(600);
+        let summary = status_summary(&nodes, 0);
+        assert!(summary.len() <= 524 && summary.ends_with(" [truncated]"));
+    }
+
+    #[test]
+    fn control_context_keeps_price_in_its_own_card() {
+        let mut nodes = vec![
+            make_node("RootWebArea", "", None),
+            make_node("article", "", None),
+            make_node("heading", "Folder", None),
+            make_node("StaticText", "Price: $9.00", None),
+            make_node("button", "Add to cart", Some(1)),
+            make_node("article", "", None),
+            make_node("StaticText", "Price: $4.00", None),
+        ];
+        nodes[0].children = vec![1, 5];
+        nodes[1].parent_idx = Some(0);
+        nodes[1].children = vec![2, 3, 4];
+        nodes[4].parent_idx = Some(1);
+        nodes[5].children = vec![6];
+        assert_eq!(
+            control_context(&nodes, 4).as_deref(),
+            Some("Folder | Price: $9.00")
+        );
+        assert_eq!(nodes[4].name, "Add to cart");
+        // A page-wide wrapper cannot combine two independent cards.
+        nodes[4].parent_idx = Some(0);
+        assert_eq!(control_context(&nodes, 4), None);
+    }
+
+    #[test]
+    fn control_context_rejects_ambiguous_generic_groups() {
+        let mut nodes = vec![
+            make_node("generic", "", None),
+            make_node("heading", "Folder", None),
+            make_node("StaticText", "$9.00", None),
+            make_node("button", "Buy", Some(1)),
+            make_node("heading", "Notebook", None),
+        ];
+        nodes[0].children = vec![1, 2, 3];
+        nodes[3].parent_idx = Some(0);
+        assert_eq!(
+            control_context(&nodes, 3).as_deref(),
+            Some("Folder | $9.00")
+        );
+        // Ignored AX containers retain structural children but have no role.
+        nodes[0].role.clear();
+        assert_eq!(
+            control_context(&nodes, 3).as_deref(),
+            Some("Folder | $9.00")
+        );
+        nodes[2].name = "Description ".repeat(100);
+        nodes.push(make_node("StaticText", "Price: $9.00", None));
+        nodes[0].children.push(5);
+        assert!(control_context(&nodes, 3).unwrap().contains("Price: $9.00"));
+        nodes[0].children.push(4);
+        assert_eq!(control_context(&nodes, 3), None);
+    }
+
+    #[test]
+    fn control_context_linked_card_keeps_one_product() {
+        let mut nodes = vec![
+            make_node("generic", "", None),
+            make_node("link", "Folder", None),
+            make_node("link", "Folder", None),
+            make_node("StaticText", "$9.00", None),
+            make_node("button", "Add", Some(1)),
+        ];
+        nodes[0].children = vec![1, 2, 3, 4];
+        nodes[4].parent_idx = Some(0);
+        assert_eq!(
+            control_context(&nodes, 4).as_deref(),
+            Some("Folder | $9.00")
+        );
+        nodes[1].parent_idx = Some(0);
+        nodes[2].parent_idx = Some(0);
+        assert_eq!(control_context(&nodes, 1), None);
+        assert_eq!(control_context(&nodes, 2), None);
+        nodes[2].name = "Notebook".to_string();
+        assert_eq!(control_context(&nodes, 4), None);
+        nodes[2].name = "Folder".to_string();
+        nodes.push(make_node("button", "Another product", Some(2)));
+        nodes[0].children.push(5);
+        assert_eq!(control_context(&nodes, 4), None);
+        // Cursor-discovered controls count too; otherwise a mixed UI with one
+        // native button is mistaken for a single-action product card.
+        nodes[5].role = "generic".to_string();
+        nodes[5].cursor_info = Some(make_cursor_info(None, None, "Custom action"));
+        assert_eq!(control_context(&nodes, 4), None);
+    }
+
+    #[test]
+    fn control_context_keeps_unique_link_details_but_omits_its_own_name() {
+        let mut nodes = vec![
+            make_node("listitem", "", None),
+            make_node("link", "Product", None),
+            make_node("StaticText", "$9.00", None),
+        ];
+        nodes[0].children = vec![1];
+        nodes[1].parent_idx = Some(0);
+        assert_eq!(control_context(&nodes, 1), None);
+        nodes[0].children.push(2);
+        assert_eq!(
+            control_context(&nodes, 1).as_deref(),
+            Some("Product | $9.00")
+        );
+    }
+
+    #[test]
+    fn control_context_bounds_text_and_subtree_work() {
+        let mut nodes = vec![
+            make_node("article", "", None),
+            make_node("StaticText", &"字".repeat(200), None),
+            make_node("button", "Buy", Some(1)),
+        ];
+        nodes[0].children = vec![1, 2];
+        nodes[2].parent_idx = Some(0);
+        let text = control_context(&nodes, 2).unwrap();
+        assert!(text.len() <= 268 && text.ends_with(" [truncated]"));
+        nodes[0].children = vec![1; 65];
+        assert_eq!(control_context(&nodes, 2), None);
     }
 
     fn make_cursor_info(

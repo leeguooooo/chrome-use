@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Product context fixture</title>
+<style>body {font:18px system-ui;max-width:800px;margin:32px auto} article {border:1px solid #ccc;padding:16px;margin:12px 0} button {padding:8px} output {display:block;margin-top:20px}</style>
+<h1>Office supplies</h1>
+<p>Choose the cheapest product that is in stock.</p>
+<article data-product="notebook">
+  <h2>Notebook</h2><p>Price: $12.00</p><p>In stock</p>
+  <button type="button" data-add="notebook">Add to cart</button>
+</article>
+<article data-product="pencil">
+  <h2>Pencil</h2><p>Price: $4.00</p><p>Out of stock</p>
+  <button type="button" data-add="pencil" disabled>Add to cart</button>
+</article>
+<article data-product="folder">
+  <h2>Folder</h2><p>Price: $9.00</p><p>In stock</p>
+  <button type="button" data-add="folder">Add to cart</button>
+</article>
+<output role="status" id="receipt">Cart empty</output>
+<script>
+const layout = new URLSearchParams(location.search).get('layout');
+if (layout === 'generic' || layout === 'linked') {
+  for (const article of document.querySelectorAll('article')) {
+    const card = document.createElement('div');
+    card.dataset.product = article.dataset.product;
+    card.append(...article.childNodes);
+    article.replaceWith(card);
+  }
+}
+if (layout === 'linked') {
+  for (const heading of document.querySelectorAll('[data-product] h2')) {
+    const link = document.createElement('a');
+    link.href = '#product';
+    link.textContent = heading.textContent;
+    heading.replaceWith(link, link.cloneNode(true));
+  }
+}
+if (layout === 'nested') {
+  for (const button of document.querySelectorAll('button')) {
+    const outer = document.createElement('div');
+    const inner = document.createElement('div');
+    button.replaceWith(outer);
+    outer.append(inner);
+    inner.append(button);
+  }
+}
+if (layout === 'long') {
+  for (const article of document.querySelectorAll('article')) {
+    const description = document.createElement('p');
+    description.textContent = 'Long product description. '.repeat(100);
+    article.querySelector('h2').after(description);
+  }
+}
+const added = [];
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-add]');
+  if (!button || button.disabled) return;
+  added.push(button.dataset.add);
+  document.querySelector('#receipt').textContent = 'Cart: ' + added.join(', ');
+});
+</script>
+</html>

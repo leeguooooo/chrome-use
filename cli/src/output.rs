@@ -2191,6 +2191,7 @@ chrome-use drag - Drag and drop
 Usage: chrome-use drag <source> <target>
 
 Drags an element from source to target location.
+Routing follows this session, not another profile's extension connection.
 
 Global Options:
   --json               Output as JSON
@@ -2853,7 +2854,7 @@ references (like @e1, @e2) that can be used in subsequent commands.
 Designed for AI agents to understand page structure.
 
 Options:
-  -i, --interactive    Only include interactive elements
+  -i, --interactive    Controls, local context, and status receipts
   -u, --urls           Include href URLs for link elements
   -c, --compact        Remove empty structural elements
   -d, --depth <n>      Limit tree depth
@@ -4659,7 +4660,7 @@ Setup:
   profiles                   List available Chrome profiles
 
 Snapshot Options:
-  -i, --interactive          Only interactive elements
+  -i, --interactive          Controls, context, and status receipts
   -c, --compact              Remove empty structural elements
   -d, --depth <n>            Limit tree depth
   -s, --selector <sel>       Scope to CSS selector

@@ -11361,12 +11361,14 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     // foreground tab and can't reach an OOPIF — DOM-dispatch an HTML5 drag in the
     // element's own session instead (issues #31/#36). `coord` mode forces the
     // coordinate path for pointer-driven drags (canvas/sliders) on a launched
-    // browser. Offset mode is always coordinate-driven (no target ref to DOM-drag
+    // browser. Inspect this manager, not a globally discoverable relay: another
+    // Chrome profile may have the extension active while this one is launched.
+    // Offset mode is always coordinate-driven (no target ref to DOM-drag
     // onto), so it skips this branch.
     if offset.is_none() {
         let target = target.ok_or("Missing 'target' parameter")?;
         if std::env::var("AGENT_BROWSER_CLICK_MODE").as_deref() != Ok("coord")
-            && (crate::connect::relay_url().is_some()
+            && (mgr.on_relay()
                 || state.ref_map.ref_is_in_iframe(source)
                 || state.ref_map.ref_is_in_iframe(target))
         {

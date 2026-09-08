@@ -26,6 +26,8 @@ chrome-use approach:
 Compact snapshot → @refs assigned → Direct interaction (~200-400 tokens)
 ```
 
+Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or groups identified by a heading or one distinct linked product name and one action control. Named product links omit repeated context when their sibling action carries it. It preserves local text such as product prices without changing accessible names or refs. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
+
 ## The Snapshot Command
 
 ```bash
