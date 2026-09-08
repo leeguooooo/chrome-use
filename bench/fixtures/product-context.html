@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Product context fixture</title>
+<style>body {font:18px system-ui;max-width:800px;margin:32px auto} article {border:1px solid #ccc;padding:16px;margin:12px 0} button {padding:8px} output {display:block;margin-top:20px}</style>
+<h1>Office supplies</h1>
+<p>Choose the cheapest product that is in stock.</p>
+<article data-product="notebook">
+  <h2>Notebook</h2><p>Price: $12.00</p><p>In stock</p>
+  <button type="button" data-add="notebook">Add to cart</button>
+</article>
+<article data-product="pencil">
+  <h2>Pencil</h2><p>Price: $4.00</p><p>Out of stock</p>
+  <button type="button" data-add="pencil" disabled>Add to cart</button>
+</article>
+<article data-product="folder">
+  <h2>Folder</h2><p>Price: $9.00</p><p>In stock</p>
+  <button type="button" data-add="folder">Add to cart</button>
+</article>
+<output role="status" id="receipt">Cart empty</output>
+<script>
+const added = [];
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-add]');
+  if (!button || button.disabled) return;
+  added.push(button.dataset.add);
+  document.querySelector('#receipt').textContent = 'Cart: ' + added.join(', ');
+});
+</script>
+</html>
