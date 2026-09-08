@@ -348,6 +348,13 @@ The agent operates in your Chrome — you'll see tabs opening, pages loading, cl
 If a click opens native `confirm()` or `prompt()`, the click returns with a
 pending-dialog result instead of blocking the session. Follow with
 `chrome-use dialog status` and `chrome-use dialog accept|dismiss`.
+
+The extension popup shows Connected only after a reply from the native host.
+While confirmation is pending it shows Connecting; missing-host errors are shown
+verbatim. With an older host that does not answer the initial ping, the first
+real CLI command can confirm the connection. This status confirms the host link,
+not that every page or frame is drivable.
+
 Chrome debugger relay calls are also time-bounded, so a process-swapped tab
 fails with recovery guidance rather than hanging indefinitely.
 

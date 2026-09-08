@@ -4378,6 +4378,8 @@ Core Commands:
   snapshot                   Accessibility tree with refs (for AI)
   eval <js>                  Run JavaScript
   connect <port|url>         Connect to browser via CDP
+  Extension popup: Connected means the native host replied; Connecting means
+  the reply is still pending. A host connection does not verify page liveness.
   reconnect                  Re-bind to the running Chrome's relay (alias for
                              `extension connect`) — recover a dropped relay, no reinstall
   browsers                   List connected Chrome profiles; pin a session to one

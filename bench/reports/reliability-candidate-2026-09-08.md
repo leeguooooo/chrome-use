@@ -55,7 +55,7 @@ Rust 侧将该标记映射为 `code: action_outcome_unknown`、`retryable: false
 
 ## 新发现，尚未修复
 
-1. 原生主机不存在时，扩展弹窗曾显示 Connected；直接连接探针返回 `Specified native messaging host not found`。需要区分 port 对象创建与真正连接确认。
+1. 原生主机不存在时，扩展弹窗曾显示 Connected；直接连接探针返回 `Specified native messaging host not found`。候选已改为收到主机实际回应后才确认，见下节。
 2. `--observe` 的请求列表完整输出 data URL，包括长 SVG 和 base64 图片。此问题已在下一批候选中增加有界摘要，验证见下节。
 3. 加购改变购物车 accessible name 后，引用变更需要显式跟随观察结果；错误文案却概括为每次 snapshot 都重新编号，与稳定引用说明不一致。
 
@@ -70,11 +70,25 @@ Rust 侧将该标记映射为 `code: action_outcome_unknown`、`retryable: false
 - 原推荐命令 `requests --json` 在实际 CLI 中无效，文档和提示已更正为 `network requests --json`。
 - 此批完整 Rust 单元测试 1232 项通过、0 失败、3 项忽略；候选二进制构建后，真实 CLI 文本复核通过：25 个请求的响应为 1,374 字节，包含无页面变化提示、请求摘要及省略数量。
 
+## 原生主机连接状态
+
+候选扩展新增 connecting/connected/disconnected 状态。创建 Port 时只进入 connecting；收到主机 pong 或兼容旧主机的实际命令后才确认连接。旧 Port 的迟到消息和断开回调不能覆盖新连接。弹窗通过状态推送更新，单独打开 HTML 预览也不再伪造连接或标签数量。
+
+在另一个独立 Chrome for Testing 临时 profile 中验证：
+
+- 未注册原生主机：弹窗显示 Not paired 和 `Specified native messaging host not found.`，提示安装本地主机。
+- 只在临时 profile 注册候选原生主机后：弹窗显示 Connected、`local CLI connection confirmed`；状态接口确认 connected，并通过这条中继打开 Example Domain。
+- 终止这个测试主机：已打开的弹窗及时变为 Not paired 和 `Native host has exited.`，提示 `chrome-use status`，没有要求重装。
+- 移除临时注册文件不会终止已经连接的主机。因此缺主机复查先终止测试主机，再发起新连接，才验证“未找到主机”的状态；没有把已有连接仍可用误判成修复失败。
+- 测试结束后恢复临时注册、关闭测试 session 与测试浏览器，没有修改共享 Chrome 的原生主机配置。
+
+扩展测试 70 项通过。Rust 完整套件 1233 项通过、0 失败、3 项忽略；候选 CLI 构建通过。连接状态只确认本机通信链路，不替代页面可读性或任务完成验证。
+
 ## 验收仍欠缺
 
 - 将候选加载到可控的共享真实 Chrome 测试条件下，重测导航后继续驱动。
 - 自动化的受限 OOPIF 实例、真实 tab 替换、不同 profile 和多个 session 隔离验收。
 - 已执行但回包失败场景的完整 CLI 错误输出与非重试约束验证。
-- 修复连接状态误报；请求摘要已通过真实 JSON 与文本验证。
+- 连接状态和请求摘要已完成上述测试，还需发布后的安装版本验证。
 - 固定版本、profile、页面初始状态和预热条件，交换执行顺序并重复同人对照。
 - 打包、合并和发布后的版本及真实行为验证。

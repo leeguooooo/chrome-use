@@ -126,6 +126,12 @@ Chrome's "Allow remote debugging?" popup never fires); `chrome-use extension
 connect` (alias `reconnect`) is the explicit form, and the CLI self-heals
 transient relay drops — usually just retry the command.
 
+The extension popup shows Connected only after a reply from the native host.
+While confirmation is pending it shows Connecting; missing-host errors are shown
+verbatim. With an older host that does not answer the initial ping, the first
+real CLI command can confirm the connection. This status confirms the host link,
+not that every page or frame is drivable.
+
 A restricted or detached child-frame command returns its error without detaching
 the parent tab. Top-level recovery retries against the recovered tab ID, rather
 than reusing an obsolete target. Re-read the page before retrying a failed frame action.

@@ -179,6 +179,9 @@ ab-connect，然后重试。
 
 若点击触发原生 `confirm()` 或 `prompt()`，click 会返回待处理 dialog，而不是把会话卡死；
 接着运行 `chrome-use dialog status` 与 `chrome-use dialog accept|dismiss` 即可。
+
+扩展弹窗收到原生主机回应后才显示 Connected，确认前显示 Connecting；主机未找到等错误会直接显示。旧主机若不响应初始 ping，可由首次实际 CLI 命令确认连接。该状态只证明主机链路已接通，不代表每个页面或框架都可操作。
+
 扩展中继的 Chrome debugger 调用也有明确超时，跨进程跳转后的坏句柄会返回恢复提示，不再无限挂起。
 
 受限或已解绑子框架的命令会返回错误，不会因此解绑父标签。顶层标签恢复后，重试使用恢复得到的标签 ID，避免继续向旧目标发命令。重试框架内动作前先重新读取页面。

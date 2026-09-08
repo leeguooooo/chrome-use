@@ -40,6 +40,7 @@ import {
 } from './reload-loop.js'
 import { targetInfoForTab } from './target-info.js'
 import { sendTabCommand } from './tab-command.js'
+import { HostConnectionState } from './host-connection.js'
 import {
   IDLE_DETACH_DEFAULT_SECS,
   idleDetachMsFrom,
@@ -54,7 +55,8 @@ const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about
 let port = null
 /** Whether the native-messaging host (the local chrome-use CLI) is linked.
  *  Read by the popup status page. */
-let hostConnected = false
+const hostConnection = new HostConnectionState()
+let nextHostAttemptAt = 0
 /** tabId -> { sessionId, targetId } */
 const tabs = new Map()
 /** tabId -> reload history, retained across debugger/process re-attachments. */
@@ -504,30 +506,52 @@ function cursorOverlayExpression(x, y, click) {
 
 // ---- native messaging transport ------------------------------------------
 
+function publishHostStatus() {
+  try {
+    chrome.runtime.sendMessage({ type: 'ab-host-state', ...hostConnection.snapshot(), tabCount: tabs.size })
+      .catch(() => {}) // Popup may be closed; state still lives in the worker.
+  } catch {}
+}
+
 function connectHost() {
-  if (port) return
+  if (port || Date.now() < nextHostAttemptAt) return
   try {
     port = chrome.runtime.connectNative(HOST_NAME)
-    hostConnected = true
+    hostConnection.begin(port)
   } catch (e) {
     port = null
-    hostConnected = false
+    hostConnection.end(null, String(e?.message || e))
+    nextHostAttemptAt = Date.now() + 1000
+    publishHostStatus()
     return
   }
-  port.onMessage.addListener((msg) => void whenReady(() => onHostMessage(msg)))
-  port.onDisconnect.addListener(() => {
-    // Read (acknowledge) lastError so Chrome doesn't log an "Unchecked
-    // runtime.lastError: Native host has exited." warning to the error page.
-    // A disconnect is expected whenever the local host exits (e.g. the CLI
-    // isn't actively driving); we reconnect on demand, nothing is wrong.
-    void chrome.runtime.lastError
+  const connectedPort = port
+  connectedPort.onMessage.addListener((msg) => {
+    if (port !== connectedPort) return
+    if (hostConnection.receive(connectedPort, msg)) {
+      notifyConnChange(true)
+      publishHostStatus()
+    }
+    void whenReady(() => {
+      if (port === connectedPort) return onHostMessage(msg)
+    })
+  })
+  connectedPort.onDisconnect.addListener(() => {
+    const error = chrome.runtime.lastError?.message || 'Native host disconnected'
+    if (port !== connectedPort) return
+    const wasConnected = hostConnection.snapshot().connected
+    hostConnection.end(connectedPort, error)
     port = null
-    hostConnected = false
-    notifyConnChange(false)
-    // Sessions are stale once the host is gone; the daemon re-discovers on
-    // reconnect. Keep chrome.debugger attached so reconnect is cheap.
+    nextHostAttemptAt = Date.now() + 1000
+    publishHostStatus()
+    if (wasConnected) notifyConnChange(false)
+    // Retain tab records; the new host will rediscover them after reconnect.
     for (const tabId of tabs.keys()) setBadge(tabId, 'connecting')
   })
+  // A response proves that the native host exists and can exchange messages.
+  // Older hosts can instead confirm themselves with their first real command.
+  publishHostStatus()
+  postToHost({ method: 'ping' })
   // Report our version + a stable per-profile id so the host can tell the
   // CLI/`doctor` which extension build is live AND which Chrome profile the relay
   // is bound to. With many profiles, "logged out" on a site is otherwise
@@ -537,6 +561,7 @@ function connectHost() {
   // `identity` permission is granted, we also include the account email; absent
   // that, email is simply omitted. Best-effort; ignored by older hosts.
   void buildHelloIdentity().then((extra) => {
+    if (port !== connectedPort) return
     try {
       postToHost({
         method: 'hello',
@@ -551,7 +576,6 @@ function connectHost() {
   // pages).
   void reannounceAttachedTabs()
   void reattachOwnedTabs()
-  notifyConnChange(true)
   // Start the proactive heartbeat so the worker stays alive while paired.
   scheduleKeepalivePing()
 }
@@ -559,6 +583,7 @@ function connectHost() {
 async function onHostMessage(msg) {
   if (!msg || typeof msg !== 'object') return
   // Optional keepalive.
+  if (msg.method === 'pong') return
   if (msg.method === 'ping') {
     postToHost({ method: 'pong' })
     return
@@ -1594,9 +1619,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!port) {
       try { connectHost() } catch (e) {}
     }
-    sendResponse({ connected: hostConnected, tabCount: tabs.size, host: HOST_NAME })
+    sendResponse({ ...hostConnection.snapshot(), tabCount: tabs.size, host: HOST_NAME })
   }
-  return true
+  return false
 })
 
 // Hot-path keepalive: while a native-messaging port is open, post a tiny ping

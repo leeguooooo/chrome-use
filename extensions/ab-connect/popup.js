@@ -7,6 +7,8 @@ const label = document.getElementById('statusLabel')
 const sub = document.getElementById('statusSub')
 const tabPill = document.getElementById('tabPill')
 const hint = document.getElementById('hint')
+const hintText = document.getElementById('hintText')
+const hintCommand = document.getElementById('hintCommand')
 
 let resolved = false
 
@@ -18,7 +20,7 @@ function render(state) {
     dot.classList.add('on')
     label.textContent = 'Connected'
     const n = state.tabCount | 0
-    sub.textContent = 'bridged to your local CLI · ready'
+    sub.textContent = 'local CLI connection confirmed'
     if (n > 0) {
       tabPill.textContent = `${n} tab${n === 1 ? '' : 's'}`
       tabPill.classList.remove('hidden')
@@ -26,20 +28,29 @@ function render(state) {
       tabPill.classList.add('hidden')
     }
     hint.style.display = 'none'
+  } else if (state?.connectionState === 'connecting') {
+    label.textContent = 'Connecting…'
+    sub.textContent = 'waiting for the local CLI to respond'
+    tabPill.classList.add('hidden')
+    hint.style.display = 'none'
   } else {
     dot.classList.add('off')
     label.textContent = 'Not paired'
-    sub.textContent = 'no local chrome-use CLI linked'
+    sub.textContent = state?.connectionError || 'no local chrome-use CLI linked'
     tabPill.classList.add('hidden')
     hint.style.display = 'block'
+    const missingHost = (state?.connectionError || '').toLowerCase().includes('host not found')
+    hintText.textContent = missingHost
+      ? 'Install the local host, then reopen this popup:'
+      : 'Check the local CLI, then reopen this popup to reconnect:'
+    hintCommand.textContent = missingHost ? 'chrome-use extension install' : 'chrome-use status'
   }
 }
 
 function queryStatus() {
-  // Standalone (opened as a plain file, no extension context) → show a friendly
-  // demo state so the design is viewable without the service worker.
+  // A standalone preview has no native connection to confirm.
   if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
-    render({ connected: true, tabCount: 13 })
+    render({ connected: false, connectionError: 'Open this popup from the chrome-use extension' })
     return
   }
   try {
@@ -68,6 +79,13 @@ document.querySelectorAll('[data-href]').forEach((a) => {
     }
   })
 })
+
+// Update an open popup even when the host confirms after the startup queries.
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === 'ab-host-state') render(message)
+  })
+}
 
 // Query now, then once more shortly after — opening the popup also nudges the
 // service worker to (re)connect the host, which may complete a beat later.
