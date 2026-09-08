@@ -725,11 +725,10 @@ leaving gigabyte-scale APFS clones behind.
 
 ## Contributing
 
-`AGENTS.md` carries the conventions for this codebase (where docs live, how to
-build and test, and two hard-won rules about silent successes and about
-measuring performance). [HANDOFF.md](HANDOFF.md) covers the current line of work
-on reducing what a browser task costs an agent: the benchmark data behind it,
-what shipped, and which open issue to pick up next.
+`AGENTS.md` carries the conventions for this codebase: where docs live, how to
+build and test, and two hard-won rules about never shipping a silent success and
+about measuring performance honestly. Open work is tracked in
+[issues](https://github.com/leeguooooo/chrome-use/issues).
 
 ## Contributors
 

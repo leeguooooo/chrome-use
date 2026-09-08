@@ -1,7 +1,8 @@
 # bench — browser-agent round-trip benchmarks
 
-> **New here?** Read [../HANDOFF.md](../HANDOFF.md) first: why this work exists, what
-> shipped, and which open issue to pick up next.
+> **New here?** Start with the tracking issue
+> [#232](https://github.com/leeguooooo/chrome-use/issues/232): why this work
+> exists, what shipped, and which open issue to pick up next.
 
 Measures the two costs an agent actually pays per browser task:
 **round trips to the model** and **bytes returned into its context**.

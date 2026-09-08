@@ -2,12 +2,6 @@
 
 Instructions for AI coding agents working with this codebase.
 
-> **Continuing the work on making the browser cheaper for agents to drive?**
-> Read [HANDOFF.md](HANDOFF.md): why that work exists, what shipped, which open
-> issue to pick up next and why that order. The two sections below on silent
-> successes and on measuring performance came out of it and apply to everything
-> in this repo.
-
 ## Package Manager
 
 This project uses **pnpm**. Always use `pnpm` instead of `npm` or `yarn` for installing dependencies, running scripts, etc. (e.g., `pnpm install`, `pnpm run build`).
