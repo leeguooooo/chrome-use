@@ -133,11 +133,6 @@ When a fixture page needs `href="#..."`, write the Rust raw string as
 `r##"..."##`. Inside `r#"..."#` the sequence `"#` closes the literal early, and
 the compiler reports it as a syntax error nowhere near the real cause.
 
-## Dashboard (packages/dashboard)
-
-- Never use native browser dialogs (`alert`, `confirm`, `prompt`). Use shadcn/ui components (`Dialog`, `AlertDialog`, etc.) instead.
-- Use param-case (kebab-case) for all file and folder names (e.g., `session-tree.tsx`, not `SessionTree.tsx`). The `ui/` directory follows shadcn conventions which already uses param-case.
-
 ## Releasing
 
 Releases are manual, single-PR affairs. There is no changesets automation. The maintainer controls the changelog voice and format.
@@ -146,12 +141,17 @@ To prepare a release:
 
 1. Create a branch (e.g. `prepare-v0.24.0`)
 2. Bump `version` in `package.json`
-3. Run `pnpm version:sync` to update `cli/Cargo.toml`, `cli/Cargo.lock`, and `packages/dashboard/package.json`
+3. Run `pnpm version:sync` to update `cli/Cargo.toml` and `cli/Cargo.lock`. This repository has no dashboard workspace package
 4. Write the changelog entry in `CHANGELOG.md` at the top, under a new `## <version>` heading, wrapped in `<!-- release:start -->` and `<!-- release:end -->` markers. Remove the `<!-- release:start -->` and `<!-- release:end -->` markers from the previous release entry so only the new release has markers.
-5. Add a matching entry to `docs/src/app/changelog/page.mdx` at the top (below the `# Changelog` heading)
+5. Add a matching entry to both `docs/changelog.html` and `docs/en/changelog.html`, at the top of their version lists
 6. Open a PR and merge to `main`
 
-When the PR merges, CI compares `package.json` version to what's on npm. If it differs, it builds all 7 platform binaries, publishes to npm, and creates the GitHub release automatically. The GitHub release body is extracted from the content between the `<!-- release:start -->` and `<!-- release:end -->` markers in `CHANGELOG.md`.
+After the release PR merges and required checks pass, create and push the matching
+`v<version>` tag. `.github/workflows/release-binaries.yml` builds seven platform
+binaries and publishes their archives and checksums to GitHub Releases. It does
+not publish to npm. The release body comes from the current version's
+`release:start` / `release:end` block in `CHANGELOG.md`; the tag and package version
+must match. Chrome Web Store extension distribution is a separate step.
 
 ### Writing the changelog
 
@@ -185,13 +185,11 @@ Do not prefix entries with commit hashes. Do not use the changesets `### Patch C
 
 ### Docs changelog
 
-The docs changelog at `docs/src/app/changelog/page.mdx` mirrors `CHANGELOG.md` but uses a slightly different format. Each entry uses:
-
-- A `v` prefix on the version (e.g. `## v0.24.0`)
-- A date line with the full date: `<p className="text-[#888] text-sm">March 30, 2026</p>`
-- A `---` separator between entries
-
-Match the existing style in that file.
+The static HTML changelogs at `docs/changelog.html` (Chinese) and
+`docs/en/changelog.html` (English) mirror the user-visible changes in
+`CHANGELOG.md`. Add an entry to each `du-changelog` list using the existing
+`<li><strong>v<version></strong>` format and include contributors. Mark a prepared
+release as unreleased until publication, then record its publication date.
 
 ## Architecture
 
