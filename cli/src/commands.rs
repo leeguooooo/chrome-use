@@ -445,6 +445,15 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
             obj.insert("settleMs".to_string(), json!(ms));
         }
     }
+    // `--with-screenshot <path>` (issue #229): structure and pixels from one
+    // call, and — because both are taken after the same settle — from one
+    // moment. Two separately-waited captures would describe two different
+    // states, which is worse than not combining them at all.
+    if let Some(ref path) = flags.with_screenshot {
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("withScreenshot".to_string(), json!(path));
+        }
+    }
 
     Ok(result)
 }
@@ -4808,6 +4817,7 @@ mod tests {
             if_present: false,
             observe: false,
             settle_ms: None,
+            with_screenshot: None,
             profile: None,
             state: None,
             proxy: None,

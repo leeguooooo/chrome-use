@@ -58,6 +58,7 @@ chrome-use snapshot -i --max-bytes 4000   # Cap the tree; cuts between nodes, re
 chrome-use snapshot -i --max-bytes 4000 --from 70   # Read on from where the last one stopped
 chrome-use snapshot -i --settle-ms 3000   # Raise the pre-capture wait ceiling (default 1000ms)
 chrome-use snapshot -i --no-settle         # Capture now, without waiting for the page to stop changing
+chrome-use snapshot -i --with-screenshot ./page.png   # Tree on stdout + pixels on disk, from the same settled moment
 chrome-use read <url>          # Fetch a URL as agent-readable markdown/text (prefers .md/llms.txt, HTML→markdown fallback)
 chrome-use read                # No URL: read the rendered DOM of the active tab
 chrome-use read <url> --outline        # Heading outline only

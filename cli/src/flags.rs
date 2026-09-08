@@ -79,6 +79,7 @@ pub(crate) const GLOBAL_FLAGS_WITH_VALUE: &[&str] = &[
     "--config",
     "--engine",
     "--settle-ms",
+    "--with-screenshot",
     "--screenshot-dir",
     "--screenshot-quality",
     "--screenshot-format",
@@ -341,6 +342,7 @@ fn extract_config_path(args: &[String]) -> Option<Option<String>> {
         "--humanize",
         "--window",
         "--settle-ms",
+        "--with-screenshot",
     ];
     let mut i = 0;
     while i < args.len() {
@@ -457,6 +459,11 @@ pub struct Flags {
     /// skips the wait entirely. `None` means "use AGENT_BROWSER_SETTLE_MS, or
     /// the default" — it is deliberately distinct from `Some(0)`.
     pub settle_ms: Option<u64>,
+    /// `--with-screenshot <path>`: save the pixels alongside a structural
+    /// observation, captured from the same settled state (issue #229). The
+    /// image is an output — something to look at or attach — not an input for
+    /// the agent to read the page from.
+    pub with_screenshot: Option<String>,
     /// `--observe`: after a mutating action, return only what changed on the page
     /// (a11y delta + url + requests) instead of the agent re-snapshotting.
     pub observe: bool,
@@ -913,6 +920,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         if_present: false,
         observe: false,
         settle_ms: None,
+        with_screenshot: None,
         model: env::var("AI_GATEWAY_MODEL").ok().or(config.model),
         verbose: false,
         quiet: false,
@@ -1315,6 +1323,12 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     if let Ok(n) = s.parse::<u64>() {
                         flags.settle_ms = Some(n);
                     }
+                    i += 1;
+                }
+            }
+            "--with-screenshot" => {
+                if let Some(s) = args.get(i + 1) {
+                    flags.with_screenshot = Some(s.clone());
                     i += 1;
                 }
             }

@@ -551,6 +551,18 @@ chrome-use snapshot -i --settle-ms 3000   # raise the ceiling for a slow page
 chrome-use snapshot -i --no-settle        # capture now, mid-flight
 ```
 
+Because the wait already happened, the pixels can ride along with it:
+
+```bash
+chrome-use snapshot -i --with-screenshot ./page.png
+chrome-use click @e8 --observe --with-screenshot ./after.png
+```
+
+Both captures come from that one settled moment — two separately-waited
+captures would describe two different states, which is worse than not combining
+them. The tree still goes to stdout and the image to disk: a screenshot is an
+output here, for looking at or attaching, never the way an agent reads a page.
+
 `AGENT_BROWSER_SETTLE_MS` sets the ceiling for every command (0 disables the
 wait) and `AGENT_BROWSER_SETTLE_QUIET_MS` sets the quiet window. Waiting for
 something *specific* is still `wait`'s job: the settle knows the page stopped,

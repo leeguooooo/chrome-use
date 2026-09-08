@@ -126,6 +126,13 @@
       </div>
 
       <p>
+        既然已经等过一次，像素就可以搭这趟车：<code>--with-screenshot &lt;path&gt;</code>
+        让 <code>snapshot</code> 或带 <code>--observe</code> 的动作在<strong>同一个稳定时刻</strong>
+        同时留下结构和截图（各等各的会得到两个时刻的东西，那比不合并还糟）。结构照旧走 stdout，
+        图片落盘并在输出里报路径 —— 截图在这里是<strong>输出</strong>，不是 agent 读页面的方式。
+      </p>
+
+      <p>
         全局可用 <code>AGENT_BROWSER_SETTLE_MS</code>（设 0 关闭等待）和
         <code>AGENT_BROWSER_SETTLE_QUIET_MS</code> 调。等<strong>某个具体条件</strong>
         仍然是 <code>wait</code> 的活：settle 只知道页面停了，不知道你要的东西出现了没有。

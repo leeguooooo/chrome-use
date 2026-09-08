@@ -755,7 +755,11 @@ ceiling expires with the page still moving, the reply says so
 warning means the tree may be mid-transition, so re-read rather than trusting
 it. Spinners that loop forever are ignored on purpose; they never end. Tune
 with `--settle-ms <ms>` (or `AGENT_BROWSER_SETTLE_MS`) and switch it off with
-`--no-settle` when you deliberately want the page mid-flight. Waiting for
+`--no-settle` when you deliberately want the page mid-flight. Since the wait
+already happened, `--with-screenshot <path>` saves the pixels from that same
+settled moment (`snapshot -i --with-screenshot ./page.png`, or an action with
+`--observe`) — the tree is still what you read the page from; the image is an
+output to look at or attach, and never a substitute for the structural read. Waiting for
 something *specific* is still `wait`'s job — the settle only knows that the
 page stopped, not that what you wanted appeared.
 

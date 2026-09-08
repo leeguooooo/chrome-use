@@ -238,6 +238,16 @@ chrome-use snapshot -i --settle-ms 3000   # 慢页面：把上限调高
 chrome-use snapshot -i --no-settle        # 就要中间态：不等，立刻采
 ```
 
+既然已经等过一次，像素就可以搭这趟车：
+
+```bash
+chrome-use snapshot -i --with-screenshot ./page.png
+chrome-use click @e8 --observe --with-screenshot ./after.png
+```
+
+两份采集来自**同一个稳定时刻** —— 各等各的会得到两个时刻的快照，那比不合并还糟。
+结构照旧走 stdout，图片落盘：截图在这里是**输出**，用于看和附上，不是 agent 读页面的方式。
+
 `AGENT_BROWSER_SETTLE_MS` 全局设置上限（设 0 关闭等待），
 `AGENT_BROWSER_SETTLE_QUIET_MS` 设置静默窗口。等**某个具体条件**仍然是 `wait`
 的活：settle 只知道页面停了，不知道你要的东西出现了没有。

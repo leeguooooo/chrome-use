@@ -134,6 +134,18 @@
         <code>AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS</code> on very large pages), and an unconfirmed ref is never acted on.
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Controls with no accessible name</div>
+        A bare <code>&lt;select&gt;</code> or an icon button has no accessible name, so role + name matches
+        <strong>every</strong> control of its kind and cannot re-anchor a stale ref on its own. Those fall back to
+        the <strong>value</strong> the snapshot recorded (a sort dropdown showing <code>Name (A to Z)</code> carries
+        its identity there), and it is only accepted when it narrows to exactly one candidate. When several remain,
+        the command still refuses — but it now says <em>N elements cannot be told apart</em> rather than
+        "no element with that role and name", which described a disappearance that had not happened. The fix for
+        that case is a fresh <code>snapshot</code> (it numbers duplicates, so the new ref carries an ordinal) or a
+        CSS selector.
+      </div>
+
       <h2>The element is in the DOM but not in the snapshot</h2>
       <p>
         It's probably offscreen, or not rendered yet. Scroll it into the viewport or wait for it to appear, then re-snapshot.

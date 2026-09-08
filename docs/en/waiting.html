@@ -129,6 +129,16 @@
       </div>
 
       <p>
+        Since the wait already happened, the pixels can ride along with it:
+        <code>--with-screenshot &lt;path&gt;</code> makes <code>snapshot</code> — or an action with
+        <code>--observe</code> — leave both the structure and an image from that
+        <strong>same settled moment</strong> (two separately-waited captures would describe two
+        different states, which is worse than not combining them). The tree still goes to stdout and
+        the image to disk: a screenshot is an <strong>output</strong> here, not the way an agent
+        reads a page.
+      </p>
+
+      <p>
         <code>AGENT_BROWSER_SETTLE_MS</code> sets the ceiling globally (0 disables
         the wait) and <code>AGENT_BROWSER_SETTLE_QUIET_MS</code> sets the quiet
         window. Waiting for something <strong>specific</strong> is still

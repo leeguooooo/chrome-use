@@ -708,6 +708,18 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 eprintln!("{}", color::dim(note));
             }
             print_with_boundaries(snapshot, origin, opts);
+            // `--with-screenshot`: the image is an output, so its path is
+            // reported and nothing more — the tree above is what the agent
+            // reads the page from.
+            if let Some(p) = data.get("screenshot").and_then(|v| v.as_str()) {
+                eprintln!("{} {}", color::dim("screenshot:"), p);
+            }
+            if let Some(e) = data.get("screenshotError").and_then(|v| v.as_str()) {
+                eprintln!(
+                    "{} --with-screenshot failed: {e}",
+                    color::warning_indicator()
+                );
+            }
             // The adaptive wait hit its ceiling with the page still moving
             // (#228). A mid-transition tree is indistinguishable from a settled
             // one once printed, so this line is the only thing that separates
@@ -1802,6 +1814,15 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             print_observed(obs);
         } else if let Some(snap) = observed_snapshot {
             print_observed_snapshot(snap);
+        }
+        if let Some(p) = data.get("screenshot").and_then(|v| v.as_str()) {
+            eprintln!("{} {}", color::dim("screenshot:"), p);
+        }
+        if let Some(e) = data.get("screenshotError").and_then(|v| v.as_str()) {
+            eprintln!(
+                "{} --with-screenshot failed: {e}",
+                color::warning_indicator()
+            );
         }
     } else {
         // Success response with no data payload — still confirm the command ran
@@ -4640,6 +4661,10 @@ Options:
                              capture that hit the ceiling says so.
   --no-settle                Capture immediately, without waiting for the page
                              to stop changing
+  --with-screenshot <path>   Save the pixels alongside a structural observation
+                             (`snapshot`, or an action with `--observe`), from
+                             the same settled moment. The tree is what you read;
+                             the image is for looking at
   --model <name>             AI model for chat (or AI_GATEWAY_MODEL env)
   -v, --verbose              Show tool commands and their raw output
   -q, --quiet                Show only AI text responses (hide tool calls)

@@ -8921,3 +8921,278 @@ async fn e2e_paste_html_arrives_as_rich_content() {
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
 }
+
+// ---------------------------------------------------------------------------
+// Nameless controls: a @ref that role + name cannot tell apart (#224)
+// ---------------------------------------------------------------------------
+
+/// A bare `<select>` has no accessible name, so role + name — the signal a
+/// stale ref re-anchors on — matches every `<select>` on the page. The value it
+/// was showing is the one thing that still identifies it, and that is what this
+/// exercises: the node is replaced (stale backendNodeId) and a second nameless
+/// combobox appears, which is exactly the shape that used to be unrecoverable.
+#[tokio::test]
+#[ignore]
+async fn e2e_nameless_ref_recovers_by_the_value_it_was_showing() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>nameless select</title>
+<div id="host">
+  <select id="sort">
+    <option>Name (A to Z)</option>
+    <option>Price (low to high)</option>
+  </select>
+</div>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let tree = get_data(&resp)["snapshot"].as_str().unwrap_or_default();
+    let line = tree
+        .lines()
+        .find(|l| l.contains("combobox"))
+        .unwrap_or_else(|| panic!("no combobox in snapshot:\n{tree}"));
+    assert!(
+        line.contains("Name (A to Z)"),
+        "the value is the only identity a nameless control has: {line}"
+    );
+    let start = line.find("ref=").expect("line has a ref") + 4;
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_alphanumeric())
+        .unwrap_or(rest.len());
+    let sort_ref = format!("@{}", &rest[..end]);
+
+    // Replace the node (stale backendNodeId) and add a second nameless
+    // combobox, so role + name now matches two elements and the ref carries no
+    // ordinal to choose with.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": "(() => { const el = document.getElementById('sort'); \
+                       el.replaceWith(el.cloneNode(true)); \
+                       const extra = document.createElement('select'); \
+                       extra.innerHTML = '<option>Alpha</option><option>Beta</option>'; \
+                       document.getElementById('host').prepend(extra); \
+                       return true; })()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "select",
+            "selector": sort_ref,
+            "value": "Price (low to high)"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({
+            "id": "6",
+            "action": "evaluate",
+            "script": "document.getElementById('sort').value"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!("Price (low to high)"),
+        "the recovery must land on the control the ref named, not the new one"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// When the last signal cannot separate them either, the refusal stands — but
+/// it has to say that several elements are indistinguishable, not that the
+/// element is gone. The two have different fixes, and the old wording only
+/// described the one that had not happened.
+#[tokio::test]
+#[ignore]
+async fn e2e_nameless_ref_refusal_says_indistinguishable_not_missing() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>twin selects</title>
+<div id="host">
+  <select id="sort">
+    <option>Name (A to Z)</option>
+    <option>Price (low to high)</option>
+  </select>
+</div>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let tree = get_data(&resp)["snapshot"].as_str().unwrap_or_default();
+    let line = tree
+        .lines()
+        .find(|l| l.contains("combobox"))
+        .unwrap_or_else(|| panic!("no combobox in snapshot:\n{tree}"));
+    let start = line.find("ref=").expect("line has a ref") + 4;
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_alphanumeric())
+        .unwrap_or(rest.len());
+    let sort_ref = format!("@{}", &rest[..end]);
+
+    // Two twins now, same role, same (absent) name, same value — and the
+    // original node replaced so the cached id is stale.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "evaluate",
+            "script": "(() => { const el = document.getElementById('sort'); \
+                       const twin = el.cloneNode(true); twin.removeAttribute('id'); \
+                       el.replaceWith(el.cloneNode(true)); \
+                       document.getElementById('host').prepend(twin); \
+                       return true; })()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "5",
+            "action": "select",
+            "selector": sort_ref,
+            "value": "Price (low to high)"
+        }),
+        &mut state,
+    )
+    .await;
+    let err = resp["error"].as_str().unwrap_or_default();
+    assert!(
+        err.contains("cannot be told apart"),
+        "the refusal must name the real problem: {err}"
+    );
+    assert!(
+        !err.contains("no element with that role and name"),
+        "and must not claim the element disappeared: {err}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Structure and pixels from one call, at one moment (#229)
+// ---------------------------------------------------------------------------
+
+/// `--with-screenshot` exists to save a round trip, but its real constraint is
+/// that both captures describe the *same* state: they ride on the single
+/// settle the observation already performed (#228), instead of each waiting on
+/// its own and describing two different moments.
+#[tokio::test]
+#[ignore]
+async fn e2e_with_screenshot_saves_pixels_alongside_the_tree() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>with screenshot</title>
+<button id="go">Go</button>
+<div id="out"></div>
+<script>
+document.getElementById('go').addEventListener('click', () => {
+  document.getElementById('out').innerHTML = '<button>Appeared</button>';
+});
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let dir = std::env::temp_dir().join(format!(
+        "chrome-use-e2e-shot-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir should be creatable");
+    let snap_shot = dir.join("snapshot.png");
+    let observe_shot = dir.join("observe.png");
+
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(
+        &json!({
+            "id": "3",
+            "action": "snapshot",
+            "interactive": true,
+            "withScreenshot": snap_shot.to_string_lossy()
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert!(
+        data["snapshot"].as_str().unwrap_or_default().contains("Go"),
+        "the tree is still the thing you read: {data}"
+    );
+    assert!(
+        data.get("screenshotError").is_none(),
+        "a companion capture that failed must say so, not be dropped: {data}"
+    );
+    let saved = data["screenshot"]
+        .as_str()
+        .expect("the saved path must be reported");
+    assert!(
+        std::fs::metadata(saved)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false),
+        "the reported path must hold a real image: {saved}"
+    );
+
+    // The same on an observed action: the delta and the pixels for it.
+    let resp = execute_command(
+        &json!({
+            "id": "4",
+            "action": "click",
+            "selector": "#go",
+            "observe": true,
+            "withScreenshot": observe_shot.to_string_lossy()
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert!(
+        data["observed"]["delta"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Appeared"),
+        "the delta must be the post-action one: {data}"
+    );
+    let saved = data["screenshot"]
+        .as_str()
+        .expect("the saved path must be reported");
+    assert!(
+        std::fs::metadata(saved)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false),
+        "the reported path must hold a real image: {saved}"
+    );
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+    let _ = std::fs::remove_dir_all(&dir);
+}

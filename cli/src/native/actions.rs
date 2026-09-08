@@ -2031,6 +2031,31 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         }
     }
 
+    // `--with-screenshot <path>` on an observed action (issue #229): the pixels
+    // for the delta just reported, from the same settled moment. Only for an
+    // observation that actually happened — attaching an image to a command that
+    // observed nothing would be a picture of an unrelated instant.
+    if ok && (observe || observe_navigation) {
+        if let Some(path) = cmd.get("withScreenshot").and_then(|v| v.as_str()) {
+            let shot = companion_screenshot(path, state).await;
+            if let Some(obj) = resp.as_object_mut() {
+                let data = obj
+                    .entry("data")
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                if let Some(d) = data.as_object_mut() {
+                    match shot {
+                        Ok(saved) => {
+                            d.insert("screenshot".into(), json!(saved));
+                        }
+                        Err(e) => {
+                            d.insert("screenshotError".into(), json!(e));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Auto-report pending JavaScript dialog so agents know why commands may hang
     if action != "dialog" {
         if let Some(ref dialog) = state.pending_dialog {
@@ -4292,7 +4317,40 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         }
     }
 
+    // `--with-screenshot <path>` (issue #229): the pixels for the tree above,
+    // taken from the state the settle already waited for rather than after a
+    // second wait of its own — two waits would describe two moments, which is
+    // worse than not combining them. Structure still goes to stdout; the image
+    // is written to disk and only its path is reported, because a screenshot is
+    // an output here, never the agent's way of reading the page.
+    if let Some(path) = cmd.get("withScreenshot").and_then(|v| v.as_str()) {
+        match companion_screenshot(path, state).await {
+            Ok(saved) => {
+                out["screenshot"] = json!(saved);
+            }
+            Err(e) => {
+                out["screenshotError"] = json!(e);
+            }
+        }
+    }
+
     Ok(out)
+}
+
+/// Take the screenshot that rides along with a structural observation
+/// (`--with-screenshot`, issue #229).
+///
+/// Delegates to the `screenshot` handler rather than reimplementing the
+/// capture: that path carries the target-drift and blank-image guards a
+/// screenshot needs, and a companion shot deserves them just as much as a
+/// standalone one.
+async fn companion_screenshot(path: &str, state: &mut DaemonState) -> Result<String, String> {
+    let resp = handle_screenshot(&json!({ "path": path }), state).await?;
+    Ok(resp
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or(path)
+        .to_string())
 }
 
 /// Resolve a (possibly relative) saved-file path to an absolute one so the CLI
