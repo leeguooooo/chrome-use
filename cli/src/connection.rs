@@ -371,9 +371,14 @@ pub fn cleanup_stale_files(session: &str) {
     // silently blocked. Absence ⇒ agent-owned, the right default.
     let owner_path = get_socket_dir().join(format!("{}.owner", session));
     let _ = fs::remove_file(&owner_path);
-    // Same reasoning for the tab-group label: a fresh session with a recycled
-    // name must not inherit the previous task's label.
-    let _ = fs::remove_file(crate::session_title::title_path(session));
+    // The tab-group label is deliberately NOT removed here. `cleanup_stale_files`
+    // also runs when a daemon is merely found stale — including on the very
+    // first command of a session, before any daemon exists — so deleting the
+    // label here wiped a name the moment it was set: `session name` wrote the
+    // sidecar, its own best-effort rename call went through `send_command`,
+    // that reached this cleanup, and the file was gone before the ✓ printed.
+    // A label is the human's choice rather than daemon state, and a stale one
+    // is harmless because the next `session name` replaces it.
     // Note: the .restore-url sidecar is intentionally NOT removed here —
     // it lives across the brief window between killing the old daemon
     // and the new daemon reading it back. The new daemon deletes it after

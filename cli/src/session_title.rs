@@ -126,6 +126,26 @@ mod tests {
         assert_eq!(display_name(session), session);
     }
 
+    /// A label must survive the stale-file cleanup that runs whenever a daemon
+    /// is found missing or old — including on a session's very first command.
+    ///
+    /// Regression: `session name` wrote the sidecar, then its own best-effort
+    /// rename went through `send_command`, which reached that cleanup and
+    /// deleted the file before the success line printed. Setting a name
+    /// reported ✓ and left nothing behind.
+    #[test]
+    fn a_label_survives_stale_file_cleanup() {
+        let session = "chrome-use-title-survives-cleanup-test";
+        set_title(session, "🔎 keep me").unwrap();
+        crate::connection::cleanup_stale_files(session);
+        assert_eq!(
+            title_of(session).as_deref(),
+            Some("🔎 keep me"),
+            "cleanup must not discard a label the user chose"
+        );
+        clear_title(session);
+    }
+
     /// Round trip through the sidecar, including the emoji, because that is the
     /// path the daemon reads on every tab it creates.
     #[test]
