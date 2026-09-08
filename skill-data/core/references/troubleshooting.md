@@ -118,8 +118,12 @@ the session cannot drive it. Those are different paths.
 
 - **confirmed** — the session evaluated on that tab, and `driving.url` is where
   it landed. This is the only case that prints ✓.
-- **failed** — the session answered from a different origin. The command errors
-  and names both urls.
+- **failed** — the session answered from a page a driven tab can never reach
+  (`chrome-extension://`, `chrome://`, `devtools://`). That is the signature of
+  a session pinned somewhere it cannot leave, so it is proof rather than doubt.
+  A different *web* origin is reported as **not confirmed** instead: it can be
+  a redirect that fired after the switch, and calling a switch that worked a
+  failure would send you to redo it.
 - **not confirmed** — the session did not answer at all. The command prints ⚠,
   not ✓, because this is neither outcome. **Do not treat it as recovered.**
 

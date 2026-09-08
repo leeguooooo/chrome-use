@@ -7948,8 +7948,25 @@ pub(crate) fn classify_driving(
 ) -> DrivingCheck {
     match probe {
         Ok(actual) => match tab_switch_identity_error(requested, expected_url, &actual) {
-            Some(message) => DrivingCheck::Elsewhere { message },
             None => DrivingCheck::Confirmed { url: actual },
+            // Landing somewhere else is only *proof* of a failed switch when the
+            // destination is one a driven web tab can never legitimately reach.
+            // A different http(s) origin can simply be a redirect that fired
+            // between the switch and the probe — an SSO bounce is exactly that
+            // shape — and calling a switch that worked a failure sends the
+            // caller off to redo it. That cost is not hypothetical: a false
+            // failure elsewhere in this area had another tool retry a step that
+            // had already succeeded and lose the state it had built.
+            Some(message) if super::browser::is_internal_chrome_target(&actual) => {
+                DrivingCheck::Elsewhere { message }
+            }
+            Some(_) => DrivingCheck::Unconfirmed {
+                why: format!(
+                    "the session answered from {actual}, not {expected_url}. That can be a \
+                     redirect that fired after the switch, so it is not proof either way — \
+                     read the page before relying on it"
+                ),
+            },
         },
         Err(why) => DrivingCheck::Unconfirmed { why },
     }
@@ -15667,16 +15684,75 @@ mod tests {
         );
     }
 
-    /// The session answered from somewhere else: the switch demonstrably did
-    /// not take, so this is a failure rather than an uncertainty.
+    /// A privileged destination is the signature of a session pinned to a page
+    /// it cannot leave — no navigation from a normal site reaches one — so this
+    /// is proof of failure rather than an uncertainty.
     #[test]
-    fn a_probe_from_another_origin_is_a_failure() {
+    fn a_probe_from_a_privileged_page_is_a_failure() {
+        for landed in [
+            "chrome-extension://abcdef/page.html",
+            "chrome://settings",
+            "devtools://devtools/bundled/x.html",
+        ] {
+            let got = classify_driving("t1", "https://www.saucedemo.com/", Ok(landed.into()));
+            assert!(
+                matches!(got, DrivingCheck::Elsewhere { .. }),
+                "{landed} should be a failure"
+            );
+        }
+    }
+
+    /// A different *web* origin can be a redirect that fired between the switch
+    /// and the probe. Calling that a failure would send the caller to redo a
+    /// switch that worked — the same false-failure cost that made another tool
+    /// retry a successful step and lose the state it had built.
+    #[test]
+    fn a_probe_from_another_web_origin_is_unconfirmed_not_failure() {
         let got = classify_driving(
             "t1",
-            "https://www.saucedemo.com/",
-            Ok("chrome-extension://abcdef/page.html".into()),
+            "https://app.example.com/",
+            Ok("https://login.microsoftonline.com/oauth2/authorize".into()),
         );
-        assert!(matches!(got, DrivingCheck::Elsewhere { .. }));
+        match got {
+            DrivingCheck::Unconfirmed { why } => {
+                assert!(
+                    why.contains("login.microsoftonline.com"),
+                    "names where it landed: {why}"
+                );
+                assert!(
+                    why.contains("redirect"),
+                    "explains why it is not proof: {why}"
+                );
+            }
+            other => panic!("a cross-origin redirect must not be reported as failure: {other:?}"),
+        }
+    }
+
+    /// Reuses `is_internal_chrome_target` rather than a second list: two
+    /// definitions of "privileged page" would drift, and this one already
+    /// decides which targets auto-connect refuses.
+    #[test]
+    fn ordinary_web_urls_are_not_internal_chrome_targets() {
+        for url in [
+            "https://a.example/",
+            "http://localhost:8080/x",
+            "https://chrome.google.com/",
+        ] {
+            assert!(
+                !super::super::browser::is_internal_chrome_target(url),
+                "{url}"
+            );
+        }
+        for url in [
+            "chrome://flags",
+            "CHROME-EXTENSION://abc/p.html",
+            " devtools://x",
+        ] {
+            assert!(
+                super::super::browser::is_internal_chrome_target(url),
+                "{url}"
+            );
+        }
     }
 
     /// #235: the probe not completing is the case that used to fall through to
