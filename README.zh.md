@@ -219,6 +219,8 @@ chrome-use snapshot -i --max-bytes 4000 --from 70   # 从上次停下的地方�
 
 ## 读之前的等待
 
+动作观察最多附带 20 条请求摘要，每条最多 256 个 UTF-8 字节。data URL 只显示媒体头和编码后载荷大小。JSON 的 `requestsTotal`、`requestsOmitted`、`requestsShortened` 分别说明总数、省略数和已显示摘要中缩短的 URL 数；完整捕获记录用 `network requests --json` 查看。即使 `changed:false`，请求摘要仍会显示，因为该字段只描述树和 URL 的变化。
+
 一次观察值多少，取决于它拍下的那一刻页面在做什么。`snapshot` 和 `--observe`
 会先等页面不再变化再采集，你不需要自己猜一个 sleep：
 

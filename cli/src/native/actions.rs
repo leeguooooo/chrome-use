@@ -1939,15 +1939,14 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             .get_url()
             .await
             .unwrap_or_default();
-        let new_reqs: Vec<String> = state
-            .tracked_requests
-            .get(req_mark..)
-            .map(|s| {
-                s.iter()
-                    .map(|r| format!("{} {}", r.method, r.url))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let new_reqs = super::observation::summarize_requests(
+            state
+                .tracked_requests
+                .get(req_mark..)
+                .unwrap_or_default()
+                .iter()
+                .map(|r| (r.method.as_str(), r.url.as_str())),
+        );
         let mut observed = serde_json::Map::new();
         // The diff is the authority on whether the action changed anything: a
         // mutation made synchronously during dispatch happens before the wait's
@@ -1965,8 +1964,11 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         if url0 != url1 {
             observed.insert("urlChanged".into(), json!({ "from": url0, "to": url1 }));
         }
-        if !new_reqs.is_empty() {
-            observed.insert("requests".into(), json!(new_reqs));
+        if new_reqs.total > 0 {
+            observed.insert("requests".into(), json!(new_reqs.lines));
+            observed.insert("requestsTotal".into(), json!(new_reqs.total));
+            observed.insert("requestsOmitted".into(), json!(new_reqs.omitted));
+            observed.insert("requestsShortened".into(), json!(new_reqs.shortened));
         }
         if let Some(obj) = resp.as_object_mut() {
             let data = obj

@@ -249,6 +249,22 @@ fn truncate_middle(s: &str, max: usize) -> String {
 }
 
 pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
+    print_response_body(resp, action, opts);
+    // Every successful text response gets its observation, including branches
+    // such as eval/check that return before the generic Done renderer.
+    if !opts.json && resp.success {
+        if let Some(data) = &resp.data {
+            if let Some(obs) = data.get("observed").and_then(|v| v.as_object()) {
+                print_observed(obs);
+            } else if let Some(snap) = data.get("observedSnapshot").and_then(|v| v.as_str()) {
+                print_observed_snapshot(snap);
+            }
+        }
+        print_warning(resp);
+    }
+}
+
+fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
     if opts.json {
         if opts.content_boundaries {
             let mut json_val = serde_json::to_value(resp).unwrap_or_default();
@@ -505,7 +521,6 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 } else {
                     println!("{} No dialog is currently open", color::success_indicator());
                 }
-                print_warning(resp);
                 return;
             }
         }
@@ -561,13 +576,6 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             // pollute the stdout url/title that scripts parse.
             if let Some(w) = data.get("warning").and_then(|v| v.as_str()) {
                 eprintln!("⚠ navigation: {w}");
-            }
-            // `navigate --observe`: the post-navigation interactive snapshot rides
-            // along so the caller does not spend a second round trip on
-            // `snapshot`. The navigation branch returns before the generic
-            // success path, so render it here too.
-            if let Some(snap) = data.get("observedSnapshot").and_then(|v| v.as_str()) {
-                print_observed_snapshot(snap);
             }
             return;
         }
@@ -1787,17 +1795,6 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             return;
         }
 
-        // `--observe` payload. The daemon has always attached the post-action
-        // a11y delta under `data.observed`, but only `--json` ever showed it:
-        // text mode fell straight through to a bare `✓ Done` and dropped the
-        // whole thing, so the flag looked like a no-op to anyone not passing
-        // `--json`. Render it here so one call really does replace
-        // act → wait → snapshot → diff.
-        let observed = data.get("observed").and_then(|v| v.as_object());
-        // `navigate --observe` has no comparable baseline across a page swap, so
-        // the daemon attaches a fresh interactive snapshot instead of a delta.
-        let observed_snapshot = data.get("observedSnapshot").and_then(|v| v.as_str());
-
         // Default success. A soft warning carried in the data (e.g. `type`
         // read back a value that does not contain what was typed, #203) must
         // not hide behind a bare ✓ — surface it on stderr.
@@ -1809,11 +1806,6 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         }
         if let Some(w) = data_warning {
             eprintln!("{} {}", color::warning_indicator(), w);
-        }
-        if let Some(obs) = observed {
-            print_observed(obs);
-        } else if let Some(snap) = observed_snapshot {
-            print_observed_snapshot(snap);
         }
         if let Some(p) = data.get("screenshot").and_then(|v| v.as_str()) {
             eprintln!("{} {}", color::dim("screenshot:"), p);
@@ -1830,8 +1822,6 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         // hides whether anything happened).
         println!("{} Done", color::success_indicator());
     }
-
-    print_warning(resp);
 }
 
 fn print_warning(resp: &Response) {
@@ -4673,6 +4663,8 @@ Options:
                              erroring when the target element is absent
   --observe                  After a mutating action, return only what changed
                              (a11y delta + url + requests) — skip act→snapshot→diff
+                             Requests: at most 20 summaries, 256 UTF-8 bytes each;
+                             data URL payloads omitted. Full capture: network requests --json
   --settle-ms <ms>           Ceiling on the wait before an observation captures
                              (default 1000, or AGENT_BROWSER_SETTLE_MS). The wait
                              ends early on DOM quiet + no in-flight request; a
@@ -4836,7 +4828,6 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
             Some(ms) => println!("{}", color::dim(&format!("observed: no change ({ms}ms)"))),
             None => println!("{}", color::dim("observed: no change")),
         }
-        return;
     }
     if let Some(url) = obs.get("urlChanged").and_then(|v| v.as_object()) {
         let from = url.get("from").and_then(|v| v.as_str()).unwrap_or("");
@@ -4874,9 +4865,26 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
     }
     if let Some(reqs) = obs.get("requests").and_then(|v| v.as_array()) {
         if !reqs.is_empty() {
-            println!("{} {}", color::dim("observed requests:"), reqs.len());
+            let total = obs
+                .get("requestsTotal")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(reqs.len() as u64);
+            println!("{} {}", color::dim("observed requests:"), total);
             for r in reqs.iter().filter_map(|v| v.as_str()) {
                 println!("  {}", color::dim(r));
+            }
+            let omitted = obs
+                .get("requestsOmitted")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let shortened = obs
+                .get("requestsShortened")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            if omitted > 0 || shortened > 0 {
+                println!("{}", color::dim(&format!(
+                    "  {omitted} requests omitted; {shortened} shown URLs shortened. Use `network requests --json` for captured details."
+                )));
             }
         }
     }
@@ -4979,6 +4987,80 @@ pub fn print_version() {
 mod tests {
     use super::{format_a11y_text, format_storage_text};
     use serde_json::json;
+
+    #[test]
+    fn observation_output_survives_early_return_branches() {
+        const KEY: &str = "CHROME_USE_TEST_OBSERVATION_OUTPUT";
+        if let Ok(case) = std::env::var(KEY) {
+            let mut data = json!({"observed": {
+                "changed": false, "requests": ["GET data:text/plain [420000 encoded payload bytes omitted]"],
+                "requestsTotal": 25, "requestsOmitted": 24, "requestsShortened": 1
+            }});
+            match case.as_str() {
+                "eval" => data["result"] = serde_json::Value::Null,
+                "check" => data["checked"] = json!(true),
+                "navigation" => {
+                    data = json!({"url": "https://example.com", "title": "Fixture",
+                        "observedSnapshot": "- button Ready [ref=e1]"});
+                }
+                _ => {}
+            }
+            let response = crate::connection::Response {
+                success: true,
+                data: Some(data),
+                warning: Some("fixture unsettled".into()),
+                ..Default::default()
+            };
+            super::print_response_with_opts(
+                &response,
+                Some(&case),
+                &super::OutputOptions {
+                    json: case == "json",
+                    ..Default::default()
+                },
+            );
+            return;
+        }
+        for case in ["eval", "check", "click", "navigation", "json"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "output::tests::observation_output_survives_early_return_branches",
+                    "--nocapture",
+                ])
+                .env(KEY, case)
+                .env("NO_COLOR", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            if case == "json" {
+                let line = stdout.lines().find(|line| line.starts_with('{')).unwrap();
+                let value: serde_json::Value = serde_json::from_str(line).unwrap();
+                assert_eq!(value["data"]["observed"]["requestsTotal"], 25);
+                assert!(!stdout.contains("observed requests:"));
+                assert!(!stderr.contains("fixture unsettled"));
+            } else {
+                assert_eq!(
+                    stderr.matches("fixture unsettled").count(),
+                    1,
+                    "{case}: {stderr}"
+                );
+                if case == "navigation" {
+                    assert_eq!(stdout.matches("observed snapshot:").count(), 1);
+                } else {
+                    assert_eq!(
+                        stdout.matches("observed requests: 25").count(),
+                        1,
+                        "{case}: {stdout}"
+                    );
+                    assert!(stdout.contains("observed: no change"));
+                    assert!(stdout.contains("network requests --json"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_format_stream_status_text_for_enabled_stream() {

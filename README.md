@@ -534,6 +534,12 @@ severed — and reports what it left out plus a cursor to resume from.
 ## Waiting before a read
 
 An observation is only worth what the page was doing when it was taken.
+Action observations include at most 20 request summaries, each capped at 256 UTF-8
+bytes. Data URLs show their media header and encoded payload size instead of the
+payload. `requestsTotal`, `requestsOmitted`, and `requestsShortened` describe the
+summary; use `network requests --json` for full captured details. Request summaries remain
+visible when `changed:false`: that flag describes tree/URL changes, not network activity.
+
 `snapshot` and `--observe` wait for the page to stop changing before they
 capture, so you do not have to guess a sleep:
 

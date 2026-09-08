@@ -47,6 +47,9 @@ single reference unless you genuinely need the whole set.
 
 ## The core loop
 
+Use `--observe` to get action results with bounded request context; load
+`core/waiting` for the summary limits and how to retrieve full captured details.
+
 ```bash
 chrome-use open <url>        # 1. Open a page
 chrome-use snapshot -i       # 2. See what's on it (interactive elements only)

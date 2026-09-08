@@ -200,6 +200,7 @@
 
       <!-- ============ OBSERVE ============ -->
       <h2>看清动作改了什么 — --observe</h2>
+      <p>请求最多显示 20 条摘要，每条最多 256 个 UTF-8 字节；data URL 只显示媒体头和编码后载荷大小。JSON 同时返回 <code>requestsTotal</code>、<code>requestsOmitted</code>、<code>requestsShortened</code>。完整记录用 <code>network requests --json</code> 查看。<code>changed:false</code> 只表示树与 URL 没变，有请求时仍显示摘要。</p>
       <p>
         给一个会改变页面的动作（<code>click</code> / <code>fill</code> / <code>type</code> /
         <code>select</code> / <code>check</code> / <code>press</code> / <code>eval</code>）
@@ -214,7 +215,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use click @e8 <span class="du-flag">--observe</span>   <span class="du-cmt"># 一条 ~20-80 token 的回复里就看到弹出的对话框/toast/新行</span></code></pre>
+<pre><code><span class="du-prompt">$</span> chrome-use click @e8 <span class="du-flag">--observe</span>   <span class="du-cmt"># 读取动作后的变化和有界请求摘要</span></code></pre>
       </div>
 
       <div class="du-callout tip">
