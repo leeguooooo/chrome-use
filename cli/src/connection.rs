@@ -254,6 +254,34 @@ fn get_created_targets_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.created-targets.json", session))
 }
 
+/// Ask a running daemon to relabel this session's existing tab group.
+///
+/// Returns whether the group was actually relabelled. Best effort by design:
+/// there may be no daemon yet (nothing is open, so nothing needs renaming) or
+/// the live extension may predate `ABExt.renameGroup`. Both cases mean
+/// already-open tabs keep the old label, and the caller says so rather than
+/// implying the new name applied everywhere.
+pub fn rename_session_group(session: &str, from: &str, to: &str) -> bool {
+    if from == to {
+        return true;
+    }
+    let cmd = serde_json::json!({
+        "id": "session-name",
+        "action": "renameGroup",
+        "from": from,
+        "to": to,
+    });
+    match send_command(cmd, session) {
+        Ok(resp) => resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("renamed"))
+            .and_then(|v| v.as_u64())
+            .is_some_and(|n| n > 0),
+        Err(_) => false,
+    }
+}
+
 /// Ownership survives idle daemon exit; explicit stop must not silently ignore it.
 pub fn has_created_targets(session: &str) -> bool {
     fs::read_to_string(get_created_targets_path(session))
@@ -343,6 +371,9 @@ pub fn cleanup_stale_files(session: &str) {
     // silently blocked. Absence ⇒ agent-owned, the right default.
     let owner_path = get_socket_dir().join(format!("{}.owner", session));
     let _ = fs::remove_file(&owner_path);
+    // Same reasoning for the tab-group label: a fresh session with a recycled
+    // name must not inherit the previous task's label.
+    let _ = fs::remove_file(crate::session_title::title_path(session));
     // Note: the .restore-url sidecar is intentionally NOT removed here —
     // it lives across the brief window between killing the old daemon
     // and the new daemon reading it back. The new daemon deletes it after

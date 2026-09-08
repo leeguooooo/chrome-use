@@ -3721,6 +3721,12 @@ command asks you to reconnect with the original options and run close.
 
 Operations:
   (none)               Show the current session owner
+  name [title]         Label this session's tab group in the user's Chrome
+                       (no title: show the current one). Set it at the start of
+                       a task, before opening tabs — already-open tabs keep the
+                       old label unless the live extension can rename the group.
+                       A short, task-relevant name with a leading emoji reads
+                       best in the tab strip: `session name "🔎 track a parcel"`
   list                 List active sessions and their owners
   status               Show the current session owner
   handoff              Hand control to the user

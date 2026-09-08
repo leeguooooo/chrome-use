@@ -846,6 +846,15 @@ an event is untrusted and has no default action, so an editor that listens gets
 it through its own handler and one that ignores it gets a real insert; the reply
 names which path ran, and a paste that changed nothing is an error, not a ✓.
 
+**Name the session before you open tabs — `session name`.** On the user's real
+Chrome your tabs are collected into a tab group, and by default that group is
+labelled with the session id (`cu-myproject-fb0742`). That is a routing key; it
+tells the person whose browser this is nothing about what you are doing in it.
+Set a short, task-relevant label with a leading emoji as the first thing you do:
+`chrome-use session name "🔎 track a parcel"`. Do it *before* opening tabs —
+tabs already open keep the old label unless the installed extension is new
+enough to rename the group, and the command tells you which happened.
+
 **Operate a control that click alone won't move — `actions` / `do`.** Some
 elements expose more than a click: a disclosure expands, a menu button opens a
 popup, a spinbutton or slider steps through a range. `chrome-use actions @e7`

@@ -1671,6 +1671,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "snapshot" => handle_snapshot(cmd, state).await,
             "select_text" => handle_select_text(cmd, state).await,
             "paste" => handle_paste(cmd, state).await,
+            "renameGroup" => handle_rename_group(cmd, state).await,
             "actions" => handle_actions(cmd, state).await,
             "do" => handle_do_action(cmd, state).await,
             "screenshot" => handle_screenshot(cmd, state).await,
@@ -3889,6 +3890,33 @@ pub(crate) fn snapshot_diff_basis<'a>(
         }
         Some((_, _, prev_tree)) => SnapshotDiffBasis::Compare(prev_tree),
     }
+}
+
+/// `session name` — relabel this session's existing Chrome tab group.
+///
+/// Only meaningful on the extension relay; a launched browser has no tab
+/// groups, and reporting a rename there would be a success that did nothing.
+async fn handle_rename_group(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let from = cmd.get("from").and_then(|v| v.as_str()).unwrap_or_default();
+    let to = cmd.get("to").and_then(|v| v.as_str()).unwrap_or_default();
+    if to.is_empty() {
+        return Err("renameGroup needs a `to` title".to_string());
+    }
+    let Some(mgr) = state.browser.as_ref() else {
+        return Ok(json!({ "renamed": 0, "reason": "no browser session is open yet" }));
+    };
+    if !mgr.on_relay() {
+        return Ok(json!({
+            "renamed": 0,
+            "reason": "tab groups exist only in the user's Chrome via the extension relay"
+        }));
+    }
+    let result: Value = mgr
+        .client
+        .send_command_typed("ABExt.renameGroup", &json!({ "from": from, "to": to }), None)
+        .await
+        .unwrap_or_else(|e| json!({ "renamed": 0, "reason": e }));
+    Ok(result)
 }
 
 /// `actions <@ref>` — what this element supports besides a plain click.
