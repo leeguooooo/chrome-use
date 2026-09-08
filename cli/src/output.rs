@@ -547,14 +547,29 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|t| !t.is_empty());
+            // `tab select` / `tab adopt` report three outcomes, and only one of
+            // them is a success (issue #235). "Requested, but nothing confirmed
+            // it" used to print the same ✓ + title as a confirmed switch, with
+            // the doubt demoted to a footnote — so an agent read the ✓, ran the
+            // next command, and hit the identical failure it was recovering
+            // from. An unconfirmed result must not look like a done one.
+            let unconfirmed = data.get("verified").and_then(|v| v.as_str()) == Some("unconfirmed");
+            let indicator = if unconfirmed {
+                color::warning_indicator()
+            } else {
+                color::success_indicator()
+            };
+            if unconfirmed {
+                println!("{} not confirmed — the tab below is what was REQUESTED, not what this session is known to be driving", indicator);
+            }
             match title {
                 Some(t) => {
-                    println!("{} {}", color::success_indicator(), color::bold(t));
+                    println!("{} {}", indicator, color::bold(t));
                     println!("  {}", color::dim(url));
                 }
                 // Title-less page: show the URL with the checkmark instead of an
                 // empty title line.
-                None => println!("{} {}", color::success_indicator(), color::dim(url)),
+                None => println!("{} {}", indicator, color::dim(url)),
             }
             // Soft warning carried in the response (e.g. the load event timed out
             // but the DOM was ready — issue #10). Goes to stderr so it doesn't
@@ -3780,12 +3795,24 @@ chrome-use upgrade - Upgrade to the latest version
 
 Usage: chrome-use upgrade
 
-Detects the current installation method (npm, Homebrew, or Cargo) and runs
-the appropriate update command. Displays the version change on success, or
-informs you if you are already on the latest version.
+Re-runs the official install script (install.sh from the GitHub repo), which
+downloads the latest GitHub Release archive for this platform, verifies its
+checksum, and replaces the binary in place. Displays the version change on
+success, or tells you when you are already current.
+
+Environment:
+  AGENT_BROWSER_NO_SETUP=1   Skip the post-install interactive setup
+  AGENT_BROWSER_NO_SKILL=1   Skip installing/refreshing the agent skill —
+                             together these make the upgrade binary-only
+  CHROME_USE_NO_UPDATE_CHECK=1  Do not check for updates on ordinary commands
+
+The bundled skill content travels with the binary, so an upgrade refreshes what
+`chrome-use skills get` prints. A SKILL.md already installed into a runner is a
+separate copy: refresh that with `chrome-use skills update`.
 
 Examples:
   chrome-use upgrade
+  AGENT_BROWSER_NO_SKILL=1 AGENT_BROWSER_NO_SETUP=1 chrome-use upgrade
 "##
         }
 
@@ -4270,13 +4297,23 @@ Subcommands:
   get <name> --full          Include references and templates
   get --all                  Output every skill
   path [name]                Print filesystem path to skill directory
+  install                    Install the agent skill for your runner (via npx
+                             skills add); --project installs into ./ instead of
+                             globally
+  update, refresh            Same operation as install — re-adds the current
+                             version over an existing copy
 
 Options:
   --json                     Output as JSON
 
-The skills command serves bundled skill content that always matches the
-installed CLI version. Agents should use this to get current instructions
-rather than relying on cached copies.
+Two different things can be out of date, and only one of them needs `update`:
+
+  * the content `skills get` prints is bundled INTO this binary, so it always
+    matches `chrome-use --version` — upgrade the binary (`chrome-use upgrade`)
+    and it is current;
+  * a SKILL.md copy installed into a runner (Claude Code, Codex, …) lives
+    outside this binary and does not move when the binary does — that is what
+    `chrome-use skills update` re-adds.
 
 Examples:
   chrome-use skills
@@ -4287,6 +4324,8 @@ Examples:
   chrome-use skills get --all
   chrome-use skills path core
   chrome-use skills list --json
+  chrome-use skills install --project
+  chrome-use skills update
 
 Environment:
   AGENT_BROWSER_SKILLS_DIR   Override the skills directory path
@@ -4563,6 +4602,10 @@ Sessions:
   user (exempt from auto-close), `session stop/prune` to reclaim now.
   If a registered daemon loses its socket, the next command stops the unreachable
   process and starts a clean replacement for the same session automatically.
+  A session under `session handoff` is never reaped — the human's window stays
+  open. If a browser was reaped (or died) and a command has to launch a fresh
+  one, the reply carries a warning saying so: the new window is empty, and
+  anything typed into the old one is gone.
 
 Chat (AI):
   chat <message>             Send a natural language instruction (single-shot)
@@ -4865,6 +4908,17 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
                 println!("{}", color::red(line));
             } else {
                 println!("{}", color::dim(line));
+            }
+        }
+    }
+    // A cross-origin frame that appeared during the action: its content is in
+    // none of the delta above, so an agent reading only the delta concludes the
+    // click did nothing (#218).
+    if let Some(note) = obs.get("newFramesNote").and_then(|v| v.as_str()) {
+        eprintln!("{} {}", color::warning_indicator(), note);
+        if let Some(frames) = obs.get("newFrames").and_then(|v| v.as_array()) {
+            for f in frames.iter().filter_map(|v| v.as_str()) {
+                eprintln!("  {}", color::dim(f));
             }
         }
     }

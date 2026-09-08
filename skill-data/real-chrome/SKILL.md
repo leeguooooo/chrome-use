@@ -138,17 +138,19 @@ them for control.
 
 > **Per-agent isolation is automatic.** The session *name* is the isolation key:
 > it maps to a dedicated tab group **and a dedicated daemon** (the port is derived
-> from the name). When you don't pass `--session` / `AGENT_BROWSER_SESSION`,
-> chrome-use now **auto-derives a per-agent default** — `cu-<repo>-<id>`, where
-> `<id>` is a short hash of a stable per-agent terminal/agent env id
-> (`CMUX_SURFACE_ID`, `TERM_SESSION_ID`, `ITERM_SESSION_ID`, `TMUX_PANE`, … or
-> `AGENT_BROWSER_SESSION_ID` if a runner injects one). So **two agents in the same
-> repo get different tab groups by default** and no longer stomp each other's
-> active tab. The name is stable across that one agent's commands and unique per
-> agent. In a plain shell with none of those env vars it falls back to the shared
-> `default`. Override anytime: pass `--session <name>` / `AGENT_BROWSER_SESSION` to
-> pick an explicit name, or set them to the **same** value across agents to make
-> them deliberately *share* one tab group.
+> from the name). With no `--session` / `AGENT_BROWSER_SESSION`, the name is
+> derived per agent — **the derivation rules live in the core skill** (`chrome-use
+> skills get core`, "Per-agent isolation"), so there is one description of them
+> rather than two that drift apart. What matters here: when each agent has a
+> per-agent id in its environment (the usual case under an agent harness), **two
+> agents in the same repo get different tab groups** and no longer stomp each
+> other's active tab, and the name is stable across one agent's commands. That
+> prerequisite is real: with neither a per-agent nor a per-terminal id — two
+> plain shells, or two agents sharing one terminal tab — the derivation falls
+> back to the shared `default` session and they *do* share a tab group. When
+> separation has to be guaranteed rather than derived, pass `--session <name>` /
+> `AGENT_BROWSER_SESSION` explicitly; setting them to the **same** value across
+> agents makes them deliberately *share* one tab group.
 
 **Strict multi-agent isolation.** A session over the relay drives **only the tabs
 it created or explicitly adopted**. A pop-up that **your own action

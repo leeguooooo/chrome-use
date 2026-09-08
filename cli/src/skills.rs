@@ -630,6 +630,15 @@ fn run_path(skills_dirs: &[PathBuf], override_used: bool, name: Option<&str>, js
 /// Build the argv passed to `npx` for `chrome-use skill install`.
 /// Delegates to skills.sh — we never write runner dirs ourselves.
 /// Global (`-g`) by default; `--project` installs into the current project.
+/// Does this subcommand name mean "install the agent skill"?
+///
+/// Shared with the test on purpose: asserting against a copy of the `matches!`
+/// arm proves only that the copy is spelled right, and would keep passing if
+/// dispatch stopped accepting `update` (issue #234, again).
+fn is_install_alias(name: Option<&str>) -> bool {
+    matches!(name, Some("install") | Some("update") | Some("refresh"))
+}
+
 fn build_skill_install_argv(project: bool) -> Vec<String> {
     let mut v = vec![
         "-y".to_string(),
@@ -648,7 +657,12 @@ pub fn run_skills(args: &[String], json_mode: bool) {
     // dirs — handle it before the empty-dirs guard so a single-binary install
     // with an unwritable cache still reaches npx instead of a misleading
     // "Skills directory not found" error.
-    if args.get(1).map(|s| s.as_str()) == Some("install") {
+    // `update` / `refresh` are the same operation as `install`: `skills add`
+    // re-adds the current version over an existing copy. They exist because
+    // "how do I update the skill?" had no discoverable answer — the command was
+    // there, under a name nobody looks for when they already installed it, and
+    // `skills update` answered `Unknown skills subcommand` (issue #234).
+    if is_install_alias(args.get(1).map(|s| s.as_str())) {
         let project = args[2..].iter().any(|a| a == "--project" || a == "-p");
         run_skill_install(project, json_mode);
     }
@@ -698,7 +712,8 @@ pub fn run_skills(args: &[String], json_mode: bool) {
             let name = args.get(2).map(|s| s.as_str());
             run_path(&skills_dirs, skills_dirs_overridden, name, json_mode);
         }
-        // `install` is dispatched early (above), before the skill-dirs guard.
+        // `install` / `update` / `refresh` are dispatched early (above), before
+        // the skill-dirs guard.
         Some(unknown) => {
             if json_mode {
                 println!(
@@ -777,6 +792,32 @@ fn run_skill_install(project: bool, json_mode: bool) -> ! {
 
 #[cfg(test)]
 mod tests {
+    /// `install`, `update` and `refresh` are one operation. The command existed
+    /// under a name nobody reaches for once they have already installed it, and
+    /// `skills update` answered `Unknown skills subcommand` (issue #234).
+    #[test]
+    fn update_and_refresh_are_the_documented_names_for_install() {
+        for name in ["install", "update", "refresh"] {
+            assert!(
+                is_install_alias(Some(name)),
+                "{name} must reach the installer"
+            );
+        }
+        // And nothing else does -- these three are the whole set.
+        assert!(!is_install_alias(Some("get")));
+        assert!(!is_install_alias(Some("list")));
+        assert!(!is_install_alias(None));
+        // The argv it delegates to is the same for all three.
+        assert_eq!(
+            build_skill_install_argv(false),
+            vec!["-y", "skills@latest", "add", "leeguooooo/chrome-use", "-g"]
+        );
+        assert_eq!(
+            build_skill_install_argv(true),
+            vec!["-y", "skills@latest", "add", "leeguooooo/chrome-use"]
+        );
+    }
+
     use super::*;
     use std::fs;
 

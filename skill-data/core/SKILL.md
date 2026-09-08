@@ -66,8 +66,13 @@ discover newly rendered controls.
 > relocates to the matching element on the *current* page and proceeds. So after a
 > React/Vue list re-render that keeps the same labels, `click @e3` still hits the
 > right element. If the element is genuinely gone, it refuses (loud error) rather
-> than click the wrong node — it never silently mis-targets. Re-snapshot when you
-> navigated, switched tabs, or need refs for newly created elements.
+> than click the wrong node — it never silently mis-targets. **The boundary, so
+> you can decide without guessing:** a ref survives a re-render that keeps the
+> control's role and accessible name (and, for a nameless control, its value).
+> It does NOT survive a navigation, a tab switch, or a relabelling into a
+> different control — those hard-reset the identity map. So re-snapshot after a
+> navigation or tab switch, and when you need refs for newly rendered elements;
+> not after every DOM churn.
 
 > **Hard rule: snapshot-first, never screenshot-to-locate.** For form fields and
 > buttons, ALWAYS `snapshot -i` and act on refs/selectors. Do **not** reach for
@@ -135,11 +140,17 @@ transient relay drops — usually just retry the command.
 Chrome tab group + dedicated daemon and drives only tabs it created or explicitly
 adopted, so
 concurrent agents share one real Chrome without cross-talk and never touch
-unadopted user tabs; an unset session auto-derives a stable per-agent name from supported
-runner IDs, including Codex's `CODEX_THREAD_ID`. Other runners can set
-`AGENT_BROWSER_SESSION_ID`. The derived name is `cu-<repo>-<tag>`; a command run
-from another directory reuses the live daemon carrying the same agent tag, so
-tabs and refs survive `cd` (explicit `--session` still wins). `adopt
+unadopted user tabs. With no `--session` / `AGENT_BROWSER_SESSION`, the name is
+derived as `cu-<repo>-<tag>`, where `<tag>` hashes the first of these that is
+set: an **agent** id (`AGENT_BROWSER_SESSION_ID`, `OPENCODE_PID`,
+`CODEX_THREAD_ID`, `CMUX_SURFACE_ID`, `CMUX_CLAUDE_PID`, `CLAUDE_PID`), then a
+conventionally-named one, then a **terminal** id (`TERM_SESSION_ID`,
+`ITERM_SESSION_ID`, `TMUX_PANE`, `WT_SESSION`, …) — agent ids outrank terminal
+ids, because two agents in one terminal tab share the terminal's. With none of
+them set it falls back to the shared `default`. A command run from another
+directory reuses the live daemon carrying the same tag, so tabs and refs survive
+`cd` (explicit `--session` still wins). `chrome-use doctor` prints the name and
+the variable it was keyed on. `adopt
 <url|targetId>` drives a pre-existing tab on demand; OAuth/SSO popups and
 cross-process redirects are followed automatically.
 
@@ -460,6 +471,17 @@ user for the tab. It's **zero-impact until you call `handoff`** — the agent ow
 and drives every session by default, autonomous login included. Check state with
 `chrome-use session status`; `chrome-use session list` shows every session's owner.
 Never call `session resume` on your own to grab control back — wait for the user.
+A handed-off session is also **never reaped by the idle timer** — the window the
+human is working in stays open however long they take.
+
+Every other session's launched browser *is* closed after the daemon sits idle
+(`AGENT_BROWSER_IDLE_TIMEOUT_MS`, default `600000`; set `0` to keep it). If that
+happens, the next command launches a fresh browser rather than failing — and
+says so in a warning. Read it: the new window is empty, so a half-filled form,
+a logged-in tab, or anything typed into the old window is gone. That warning is
+the difference between "the page navigated away" (it did not) and "the browser
+was replaced" (it was). For a long-running flow with idle gaps, set
+`AGENT_BROWSER_IDLE_TIMEOUT_MS=0` or keep the session busy.
 
 To reclaim daemon workers without restarting every browser connection, use
 `chrome-use session stop [name]` for one session or `chrome-use session prune`
