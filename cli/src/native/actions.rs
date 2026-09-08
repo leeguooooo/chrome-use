@@ -7847,23 +7847,39 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
         .get("url")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    match mgr.evaluate("location.href", None).await {
-        Err(_) => {
+    let probe = mgr
+        .evaluate("location.href", None)
+        .await
+        .map(|v| v.as_str().unwrap_or_default().to_string());
+    match classify_driving(
+        tab_ref_str,
+        expected_url.as_deref().unwrap_or_default(),
+        probe,
+    ) {
+        DrivingCheck::Elsewhere { message } => return Err(message),
+        DrivingCheck::Confirmed { url } => {
+            // The credential the caller needs: what the session evaluates in
+            // *now*. Holding this is what "I am driving that tab" means; without
+            // it the caller has to spend another command to find out.
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "driving".to_string(),
+                    json!({ "confirmed": true, "url": url }),
+                );
+            }
+        }
+        DrivingCheck::Unconfirmed { why } => {
             let warning = tab_liveness_probe_warning(
                 mgr.on_relay(),
                 crate::connect::relay_ext_version().as_deref(),
                 env!("AB_CONNECT_VERSION"),
             );
             if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "driving".to_string(),
+                    json!({ "confirmed": false, "reason": why }),
+                );
                 obj.insert("warning".to_string(), json!(warning));
-            }
-        }
-        Ok(actual) => {
-            let actual_url = actual.as_str().unwrap_or_default().to_string();
-            if let Some(expected) = expected_url.as_deref() {
-                if let Some(msg) = tab_switch_identity_error(tab_ref_str, expected, &actual_url) {
-                    return Err(msg);
-                }
             }
         }
     }
@@ -7898,6 +7914,45 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     Ok(result)
+}
+
+/// Whether the session can actually drive the tab a recovery command just
+/// reported.
+///
+/// Three states, because two are not enough. A probe that never completed is
+/// not evidence of failure, but it is certainly not proof of success — and
+/// collapsing it into ✓ is what made `tab select` print the requested tab's
+/// title and url while the session went on driving the page it was stuck on
+/// (issue #223, then #235 when the probe failed outright rather than answering
+/// from the wrong page).
+#[derive(Debug, PartialEq)]
+pub(crate) enum DrivingCheck {
+    /// The session evaluated on the tab that was asked for.
+    Confirmed { url: String },
+    /// The session answered, from somewhere else entirely.
+    Elsewhere { message: String },
+    /// The session did not answer. Say so; do not call it either outcome.
+    Unconfirmed { why: String },
+}
+
+/// Classify a recovery command's outcome from its identity probe.
+///
+/// `probe` is the result of asking the session for its own `location.href`
+/// **after** the switch: the one question whose answer distinguishes "driving
+/// the requested tab" from "driving whatever it was stuck on". `evaluate("1")`
+/// cannot, because every page satisfies it.
+pub(crate) fn classify_driving(
+    requested: &str,
+    expected_url: &str,
+    probe: Result<String, String>,
+) -> DrivingCheck {
+    match probe {
+        Ok(actual) => match tab_switch_identity_error(requested, expected_url, &actual) {
+            Some(message) => DrivingCheck::Elsewhere { message },
+            None => DrivingCheck::Confirmed { url: actual },
+        },
+        Err(why) => DrivingCheck::Unconfirmed { why },
+    }
 }
 
 /// Reject a tab switch that reported the requested tab but left the session
@@ -7985,20 +8040,48 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         Some(mgr) => mgr.tab_adopt(spec).await,
         None => Err("Browser not launched".to_string()),
     };
-    let result = finish_tab_adopt(result, state)?;
+    let mut result = finish_tab_adopt(result, state)?;
     // Same identity check as `tab select` (issue #223): adopt reported the
     // requested tab's title and url while the session went on driving the page
     // it was stuck on, so the documented recovery for a lost tab silently did
     // nothing and the next command failed identically.
-    if let (Some(mgr), Some(expected)) = (
-        state.browser.as_mut(),
-        result.get("url").and_then(|v| v.as_str()),
-    ) {
-        if let Ok(actual) = mgr.evaluate("location.href", None).await {
-            if let Some(msg) =
-                tab_switch_identity_error(spec, expected, actual.as_str().unwrap_or_default())
-            {
-                return Err(msg);
+    let expected = result
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if let Some(mgr) = state.browser.as_mut() {
+        let probe = mgr
+            .evaluate("location.href", None)
+            .await
+            .map(|v| v.as_str().unwrap_or_default().to_string());
+        match classify_driving(spec, &expected, probe) {
+            DrivingCheck::Elsewhere { message } => return Err(message),
+            DrivingCheck::Confirmed { url } => {
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert(
+                        "driving".to_string(),
+                        json!({ "confirmed": true, "url": url }),
+                    );
+                }
+            }
+            // Previously an unanswerable probe passed silently, so adopt could
+            // report the tab it was asked for while the session drove nothing.
+            DrivingCheck::Unconfirmed { why } => {
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert(
+                        "driving".to_string(),
+                        json!({ "confirmed": false, "reason": why }),
+                    );
+                    obj.insert(
+                        "warning".to_string(),
+                        json!(format!(
+                            "adopted {spec}, but the session could not confirm it is driving that \
+                             tab: {why}. Run a read before relying on it; if that fails too, \
+                             re-open the target with `open <url>`."
+                        )),
+                    );
+                }
             }
         }
     }
@@ -15565,6 +15648,64 @@ mod tests {
                 "`{action}` would be diffed across a page swap"
             );
         }
+    }
+
+    /// The session answered from the tab that was asked for. Only this state
+    /// earns a ✓, and it carries the url the caller can now act on.
+    #[test]
+    fn a_probe_from_the_requested_tab_is_confirmed() {
+        let got = classify_driving(
+            "t1",
+            "https://www.saucedemo.com/",
+            Ok("https://www.saucedemo.com/inventory.html".into()),
+        );
+        assert_eq!(
+            got,
+            DrivingCheck::Confirmed {
+                url: "https://www.saucedemo.com/inventory.html".into()
+            }
+        );
+    }
+
+    /// The session answered from somewhere else: the switch demonstrably did
+    /// not take, so this is a failure rather than an uncertainty.
+    #[test]
+    fn a_probe_from_another_origin_is_a_failure() {
+        let got = classify_driving(
+            "t1",
+            "https://www.saucedemo.com/",
+            Ok("chrome-extension://abcdef/page.html".into()),
+        );
+        assert!(matches!(got, DrivingCheck::Elsewhere { .. }));
+    }
+
+    /// #235: the probe not completing is the case that used to fall through to
+    /// a plain ✓. It is neither outcome, and must be reported as neither —
+    /// an agent that reads ✓ here goes back round the recovery loop.
+    #[test]
+    fn a_probe_that_never_answered_is_unconfirmed_not_success() {
+        let got = classify_driving(
+            "t1",
+            "https://www.saucedemo.com/",
+            Err("Cannot access a chrome-extension:// URL of different extension".into()),
+        );
+        match got {
+            DrivingCheck::Unconfirmed { why } => {
+                assert!(
+                    why.contains("chrome-extension"),
+                    "keeps the real reason: {why}"
+                );
+            }
+            other => panic!("an unanswerable probe must not be {other:?}"),
+        }
+    }
+
+    /// A tab with no reported url still classifies rather than panicking; an
+    /// unparseable expectation is not evidence of a bad switch.
+    #[test]
+    fn a_missing_expected_url_does_not_manufacture_a_failure() {
+        let got = classify_driving("t1", "", Ok("https://a.example/".into()));
+        assert!(matches!(got, DrivingCheck::Confirmed { .. }));
     }
 
     /// The old probe ran `evaluate("1")`, which any page satisfies — including

@@ -239,6 +239,79 @@ async fn spawn_fake_daemon_socket(
 // Core: launch, navigate, evaluate, url, title, close
 // ---------------------------------------------------------------------------
 
+/// A successful `tab` switch must hand back proof that the session is driving
+/// the tab it named, not just the tab's title.
+///
+/// The unit tests cover the classifier; this covers the wiring, which is where
+/// the bug actually lived: the probe result was computed and then dropped, so a
+/// switch reported ✓ with the requested tab's details while the session drove
+/// something else (#223), or while it could not answer at all (#235).
+#[tokio::test]
+#[ignore]
+async fn e2e_tab_switch_returns_proof_it_is_driving_that_tab() {
+    let (port, server) = spawn_html_server(
+        "<!doctype html><meta charset=\"utf-8\"><title>first</title><p>one".to_string(),
+    )
+    .await;
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let url = format!("http://127.0.0.1:{port}/");
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // A second tab, so the switch has somewhere to come back from.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "tab_new", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(&json!({ "id": "4", "action": "tab_list" }), &mut state).await;
+    assert_success(&resp);
+    let first = get_data(&resp)["tabs"]
+        .as_array()
+        .and_then(|tabs| tabs.first())
+        .and_then(|t| t.get("tabId"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .expect("tab list reports at least one addressable tab");
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "tab_switch", "tabId": first }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let driving = &get_data(&resp)["driving"];
+    assert_eq!(
+        driving["confirmed"],
+        json!(true),
+        "a switch that worked must say so explicitly, not leave it to be inferred: {driving}"
+    );
+    assert!(
+        driving["url"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&port.to_string()),
+        "the credential must be the url the session actually evaluates in: {driving}"
+    );
+
+    let _ = execute_command(&json!({ "id": "6", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
 /// `actions` / `do` end to end against a real page.
 ///
 /// The derivation has unit tests, but nothing covered the chain that actually

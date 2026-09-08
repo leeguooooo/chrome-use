@@ -107,3 +107,26 @@ snapshot — fall back to `eval` in the iframe's origin or use the
 Use `--session-name <name>` or `state save`/`state load` so your session
 survives browser restarts. See [references/session-management.md](references/session-management.md)
 and [references/authentication.md](references/authentication.md).
+
+## "the tab this command was driving is gone"
+
+`tab list` may still show the tab, and `tab inspect` may still read it, while
+the session cannot drive it. Those are different paths.
+
+`tab select` / `tab adopt` now report which of three things happened, in a
+`driving` field:
+
+- **confirmed** — the session evaluated on that tab, and `driving.url` is where
+  it landed. This is the only case that prints ✓.
+- **failed** — the session answered from a different origin. The command errors
+  and names both urls.
+- **not confirmed** — the session did not answer at all. The command prints ⚠,
+  not ✓, because this is neither outcome. **Do not treat it as recovered.**
+
+On ⚠, run one read. If that also fails, stop retrying `tab select` — it cannot
+recover a session pinned to a page it can no longer leave. Re-open the target
+with `open <url>` / `navigate <url>` to rebind, then re-`snapshot`.
+
+Retrying the recovery command after a ⚠ is the loop this reporting exists to
+break: the old behaviour printed ✓ with the requested tab's title, so the next
+command failed identically and the obvious response was to "recover" again.

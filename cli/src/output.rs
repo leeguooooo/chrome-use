@@ -547,14 +547,38 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|t| !t.is_empty());
+            // A recovery command (`tab select` / `tab adopt`) carries a
+            // `driving` credential saying whether the session was confirmed to
+            // be on that tab. Unconfirmed must not wear a ✓: printing the
+            // requested tab's title under a checkmark, while the session drove
+            // something else, is what sent agents round the
+            // error → "recover" → ✓ → same error loop (issues #223, #235).
+            let unconfirmed = data
+                .get("driving")
+                .and_then(|d| d.get("confirmed"))
+                .and_then(|v| v.as_bool())
+                .is_some_and(|confirmed| !confirmed);
+            let mark = if unconfirmed {
+                color::warning_indicator()
+            } else {
+                color::success_indicator()
+            };
             match title {
                 Some(t) => {
-                    println!("{} {}", color::success_indicator(), color::bold(t));
+                    println!("{} {}", mark, color::bold(t));
                     println!("  {}", color::dim(url));
                 }
-                // Title-less page: show the URL with the checkmark instead of an
+                // Title-less page: show the URL with the marker instead of an
                 // empty title line.
-                None => println!("{} {}", color::success_indicator(), color::dim(url)),
+                None => println!("{} {}", mark, color::dim(url)),
+            }
+            if unconfirmed {
+                eprintln!(
+                    "{}",
+                    color::yellow(
+                        "not confirmed: the session did not answer, so it may not be driving this tab"
+                    )
+                );
             }
             // Soft warning carried in the response (e.g. the load event timed out
             // but the DOM was ready — issue #10). Goes to stderr so it doesn't
