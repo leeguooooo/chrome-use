@@ -521,6 +521,15 @@ fn run_path(skills_dirs: &[PathBuf], override_used: bool, name: Option<&str>, js
 /// Build the argv passed to `npx` for `chrome-use skill install`.
 /// Delegates to skills.sh — we never write runner dirs ourselves.
 /// Global (`-g`) by default; `--project` installs into the current project.
+/// Does this subcommand name mean "install the agent skill"?
+///
+/// Shared with the test on purpose: asserting against a copy of the `matches!`
+/// arm proves only that the copy is spelled right, and would keep passing if
+/// dispatch stopped accepting `update` (issue #234, again).
+fn is_install_alias(name: Option<&str>) -> bool {
+    matches!(name, Some("install") | Some("update") | Some("refresh"))
+}
+
 fn build_skill_install_argv(project: bool) -> Vec<String> {
     let mut v = vec![
         "-y".to_string(),
@@ -544,10 +553,7 @@ pub fn run_skills(args: &[String], json_mode: bool) {
     // "how do I update the skill?" had no discoverable answer — the command was
     // there, under a name nobody looks for when they already installed it, and
     // `skills update` answered `Unknown skills subcommand` (issue #234).
-    if matches!(
-        args.get(1).map(|s| s.as_str()),
-        Some("install") | Some("update") | Some("refresh")
-    ) {
+    if is_install_alias(args.get(1).map(|s| s.as_str())) {
         let project = args[2..].iter().any(|a| a == "--project" || a == "-p");
         run_skill_install(project, json_mode);
     }
@@ -684,13 +690,14 @@ mod tests {
     fn update_and_refresh_are_the_documented_names_for_install() {
         for name in ["install", "update", "refresh"] {
             assert!(
-                matches!(
-                    Some(name),
-                    Some("install") | Some("update") | Some("refresh")
-                ),
+                is_install_alias(Some(name)),
                 "{name} must reach the installer"
             );
         }
+        // And nothing else does -- these three are the whole set.
+        assert!(!is_install_alias(Some("get")));
+        assert!(!is_install_alias(Some("list")));
+        assert!(!is_install_alias(None));
         // The argv it delegates to is the same for all three.
         assert_eq!(
             build_skill_install_argv(false),
