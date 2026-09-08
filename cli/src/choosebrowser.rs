@@ -22,6 +22,7 @@
 //!   send as the wrong identity.
 
 use serde::Deserialize;
+use std::cmp::Ordering;
 use std::path::PathBuf;
 
 /// The one format this code understands. A different number means the file was
@@ -63,8 +64,16 @@ struct RulesFile {
 struct Rule {
     #[serde(default)]
     priority: i64,
+    /// Untyped because the real files carry a unix timestamp as a **number**
+    /// while the written contract shows a string. Declaring it as either one
+    /// made serde reject the whole document, and a document that fails to parse
+    /// is indistinguishable from "no rules" — the feature stayed silent with
+    /// every rule intact on disk.
+    ///
+    /// Only ever compared for ordering, so the concrete type does not matter as
+    /// long as comparison is stable.
     #[serde(default, rename = "createdAt")]
-    created_at: Option<String>,
+    created_at: Option<serde_json::Value>,
     /// `ruleId` in the file. The provenance line names it so the user can find
     /// the rule that redirected them; without the rename it silently stayed
     /// empty and the message said "a rule" with no way to look it up.
@@ -219,7 +228,7 @@ pub fn choose_for_url(rules_json: &str, url: &str) -> Option<ProfileChoice> {
         b.priority
             .cmp(&a.priority)
             .then(b.r#match.specificity().cmp(&a.r#match.specificity()))
-            .then(a.created_at.cmp(&b.created_at))
+            .then(compare_created_at(&a.created_at, &b.created_at))
     });
 
     let winner = candidates.first()?;
@@ -228,6 +237,22 @@ pub fn choose_for_url(rules_json: &str, url: &str) -> Option<ProfileChoice> {
         key,
         rule_id: winner.rule_id.clone(),
     })
+}
+
+/// Order two `createdAt` values without caring whether they are numbers or
+/// strings. Numbers compare numerically, everything else by its text; a missing
+/// value sorts last so a rule that records its age wins the tie over one that
+/// does not.
+fn compare_created_at(a: &Option<serde_json::Value>, b: &Option<serde_json::Value>) -> Ordering {
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(x), Some(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+            _ => x.to_string().cmp(&y.to_string()),
+        },
+    }
 }
 
 /// Turn a portable profile key into the `--profile-directory` value for *this*
@@ -562,6 +587,47 @@ mod tests {
         let resolved = resolve_profile_directory(&local_state(), "Profile 7").unwrap();
         assert_eq!(resolved.directory, "Profile 7");
         assert_eq!(resolved.email, None);
+    }
+
+    /// Verbatim from a real rules.json written by the shipped app.
+    ///
+    /// `createdAt` is a **number** here while the written contract shows a
+    /// string. Declaring it as either concrete type made serde reject the whole
+    /// document — and a document that fails to parse is indistinguishable from
+    /// "no rules", so the feature stayed silent with every rule intact on disk.
+    /// This fixture is the format as it actually ships, not as it is described.
+    #[test]
+    fn a_real_rules_file_from_the_shipped_app_parses() {
+        let real = r#"{"version":2,"rules":[
+          {"createdAt":1788593504,
+           "action":{"type":"always_open_in",
+                     "bundleIdentifier":"com.google.Chrome::profile::103695396640962395023"},
+           "match":{"path":"/leeguooooo*","domain":"github.com"},
+           "ruleId":"github.com|/leeguooooo*",
+           "priority":100}]}"#;
+        let got = choose_for_url(real, "https://github.com/leeguooooo/chrome-use")
+            .expect("a rule the shipped app wrote must parse");
+        assert_eq!(got.key, "103695396640962395023");
+        assert_eq!(got.rule_id.as_deref(), Some("github.com|/leeguooooo*"));
+    }
+
+    /// Ordering must survive either representation, and must not throw away a
+    /// rule just because its timestamp is typed differently.
+    #[test]
+    fn created_at_orders_across_numbers_and_strings() {
+        use serde_json::json;
+        let num = |n: i64| Some(json!(n));
+        let text = |s: &str| Some(json!(s));
+        assert_eq!(compare_created_at(&num(1), &num(2)), Ordering::Less);
+        assert_eq!(compare_created_at(&num(2), &num(1)), Ordering::Greater);
+        assert_eq!(
+            compare_created_at(&text("2020"), &text("2024")),
+            Ordering::Less
+        );
+        // A rule that records its age wins the tie over one that does not.
+        assert_eq!(compare_created_at(&None, &num(1)), Ordering::Greater);
+        assert_eq!(compare_created_at(&num(1), &None), Ordering::Less);
+        assert_eq!(compare_created_at(&None, &None), Ordering::Equal);
     }
 
     /// A url no rule covers is the ordinary case, not an error.
