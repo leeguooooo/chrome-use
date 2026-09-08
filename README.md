@@ -537,7 +537,7 @@ profile.
 
 ## Reading a page for fewer bytes
 
-Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or heading-bearing groups. It preserves local text such as product prices without changing accessible names or refs. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
+Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or heading-bearing groups. It preserves local text such as product prices without changing accessible names or refs. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
 
 `snapshot -i` is the start of every interaction, and re-reading a page you just
 read is the largest avoidable cost in an agent's context. Two flags cut it:

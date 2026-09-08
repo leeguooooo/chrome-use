@@ -45,7 +45,8 @@ try:
         choices.append((float(price[1]), ref[1]))
     assert len(choices) == 2
     _, chosen = min(choices)
-    run(['click', '@' + chosen, '--observe'])
+    changed = run(['click', '@' + chosen, '--observe'])
+    assert 'Cart: folder' in changed and 'observed: no change' not in changed, changed
     receipt = run(['get', 'text', '#receipt']).strip()
     assert receipt == 'Cart: folder', receipt
     verdict = 'PASS'

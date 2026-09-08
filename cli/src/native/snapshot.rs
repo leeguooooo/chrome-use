@@ -2107,6 +2107,43 @@ fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
     None
 }
 
+/// Keep live status receipts visible even when ordinary static text is
+/// filtered. Bound both traversal and UTF-8 output, and never mint action refs.
+fn status_summary(nodes: &[TreeNode], idx: usize) -> String {
+    let mut pending = vec![idx];
+    let mut parts = Vec::new();
+    let mut remaining = 512;
+    let mut truncated = false;
+    for _ in 0..64 {
+        let Some(current) = pending.pop() else { break };
+        let node = &nodes[current];
+        if current != idx && is_interactive_role(&node.role) {
+            continue;
+        }
+        if !node.name.is_empty() && (current == idx || node.role == "StaticText") {
+            let mut end = node.name.len().min(remaining);
+            while !node.name.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end > 0 {
+                parts.push(node.name[..end].to_string());
+            }
+            remaining = remaining.saturating_sub(end + 3);
+            if end < node.name.len() || remaining == 0 {
+                truncated = true;
+                break;
+            }
+        }
+        pending.extend(node.children.iter().rev().copied());
+    }
+    truncated |= !pending.is_empty();
+    let mut text = parts.join(" | ");
+    if truncated {
+        text.push_str(" [truncated]");
+    }
+    text
+}
+
 fn render_tree(
     nodes: &[TreeNode],
     idx: usize,
@@ -2138,6 +2175,22 @@ fn render_tree(
 
     // Skip root WebArea wrapper
     if role == "RootWebArea" || role == "WebArea" {
+        for &child in &node.children {
+            render_tree(nodes, child, indent, output, options);
+        }
+        return;
+    }
+
+    if options.interactive && role == "status" {
+        let summary = status_summary(nodes, idx);
+        if !summary.is_empty() {
+            output.push_str(&format!(
+                "{}- status: {}\n",
+                "  ".repeat(indent),
+                serde_json::to_string(&summary).unwrap_or_default()
+            ));
+        }
+        // Preserve actionable descendants, without duplicating static content.
         for &child in &node.children {
             render_tree(nodes, child, indent, output, options);
         }
@@ -2889,6 +2942,30 @@ mod tests {
         node.name = name.to_string();
         node.backend_node_id = backend_node_id;
         node
+    }
+
+    #[test]
+    fn interactive_status_receipt_survives_compaction() {
+        let mut nodes = vec![
+            make_node("status", "", None),
+            make_node("StaticText", "Cart: folder", None),
+            make_node("button", "Undo", Some(7)),
+        ];
+        nodes[0].children = vec![1, 2];
+        nodes[2].has_ref = true;
+        nodes[2].ref_id = Some("e7".to_string());
+        let options = SnapshotOptions {
+            interactive: true,
+            ..Default::default()
+        };
+        let mut output = String::new();
+        render_tree(&nodes, 0, 0, &mut output, &options);
+        let compact = compact_tree(&output, true);
+        assert!(compact.contains("- status: \"Cart: folder\""));
+        assert!(compact.contains("button \"Undo\" [ref=e7]"));
+        nodes[1].name = "字".repeat(600);
+        let summary = status_summary(&nodes, 0);
+        assert!(summary.len() <= 524 && summary.ends_with(" [truncated]"));
     }
 
     #[test]
