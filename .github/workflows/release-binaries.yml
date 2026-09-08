@@ -23,8 +23,29 @@ env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
+  validate:
+    name: Validate release version and notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - name: Check packaged version and reviewed notes
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          node scripts/check-version-sync.js
+          node scripts/release-notes.js "$RELEASE_TAG" > /dev/null
+
   build:
     name: Build ${{ matrix.name }}
+    needs: validate
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
