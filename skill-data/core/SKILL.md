@@ -47,6 +47,12 @@ single reference unless you genuinely need the whole set.
 
 ## The core loop
 
+Check `observed.status` as well as the action result. An unavailable observation
+does not mean the action failed; inspect current state instead of replaying it.
+
+Use `--observe` to get action results with bounded request context; load
+`core/waiting` for the summary limits and how to retrieve full captured details.
+
 ```bash
 chrome-use open <url>        # 1. Open a page
 chrome-use snapshot -i       # 2. See what's on it (interactive elements only)
@@ -128,6 +134,20 @@ Chrome's "Allow remote debugging?" popup never fires); `chrome-use extension
 connect` (alias `reconnect`) is the explicit form, and the CLI self-heals
 transient relay drops — usually just retry the command.
 
+The extension popup shows Connected only after a reply from the native host.
+While confirmation is pending it shows Connecting; missing-host errors are shown
+verbatim. With an older host that does not answer the initial ping, the first
+real CLI command can confirm the connection. This status confirms the host link,
+not that every page or frame is drivable.
+
+A restricted or detached child-frame command returns its error without detaching
+the parent tab. Top-level recovery retries against the recovered tab ID, rather
+than reusing an obsolete target. Re-read the page before retrying a failed frame action.
+If a top-level action is interrupted after dispatch, the relay does not replay it
+unless the command is safe to repeat or Chrome explicitly rejected it before dispatch.
+`action_outcome_unknown` means the action may already have executed; JSON reports
+`retryable: false`. Observe the current page before choosing another action.
+
 - **`--launch`** opens an isolated, empty test profile (no cookies/login/extensions,
   relay off) — use when a clean browser is fine. On macOS this path disables
   Chrome's code-sign clone so interrupted automation sessions do not leak disk.
@@ -161,6 +181,22 @@ the agent never force-fronts a tab (emulated focus keeps the page rendering).
 clearance.
 
 Full detail: `chrome-use skills get real-chrome`
+
+
+Chrome can refuse debugger access to an ordinary web tab containing another
+extension's protected iframe. `debugger_access_denied` is non-retryable; use
+`tab inspect <ref>` for browser metadata or a separate test profile. Reattaching
+does not remove this restriction.
+
+Relay navigation makes up to three bounded access checks while waiting for a
+lifecycle event. A confirmed debugger access denial ends the wait early; a
+successful check or a transient failure does not substitute for page readiness.
+Fast pages can finish before any check is sent.
+
+For isolated development, set `CHROME_USE_RELAY_DIR` to the same absolute
+directory in the native-host launcher and the CLI. This scopes relay discovery
+without changing HOME; combine it with unique session names and an explicit
+`--browser` ID. Relative paths are rejected before discovery. Omit it for ordinary shared-profile discovery.
 
 ## Two ways to drive a page — and when to drop to `eval`
 

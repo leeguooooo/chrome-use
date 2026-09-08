@@ -23,7 +23,9 @@ import {
   startDownload,
 } from './download-manager.js'
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js'
-import { reconcileAttachedTabEntries, resolveFirstLiveTab } from './tab-liveness.js'
+import {
+  reconcileAttachedTabEntries, resolveFirstLiveTab, resolveSessionTab, forgetSessionTab,
+} from './tab-liveness.js'
 import {
   canUseBrowserNavigationFallback,
   navigateTabWithBrowserFallback,
@@ -37,6 +39,9 @@ import {
   RELOAD_LOOP_WINDOW_MS,
 } from './reload-loop.js'
 import { targetInfoForTab } from './target-info.js'
+import { sendTabCommand } from './tab-command.js'
+import { HostConnectionState } from './host-connection.js'
+import { isDebuggerAccessDenied, debuggerAccessError } from './debugger-access.js'
 import {
   IDLE_DETACH_DEFAULT_SECS,
   idleDetachMsFrom,
@@ -51,7 +56,8 @@ const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about
 let port = null
 /** Whether the native-messaging host (the local chrome-use CLI) is linked.
  *  Read by the popup status page. */
-let hostConnected = false
+const hostConnection = new HostConnectionState()
+let nextHostAttemptAt = 0
 /** tabId -> { sessionId, targetId } */
 const tabs = new Map()
 /** tabId -> reload history, retained across debugger/process re-attachments. */
@@ -501,30 +507,52 @@ function cursorOverlayExpression(x, y, click) {
 
 // ---- native messaging transport ------------------------------------------
 
+function publishHostStatus() {
+  try {
+    chrome.runtime.sendMessage({ type: 'ab-host-state', ...hostConnection.snapshot(), tabCount: tabs.size })
+      .catch(() => {}) // Popup may be closed; state still lives in the worker.
+  } catch {}
+}
+
 function connectHost() {
-  if (port) return
+  if (port || Date.now() < nextHostAttemptAt) return
   try {
     port = chrome.runtime.connectNative(HOST_NAME)
-    hostConnected = true
+    hostConnection.begin(port)
   } catch (e) {
     port = null
-    hostConnected = false
+    hostConnection.end(null, String(e?.message || e))
+    nextHostAttemptAt = Date.now() + 1000
+    publishHostStatus()
     return
   }
-  port.onMessage.addListener((msg) => void whenReady(() => onHostMessage(msg)))
-  port.onDisconnect.addListener(() => {
-    // Read (acknowledge) lastError so Chrome doesn't log an "Unchecked
-    // runtime.lastError: Native host has exited." warning to the error page.
-    // A disconnect is expected whenever the local host exits (e.g. the CLI
-    // isn't actively driving); we reconnect on demand, nothing is wrong.
-    void chrome.runtime.lastError
+  const connectedPort = port
+  connectedPort.onMessage.addListener((msg) => {
+    if (port !== connectedPort) return
+    if (hostConnection.receive(connectedPort, msg)) {
+      notifyConnChange(true)
+      publishHostStatus()
+    }
+    void whenReady(() => {
+      if (port === connectedPort) return onHostMessage(msg)
+    })
+  })
+  connectedPort.onDisconnect.addListener(() => {
+    const error = chrome.runtime.lastError?.message || 'Native host disconnected'
+    if (port !== connectedPort) return
+    const wasConnected = hostConnection.snapshot().connected
+    hostConnection.end(connectedPort, error)
     port = null
-    hostConnected = false
-    notifyConnChange(false)
-    // Sessions are stale once the host is gone; the daemon re-discovers on
-    // reconnect. Keep chrome.debugger attached so reconnect is cheap.
+    nextHostAttemptAt = Date.now() + 1000
+    publishHostStatus()
+    if (wasConnected) notifyConnChange(false)
+    // Retain tab records; the new host will rediscover them after reconnect.
     for (const tabId of tabs.keys()) setBadge(tabId, 'connecting')
   })
+  // A response proves that the native host exists and can exchange messages.
+  // Older hosts can instead confirm themselves with their first real command.
+  publishHostStatus()
+  postToHost({ method: 'ping' })
   // Report our version + a stable per-profile id so the host can tell the
   // CLI/`doctor` which extension build is live AND which Chrome profile the relay
   // is bound to. With many profiles, "logged out" on a site is otherwise
@@ -534,6 +562,7 @@ function connectHost() {
   // `identity` permission is granted, we also include the account email; absent
   // that, email is simply omitted. Best-effort; ignored by older hosts.
   void buildHelloIdentity().then((extra) => {
+    if (port !== connectedPort) return
     try {
       postToHost({
         method: 'hello',
@@ -548,7 +577,6 @@ function connectHost() {
   // pages).
   void reannounceAttachedTabs()
   void reattachOwnedTabs()
-  notifyConnChange(true)
   // Start the proactive heartbeat so the worker stays alive while paired.
   scheduleKeepalivePing()
 }
@@ -556,6 +584,7 @@ function connectHost() {
 async function onHostMessage(msg) {
   if (!msg || typeof msg !== 'object') return
   // Optional keepalive.
+  if (msg.method === 'pong') return
   if (msg.method === 'ping') {
     postToHost({ method: 'pong' })
     return
@@ -618,7 +647,7 @@ function isPermanentAttachError(e) {
 // Returns the tabId on success, or null when the tab is genuinely gone
 // (closed / restricted). (issues #20.1, #23)
 async function recoverSessionTab(sessionId) {
-  const tabId = tabIdFromSession(sessionId)
+  const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
   // 1) Fast path: the encoded Chrome tabId still exists — re-attach it (covers
   //    the common renderer-process swap where the tabId is preserved, #23).
   if (tabId != null) {
@@ -630,6 +659,7 @@ async function recoverSessionTab(sessionId) {
         if (tabs.has(tabId)) return tabId
       } catch (e) {
         if (isRelayTimeoutError(e)) throw e
+        if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e)
         // Permanently off-limits (other extension's page etc.) — stop the tabId
         // fast-path and let the stable-targetId path below try a different tab.
         if (isPermanentAttachError(e)) break
@@ -673,6 +703,7 @@ async function recoverSessionTab(sessionId) {
             }
           } catch (e) {
             if (isRelayTimeoutError(e)) throw e
+            if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e)
             // The tab hosting our target is a page we can never attach to — no
             // amount of waiting fixes that, so give up the recovery now.
             if (isPermanentAttachError(e)) return null
@@ -698,25 +729,11 @@ async function recoverSessionTab(sessionId) {
 // frame — this is what lets the daemon pierce the GSI sign-in iframe over the
 // relay. Omitted/undefined ⇒ the top (page) session, addressed by tabId alone.
 async function sendCdpToTab(tabId, method, params, childSessionId) {
-  const dbg = childSessionId ? { tabId, sessionId: childSessionId } : { tabId }
-  try {
-    return await withRelayTimeout(
-      chrome.debugger.sendCommand(dbg, method, params),
-      `chrome.debugger.sendCommand(${method})`,
-    )
-  } catch (e) {
-    const msg = String((e && e.message) || e)
-    if (!/detached|not attached|target.*(closed|gone)|no target|cannot access|frame.*detached/i.test(msg)) {
-      throw e
-    }
-    detachTab(tabId, false)
-    const ok = await recoverSessionTab(`cb-tab-${tabId}`)
-    if (!ok) throw e
-    return await withRelayTimeout(
-      chrome.debugger.sendCommand(dbg, method, params),
-      `chrome.debugger.sendCommand(${method}) retry`,
-    )
-  }
+  return await sendTabCommand(tabId, method, params, childSessionId, {
+    sendCommand: (target, command, args) => chrome.debugger.sendCommand(target, command, args),
+    detachTab,
+    recoverSessionTab,
+  })
 }
 
 function anyConnectedTab() {
@@ -733,7 +750,7 @@ async function handleForwardCdpCommand(msg) {
   // tab from its per-session tab group so a `keep`-marked tab is left for the user
   // as a normal, ungrouped tab (the group can then be cleaned up). Best-effort.
   if (method === 'ABExt.ungroupTab') {
-    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
     if (tabId != null && chrome.tabs.ungroup) {
       try {
         await chrome.tabs.ungroup(tabId)
@@ -777,7 +794,7 @@ async function handleForwardCdpCommand(msg) {
   // invisible even with the overlay switched on. The daemon resolves the element
   // centre and calls this directly for that path. No-op when the cursor is off.
   if (method === 'ABExt.driveCursor') {
-    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
     const x = Number(params?.x)
     const y = Number(params?.y)
     // `reason` matters: the daemon caches "disabled" to stop paying for the round
@@ -805,7 +822,7 @@ async function handleForwardCdpCommand(msg) {
   // Hide/show the overlay around a capture so the cursor doesn't end up baked
   // into screenshots the agent then reasons about.
   if (method === 'ABExt.setCursorVisible') {
-    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
     if (!cursorEnabled || tabId == null) return { applied: false }
     const show = !!params?.visible
     await sendCdpToTab(tabId, 'Runtime.evaluate', {
@@ -1007,11 +1024,11 @@ async function handleForwardCdpCommand(msg) {
   if (sessionId) {
     // The stable Chrome tabId encoded in `cb-tab-<tabId>` is the source of truth
     // (it survives renderer-process swaps; the CDP target/sessionId does not).
-    // Resolve via it primarily — don't depend on a session→tab map entry that the
-    // detach handler may have cleared — and ensure the debugger is attached,
+    // Honor a recovered alias first, then fall back to the encoded id if the
+    // detach handler cleared the maps. Ensure the debugger is attached,
     // re-attaching across a cross-process nav before failing (issues #20.1, #23).
     // `tabForSession` still covers child/iframe sessions that aren't `cb-tab-*`.
-    tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
     if (tabId == null) {
       throw new Error(`unknown sessionId ${sessionId} for ${method}`)
     }
@@ -1296,7 +1313,7 @@ function detachTab(tabId, notify) {
   const entry = tabs.get(tabId)
   if (!entry) return
   tabs.delete(tabId)
-  sessionToTab.delete(entry.sessionId)
+  forgetSessionTab(sessionToTab, tabId)
   for (const [sid, tid] of childSessionToTab.entries()) if (tid === tabId) childSessionToTab.delete(sid)
   if (notify) {
     postToHost({
@@ -1605,9 +1622,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!port) {
       try { connectHost() } catch (e) {}
     }
-    sendResponse({ connected: hostConnected, tabCount: tabs.size, host: HOST_NAME })
+    sendResponse({ ...hostConnection.snapshot(), tabCount: tabs.size, host: HOST_NAME })
   }
-  return true
+  return false
 })
 
 // Hot-path keepalive: while a native-messaging port is open, post a tiny ping

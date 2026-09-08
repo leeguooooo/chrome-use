@@ -28,6 +28,7 @@ pub mod inspect_server;
 pub mod interaction;
 #[allow(dead_code)]
 pub mod network;
+mod observation;
 #[allow(dead_code)]
 pub mod policy;
 #[allow(dead_code)]

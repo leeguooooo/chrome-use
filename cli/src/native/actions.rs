@@ -1660,12 +1660,12 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // interactive snapshot instead, which is what collapses
     // `navigate` + `snapshot` into one round trip.
     let observe_navigation = observe_requested && NAVIGATION_OBSERVABLE_ACTIONS.contains(&action);
-    let observe_baseline: Option<(String, String, usize)> = if observe {
+    let observe_baseline = if observe {
         enable_request_tracking(state).await;
         let _ = state.drain_cdp_events();
         let req_mark = state.tracked_requests.len();
         let mgr = state.browser.as_ref().unwrap();
-        let url = mgr.get_url().await.unwrap_or_default();
+        let url = mgr.get_url().await;
         let snap = observe_snapshot(state).await;
         Some((url, snap, req_mark))
     } else {
@@ -1975,28 +1975,15 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         let _ = state.drain_cdp_events();
         // Registering: the delta the caller reads names refs it will act on next.
         let snap1 = observe_snapshot_registering(state).await;
-        // Normalize trailing newline so the diff doesn't report a spurious
-        // remove+add for the last line ("No newline at end of file").
-        let d = super::diff::diff_snapshots(
-            &format!("{}\n", snap0.trim_end()),
-            &format!("{}\n", snap1.trim_end()),
+        let url1 = state.browser.as_ref().unwrap().get_url().await;
+        let new_reqs = super::observation::summarize_requests(
+            state
+                .tracked_requests
+                .get(req_mark..)
+                .unwrap_or_default()
+                .iter()
+                .map(|r| (r.method.as_str(), r.url.as_str())),
         );
-        let url1 = state
-            .browser
-            .as_ref()
-            .unwrap()
-            .get_url()
-            .await
-            .unwrap_or_default();
-        let new_reqs: Vec<String> = state
-            .tracked_requests
-            .get(req_mark..)
-            .map(|s| {
-                s.iter()
-                    .map(|r| format!("{} {}", r.method, r.url))
-                    .collect()
-            })
-            .unwrap_or_default();
         // A cross-origin overlay (a bank picker, a payment field) arrives as a
         // NEW out-of-process frame, and its content is in none of this tree —
         // so the delta looks like "the click did nothing" (#218). Name the
@@ -2007,25 +1994,15 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             .filter(|f| !frames_before.contains(*f))
             .cloned()
             .collect();
-        let mut observed = serde_json::Map::new();
-        // The diff is the authority on whether the action changed anything: a
-        // mutation made synchronously during dispatch happens before the wait's
-        // observer exists, so `sawChange` alone would report `false` next to a
-        // delta that plainly shows a change.
+        let mut observed = super::observation::changes(&snap0, &snap1, &url0, &url1);
         let mut settled = settled;
-        settled.mark_changed(d.changed || url0 != url1);
+        settled.mark_changed(observed.get("changed").and_then(|v| v.as_bool()) == Some(true));
         observed.insert("settle".into(), settled.to_json());
-        observed.insert("changed".into(), json!(d.changed || url0 != url1));
-        if d.changed {
-            observed.insert("delta".into(), json!(d.diff));
-            observed.insert("added".into(), json!(d.additions));
-            observed.insert("removed".into(), json!(d.removals));
-        }
-        if url0 != url1 {
-            observed.insert("urlChanged".into(), json!({ "from": url0, "to": url1 }));
-        }
-        if !new_reqs.is_empty() {
-            observed.insert("requests".into(), json!(new_reqs));
+        if new_reqs.total > 0 {
+            observed.insert("requests".into(), json!(new_reqs.lines));
+            observed.insert("requestsTotal".into(), json!(new_reqs.total));
+            observed.insert("requestsOmitted".into(), json!(new_reqs.omitted));
+            observed.insert("requestsShortened".into(), json!(new_reqs.shortened));
         }
         if !new_frames.is_empty() {
             observed.insert("newFrames".into(), json!(new_frames));
@@ -2130,7 +2107,19 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 .entry("data")
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
             if let Some(d) = data.as_object_mut() {
-                d.insert("observedSnapshot".into(), json!(snap));
+                match snap {
+                    Ok(snapshot) => {
+                        d.insert("observedSnapshot".into(), json!(snapshot));
+                        d.insert("observed".into(), json!({"status":"complete"}));
+                    }
+                    Err(error) => {
+                        d.insert(
+                            "observed".into(),
+                            json!({"status":"unavailable","changed":null,
+                        "errors":[super::observation::capture_error("afterSnapshot", &error)]}),
+                        );
+                    }
+                }
                 d.insert("settle".into(), settled.to_json());
             }
             if let Some(w) = settled.warning() {
@@ -2140,6 +2129,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             }
         }
     }
+
+    super::observation::annotate_incomplete(&mut resp);
 
     // `--with-screenshot <path>` on an observed action (issue #229): the pixels
     // for the delta just reported, from the same settled moment. Only for an
@@ -7232,39 +7223,45 @@ pub(crate) const NAVIGATION_OBSERVABLE_ACTIONS: &[&str] =
 /// those refs have to be real: `--observe` used to print `[ref=e23]` lines that
 /// came back "Unknown ref", so the flag cost a round trip and then made you
 /// spend another one on `snapshot` anyway.
-async fn observe_snapshot_registering(state: &mut DaemonState) -> String {
+async fn observe_snapshot_registering(state: &mut DaemonState) -> Result<String, String> {
     let session_id = match state.browser.as_ref().map(|m| m.active_session_id()) {
         Some(Ok(sid)) => sid.to_string(),
-        _ => return String::new(),
+        _ => return Err("No active page for observation".into()),
     };
     let options = snapshot::SnapshotOptions {
         interactive: true,
         compact: true,
         ..Default::default()
     };
-    state.ref_map.begin_snapshot();
+    let mut refs = state.ref_map.clone();
+    refs.begin_snapshot();
     let Some(mgr) = state.browser.as_ref() else {
-        return String::new();
+        return Err("No active page for observation".into());
     };
-    snapshot::take_snapshot(
+    let result = snapshot::take_snapshot(
         &mgr.client,
         &session_id,
         &options,
-        &mut state.ref_map,
+        &mut refs,
         state.active_frame_id.as_deref(),
         &state.iframe_sessions,
     )
-    .await
-    .unwrap_or_default()
+    .await;
+    if result.is_ok() {
+        state.ref_map = refs;
+    } else {
+        state.ref_map.clear();
+    }
+    result
 }
 
-/// `--observe`. Returns "" on failure so a snapshot error never breaks the action.
-async fn observe_snapshot(state: &DaemonState) -> String {
+/// Capture a baseline without changing refs; preserve failures for the caller.
+async fn observe_snapshot(state: &DaemonState) -> Result<String, String> {
     let Some(mgr) = state.browser.as_ref() else {
-        return String::new();
+        return Err("No active page for observation".into());
     };
     let Ok(session_id) = mgr.active_session_id() else {
-        return String::new();
+        return Err("No active page for observation".into());
     };
     let session_id = session_id.to_string();
     let options = snapshot::SnapshotOptions {
@@ -7288,7 +7285,6 @@ async fn observe_snapshot(state: &DaemonState) -> String {
         &state.iframe_sessions,
     )
     .await
-    .unwrap_or_default()
 }
 
 /// `form fill --map` — fill a whole form from a {label|selector: value} map in
@@ -7384,18 +7380,28 @@ async fn handle_form_fill(cmd: &Value, state: &DaemonState) -> Result<Value, Str
     // Let validation/toasts render, then collect inline errors (#57 alert lines).
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     let snap = observe_snapshot(state).await;
-    let errors: Vec<String> = snap
+    let snapshot = snap.as_ref().map(String::as_str).unwrap_or("");
+    let errors: Vec<String> = snapshot
         .lines()
         .filter_map(|l| l.trim_start().strip_prefix("- alert "))
         .map(|s| s.trim().trim_matches('"').to_string())
         .collect();
-    let url = mgr.get_url().await.unwrap_or_default();
-    Ok(json!({
-        "filled": results,
-        "submitted": submitted,
-        "errors": errors,
-        "origin": url,
-    }))
+    let url = mgr.get_url().await;
+    let mut data =
+        json!({"filled":results,"submitted":submitted,"errors":errors,"origin":url.as_ref().ok()});
+    let mut observation_errors = Vec::new();
+    if let Err(error) = &snap {
+        data["errors"] = Value::Null;
+        observation_errors.push(super::observation::capture_error("formValidation", error));
+    }
+    if let Err(error) = &url {
+        observation_errors.push(super::observation::capture_error("afterUrl", error));
+    }
+    if !observation_errors.is_empty() {
+        data["observed"] = json!({"status":if snap.is_err() {"unavailable"} else {"partial"},
+            "changed":null,"errors":observation_errors});
+    }
+    Ok(data)
 }
 
 /// Whether an error means "the target element isn't on the page" (vs a real

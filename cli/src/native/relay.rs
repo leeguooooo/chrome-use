@@ -303,6 +303,11 @@ impl RelayState {
             return vec![RelayOut::ToExt(res)];
         }
 
+        // A native Port can be constructed before Chrome reports a missing host.
+        // Reply explicitly so the extension only marks a confirmed connection.
+        if msg.get("method").and_then(|m| m.as_str()) == Some("ping") {
+            return vec![RelayOut::ToExt(json!({ "method": "pong" }))];
+        }
         // Keepalive.
         if msg.get("method").and_then(|m| m.as_str()) == Some("pong") {
             return vec![];
@@ -499,6 +504,18 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn native_host_ping_confirms_liveness_without_broadcasting_to_clients() {
+        let mut state = RelayState::new();
+        assert_eq!(
+            state.handle_ext_message(&json!({"method": "ping"}), ""),
+            vec![RelayOut::ToExt(json!({"method": "pong"}))]
+        );
+        assert!(state
+            .handle_ext_message(&json!({"method": "pong"}), "")
+            .is_empty());
     }
 
     #[test]

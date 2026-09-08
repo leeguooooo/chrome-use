@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Observation failure fixture</title>
+<h1>Observation failure fixture</h1>
+<button id="submit">Record one action</button>
+<output id="result">Not recorded</output>
+<script>
+  document.querySelector('#submit').onclick = () => {
+    const id = new URL(location.href).searchParams.get('case');
+    fetch('/record?case=' + encodeURIComponent(id), { method: 'POST' }).then(() => {
+      document.querySelector('#result').textContent = 'Recorded';
+      setTimeout(() => document.dispatchEvent(new Event('show-restricted-fixture')), 100);
+    });
+  };
+</script>
+</html>

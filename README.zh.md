@@ -183,10 +183,23 @@ ab-connect，然后重试。
 
 若点击触发原生 `confirm()` 或 `prompt()`，click 会返回待处理 dialog，而不是把会话卡死；
 接着运行 `chrome-use dialog status` 与 `chrome-use dialog accept|dismiss` 即可。
+
+扩展弹窗收到原生主机回应后才显示 Connected，确认前显示 Connecting；主机未找到等错误会直接显示。旧主机若不响应初始 ping，可由首次实际 CLI 命令确认连接。该状态只证明主机链路已接通，不代表每个页面或框架都可操作。
+
 扩展中继的 Chrome debugger 调用也有明确超时，跨进程跳转后的坏句柄会返回恢复提示，不再无限挂起。
+
+受限或已解绑子框架的命令会返回错误，不会因此解绑父标签。顶层标签恢复后，重试使用恢复得到的标签 ID，避免继续向旧目标发命令。重试框架内动作前先重新读取页面。
+顶层动作发出后若连接中断，中继仅对可安全重复的命令或明确尚未派发的命令自动重试。`action_outcome_unknown` 表示动作可能已执行，JSON 返回 `retryable: false`；先观察当前页面，再决定下一步。
 默认的 daemon 空闲回收会保留真实 Chrome 中由 session 创建的标签页，包括当前 URL 与页内状态；
 显式执行 `close` 或 `session stop` 仍会关闭这些标签页。
 空闲退出后，`session stop` 会重新发现原浏览器并校验所有权再清理；若无法匹配，会明确报告未完成并保留记录，供使用原连接选项重连后执行 `close`。
+
+
+普通网页嵌入另一个扩展的受限 iframe 时，Chrome 也可能拒绝整个标签的 debugger 访问。此时 `debugger_access_denied` 不建议重试；用 `tab inspect <ref>` 查浏览器级状态，或选用独立测试 profile。重新连接不能解除这项限制。
+
+中继导航等待加载事件时，最多附带三次有时限的访问检查。确认访问被拒绝会提前结束等待；检查成功或临时失败都不会替代页面就绪条件。快速页面可在首次检查前完成。
+
+隔离开发时，在原生主机启动脚本和 CLI 中把 `CHROME_USE_RELAY_DIR` 设为同一个绝对路径。它只隔离中继登记与发现，不修改 HOME；同时使用唯一 session 名和明确的 `--browser` ID。相对路径会在发现中继前被拒绝。普通共享 profile 不需要设置该变量。
 
 ### 独立模式（`--launch`）
 
@@ -219,6 +232,10 @@ chrome-use snapshot -i --max-bytes 4000 --from 70   # 从上次停下的地方�
 `[ref=eN]`，既用不了也看不出是残的），并告诉你漏了哪些、从哪继续。
 
 ## 读之前的等待
+
+观察通过 `status: complete|partial|unavailable` 单独报告质量，保留动作原来的 success 值。捕获失败不会被伪装成空页面或空 URL；`changed:null` 表示证据不足，部分观察若已确认有变化仍可为 true。前置捕获失败但后置树可用时，返回后置树，不编造 diff。不完整的观察携带错误和 `retryAction:false`，应先检查当前状态，不要重放动作。 `form fill` 无法确认校验结果时返回 `errors:null`，不冒充空错误列表。
+
+动作观察最多附带 20 条请求摘要，每条最多 256 个 UTF-8 字节。data URL 只显示媒体头和编码后载荷大小。JSON 的 `requestsTotal`、`requestsOmitted`、`requestsShortened` 分别说明总数、省略数和已显示摘要中缩短的 URL 数；完整捕获记录用 `network requests --json` 查看。即使 `changed:false`，请求摘要仍会显示，因为该字段只描述树和 URL 的变化。
 
 一次观察值多少，取决于它拍下的那一刻页面在做什么。`snapshot` 和 `--observe`
 会先等页面不再变化再采集，你不需要自己猜一个 sleep：

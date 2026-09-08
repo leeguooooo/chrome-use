@@ -13,6 +13,21 @@ pub struct ErrorMetadata {
 pub fn classify_error(message: &str) -> ErrorMetadata {
     let lower = message.to_ascii_lowercase();
 
+    if lower.contains("action_outcome_unknown:") {
+        return ErrorMetadata {
+            code: "action_outcome_unknown",
+            retryable: false,
+        };
+    }
+    if lower.contains("debugger_access_denied:")
+        || (lower.contains("cannot access a chrome-extension://")
+            && lower.contains("different extension"))
+    {
+        return ErrorMetadata {
+            code: "debugger_access_denied",
+            retryable: false,
+        };
+    }
     if lower.contains("timeout") || lower.contains("timed out") {
         return ErrorMetadata {
             code: "timeout",
@@ -118,6 +133,41 @@ pub fn enrich_error_value(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protected_extension_content_is_not_retryable() {
+        for message in [
+            "debugger_access_denied: blocked",
+            "Cannot access a chrome-extension:// URL of different extension",
+        ] {
+            assert_eq!(
+                classify_error(message),
+                ErrorMetadata {
+                    code: "debugger_access_denied",
+                    retryable: false
+                }
+            );
+        }
+        assert_eq!(
+            classify_error("action_outcome_unknown: original debugger_access_denied: blocked").code,
+            "action_outcome_unknown"
+        );
+    }
+
+    #[test]
+    fn an_unconfirmed_action_is_not_reclassified_as_retryable_transport_failure() {
+        for cause in [
+            "Detached while handling command",
+            "timeout",
+            "stale sessionId",
+        ] {
+            let message = format!("action_outcome_unknown: not replayed. Original error: {cause}");
+            let value = error_value(&message);
+            assert_eq!(value["code"], "action_outcome_unknown");
+            assert_eq!(value["retryable"], false);
+            assert_eq!(value["error"], message);
+        }
+    }
 
     #[test]
     fn classifies_retryable_runtime_failures() {

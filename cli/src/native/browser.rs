@@ -541,11 +541,58 @@ fn target_was_closed(result: &Result<CloseTargetResult, String>) -> bool {
 /// fresh tab instead of erroring on every command until the user runs `tab new`.
 pub(crate) fn is_stale_target_error(error: &str) -> bool {
     let lower = error.to_lowercase();
+    if is_debugger_access_denied(error) {
+        return false;
+    }
+    if lower.contains("action_outcome_unknown:") {
+        return false;
+    }
     lower.contains("its tab is gone")
         || lower.contains("stale sessionid")
         || lower.contains("unknown sessionid")
         || lower.contains("no attached tab")
         || lower.contains("can no longer be resolved")
+}
+
+/// A Chrome access decision is not a lost tab and cannot be fixed by reattachment.
+fn is_debugger_access_denied(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("debugger_access_denied:")
+        || (lower.contains("cannot access a chrome-extension://")
+            && lower.contains("different extension"))
+}
+
+/// Race normal lifecycle waiting against a small number of access checks. A
+/// successful check never substitutes for a load event; only a definitive
+/// Chrome access denial can end the wait early. Fast pages finish before the
+/// first check, and checks that stall cannot hold up the lifecycle future.
+async fn wait_with_access_checks<W, C, P>(
+    wait: W,
+    mut check: C,
+    delay: Duration,
+) -> Result<(), String>
+where
+    W: Future<Output = Result<(), String>>,
+    C: FnMut() -> P,
+    P: Future<Output = Result<(), String>>,
+{
+    let guard = async {
+        tokio::time::sleep(delay).await;
+        for _ in 0..3 {
+            if let Ok(Err(error)) = tokio::time::timeout(Duration::from_millis(500), check()).await
+            {
+                if is_debugger_access_denied(&error) {
+                    return error;
+                }
+            }
+            tokio::time::sleep(delay).await;
+        }
+        std::future::pending::<String>().await
+    };
+    tokio::select! {
+        result = wait => result,
+        error = guard => Err(error),
+    }
 }
 
 /// A CDP call that ran to its full time budget without the command promise ever
@@ -574,6 +621,17 @@ pub(crate) fn navigation_committed(landed: &str, target: &str) -> bool {
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     let lower = error.to_lowercase();
+    // Preserve the no-replay instruction even when the nested cause is stale or
+    // timed out; generic transport recovery guidance could duplicate the action.
+    if lower.contains("action_outcome_unknown:") {
+        return error.to_string();
+    }
+    if is_debugger_access_denied(error) {
+        if lower.contains("debugger_access_denied:") {
+            return error.to_string();
+        }
+        return format!("debugger_access_denied: Chrome blocked debugger access to protected extension content in this tab, which can be a child frame. Reattaching does not resolve this restriction. Use `tab inspect` for browser metadata or a separate test profile. Original error: {error}");
+    }
     // Top-level `await` in `eval` fails with a bare "await is not defined" /
     // "await is only valid in async" — unhelpful. Point at the wrapper (issue #65).
     if lower.contains("await is not defined")
@@ -1925,6 +1983,9 @@ impl BrowserManager {
                 .wait_for_lifecycle(wait_until, &session_id, &mut lifecycle_rx)
                 .await
             {
+                if is_debugger_access_denied(&e) {
+                    return Err(e);
+                }
                 // The lifecycle event (e.g. `load`) didn't fire within the
                 // timeout. On SPAs this is common — a long-pending XHR or a stuck
                 // sub-resource holds `load` open long after the DOM is interactive
@@ -1933,12 +1994,13 @@ impl BrowserManager {
                 // already ready, treat navigation as done (with a warning, carried
                 // in the response so the CLI can surface it) instead of failing.
                 // Only a still-loading document is a real failure.
-                let ready = self
-                    .evaluate_simple("document.readyState")
-                    .await
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_string))
-                    .unwrap_or_default();
+                let ready = match self.evaluate_simple("document.readyState").await {
+                    Err(cause) if is_debugger_access_denied(&cause) => return Err(cause),
+                    result => result
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_default(),
+                };
                 if ready == "interactive" || ready == "complete" {
                     nav_warning = Some(format!(
                         "`{}` didn't complete within the timeout, but the DOM is ready ({}) — \
@@ -1966,10 +2028,24 @@ impl BrowserManager {
                 },
                 sanitize_title(&fallback.title),
             ),
-            None => (
-                self.get_url().await.unwrap_or_else(|_| url.to_string()),
-                self.get_title().await.unwrap_or_default(),
-            ),
+            None => {
+                let current_url = self.get_url().await;
+                if let Err(error) = &current_url {
+                    if is_debugger_access_denied(error) {
+                        return Err(error.clone());
+                    }
+                }
+                let title = self.get_title().await;
+                if let Err(error) = &title {
+                    if is_debugger_access_denied(error) {
+                        return Err(error.clone());
+                    }
+                }
+                (
+                    current_url.unwrap_or_else(|_| url.to_string()),
+                    title.unwrap_or_default(),
+                )
+            }
         };
 
         // Track visited origin for cross-origin localStorage collection in save_state
@@ -2017,6 +2093,30 @@ impl BrowserManager {
     }
 
     async fn wait_for_lifecycle(
+        &self,
+        wait_until: WaitUntil,
+        session_id: &str,
+        rx: &mut broadcast::Receiver<CdpEvent>,
+    ) -> Result<(), String> {
+        let wait = self.wait_for_lifecycle_event(wait_until, session_id, rx);
+        if self.on_relay() && wait_until != WaitUntil::None {
+            wait_with_access_checks(
+                wait,
+                || async {
+                    self.client
+                        .send_command_no_params("DOM.enable", Some(session_id))
+                        .await
+                        .map(|_| ())
+                },
+                Duration::from_millis(400),
+            )
+            .await
+        } else {
+            wait.await
+        }
+    }
+
+    async fn wait_for_lifecycle_event(
         &self,
         wait_until: WaitUntil,
         session_id: &str,
@@ -4291,6 +4391,74 @@ mod tests {
     use super::*;
     use tokio::time::sleep;
 
+    #[tokio::test]
+    async fn access_checks_end_only_a_definitively_blocked_wait() {
+        let error = "debugger_access_denied: fixture".to_string();
+        let result = wait_with_access_checks(
+            std::future::pending(),
+            || async { Err(error.clone()) },
+            Duration::ZERO,
+        )
+        .await;
+        assert_eq!(result, Err(error));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_completion_does_not_wait_for_an_access_probe() {
+        let mut calls = 0;
+        let result = wait_with_access_checks(
+            async { Ok(()) },
+            || {
+                calls += 1;
+                std::future::pending()
+            },
+            Duration::from_secs(30),
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls, 0);
+    }
+
+    #[tokio::test]
+    async fn successful_or_transient_checks_do_not_complete_the_lifecycle() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut signal = Some(tx);
+        let mut calls = 0;
+        let result = wait_with_access_checks(
+            async {
+                rx.await.unwrap();
+                Err("original lifecycle error".to_string())
+            },
+            || {
+                calls += 1;
+                if calls == 3 {
+                    let _ = signal.take().unwrap().send(());
+                }
+                let check = if calls == 2 {
+                    Err("temporary transport failure".to_string())
+                } else {
+                    Ok(())
+                };
+                std::future::ready(check)
+            },
+            Duration::ZERO,
+        )
+        .await;
+        assert_eq!(result, Err("original lifecycle error".to_string()));
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn debugger_restriction_is_not_a_stale_target_retry() {
+        let raw = "Cannot access a chrome-extension:// URL of different extension";
+        let friendly = to_ai_friendly_error(raw);
+        assert!(friendly.starts_with("debugger_access_denied:"));
+        assert!(!is_stale_target_error(&friendly));
+        assert_eq!(to_ai_friendly_error(&friendly), friendly);
+        let unknown = format!("action_outcome_unknown: original {raw}");
+        assert_eq!(to_ai_friendly_error(&unknown), unknown);
+    }
+
     #[test]
     fn relay_primary_navigation_reads_final_metadata_but_recovery_does_not() {
         let mut payload = json!({
@@ -5123,6 +5291,13 @@ mod tests {
             m.contains("await is not defined"),
             "keeps the original error"
         );
+    }
+
+    #[test]
+    fn unconfirmed_action_preserves_no_replay_guidance() {
+        let error = "action_outcome_unknown: Runtime.evaluate was not replayed. Original error: stale sessionId cb-tab-1; its tab is gone";
+        assert!(!is_stale_target_error(error));
+        assert_eq!(to_ai_friendly_error(error), error);
     }
 
     #[test]

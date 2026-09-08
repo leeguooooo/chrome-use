@@ -62,7 +62,7 @@ chrome-use expect count ".result" ">=" 1                        # results loaded
 chrome-use expect text @e3 contains "Saved"                     # success message?
 chrome-use expect url contains /dashboard                       # navigation landed?
 chrome-use expect "#spinner" gone                               # finished loading?
-chrome-use requests --clear && chrome-use click @save \
+chrome-use network requests --clear && chrome-use click @save \
   && chrome-use expect request /api/save --status 2xx           # the POST fired & 2xx?
 chrome-use expect no-errors                                     # no console errors?
 ```
@@ -81,6 +81,21 @@ success. Monaco instances that hide their model API use one trusted editor
 paste plus editor-generated copy readback, with the browser clipboard restored
 afterward; if either operation cannot be verified, `fill` fails. `form fill`
 covers standard controls.
+
+Observations report `status: complete|partial|unavailable` separately from the
+action result. Failed captures do not become empty pages or URLs. `changed:null`
+means the evidence cannot establish whether anything changed; a known change can
+still be true in a partial observation. If the baseline failed but the after-tree
+was captured, that tree is returned instead of a fabricated diff. Incomplete
+observations include errors and `retryAction:false`: inspect current state rather
+than replaying the action. The command keeps its original action success value.
+For `form fill`, unavailable validation is `errors:null`, not an empty error list.
+
+Action observations include at most 20 request summaries, each capped at 256 UTF-8
+bytes. Data URLs show their media header and encoded payload size instead of the
+payload. `requestsTotal`, `requestsOmitted`, and `requestsShortened` describe the
+summary; use `network requests --json` for full captured details. Request summaries remain
+visible when `changed:false`: that flag describes tree/URL changes, not network activity.
 
 **See what an action changed — `--observe`.** Add it to a mutating action
 (`click`/`fill`/`type`/`select`/`check`/`press`/`eval`) and instead of you
@@ -171,4 +186,4 @@ don't need a separate `wait`. Conditions: element `visible|hidden|gone|present`;
 `count <css> <op> <n>`; `text|value|attr … equals|contains|matches`; `url …`;
 `request <substr> [--status 2xx]`; `no-errors`. `--not` inverts, `--no-wait`
 checks once. (`expect request` only sees requests captured after tracking is on —
-`requests --clear` first; `no-errors` needs console capture — run `console` once.)
+`network requests --clear` first; `no-errors` needs console capture — run `console` once.)

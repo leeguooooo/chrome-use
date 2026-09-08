@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Action outcome fixture</title>
+<h1>Action outcome fixture</h1>
+<button id="submit">Submit once</button>
+<p>Submission count: <output id="count">0</output></p>
+<script>
+  document.querySelector('#submit').addEventListener('click', () => {
+    const count = document.querySelector('#count');
+    count.value = String(Number(count.value) + 1);
+  });
+</script>
+</html>

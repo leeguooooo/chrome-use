@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Form observation failure fixture</title>
+<h1>Form observation failure fixture</h1>
+<label>Fixture value <input id="value"></label>
+<button id="submit">Record form action</button>
+<script>
+  document.querySelector('#submit').onclick = () => {
+    const id = new URL(location.href).searchParams.get('case');
+    fetch('/record?case=' + encodeURIComponent(id), { method: 'POST' }).then(() => {
+      setTimeout(() => document.dispatchEvent(new Event('show-restricted-fixture')), 100);
+    });
+  };
+</script>
+</html>

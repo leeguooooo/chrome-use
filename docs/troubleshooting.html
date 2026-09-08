@@ -58,6 +58,9 @@
       </p>
 
       <!-- ============ SECTION ======= -->
+      <p>扩展弹窗只在收到原生主机回应后显示 Connected。确认前为 Connecting，连接失败时显示具体错误。旧主机可由首次实际 CLI 命令确认连接；主机接通不代表所有页面都可驱动。</p>
+      <p>网页中的其他扩展 iframe 也可能导致 <code>debugger_access_denied</code>。此时不应循环重连，使用 <code>tab inspect &lt;ref&gt;</code> 查看浏览器级状态，或选择独立测试 profile。开发验收可在原生主机和 CLI 中设置相同的绝对路径 <code>CHROME_USE_RELAY_DIR</code>，配合唯一 session 与明确的 <code>--browser</code>，避免把候选中继登记到共享目录。</p>
+      <p>中继导航最多执行三次有时限的访问检查，确认 debugger 访问被拒绝时提前结束等待；成功检查或临时错误不会被当作页面已经就绪。</p>
       <h2>先跑一次体检：doctor</h2>
       <p>
         命令出现意外失败——<code>Unknown command</code>、<code>Failed to connect</code>、守护进程僵死、
@@ -219,6 +222,8 @@
         重新连接时也会核对 Chrome 标签 ID，死掉的启动页 <code>about:blank</code> 不会再混进标签清单。
         页面 JavaScript 用无限循环阻塞主线程时，<code>eval</code> 在主线程恢复前不可能完成；
         不要为了恢复 eval 而刷新掉需要诊断的现场。
+        <p>受限或已解绑子框架的命令会返回错误，不会因此解绑父标签。顶层标签恢复后，重试使用恢复得到的标签 ID。重试框架内动作前先重新读取页面。</p>
+        <p>顶层动作中断后，<code>action_outcome_unknown</code> 表示可能已经执行，中继未重放该动作，JSON 返回 <code>retryable: false</code>。先观察当前页面，再决定下一步。</p>
         <br /><br />
         只有标签确实不在清单里时才重开 URL。
         多重跳转的 SSO 流程，重开<strong>稳定的入口 URL</strong>（不是中途某个 redirect 地址），
