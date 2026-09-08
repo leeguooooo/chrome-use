@@ -1,0 +1,20 @@
+# Round 2's task, replayed. Both tools stalled here on the sort dropdown — a
+# <select> with no accessible name. Ours failed ref verification (#224); the
+# other tool tried setValue, click+keyboard and a coordinate click before
+# escaping to Playwright. This file is the fixed action sequence a working
+# run takes, so it measures whether the path is now navigable at all.
+#! assert text ".summary_subtotal_label" contains "17.98"
+#! assert text ".summary_total_label" contains "19.42"
+navigate https://www.saucedemo.com --observe
+fill "#user-name" "standard_user"
+fill "#password" "secret_sauce"
+click "#login-button" --observe
+select ".product_sort_container" "Price (low to high)" --observe
+click "[data-test='add-to-cart-sauce-labs-onesie']" --observe
+click "[data-test='add-to-cart-sauce-labs-bike-light']" --observe
+click ".shopping_cart_link" --observe
+click "#checkout" --observe
+fill "#first-name" "Leo"
+fill "#last-name" "Guo"
+fill "#postal-code" "100000"
+click "#continue" --observe

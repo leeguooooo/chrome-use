@@ -742,6 +742,34 @@ async function handleForwardCdpCommand(msg) {
     return { ungrouped: tabId ?? null }
   }
 
+  // Relabel this session's existing tab group. `session name` writes the new
+  // label for tabs opened from then on; without this, tabs already open would
+  // keep the old label forever and the user would see the task split across two
+  // differently-named groups. Matching on the old title (rather than a cached
+  // group id) is what lets it work after a service-worker restart.
+  if (method === 'ABExt.renameGroup') {
+    const from = typeof params?.from === 'string' ? params.from.trim() : ''
+    const to = typeof params?.to === 'string' ? params.to.trim() : ''
+    if (!from || !to) throw new Error('renameGroup: both `from` and `to` are required')
+    if (!chrome.tabGroups || !chrome.tabGroups.query) {
+      throw new Error('renameGroup: Chrome tab-group APIs are unavailable')
+    }
+    if (from === to) return { renamed: 0 }
+    const groups = await chrome.tabGroups.query({ title: from }).catch(() => [])
+    let renamed = 0
+    for (const g of groups || []) {
+      try {
+        await chrome.tabGroups.update(g.id, { title: to, color: colorForName(to) })
+        groupIdByName.set(to, g.id)
+        renamed++
+      } catch {}
+    }
+    groupIdByName.delete(from)
+    // Report the count rather than a bare ok: zero means the group was not
+    // found, which the caller must be able to tell apart from a rename.
+    return { renamed }
+  }
+
   // Drive the on-page cursor explicitly. `maybeDriveCursor` below mirrors
   // `Input.dispatchMouseEvent`, but on the relay a left click is dispatched
   // through the DOM instead (see `prefer_dom_dispatch` in the daemon), which

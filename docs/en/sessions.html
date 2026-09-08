@@ -253,6 +253,42 @@
 
       <hr class="du-divider" />
 
+      <!-- ============ TAB GROUP NAMING ============ -->
+      <h2>Give the tab group a name a person can read</h2>
+      <p>
+        In your real Chrome, the tabs a session opens are collected into a tab group. By default
+        that group is labelled with the <span class="mark">session id</span>
+        (<code>cu-myproject-fb0742</code>) — a routing key, which tells the person whose browser it
+        is nothing about what the agent is doing in it.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">session name</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use session name <span class="du-str">"🔎 track a parcel"</span>
+<span class="du-cmt">✓ tab group for session 'cu-myproject-fb0742' is now 🔎 track a parcel</span>
+
+<span class="du-prompt">$</span> chrome-use session name            <span class="du-cmt"># show the current one</span>
+<span class="du-prompt">$</span> chrome-use session name <span class="du-flag">--clear</span>    <span class="du-cmt"># back to the session id</span></code></pre>
+      </div>
+
+      <p>
+        <strong>Set it before you open tabs.</strong> The label is fixed when the group is created,
+        so setting it later only affects tabs opened from then on; already-open tabs need the
+        extension to rename the group, which requires a recent enough build. The command says which
+        of the two happened, so it <span class="mark">never implies the new name applied
+        everywhere</span>.
+      </p>
+      <p>
+        Short, task-relevant, and led by a neutral friendly emoji reads best in the tab strip; use
+        🔎 when unsure. Renaming affects no routing — the session id remains the identity, and the
+        label is presentation only.
+      </p>
+
+      <hr class="du-divider" />
+
       <!-- ============ DAEMON ============ -->
       <h2>Reset a stuck daemon state</h2>
       <p>

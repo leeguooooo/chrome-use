@@ -16,6 +16,7 @@ mod native;
 mod output;
 mod ownership;
 mod read;
+mod session_title;
 mod silence;
 mod site;
 mod skills;
@@ -167,12 +168,138 @@ fn session_command_route(sub: Option<&str>) -> SessionCommandRoute {
     }
 }
 
+/// `session name [title]` — set or show this session's tab-group label.
+///
+/// The label is written to a sidecar so a tab opened after a daemon recycle
+/// still carries it. Tabs that are *already* open keep the old label until the
+/// extension renames the group, so the daemon is asked to do that; when it
+/// cannot (no daemon yet, or an older extension), the reply says which tabs the
+/// new name applies to rather than implying it applied to all of them.
+fn run_session_name(session: &str, json_mode: bool, zh: bool) {
+    let requested: Vec<String> = std::env::args()
+        .skip_while(|a| a != "name")
+        .skip(1)
+        .collect();
+    // `--clear` drops the label so the group falls back to the session id.
+    // Without it a name could be set but never taken back, which matters when
+    // a long-lived session moves on to unrelated work and the old label would
+    // otherwise keep describing the wrong task.
+    let clearing = requested.iter().any(|a| a == "--clear");
+    let requested = requested
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if clearing {
+        let previous = session_title::display_name(session);
+        session_title::clear_title(session);
+        let restored = session.to_string();
+        let renamed = connection::rename_session_group(session, &previous, &restored);
+        if json_mode {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "session": session,
+                    "name": serde_json::Value::Null,
+                    "renamedExistingGroup": renamed,
+                })
+            );
+        } else if zh {
+            println!("✓ 会话 '{session}' 的标签组名已清除，恢复显示会话 id");
+        } else {
+            println!("✓ tab group for session '{session}' shows the session id again");
+        }
+        return;
+    }
+
+    if requested.trim().is_empty() {
+        let current = session_title::title_of(session);
+        if json_mode {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "session": session,
+                    "name": current,
+                    "label": session_title::display_name(session),
+                })
+            );
+        } else {
+            match current {
+                Some(t) => println!("{t}"),
+                None if zh => println!(
+                    "（未命名，标签组显示会话 id：{session}）\n  设置：chrome-use session name \"🔎 任务名\""
+                ),
+                None => println!(
+                    "(unnamed — the tab group shows the session id: {session})\n  set one with: chrome-use session name \"🔎 task name\""
+                ),
+            }
+        }
+        return;
+    }
+
+    let previous = session_title::display_name(session);
+    let title = match session_title::set_title(session, &requested) {
+        Ok(t) => t,
+        Err(e) => {
+            if json_mode {
+                print_json_error(e);
+            } else {
+                eprintln!("{}", color::red(&e));
+            }
+            exit(1);
+        }
+    };
+
+    // Best effort: an existing group only changes label if a daemon is up and
+    // the live extension knows the command. Anything else leaves already-open
+    // tabs under the old label, which the caller is told rather than left to
+    // discover.
+    let renamed = connection::rename_session_group(session, &previous, &title);
+
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "session": session,
+                "name": title,
+                "renamedExistingGroup": renamed,
+            })
+        );
+        return;
+    }
+    if zh {
+        println!("✓ 会话 '{session}' 的标签组名为 {title}");
+        if !renamed {
+            println!(
+                "  {}",
+                color::dim("已经打开的标签仍在原来的组里；新开的标签会用这个名字。")
+            );
+        }
+    } else {
+        println!("✓ tab group for session '{session}' is now {title}");
+        if !renamed {
+            println!(
+                "  {}",
+                color::dim("already-open tabs stay in the old group; new tabs use this name.")
+            );
+        }
+    }
+}
+
 /// `session <handoff|resume|status|list>` — ownership + human handoff (#89,
 /// ported from ego-lite). CLI-local: only touches the `.owner` sidecar.
 fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
     use ownership::{hand_off, owner_of, resume, session_flag_suffix, Owner};
     let zh = connect::ui_zh();
     match sub {
+        // `session name [title]` — label this session's tab group with
+        // something the human can read in their own browser, instead of the
+        // routing id. With no argument it reports the current label.
+        Some("name") => run_session_name(session, json_mode, zh),
         Some("handoff") => {
             if let Err(e) = hand_off(session) {
                 if json_mode {
