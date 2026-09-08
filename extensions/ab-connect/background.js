@@ -23,7 +23,9 @@ import {
   startDownload,
 } from './download-manager.js'
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js'
-import { reconcileAttachedTabEntries, resolveFirstLiveTab } from './tab-liveness.js'
+import {
+  reconcileAttachedTabEntries, resolveFirstLiveTab, resolveSessionTab, forgetSessionTab,
+} from './tab-liveness.js'
 import {
   canUseBrowserNavigationFallback,
   navigateTabWithBrowserFallback,
@@ -37,6 +39,7 @@ import {
   RELOAD_LOOP_WINDOW_MS,
 } from './reload-loop.js'
 import { targetInfoForTab } from './target-info.js'
+import { sendTabCommand } from './tab-command.js'
 import {
   IDLE_DETACH_DEFAULT_SECS,
   idleDetachMsFrom,
@@ -618,7 +621,7 @@ function isPermanentAttachError(e) {
 // Returns the tabId on success, or null when the tab is genuinely gone
 // (closed / restricted). (issues #20.1, #23)
 async function recoverSessionTab(sessionId) {
-  const tabId = tabIdFromSession(sessionId)
+  const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
   // 1) Fast path: the encoded Chrome tabId still exists — re-attach it (covers
   //    the common renderer-process swap where the tabId is preserved, #23).
   if (tabId != null) {
@@ -698,25 +701,11 @@ async function recoverSessionTab(sessionId) {
 // frame — this is what lets the daemon pierce the GSI sign-in iframe over the
 // relay. Omitted/undefined ⇒ the top (page) session, addressed by tabId alone.
 async function sendCdpToTab(tabId, method, params, childSessionId) {
-  const dbg = childSessionId ? { tabId, sessionId: childSessionId } : { tabId }
-  try {
-    return await withRelayTimeout(
-      chrome.debugger.sendCommand(dbg, method, params),
-      `chrome.debugger.sendCommand(${method})`,
-    )
-  } catch (e) {
-    const msg = String((e && e.message) || e)
-    if (!/detached|not attached|target.*(closed|gone)|no target|cannot access|frame.*detached/i.test(msg)) {
-      throw e
-    }
-    detachTab(tabId, false)
-    const ok = await recoverSessionTab(`cb-tab-${tabId}`)
-    if (!ok) throw e
-    return await withRelayTimeout(
-      chrome.debugger.sendCommand(dbg, method, params),
-      `chrome.debugger.sendCommand(${method}) retry`,
-    )
-  }
+  return await sendTabCommand(tabId, method, params, childSessionId, {
+    sendCommand: (target, command, args) => chrome.debugger.sendCommand(target, command, args),
+    detachTab,
+    recoverSessionTab,
+  })
 }
 
 function anyConnectedTab() {
@@ -733,7 +722,7 @@ async function handleForwardCdpCommand(msg) {
   // tab from its per-session tab group so a `keep`-marked tab is left for the user
   // as a normal, ungrouped tab (the group can then be cleaned up). Best-effort.
   if (method === 'ABExt.ungroupTab') {
-    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
     if (tabId != null && chrome.tabs.ungroup) {
       try {
         await chrome.tabs.ungroup(tabId)
@@ -777,7 +766,7 @@ async function handleForwardCdpCommand(msg) {
   // invisible even with the overlay switched on. The daemon resolves the element
   // centre and calls this directly for that path. No-op when the cursor is off.
   if (method === 'ABExt.driveCursor') {
-    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
     const x = Number(params?.x)
     const y = Number(params?.y)
     // `reason` matters: the daemon caches "disabled" to stop paying for the round
@@ -805,7 +794,7 @@ async function handleForwardCdpCommand(msg) {
   // Hide/show the overlay around a capture so the cursor doesn't end up baked
   // into screenshots the agent then reasons about.
   if (method === 'ABExt.setCursorVisible') {
-    const tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
     if (!cursorEnabled || tabId == null) return { applied: false }
     const show = !!params?.visible
     await sendCdpToTab(tabId, 'Runtime.evaluate', {
@@ -1007,11 +996,11 @@ async function handleForwardCdpCommand(msg) {
   if (sessionId) {
     // The stable Chrome tabId encoded in `cb-tab-<tabId>` is the source of truth
     // (it survives renderer-process swaps; the CDP target/sessionId does not).
-    // Resolve via it primarily — don't depend on a session→tab map entry that the
-    // detach handler may have cleared — and ensure the debugger is attached,
+    // Honor a recovered alias first, then fall back to the encoded id if the
+    // detach handler cleared the maps. Ensure the debugger is attached,
     // re-attaching across a cross-process nav before failing (issues #20.1, #23).
     // `tabForSession` still covers child/iframe sessions that aren't `cb-tab-*`.
-    tabId = tabIdFromSession(sessionId) ?? tabForSession(sessionId)
+    tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab)
     if (tabId == null) {
       throw new Error(`unknown sessionId ${sessionId} for ${method}`)
     }
@@ -1296,7 +1285,7 @@ function detachTab(tabId, notify) {
   const entry = tabs.get(tabId)
   if (!entry) return
   tabs.delete(tabId)
-  sessionToTab.delete(entry.sessionId)
+  forgetSessionTab(sessionToTab, tabId)
   for (const [sid, tid] of childSessionToTab.entries()) if (tid === tabId) childSessionToTab.delete(sid)
   if (notify) {
     postToHost({

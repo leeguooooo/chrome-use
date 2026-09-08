@@ -180,6 +180,8 @@ ab-connect，然后重试。
 若点击触发原生 `confirm()` 或 `prompt()`，click 会返回待处理 dialog，而不是把会话卡死；
 接着运行 `chrome-use dialog status` 与 `chrome-use dialog accept|dismiss` 即可。
 扩展中继的 Chrome debugger 调用也有明确超时，跨进程跳转后的坏句柄会返回恢复提示，不再无限挂起。
+
+受限或已解绑子框架的命令会返回错误，不会因此解绑父标签。顶层标签恢复后，重试使用恢复得到的标签 ID，避免继续向旧目标发命令。重试框架内动作前先重新读取页面。
 默认的 daemon 空闲回收会保留真实 Chrome 中由 session 创建的标签页，包括当前 URL 与页内状态；
 显式执行 `close` 或 `session stop` 仍会关闭这些标签页。
 空闲退出后，`session stop` 会重新发现原浏览器并校验所有权再清理；若无法匹配，会明确报告未完成并保留记录，供使用原连接选项重连后执行 `close`。

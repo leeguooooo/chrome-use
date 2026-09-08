@@ -351,6 +351,10 @@ pending-dialog result instead of blocking the session. Follow with
 Chrome debugger relay calls are also time-bounded, so a process-swapped tab
 fails with recovery guidance rather than hanging indefinitely.
 
+A restricted or detached child-frame command returns its error without detaching
+the parent tab. Top-level recovery retries against the recovered tab ID, rather
+than reusing an obsolete target. Re-read the page before retrying a failed frame action.
+
 ### Standalone mode (`--launch`)
 
 Spawn a separate browser instead of attaching to your running Chrome:

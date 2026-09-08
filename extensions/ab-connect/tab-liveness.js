@@ -29,3 +29,18 @@ export async function reconcileAttachedTabEntries(entries, deps) {
   }
   return { live, removed }
 }
+
+/** Prefer a recovered session alias to the tab id encoded before replacement. */
+export function resolveSessionTab(sessionId, mainSessions, childSessions) {
+  const mapped = mainSessions.get(sessionId) ?? childSessions.get(sessionId)
+  if (mapped != null) return mapped
+  const encoded = /^cb-tab-(\d+)$/.exec(sessionId || '')
+  return encoded ? Number(encoded[1]) : null
+}
+
+/** Remove every alias of a detached tab without disturbing other sessions. */
+export function forgetSessionTab(sessionMap, tabId) {
+  for (const [sessionId, mappedTabId] of sessionMap) {
+    if (mappedTabId === tabId) sessionMap.delete(sessionId)
+  }
+}

@@ -123,6 +123,10 @@ Chrome's "Allow remote debugging?" popup never fires); `chrome-use extension
 connect` (alias `reconnect`) is the explicit form, and the CLI self-heals
 transient relay drops — usually just retry the command.
 
+A restricted or detached child-frame command returns its error without detaching
+the parent tab. Top-level recovery retries against the recovered tab ID, rather
+than reusing an obsolete target. Re-read the page before retrying a failed frame action.
+
 - **`--launch`** opens an isolated, empty test profile (no cookies/login/extensions,
   relay off) — use when a clean browser is fine. On macOS this path disables
   Chrome's code-sign clone so interrupted automation sessions do not leak disk.

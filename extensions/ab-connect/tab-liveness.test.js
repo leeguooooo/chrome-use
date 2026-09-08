@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { reconcileAttachedTabEntries, resolveFirstLiveTab } from './tab-liveness.js'
+import { reconcileAttachedTabEntries, resolveFirstLiveTab, resolveSessionTab, forgetSessionTab } from './tab-liveness.js'
 
 test('inspect resolution prefers a live target mapping over a dead encoded session tab', async () => {
   const got = await resolveFirstLiveTab(
@@ -35,4 +35,21 @@ test('reannounce drops phantom tab records before publishing targets (#196)', as
     ['detach', 11],
     ['unmarkOwned', 11],
   ])
+})
+
+
+test('recovered alias routes the next command to the replacement tab', () => {
+  const sessions = new Map([['cb-tab-7', 42], ['cb-tab-42', 42], ['cb-tab-9', 9]])
+  const children = new Map([['frame-1', 42]])
+  assert.equal(resolveSessionTab('cb-tab-7', sessions, children), 42)
+  assert.equal(resolveSessionTab('frame-1', sessions, children), 42)
+  assert.equal(resolveSessionTab('cb-tab-9', sessions, children), 9)
+  assert.equal(resolveSessionTab('unknown', sessions, children), null)
+  assert.equal(resolveSessionTab('cb-tab-11', sessions, children), 11)
+})
+
+test('detaching a replacement removes all its aliases but keeps unrelated sessions', () => {
+  const sessions = new Map([['cb-tab-7', 42], ['cb-tab-42', 42], ['cb-tab-9', 9]])
+  forgetSessionTab(sessions, 42)
+  assert.deepEqual([...sessions], [['cb-tab-9', 9]])
 })

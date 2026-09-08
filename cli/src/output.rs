@@ -4403,6 +4403,8 @@ Navigation:
   reload                     Reload page
   On the extension relay, a renderer-blocked Page.navigate falls back to
   browser-level navigation instead of restarting the whole session.
+  Child-frame access/detach errors do not detach the parent tab.
+  Re-read the page before retrying a failed frame action.
 
 Get Info:  chrome-use get <what> [selector]
   text, html, value, attr <name>, title, url, count, box, styles, cdp-url
