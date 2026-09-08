@@ -2760,6 +2760,12 @@ impl BrowserManager {
         crate::connect::relay_url().as_deref() == Some(self.ws_url.as_str())
     }
 
+    /// The label this session's tabs are grouped under in the user's Chrome.
+    ///
+    /// Read fresh each time rather than cached: `session name` can be run
+    /// mid-task, and a tab opened after it should carry the new label. The
+    /// title is presentation only — ownership is tracked by target id — so the
+    /// session id remains the identity even when the label changes.
     fn agent_group(&self) -> Option<String> {
         if !self.via_relay() {
             return None;
@@ -2771,7 +2777,7 @@ impl BrowserManager {
         if name.is_empty() {
             None
         } else {
-            Some(name.to_string())
+            Some(crate::session_title::display_name(name))
         }
     }
 

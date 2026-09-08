@@ -267,6 +267,48 @@ fn read_skill_tiered(skill_md: &Path, full: bool) -> Option<String> {
     }
 }
 
+/// Resolve a `<skill>/<reference>` request to one supplementary file.
+///
+/// Without this, a reference could only be reached by pulling the whole skill
+/// with `--full` — so moving detail out of `SKILL.md` to keep it small would
+/// have made that detail unreachable rather than deferred. Deferred loading is
+/// only deferred if there is a way to load it.
+///
+/// The stem is matched with and without an extension, and against both
+/// subdirectories, so `core/waiting`, `core/waiting.md` and
+/// `core/references/waiting.md` all resolve to the same file.
+fn resolve_supplementary(skill_dir: &Path, stem: &str) -> Option<(String, String)> {
+    let wanted = stem
+        .trim_start_matches("references/")
+        .trim_start_matches("templates/")
+        .trim_end_matches(".md")
+        .to_ascii_lowercase();
+    if wanted.is_empty() {
+        return None;
+    }
+    collect_supplementary_files(skill_dir)
+        .into_iter()
+        .find(|(rel, _)| {
+            let base = rel
+                .rsplit('/')
+                .next()
+                .unwrap_or(rel)
+                .trim_end_matches(".md")
+                .to_ascii_lowercase();
+            base == wanted
+        })
+}
+
+/// Split `core/waiting` into `("core", Some("waiting"))`, leaving a plain skill
+/// name alone. Only the first separator matters, so `core/references/waiting`
+/// keeps its subdirectory for [`resolve_supplementary`] to strip.
+fn split_reference_request(name: &str) -> (&str, Option<&str>) {
+    match name.split_once('/') {
+        Some((skill, rest)) if !skill.is_empty() && !rest.is_empty() => (skill, Some(rest)),
+        _ => (name, None),
+    }
+}
+
 /// Collect all supplementary files (references/, templates/) for a skill.
 fn collect_supplementary_files(skill_dir: &Path) -> Vec<(String, String)> {
     let mut files = Vec::new();
@@ -363,6 +405,73 @@ fn run_get(
                     name
                 );
                 continue;
+            }
+            // `<skill>/<reference>` serves one supplementary file, so a skill
+            // can keep its entry point small and point at detail that is still
+            // reachable in one command.
+            let (skill_name, reference) = split_reference_request(name);
+            if let Some(stem) = reference {
+                match all_skills.iter().find(|s| s.name == skill_name) {
+                    Some(s) => match resolve_supplementary(&s.dir, stem) {
+                        Some((rel, content)) => {
+                            if json_mode {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&json!({
+                                        "success": true,
+                                        "skill": s.name,
+                                        "reference": rel,
+                                        "content": content,
+                                    }))
+                                    .unwrap_or_default()
+                                );
+                            } else {
+                                println!("{}", content.trim_end());
+                            }
+                            continue;
+                        }
+                        None => {
+                            let available: Vec<String> = collect_supplementary_files(&s.dir)
+                                .into_iter()
+                                .map(|(rel, _)| rel)
+                                .collect();
+                            let msg = if available.is_empty() {
+                                format!("Skill '{skill_name}' has no references")
+                            } else {
+                                format!(
+                                    "No reference '{stem}' in skill '{skill_name}'. Available: {}",
+                                    available.join(", ")
+                                )
+                            };
+                            if json_mode {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&json!({
+                                        "success": false,
+                                        "error": msg,
+                                    }))
+                                    .unwrap_or_default()
+                                );
+                            } else {
+                                eprintln!("{} {}", color::error_indicator(), msg);
+                            }
+                            exit(1);
+                        }
+                    },
+                    None => {
+                        let msg = format!("Skill not found: {skill_name}");
+                        if json_mode {
+                            println!(
+                                "{}",
+                                serde_json::to_string(&json!({"success": false, "error": msg}))
+                                    .unwrap_or_default()
+                            );
+                        } else {
+                            eprintln!("{} {}", color::error_indicator(), msg);
+                        }
+                        exit(1);
+                    }
+                }
             }
             match all_skills.iter().find(|s| s.name == *name) {
                 Some(s) => targets.push(s),
@@ -927,5 +1036,63 @@ mod tests {
         assert_eq!(files[0].0, "references/auth.md");
         assert_eq!(files[1].0, "references/commands.md");
         assert_eq!(files[2].0, "templates/example.sh");
+    }
+
+    /// A bare skill name must keep working; only an embedded separator asks
+    /// for a reference.
+    #[test]
+    fn a_plain_skill_name_is_not_a_reference_request() {
+        assert_eq!(split_reference_request("core"), ("core", None));
+        assert_eq!(split_reference_request(""), ("", None));
+        assert_eq!(split_reference_request("core/"), ("core/", None));
+        assert_eq!(split_reference_request("/waiting"), ("/waiting", None));
+    }
+
+    /// The three shapes an agent might reasonably type all mean the same file.
+    #[test]
+    fn a_reference_request_splits_on_the_first_separator() {
+        assert_eq!(
+            split_reference_request("core/waiting"),
+            ("core", Some("waiting"))
+        );
+        assert_eq!(
+            split_reference_request("core/waiting.md"),
+            ("core", Some("waiting.md"))
+        );
+        assert_eq!(
+            split_reference_request("core/references/waiting.md"),
+            ("core", Some("references/waiting.md"))
+        );
+    }
+
+    /// Resolution has to accept those same three shapes, case-insensitively —
+    /// an agent that guesses the path should still land on the file rather than
+    /// be told to go read the whole skill.
+    #[test]
+    fn resolves_a_reference_by_stem_path_or_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let refs = tmp.path().join("references");
+        std::fs::create_dir_all(&refs).unwrap();
+        std::fs::write(refs.join("waiting.md"), "# Waiting\nbody").unwrap();
+
+        for stem in ["waiting", "waiting.md", "references/waiting.md", "WAITING"] {
+            let hit = resolve_supplementary(tmp.path(), stem);
+            assert!(hit.is_some(), "{stem} should resolve");
+            let (rel, content) = hit.unwrap();
+            assert_eq!(rel, "references/waiting.md");
+            assert!(content.contains("# Waiting"));
+        }
+    }
+
+    /// A miss must be a miss: silently serving some other reference would be
+    /// worse than the error, because the agent would act on the wrong document.
+    #[test]
+    fn an_unknown_reference_does_not_fall_back_to_another_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let refs = tmp.path().join("references");
+        std::fs::create_dir_all(&refs).unwrap();
+        std::fs::write(refs.join("waiting.md"), "body").unwrap();
+        assert!(resolve_supplementary(tmp.path(), "nope").is_none());
+        assert!(resolve_supplementary(tmp.path(), "").is_none());
     }
 }

@@ -66,6 +66,16 @@ chrome-use read <url> --filter auth    # Keep sections/headings matching text
 chrome-use read <url> --llms index     # Nearest llms.txt (or --llms full); --raw for the untouched body; --json for metadata+content
 ```
 
+## Sessions
+
+```bash
+chrome-use session name "🔎 track a parcel"   # label this session's tab group
+chrome-use session name                        # show the current label
+```
+
+Set the label first thing in a task, before opening tabs. Without one the group
+shows the session id, which is meaningless to the person whose browser it is.
+
 ## Accessibility actions (beyond a click)
 
 ```bash

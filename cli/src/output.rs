@@ -3736,6 +3736,13 @@ command asks you to reconnect with the original options and run close.
 
 Operations:
   (none)               Show the current session owner
+  name --clear         Drop the label; the group shows the session id again
+  name [title]         Label this session's tab group in the user's Chrome
+                       (no title: show the current one). Set it at the start of
+                       a task, before opening tabs — already-open tabs keep the
+                       old label unless the live extension can rename the group.
+                       A short, task-relevant name with a leading emoji reads
+                       best in the tab strip: `session name "🔎 track a parcel"`
   list                 List active sessions and their owners
   status               Show the current session owner
   handoff              Hand control to the user
@@ -4284,6 +4291,9 @@ Usage: chrome-use skills [subcommand] [options]
 Subcommands:
   list                       List all available skills (default)
   get <name> [name...]       Output a skill's full content
+  get <skill>/<reference>    Output one reference on its own, so the entry
+                             point can stay small without putting detail out
+                             of reach (e.g. `skills get core/waiting`)
   get <name> --full          Include references and templates
   get --all                  Output every skill
   path [name]                Print filesystem path to skill directory

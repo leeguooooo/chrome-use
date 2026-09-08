@@ -234,6 +234,38 @@
 
       <hr class="du-divider" />
 
+      <!-- ============ 标签组命名 ============ -->
+      <h2>给标签组起个人看得懂的名字</h2>
+      <p>
+        在你的真 Chrome 里，一个会话开的标签会被收进一个标签组。默认组名是
+        <span class="mark">会话 id</span>（<code>cu-myproject-fb0742</code>）——那是路由键，
+        对着自己浏览器的人完全看不出 agent 在干什么。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">session name</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use session name <span class="du-str">"🔎 查快递单号"</span>
+<span class="du-cmt">✓ tab group for session 'cu-myproject-fb0742' is now 🔎 查快递单号</span>
+
+<span class="du-prompt">$</span> chrome-use session name            <span class="du-cmt"># 显示当前的</span>
+<span class="du-prompt">$</span> chrome-use session name <span class="du-flag">--clear</span>    <span class="du-cmt"># 恢复显示会话 id</span></code></pre>
+      </div>
+
+      <p>
+        <strong>在开标签之前设。</strong>组名是建组时定的，所以设晚了只影响之后新开的标签；
+        已经打开的那些要靠扩展去改名，装的扩展版本够新才行。两种情况命令都会明说是哪一种，
+        <span class="mark">不会让你以为全都改好了</span>。
+      </p>
+      <p>
+        名字短一点、和任务相关、用一个中性友好的 emoji 开头，在标签栏里最好认；拿不准就用 🔎。
+        改名不影响任何路由——会话 id 才是身份，组名纯粹是给人看的。
+      </p>
+
+      <hr class="du-divider" />
+
       <!-- ============ DAEMON ============ -->
       <h2>复位卡住的守护进程状态</h2>
       <p>

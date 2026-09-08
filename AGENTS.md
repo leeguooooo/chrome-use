@@ -55,6 +55,38 @@ element's live accessibility state and refuses anything else with the supported
 list, because a command that quietly does something adjacent when asked for
 something it does not support is the next silent success.
 
+## Say what you observed, not what you inferred
+
+Wrong attribution is harder to catch than a wrong measurement: a bad number
+eventually disagrees with another number, while a bad causal story stays
+internally consistent and gets built on. Four in one day on this codebase, all
+the same shape — take an observed feature, infer an unobserved mechanism,
+then use the inference as though it were established:
+
+- "One debugger client per tab" became "two tools on one browser necessarily
+  contend on every tab." Chrome authorises the debugger per tab; clients on
+  different tabs do not inherently conflict.
+- A `Detached while handling command` error was attributed to that contention
+  with no evidence. Detach has several ordinary causes: a cross-process
+  navigation, an extension worker being recycled, the target going away.
+- Another tool's log showed an action that reported failure but had actually
+  taken effect. That became "so it retried the successful operation, which
+  forced a reload, which reset the sort" — a chain its log did not contain.
+- Its accessibility output used macOS-flavoured role words (`AXWebArea`,
+  `text entry area`), so its browser AX "must" come from the macOS
+  accessibility API. It comes from CDP `Accessibility.getFullAXTree`, the same
+  source we use; the vocabulary is a mapping table in a WASM module it ships.
+  **Output that looks like something is not evidence of where it came from.**
+
+Before writing a sentence about *why* something happens, ask whether that
+sentence is something you saw or something you worked out. If it is worked
+out, either mark it as a hypothesis or go and check — the last one above took
+two commands to settle, and three paragraphs of conclusions had already been
+written by then.
+
+This applies with more force when the mechanism belongs to someone else's
+system, where you have no way to be corrected by a failing test.
+
 ## Measuring performance
 
 Three separate wrong conclusions came out of careless measurement here, and each

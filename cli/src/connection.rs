@@ -254,6 +254,34 @@ fn get_created_targets_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.created-targets.json", session))
 }
 
+/// Ask a running daemon to relabel this session's existing tab group.
+///
+/// Returns whether the group was actually relabelled. Best effort by design:
+/// there may be no daemon yet (nothing is open, so nothing needs renaming) or
+/// the live extension may predate `ABExt.renameGroup`. Both cases mean
+/// already-open tabs keep the old label, and the caller says so rather than
+/// implying the new name applied everywhere.
+pub fn rename_session_group(session: &str, from: &str, to: &str) -> bool {
+    if from == to {
+        return true;
+    }
+    let cmd = serde_json::json!({
+        "id": "session-name",
+        "action": "renameGroup",
+        "from": from,
+        "to": to,
+    });
+    match send_command(cmd, session) {
+        Ok(resp) => resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("renamed"))
+            .and_then(|v| v.as_u64())
+            .is_some_and(|n| n > 0),
+        Err(_) => false,
+    }
+}
+
 /// Ownership survives idle daemon exit; explicit stop must not silently ignore it.
 pub fn has_created_targets(session: &str) -> bool {
     fs::read_to_string(get_created_targets_path(session))
@@ -343,6 +371,14 @@ pub fn cleanup_stale_files(session: &str) {
     // silently blocked. Absence ⇒ agent-owned, the right default.
     let owner_path = get_socket_dir().join(format!("{}.owner", session));
     let _ = fs::remove_file(&owner_path);
+    // The tab-group label is deliberately NOT removed here. `cleanup_stale_files`
+    // also runs when a daemon is merely found stale — including on the very
+    // first command of a session, before any daemon exists — so deleting the
+    // label here wiped a name the moment it was set: `session name` wrote the
+    // sidecar, its own best-effort rename call went through `send_command`,
+    // that reached this cleanup, and the file was gone before the ✓ printed.
+    // A label is the human's choice rather than daemon state, and a stale one
+    // is harmless because the next `session name` replaces it.
     // Note: the .restore-url sidecar is intentionally NOT removed here —
     // it lives across the brief window between killing the old daemon
     // and the new daemon reading it back. The new daemon deletes it after
