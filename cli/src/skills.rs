@@ -274,28 +274,32 @@ fn read_skill_tiered(skill_md: &Path, full: bool) -> Option<String> {
 /// have made that detail unreachable rather than deferred. Deferred loading is
 /// only deferred if there is a way to load it.
 ///
-/// The stem is matched with and without an extension, and against both
-/// subdirectories, so `core/waiting`, `core/waiting.md` and
-/// `core/references/waiting.md` all resolve to the same file.
+/// The stem is matched with and without an extension, and a bare stem is
+/// matched against both subdirectories, so `core/waiting`, `core/waiting.md`
+/// and `core/references/waiting.md` all resolve to the same file.
+///
+/// A request that names its directory is honoured as written. Matching a
+/// `templates/` request on the basename alone would silently serve
+/// `references/` instead -- that directory is enumerated first, so it always
+/// wins a tie -- and handing back a different file than the one asked for,
+/// under a `✓`, is the failure this repo exists to avoid.
 fn resolve_supplementary(skill_dir: &Path, stem: &str) -> Option<(String, String)> {
-    let wanted = stem
-        .trim_start_matches("references/")
-        .trim_start_matches("templates/")
-        .trim_end_matches(".md")
-        .to_ascii_lowercase();
-    if wanted.is_empty() {
+    let requested = stem.trim_end_matches(".md").to_ascii_lowercase();
+    if requested.is_empty() {
         return None;
     }
+    // `references/waiting` pins the directory; `waiting` does not.
+    let pinned = requested.starts_with("references/") || requested.starts_with("templates/");
+
     collect_supplementary_files(skill_dir)
         .into_iter()
         .find(|(rel, _)| {
-            let base = rel
-                .rsplit('/')
-                .next()
-                .unwrap_or(rel)
-                .trim_end_matches(".md")
-                .to_ascii_lowercase();
-            base == wanted
+            let rel = rel.trim_end_matches(".md").to_ascii_lowercase();
+            if pinned {
+                rel == requested
+            } else {
+                rel.rsplit('/').next().unwrap_or(&rel) == requested
+            }
         })
 }
 
@@ -393,6 +397,13 @@ fn run_get(
 ) {
     let all_skills = discover_skills(skills_dirs, override_used);
 
+    // References resolved from this request, held until the loop ends so that
+    // `--json` emits ONE document. Printing inside the loop concatenates a
+    // top-level object per name, which no JSON parser accepts -- and the
+    // ordinary skill path already batches, so the two disagreed.
+    let mut references: Vec<serde_json::Value> = Vec::new();
+    let mut printed_references = 0usize;
+
     let targets: Vec<&SkillInfo> = if get_all {
         all_skills.iter().filter(|s| !s.hidden).collect()
     } else {
@@ -415,17 +426,16 @@ fn run_get(
                     Some(s) => match resolve_supplementary(&s.dir, stem) {
                         Some((rel, content)) => {
                             if json_mode {
-                                println!(
-                                    "{}",
-                                    serde_json::to_string(&json!({
-                                        "success": true,
-                                        "skill": s.name,
-                                        "reference": rel,
-                                        "content": content,
-                                    }))
-                                    .unwrap_or_default()
-                                );
+                                references.push(json!({
+                                    "skill": s.name,
+                                    "reference": rel,
+                                    "content": content,
+                                }));
                             } else {
+                                if printed_references > 0 {
+                                    println!("\n---\n");
+                                }
+                                printed_references += 1;
                                 println!("{}", content.trim_end());
                             }
                             continue;
@@ -495,7 +505,33 @@ fn run_get(
         targets
     };
 
+    // A request for references only leaves `targets` empty, which is success,
+    // not the "no skill name" error below.
+    //
+    // One reference keeps the flat shape it has always emitted -- a consumer
+    // reading `.content` off a single get must not break to fix a multi-get it
+    // never made. More than one nests under `references`, because the
+    // alternative is several top-level objects and no parser accepts that.
+    if !references.is_empty() {
+        let doc = if references.len() == 1 {
+            let mut obj = references.remove(0);
+            if let Some(map) = obj.as_object_mut() {
+                map.insert("success".to_string(), json!(true));
+            }
+            obj
+        } else {
+            json!({ "success": true, "references": references })
+        };
+        println!("{}", serde_json::to_string(&doc).unwrap_or_default());
+        if targets.is_empty() {
+            return;
+        }
+    }
+
     if targets.is_empty() {
+        if printed_references > 0 {
+            return;
+        }
         if json_mode {
             println!(
                 "{}",
@@ -995,6 +1031,38 @@ mod tests {
         assert_eq!(files[0].0, "references/auth.md");
         assert_eq!(files[1].0, "references/commands.md");
         assert_eq!(files[2].0, "templates/example.sh");
+    }
+
+    /// A request that names its directory must get that directory's file.
+    ///
+    /// `collect_supplementary_files` walks `references/` before `templates/`,
+    /// so a basename-only match hands back the reference for every colliding
+    /// stem -- silently serving a different file than the one asked for.
+    #[test]
+    fn an_explicit_directory_is_not_traded_for_the_other_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let refs_dir = tmp.path().join("references");
+        let templates_dir = tmp.path().join("templates");
+        fs::create_dir_all(&refs_dir).unwrap();
+        fs::create_dir_all(&templates_dir).unwrap();
+        fs::write(refs_dir.join("waiting.md"), "# reference\n").unwrap();
+        fs::write(templates_dir.join("waiting.md"), "# template\n").unwrap();
+
+        let (rel, content) = resolve_supplementary(tmp.path(), "templates/waiting").unwrap();
+        assert_eq!(rel, "templates/waiting.md");
+        assert!(content.contains("template"), "{content}");
+
+        let (rel, _) = resolve_supplementary(tmp.path(), "references/waiting.md").unwrap();
+        assert_eq!(rel, "references/waiting.md");
+
+        // A bare stem stays a bare stem: first match wins, as before.
+        let (rel, _) = resolve_supplementary(tmp.path(), "waiting").unwrap();
+        assert_eq!(rel, "references/waiting.md");
+
+        // A pinned directory that holds no such file resolves to nothing
+        // rather than falling back to the other directory.
+        fs::remove_file(templates_dir.join("waiting.md")).unwrap();
+        assert!(resolve_supplementary(tmp.path(), "templates/waiting").is_none());
     }
 
     /// A bare skill name must keep working; only an embedded separator asks
