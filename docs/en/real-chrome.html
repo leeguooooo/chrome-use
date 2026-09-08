@@ -172,6 +172,47 @@
         the correct <code>--browser</code>.
       </div>
 
+      <h3>Let your rules pick: ChooseBrowser</h3>
+      <p>
+        You already know which account each site belongs to; you just tell us again with
+        <code>--browser</code> every time.
+        <a href="https://choosebrowser.leeguoo.com">ChooseBrowser</a> is a macOS link router that
+        stores that mapping. With it installed, <code>open</code> follows the rule you wrote —
+        <span class="mark">only when you did not pass <code>--browser</code></span> — and says where
+        the choice came from.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">a rule fires</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/my-org/repo
+<span class="du-cmt">· using Chrome profile Profile 14 — a ChooseBrowser rule routes this site there</span>
+<span class="du-cmt">  (github.com|/my-org*). Override with --browser &lt;id|email&gt;, or skip with --no-choosebrowser.</span></code></pre>
+      </div>
+
+      <p>
+        Read-only, and invisible if you do not use it: no rules file means no behaviour change and
+        no message. A rule naming a profile that is not running the extension falls back to the
+        normal profile choice <span class="mark">rather than opening the link as some other
+        account</span> — the wrong identity can post, purchase and send as you.
+      </p>
+      <p>
+        Rules are consulted before the "most recently focused window" guess, because a rule is
+        something you wrote down and the focus is something we infer. Only navigating commands
+        (<code>open</code> / <code>goto</code> / <code>navigate</code>) consult them;
+        <code>snapshot</code> and <code>click</code> act on what the session already has open.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Disclosure</div>
+        ChooseBrowser is a paid macOS app (US$4.99, 7-day trial) by the same author as chrome-use.
+        This is a companion-tool note, not an independent review. chrome-use does not depend on it.
+      </div>
+
+      <hr class="du-divider" />
+
       <h2>--launch vs --profile auto</h2>
       <p>
         <code>--launch</code> opens an <strong>isolated blank test profile</strong>—no cookies, no logins, no extensions

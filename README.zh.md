@@ -515,6 +515,30 @@ Apache-2.0
 > 由 **leeguooooo** 打造 —— AI agent、逆向工程与 Cloudflare Workers 的实战笔记见 **[blog.leeguoo.com](https://blog.leeguoo.com)** · 关注 **[X @leeguooooo](https://x.com/leeguooooo)**
 
 <!-- use-family -->
+## 多 profile 的 Chrome：读 ChooseBrowser 的规则
+
+同时开着工作号、个人号、客户号的人，心里本来就清楚「哪个站点用哪个账号」，
+只是每次都要用 `--browser` 再告诉我们一遍。
+
+[ChooseBrowser](https://choosebrowser.leeguoo.com) 是一个 macOS 链接路由工具，
+它把这份映射存了下来。装了它之后，`chrome-use open <url>` 在你没显式指定
+`--browser` 时会按你自己写的规则选 profile，并且会说明来源：
+
+```
+$ chrome-use open https://github.com/my-org/repo
+· using Chrome profile Profile 14 — a ChooseBrowser rule routes this site there
+  (github.com|/my-org*). Override with --browser <id|email>, or skip with
+  --no-choosebrowser.
+```
+
+只读，没装的话完全无感：没有规则文件就不改变任何行为、也不打任何提示。
+规则指向的 profile 如果没在跑扩展，会退回正常的 profile 选择逻辑，
+**而不是退而求其次开进别的账号**。
+
+> **利益披露：** ChooseBrowser 是一款付费 macOS 应用（US$4.99，7 天试用），
+> 作者与 chrome-use 是同一人。这是配套工具说明，不是独立第三方评价。
+> chrome-use 不依赖它——这个集成只是「文件恰好在就读一下」。
+
 ## `*-use` 家族
 
 一组小而互相独立的 CLI，各自把 agent 的手伸到一个真实的东西上。装法都一样：
