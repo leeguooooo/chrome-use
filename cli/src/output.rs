@@ -3721,6 +3721,7 @@ command asks you to reconnect with the original options and run close.
 
 Operations:
   (none)               Show the current session owner
+  name --clear         Drop the label; the group shows the session id again
   name [title]         Label this session's tab group in the user's Chrome
                        (no title: show the current one). Set it at the start of
                        a task, before opening tabs — already-open tabs keep the

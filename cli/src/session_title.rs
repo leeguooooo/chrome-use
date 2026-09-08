@@ -126,6 +126,19 @@ mod tests {
         assert_eq!(display_name(session), session);
     }
 
+    /// Clearing must return the group to the session id, not to an empty label.
+    /// A long-lived session that moves on to unrelated work needs a way to stop
+    /// advertising the old task.
+    #[test]
+    fn clearing_restores_the_session_id_as_the_label() {
+        let session = "chrome-use-title-clear-test";
+        set_title(session, "🔎 old task").unwrap();
+        assert_eq!(display_name(session), "🔎 old task");
+        clear_title(session);
+        assert_eq!(title_of(session), None);
+        assert_eq!(display_name(session), session);
+    }
+
     /// A label must survive the stale-file cleanup that runs whenever a daemon
     /// is found missing or old — including on a session's very first command.
     ///

@@ -180,12 +180,40 @@ fn run_session_name(session: &str, json_mode: bool, zh: bool) {
         .skip_while(|a| a != "name")
         .skip(1)
         .collect();
+    // `--clear` drops the label so the group falls back to the session id.
+    // Without it a name could be set but never taken back, which matters when
+    // a long-lived session moves on to unrelated work and the old label would
+    // otherwise keep describing the wrong task.
+    let clearing = requested.iter().any(|a| a == "--clear");
     let requested = requested
         .iter()
         .filter(|a| !a.starts_with("--"))
         .cloned()
         .collect::<Vec<_>>()
         .join(" ");
+
+    if clearing {
+        let previous = session_title::display_name(session);
+        session_title::clear_title(session);
+        let restored = session.to_string();
+        let renamed = connection::rename_session_group(session, &previous, &restored);
+        if json_mode {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "session": session,
+                    "name": serde_json::Value::Null,
+                    "renamedExistingGroup": renamed,
+                })
+            );
+        } else if zh {
+            println!("✓ 会话 '{session}' 的标签组名已清除，恢复显示会话 id");
+        } else {
+            println!("✓ tab group for session '{session}' shows the session id again");
+        }
+        return;
+    }
 
     if requested.trim().is_empty() {
         let current = session_title::title_of(session);
