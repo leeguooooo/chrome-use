@@ -360,10 +360,21 @@
       <h2>Silent by default</h2>
       <p>
         When driving the user's real Chrome, the agent works entirely in the <strong>background</strong>—new tabs open
-        unfocused, the agent never forces a tab to the front, and focus is emulated so background pages still render and
-        report <code>visibilityState: 'visible'</code>. You don't have to do anything; just don't expect the user's view to
-        follow you (only use an explicit <code>bringToFront</code> when you <strong>deliberately</strong> want to surface a tab).
+        unfocused and the agent never forces a tab to the front. Focus is emulated, so the page keeps rendering and keeps
+        running timers instead of being throttled. You don't have to do anything; just don't expect the user's view to
+        follow you.
       </p>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ But a background tab really is hidden</div>
+        <code>document.visibilityState</code> stays <code>'hidden'</code>—focus emulation does not change it, and no CDP
+        override does either. Almost nothing cares. The exception is a page that deliberately gates its UI on visibility
+        (a device lease that must not be kept alive by a background tab, a video player, a game that pauses): it renders
+        its background branch, so <code>snapshot</code> comes back looking empty and every control reads as disabled.
+        <code>snapshot</code> now says so when the tree is near-empty and the tab is hidden. Surface it on purpose with
+        <code>chrome-use bringToFront</code> and read it again—that is also the only thing that makes the user's view
+        follow you, so use it deliberately, not by habit.
+      </div>
 
       <h2>Behavioral anti-bot: humanized input</h2>
       <p>

@@ -4352,6 +4352,10 @@ Core Commands:
                              URL is read from inside the page instead (byte-exact,
                              no re-encode) — path required
   downloads [--limit N]      List downloads (--clear clears history)
+  bringToFront               Surface the active tab in the user's window. Tabs are
+                             driven in the background, where document.visibilityState
+                             stays 'hidden' — this is the way to make a page that
+                             gates its UI on visibility render for real
   scroll <dir> [px]          Scroll (up/down/left/right)
   scrollintoview <sel>       Scroll element into view
   wait <sel|ms>              Wait for element or time

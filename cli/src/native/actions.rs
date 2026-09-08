@@ -4301,18 +4301,23 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     // (dogfood: the Dead Cell game). When the tree is sparse but a canvas
     // dominates the viewport, tell them to switch to the screenshot-driven path.
     if ref_count < 3 {
-        let canvas_js =
-            "(() => { const c = document.querySelector('canvas'); if (!c) return false; \
-                         const r = c.getBoundingClientRect(); \
-                         return r.width * r.height > innerWidth * innerHeight * 0.5; })()";
-        if let Ok(v) = mgr.evaluate(canvas_js, None).await {
-            if v.as_bool() == Some(true) {
-                out["note"] = json!(
-                    "This page renders to a <canvas> (game / WebGL / editor) and exposes almost no \
-                     accessibility tree — refs won't help. Use `screenshot` to see it, coordinate \
-                     `click <x> <y>` to interact, and `keydown`/`keyup`/`press` for keyboard \
-                     (hold-to-move: `keydown d` … `keyup d`)."
-                );
+        // One probe, two answers. The second is `document.visibilityState`
+        // (issue #215): a tab we drive in the background really is hidden —
+        // focus emulation does not change that — and a page that gates its UI
+        // on visibility renders its "background" branch, which reaches the
+        // agent as a page that is simply empty. Nothing in the tree says why,
+        // so an agent burns turns looking for controls that the page has
+        // deliberately not drawn.
+        let probe_js =
+            "(() => { const c = document.querySelector('canvas'); \
+                         const r = c && c.getBoundingClientRect(); \
+                         return { canvas: !!r && r.width * r.height > innerWidth * innerHeight * 0.5, \
+                                  hidden: document.visibilityState === 'hidden' }; })()";
+        if let Ok(v) = mgr.evaluate(probe_js, None).await {
+            let canvas = v.get("canvas").and_then(|c| c.as_bool()).unwrap_or(false);
+            let hidden = v.get("hidden").and_then(|h| h.as_bool()).unwrap_or(false);
+            if let Some(note) = sparse_tree_note(canvas, hidden) {
+                out["note"] = json!(note);
             }
         }
     }
@@ -4335,6 +4340,41 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     }
 
     Ok(out)
+}
+
+/// Why a snapshot came back with almost nothing in it, when the page itself can
+/// say. Pure so the wording is testable without a browser.
+///
+/// Two causes look identical in the output — an empty tree — and neither is
+/// something the tree itself can express:
+///
+/// - the page paints to a `<canvas>` (game / WebGL / editor), so there is
+///   nothing to put in an accessibility tree in the first place;
+/// - the tab is **hidden**, and the page gates its UI on
+///   `document.visibilityState` (issue #215). We drive tabs in the background
+///   on purpose, and focus emulation does not make a background tab visible —
+///   so a page that does nothing while hidden is doing exactly what it was
+///   written to do, and the agent needs to be told that rather than left
+///   hunting for controls that were never drawn.
+fn sparse_tree_note(canvas: bool, hidden: bool) -> Option<String> {
+    match (canvas, hidden) {
+        (true, _) => Some(
+            "This page renders to a <canvas> (game / WebGL / editor) and exposes almost no \
+             accessibility tree — refs won't help. Use `screenshot` to see it, coordinate \
+             `click <x> <y>` to interact, and `keydown`/`keyup`/`press` for keyboard \
+             (hold-to-move: `keydown d` … `keyup d`)."
+                .to_string(),
+        ),
+        (false, true) => Some(
+            "This tab is hidden (document.visibilityState === 'hidden') — tabs are driven in the \
+             background, and focus emulation does not change that. A page that gates its UI on \
+             visibility will have rendered its background branch, which is why the tree looks \
+             empty. If this page needs to be visible, surface it with `chrome-use bringToFront` \
+             and read it again."
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 /// Take the screenshot that rides along with a structural observation
@@ -13876,6 +13916,28 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    /// An empty tree has two very different causes, and the output cannot tell
+    /// them apart on its own (issues #206 and #215). Canvas wins when both
+    /// hold: a canvas app has no tree to render whether or not anyone is
+    /// looking at it, so "make it visible" would be the wrong advice.
+    #[test]
+    fn a_sparse_tree_says_which_of_the_two_reasons_it_is() {
+        let canvas = sparse_tree_note(true, false).expect("canvas gets a note");
+        assert!(canvas.contains("<canvas>"), "{canvas}");
+        assert!(canvas.contains("screenshot"), "{canvas}");
+
+        let hidden = sparse_tree_note(false, true).expect("a hidden tab gets a note");
+        assert!(hidden.contains("visibilityState"), "{hidden}");
+        // The advice has to be a command that exists and actually surfaces it.
+        assert!(hidden.contains("bringToFront"), "{hidden}");
+        // And it must not repeat the claim that #215 was filed against.
+        assert!(!hidden.contains("'visible'"), "{hidden}");
+
+        assert!(sparse_tree_note(true, true).unwrap().contains("<canvas>"));
+        // An ordinary page that is simply short gets no note at all.
+        assert!(sparse_tree_note(false, false).is_none());
+    }
+
     use super::is_blank_capture_target;
 
     // issue #184: a screenshot must not report ✓ when its capture session is on a

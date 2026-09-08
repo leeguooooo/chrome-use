@@ -99,6 +99,7 @@ chrome-use press Control+a     # Key combination
 chrome-use keydown Shift       # Hold key down
 chrome-use keyup Shift         # Release key
 chrome-use hover @e1           # Hover
+chrome-use bringToFront        # Surface the active tab (tabs are driven in the background, where document.visibilityState stays 'hidden')
 chrome-use check @e1           # Check checkbox
 chrome-use uncheck @e1         # Uncheck checkbox
 chrome-use select @e1 "value"  # Select by value/label; native setter commits controlled forms
