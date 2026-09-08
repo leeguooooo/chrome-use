@@ -2476,7 +2476,28 @@ pub async fn active_element_descriptor(client: &CdpClient, session_id: &str) -> 
     if result.exception_details.is_some() {
         return None;
     }
-    result.result.value?.as_str().map(String::from)
+    result.result.value?.as_str().map(sanitize_descriptor)
+}
+
+/// Strip control characters out of a descriptor built from page attributes.
+///
+/// `id` and `name` are whatever the page put there, and the descriptor is
+/// printed straight to a terminal in a warning. An ANSI escape in an iframe's
+/// name could otherwise rewrite the line around it -- repainting a warning as a
+/// success is precisely the outcome every other change here exists to prevent.
+/// Length is capped for the same reason: a descriptor is an identifier, not a
+/// payload.
+fn sanitize_descriptor(raw: &str) -> String {
+    const MAX: usize = 200;
+    let mut out: String = raw
+        .chars()
+        .map(|c| if c.is_control() { '\u{fffd}' } else { c })
+        .take(MAX)
+        .collect();
+    if raw.chars().count() > MAX {
+        out.push('\u{2026}');
+    }
+    out
 }
 
 /// Does a key landing on `<body>` mean it provably did nothing?
@@ -3742,6 +3763,30 @@ mod tests {
         assert!(!descriptor_is_iframe("input[name=\"iframe\"]"));
         assert!(!descriptor_is_iframe("body"));
         assert!(!descriptor_is_iframe("textarea[name=\"q\"]"));
+    }
+
+    #[test]
+    /// The descriptor is built from page-controlled `id`/`name` and printed to a
+    /// terminal. An escape sequence in it could repaint the warning line.
+    #[test]
+    fn a_descriptor_cannot_carry_terminal_escapes_out_of_the_page() {
+        let hostile = sanitize_descriptor("iframe#a\u{1b}[2K\u{1b}[Gok\r\n");
+        assert!(!hostile.contains('\u{1b}'), "{hostile}");
+        assert!(!hostile.contains('\r'), "{hostile}");
+        assert!(!hostile.contains('\n'), "{hostile}");
+        // Still recognisable as the element it names.
+        assert!(hostile.starts_with("iframe#a"), "{hostile}");
+        assert!(descriptor_is_iframe(&hostile), "{hostile}");
+
+        // Ordinary descriptors pass through untouched.
+        assert_eq!(
+            sanitize_descriptor("iframe#inner[name=\"inner\"]"),
+            "iframe#inner[name=\"inner\"]"
+        );
+
+        // And a descriptor is an identifier, not a place to hide a payload.
+        let long = sanitize_descriptor(&format!("iframe#{}", "a".repeat(500)));
+        assert!(long.chars().count() <= 201, "{}", long.chars().count());
     }
 
     #[test]

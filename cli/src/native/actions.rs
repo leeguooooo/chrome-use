@@ -387,7 +387,7 @@ pub struct DaemonState {
     /// as (what the caller asked for, when). A tab-gone error after one of these
     /// means the documented recovery has already been tried and did not work —
     /// repeating it is the loop #235 describes, so the error says so instead.
-    pub last_unconfirmed_tab_switch: Option<(String, std::time::Instant)>,
+    pub last_unconfirmed_tab_switch: Option<(&'static str, String, std::time::Instant)>,
     /// Requests seen going out and not yet finished, as (requestId, start).
     /// Feeds the adaptive settle (#228): a click that fires an XHR leaves the
     /// DOM quiet for the whole round trip, so DOM stillness alone would report
@@ -1605,6 +1605,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 state.browser = None;
                 state.screencasting = false;
                 state.reset_input_state();
+                // The dialog belonged to the window that just died. Left set, it
+                // both describes a prompt nobody can answer and overwrites the
+                // replacement warning below, putting the silence back.
+                state.pending_dialog = None;
                 state.update_stream_client().await;
             } else if let Some(reason) = super::daemon::take_reaped_marker(&state.session_id) {
                 // A previous daemon reaped the browser and exited, so this
@@ -3595,6 +3599,15 @@ async fn resolve_frame_spec(
 ) -> Result<String, String> {
     let session_id = mgr.active_session_id()?.to_string();
 
+    // 0. A frameId we already have a session for. `observed.newFrames` reports
+    //    these ids by name, so they have to be accepted here -- a command that
+    //    hands back an identifier its own `--frame` cannot consume sends the
+    //    caller in a circle (`no frame matched`) over a frame that plainly
+    //    exists.
+    if iframe_sessions.contains_key(spec) {
+        return Ok(spec.to_string());
+    }
+
     // 1. Numeric index into the `frames` listing.
     if let Ok(idx) = spec.parse::<usize>() {
         let frames =
@@ -3634,7 +3647,7 @@ async fn resolve_frame_spec(
 
     Err(format!(
         "eval --frame: no frame matched '{spec}' (try an index from `chrome-use frames`, a URL \
-         substring, or an iframe @ref/CSS selector)"
+         substring, a frameId from `observed.newFrames`, or an iframe @ref/CSS selector)"
     ))
 }
 
@@ -7934,8 +7947,11 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 obj.insert("verified".to_string(), json!("unconfirmed"));
                 obj.insert("warning".to_string(), json!(warning));
             }
-            state.last_unconfirmed_tab_switch =
-                Some((tab_ref_str.to_string(), std::time::Instant::now()));
+            state.last_unconfirmed_tab_switch = Some((
+                "tab select",
+                tab_ref_str.to_string(),
+                std::time::Instant::now(),
+            ));
         }
         Ok(actual) => {
             let actual_url = actual.as_str().unwrap_or_default().to_string();
@@ -8073,11 +8089,13 @@ fn tab_liveness_probe_warning(
 /// got an unconfirmed result, is told to do it again. The loop that produces —
 /// `snapshot` fails → "recover" → `snapshot` fails — is worse than a short
 /// error, because every step of it points confidently at the next.
-pub(crate) fn already_tried_note(attempt: Option<&(String, std::time::Instant)>) -> Option<String> {
-    let (what, when) = attempt?;
+pub(crate) fn already_tried_note(
+    attempt: Option<&(&'static str, String, std::time::Instant)>,
+) -> Option<String> {
+    let (verb, what, when) = attempt?;
     let ago = when.elapsed().as_secs();
     Some(format!(
-        "\nYou already ran `tab select {what}` {ago}s ago and its liveness probe did not \
+        "\nYou already ran `{verb} {what}` {ago}s ago and its liveness probe did not \
          confirm the switch, so repeating it will not help. This session cannot reach that \
          tab's renderer: re-open the target with `open <url>` / `navigate <url>` to rebind. \
          (`tab inspect {what}` may still read its url/title — that path goes through the \
@@ -8135,7 +8153,7 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
                     obj.insert("warning".to_string(), json!(warning));
                 }
                 state.last_unconfirmed_tab_switch =
-                    Some((spec.to_string(), std::time::Instant::now()));
+                    Some(("tab adopt", spec.to_string(), std::time::Instant::now()));
             }
         }
     }
@@ -10431,6 +10449,18 @@ async fn handle_waitforfunction(cmd: &Value, state: &DaemonState) -> Result<Valu
 // ---------------------------------------------------------------------------
 
 async fn handle_frame(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    // A frameId we already hold a session for. `observed.newFrames` names the
+    // frames a click opened by id, so `frame <id>` has to take one: reporting an
+    // identifier and then refusing it is the dead end this change is here to
+    // remove. Checked before the frame tree because an out-of-process frame is
+    // not in the parent's tree at all -- name/url matching cannot find it.
+    if let Some(sel) = cmd.get("selector").and_then(|v| v.as_str()) {
+        if state.iframe_sessions.contains_key(sel) {
+            state.active_frame_id = Some(sel.to_string());
+            return Ok(json!({ "frame": sel }));
+        }
+    }
+
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
@@ -14363,7 +14393,7 @@ mod tests {
     fn a_second_failure_after_an_unconfirmed_switch_breaks_the_loop() {
         assert!(already_tried_note(None).is_none());
 
-        let attempt = ("t8".to_string(), std::time::Instant::now());
+        let attempt = ("tab select", "t8".to_string(), std::time::Instant::now());
         let note = already_tried_note(Some(&attempt)).expect("an attempt gets a note");
         assert!(note.contains("already ran `tab select t8`"), "{note}");
         assert!(note.contains("repeating it will not help"), "{note}");
@@ -14371,6 +14401,21 @@ mod tests {
         // And it must explain the asymmetry the issue calls out, not just deny
         // the loop: inspect reads over a different connection.
         assert!(note.contains("browser connection"), "{note}");
+
+        // The note names the command the caller actually ran. Telling someone
+        // who ran `tab adopt` that they ran `tab select` is the same class of
+        // wrong-but-confident guidance this whole change exists to remove.
+        let adopted = (
+            "tab adopt",
+            "checkout.example".to_string(),
+            std::time::Instant::now(),
+        );
+        let note = already_tried_note(Some(&adopted)).expect("an attempt gets a note");
+        assert!(
+            note.contains("already ran `tab adopt checkout.example`"),
+            "{note}"
+        );
+        assert!(!note.contains("tab select"), "{note}");
     }
 
     #[test]

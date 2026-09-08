@@ -141,12 +141,16 @@ them for control.
 > from the name). With no `--session` / `AGENT_BROWSER_SESSION`, the name is
 > derived per agent — **the derivation rules live in the core skill** (`chrome-use
 > skills get core`, "Per-agent isolation"), so there is one description of them
-> rather than two that drift apart. What matters here: **two agents in the same
-> repo get different tab groups by default** and no longer stomp each other's
-> active tab, and the name is stable across one agent's commands. Override
-> anytime: pass `--session <name>` / `AGENT_BROWSER_SESSION` to pick an explicit
-> name, or set them to the **same** value across agents to make them deliberately
-> *share* one tab group.
+> rather than two that drift apart. What matters here: when each agent has a
+> per-agent id in its environment (the usual case under an agent harness), **two
+> agents in the same repo get different tab groups** and no longer stomp each
+> other's active tab, and the name is stable across one agent's commands. That
+> prerequisite is real: with neither a per-agent nor a per-terminal id — two
+> plain shells, or two agents sharing one terminal tab — the derivation falls
+> back to the shared `default` session and they *do* share a tab group. When
+> separation has to be guaranteed rather than derived, pass `--session <name>` /
+> `AGENT_BROWSER_SESSION` explicitly; setting them to the **same** value across
+> agents makes them deliberately *share* one tab group.
 
 **Strict multi-agent isolation.** A session over the relay drives **only the tabs
 it created or explicitly adopted**. A pop-up that **your own action
