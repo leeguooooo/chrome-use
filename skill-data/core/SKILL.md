@@ -794,6 +794,15 @@ single call: `chrome-use navigate <url> --observe` gets you the page AND its
 interactive tree in one round trip. On a real task that halved the calls (6 → 3)
 at identical bytes returned.
 
+**Operate a control that click alone won't move — `actions` / `do`.** Some
+elements expose more than a click: a disclosure expands, a menu button opens a
+popup, a spinbutton or slider steps through a range. `chrome-use actions @e7`
+lists what *that* element supports right now (read live — a disclosure that was
+collapsed when you snapshotted may be open now), and `chrome-use do @e7 expand`
+performs one of exactly those. An action outside the reported set is refused
+with the supported list, never attempted. After acting it reports the set again,
+so a control that did not move cannot read as success.
+
 **Re-read a page for a few bytes — `snapshot --diff`.** After an action, most
 of the tree is what it was. `--diff` returns only the lines that changed since
 this session's last snapshot of the same page (same options): on a 143 KB HN

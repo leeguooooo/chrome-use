@@ -237,6 +237,51 @@
 
       <hr class="du-divider" />
 
+      <!-- ============ Accessibility actions ============ -->
+      <h2>Actions beyond a click</h2>
+      <p>
+        Some controls do more than click: a disclosure expands, a menu button opens a popup, a
+        spinbutton or slider steps through a range. <code>actions</code> tells you what
+        <span class="mark">this element supports right now</span>; <code>do</code> performs one of
+        exactly those.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">actions / do</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use actions <span class="du-str">@e15</span>
+@e15 DisclosureTriangle <span class="du-str">"Disclosure summary"</span>
+  expand
+
+<span class="du-prompt">$</span> chrome-use do <span class="du-str">@e15</span> expand
+<span class="du-cmt">✓ expand on @e15</span>
+<span class="du-cmt">now: collapse</span></code></pre>
+      </div>
+
+      <p>
+        The set is read <span class="mark">live</span>, not carried over from the snapshot that
+        minted the ref — what an element supports is state, not identity. A disclosure that was
+        collapsed when you snapshotted may be open now, and offering <code>expand</code> would send
+        you to do the opposite of what you asked.
+      </p>
+      <p>
+        An action outside the set is <strong>refused</strong> with the supported list rather than
+        attempted. After acting it reports the set again, so a control that did not move cannot
+        read as a success.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ What is supported</div>
+        <code>expand</code> / <code>collapse</code> (disclosures), <code>showMenu</code> (controls
+        that open one), <code>increment</code> / <code>decrement</code> (value ranges), and
+        <code>toggle</code> (pressable controls) — all derived from the element's accessibility
+        properties. A <code>disabled</code> element offers none.
+      </div>
+
+      <hr class="du-divider" />
+
       <!-- ============ Uploading files ============ -->
       <h2>Uploading files</h2>
       <p>

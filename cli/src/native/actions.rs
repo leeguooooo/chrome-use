@@ -1610,6 +1610,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "keep" => handle_keep(state).await,
             "stealth_status" => handle_stealth_status(state).await,
             "snapshot" => handle_snapshot(cmd, state).await,
+            "actions" => handle_actions(cmd, state).await,
+            "do" => handle_do_action(cmd, state).await,
             "screenshot" => handle_screenshot(cmd, state).await,
             "canvas_list" => handle_canvas_list(state).await,
             "canvas_capture" => handle_canvas_capture(cmd, state).await,
@@ -3755,6 +3757,180 @@ pub(crate) fn snapshot_diff_basis<'a>(
         }
         Some((_, _, prev_tree)) => SnapshotDiffBasis::Compare(prev_tree),
     }
+}
+
+/// `actions <@ref>` — what this element supports besides a plain click.
+///
+/// The list is the contract for any future executor: an action absent from it
+/// must be refused, never attempted. Everything that has gone wrong in this
+/// area has been a silent success (a `tab select` that switched nothing, an
+/// `--observe` ref that resolved to nothing), and an action command that
+/// accepts a guessed name would be the next one.
+async fn handle_actions(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let target = cmd
+        .get("selector")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing element (expected an @ref from `snapshot -i`)")?;
+    let ref_id = target.strip_prefix('@').unwrap_or(target);
+    let entry = state
+        .ref_map
+        .get(ref_id)
+        .ok_or_else(|| state.ref_map.unknown_ref_error(ref_id))?;
+    let backend_node_id = entry.backend_node_id.ok_or_else(|| {
+        format!(
+            "@{ref_id} has no accessibility node behind it (it came from the DOM-walk \
+             fallback), so its supported actions cannot be read"
+        )
+    })?;
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let (role, name, actions) =
+        super::element::element_secondary_actions(&mgr.client, &session_id, backend_node_id)
+            .await?;
+    Ok(json!({
+        "ref": format!("@{ref_id}"),
+        "role": role,
+        "name": name,
+        "actions": actions.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+    }))
+}
+
+/// Whether an action left the element where it started.
+///
+/// Only expand/collapse are decidable from the action set alone — afterwards
+/// the element must offer the opposite one. A range step legitimately leaves
+/// the set unchanged (a range stays a range), so flagging it would cry wolf on
+/// every working `increment`.
+pub(crate) fn action_stalled(
+    chosen: super::snapshot::SecondaryAction,
+    now: &[super::snapshot::SecondaryAction],
+) -> bool {
+    use super::snapshot::SecondaryAction as A;
+    match chosen {
+        A::Expand => now.contains(&A::Expand),
+        A::Collapse => now.contains(&A::Collapse),
+        _ => false,
+    }
+}
+
+/// `do <@ref> <action>` — perform one of the actions the element actually
+/// exposes.
+///
+/// The action set is re-derived from the live accessibility state and the
+/// request is refused unless it is in that set. Guessing is the failure mode
+/// this whole area keeps producing: a command that quietly does *something*
+/// when asked for an action the element does not support is a silent success,
+/// and a caller cannot tell it from the real thing.
+async fn handle_do_action(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let target = cmd
+        .get("selector")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing element (expected an @ref from `snapshot -i`)")?;
+    let wanted = cmd
+        .get("actionName")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing action (run `actions <@ref>` to see what this element supports)")?;
+    let ref_id = target.strip_prefix('@').unwrap_or(target);
+    let backend_node_id = {
+        let entry = state
+            .ref_map
+            .get(ref_id)
+            .ok_or_else(|| state.ref_map.unknown_ref_error(ref_id))?;
+        entry.backend_node_id.ok_or_else(|| {
+            format!("@{ref_id} has no accessibility node behind it, so its actions are unknown")
+        })?
+    };
+    let (role, name, available) = {
+        let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+        let session_id = mgr.active_session_id()?.to_string();
+        super::element::element_secondary_actions(&mgr.client, &session_id, backend_node_id).await?
+    };
+    let chosen = available
+        .iter()
+        .find(|a| a.as_str().eq_ignore_ascii_case(wanted))
+        .copied()
+        .ok_or_else(|| {
+            let list = if available.is_empty() {
+                "none".to_string()
+            } else {
+                available
+                    .iter()
+                    .map(|a| a.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!(
+                "`{wanted}` is not an action [{role} \"{name}\"] exposes right now. \
+                 Supported: {list}. The set is read from the live accessibility state, so it \
+                 changes as the element does — re-run `actions @{ref_id}` after anything that \
+                 alters the page."
+            )
+        })?;
+
+    // Every action below is expressed with the primitives we already drive, so
+    // there is no second, untested input path to keep correct.
+    let selector = format!("@{ref_id}");
+    match chosen {
+        // Expanding, collapsing and opening a popup are all "operate this
+        // control"; the accessibility state is what says which one it will be,
+        // and that is exactly what the caller was just told.
+        super::snapshot::SecondaryAction::Expand
+        | super::snapshot::SecondaryAction::Collapse
+        | super::snapshot::SecondaryAction::ShowMenu
+        | super::snapshot::SecondaryAction::Toggle => {
+            handle_click(&json!({ "selector": selector }), state).await?;
+        }
+        super::snapshot::SecondaryAction::Increment => {
+            handle_press(&json!({ "key": "ArrowUp", "selector": selector }), state).await?;
+        }
+        super::snapshot::SecondaryAction::Decrement => {
+            handle_press(&json!({ "key": "ArrowDown", "selector": selector }), state).await?;
+        }
+    }
+
+    // Report the state the action produced, not the one it was asked for: a
+    // control that refused to move must not read as a success.
+    let after = {
+        let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+        let session_id = mgr.active_session_id()?.to_string();
+        super::element::element_secondary_actions(&mgr.client, &session_id, backend_node_id)
+            .await
+            .ok()
+    };
+    let after_actions: Option<Vec<super::snapshot::SecondaryAction>> = after.map(|(_, _, a)| a);
+
+    // Expanding and collapsing are the two cases where "did it work" is
+    // decidable from the state alone: afterwards the element must offer the
+    // opposite action. When it still offers the same one, the control did not
+    // move, and a bare ✓ would be exactly the silent success this command
+    // exists to avoid.
+    let mut warning = None;
+    if let Some(ref now) = after_actions {
+        if action_stalled(chosen, now) {
+            warning = Some(format!(
+                "{} was dispatched but [{role} \"{name}\"] still reports `{}` — it did not \
+                 move. Some controls (a native `<select>` popup, a menu drawn outside the \
+                 page) do not change their accessibility state when opened; others simply \
+                 ignored the click. Check the page before assuming this worked.",
+                chosen.as_str(),
+                chosen.as_str()
+            ));
+        }
+    }
+
+    let mut out = json!({
+        "ref": selector,
+        "role": role,
+        "name": name,
+        "performed": chosen.as_str(),
+        "actionsNow": after_actions
+            .as_ref()
+            .map(|a| a.iter().map(|x| x.as_str()).collect::<Vec<_>>()),
+    });
+    if let Some(w) = warning {
+        out["warning"] = json!(w);
+    }
+    Ok(out)
 }
 
 async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -15052,6 +15228,29 @@ mod tests {
     fn tab_switch_does_not_fail_on_an_unparseable_url() {
         assert!(tab_switch_identity_error("t1", "about:blank", "https://a.example/").is_none());
         assert!(tab_switch_identity_error("t1", "https://a.example/", "").is_none());
+    }
+
+    /// After a successful expand the element must offer `collapse`. Still
+    /// offering `expand` means it did not move, and a bare ✓ there is the same
+    /// silent success this command exists to avoid.
+    #[test]
+    fn a_stalled_expand_is_detected_from_the_action_set() {
+        use super::super::snapshot::SecondaryAction as A;
+        assert!(action_stalled(A::Expand, &[A::Expand, A::ShowMenu]));
+        assert!(!action_stalled(A::Expand, &[A::Collapse, A::ShowMenu]));
+        assert!(action_stalled(A::Collapse, &[A::Collapse]));
+        assert!(!action_stalled(A::Collapse, &[A::Expand]));
+    }
+
+    /// Increment/decrement leave the action set unchanged even when they work
+    /// (a range stays a range), so the set cannot decide it — never flag them.
+    #[test]
+    fn a_range_step_is_never_reported_as_stalled() {
+        use super::super::snapshot::SecondaryAction as A;
+        assert!(!action_stalled(A::Increment, &[A::Increment, A::Decrement]));
+        assert!(!action_stalled(A::Decrement, &[A::Increment, A::Decrement]));
+        assert!(!action_stalled(A::Toggle, &[A::Toggle]));
+        assert!(!action_stalled(A::ShowMenu, &[A::ShowMenu]));
     }
 
     /// A diff against a baseline from a different page would report the whole

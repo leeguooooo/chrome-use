@@ -27,6 +27,10 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "switch",
     "tab",
     "treeitem",
+    // `<summary>`. Chrome computes this role for the one control whose entire
+    // purpose is to be clicked, yet it was absent — so a disclosure got no ref
+    // and could not be expanded through `@ref` at all.
+    "DisclosureTriangle",
     "Iframe",
 ];
 
@@ -2521,6 +2525,40 @@ pub fn secondary_actions(facts: &AxActionFacts) -> Vec<SecondaryAction> {
     out
 }
 
+/// Read the action-relevant facts out of a node's computed AX properties.
+///
+/// Kept separate from `extract_properties` (which feeds the rendered tree) so
+/// adding a fact here never changes what a snapshot prints — the action set is
+/// queried on demand, deliberately not stamped onto every line.
+pub fn action_facts_from_properties(props: &Option<Vec<AXProperty>>) -> AxActionFacts {
+    let mut f = AxActionFacts::default();
+    let (mut has_min, mut has_max) = (false, false);
+    if let Some(properties) = props {
+        for prop in properties {
+            let v = prop.value.value.as_ref();
+            match prop.name.as_str() {
+                "disabled" => f.disabled = v.and_then(|v| v.as_bool()).unwrap_or(false),
+                "readonly" => f.readonly = v.and_then(|v| v.as_bool()).unwrap_or(false),
+                "expanded" => f.expanded = v.and_then(|v| v.as_bool()),
+                // Chrome sends `pressed` as the string "true"/"false", not a bool.
+                "pressed" => {
+                    f.pressed = v.and_then(|v| match v {
+                        Value::Bool(b) => Some(*b),
+                        Value::String(s) => Some(s == "true"),
+                        _ => None,
+                    })
+                }
+                "hasPopup" => f.has_popup = v.and_then(|v| v.as_str()).map(str::to_string),
+                "valuemin" => has_min = true,
+                "valuemax" => has_max = true,
+                _ => {}
+            }
+        }
+    }
+    f.has_value_range = has_min && has_max;
+    f
+}
+
 /// Build the set of texts to de-duplicate cursor-interactive elements against.
 ///
 /// All ref-bearing ARIA tree nodes have their names stored in `ref_map` during
@@ -2910,6 +2948,41 @@ mod tests {
 
         assert_eq!(nodes[0].role, "LabelText"); // unchanged
     }
+    /// `<summary>` is the one control that exists purely to be clicked; leaving
+    /// it out of the interactive set meant a disclosure never got a ref.
+    #[test]
+    fn a_disclosure_triangle_is_interactive() {
+        assert!(is_interactive_role("DisclosureTriangle"));
+    }
+
+    /// Measured: Chrome sends `pressed` as the JSON string "true"/"false", not
+    /// a bool. Parsing it as a bool would silently drop every toggle button.
+    #[test]
+    fn pressed_is_parsed_from_chromes_string_form() {
+        let props = Some(vec![AXProperty {
+            name: "pressed".into(),
+            value: AXValue {
+                value_type: "booleanOrUndefined".into(),
+                value: Some(Value::String("true".into())),
+            },
+        }]);
+        assert_eq!(action_facts_from_properties(&props).pressed, Some(true));
+    }
+
+    /// A range needs both ends: `valuemin` alone (Chrome reports it on controls
+    /// with no upper bound) is not something you can step through.
+    #[test]
+    fn a_value_range_needs_both_ends() {
+        let one = Some(vec![AXProperty {
+            name: "valuemin".into(),
+            value: AXValue {
+                value_type: "number".into(),
+                value: Some(serde_json::json!(0)),
+            },
+        }]);
+        assert!(!action_facts_from_properties(&one).has_value_range);
+    }
+
     fn facts() -> AxActionFacts {
         AxActionFacts::default()
     }

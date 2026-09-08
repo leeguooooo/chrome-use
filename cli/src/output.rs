@@ -602,6 +602,55 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         }
         let origin = data.get("origin").and_then(|v| v.as_str());
         // Snapshot
+        // `actions` / `do`: the supported set is the contract, so print it even
+        // when it is empty — "nothing here" is the answer, not a missing line.
+        if let Some(list) = data.get("actions").and_then(|v| v.as_array()) {
+            let r = data.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+            let role = data.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            println!("{} {} {:?}", color::dim(r), role, name);
+            if list.is_empty() {
+                println!("{}", color::dim("  (no actions beyond click)"));
+            } else {
+                for a in list.iter().filter_map(|v| v.as_str()) {
+                    println!("  {}", a);
+                }
+                eprintln!(
+                    "{}",
+                    color::dim(&format!("perform one with: chrome-use do {r} <action>"))
+                );
+            }
+            return;
+        }
+        if let Some(done) = data.get("performed").and_then(|v| v.as_str()) {
+            let r = data.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+            // A stalled expand/collapse must not wear a plain ✓.
+            let stalled = data.get("warning").and_then(|v| v.as_str());
+            let mark = if stalled.is_some() {
+                color::warning_indicator()
+            } else {
+                color::success_indicator()
+            };
+            println!("{} {} on {}", mark, done, r);
+            if let Some(now) = data.get("actionsNow").and_then(|v| v.as_array()) {
+                let s: Vec<&str> = now.iter().filter_map(|v| v.as_str()).collect();
+                println!(
+                    "{}",
+                    color::dim(&format!(
+                        "now: {}",
+                        if s.is_empty() {
+                            "(no actions beyond click)".to_string()
+                        } else {
+                            s.join(", ")
+                        }
+                    ))
+                );
+            }
+            if let Some(w) = stalled {
+                eprintln!("{} {}", color::warning_indicator(), w);
+            }
+            return;
+        }
         if let Some(snapshot) = data.get("snapshot").and_then(|v| v.as_str()) {
             // `--diff` fell back to a full tree, or found nothing changed. Say
             // which: a diff printed without saying its baseline was missing
@@ -2587,6 +2636,49 @@ Global Options:
 Examples:
   chrome-use pdf ./page.pdf
   chrome-use pdf ~/Documents/report.pdf
+"##
+        }
+
+        // === Accessibility actions ===
+        "actions" => {
+            r##"
+chrome-use actions - What an element supports besides a click
+
+Usage: chrome-use actions <@ref>
+
+Reads the element's live accessibility state and lists the actions it exposes
+beyond a plain click: expand / collapse a disclosure, showMenu for a control
+that opens one, increment / decrement over a value range, toggle for a
+pressable control.
+
+The set is read fresh each time, because it is state, not identity: a
+disclosure that was collapsed when you took the snapshot may be open now.
+
+Only the listed actions can be performed — `do` refuses anything else rather
+than quietly doing something adjacent.
+
+Examples:
+  chrome-use actions @e7
+  chrome-use do @e7 showMenu
+"##
+        }
+        "do" => {
+            r##"
+chrome-use do - Perform one of an element's accessibility actions
+
+Usage: chrome-use do <@ref> <action>
+
+Performs an action from the set `actions <@ref>` reports. An action outside
+that set is refused with the supported list, never attempted — an action
+command that guesses is indistinguishable from one that silently does nothing.
+
+Reports the action set again afterwards, so a control that refused to move
+does not read as a success.
+
+Examples:
+  chrome-use actions @e7          # see what it supports
+  chrome-use do @e7 expand
+  chrome-use do @e12 increment
 "##
         }
 

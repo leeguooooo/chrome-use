@@ -1066,6 +1066,38 @@ async fn verify_dom_sourced_ref(
 /// cannot re-anchor the ref. Treating an unfinished probe as "confirmed" is what
 /// let `click @e273` activate an unrelated overflow menu (issue #162), and the
 /// slow relay transport made that the *common* path, not a rare one.
+/// Ask the page which secondary actions an element currently supports.
+///
+/// Probed live rather than read back from the snapshot that minted the ref:
+/// what an element supports is state, not identity. A disclosure that was
+/// collapsed when the tree was taken may be open now, and offering `expand` on
+/// it would send the caller to do the opposite of what they asked.
+pub async fn element_secondary_actions(
+    client: &CdpClient,
+    session_id: &str,
+    backend_node_id: i64,
+) -> Result<(String, String, Vec<super::snapshot::SecondaryAction>), String> {
+    let params = serde_json::json!({
+        "backendNodeId": backend_node_id,
+        "fetchRelatives": false,
+    });
+    let resp: GetFullAXTreeResult = tokio::time::timeout(
+        identity_probe_budget(),
+        client.send_command_typed("Accessibility.getPartialAXTree", &params, Some(session_id)),
+    )
+    .await
+    .map_err(|_| "the accessibility probe timed out".to_string())??;
+    let node = resp
+        .nodes
+        .iter()
+        .find(|n| n.backend_d_o_m_node_id == Some(backend_node_id))
+        .ok_or_else(|| "the element is no longer in the accessibility tree".to_string())?;
+    let role = extract_ax_string(&node.role);
+    let name = extract_ax_string(&node.name);
+    let facts = super::snapshot::action_facts_from_properties(&node.properties);
+    Ok((role, name, super::snapshot::secondary_actions(&facts)))
+}
+
 async fn verify_ref_identity(
     client: &CdpClient,
     session_id: &str,

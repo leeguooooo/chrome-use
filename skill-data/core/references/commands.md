@@ -63,6 +63,20 @@ chrome-use read <url> --filter auth    # Keep sections/headings matching text
 chrome-use read <url> --llms index     # Nearest llms.txt (or --llms full); --raw for the untouched body; --json for metadata+content
 ```
 
+## Accessibility actions (beyond a click)
+
+```bash
+chrome-use actions @e7         # what this element supports besides a click
+chrome-use do @e7 expand       # perform one of exactly those
+chrome-use do @e6 increment    # step a spinbutton/slider
+```
+
+`actions` reads the element's live accessibility state: `expand`/`collapse` for a
+disclosure, `showMenu` for a control that opens one, `increment`/`decrement` over a
+value range, `toggle` for a pressable control. `do` refuses anything outside that
+set rather than doing something adjacent, and reports the set again afterwards so a
+control that refused to move does not read as success.
+
 ## Interactions (use @refs from snapshot)
 
 ```bash

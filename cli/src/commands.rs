@@ -1456,6 +1456,28 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             Ok(json!({ "id": id, "action": "pdf", "path": path }))
         }
 
+        // === Accessibility actions ===
+        // What an element supports beyond a click, read from its live
+        // accessibility state — and performing one of exactly those.
+        "actions" => {
+            let sel = rest.first().ok_or(ParseError::MissingArguments {
+                context: "actions".to_string(),
+                usage: "actions <@ref>",
+            })?;
+            Ok(json!({ "id": id, "action": "actions", "selector": sel }))
+        }
+        "do" => {
+            let sel = rest.first().ok_or(ParseError::MissingArguments {
+                context: "do".to_string(),
+                usage: "do <@ref> <action>",
+            })?;
+            let act = rest.get(1).ok_or(ParseError::MissingArguments {
+                context: "do".to_string(),
+                usage: "do <@ref> <action>   (run `actions <@ref>` to list them)",
+            })?;
+            Ok(json!({ "id": id, "action": "do", "selector": sel, "actionName": act }))
+        }
+
         // === Snapshot ===
         "snapshot" => {
             let mut cmd = json!({ "id": id, "action": "snapshot" });

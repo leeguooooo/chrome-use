@@ -229,6 +229,48 @@
 
       <hr class="du-divider" />
 
+      <!-- ============ 无障碍动作 ============ -->
+      <h2>点击之外的动作</h2>
+      <p>
+        有些控件不止能点：折叠块要展开、菜单按钮要弹出、数字框和滑块要按范围步进。
+        <code>actions</code> 告诉你<span class="mark">这个元素此刻</span>支持哪些，
+        <code>do</code> 只执行其中之一。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">actions / do</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use actions <span class="du-str">@e15</span>
+@e15 DisclosureTriangle <span class="du-str">"Disclosure summary"</span>
+  expand
+
+<span class="du-prompt">$</span> chrome-use do <span class="du-str">@e15</span> expand
+<span class="du-cmt">✓ expand on @e15</span>
+<span class="du-cmt">now: collapse</span></code></pre>
+      </div>
+
+      <p>
+        动作集是<span class="mark">实时读</span>的，不是从快照里带出来的 ——
+        它是状态而不是身份：你截图时收着的折叠块现在可能已经开了，
+        这时候再给它 <code>expand</code> 就是让你做反。
+      </p>
+      <p>
+        集合之外的动作会被<strong>拒绝</strong>并附上支持列表，而不是勉强做点相近的事。
+        执行完会<em>再报一次</em>动作集，所以一个没动的控件不会读起来像成功。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 支持哪些</div>
+        <code>expand</code> / <code>collapse</code>（折叠块）、<code>showMenu</code>（会弹出的控件）、
+        <code>increment</code> / <code>decrement</code>（有取值范围的控件）、
+        <code>toggle</code>（可按下的控件）。都由元素的无障碍属性推导，
+        <code>disabled</code> 的元素不提供任何动作。
+      </div>
+
+      <hr class="du-divider" />
+
       <!-- ============ 上传文件 ============ -->
       <h2>上传文件</h2>
       <p>
