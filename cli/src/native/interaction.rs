@@ -3146,6 +3146,553 @@ fn named_key_info(key: &str) -> (String, String, i32) {
     }
 }
 
+/// Where to leave the caret once the match is found (issue #226).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectTextMode {
+    /// Select the matched text itself.
+    Text,
+    /// Collapse to just before the match — a cursor, not a selection.
+    CursorBefore,
+    /// Collapse to just after the match, so a following `type` appends there.
+    CursorAfter,
+}
+
+impl SelectTextMode {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "text" => Ok(Self::Text),
+            "cursor_before" | "cursor-before" => Ok(Self::CursorBefore),
+            "cursor_after" | "cursor-after" => Ok(Self::CursorAfter),
+            other => Err(format!(
+                "Unknown selection type '{other}'. Use text, cursor-before or cursor-after."
+            )),
+        }
+    }
+
+    fn as_js(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::CursorBefore => "cursor_before",
+            Self::CursorAfter => "cursor_after",
+        }
+    }
+}
+
+/// Turn the page-side refusal into the sentence the agent needs (issue #226).
+///
+/// "Not found" and "too many candidates" are different problems with different
+/// fixes, and this codebase has already paid for conflating them (#224): an
+/// ambiguous match reported as "no match" sends the agent looking for a typo
+/// that is not there. So each reason gets its own wording, and the ambiguous
+/// one names the disambiguators.
+fn select_text_error(result: &Value, selector: &str, text: &str) -> String {
+    let reason = result
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("failed");
+    let occurrences = result
+        .get("textOccurrences")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let matches = result.get("matches").and_then(|v| v.as_u64()).unwrap_or(0);
+    let detail = result.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+    match reason {
+        "not-found" => format!(
+            "No text matching \"{text}\" in {selector}. The field holds {} characters; \
+             read it with `get value {selector}` to see what is actually there.",
+            result.get("length").and_then(|v| v.as_u64()).unwrap_or(0)
+        ),
+        "context-mismatch" => format!(
+            "\"{text}\" appears {occurrences} time(s) in {selector}, but never with the \
+             prefix/suffix given. The prefix and suffix must sit immediately before and after \
+             the text, and they are not part of what gets selected."
+        ),
+        "ambiguous" => format!(
+            "\"{text}\" matches {matches} places in {selector} — refusing to guess which. \
+             Disambiguate with --prefix / --suffix (the text immediately before or after the \
+             one you mean)."
+        ),
+        "not-editable" => format!(
+            "select-text needs an <input>, <textarea> or contenteditable element; {selector} \
+             is {detail}."
+        ),
+        "unsupported-editor" => format!(
+            "select-text cannot address {detail} — it keeps its own selection model, and a DOM \
+             selection there would look applied while doing nothing. Use `fill` to replace the \
+             whole value."
+        ),
+        "selection-unsupported" => format!(
+            "{selector} is {detail}, which does not support text selection at all \
+             (`setSelectionRange` throws on it). Use `fill` to replace the value."
+        ),
+        "not-applied" => format!(
+            "The selection did not take on {selector} — the element may have re-rendered \
+             between the match and the selection. Re-read the page and try again."
+        ),
+        other => format!("select-text failed on {selector}: {other}"),
+    }
+}
+
+/// Select a run of text inside an editable element, or place the caret next to
+/// it (issue #226).
+///
+/// `prefix`/`suffix` disambiguate a repeated phrase; they are context, not part
+/// of the selection: `select_text(el, "确认", prefix = "请")` selects `确认`,
+/// not `请确认`. A match that is missing, or present more than once with no way
+/// to tell which was meant, is an error naming which of the two it was — never
+/// a silent pick of the first one.
+#[allow(clippy::too_many_arguments)]
+pub async fn select_text(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    text: &str,
+    prefix: &str,
+    suffix: &str,
+    mode: SelectTextMode,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<Value, String> {
+    if text.is_empty() {
+        return Err("select-text needs the text to select (it cannot be empty).".to_string());
+    }
+    let (object_id, effective_session_id) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await?;
+
+    // Two different selection APIs, because the two element families have
+    // nothing in common: `<input>`/`<textarea>` own a flat string and take
+    // `setSelectionRange`; contenteditable content lives in text nodes, so the
+    // offsets have to be mapped back onto them and applied through a Range.
+    let js = format!(
+        r#"function() {{
+            const TEXT = {text};
+            const PREFIX = {prefix};
+            const SUFFIX = {suffix};
+            const MODE = {mode};
+            let el = this;
+            if (el.shadowRoot) {{
+                const inner = el.shadowRoot.querySelector('input, textarea, [contenteditable]');
+                if (inner) el = inner;
+            }}
+            const editorRoot = el.closest && (el.closest('.monaco-editor') || el.closest('.CodeMirror') || el.closest('.cm-editor'));
+            if (editorRoot) {{
+                const kind = editorRoot.classList.contains('monaco-editor') ? 'a Monaco editor'
+                    : (editorRoot.classList.contains('CodeMirror') ? 'a CodeMirror 5 editor' : 'a CodeMirror 6 editor');
+                return {{ ok: false, reason: 'unsupported-editor', detail: kind }};
+            }}
+            const tag = el.tagName;
+            const isField = tag === 'INPUT' || tag === 'TEXTAREA';
+            if (!isField && !el.isContentEditable) {{
+                return {{ ok: false, reason: 'not-editable', detail: 'a <' + tag.toLowerCase() + '>' }};
+            }}
+
+            // Offsets are computed over the raw text: the field's value, or the
+            // concatenated text nodes for contenteditable (which is what a Range
+            // addresses).
+            let nodes = [];
+            let hay;
+            if (isField) {{
+                hay = el.value;
+            }} else {{
+                const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                let acc = 0;
+                hay = '';
+                while (walker.nextNode()) {{
+                    const n = walker.currentNode;
+                    nodes.push([acc, n]);
+                    hay += n.data;
+                    acc += n.data.length;
+                }}
+            }}
+
+            const countOf = (needle) => {{
+                if (!needle) return 0;
+                let n = 0, at = hay.indexOf(needle);
+                while (at !== -1) {{ n++; at = hay.indexOf(needle, at + 1); }}
+                return n;
+            }};
+            const needle = PREFIX + TEXT + SUFFIX;
+            const hits = [];
+            let at = hay.indexOf(needle);
+            while (at !== -1) {{ hits.push(at); at = hay.indexOf(needle, at + 1); }}
+            const bare = countOf(TEXT);
+            if (hits.length === 0) {{
+                return {{
+                    ok: false,
+                    reason: bare > 0 ? 'context-mismatch' : 'not-found',
+                    textOccurrences: bare,
+                    length: hay.length
+                }};
+            }}
+            if (hits.length > 1) {{
+                return {{ ok: false, reason: 'ambiguous', matches: hits.length, textOccurrences: bare }};
+            }}
+            const start = hits[0] + PREFIX.length;
+            const end = start + TEXT.length;
+            const from = MODE === 'cursor_after' ? end : start;
+            const to = MODE === 'text' ? end : from;
+
+            try {{ el.focus({{ preventScroll: true }}); }} catch (e) {{}}
+
+            if (isField) {{
+                try {{
+                    el.setSelectionRange(from, to);
+                }} catch (e) {{
+                    return {{
+                        ok: false,
+                        reason: 'selection-unsupported',
+                        detail: 'an <' + tag.toLowerCase() + (el.type ? ' type=' + el.type : '') + '>'
+                    }};
+                }}
+                // Verify the effect, not the call: a field can refuse the range
+                // (or be re-rendered under us) and report nothing.
+                const okSel = el.selectionStart === from && el.selectionEnd === to;
+                return {{
+                    ok: okSel,
+                    reason: okSel ? null : 'not-applied',
+                    engine: 'input',
+                    start: from,
+                    end: to,
+                    selected: el.value.slice(from, to)
+                }};
+            }}
+
+            const locate = (off) => {{
+                for (let k = nodes.length - 1; k >= 0; k--) {{
+                    if (off >= nodes[k][0]) return [nodes[k][1], off - nodes[k][0]];
+                }}
+                return [el, 0];
+            }};
+            const range = document.createRange();
+            const [sn, so] = locate(from);
+            const [en, eo] = locate(to);
+            try {{
+                range.setStart(sn, so);
+                range.setEnd(en, eo);
+            }} catch (e) {{
+                return {{ ok: false, reason: 'not-applied' }};
+            }}
+            const view = el.ownerDocument.defaultView || window;
+            const sel = view.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            const got = sel.toString();
+            const okSel = MODE === 'text' ? got === TEXT : sel.isCollapsed;
+            return {{
+                ok: okSel,
+                reason: okSel ? null : 'not-applied',
+                engine: 'contenteditable',
+                start: from,
+                end: to,
+                selected: MODE === 'text' ? got : ''
+            }};
+        }}"#,
+        text = serde_json::to_string(text).unwrap_or_default(),
+        prefix = serde_json::to_string(prefix).unwrap_or_default(),
+        suffix = serde_json::to_string(suffix).unwrap_or_default(),
+        mode = serde_json::to_string(mode.as_js()).unwrap_or_default(),
+    );
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: js,
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+
+    if let Some(ex) = result.exception_details {
+        return Err(format!("select-text failed: {}", ex.text));
+    }
+    let value = result.result.value.unwrap_or(Value::Null);
+    if value.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        return Err(select_text_error(&value, selector_or_ref, text));
+    }
+    Ok(value)
+}
+
+/// What `paste` put on the synthetic clipboard (issue #227).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteFormat {
+    /// Plain text.
+    Text,
+    /// Markdown *source*, inserted as plain text — the same thing the other
+    /// tool does. Rendering it to HTML first would make the result depend on a
+    /// renderer the caller cannot see; inserting the source is predictable.
+    Markdown,
+    /// Rich text: the payload rides as `text/html`, with the same string as the
+    /// `text/plain` fallback for editors that only read plain text.
+    Html,
+}
+
+impl PasteFormat {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "text" | "plain" => Ok(Self::Text),
+            "md" | "markdown" => Ok(Self::Markdown),
+            "html" => Ok(Self::Html),
+            other => Err(format!(
+                "Unknown paste format '{other}'. Use text, md or html."
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Markdown => "md",
+            Self::Html => "html",
+        }
+    }
+}
+
+/// Paste content into the page without going anywhere near the user's real
+/// clipboard (issue #227).
+///
+/// Why this exists: in a rich-text editor, pasting `text/html` and typing the
+/// same characters produce different documents — `type` of `<b>bold</b>` gives
+/// you those eleven characters, a paste gives you bold text. Multi-line text is
+/// the same story: `type` turns a newline into Enter, which in most editors
+/// submits or starts a new block, while a paste inserts the line break.
+///
+/// The clipboard is deliberately untouched. We drive the user's real Chrome, so
+/// overwriting what they had copied is not an acceptable side effect — the
+/// payload is carried by a `DataTransfer` on a synthetic `ClipboardEvent`
+/// instead, and no `navigator.clipboard` call and no Ctrl+V is involved.
+///
+/// A synthetic paste event is untrusted, so it has no default action: an editor
+/// that listens for `paste` handles it, and a plain field ignores it. That is
+/// why the effect is read back, and why an unhandled paste falls through to a
+/// real insert rather than reporting a success nothing produced.
+pub async fn paste_content(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: Option<&str>,
+    text: &str,
+    format: PasteFormat,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<Value, String> {
+    let want_html = matches!(format, PasteFormat::Html);
+    let probe = format!(
+        r#"function() {{
+            const TEXT = {text};
+            const WANT_HTML = {want_html};
+            let el = this;
+            if (!el || el.nodeType !== 1) {{
+                return {{ ok: false, reason: 'no-target' }};
+            }}
+            if (el.shadowRoot) {{
+                const inner = el.shadowRoot.querySelector('input, textarea, [contenteditable]');
+                if (inner) el = inner;
+            }}
+            const isField = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA';
+            const read = () => (isField ? el.value : (el.isContentEditable ? el.innerHTML : el.textContent));
+            const before = read();
+            try {{ el.focus({{ preventScroll: true }}); }} catch (e) {{}}
+            let handled = false;
+            try {{
+                const dt = new DataTransfer();
+                dt.setData('text/plain', TEXT);
+                if (WANT_HTML) dt.setData('text/html', TEXT);
+                const ev = new ClipboardEvent('paste', {{
+                    clipboardData: dt,
+                    bubbles: true,
+                    cancelable: true
+                }});
+                handled = el.dispatchEvent(ev) === false;
+            }} catch (e) {{
+                return {{ ok: false, reason: 'dispatch-failed', detail: String(e && e.message || e) }};
+            }}
+            return {{
+                ok: true,
+                handled,
+                before,
+                changed: read() !== before,
+                isField,
+                contentEditable: !!el.isContentEditable
+            }};
+        }}"#,
+        text = serde_json::to_string(text).unwrap_or_default(),
+        want_html = want_html,
+    );
+
+    let (object_id, effective_session_id) = match selector_or_ref {
+        Some(sel) => {
+            resolve_element_object_id(client, session_id, ref_map, sel, iframe_sessions).await?
+        }
+        None => (
+            active_element_object_id(client, session_id).await?,
+            session_id.to_string(),
+        ),
+    };
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: probe,
+                object_id: Some(object_id.clone()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+    if let Some(ex) = result.exception_details {
+        return Err(format!("paste failed: {}", ex.text));
+    }
+    let probe_result = result.result.value.unwrap_or(Value::Null);
+    if probe_result.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let reason = probe_result
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("failed");
+        return Err(match reason {
+            "no-target" => {
+                "paste needs an element: pass a selector/@ref, or focus a field first.".to_string()
+            }
+            other => format!("paste failed: {other}"),
+        });
+    }
+
+    let changed = probe_result
+        .get("changed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let content_editable = probe_result
+        .get("contentEditable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if changed {
+        return Ok(json!({
+            "engine": "paste-event",
+            "format": format.as_str(),
+            "chars": text.chars().count(),
+        }));
+    }
+
+    // Nothing listened. Insert for real, matching what the format promised:
+    // rich content through `insertHTML` (contenteditable only — a `<textarea>`
+    // holds a string, so its "html" is that string), everything else through a
+    // TRUSTED `Input.insertText`, which respects the current selection and puts
+    // newlines in as newlines instead of Enter.
+    let engine = if want_html && content_editable {
+        let insert = format!(
+            r#"function() {{
+                try {{
+                    this.focus({{ preventScroll: true }});
+                    return document.execCommand('insertHTML', false, {html});
+                }} catch (e) {{ return false; }}
+            }}"#,
+            html = serde_json::to_string(text).unwrap_or_default(),
+        );
+        let _: EvaluateResult = client
+            .send_command_typed(
+                "Runtime.callFunctionOn",
+                &CallFunctionOnParams {
+                    function_declaration: insert,
+                    object_id: Some(object_id.clone()),
+                    arguments: None,
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(&effective_session_id),
+            )
+            .await?;
+        "insert-html"
+    } else {
+        client
+            .send_command_typed::<_, Value>(
+                "Input.insertText",
+                &InsertTextParams {
+                    text: text.to_string(),
+                },
+                Some(&effective_session_id),
+            )
+            .await?;
+        "insert-text"
+    };
+
+    // Verify the effect, not the call. An editor that swallowed the paste event
+    // AND ignored the insert must not come back as a success — that is exactly
+    // the silent no-op this codebase keeps paying for.
+    let verify: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: r#"function() {
+                    const isField = this.tagName === 'INPUT' || this.tagName === 'TEXTAREA';
+                    return isField ? this.value : (this.isContentEditable ? this.innerHTML : this.textContent);
+                }"#
+                .to_string(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+    let after = verify
+        .result
+        .value
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let before = probe_result
+        .get("before")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if after == before && !after.contains(text) {
+        return Err(
+            "The paste did not take: the target neither handled the paste event nor accepted an \
+             insert. Its content is unchanged. For Monaco or a similar editor with its own model, \
+             use `fill`."
+                .to_string(),
+        );
+    }
+
+    Ok(json!({
+        "engine": engine,
+        "format": format.as_str(),
+        "chars": text.chars().count(),
+    }))
+}
+
+/// The object id of `document.activeElement`, for a `paste` with no selector.
+async fn active_element_object_id(client: &CdpClient, session_id: &str) -> Result<String, String> {
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: "(() => { let a = document.activeElement; \
+                             while (a && a.shadowRoot && a.shadowRoot.activeElement) \
+                             a = a.shadowRoot.activeElement; return a; })()"
+                    .to_string(),
+                return_by_value: Some(false),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+    result.result.object_id.ok_or_else(|| {
+        "paste needs a target: pass a selector/@ref, or focus a field first.".to_string()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

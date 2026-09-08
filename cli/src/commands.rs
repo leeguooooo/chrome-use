@@ -59,6 +59,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     "scroll",
     "hover",
     "select",
+    "select-text",
+    "paste",
     "check",
     "uncheck",
     "tab",
@@ -432,6 +434,15 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
     if flags.observe {
         if let Some(obj) = result.as_object_mut() {
             obj.insert("observe".to_string(), json!(true));
+        }
+    }
+    // `--settle-ms` / `--no-settle` (issue #228): ceiling on the adaptive wait
+    // an observation makes before capturing. Stamped rather than read from the
+    // environment in the daemon so a per-command override actually reaches it —
+    // the daemon is a long-lived process that does not see this run's flags.
+    if let Some(ms) = flags.settle_ms {
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("settleMs".to_string(), json!(ms));
         }
     }
 
@@ -1476,6 +1487,90 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 usage: "do <@ref> <action>   (run `actions <@ref>` to list them)",
             })?;
             Ok(json!({ "id": id, "action": "do", "selector": sel, "actionName": act }))
+        }
+
+        // Select a run of text inside an editable element, or place the caret
+        // next to it (issue #226). `fill` replaces everything and `type`
+        // appends; neither can touch one phrase inside a long field.
+        "select-text" => {
+            let sel = rest.first().ok_or(ParseError::MissingArguments {
+                context: "select-text".to_string(),
+                usage: "select-text <@ref|selector> <text> [--prefix <s>] [--suffix <s>] \
+                        [--cursor-before|--cursor-after]",
+            })?;
+            let text = rest.get(1).ok_or(ParseError::MissingArguments {
+                context: "select-text".to_string(),
+                usage: "select-text <@ref|selector> <text>   (the text to select inside it)",
+            })?;
+            let mut cmd = json!({
+                "id": id,
+                "action": "select_text",
+                "selector": sel,
+                "text": text,
+            });
+            let obj = cmd.as_object_mut().unwrap();
+            let mut i = 2;
+            while i < rest.len() {
+                match rest[i] {
+                    "--prefix" => {
+                        if let Some(v) = rest.get(i + 1) {
+                            obj.insert("prefix".to_string(), json!(v));
+                            i += 1;
+                        }
+                    }
+                    "--suffix" => {
+                        if let Some(v) = rest.get(i + 1) {
+                            obj.insert("suffix".to_string(), json!(v));
+                            i += 1;
+                        }
+                    }
+                    "--cursor-before" => {
+                        obj.insert("selectionType".to_string(), json!("cursor_before"));
+                    }
+                    "--cursor-after" => {
+                        obj.insert("selectionType".to_string(), json!("cursor_after"));
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            Ok(cmd)
+        }
+
+        // Paste content with a MIME type instead of typing it (issue #227).
+        // Never touches the user's real clipboard — the payload rides on a
+        // synthetic ClipboardEvent.
+        "paste" => {
+            let mut text_parts: Vec<&str> = Vec::new();
+            let mut cmd = json!({ "id": id, "action": "paste" });
+            let obj = cmd.as_object_mut().unwrap();
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i] {
+                    "--format" | "-f" => {
+                        if let Some(v) = rest.get(i + 1) {
+                            obj.insert("format".to_string(), json!(v));
+                            i += 1;
+                        }
+                    }
+                    "--selector" | "--on" => {
+                        if let Some(v) = rest.get(i + 1) {
+                            obj.insert("selector".to_string(), json!(v));
+                            i += 1;
+                        }
+                    }
+                    other => text_parts.push(other),
+                }
+                i += 1;
+            }
+            if text_parts.is_empty() {
+                return Err(ParseError::MissingArguments {
+                    context: "paste".to_string(),
+                    usage: "paste <text> [--format text|md|html] [--selector <sel>]",
+                });
+            }
+            obj.insert("text".to_string(), json!(text_parts.join(" ")));
+            Ok(cmd)
         }
 
         // === Snapshot ===
@@ -4712,6 +4807,7 @@ mod tests {
             browser: None,
             if_present: false,
             observe: false,
+            settle_ms: None,
             profile: None,
             state: None,
             proxy: None,
@@ -6457,6 +6553,69 @@ mod tests {
         assert_eq!(cmd["action"], "clipboard");
         assert_eq!(cmd["operation"], "write");
         assert_eq!(cmd["text"], "hello world");
+    }
+
+    /// `select-text`'s prefix/suffix are context for finding the match, so they
+    /// must survive parsing separately from the text — folding either into the
+    /// text would select the wrong span (issue #226).
+    #[test]
+    fn select_text_keeps_context_separate_from_the_target_text() {
+        let cmd = parse_command(
+            &args("select-text @e3 confirm --prefix please --suffix ."),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "select_text");
+        assert_eq!(cmd["selector"], "@e3");
+        assert_eq!(cmd["text"], "confirm");
+        assert_eq!(cmd["prefix"], "please");
+        assert_eq!(cmd["suffix"], ".");
+        assert!(cmd.get("selectionType").is_none());
+    }
+
+    #[test]
+    fn select_text_cursor_modes_are_distinct() {
+        let before = parse_command(
+            &args("select-text @e3 hi --cursor-before"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(before["selectionType"], "cursor_before");
+        let after =
+            parse_command(&args("select-text @e3 hi --cursor-after"), &default_flags()).unwrap();
+        assert_eq!(after["selectionType"], "cursor_after");
+    }
+
+    #[test]
+    fn select_text_without_text_is_an_error_naming_what_is_missing() {
+        let err = parse_command(&args("select-text @e3"), &default_flags()).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("select-text"),
+            "the usage line must name the command: {err:?}"
+        );
+    }
+
+    /// `paste` takes its content as free text, so flags must not be swallowed
+    /// into it and multi-word content must not be truncated (issue #227).
+    #[test]
+    fn paste_separates_its_flags_from_its_content() {
+        let cmd = parse_command(
+            &args("paste hello there --format html --selector #editor"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "paste");
+        assert_eq!(cmd["text"], "hello there");
+        assert_eq!(cmd["format"], "html");
+        assert_eq!(cmd["selector"], "#editor");
+    }
+
+    #[test]
+    fn paste_defaults_to_plain_text_and_the_focused_element() {
+        let cmd = parse_command(&args("paste hello"), &default_flags()).unwrap();
+        assert_eq!(cmd["text"], "hello");
+        assert!(cmd.get("format").is_none());
+        assert!(cmd.get("selector").is_none());
     }
 
     #[test]

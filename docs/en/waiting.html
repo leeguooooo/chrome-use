@@ -91,6 +91,53 @@
 
       <hr class="du-divider" />
 
+      <!-- ============ SETTLE ============ -->
+      <h2>The read waits for you — settle</h2>
+      <p>
+        An observation is only worth what the page was doing when it was taken,
+        so <code>snapshot</code> and <code>--observe</code>
+        <strong>wait for the page to stop changing before they capture</strong>.
+        You do not have to guess a sleep in front of them:
+      </p>
+      <ul>
+        <li>the DOM has gone 100ms without a mutation,</li>
+        <li>no finite CSS transition or animation is still running (a spinner that loops forever is ignored — it never ends),</li>
+        <li>and no request fired by the action you just ran is still in flight.</li>
+      </ul>
+      <p>
+        Whichever takes longest wins, bounded by a 1 second ceiling. A static
+        page costs about 100ms; a click that fires an XHR waits for the response
+        instead of returning the pre-response tree as though it were the result.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use snapshot -i <span class="du-flag">--settle-ms</span> 3000   <span class="du-cmt"># raise the ceiling for a slow page</span>
+<span class="du-prompt">$</span> chrome-use snapshot -i <span class="du-flag">--no-settle</span>        <span class="du-cmt"># capture now, mid-flight</span></code></pre>
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ A ceiling that expires says so</div>
+        When the page is still moving at the ceiling, the reply carries
+        <code>Page had not settled after 1000ms (request in flight still active)</code>.
+        That means the tree may be mid-transition — re-read before trusting it.
+        A mid-transition capture passed off as the final one is worse than being
+        slow, so this line is never swallowed.
+      </div>
+
+      <p>
+        <code>AGENT_BROWSER_SETTLE_MS</code> sets the ceiling globally (0 disables
+        the wait) and <code>AGENT_BROWSER_SETTLE_QUIET_MS</code> sets the quiet
+        window. Waiting for something <strong>specific</strong> is still
+        <code>wait</code>'s job: the settle knows the page stopped, not that what
+        you wanted appeared.
+      </p>
+
+      <hr class="du-divider" />
+
       <!-- ============ EXPECT ============ -->
       <h2>Confirm the action landed — expect</h2>
       <p>

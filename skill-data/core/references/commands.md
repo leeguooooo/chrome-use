@@ -56,6 +56,8 @@ chrome-use snapshot -i -f "SSH|Save"   # Keep matching lines + ancestor context 
 chrome-use snapshot -i --diff  # Only what changed since this session's last snapshot of the same page
 chrome-use snapshot -i --max-bytes 4000   # Cap the tree; cuts between nodes, reports what it omitted
 chrome-use snapshot -i --max-bytes 4000 --from 70   # Read on from where the last one stopped
+chrome-use snapshot -i --settle-ms 3000   # Raise the pre-capture wait ceiling (default 1000ms)
+chrome-use snapshot -i --no-settle         # Capture now, without waiting for the page to stop changing
 chrome-use read <url>          # Fetch a URL as agent-readable markdown/text (prefers .md/llms.txt, HTML→markdown fallback)
 chrome-use read                # No URL: read the rendered DOM of the active tab
 chrome-use read <url> --outline        # Heading outline only
@@ -86,6 +88,10 @@ chrome-use dblclick @e1        # Double-click
 chrome-use focus @e1           # Focus element
 chrome-use fill @e2 "text"     # Clear and type
 chrome-use type @e2 "text"     # Type without clearing (add --clear to clear first, --delay <ms> for per-key delay)
+chrome-use select-text @e2 "confirm" --prefix "please "   # Select one run of text inside the field (prefix/suffix disambiguate; they are not selected)
+chrome-use select-text @e2 "Hi Sam," --cursor-after       # Place the caret instead of selecting, so the next `type` continues there
+chrome-use paste "line one\nline two" --selector @e2      # Paste (newline stays a newline; the real clipboard is untouched)
+chrome-use paste "<b>bold</b>" --format html --selector @e2  # Paste as text/html; --format md inserts Markdown source as plain text
 chrome-use press Enter         # Press key at current focus (alias: key); output names the target; ⚠ warns when the page has no listener for a JS-only key
 chrome-use press Enter --selector @e2  # Focus the target first (alias: --on)
 chrome-use press Control+a     # Key combination

@@ -214,6 +214,61 @@ chrome-use snapshot -i --max-bytes 4000 --from 70   # 从上次停下的地方�
 **不需要事先知道要找什么**。它只在完整节点边界切开（截字符串会留下残缺的
 `[ref=eN]`，既用不了也看不出是残的），并告诉你漏了哪些、从哪继续。
 
+## 读之前的等待
+
+一次观察值多少，取决于它拍下的那一刻页面在做什么。`snapshot` 和 `--observe`
+会先等页面不再变化再采集，你不需要自己猜一个 sleep：
+
+- DOM 连续 100ms 没有变更，
+- 没有还在跑的有限时长过渡/动画（无限循环的 loading 转圈会被忽略 —— 它永远不结束），
+- 你刚触发的动作发出的请求都已经回来。
+
+以最慢的那个为准，上限 1 秒。静态页面大约只花 100ms；而一次触发 XHR 的点击会等到
+响应回来，而不是把「响应前的树」当成结果返回。
+
+上限到点而页面仍在动时，它会**说出来**，不会把中间态冒充成最终态：
+
+```
+⚠ Page had not settled after 1000ms (request in flight still active) — this
+  capture may be mid-transition.
+```
+
+```bash
+chrome-use snapshot -i --settle-ms 3000   # 慢页面：把上限调高
+chrome-use snapshot -i --no-settle        # 就要中间态：不等，立刻采
+```
+
+`AGENT_BROWSER_SETTLE_MS` 全局设置上限（设 0 关闭等待），
+`AGENT_BROWSER_SETTLE_QUIET_MS` 设置静默窗口。等**某个具体条件**仍然是 `wait`
+的活：settle 只知道页面停了，不知道你要的东西出现了没有。
+
+## 在字段内部编辑，以及带格式粘贴
+
+`fill` 是整体替换，`type` 是追加。有两件事它们都做不到：
+
+```bash
+chrome-use select-text @e3 "确认" --prefix "请"      # 选中其中一段
+chrome-use select-text @e3 "Hi Sam," --cursor-after  # 只放光标
+chrome-use type @e3 " 顺便说一句："                    # 从光标处继续
+
+chrome-use paste "第一行\n第二行" --selector "#notes"
+chrome-use paste "<b>粗体</b>文字" --format html --selector "#editor"
+```
+
+`select-text` 支持 `<input>`、`<textarea>` 和 contenteditable。prefix / suffix
+是**消歧用的上下文，不属于被选中的内容**：`--prefix "请"` 选中的是「确认」。
+出现多次而没有消歧信息时它**报错并说清有几处**，不会替你挑第一个；而且
+「找不到」「找到了但上下文对不上」「有多处」是三条不同的提示 —— 它们的解法本来就不同。
+Monaco 和 CodeMirror 有自己的选区模型，会被点名拒绝：在那上面做 DOM 选区，
+看起来成功、实际什么也没发生。
+
+`paste` 用在「敲字和粘贴结果不一样」的地方：`type "<b>粗体</b>"` 得到的是这几个字符，
+`paste --format html` 得到的才是粗体；换行也保持换行，而不是变成 Enter。
+`--format md` 把 Markdown 源码作为纯文本插入。**全程不碰用户的真实剪贴板** ——
+内容走的是合成 ClipboardEvent，不调用 `navigator.clipboard`，也不模拟 Ctrl+V。
+这种事件是 untrusted 的、没有默认行为：监听 paste 的编辑器从自己的 handler 里拿到内容，
+不监听的则走一次真实插入。回复里会写明走的是哪条路径；两条都没生效时它**报错**，不会打 ✓。
+
 ## 点击之外的动作
 
 有些控件不止能点：折叠块要展开，菜单按钮要弹出，数字框和滑块要按范围步进。

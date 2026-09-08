@@ -383,6 +383,13 @@ pub struct DaemonState {
     pub routes: Arc<RwLock<Vec<RouteEntry>>>,
     pub tracked_requests: Vec<TrackedRequest>,
     pub request_tracking: bool,
+    /// Requests seen going out and not yet finished, as (requestId, start).
+    /// Feeds the adaptive settle (#228): a click that fires an XHR leaves the
+    /// DOM quiet for the whole round trip, so DOM stillness alone would report
+    /// the pre-response tree as the result. Tracked unconditionally — gating it
+    /// on `request_tracking` would make the wait blind unless someone happened
+    /// to ask for `network requests`.
+    pub in_flight_requests: Vec<(String, std::time::Instant)>,
     pub active_frame_id: Option<String>,
     /// Last `snapshot` this session produced, as (url, options fingerprint, tree).
     /// `snapshot --diff` compares against it so a re-read of a mostly-unchanged
@@ -459,6 +466,7 @@ impl DaemonState {
             routes: Arc::new(RwLock::new(Vec::new())),
             tracked_requests: Vec::new(),
             request_tracking: false,
+            in_flight_requests: Vec::new(),
             active_frame_id: None,
             last_snapshot: None,
             iframe_sessions: HashMap::new(),
@@ -499,6 +507,14 @@ impl DaemonState {
 
     fn reset_input_state(&mut self) {
         self.mouse_state = MouseState::default();
+    }
+
+    /// Requests still in flight that started at or after `since` — the network
+    /// half of the adaptive settle (#228). See `settle::pending_requests` for
+    /// why age matters: a stream never finishes, and waiting on one would hold
+    /// every observation to its ceiling.
+    pub fn pending_request_count(&self, since: std::time::Instant) -> usize {
+        super::settle::pending_requests(&self.in_flight_requests, since)
     }
 
     /// Create state with an optional stream client slot and server instance
@@ -1028,6 +1044,39 @@ impl DaemonState {
 
                     if !session_matches && !iframe_network_event {
                         continue;
+                    }
+
+                    // In-flight bookkeeping for the adaptive settle (#228),
+                    // separate from the tracking below because it must run
+                    // whether or not anyone asked for HAR or `network requests`.
+                    match event.method.as_str() {
+                        "Network.requestWillBeSent" => {
+                            if let Some(rid) =
+                                event.params.get("requestId").and_then(|v| v.as_str())
+                            {
+                                let now = std::time::Instant::now();
+                                // A redirect reuses the requestId; keep the
+                                // original start so the chain ages out together.
+                                if !self.in_flight_requests.iter().any(|(id, _)| id == rid) {
+                                    self.in_flight_requests.push((rid.to_string(), now));
+                                }
+                            }
+                            // Bounded: a page that streams forever would
+                            // otherwise grow this list for the session's life.
+                            if self.in_flight_requests.len() > 256 {
+                                let cutoff = std::time::Duration::from_secs(30);
+                                self.in_flight_requests
+                                    .retain(|(_, t)| t.elapsed() < cutoff);
+                            }
+                        }
+                        "Network.loadingFinished" | "Network.loadingFailed" => {
+                            if let Some(rid) =
+                                event.params.get("requestId").and_then(|v| v.as_str())
+                            {
+                                self.in_flight_requests.retain(|(id, _)| id != rid);
+                            }
+                        }
+                        _ => {}
                     }
 
                     match event.method.as_str() {
@@ -1580,6 +1629,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     } else {
         None
     };
+    // Marks the point the settle's network signal cares about: a request fired
+    // BY the action starts before the settle does, so anchoring on "now" here
+    // is what lets the wait see it (#228).
+    let action_started_at = std::time::Instant::now();
 
     // On the relay, a cross-process navigation (an OAuth/SSO redirect) can swap the
     // renderer and rotate the CDP sessionId out from under a non-navigate read or
@@ -1610,6 +1663,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "keep" => handle_keep(state).await,
             "stealth_status" => handle_stealth_status(state).await,
             "snapshot" => handle_snapshot(cmd, state).await,
+            "select_text" => handle_select_text(cmd, state).await,
+            "paste" => handle_paste(cmd, state).await,
             "actions" => handle_actions(cmd, state).await,
             "do" => handle_do_action(cmd, state).await,
             "screenshot" => handle_screenshot(cmd, state).await,
@@ -1850,7 +1905,17 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // and attach ONLY the delta vs the baseline (added/removed lines, url change,
     // requests fired). Collapses act→wait→snapshot→diff into one reply.
     if let (true, Some((url0, snap0, req_mark))) = (ok, observe_baseline) {
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        // Wait on signals, not on a number (#228). The 250ms this replaces was
+        // wrong in both directions: too short on a slow page, where the delta
+        // described a tree that no longer existed by the time the agent read
+        // it, and pure overhead on a static one.
+        let settled = super::settle::settle(
+            state,
+            super::settle::max_ms_for(cmd),
+            action_started_at,
+            true,
+        )
+        .await;
         let _ = state.drain_cdp_events();
         // Registering: the delta the caller reads names refs it will act on next.
         let snap1 = observe_snapshot_registering(state).await;
@@ -1877,6 +1942,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             })
             .unwrap_or_default();
         let mut observed = serde_json::Map::new();
+        observed.insert("settle".into(), settled.to_json());
         observed.insert("changed".into(), json!(d.changed || url0 != url1));
         if d.changed {
             observed.insert("delta".into(), json!(d.diff));
@@ -1895,6 +1961,13 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
             if let Some(d) = data.as_object_mut() {
                 d.insert("observed".into(), Value::Object(observed));
+            }
+            // A delta captured off a page that never went quiet is a guess. Say
+            // so rather than letting it read like the settled result.
+            if let Some(w) = settled.warning() {
+                if obj.get("warning").is_none() {
+                    obj.insert("warning".to_string(), json!(w));
+                }
             }
         }
     }
@@ -1925,6 +1998,22 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // This is the round trip that separated us from a `createBrowserTab` that
     // returns the page's a11y tree with the tab.
     if ok && observe_navigation {
+        // `navigate` returns at its load state, which is before client-side
+        // routing, hydration and the first data fetch have finished. Settle on
+        // the page's own signals so the attached tree is the one the agent will
+        // act on, not the shell it briefly was (#228).
+        //
+        // No reaction window here, unlike a same-page action: the change a
+        // navigation makes has already happened, and what comes after it (an
+        // SPA's first data fetch) announces itself on the network signal. A
+        // fully static page would otherwise pay that window for nothing.
+        let settled = super::settle::settle(
+            state,
+            super::settle::max_ms_for(cmd),
+            action_started_at,
+            false,
+        )
+        .await;
         let snap = observe_snapshot_registering(state).await;
         if let Some(obj) = resp.as_object_mut() {
             let data = obj
@@ -1932,6 +2021,12 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
             if let Some(d) = data.as_object_mut() {
                 d.insert("observedSnapshot".into(), json!(snap));
+                d.insert("settle".into(), settled.to_json());
+            }
+            if let Some(w) = settled.warning() {
+                if obj.get("warning").is_none() {
+                    obj.insert("warning".to_string(), json!(w));
+                }
             }
         }
     }
@@ -3945,6 +4040,22 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     if let Some(mgr) = state.browser.as_mut() {
         mgr.resync_targets().await.ok();
     }
+
+    // Wait for the page to stop changing before reading it (#228). `snapshot`
+    // used to capture the instant it was called, which on anything doing
+    // client-side rendering meant the caller read a shell, acted on refs that
+    // were about to be replaced, and blamed the refs. The wait is bounded and
+    // says so when it expires — see `settle`.
+    let settled = super::settle::settle(
+        state,
+        super::settle::max_ms_for(cmd),
+        super::settle::lookback(),
+        // No action of ours to react to: on a plain read, a still page is the
+        // answer, not a reason to keep waiting.
+        false,
+    )
+    .await;
+
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
@@ -4121,6 +4232,12 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     let ref_count = refs.len();
     let mut out = json!({ "snapshot": tree, "origin": url, "refs": refs });
+    out["settle"] = settled.to_json();
+    // A tree read off a page that was still moving is not the page's answer.
+    // Print that rather than let a mid-transition capture pass for a settled one.
+    if let Some(w) = settled.warning() {
+        out["settleWarning"] = json!(w);
+    }
     if want_diff {
         out["diffMode"] = json!(diff_note.is_none());
         if let Some(n) = diff_note {
@@ -4885,6 +5002,101 @@ async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     // Echo the input path used (input/contenteditable/codemirror5/monaco/select)
     // so the agent can confirm a rich editor was handled, not silently no-op'd (#41).
     Ok(json!({ "filled": selector, "engine": engine }))
+}
+
+/// `select-text` (issue #226): select one run of text inside an editable
+/// element, or place the caret before/after it.
+///
+/// The gap this closes: `fill` replaces the whole value and `type` appends, so
+/// changing one word in a written paragraph — or putting the cursor somewhere
+/// specific and carrying on — had no route but hand-written `eval`. Needing
+/// `eval` for something this ordinary is the signal that a feature is missing.
+async fn handle_select_text(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let selector = cmd
+        .get("selector")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'selector' parameter")?;
+    let text = cmd
+        .get("text")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'text' parameter")?;
+    let prefix = cmd.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+    let suffix = cmd.get("suffix").and_then(|v| v.as_str()).unwrap_or("");
+    let mode = interaction::SelectTextMode::parse(
+        cmd.get("selectionType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text"),
+    )?;
+
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+
+    let result = interaction::select_text(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        text,
+        prefix,
+        suffix,
+        mode,
+        &state.iframe_sessions,
+    )
+    .await?;
+
+    Ok(json!({
+        "selector": selector,
+        "engine": result.get("engine").cloned().unwrap_or(Value::Null),
+        "selected": result.get("selected").cloned().unwrap_or(Value::Null),
+        "start": result.get("start").cloned().unwrap_or(Value::Null),
+        "end": result.get("end").cloned().unwrap_or(Value::Null),
+        "selectionType": cmd
+            .get("selectionType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text"),
+    }))
+}
+
+/// `paste` (issue #227): put content into the page with a MIME type, without
+/// touching the user's real clipboard.
+///
+/// `type` and `paste` are not interchangeable in a rich-text editor: typing
+/// `<b>bold</b>` gives you those characters, pasting `text/html` gives you bold
+/// text. Newlines differ too — `type` sends Enter, which submits or splits a
+/// block in most editors, while a paste inserts the break.
+async fn handle_paste(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let text = cmd
+        .get("text")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'text' parameter")?;
+    let format = interaction::PasteFormat::parse(
+        cmd.get("format").and_then(|v| v.as_str()).unwrap_or("text"),
+    )?;
+    let selector = cmd.get("selector").and_then(|v| v.as_str());
+
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+
+    let result = interaction::paste_content(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        text,
+        format,
+        &state.iframe_sessions,
+    )
+    .await?;
+
+    Ok(json!({
+        "pasted": result.get("chars").cloned().unwrap_or(Value::Null),
+        "format": result.get("format").cloned().unwrap_or(Value::Null),
+        // Which path took the content: the page's own paste handler, or our
+        // insert after nobody listened. An agent debugging a rich editor needs
+        // to know which one it got.
+        "engine": result.get("engine").cloned().unwrap_or(Value::Null),
+        "target": selector.map(Value::from).unwrap_or(Value::Null),
+    }))
 }
 
 async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
