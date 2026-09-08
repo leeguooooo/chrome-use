@@ -411,6 +411,10 @@ pub struct Flags {
     /// `--browser <id|email-substr>`: pin this session to a specific connected
     /// Chrome profile's relay endpoint (issue #60). Resolved to a `relay-cdp-url-<id>`.
     pub browser: Option<String>,
+    /// Skip the ChooseBrowser rule lookup for this invocation. The lookup is
+    /// silent when ChooseBrowser is not installed, so this exists for the user
+    /// who *has* rules and wants one command to ignore them.
+    pub no_choosebrowser: bool,
     /// `--as <vault-account-id>`: before executing the command, verify the
     /// session's live cookies match this cookie-use account's fingerprint;
     /// on mismatch auto-apply the account's session (or fail with --as-strict).
@@ -803,6 +807,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
     };
 
     let mut flags = Flags {
+        no_choosebrowser: false,
         json: env_var_is_truthy("AGENT_BROWSER_JSON") || config.json.unwrap_or(false),
         headed: env_var_is_truthy("AGENT_BROWSER_HEADED") || config.headed.unwrap_or(false),
         debug: env_var_is_truthy("AGENT_BROWSER_DEBUG") || config.debug.unwrap_or(false),
@@ -1047,6 +1052,9 @@ pub fn parse_flags(args: &[String]) -> Flags {
                     flags.browser = Some(s.clone());
                     i += 1;
                 }
+            }
+            "--no-choosebrowser" => {
+                flags.no_choosebrowser = true;
             }
             "--as" => {
                 if let Some(s) = args.get(i + 1) {

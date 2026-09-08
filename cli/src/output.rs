@@ -4698,6 +4698,11 @@ Options:
   --browser <id|email>       Pin this session to a specific connected Chrome profile
                              (run `chrome-use browsers` to list; for multi-profile
                              relay setups). Sticky per session.
+  --no-choosebrowser         Ignore ChooseBrowser's site rules for this command.
+                             When that app is installed, `open <url>` without an
+                             explicit --browser follows the rule the user already
+                             wrote for that site. Nothing happens either way if
+                             it isn't installed.
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
