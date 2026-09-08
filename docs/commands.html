@@ -130,6 +130,23 @@
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000  <span class="du-cmt"># 按整节点裁剪，并说明漏了什么 + 续读游标</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000 <span class="du-flag">--from</span> 70  <span class="du-cmt"># 从上次停下的地方续读</span></code></pre>
       </div>
+      <h3>点击之外的动作</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">actions / do</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use actions <span class="du-str">@e15</span>   <span class="du-cmt"># 这个元素此刻支持什么（实时读）</span>
+<span class="du-prompt">$</span> chrome-use do <span class="du-str">@e15</span> expand  <span class="du-cmt"># 只做其中之一；集合外的一律拒绝</span></code></pre>
+      </div>
+      <p>
+        <code>expand</code> / <code>collapse</code>、<code>showMenu</code>、
+        <code>increment</code> / <code>decrement</code>、<code>toggle</code>，
+        由元素的无障碍属性推导。做完会再报一次动作集，
+        <span class="mark">没动的控件不会读起来像成功</span>。详见
+        <a href="interacting.html">交互</a>。
+      </p>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 小贴士</div>
         <code>snapshot -i</code> 只呈现可见、可交互的元素 —— 它<strong>不</strong>显示隐藏输入或控件的实际提交值。

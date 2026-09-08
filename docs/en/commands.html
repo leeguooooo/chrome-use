@@ -136,6 +136,24 @@
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000  <span class="du-cmt"># cut between nodes, report what was omitted + a cursor</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--max-bytes</span> 4000 <span class="du-flag">--from</span> 70  <span class="du-cmt"># read on from where it stopped</span></code></pre>
       </div>
+
+      <h3>Actions beyond a click</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">actions / do</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use actions <span class="du-str">@e15</span>   <span class="du-cmt"># what this element supports right now (read live)</span>
+<span class="du-prompt">$</span> chrome-use do <span class="du-str">@e15</span> expand  <span class="du-cmt"># perform one of exactly those; anything else is refused</span></code></pre>
+      </div>
+      <p>
+        <code>expand</code> / <code>collapse</code>, <code>showMenu</code>,
+        <code>increment</code> / <code>decrement</code> and <code>toggle</code>, derived from the
+        element's accessibility properties. The set is reported again afterwards, so
+        <span class="mark">a control that did not move cannot read as a success</span>. See
+        <a href="interacting.html">Interacting</a>.
+      </p>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Tip</div>
         <code>snapshot -i</code> only surfaces visible, interactive elements — it does <strong>not</strong> show
