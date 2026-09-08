@@ -733,8 +733,8 @@ fn indistinguishable_ref_error(ref_id: &str, entry: &RefEntry, candidates: usize
     };
     let value_hint = match fingerprint_value(entry) {
         Some(v) => format!(
-            " Its value was \"{v}\" at snapshot time; no live candidate has that value now, so \
-             that could not tell them apart either."
+            " Its value was \"{v}\" at snapshot time, which did not single one of them out \
+             either — no live candidate carries it, or more than one does."
         ),
         None => String::new(),
     };

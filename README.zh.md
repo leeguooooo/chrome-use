@@ -226,6 +226,11 @@ chrome-use snapshot -i --max-bytes 4000 --from 70   # 从上次停下的地方�
 以最慢的那个为准，上限 1 秒。静态页面大约只花 100ms；而一次触发 XHR 的点击会等到
 响应回来，而不是把「响应前的树」当成结果返回。
 
+两者有一处不同：单独的 `snapshot` 没有动作要反应，页面静止就是答案；而动作之后的
+`--observe` 会先花上限的一半（默认 500ms）盯着「有没有第一个反应」，才肯报
+`changed:false` —— 否则一个 300ms 后才渲染的控件会被读成「什么都没发生」。
+这份代价只由真的什么都没做的动作承担。
+
 上限到点而页面仍在动时，它会**说出来**，不会把中间态冒充成最终态：
 
 ```
@@ -261,7 +266,7 @@ chrome-use select-text @e3 "确认" --prefix "请"      # 选中其中一段
 chrome-use select-text @e3 "Hi Sam," --cursor-after  # 只放光标
 chrome-use type @e3 " 顺便说一句："                    # 从光标处继续
 
-chrome-use paste "第一行\n第二行" --selector "#notes"
+chrome-use paste $'第一行\n第二行' --selector "#notes"
 chrome-use paste "<b>粗体</b>文字" --format html --selector "#editor"
 ```
 

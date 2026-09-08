@@ -8411,6 +8411,11 @@ async fn e2e_settle_is_cheap_on_a_static_page() {
 /// A page that never stops mutating must still return — and must say that what
 /// it returned may be mid-transition. A ceiling that expires quietly is the
 /// same silent success in a new place.
+///
+/// The 300ms ceiling here also pins the wait's own arithmetic: the last slice of
+/// the budget is too short to run a real quiet check, and a zero-length quiet
+/// window is satisfied the moment it is tested. That path once turned this exact
+/// page into a confident `quiet: true`.
 #[tokio::test]
 #[ignore]
 async fn e2e_settle_reports_its_ceiling_instead_of_hiding_it() {

@@ -108,6 +108,13 @@
         而一次触发 XHR 的点击会等到响应回来，而不是把「响应前的树」当成结果返回。
       </p>
 
+      <p>
+        两者有一处不同：单独的 <code>snapshot</code> 没有动作要反应，页面静止就是答案，安静了立刻返回；
+        而动作之后的 <code>--observe</code> 会先花上限的一半（默认 500ms）盯着「有没有第一个反应」，
+        才肯报 <code>changed:false</code> —— 否则一个 300ms 后才渲染的控件会被读成「什么都没发生」。
+        这份代价只由真的什么都没做的动作承担；只要页面有反应，窗口立刻结束。
+      </p>
+
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
@@ -120,9 +127,10 @@
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 上限到点了会说出来</div>
         页面到上限还在动时，回复里会带一行
-        <code>Page had not settled after 1000ms (request in flight still active)</code>——
-        意思是这张树可能是中间态，请重读一次再信它。中间态被当成最终态返回，
-        比慢更糟，所以这条永远不会被吞掉。
+        <code>Page had not settled after 1000ms (request in flight still active) — this capture
+        may be mid-transition. Re-read to confirm, or raise the ceiling with
+        AGENT_BROWSER_SETTLE_MS.</code>——意思是这张树可能是中间态，请重读一次再信它。
+        中间态被当成最终态返回，比慢更糟，所以这条永远不会被吞掉。
       </div>
 
       <p>

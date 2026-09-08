@@ -187,7 +187,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">paste</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use paste <span class="du-str">"line one\nline two"</span> <span class="du-flag">--selector</span> <span class="du-str">"#notes"</span>
+<pre><code><span class="du-prompt">$</span> chrome-use paste <span class="du-str">$'line one\nline two'</span> <span class="du-flag">--selector</span> <span class="du-str">"#notes"</span>  <span class="du-cmt"># $'...' sends a real newline</span>
 <span class="du-prompt">$</span> chrome-use paste <span class="du-str">"&lt;b&gt;bold&lt;/b&gt; text"</span> <span class="du-flag">--format</span> html <span class="du-flag">--selector</span> <span class="du-str">"#editor"</span>
 <span class="du-prompt">$</span> chrome-use paste <span class="du-str">"# Heading"</span> <span class="du-flag">--format</span> md            <span class="du-cmt"># Markdown source as plain text</span></code></pre>
       </div>

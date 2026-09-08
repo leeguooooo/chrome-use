@@ -91,7 +91,7 @@ chrome-use fill @e2 "text"     # Clear and type
 chrome-use type @e2 "text"     # Type without clearing (add --clear to clear first, --delay <ms> for per-key delay)
 chrome-use select-text @e2 "confirm" --prefix "please "   # Select one run of text inside the field (prefix/suffix disambiguate; they are not selected)
 chrome-use select-text @e2 "Hi Sam," --cursor-after       # Place the caret instead of selecting, so the next `type` continues there
-chrome-use paste "line one\nline two" --selector @e2      # Paste (newline stays a newline; the real clipboard is untouched)
+chrome-use paste $'line one\nline two' --selector @e2     # Paste ($'...' so the shell sends a real newline; the clipboard is untouched)
 chrome-use paste "<b>bold</b>" --format html --selector @e2  # Paste as text/html; --format md inserts Markdown source as plain text
 chrome-use press Enter         # Press key at current focus (alias: key); output names the target; ⚠ warns when the page has no listener for a JS-only key
 chrome-use press Enter --selector @e2  # Focus the target first (alias: --on)

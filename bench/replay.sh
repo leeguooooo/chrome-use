@@ -29,8 +29,24 @@ BIN="${CHROME_USE_BIN:-chrome-use}"
 OUT="$(dirname "$0")/results"; mkdir -p "$OUT"
 TSV="$OUT/$LABEL-$(date +%Y%m%d-%H%M%S).tsv"
 
-BIN_PATH=$(command -v "$BIN" 2>/dev/null || printf '%s' "$BIN")
-BIN_VERSION=$(eval "$BIN --version" 2>/dev/null | head -1)
+# Split once, with shell quoting rules but WITHOUT shell evaluation: task files
+# and CHROME_USE_BIN are ordinary text, and running them through `eval` would let
+# a stray `;` or `$(...)` in either execute as a command. python3 is already a
+# dependency of this script, so shlex does the splitting.
+# Sets ARGV to the split result (a global, not a nameref: macOS still ships
+# bash 3.2, where `local -n` does not exist).
+split_into_argv() {
+  ARGV=()
+  local part
+  while IFS= read -r -d '' part; do
+    ARGV[${#ARGV[@]}]="$part"
+  done < <(python3 -c 'import shlex,sys;print("\0".join(shlex.split(sys.argv[1])),end="")' "$1"; printf '\0')
+}
+
+split_into_argv "$BIN"
+BIN_ARGV=("${ARGV[@]}")
+BIN_PATH=$(command -v "${BIN_ARGV[0]}" 2>/dev/null || printf '%s' "${BIN_ARGV[0]}")
+BIN_VERSION=$("${BIN_ARGV[@]}" --version 2>/dev/null | head -1)
 LOADAVG=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null \
   || uptime | sed 's/.*load averages*: //' 2>/dev/null || echo unknown)
 
@@ -44,7 +60,7 @@ WARM=true
 if [ "${BENCH_WARMUP:-1}" = "0" ]; then
   WARM=false
 else
-  eval "$BIN eval 1+1" >/dev/null 2>&1 || true
+  "${BIN_ARGV[@]}" eval 1+1 >/dev/null 2>&1 || true
 fi
 
 {
@@ -60,6 +76,9 @@ printf 'n\tms\tbytes\trc\tcmd\n' >> "$TSV"
 
 ASSERTIONS=()
 n=0
+# `set -u` plus an empty array is an error on bash 3.2, and a task line that
+# splits to nothing (only quotes, say) would trip it.
+
 while IFS= read -r line; do
   case "$line" in
     '#!'*)
@@ -74,8 +93,11 @@ while IFS= read -r line; do
     ''|\#*) continue;;
   esac
   n=$((n+1))
+  split_into_argv "$line"
+  if [ ${#ARGV[@]} -eq 0 ]; then continue; fi
+  CALL_ARGV=("${ARGV[@]}")
   s=$(python3 -c 'import time;print(time.time())')
-  out=$(eval "$BIN $line" 2>&1); rc=$?
+  out=$("${BIN_ARGV[@]}" "${CALL_ARGV[@]}" 2>&1); rc=$?
   ms=$(python3 -c "import time;print(int((time.time()-$s)*1000))")
   printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$ms" "${#out}" "$rc" "$line" >> "$TSV"
 done < "$TASK"
@@ -87,7 +109,8 @@ verdict=none
 if [ ${#ASSERTIONS[@]} -gt 0 ]; then
   verdict=pass
   for a in "${ASSERTIONS[@]}"; do
-    if eval "$BIN expect $a" >/dev/null 2>&1; then
+    split_into_argv "$a"
+    if "${BIN_ARGV[@]}" expect "${ARGV[@]}" >/dev/null 2>&1; then
       printf '# assert\tpass\t%s\n' "$a" >> "$TSV"
     else
       printf '# assert\tFAIL\t%s\n' "$a" >> "$TSV"
@@ -98,7 +121,7 @@ fi
 printf '# verdict\t%s\n' "$verdict" >> "$TSV"
 
 python3 - "$TSV" <<'PY'
-import sys, statistics as st
+import math, sys, statistics as st
 
 path = sys.argv[1]
 meta, rows = {}, []
@@ -125,8 +148,11 @@ print(f"binary: {meta.get('binary','?')}  version: {meta.get('version','?')}  "
 if not rows:
     print("no calls recorded")
     raise SystemExit(0)
+# Nearest-rank p90: `int(len * .9)` picks the maximum for 10 calls (index 9),
+# which is a different statistic than the one the label promises.
+p90 = sorted(ms)[math.ceil(len(ms) * 0.9) - 1]
 print(f"calls={len(rows)}  wall_total={sum(ms)/1000:.1f}s  "
-      f"ms_median={st.median(ms):.0f}  ms_p90={sorted(ms)[int(len(ms)*.9)]}")
+      f"ms_median={st.median(ms):.0f}  ms_p90={p90}")
 print(f"bytes_total={sum(by)}  bytes_median={st.median(by):.0f}  bytes_max={max(by)}")
 # Failed calls are counted apart from the total, never folded into it: the cost
 # of a failure and its recovery is part of what a task really costs, and hiding

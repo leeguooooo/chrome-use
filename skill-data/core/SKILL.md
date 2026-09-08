@@ -750,10 +750,18 @@ transitions to finish, and for requests fired by the action to come back —
 whichever takes longest, up to a 1 second ceiling, and they return the moment
 the page goes quiet (a static page costs about 100ms, not the ceiling). A
 `wait 2000` in front of a snapshot buys nothing and costs two seconds. If the
-ceiling expires with the page still moving, the reply says so
-(`Page had not settled after 1000ms (request in flight still active)`) — that
-warning means the tree may be mid-transition, so re-read rather than trusting
-it. Spinners that loop forever are ignored on purpose; they never end. Tune
+ceiling expires with the page still moving, the reply says so — `Page had not
+settled after 1000ms (request in flight still active) — this capture may be
+mid-transition. Re-read to confirm, or raise the ceiling with
+AGENT_BROWSER_SETTLE_MS.` — so re-read rather than trusting that tree.
+
+The two differ in one way. A plain `snapshot` has no action to react to, so a
+still page is its answer and it returns as soon as everything is quiet. After a
+mutating action, `--observe` keeps watching for a *first* reaction for half the
+ceiling (500ms by default) before it is willing to report `changed:false` —
+otherwise a control that renders on a 300ms timer reads as "nothing happened".
+Only actions that really change nothing pay that; anything that reacts ends the
+window at once. Spinners that loop forever are ignored on purpose; they never end. Tune
 with `--settle-ms <ms>` (or `AGENT_BROWSER_SETTLE_MS`) and switch it off with
 `--no-settle` when you deliberately want the page mid-flight. Since the wait
 already happened, `--with-screenshot <path>` saves the pixels from that same

@@ -163,7 +163,7 @@
 
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 有多处匹配时它会拒绝，而不是替你挑第一个</div>
-        prefix / suffix 是**消歧用的上下文**，不属于被选中的内容。
+        prefix / suffix 是<strong>消歧用的上下文</strong>，不属于被选中的内容。
         「找不到」「找到了但上下文对不上」「有 N 处」是三条不同的提示 —— 解法本来就不同。
         Monaco / CodeMirror 有自己的选区模型，会被点名拒绝：在那上面做 DOM 选区看起来成功、实际没发生。
       </div>
@@ -179,7 +179,7 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">paste</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use paste <span class="du-str">"第一行\n第二行"</span> <span class="du-flag">--selector</span> <span class="du-str">"#notes"</span>
+<pre><code><span class="du-prompt">$</span> chrome-use paste <span class="du-str">$'第一行\n第二行'</span> <span class="du-flag">--selector</span> <span class="du-str">"#notes"</span>  <span class="du-cmt"># $'...' 才是真换行</span>
 <span class="du-prompt">$</span> chrome-use paste <span class="du-str">"&lt;b&gt;粗体&lt;/b&gt;文字"</span> <span class="du-flag">--format</span> html <span class="du-flag">--selector</span> <span class="du-str">"#editor"</span>
 <span class="du-prompt">$</span> chrome-use paste <span class="du-str">"# 标题"</span> <span class="du-flag">--format</span> md            <span class="du-cmt"># Markdown 源码按纯文本插入</span></code></pre>
       </div>

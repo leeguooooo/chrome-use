@@ -47,6 +47,10 @@ pub const DEFAULT_MAX_MS: u64 = 1000;
 /// How often the network signal is re-checked while the page itself is quiet.
 const NETWORK_POLL_MS: u64 = 25;
 
+/// Time reserved out of each page-side wait for the CDP round trip that carries
+/// its answer back, so the whole settle stays within the ceiling.
+const ROUND_TRIP_ALLOWANCE_MS: u64 = 100;
+
 /// A request that has been in flight this long stops counting as a settle
 /// blocker. Server-sent events, long-polls and streaming responses never
 /// "finish"; without this they would hold every observation to the ceiling.
@@ -68,6 +72,12 @@ pub struct SettleOutcome {
     /// animation. `quiet` with `saw_change: false` after an action is the
     /// honest form of "that did nothing": the wait watched for a reaction and
     /// none came, rather than never having looked.
+    ///
+    /// It only covers what happened *while waiting*: a mutation the action made
+    /// synchronously, before this observer existed, is invisible here. The
+    /// caller that has a before/after diff knows better, and `--observe` folds
+    /// that in (see `mark_changed`) so the reported flag never contradicts the
+    /// delta printed beside it.
     pub saw_change: bool,
     /// Signals still busy when the ceiling hit: `dom`, `animation`, `network`.
     /// Empty when `quiet`.
@@ -102,6 +112,14 @@ impl SettleOutcome {
             describe_pending(&self.pending),
             ENV_MAX_MS,
         ))
+    }
+
+    /// Fold in a change the caller observed that the wait could not: a DOM
+    /// mutation made synchronously during dispatch happens before the page-side
+    /// observer is installed, so the delta is the authority on whether anything
+    /// changed and this flag must not say otherwise.
+    pub fn mark_changed(&mut self, changed: bool) {
+        self.saw_change |= changed;
     }
 
     /// JSON shape attached to `--json` output.
@@ -234,6 +252,15 @@ pub async fn settle(
             continue;
         }
 
+        // Too little left for the page-side wait to learn anything: its budget
+        // would be zero, and a zero-length quiet window is satisfied the instant
+        // it is checked — a false "quiet" right at the ceiling. Wait out the
+        // remainder instead and let the loop report the timeout it really is.
+        if remaining <= ROUND_TRIP_ALLOWANCE_MS {
+            tokio::time::sleep(Duration::from_millis(remaining)).await;
+            continue;
+        }
+
         match page_quiet(state, quiet_ms.min(remaining), remaining, reaction_left).await {
             Ok(page) if page.pending.is_empty() => {
                 saw_change |= page.saw_change;
@@ -295,11 +322,21 @@ async fn page_quiet(
     reaction_ms: u64,
 ) -> Result<PageQuiet, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
-    let script = page_quiet_script(quiet_ms, budget_ms, reaction_ms);
-    // The page-side wait resolves on its own budget; the outer timeout only
-    // guards against a renderer that never answers at all.
+    // The page resolves a little before the deadline so the reply still fits
+    // inside it: `max_ms` is documented as the ceiling on the wait, and a grace
+    // period added on top of the budget would quietly overrun it (a 50ms
+    // ceiling waiting ~550ms). The room comes out of the page's budget, not off
+    // the end of the caller's.
+    let page_budget = budget_ms.saturating_sub(ROUND_TRIP_ALLOWANCE_MS);
+    if page_budget == 0 {
+        // Defensive: a zero budget makes the quiet window zero, which every page
+        // satisfies immediately. Saying "I could not look" beats reporting a
+        // quiet the wait never established.
+        return Err("no budget left for a settle probe".to_string());
+    }
+    let script = page_quiet_script(quiet_ms.min(page_budget), page_budget, reaction_ms);
     let value = tokio::time::timeout(
-        Duration::from_millis(budget_ms + 500),
+        Duration::from_millis(budget_ms),
         mgr.evaluate(&script, None),
     )
     .await

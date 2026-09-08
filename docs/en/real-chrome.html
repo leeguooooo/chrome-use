@@ -370,7 +370,7 @@
         <code>document.visibilityState</code> stays <code>'hidden'</code>—focus emulation does not change it, and no CDP
         override does either. Almost nothing cares. The exception is a page that deliberately gates its UI on visibility
         (a device lease that must not be kept alive by a background tab, a video player, a game that pauses): it renders
-        its background branch, so <code>snapshot</code> comes back looking empty and every control reads as disabled.
+        its background branch, so <code>snapshot</code> can come back empty and the controls you expect may be missing or unavailable.
         <code>snapshot</code> now says so when the tree is near-empty and the tab is hidden. Surface it on purpose with
         <code>chrome-use bringToFront</code> and read it again—that is also the only thing that makes the user's view
         follow you, so use it deliberately, not by habit.

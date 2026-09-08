@@ -853,12 +853,15 @@ impl DaemonState {
                         Some(iframe_sid.as_str()),
                     )
                     .await;
-                if self.har_recording || self.request_tracking {
-                    let _ = mgr
-                        .client
-                        .send_command_no_params("Network.enable", Some(iframe_sid.as_str()))
-                        .await;
-                }
+                // Unconditional, like the page session's own `Network.enable`:
+                // the adaptive settle (#228) counts in-flight requests, and an
+                // iframe whose Network domain was never enabled emits none — so
+                // a fetch driving an iframe's render would look like silence and
+                // the settle would call the page quiet before it was.
+                let _ = mgr
+                    .client
+                    .send_command_no_params("Network.enable", Some(iframe_sid.as_str()))
+                    .await;
                 // Hide automation markers in this cross-origin iframe session too.
                 apply_stealth_via_mgr(mgr, iframe_sid.as_str()).await;
             }
@@ -1032,10 +1035,13 @@ impl DaemonState {
                         false
                     };
 
-                    // Allow Network events from cross-origin iframe sessions
-                    // when HAR recording or request tracking is active.
+                    // Allow Network events from cross-origin iframe sessions. Not
+                    // gated on HAR/request tracking: the in-flight bookkeeping
+                    // below feeds the adaptive settle (#228), which must see an
+                    // iframe's requests whether or not anyone asked to record
+                    // them. The HAR and `network requests` arms stay gated
+                    // individually, so nothing else changes.
                     let iframe_network_event = !session_matches
-                        && (self.har_recording || self.request_tracking)
                         && event.method.starts_with("Network.")
                         && event
                             .session_id
@@ -1942,6 +1948,12 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             })
             .unwrap_or_default();
         let mut observed = serde_json::Map::new();
+        // The diff is the authority on whether the action changed anything: a
+        // mutation made synchronously during dispatch happens before the wait's
+        // observer exists, so `sawChange` alone would report `false` next to a
+        // delta that plainly shows a change.
+        let mut settled = settled;
+        settled.mark_changed(d.changed || url0 != url1);
         observed.insert("settle".into(), settled.to_json());
         observed.insert("changed".into(), json!(d.changed || url0 != url1));
         if d.changed {

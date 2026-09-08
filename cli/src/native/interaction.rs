@@ -3656,7 +3656,11 @@ pub async fn paste_content(
         .get("before")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if after == before && !after.contains(text) {
+    // Unchanged content is the failure, full stop. The earlier form let a
+    // target that ALREADY held the payload pass verification — `after` contains
+    // the text, but so did `before`, so the paste demonstrably did nothing and
+    // still reported ✓.
+    if after == before {
         return Err(
             "The paste did not take: the target neither handled the paste event nor accepted an \
              insert. Its content is unchanged. For Monaco or a similar editor with its own model, \

@@ -110,6 +110,15 @@
         instead of returning the pre-response tree as though it were the result.
       </p>
 
+      <p>
+        They differ in one way. A plain <code>snapshot</code> has no action to react to, so a still
+        page is its answer and it returns as soon as everything is quiet. After a mutating action,
+        <code>--observe</code> keeps watching for a <em>first</em> reaction for half the ceiling
+        (500ms by default) before it is willing to report <code>changed:false</code> — otherwise a
+        control that renders on a 300ms timer reads as "nothing happened". Only actions that really
+        change nothing pay that; anything that reacts ends the window at once.
+      </p>
+
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
@@ -122,7 +131,9 @@
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ A ceiling that expires says so</div>
         When the page is still moving at the ceiling, the reply carries
-        <code>Page had not settled after 1000ms (request in flight still active)</code>.
+        <code>Page had not settled after 1000ms (request in flight still active) — this capture
+        may be mid-transition. Re-read to confirm, or raise the ceiling with
+        AGENT_BROWSER_SETTLE_MS.</code>
         That means the tree may be mid-transition — re-read before trusting it.
         A mid-transition capture passed off as the final one is worse than being
         slow, so this line is never swallowed.

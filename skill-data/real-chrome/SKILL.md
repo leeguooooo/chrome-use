@@ -204,8 +204,8 @@ don't expect the user's view to follow you.
 either (issue #215). Almost nothing cares. The exception is a page that
 deliberately gates its UI on visibility (a device lease that must not be kept
 alive by a background tab, a video player, a game that pauses): it renders its
-background branch, so `snapshot` comes back looking empty and every control
-reads as disabled. `snapshot` now says so when the tree is near-empty and the
+background branch, so `snapshot` can come back empty and the controls you
+expect may be missing or unavailable. `snapshot` now says so when the tree is near-empty and the
 tab is hidden. When you hit that, surface the tab on purpose with
 `chrome-use bringToFront` and read it again — that is also the only thing that
 makes the user's view follow you, so use it deliberately, not by habit.

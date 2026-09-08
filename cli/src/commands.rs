@@ -1539,7 +1539,20 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "--cursor-after" => {
                         obj.insert("selectionType".to_string(), json!("cursor_after"));
                     }
-                    _ => {}
+                    // The text is ONE argument. An unquoted phrase arrives as
+                    // several, and dropping the tail would select a shorter run
+                    // than asked for while reporting success — say so instead.
+                    extra => {
+                        return Err(ParseError::InvalidValue {
+                            message: format!(
+                                "unexpected argument '{extra}' — select-text takes the text as a \
+                                 single argument, so quote it: select-text {sel} \"{text} \
+                                 {extra}\""
+                            ),
+                            usage: "select-text <@ref|selector> <text> [--prefix <s>] \
+                                    [--suffix <s>] [--cursor-before|--cursor-after]",
+                        });
+                    }
                 }
                 i += 1;
             }
@@ -6581,6 +6594,18 @@ mod tests {
         assert_eq!(cmd["prefix"], "please");
         assert_eq!(cmd["suffix"], ".");
         assert!(cmd.get("selectionType").is_none());
+    }
+
+    /// The text is one argument. An unquoted phrase arrives as several, and
+    /// silently keeping only the first word would select a shorter run than
+    /// asked for — with a ✓ on it.
+    #[test]
+    fn select_text_refuses_an_unquoted_multi_word_phrase() {
+        let err = parse_command(&args("select-text @e3 confirm order"), &default_flags())
+            .expect_err("an extra positional token must not be dropped");
+        let rendered = format!("{err:?}");
+        assert!(rendered.contains("order"), "{rendered}");
+        assert!(rendered.contains("quote"), "{rendered}");
     }
 
     #[test]

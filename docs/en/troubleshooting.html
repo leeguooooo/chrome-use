@@ -136,7 +136,7 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Controls with no accessible name</div>
-        A bare <code>&lt;select&gt;</code> or an icon button has no accessible name, so role + name matches
+        A bare <code>&lt;select&gt;</code> or an unlabeled icon button has no accessible name, so role + name matches
         <strong>every</strong> control of its kind and cannot re-anchor a stale ref on its own. Those fall back to
         the <strong>value</strong> the snapshot recorded (a sort dropdown showing <code>Name (A to Z)</code> carries
         its identity there), and it is only accepted when it narrows to exactly one candidate. When several remain,

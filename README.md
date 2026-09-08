@@ -538,6 +538,12 @@ Whichever takes longest wins, bounded by a 1 second ceiling. A static page
 costs about 100ms; a click that fires an XHR waits for the response instead of
 returning the pre-response tree as though it were the result.
 
+They differ in one way. A plain `snapshot` has no action to react to, so a still
+page is its answer. After a mutating action, `--observe` keeps watching for a
+first reaction for half the ceiling (500ms by default) before reporting
+`changed:false` — otherwise a control that renders on a 300ms timer reads as
+"nothing happened". Only actions that really change nothing pay that.
+
 When the ceiling expires with the page still moving, the reply says so rather
 than passing a mid-transition capture off as settled:
 
@@ -578,7 +584,7 @@ chrome-use select-text @e3 "confirm" --prefix "please "   # select one phrase
 chrome-use select-text @e3 "Hi Sam," --cursor-after       # place the caret
 chrome-use type @e3 " quick note:"                        # continues there
 
-chrome-use paste "line one\nline two" --selector "#notes"
+chrome-use paste $'line one\nline two' --selector "#notes"
 chrome-use paste "<b>bold</b> text" --format html --selector "#editor"
 ```
 

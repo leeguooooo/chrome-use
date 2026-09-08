@@ -2785,7 +2785,7 @@ If neither takes, the command fails rather than reporting a paste that did
 nothing.
 
 Examples:
-  chrome-use paste "line one\nline two" --selector "#notes"
+  chrome-use paste $'line one\nline two' --selector "#notes"   # $'...' so the shell sends a real newline
   chrome-use paste "<b>bold</b> text" --format html --selector "#editor"
   chrome-use paste "# Heading" --format md
 "##

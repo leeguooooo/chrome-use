@@ -128,10 +128,10 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 没有可访问名的控件</div>
-        裸 <code>&lt;select&gt;</code>、图标按钮这类控件没有可访问名，于是 role + name 会匹配到页面上
+        裸 <code>&lt;select&gt;</code>、没有 aria-label 的图标按钮这类控件没有可访问名，于是 role + name 会匹配到页面上
         <strong>每一个</strong>同类控件，单靠它无法重锚一个失效的 ref。这种情况会退到快照记下的
         <strong>值</strong>（一个显示着 <code>Name (A to Z)</code> 的排序下拉，身份就在那里），
-        而且只有当它把候选缩到**恰好一个**时才采纳。仍然剩多个时命令照样拒绝 —— 但现在它会说
+        而且只有当它把候选缩到<strong>恰好一个</strong>时才采纳。仍然剩多个时命令照样拒绝 —— 但现在它会说
         <em>有 N 个元素无法区分</em>，而不是「页面上没有这个 role 和 name 的元素」：后者描述的是
         一件根本没发生的事（元素消失）。这时的解法是重新 <code>snapshot</code>（它会给重复项编号，
         新 ref 就带上了序号），或者直接用 CSS 选择器。
