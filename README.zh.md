@@ -195,6 +195,39 @@ chrome-use --launch --profile auto open https://x.com/home
 # 或显式指定：--profile Default / --profile "Profile 1"
 ```
 
+## 更省字节地读页面
+
+`snapshot -i` 是每次交互的起点，而「刚读过又读一遍」是 agent 上下文里最大的
+可省成本。两个 flag 专治这个：
+
+```bash
+chrome-use snapshot -i --diff              # 只回传相对上一张快照变化的部分
+chrome-use snapshot -i --max-bytes 4000    # 按整节点裁剪，并说明漏了什么
+chrome-use snapshot -i --max-bytes 4000 --from 70   # 从上次停下的地方续读
+```
+
+`--diff` 的基线是本会话上一张**同页面、同选项**的快照；一个 143 KB 的评论页，
+页面没动时再读一次只要 1 个字节。没有有效基线时它退回整树**并说明是哪一种** ——
+空 diff 和「什么都没变」在调用方看来一模一样。
+
+`--max-bytes` 走的是另一条路：跟 `-i` / `-s` / `-d` / `-f` 不同，用预算
+**不需要事先知道要找什么**。它只在完整节点边界切开（截字符串会留下残缺的
+`[ref=eN]`，既用不了也看不出是残的），并告诉你漏了哪些、从哪继续。
+
+## 点击之外的动作
+
+有些控件不止能点：折叠块要展开，菜单按钮要弹出，数字框和滑块要按范围步进。
+
+```bash
+chrome-use actions @e15      # 这个元素此刻支持什么
+chrome-use do @e15 expand    # 只做其中之一
+```
+
+支持 `expand` / `collapse`、`showMenu`、`increment` / `decrement`、`toggle`，
+全部由元素的无障碍属性推导。动作集是**实时读**的 —— 它是状态不是身份：
+你截图时收着的折叠块现在可能已经开了。集合之外的动作会被拒绝并附上支持列表，
+而不是勉强做点相近的事；执行完会再报一次动作集，所以一个没动的控件不会读起来像成功。
+
 ## 站点适配器 —— 把一个网站变成「结构化数据 CLI」
 
 大多数「读 GitHub issue」「搜 Reddit」「拉我的 B 站动态」这类任务，根本不需要点击 +

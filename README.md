@@ -502,6 +502,44 @@ arrays. Audits require a CDP browser and are unavailable on Safari or iOS
 WebDriver sessions. MCP-only hosts can use `chrome_use_a11y` from the `all` tool
 profile.
 
+## Reading a page for fewer bytes
+
+`snapshot -i` is the start of every interaction, and re-reading a page you just
+read is the largest avoidable cost in an agent's context. Two flags cut it:
+
+```bash
+chrome-use snapshot -i --diff              # only what changed since the last snapshot
+chrome-use snapshot -i --max-bytes 4000    # cap the tree, cut between whole nodes
+chrome-use snapshot -i --max-bytes 4000 --from 70   # read on from where it stopped
+```
+
+`--diff` compares against this session's last snapshot **of the same page, with
+the same options**; on a 143 KB comment thread an unchanged re-read costs 1 byte.
+With no valid baseline it returns the full tree and says why, because an empty
+diff and an unchanged page are indistinguishable.
+
+`--max-bytes` needs no advance knowledge of what you are looking for (unlike
+`-i` / `-s` / `-d` / `-f`). It cuts only on whole-node boundaries — truncating
+the string would leave a severed `[ref=eN]` you can neither use nor recognise as
+severed — and reports what it left out plus a cursor to resume from.
+
+## Actions beyond a click
+
+Some controls do more than click: a disclosure expands, a menu button opens a
+popup, a spinbutton steps through a range.
+
+```bash
+chrome-use actions @e15      # what this element supports right now
+chrome-use do @e15 expand    # perform one of exactly those
+```
+
+`expand` / `collapse`, `showMenu`, `increment` / `decrement` and `toggle`, all
+derived from the element's computed accessibility properties. The set is read
+live, because what an element supports is state, not identity — a disclosure
+that was collapsed when you snapshotted may be open now. An action outside the
+set is refused with the supported list rather than attempted, and after acting
+the set is reported again so a control that did not move cannot read as success.
+
 ## Finding elements and stable refs
 
 Use an explicit semantic locator when you know it, or pass a natural-language

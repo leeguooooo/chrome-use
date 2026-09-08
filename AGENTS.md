@@ -20,12 +20,81 @@ When adding or changing user-facing features (new flags, commands, behaviors, en
 1. `cli/src/output.rs` — `--help` output (flags list, examples, environment variables)
 2. `README.md` — Options table, relevant feature sections, examples
 3. `skill-data/core/SKILL.md` (and its `references/`) — so AI agents know about the feature when they load the core skill. Edit `skill-data/core/SKILL.md` for overview/workflow changes; edit `skill-data/core/references/*.md` for detailed reference content. Do **not** put feature content in `skills/chrome-use/SKILL.md` — that file is an intentionally thin discovery stub for `npx skills add` and exists only to redirect agents to `chrome-use skills get core`.
-4. `docs/src/app/` — the Next.js docs site (MDX pages)
-5. Inline doc comments in the relevant source files
+4. `docs/*.html` **and their `docs/en/*.html` mirrors** — the docs site at chrome-use.leeguoo.com. These are hand-written static HTML, not a generator: `docs/` is Chinese, `docs/en/` is English, and both must be updated. A commit that touches `skill-data/` prints a reminder naming the pages to update.
+5. `README.md` **and `README.zh.md`** — both, for the same reason.
+6. Inline doc comments in the relevant source files
 
 This applies to changes that either human users or AI agents would need to know about. Do not skip any of these locations.
 
-In the `docs/src/app/` MDX files, always use HTML `<table>` syntax for tables (not markdown pipe tables). This matches the existing convention across the docs site.
+`skill-data/` is compiled into the binary via `include_dir!` (`cli/src/skills.rs`). **Docs must land in the same tag as the feature** — a release whose binary carries the old skill text ships a feature its agents cannot discover, which is the same as not shipping it.
+
+## Never ship a silent success
+
+The recurring defect in this codebase is not a crash. It is a command that
+reports success while doing nothing, and every instance has cost hours:
+
+- `tab select` printed the requested tab's title and URL, exit 0, and left the
+  session driving the page it was stuck on. Its liveness probe was
+  `evaluate("1")`, which **any page satisfies** — including the wrong one. It
+  confirmed that a renderer answered, not that it was the renderer asked for.
+  (#223)
+- `--observe` printed `[ref=eN]` values minted into a throwaway ref map, so
+  every one came back `Unknown ref` when used.
+- `--observe` in text mode dropped its entire payload and printed a bare
+  `✓ Done`, so the flag looked unimplemented to anyone not passing `--json`.
+- `do @ref expand` reported `✓` for an element that had not moved.
+
+The rule that follows: **a command must verify the effect it claims, not the
+call it made.** Dispatching an action is not performing it. When the effect
+cannot be verified, say so — a warning that names the uncertainty beats a `✓`
+that hides it, and a failure the caller can read beats a success it has to
+discover was false.
+
+Prefer refusing over guessing. `do` accepts only actions derived from the
+element's live accessibility state and refuses anything else with the supported
+list, because a command that quietly does something adjacent when asked for
+something it does not support is the next silent success.
+
+## Measuring performance
+
+Three separate wrong conclusions came out of careless measurement here, and each
+one looked entirely reasonable on its own:
+
+- **Always measure a freshly built binary.** Testing repo source against the
+  `chrome-use` on `PATH` measures the version skew, not the change. The daemon
+  is a separate process: a stale one will serve your commands and print
+  `Daemon version mismatch detected, restarting…` mid-run. Set
+  `CHROME_USE_BIN=cli/target/release/chrome-use`.
+- **Always warm up first.** A cold daemon costs roughly 1.5s of process start
+  plus session rebind, and it lands entirely on whichever command runs first.
+  That artifact made `navigate` look 5x slower than `snapshot`; both are ~1.9s
+  cold and ~300ms warm.
+- **Round trips matter more than milliseconds.** Measured against another
+  agent's browser tool, tool execution was 0.5–1.0s per call while the model
+  time attached to each round trip was 6–7.7s. Optimising transport is close to
+  worthless; removing a round trip is worth about seven seconds.
+
+`bench/` holds a no-model replay harness for before/after comparisons and a
+script that extracts a reference line from another agent's rollout log. See
+`bench/README.md`.
+
+## Build and test
+
+`cargo` commands run from `cli/`, not the repo root — there is no workspace
+`Cargo.toml` at the top level.
+
+```bash
+cd cli && cargo build --release        # ~5-8 min on a laptop
+cd cli && cargo test --release         # unit tests
+cd cli && cargo test --features e2e-tests --release e2e -- --ignored --test-threads=1
+```
+
+E2E tests launch real Chrome and are `#[ignore]` by default. They run in CI on
+push, **not on pull requests** — a green PR does not mean the E2E suite passed.
+
+When a fixture page needs `href="#..."`, write the Rust raw string as
+`r##"..."##`. Inside `r#"..."#` the sequence `"#` closes the literal early, and
+the compiler reports it as a syntax error nowhere near the real cause.
 
 ## Dashboard (packages/dashboard)
 
