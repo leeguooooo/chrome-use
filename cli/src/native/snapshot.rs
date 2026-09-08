@@ -892,8 +892,7 @@ async fn take_snapshot_at_depth(
 
         // Insert each child snapshot after its Iframe line in the output
         for (ref_id, child_text) in iframe_snapshots {
-            let marker = format!("[ref={}]", ref_id);
-            if let Some(pos) = output.find(&marker) {
+            if let Some(pos) = find_snapshot_ref(&output, &ref_id) {
                 // Find the end of the Iframe line
                 let line_end = output[pos..]
                     .find('\n')
@@ -2106,6 +2105,14 @@ fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
         if (!semantic && headings == 0 && !linked_item) || text.is_empty() {
             continue;
         }
+        // A linked card's action already carries this context. Keep its named
+        // navigation links concise instead of repeating the same product block.
+        if linked_item && nodes[idx].role == "link" && nodes[idx].name == link_names[0] {
+            return None;
+        }
+        if text.len() == 1 && text[0] == nodes[idx].name {
+            return None;
+        }
         // Short fields (for example price and availability) must not disappear
         // behind a long description. Stable ordering preserves peers' order.
         text.sort_by_key(|value| value.len() > 96);
@@ -2158,6 +2165,15 @@ fn status_summary(nodes: &[TreeNode], idx: usize) -> String {
         text.push_str(" [truncated]");
     }
     text
+}
+
+/// Ref attributes can be followed by context, modal, or future metadata.
+/// Match the attribute boundary so e2 never selects e20.
+fn find_snapshot_ref(output: &str, ref_id: &str) -> Option<usize> {
+    let prefix = format!("[ref={}", ref_id);
+    output.match_indices(&prefix).find_map(|(pos, _)| {
+        matches!(output.as_bytes().get(pos + prefix.len()), Some(b']' | b',')).then_some(pos)
+    })
 }
 
 fn render_tree(
@@ -2964,6 +2980,14 @@ mod tests {
     }
 
     #[test]
+    fn iframe_ref_marker_accepts_metadata_without_matching_longer_ids() {
+        let output = "- Iframe [ref=e20]\n- Iframe [ref=e2, context=\"Frame\"]\n";
+        assert_eq!(find_snapshot_ref(output, "e2"), output.find("[ref=e2,"));
+        assert_eq!(find_snapshot_ref("- Iframe [ref=e2]", "e2"), Some(9));
+        assert_eq!(find_snapshot_ref("- Iframe [ref=e20]", "e2"), None);
+    }
+
+    #[test]
     fn interactive_status_receipt_survives_compaction() {
         let mut nodes = vec![
             make_node("status", "", None),
@@ -3063,12 +3087,33 @@ mod tests {
             control_context(&nodes, 4).as_deref(),
             Some("Folder | $9.00")
         );
+        nodes[1].parent_idx = Some(0);
+        nodes[2].parent_idx = Some(0);
+        assert_eq!(control_context(&nodes, 1), None);
+        assert_eq!(control_context(&nodes, 2), None);
         nodes[2].name = "Notebook".to_string();
         assert_eq!(control_context(&nodes, 4), None);
         nodes[2].name = "Folder".to_string();
         nodes.push(make_node("button", "Another product", Some(2)));
         nodes[0].children.push(5);
         assert_eq!(control_context(&nodes, 4), None);
+    }
+
+    #[test]
+    fn control_context_keeps_unique_link_details_but_omits_its_own_name() {
+        let mut nodes = vec![
+            make_node("listitem", "", None),
+            make_node("link", "Product", None),
+            make_node("StaticText", "$9.00", None),
+        ];
+        nodes[0].children = vec![1];
+        nodes[1].parent_idx = Some(0);
+        assert_eq!(control_context(&nodes, 1), None);
+        nodes[0].children.push(2);
+        assert_eq!(
+            control_context(&nodes, 1).as_deref(),
+            Some("Product | $9.00")
+        );
     }
 
     #[test]
