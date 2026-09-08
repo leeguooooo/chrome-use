@@ -98,13 +98,11 @@ impl Connection {
 ///
 /// A CLI invocation holds this across relay recovery and daemon startup so two
 /// processes cannot unlink, stop, or replace the same session concurrently.
-/// The OS releases the lock automatically when the holder exits (or this
-/// struct drops), because dropping `_file` closes the fd/handle the lock is
-/// held on — on Unix that releases the `flock`, on Windows the matching
-/// `UnlockFile` isn't even required: an open handle's `LockFileEx` region is
-/// released when the handle is closed.
+/// The guard explicitly unlocks before closing its file. A concurrent fork can
+/// retain the open file description briefly before exec, even with CLOEXEC;
+/// relying on close alone can therefore prolong the lock past this guard.
 pub struct SessionLifecycleLock {
-    _file: fs::File,
+    _file: FileLockGuard,
 }
 
 /// Cross-process lock for the global extension relay recovery path.
@@ -112,7 +110,17 @@ pub struct SessionLifecycleLock {
 /// The native-messaging host is shared by every session, so only one process
 /// may restart it while the relay endpoint is absent.
 pub struct RelayRecoveryLock {
-    _file: fs::File,
+    _file: FileLockGuard,
+}
+
+struct FileLockGuard {
+    file: fs::File,
+}
+
+impl Drop for FileLockGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
 }
 
 /// Acquire a cross-platform, cross-process exclusive advisory lock on `path`,
@@ -131,7 +139,7 @@ pub struct RelayRecoveryLock {
 /// and timing out would just replace a wait with the concurrent-spawn race this
 /// exists to prevent. It is announced instead — a silent multi-second stall
 /// during daemon startup is indistinguishable from a hang.
-fn acquire_file_lock(path: &std::path::Path, label: &str) -> Result<fs::File, String> {
+fn acquire_file_lock(path: &std::path::Path, label: &str) -> Result<FileLockGuard, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create {label} lock directory: {e}"))?;
@@ -150,7 +158,7 @@ fn acquire_file_lock(path: &std::path::Path, label: &str) -> Result<fs::File, St
         file.lock()
             .map_err(|e| format!("Failed to acquire {label} lock {}: {}", path.display(), e))?;
     }
-    Ok(file)
+    Ok(FileLockGuard { file })
 }
 
 pub fn lock_session_lifecycle(session: &str) -> Result<SessionLifecycleLock, String> {
@@ -1368,6 +1376,44 @@ mod tests {
     // reading it from the environment, so these run with no env var
     // mutation — safe under this test binary's parallel execution and the
     // shared `ENV_MUTEX` other tests here rely on.
+
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_lock_release_does_not_wait_for_a_forked_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("inherited.lock");
+        let held = acquire_file_lock(&path, "fixture").unwrap();
+        let contender = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let mut gate = [0; 2];
+        assert_eq!(unsafe { libc::pipe(gate.as_mut_ptr()) }, 0);
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            // Only async-signal-safe operations in the forked child. It retains
+            // the inherited lock fd until the parent has tried to reacquire.
+            unsafe {
+                libc::close(gate[1]);
+                let mut byte = 0u8;
+                libc::read(gate[0], (&mut byte as *mut u8).cast(), 1);
+                libc::_exit(0);
+            }
+        }
+        assert!(child > 0, "fork failed");
+        unsafe {
+            libc::close(gate[0]);
+        }
+        drop(held);
+        let reacquired = contender.try_lock();
+        // Always release/reap the child before asserting the result.
+        unsafe {
+            libc::write(gate[1], b"x".as_ptr().cast(), 1);
+            libc::close(gate[1]);
+            libc::waitpid(child, std::ptr::null_mut(), 0);
+        }
+        assert!(
+            reacquired.is_ok(),
+            "local guard release retained an inherited lock"
+        );
+    }
 
     #[test]
     fn test_acquire_file_lock_creates_file_and_returns_open_handle() {
