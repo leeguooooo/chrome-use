@@ -2061,6 +2061,8 @@ fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
         let mut pending: Vec<usize> = node.children.iter().rev().copied().collect();
         let mut visited = 0;
         let mut headings = 0;
+        let mut link_names = Vec::new();
+        let mut controls = 0;
         let mut text = Vec::new();
         while let Some(child) = pending.pop() {
             visited += 1;
@@ -2072,7 +2074,17 @@ fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
                 // An outer container must not mix sibling products or rows.
                 return None;
             }
+            if n.role == "link" && !n.name.trim().is_empty() {
+                if !link_names.contains(&n.name) {
+                    link_names.push(n.name.clone());
+                }
+                if !text.contains(&n.name) {
+                    text.push(n.name.clone());
+                }
+                continue;
+            }
             if is_interactive_role(&n.role) {
+                controls += 1;
                 continue;
             }
             if n.role == "heading" {
@@ -2090,7 +2102,8 @@ fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
                 pending.extend(n.children.iter().rev().copied());
             }
         }
-        if (!semantic && headings == 0) || text.is_empty() {
+        let linked_item = link_names.len() == 1 && controls == 1;
+        if (!semantic && headings == 0 && !linked_item) || text.is_empty() {
             continue;
         }
         // Short fields (for example price and availability) must not disappear
@@ -2193,11 +2206,14 @@ fn render_tree(
                 serde_json::to_string(&summary).unwrap_or_default()
             ));
         }
-        // Preserve actionable descendants, without duplicating static content.
-        for &child in &node.children {
-            render_tree(nodes, child, indent, output, options);
+        // Clickable status nodes must retain their own ref and cursor metadata.
+        // Non-actionable status nodes only need the summary and child controls.
+        if !node.has_ref {
+            for &child in &node.children {
+                render_tree(nodes, child, indent, output, options);
+            }
+            return;
         }
-        return;
     }
 
     if options.interactive && !node.has_ref {
@@ -2966,6 +2982,12 @@ mod tests {
         let compact = compact_tree(&output, true);
         assert!(compact.contains("- status: \"Cart: folder\""));
         assert!(compact.contains("button \"Undo\" [ref=e7]"));
+        nodes[0].has_ref = true;
+        nodes[0].ref_id = Some("e8".to_string());
+        let mut clickable = String::new();
+        render_tree(&nodes, 0, 0, &mut clickable, &options);
+        assert!(clickable.contains("status [ref=e8]"));
+        assert!(clickable.contains("Cart: folder"));
         nodes[1].name = "字".repeat(600);
         let summary = status_summary(&nodes, 0);
         assert!(summary.len() <= 524 && summary.ends_with(" [truncated]"));
@@ -3024,6 +3046,29 @@ mod tests {
         assert!(control_context(&nodes, 3).unwrap().contains("Price: $9.00"));
         nodes[0].children.push(4);
         assert_eq!(control_context(&nodes, 3), None);
+    }
+
+    #[test]
+    fn control_context_linked_card_keeps_one_product() {
+        let mut nodes = vec![
+            make_node("generic", "", None),
+            make_node("link", "Folder", None),
+            make_node("link", "Folder", None),
+            make_node("StaticText", "$9.00", None),
+            make_node("button", "Add", Some(1)),
+        ];
+        nodes[0].children = vec![1, 2, 3, 4];
+        nodes[4].parent_idx = Some(0);
+        assert_eq!(
+            control_context(&nodes, 4).as_deref(),
+            Some("Folder | $9.00")
+        );
+        nodes[2].name = "Notebook".to_string();
+        assert_eq!(control_context(&nodes, 4), None);
+        nodes[2].name = "Folder".to_string();
+        nodes.push(make_node("button", "Another product", Some(2)));
+        nodes[0].children.push(5);
+        assert_eq!(control_context(&nodes, 4), None);
     }
 
     #[test]

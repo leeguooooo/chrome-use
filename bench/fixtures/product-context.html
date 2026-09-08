@@ -20,12 +20,20 @@
 <output role="status" id="receipt">Cart empty</output>
 <script>
 const layout = new URLSearchParams(location.search).get('layout');
-if (layout === 'generic') {
+if (layout === 'generic' || layout === 'linked') {
   for (const article of document.querySelectorAll('article')) {
     const card = document.createElement('div');
     card.dataset.product = article.dataset.product;
     card.append(...article.childNodes);
     article.replaceWith(card);
+  }
+}
+if (layout === 'linked') {
+  for (const heading of document.querySelectorAll('[data-product] h2')) {
+    const link = document.createElement('a');
+    link.href = '#product';
+    link.textContent = heading.textContent;
+    heading.replaceWith(link, link.cloneNode(true));
   }
 }
 if (layout === 'nested') {

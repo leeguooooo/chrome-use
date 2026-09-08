@@ -11,7 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--state-file', required=True)
 parser.add_argument('--port', type=int, required=True)
 parser.add_argument('--output', required=True)
-parser.add_argument('--layout', choices=['article', 'generic', 'nested', 'long'], default='article')
+parser.add_argument('--layout', choices=['article', 'generic', 'nested', 'long', 'linked'], default='article')
 args = parser.parse_args()
 s = json.loads(Path(args.state_file).read_text())
 env = dict(os.environ, CHROME_USE_RELAY_DIR=s['registry'],
