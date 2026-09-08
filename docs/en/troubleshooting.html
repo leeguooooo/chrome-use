@@ -62,6 +62,7 @@
       <!-- ============ SECTION ======= -->
       <p>The extension popup shows Connected only after a native-host reply. Until then it shows Connecting; failures show their concrete error. An older host can be confirmed by the first real CLI command. A confirmed host link does not prove every page is drivable.</p>
       <p>A protected extension iframe can cause <code>debugger_access_denied</code> on an ordinary web tab. Do not loop on reattachment; use <code>tab inspect &lt;ref&gt;</code> for metadata or a separate test profile. Development checks can set the same absolute <code>CHROME_USE_RELAY_DIR</code> in the native host and CLI, with unique sessions and an explicit <code>--browser</code>, to keep candidate relays out of shared discovery.</p>
+      <p>Relay navigation makes up to three bounded access checks and ends the lifecycle wait early on a confirmed debugger access denial. Successful checks or transient errors are not treated as page readiness.</p>
       <h2>Run a checkup first: doctor</h2>
       <p>
         When a command fails unexpectedly—<code>Unknown command</code>, <code>Failed to connect</code>, a hung daemon,

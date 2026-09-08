@@ -174,6 +174,11 @@ extension's protected iframe. `debugger_access_denied` is non-retryable; use
 `tab inspect <ref>` for browser metadata or a separate test profile. Reattaching
 does not remove this restriction.
 
+Relay navigation makes up to three bounded access checks while waiting for a
+lifecycle event. A confirmed debugger access denial ends the wait early; a
+successful check or a transient failure does not substitute for page readiness.
+Fast pages can finish before any check is sent.
+
 For isolated development, set `CHROME_USE_RELAY_DIR` to the same absolute
 directory in the native-host launcher and the CLI. This scopes relay discovery
 without changing HOME; combine it with unique session names and an explicit

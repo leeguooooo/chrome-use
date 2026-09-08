@@ -50,3 +50,13 @@ other tabs from saved tab-list responses. Run it again while the protected page
 is foregrounded using an independent UI control, and verify focus stayed there.
 On macOS use the short socket directory in the state file; profile paths can
 exceed Unix socket path limits.
+
+## Lifecycle access checks
+
+Run `bench/fixture-server.py` for the slow-resource endpoint, then start a private
+relay fixture browser as above. Run `bench/access-wait-check.py --state-file ...
+--port ... --output ...`. It asserts early protected-frame denial for load,
+domcontentloaded and none, while a normal page still waits for a two-second
+resource and verifies that image loaded successfully. The script closes only its
+named sessions. Stop the browser holder and wait for process exit before removing
+its profile or socket directory.

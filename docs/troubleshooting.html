@@ -60,6 +60,7 @@
       <!-- ============ SECTION ======= -->
       <p>扩展弹窗只在收到原生主机回应后显示 Connected。确认前为 Connecting，连接失败时显示具体错误。旧主机可由首次实际 CLI 命令确认连接；主机接通不代表所有页面都可驱动。</p>
       <p>网页中的其他扩展 iframe 也可能导致 <code>debugger_access_denied</code>。此时不应循环重连，使用 <code>tab inspect &lt;ref&gt;</code> 查看浏览器级状态，或选择独立测试 profile。开发验收可在原生主机和 CLI 中设置相同的绝对路径 <code>CHROME_USE_RELAY_DIR</code>，配合唯一 session 与明确的 <code>--browser</code>，避免把候选中继登记到共享目录。</p>
+      <p>中继导航最多执行三次有时限的访问检查，确认 debugger 访问被拒绝时提前结束等待；成功检查或临时错误不会被当作页面已经就绪。</p>
       <h2>先跑一次体检：doctor</h2>
       <p>
         命令出现意外失败——<code>Unknown command</code>、<code>Failed to connect</code>、守护进程僵死、

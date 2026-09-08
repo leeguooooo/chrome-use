@@ -193,6 +193,8 @@ ab-connect，然后重试。
 
 普通网页嵌入另一个扩展的受限 iframe 时，Chrome 也可能拒绝整个标签的 debugger 访问。此时 `debugger_access_denied` 不建议重试；用 `tab inspect <ref>` 查浏览器级状态，或选用独立测试 profile。重新连接不能解除这项限制。
 
+中继导航等待加载事件时，最多附带三次有时限的访问检查。确认访问被拒绝会提前结束等待；检查成功或临时失败都不会替代页面就绪条件。快速页面可在首次检查前完成。
+
 隔离开发时，在原生主机启动脚本和 CLI 中把 `CHROME_USE_RELAY_DIR` 设为同一个绝对路径。它只隔离中继登记与发现，不修改 HOME；同时使用唯一 session 名和明确的 `--browser` ID。普通共享 profile 不需要设置该变量。
 
 ### 独立模式（`--launch`）

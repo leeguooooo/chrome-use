@@ -550,6 +550,39 @@ fn is_debugger_access_denied(error: &str) -> bool {
             && lower.contains("different extension"))
 }
 
+/// Race normal lifecycle waiting against a small number of access checks. A
+/// successful check never substitutes for a load event; only a definitive
+/// Chrome access denial can end the wait early. Fast pages finish before the
+/// first check, and checks that stall cannot hold up the lifecycle future.
+async fn wait_with_access_checks<W, C, P>(
+    wait: W,
+    mut check: C,
+    delay: Duration,
+) -> Result<(), String>
+where
+    W: Future<Output = Result<(), String>>,
+    C: FnMut() -> P,
+    P: Future<Output = Result<(), String>>,
+{
+    let guard = async {
+        tokio::time::sleep(delay).await;
+        for _ in 0..3 {
+            if let Ok(Err(error)) = tokio::time::timeout(Duration::from_millis(500), check()).await
+            {
+                if is_debugger_access_denied(&error) {
+                    return error;
+                }
+            }
+            tokio::time::sleep(delay).await;
+        }
+        std::future::pending::<String>().await
+    };
+    tokio::select! {
+        result = wait => result,
+        error = guard => Err(error),
+    }
+}
+
 /// A CDP call that ran to its full time budget without the command promise ever
 /// resolving — surfaced as `CDP command timed out: <method>` (see cdp/client.rs).
 /// Distinct from a *lifecycle* wait timeout: here the `Page.navigate` command
@@ -1938,6 +1971,9 @@ impl BrowserManager {
                 .wait_for_lifecycle(wait_until, &session_id, &mut lifecycle_rx)
                 .await
             {
+                if is_debugger_access_denied(&e) {
+                    return Err(e);
+                }
                 // The lifecycle event (e.g. `load`) didn't fire within the
                 // timeout. On SPAs this is common — a long-pending XHR or a stuck
                 // sub-resource holds `load` open long after the DOM is interactive
@@ -1980,10 +2016,24 @@ impl BrowserManager {
                 },
                 sanitize_title(&fallback.title),
             ),
-            None => (
-                self.get_url().await.unwrap_or_else(|_| url.to_string()),
-                self.get_title().await.unwrap_or_default(),
-            ),
+            None => {
+                let current_url = self.get_url().await;
+                if let Err(error) = &current_url {
+                    if is_debugger_access_denied(error) {
+                        return Err(error.clone());
+                    }
+                }
+                let title = self.get_title().await;
+                if let Err(error) = &title {
+                    if is_debugger_access_denied(error) {
+                        return Err(error.clone());
+                    }
+                }
+                (
+                    current_url.unwrap_or_else(|_| url.to_string()),
+                    title.unwrap_or_default(),
+                )
+            }
         };
 
         // Track visited origin for cross-origin localStorage collection in save_state
@@ -2031,6 +2081,30 @@ impl BrowserManager {
     }
 
     async fn wait_for_lifecycle(
+        &self,
+        wait_until: WaitUntil,
+        session_id: &str,
+        rx: &mut broadcast::Receiver<CdpEvent>,
+    ) -> Result<(), String> {
+        let wait = self.wait_for_lifecycle_event(wait_until, session_id, rx);
+        if self.on_relay() && wait_until != WaitUntil::None {
+            wait_with_access_checks(
+                wait,
+                || async {
+                    self.client
+                        .send_command_no_params("DOM.enable", Some(session_id))
+                        .await
+                        .map(|_| ())
+                },
+                Duration::from_millis(400),
+            )
+            .await
+        } else {
+            wait.await
+        }
+    }
+
+    async fn wait_for_lifecycle_event(
         &self,
         wait_until: WaitUntil,
         session_id: &str,
@@ -4304,6 +4378,63 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use tokio::time::sleep;
+
+    #[tokio::test]
+    async fn access_checks_end_only_a_definitively_blocked_wait() {
+        let error = "debugger_access_denied: fixture".to_string();
+        let result = wait_with_access_checks(
+            std::future::pending(),
+            || async { Err(error.clone()) },
+            Duration::ZERO,
+        )
+        .await;
+        assert_eq!(result, Err(error));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_completion_does_not_wait_for_an_access_probe() {
+        let mut calls = 0;
+        let result = wait_with_access_checks(
+            async { Ok(()) },
+            || {
+                calls += 1;
+                std::future::pending()
+            },
+            Duration::from_secs(30),
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls, 0);
+    }
+
+    #[tokio::test]
+    async fn successful_or_transient_checks_do_not_complete_the_lifecycle() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut signal = Some(tx);
+        let mut calls = 0;
+        let result = wait_with_access_checks(
+            async {
+                rx.await.unwrap();
+                Err("original lifecycle error".to_string())
+            },
+            || {
+                calls += 1;
+                if calls == 3 {
+                    let _ = signal.take().unwrap().send(());
+                }
+                let check = if calls == 2 {
+                    Err("temporary transport failure".to_string())
+                } else {
+                    Ok(())
+                };
+                std::future::ready(check)
+            },
+            Duration::ZERO,
+        )
+        .await;
+        assert_eq!(result, Err("original lifecycle error".to_string()));
+        assert_eq!(calls, 3);
+    }
 
     #[test]
     fn debugger_restriction_is_not_a_stale_target_retry() {

@@ -4380,6 +4380,8 @@ Core Commands:
   connect <port|url>         Connect to browser via CDP
   debugger_access_denied: protected extension content blocks this tab; do not
   loop on reattach. Use tab inspect <ref> for metadata or an isolated profile.
+  Relay lifecycle waits stop early on a confirmed access denial; ordinary
+  slow pages retain their normal readiness wait.
   Extension popup: Connected means the native host replied; Connecting means
   the reply is still pending. A host connection does not verify page liveness.
   reconnect                  Re-bind to the running Chrome's relay (alias for
