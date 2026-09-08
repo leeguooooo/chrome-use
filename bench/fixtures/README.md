@@ -60,3 +60,15 @@ domcontentloaded and none, while a normal page still waits for a two-second
 resource and verifies that image loaded successfully. The script closes only its
 named sessions. Stop the browser holder and wait for process exit before removing
 its profile or socket directory.
+
+## Observation capture failure
+
+`observation-failure.html` and `observation-form-failure.html` first record a POST
+in the fixture server, then ask the companion extension to add a protected frame.
+Use `?trigger=after` so the initial capture remains available. Run
+`bench/observation-capture-check.py` with a private browser state file, candidate
+binary and fixture port. The counter API verifies one actual action. JSON/text
+must report an unavailable observation without rewriting the action result,
+inventing removals or an empty URL, or suggesting action replay. Form validation
+must use `errors:null` when it could not be captured. The script's backend counter
+reads are fixture assertions, separate from browser task commands.

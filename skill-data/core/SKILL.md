@@ -47,6 +47,9 @@ single reference unless you genuinely need the whole set.
 
 ## The core loop
 
+Check `observed.status` as well as the action result. An unavailable observation
+does not mean the action failed; inspect current state instead of replaying it.
+
 Use `--observe` to get action results with bounded request context; load
 `core/waiting` for the summary limits and how to retrieve full captured details.
 
@@ -193,7 +196,7 @@ Fast pages can finish before any check is sent.
 For isolated development, set `CHROME_USE_RELAY_DIR` to the same absolute
 directory in the native-host launcher and the CLI. This scopes relay discovery
 without changing HOME; combine it with unique session names and an explicit
-`--browser` ID. Omit it for ordinary shared-profile discovery.
+`--browser` ID. Relative paths are rejected before discovery. Omit it for ordinary shared-profile discovery.
 
 ## Two ways to drive a page — and when to drop to `eval`
 

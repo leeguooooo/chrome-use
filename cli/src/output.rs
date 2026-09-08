@@ -256,7 +256,8 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
         if let Some(data) = &resp.data {
             if let Some(obs) = data.get("observed").and_then(|v| v.as_object()) {
                 print_observed(obs);
-            } else if let Some(snap) = data.get("observedSnapshot").and_then(|v| v.as_str()) {
+            }
+            if let Some(snap) = data.get("observedSnapshot").and_then(|v| v.as_str()) {
                 print_observed_snapshot(snap);
             }
         }
@@ -1814,7 +1815,15 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         // read back a value that does not contain what was typed, #203) must
         // not hide behind a bare ✓ — surface it on stderr.
         let data_warning = data.get("warning").and_then(|v| v.as_str());
-        if data_warning.is_some() {
+        if matches!(
+            data.pointer("/observed/status").and_then(|s| s.as_str()),
+            Some("partial" | "unavailable")
+        ) {
+            println!(
+                "{} Action returned; observation incomplete",
+                color::warning_indicator()
+            );
+        } else if data_warning.is_some() {
             println!("{} Done", color::warning_indicator());
         } else {
             println!("{} Done", color::success_indicator());
@@ -2634,6 +2643,9 @@ Values: string → text/select/radio; true/false → checkbox.
 Standard controls (input/select/textarea/checkbox/radio/contenteditable) only —
 for rich editors (DraftJS/Monaco/CodeMirror) fill those fields individually with
 `fill`, which handles them.
+
+If post-fill validation cannot be captured, errors is null and observed.status
+is unavailable. The action result is preserved; inspect before repeating it.
 
 Examples:
   chrome-use form fill --map '{"Email":"a@b.com","Country":"US","Subscribe":true}'
@@ -4714,6 +4726,8 @@ Options:
                              (a11y delta + url + requests) — skip act→snapshot→diff
                              Requests: at most 20 summaries, 256 UTF-8 bytes each;
                              data URL payloads omitted. Full capture: network requests --json
+                             Observation status is separate from action success;
+                             partial/unavailable results must not trigger action replay.
   --settle-ms <ms>           Ceiling on the wait before an observation captures
                              (default 1000, or AGENT_BROWSER_SETTLE_MS). The wait
                              ends early on DOM quiet + no in-flight request; a
@@ -4862,10 +4876,31 @@ Hit a bug or rough edge? A 30-second issue genuinely sharpens this tool:
 /// the delta: a silent `✓ Done` is indistinguishable from the flag being
 /// ignored, which is exactly how this went unnoticed.
 fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
-    let changed = obs
-        .get("changed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let changed = obs.get("changed").and_then(|v| v.as_bool());
+    if let Some(status) = obs.get("status").and_then(|v| v.as_str()) {
+        if status != "complete" {
+            println!("{} {}", color::dim("observation status:"), status);
+        }
+    }
+    if let Some(errors) = obs.get("errors").and_then(|v| v.as_array()) {
+        for error in errors {
+            eprintln!(
+                "{} {}: {}",
+                color::warning_indicator(),
+                error
+                    .get("stage")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("observation"),
+                error
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unavailable")
+            );
+        }
+    }
+    if let Some(snapshot) = obs.get("snapshot").and_then(|v| v.as_str()) {
+        print_observed_snapshot(snapshot);
+    }
     // How long the adaptive wait watched (#228). On "no change" this is the
     // difference between "the page did nothing" and "we did not look": the
     // wait keeps watching for a first reaction for half its ceiling before it
@@ -4874,7 +4909,7 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         .get("settle")
         .and_then(|s| s.get("waitedMs"))
         .and_then(|v| v.as_u64());
-    if !changed {
+    if changed == Some(false) {
         match waited {
             Some(ms) => println!("{}", color::dim(&format!("observed: no change ({ms}ms)"))),
             None => println!("{}", color::dim("observed: no change")),
@@ -5061,9 +5096,13 @@ mod tests {
             match case.as_str() {
                 "eval" => data["result"] = serde_json::Value::Null,
                 "check" => data["checked"] = json!(true),
+                "unavailable" => {
+                    data["observed"] = json!({"status":"unavailable","changed":null,
+                    "errors":[{"stage":"afterSnapshot","message":"fixture capture denied"}]})
+                }
                 "navigation" => {
                     data = json!({"url": "https://example.com", "title": "Fixture",
-                        "observedSnapshot": "- button Ready [ref=e1]"});
+                        "observedSnapshot": "- button Ready [ref=e1]", "observed": {"status":"complete"}});
                 }
                 _ => {}
             }
@@ -5083,7 +5122,14 @@ mod tests {
             );
             return;
         }
-        for case in ["eval", "check", "click", "navigation", "json"] {
+        for case in [
+            "eval",
+            "check",
+            "click",
+            "navigation",
+            "json",
+            "unavailable",
+        ] {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -5111,6 +5157,10 @@ mod tests {
                 );
                 if case == "navigation" {
                     assert_eq!(stdout.matches("observed snapshot:").count(), 1);
+                } else if case == "unavailable" {
+                    assert!(stdout.contains("observation status: unavailable"));
+                    assert!(!stdout.contains("no change"));
+                    assert!(stderr.contains("fixture capture denied"));
                 } else {
                     assert_eq!(
                         stdout.matches("observed requests: 25").count(),

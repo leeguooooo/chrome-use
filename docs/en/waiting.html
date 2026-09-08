@@ -56,6 +56,7 @@
       </p>
 
       <!-- ============ WAIT ============ -->
+      <p><code>observed.status</code> is complete, partial, or unavailable, independently of the action success value. Missing evidence can produce <code>changed:null</code>, never a fabricated empty page or URL. A missing baseline returns the available after-tree instead of a diff. Incomplete observations include errors and <code>retryAction:false</code>; inspect current state rather than replaying the action.</p>
       <h2>Pick the right wait condition — wait</h2>
       <p>
         After every action that changes the page, wait for a <strong>specific</strong> condition

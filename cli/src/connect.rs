@@ -2542,7 +2542,9 @@ fn random_guid() -> String {
 /// has the file (an old `agent-browser` host writes `~/.agent-browser`; a
 /// `chrome-use` host writes `~/.chrome-use`); default to [`config_home`].
 fn relay_url_path() -> PathBuf {
-    if let Some(path) = relay_url_override(std::env::var_os("CHROME_USE_RELAY_DIR")) {
+    if let Some(path) = relay_url_override(std::env::var_os("CHROME_USE_RELAY_DIR"))
+        .expect("relay configuration must be validated at process startup")
+    {
         return path;
     }
     if let Some(home) = dirs::home_dir() {
@@ -2559,10 +2561,19 @@ fn relay_url_path() -> PathBuf {
 
 /// Scope native-host registration and discovery without changing HOME or the
 /// user's ordinary registry. Set the same absolute directory in host and CLI.
-fn relay_url_override(directory: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    directory
-        .filter(|dir| !dir.is_empty())
-        .map(|dir| PathBuf::from(dir).join("relay-cdp-url"))
+fn relay_url_override(directory: Option<std::ffi::OsString>) -> Result<Option<PathBuf>, String> {
+    let Some(directory) = directory.filter(|dir| !dir.is_empty()) else {
+        return Ok(None);
+    };
+    let directory = PathBuf::from(directory);
+    if !directory.is_absolute() {
+        return Err("CHROME_USE_RELAY_DIR must be an absolute path, set identically in the native host and CLI".into());
+    }
+    Ok(Some(directory.join("relay-cdp-url")))
+}
+
+pub fn validate_relay_configuration() -> Result<(), String> {
+    relay_url_override(std::env::var_os("CHROME_USE_RELAY_DIR")).map(|_| ())
 }
 
 /// The live relay CDP WebSocket URL, if the native-messaging host is running
@@ -3258,10 +3269,14 @@ mod tests {
         let root = std::env::temp_dir().join("candidate-relay-registry");
         assert_eq!(
             relay_url_override(Some(root.clone().into_os_string())),
-            Some(root.join("relay-cdp-url"))
+            Ok(Some(root.join("relay-cdp-url")))
         );
-        assert_eq!(relay_url_override(None), None);
-        assert_eq!(relay_url_override(Some(std::ffi::OsString::new())), None);
+        assert_eq!(relay_url_override(None), Ok(None));
+        assert_eq!(
+            relay_url_override(Some(std::ffi::OsString::new())),
+            Ok(None)
+        );
+        assert!(relay_url_override(Some("relative-path".into())).is_err());
     }
 
     #[test]

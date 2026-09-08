@@ -1120,12 +1120,20 @@ fn main() {
     // launcher), so Chrome runs it with the extension origin as argv[1] and
     // no `__nm-host` marker — detect that origin too and enter the same mode.
     let nm_arg1 = env::args().nth(1);
-    if nm_arg1.as_deref() == Some("__nm-host")
+    let native_host = nm_arg1.as_deref() == Some("__nm-host")
         || nm_arg1
             .as_deref()
-            .map(|a| a.starts_with("chrome-extension://"))
-            .unwrap_or(false)
-    {
+            .is_some_and(|arg| arg.starts_with("chrome-extension://"));
+    if let Err(error) = connect::validate_relay_configuration() {
+        // Native-host stdout is a framed protocol, never ordinary JSON/text.
+        if !native_host && env::args().any(|arg| arg == "--json") {
+            print_json_error_with_type(&error, "invalid_configuration");
+        } else {
+            eprintln!("{error}");
+        }
+        exit(1);
+    }
+    if native_host {
         connect::run_nm_host();
         return;
     }

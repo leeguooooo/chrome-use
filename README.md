@@ -382,7 +382,7 @@ Fast pages can finish before any check is sent.
 For isolated development, set `CHROME_USE_RELAY_DIR` to the same absolute
 directory in the native-host launcher and the CLI. This scopes relay discovery
 without changing HOME; combine it with unique session names and an explicit
-`--browser` ID. Omit it for ordinary shared-profile discovery.
+`--browser` ID. Relative paths are rejected before discovery. Omit it for ordinary shared-profile discovery.
 
 ### Standalone mode (`--launch`)
 
@@ -559,6 +559,15 @@ severed — and reports what it left out plus a cursor to resume from.
 ## Waiting before a read
 
 An observation is only worth what the page was doing when it was taken.
+Observations report `status: complete|partial|unavailable` separately from the
+action result. Failed captures do not become empty pages or URLs. `changed:null`
+means the evidence cannot establish whether anything changed; a known change can
+still be true in a partial observation. If the baseline failed but the after-tree
+was captured, that tree is returned instead of a fabricated diff. Incomplete
+observations include errors and `retryAction:false`: inspect current state rather
+than replaying the action. The command keeps its original action success value.
+For `form fill`, unavailable validation is `errors:null`, not an empty error list.
+
 Action observations include at most 20 request summaries, each capped at 256 UTF-8
 bytes. Data URLs show their media header and encoded payload size instead of the
 payload. `requestsTotal`, `requestsOmitted`, and `requestsShortened` describe the

@@ -56,6 +56,7 @@
       </p>
 
       <!-- ============ WAIT ============ -->
+      <p>观察质量由 <code>observed.status</code> 的 complete、partial、unavailable 表示，动作 success 值不因观察失败而改写。证据不足时 <code>changed</code> 为 null，不会伪造空页面或 URL。基线失败但后置树可用时返回后置树。不完整观察会附错误和 <code>retryAction:false</code>，应检查当前状态，不要为了补观察重放动作。</p>
       <h2>选对等待条件 — wait</h2>
       <p>
         每次会改变页面的动作之后，都要挑一个<strong>具体</strong>的条件去等，

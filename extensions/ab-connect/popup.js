@@ -11,6 +11,7 @@ const hintText = document.getElementById('hintText')
 const hintCommand = document.getElementById('hintCommand')
 
 let resolved = false
+let statusEpoch = 0
 
 function render(state) {
   resolved = true
@@ -38,6 +39,11 @@ function render(state) {
     label.textContent = 'Not paired'
     sub.textContent = state?.connectionError || 'no local chrome-use CLI linked'
     tabPill.classList.add('hidden')
+    if (state?.standalone) {
+      hint.style.display = 'none'
+      hintCommand.textContent = ''
+      return
+    }
     hint.style.display = 'block'
     const missingHost = (state?.connectionError || '').toLowerCase().includes('host not found')
     hintText.textContent = missingHost
@@ -50,13 +56,17 @@ function render(state) {
 function queryStatus() {
   // A standalone preview has no native connection to confirm.
   if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
-    render({ connected: false, connectionError: 'Open this popup from the chrome-use extension' })
+    render({ connected: false, standalone: true, connectionError: 'Open this popup from the chrome-use extension' })
     return
   }
+  const queryEpoch = ++statusEpoch
   try {
     chrome.runtime.sendMessage({ type: 'ab-status' }, (resp) => {
-      // lastError fires if the service worker can't be reached.
-      if (chrome.runtime.lastError) {
+      // Acknowledge lastError even for a stale callback, then preserve any
+      // newer query or pushed state that has already arrived.
+      const error = chrome.runtime.lastError
+      if (queryEpoch !== statusEpoch) return
+      if (error) {
         render({ connected: false })
         return
       }
@@ -83,7 +93,10 @@ document.querySelectorAll('[data-href]').forEach((a) => {
 // Update an open popup even when the host confirms after the startup queries.
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === 'ab-host-state') render(message)
+    if (message?.type === 'ab-host-state') {
+      statusEpoch++
+      render(message)
+    }
   })
 }
 
