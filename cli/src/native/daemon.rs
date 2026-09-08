@@ -40,11 +40,28 @@ fn reaped_marker_path(session: &str) -> std::path::PathBuf {
 }
 
 /// Record that this session's launched browser was closed by the idle timeout.
+///
+/// Best-effort: this runs from a daemon on its way out, with nobody left to
+/// report to. But losing the marker means the next command relaunches in
+/// silence -- the exact failure of issue #216 -- so make the write as likely
+/// to land as possible: the socket dir may not exist yet on a machine where no
+/// daemon has ever written a socket.
 pub fn mark_browser_reaped(session: &str, idle_ms: u64) {
-    let _ = fs::write(
-        reaped_marker_path(session),
+    let path = reaped_marker_path(session);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(e) = fs::write(
+        &path,
         format!("the idle timeout closed it after {idle_ms}ms with no commands"),
-    );
+    ) {
+        if env::var("AGENT_BROWSER_DEBUG").is_ok() {
+            eprintln!(
+                "[daemon] failed to record the reaped-browser marker at {}: {e}",
+                path.display()
+            );
+        }
+    }
 }
 
 /// Read and clear the marker, if the previous daemon left one.
