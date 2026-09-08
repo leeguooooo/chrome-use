@@ -1,5 +1,7 @@
 # 商品上下文裁剪基线
 
+最终交互修复已合入 PR #246；本地完整浏览器 E2E 为 110 通过、0 失败，最终功能提交的跨平台 CI 通过。下文保留各轮历史结果，当前结论见[优化后体验对照](browser-experience-comparison-2026-09-09.md)。
+
 2026-09-09，CLI 候选构建 1.5.109，源码运行时来自 main 的可靠性改进。使用独立 Chrome for Testing 152 配置、ab-connect 0.5.22、私有中继目录，无远程调试端口。
 
 任务：从 `bench/fixtures/product-context.html` 选择最便宜的在售商品。正确选择为 Folder（9.00）；Notebook 为 12.00，Pencil 为 4.00 但缺货。三个按钮均名为 Add to cart，缺货按钮禁用。
