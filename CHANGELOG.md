@@ -1,8 +1,30 @@
 # Changelog
 
-## 1.5.109
+## 1.5.111
 
 <!-- release:start -->
+### New Features
+
+- **Local action context:** Interactive snapshots retain bounded nearby text, including product prices, alongside action controls. Semantic items, heading groups, and unambiguous linked product cards are supported. Repeated context on product links is omitted (#246).
+- **Profile rules:** Opening a site can use existing ChooseBrowser rules to select a connected Chrome profile. Explicit `--browser` takes precedence; `--no-choosebrowser` disables rule lookup. An unavailable rule target falls back to normal profile selection, so verify account identity when needed (#247).
+
+### Bug Fixes
+
+- **Status receipts:** Interactive snapshots and action observations retain status text, including cart confirmations. Clickable status elements keep their action references (#246).
+- **Drag routing:** Launched browsers choose their drag path from their own connection, even when another Chrome profile has an extension relay running (#246).
+
+### Improvements
+
+- Context output prioritizes short fields, marks truncation, and preserves references through budgeted continuation. Iframe expansion accepts references with additional metadata (#246).
+- Release version and changelog validation run before the platform build matrix (#249).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.109
+
 ### Bug Fixes
 
 - **Action outcomes:** Relay recovery no longer automatically repeats an action whose result is unknown. Errors distinguish uncertain execution from a confirmed rejection (#242).
@@ -20,7 +42,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.101
 

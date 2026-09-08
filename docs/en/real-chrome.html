@@ -195,8 +195,8 @@
       <p>
         Read-only, and invisible if you do not use it: no rules file means no behaviour change and
         no message. A rule naming a profile that is not running the extension falls back to the
-        normal profile choice <span class="mark">rather than opening the link as some other
-        account</span> — the wrong identity can post, purchase and send as you.
+        normal profile choice. This fallback does not verify site account identity; check it or
+        pin <code>--browser</code> when a specific account is required.
       </p>
       <p>
         Rules are consulted before the "most recently focused window" guess, because a rule is

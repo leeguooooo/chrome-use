@@ -29,6 +29,12 @@ One-time setup:
 > `profiles remove -identifier com.leeguoo.chrome-use.connect` to undo it (Chrome
 > then uninstalls the policy-installed extension — re-add it from the Store).
 
+## Site rules and profile selection
+
+On macOS, `open` / `goto` / `navigate` can consult existing ChooseBrowser site rules when no explicit connection or browser is selected. The rule must resolve to a connected relay profile. `--browser <id|email>` takes precedence; `--no-choosebrowser` skips rule lookup. Reads are local and do not modify the rules.
+
+If the rule target is unavailable, normal profile selection applies. This fallback does not verify the website account. Check `browsers` and the site's identity, or pin `--browser`, when the task requires a specific account. `click` and `snapshot` do not consult routing rules to move an existing session.
+
 Once installed, plain `chrome-use open <url>` auto-connects through the
 extension relay — `auto_connect_cdp` **prefers the live relay over a raw
 `--remote-debugging-port`**, so Chrome 136+'s "Allow remote debugging?" consent
