@@ -37,7 +37,7 @@ const SUPPORTED_VERSION: u32 = 2;
 /// and the App Store build another. Reading only the new path would find
 /// nothing for everyone using a released version today, so all three are
 /// tried and the first that parses wins.
-fn rules_paths() -> Vec<PathBuf> {
+pub fn rules_paths() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
@@ -300,6 +300,65 @@ pub fn resolve_profile_directory(local_state_json: &str, key: &str) -> Option<Re
             directory: dir.clone(),
             email: email_of(info),
         })
+}
+
+/// What the lookup found, step by step, for `doctor` to print.
+///
+/// The feature degrades silently by design — a missing file must not produce a
+/// message for the many people who do not use ChooseBrowser. That is right for
+/// them and blinding for everyone else: "not installed", "wrong path", "format
+/// not understood", "profile not connected" and "no rule matches" all present
+/// as the same thing, which is nothing at all. Three separate ways of never
+/// working shipped behind that sameness before a person ran six urls by hand
+/// and reasoned backwards.
+///
+/// So the silent path gets one loud counterpart. Nothing here changes
+/// behaviour; it only says out loud what the quiet path decided.
+#[derive(Debug)]
+pub struct Diagnosis {
+    /// Every location probed, and whether a file was there. Reported even on
+    /// success: "found it, but in the path you thought was retired" is its own
+    /// failure mode.
+    pub probed: Vec<(PathBuf, bool)>,
+    /// The file that answered, if any.
+    pub source: Option<PathBuf>,
+    /// Rules parsed out of it. `Some(0)` and `None` are different: zero rules
+    /// is an empty file, `None` is one we could not read.
+    pub parsed: Option<usize>,
+    /// Version found, when the file parsed far enough to carry one.
+    pub version: Option<u32>,
+}
+
+/// Probe the rules files without consulting any url.
+pub fn diagnose() -> Diagnosis {
+    let mut d = Diagnosis {
+        probed: Vec::new(),
+        source: None,
+        parsed: None,
+        version: None,
+    };
+    for path in rules_paths() {
+        let body = std::fs::read_to_string(&path).ok();
+        d.probed.push((path.clone(), body.is_some()));
+        let Some(body) = body else { continue };
+        if d.source.is_some() {
+            continue;
+        }
+        d.source = Some(path);
+        // Read the version even when the rest fails to deserialize: "version 3"
+        // and "malformed" are different problems with different fixes.
+        if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&body) {
+            d.version = raw
+                .get("version")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+        }
+        d.parsed = serde_json::from_str::<RulesFile>(&body)
+            .ok()
+            .filter(|f| f.version == SUPPORTED_VERSION)
+            .map(|f| f.rules.len());
+    }
+    d
 }
 
 /// The whole lookup, against the real files. `None` for every ordinary reason:
@@ -628,6 +687,25 @@ mod tests {
         assert_eq!(compare_created_at(&None, &num(1)), Ordering::Greater);
         assert_eq!(compare_created_at(&num(1), &None), Ordering::Less);
         assert_eq!(compare_created_at(&None, &None), Ordering::Equal);
+    }
+
+    /// `Some(0)` and `None` must stay distinguishable: an empty rules file and
+    /// one we could not read need different messages, and collapsing them is
+    /// exactly the sameness this diagnosis exists to break.
+    #[test]
+    fn zero_rules_and_unreadable_rules_are_different_answers() {
+        assert_eq!(
+            serde_json::from_str::<RulesFile>(r#"{"version":2,"rules":[]}"#)
+                .ok()
+                .map(|f| f.rules.len()),
+            Some(0)
+        );
+        assert_eq!(
+            serde_json::from_str::<RulesFile>("{not json")
+                .ok()
+                .map(|f| f.rules.len()),
+            None
+        );
     }
 
     /// A url no rule covers is the ordinary case, not an error.
