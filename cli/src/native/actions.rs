@@ -383,6 +383,11 @@ pub struct DaemonState {
     pub routes: Arc<RwLock<Vec<RouteEntry>>>,
     pub tracked_requests: Vec<TrackedRequest>,
     pub request_tracking: bool,
+    /// The last `tab select` / `tab adopt` whose liveness probe never answered,
+    /// as (what the caller asked for, when). A tab-gone error after one of these
+    /// means the documented recovery has already been tried and did not work —
+    /// repeating it is the loop #235 describes, so the error says so instead.
+    pub last_unconfirmed_tab_switch: Option<(String, std::time::Instant)>,
     /// Requests seen going out and not yet finished, as (requestId, start).
     /// Feeds the adaptive settle (#228): a click that fires an XHR leaves the
     /// DOM quiet for the whole round trip, so DOM stillness alone would report
@@ -466,6 +471,7 @@ impl DaemonState {
             routes: Arc::new(RwLock::new(Vec::new())),
             tracked_requests: Vec::new(),
             request_tracking: false,
+            last_unconfirmed_tab_switch: None,
             in_flight_requests: Vec::new(),
             active_frame_id: None,
             last_snapshot: None,
@@ -1528,6 +1534,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         }
     }
 
+    // Set when this command silently got a DIFFERENT browser than the caller's
+    // previous one, so the reply can say so instead of describing the fresh
+    // `about:blank` as if it were the page they left (issue #216).
+    let mut replaced_browser: Option<String> = None;
     let skip_launch = matches!(
         action,
         "" | "launch"
@@ -1571,7 +1581,24 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         };
 
         if needs_launch {
+            // A replacement browser is not the browser the caller was using.
+            // Whatever was open in the old one — a half-filled form a human was
+            // about to finish by hand — is gone, and saying nothing about that
+            // is how #216 destroyed a bank application: the next command came
+            // back `about:blank` with a plain ✓, as though that were the page.
             if state.browser.is_some() {
+                let why = state
+                    .browser
+                    .as_mut()
+                    .map(|mgr| {
+                        if mgr.has_process_exited() {
+                            "its browser process had exited"
+                        } else {
+                            "its browser connection was dead"
+                        }
+                    })
+                    .unwrap_or("its browser was gone");
+                replaced_browser = Some(why.to_string());
                 if let Some(ref mut mgr) = state.browser {
                     let _ = mgr.close().await;
                 }
@@ -1579,6 +1606,11 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 state.screencasting = false;
                 state.reset_input_state();
                 state.update_stream_client().await;
+            } else if let Some(reason) = super::daemon::take_reaped_marker(&state.session_id) {
+                // A previous daemon reaped the browser and exited, so this
+                // process has no memory of it. The marker it left behind is the
+                // only thing that can tell the caller their window is gone.
+                replaced_browser = Some(reason);
             }
             if let Err(e) = auto_launch(state).await {
                 return error_response(&id, &format!("Auto-launch failed: {}", e));
@@ -1639,6 +1671,9 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // BY the action starts before the settle does, so anchoring on "now" here
     // is what lets the wait see it (#228).
     let action_started_at = std::time::Instant::now();
+    // Frames known before the action, so the ones it opened can be named (#218).
+    let frames_before: std::collections::HashSet<String> =
+        state.iframe_sessions.keys().cloned().collect();
 
     // On the relay, a cross-process navigation (an OAuth/SSO redirect) can swap the
     // renderer and rotate the CDP sessionId out from under a non-navigate read or
@@ -1904,7 +1939,17 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         // such as `No element matches selector: #main`. Keep that actionable
         // detail instead of collapsing it into the generic locator guidance.
         Err(e) if action == "a11y" => error_response(&id, &e),
-        Err(e) => error_response(&id, &super::browser::to_ai_friendly_error(&e)),
+        Err(e) => {
+            let mut msg = super::browser::to_ai_friendly_error(&e);
+            // A tab-gone error right after an unconfirmed switch means the
+            // documented recovery has already been tried (#235).
+            if super::browser::is_stale_target_error(&e) {
+                if let Some(note) = already_tried_note(state.last_unconfirmed_tab_switch.as_ref()) {
+                    msg.push_str(&note);
+                }
+            }
+            error_response(&id, &msg)
+        }
     };
 
     // `--observe`: after a successful mutating action, settle briefly, re-snapshot,
@@ -1947,6 +1992,16 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                     .collect()
             })
             .unwrap_or_default();
+        // A cross-origin overlay (a bank picker, a payment field) arrives as a
+        // NEW out-of-process frame, and its content is in none of this tree —
+        // so the delta looks like "the click did nothing" (#218). Name the
+        // frames that appeared and where to drive them.
+        let new_frames: Vec<String> = state
+            .iframe_sessions
+            .keys()
+            .filter(|f| !frames_before.contains(*f))
+            .cloned()
+            .collect();
         let mut observed = serde_json::Map::new();
         // The diff is the authority on whether the action changed anything: a
         // mutation made synchronously during dispatch happens before the wait's
@@ -1967,6 +2022,19 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         if !new_reqs.is_empty() {
             observed.insert("requests".into(), json!(new_reqs));
         }
+        if !new_frames.is_empty() {
+            observed.insert("newFrames".into(), json!(new_frames));
+            observed.insert(
+                "newFramesNote".into(),
+                json!(format!(
+                    "{} cross-origin frame(s) appeared and their content is NOT in this tree \
+                     (a picker/overlay renders in its own frame). `frames` lists them; \
+                     `frame <id>` switches the session into one, or `eval --frame <id>` for a \
+                     one-off.",
+                    new_frames.len()
+                )),
+            );
+        }
         if let Some(obj) = resp.as_object_mut() {
             let data = obj
                 .entry("data")
@@ -1979,6 +2047,31 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             if let Some(w) = settled.warning() {
                 if obj.get("warning").is_none() {
                     obj.insert("warning".to_string(), json!(w));
+                }
+            }
+        }
+    }
+
+    // Say that this command is answering from a NEW browser (issue #216). It
+    // rides on every reply, success or failure: an agent that reads `about:blank`
+    // without this line concludes the page navigated away, and a human who left
+    // a form half-filled is told nothing at all.
+    if let Some(why) = replaced_browser {
+        if let Some(obj) = resp.as_object_mut() {
+            let note = format!(
+                "This session's previous browser is gone ({why}) and a fresh one was launched \
+                 for this command — anything open in the old window, including typed input, is \
+                 not here. A launched browser is reaped after the daemon sits idle \
+                 (AGENT_BROWSER_IDLE_TIMEOUT_MS, default 600000ms; set 0 to keep it). While a \
+                 human is working in the window, `session handoff` also holds it open."
+            );
+            match obj.get("warning").and_then(|v| v.as_str()) {
+                Some(existing) => {
+                    let merged = format!("{note}\n{existing}");
+                    obj.insert("warning".to_string(), json!(merged));
+                }
+                None => {
+                    obj.insert("warning".to_string(), json!(note));
                 }
             }
         }
@@ -5522,7 +5615,17 @@ fn press_result(key: &str, target: Option<String>, actual_key: &str, extra: Valu
     }
     if let Some(ref t) = target {
         obj.insert("target".to_string(), json!(t));
-        if interaction::key_needs_focus(actual_key) && interaction::descriptor_is_unfocused(t) {
+        // The key went to a frame container, so nothing inside the frame saw it
+        // (#218). Reported first: it explains a `✓ Pressed Enter → iframe[...]`
+        // that changed nothing, and no other warning here covers it.
+        if interaction::descriptor_is_iframe(t) {
+            obj.insert(
+                "warning".to_string(),
+                json!(interaction::frame_boundary_warning(key, t)),
+            );
+        } else if interaction::key_needs_focus(actual_key)
+            && interaction::descriptor_is_unfocused(t)
+        {
             let where_it_went = if t == "none" {
                 "nothing is focused".to_string()
             } else {
@@ -7815,6 +7918,11 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
         .get("url")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    //
+    // Three outcomes, not two (issue #235). A probe that never answered is not
+    // a success with a footnote: nothing was confirmed, and the ✓ that used to
+    // head that reply is what sent an agent round the loop
+    // `snapshot` fails → `tab select` says ✓ → `snapshot` fails identically.
     match mgr.evaluate("location.href", None).await {
         Err(_) => {
             let warning = tab_liveness_probe_warning(
@@ -7823,8 +7931,11 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 env!("AB_CONNECT_VERSION"),
             );
             if let Some(obj) = result.as_object_mut() {
+                obj.insert("verified".to_string(), json!("unconfirmed"));
                 obj.insert("warning".to_string(), json!(warning));
             }
+            state.last_unconfirmed_tab_switch =
+                Some((tab_ref_str.to_string(), std::time::Instant::now()));
         }
         Ok(actual) => {
             let actual_url = actual.as_str().unwrap_or_default().to_string();
@@ -7833,6 +7944,12 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
                     return Err(msg);
                 }
             }
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("verified".to_string(), json!("confirmed"));
+            }
+            // The session answered from the right place; a stale-target error
+            // after this is a new problem, not the old unrecovered one.
+            state.last_unconfirmed_tab_switch = None;
         }
     }
 
@@ -7938,10 +8055,35 @@ fn tab_liveness_probe_warning(
         }
     }
 
-    "tab is selected, but its liveness probe did not complete; this alone does not prove \
-     the renderer is unresponsive. `tab inspect <ref>` can still read browser-level state \
-     without navigating"
+    "the switch was requested but NOT confirmed: the liveness probe did not answer, so \
+     nothing here shows whether this session is driving that tab. This alone does not prove \
+     the renderer is unresponsive. `tab inspect <ref>` reads browser-level target metadata \
+     over the browser connection and can succeed while driving still fails — the two use \
+     different paths, so a successful inspect is not evidence the tab is drivable. If the \
+     next read fails the same way, this is not recoverable by repeating the switch: re-open \
+     the target with `open <url>` / `navigate <url>` to rebind the session"
         .to_string()
+}
+
+/// Add what an agent needs when a tab-gone error follows a `tab select` /
+/// `tab adopt` that was never confirmed (issue #235).
+///
+/// The generic advice ("run `tab list`, then `tab select <ref>`") is right the
+/// first time and a trap the second: an agent that just did exactly that, and
+/// got an unconfirmed result, is told to do it again. The loop that produces —
+/// `snapshot` fails → "recover" → `snapshot` fails — is worse than a short
+/// error, because every step of it points confidently at the next.
+pub(crate) fn already_tried_note(attempt: Option<&(String, std::time::Instant)>) -> Option<String> {
+    let (what, when) = attempt?;
+    let ago = when.elapsed().as_secs();
+    Some(format!(
+        "\nYou already ran `tab select {what}` {ago}s ago and its liveness probe did not \
+         confirm the switch, so repeating it will not help. This session cannot reach that \
+         tab's renderer: re-open the target with `open <url>` / `navigate <url>` to rebind. \
+         (`tab inspect {what}` may still read its url/title — that path goes through the \
+         browser connection, not the page session, so it succeeding does not mean the tab \
+         can be driven.)"
+    ))
 }
 
 async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -7958,15 +8100,42 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     // requested tab's title and url while the session went on driving the page
     // it was stuck on, so the documented recovery for a lost tab silently did
     // nothing and the next command failed identically.
-    if let (Some(mgr), Some(expected)) = (
-        state.browser.as_mut(),
-        result.get("url").and_then(|v| v.as_str()),
-    ) {
-        if let Ok(actual) = mgr.evaluate("location.href", None).await {
-            if let Some(msg) =
-                tab_switch_identity_error(spec, expected, actual.as_str().unwrap_or_default())
-            {
-                return Err(msg);
+    let mut result = result;
+    let expected = result
+        .get("url")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    if let Some(mgr) = state.browser.as_mut() {
+        match mgr.evaluate("location.href", None).await {
+            Ok(actual) => {
+                if let Some(expected) = expected.as_deref() {
+                    if let Some(msg) = tab_switch_identity_error(
+                        spec,
+                        expected,
+                        actual.as_str().unwrap_or_default(),
+                    ) {
+                        return Err(msg);
+                    }
+                }
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("verified".to_string(), json!("confirmed"));
+                }
+                state.last_unconfirmed_tab_switch = None;
+            }
+            // Adopt reported the tab but nothing confirmed the session is
+            // driving it — the same third state `tab select` reports (#235).
+            Err(_) => {
+                let warning = tab_liveness_probe_warning(
+                    mgr.on_relay(),
+                    crate::connect::relay_ext_version().as_deref(),
+                    env!("AB_CONNECT_VERSION"),
+                );
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("verified".to_string(), json!("unconfirmed"));
+                    obj.insert("warning".to_string(), json!(warning));
+                }
+                state.last_unconfirmed_tab_switch =
+                    Some((spec.to_string(), std::time::Instant::now()));
             }
         }
     }
@@ -9003,7 +9172,7 @@ async fn handle_focus(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         .and_then(|v| v.as_str())
         .ok_or("Missing 'selector' parameter")?;
 
-    interaction::focus(
+    let landed_session = interaction::focus_reporting_session(
         &mgr.client,
         &session_id,
         &state.ref_map,
@@ -9011,7 +9180,22 @@ async fn handle_focus(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         &state.iframe_sessions,
     )
     .await?;
-    Ok(json!({ "focused": selector }))
+
+    // Report where focus actually ended up, and say so when that is a frame
+    // container: focusing an `<iframe>` focuses nothing inside it, so the next
+    // `press`/`type` goes to the frame element and the control the caller meant
+    // never sees it (#218). Best-effort — a descriptor we cannot read is not a
+    // reason to fail a focus that the browser accepted.
+    let mut out = json!({ "focused": selector });
+    if let Some(descriptor) =
+        interaction::active_element_descriptor(&mgr.client, &landed_session).await
+    {
+        if interaction::descriptor_is_iframe(&descriptor) {
+            out["warning"] = json!(interaction::frame_boundary_warning("focus", &descriptor));
+        }
+        out["target"] = json!(descriptor);
+    }
+    Ok(out)
 }
 
 async fn handle_clear(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -14147,10 +14331,46 @@ mod tests {
     fn current_extension_liveness_warning_does_not_diagnose_renderer_failure() {
         let warning = tab_liveness_probe_warning(true, Some("0.5.16"), "0.5.16");
 
-        assert!(warning.contains("liveness probe did not complete"));
+        assert!(warning.contains("NOT confirmed"));
         assert!(warning.contains("does not prove the renderer is unresponsive"));
         assert!(warning.contains("tab inspect <ref>"));
         assert!(!warning.contains("behind bundled"));
+    }
+
+    /// The probe that never answered has to read as "nothing was confirmed",
+    /// and it has to close the two doors that sent an agent round the loop in
+    /// #235: `tab inspect` succeeding is not evidence the tab is drivable, and
+    /// repeating the switch is not the way out.
+    #[test]
+    fn an_unconfirmed_switch_says_what_it_does_not_know() {
+        let warning = tab_liveness_probe_warning(false, None, "0.5.16");
+
+        assert!(warning.contains("NOT confirmed"), "{warning}");
+        assert!(
+            warning.contains("different paths") && warning.contains("not evidence"),
+            "inspect succeeding must not read as proof the tab is drivable: {warning}"
+        );
+        assert!(
+            warning.contains("not recoverable by repeating the switch"),
+            "{warning}"
+        );
+        assert!(warning.contains("open <url>"), "{warning}");
+    }
+
+    /// A tab-gone error that follows an unconfirmed switch must say the
+    /// recovery it is about to recommend has already been tried (#235).
+    #[test]
+    fn a_second_failure_after_an_unconfirmed_switch_breaks_the_loop() {
+        assert!(already_tried_note(None).is_none());
+
+        let attempt = ("t8".to_string(), std::time::Instant::now());
+        let note = already_tried_note(Some(&attempt)).expect("an attempt gets a note");
+        assert!(note.contains("already ran `tab select t8`"), "{note}");
+        assert!(note.contains("repeating it will not help"), "{note}");
+        assert!(note.contains("open <url>"), "{note}");
+        // And it must explain the asymmetry the issue calls out, not just deny
+        // the loop: inspect reads over a different connection.
+        assert!(note.contains("browser connection"), "{note}");
     }
 
     #[test]

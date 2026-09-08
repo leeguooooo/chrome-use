@@ -539,7 +539,15 @@ pub fn run_skills(args: &[String], json_mode: bool) {
     // dirs — handle it before the empty-dirs guard so a single-binary install
     // with an unwritable cache still reaches npx instead of a misleading
     // "Skills directory not found" error.
-    if args.get(1).map(|s| s.as_str()) == Some("install") {
+    // `update` / `refresh` are the same operation as `install`: `skills add`
+    // re-adds the current version over an existing copy. They exist because
+    // "how do I update the skill?" had no discoverable answer — the command was
+    // there, under a name nobody looks for when they already installed it, and
+    // `skills update` answered `Unknown skills subcommand` (issue #234).
+    if matches!(
+        args.get(1).map(|s| s.as_str()),
+        Some("install") | Some("update") | Some("refresh")
+    ) {
         let project = args[2..].iter().any(|a| a == "--project" || a == "-p");
         run_skill_install(project, json_mode);
     }
@@ -589,7 +597,8 @@ pub fn run_skills(args: &[String], json_mode: bool) {
             let name = args.get(2).map(|s| s.as_str());
             run_path(&skills_dirs, skills_dirs_overridden, name, json_mode);
         }
-        // `install` is dispatched early (above), before the skill-dirs guard.
+        // `install` / `update` / `refresh` are dispatched early (above), before
+        // the skill-dirs guard.
         Some(unknown) => {
             if json_mode {
                 println!(
@@ -668,6 +677,31 @@ fn run_skill_install(project: bool, json_mode: bool) -> ! {
 
 #[cfg(test)]
 mod tests {
+    /// `install`, `update` and `refresh` are one operation. The command existed
+    /// under a name nobody reaches for once they have already installed it, and
+    /// `skills update` answered `Unknown skills subcommand` (issue #234).
+    #[test]
+    fn update_and_refresh_are_the_documented_names_for_install() {
+        for name in ["install", "update", "refresh"] {
+            assert!(
+                matches!(
+                    Some(name),
+                    Some("install") | Some("update") | Some("refresh")
+                ),
+                "{name} must reach the installer"
+            );
+        }
+        // The argv it delegates to is the same for all three.
+        assert_eq!(
+            build_skill_install_argv(false),
+            vec!["-y", "skills@latest", "add", "leeguooooo/chrome-use", "-g"]
+        );
+        assert_eq!(
+            build_skill_install_argv(true),
+            vec!["-y", "skills@latest", "add", "leeguooooo/chrome-use"]
+        );
+    }
+
     use super::*;
     use std::fs;
 

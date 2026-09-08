@@ -2494,6 +2494,34 @@ pub fn descriptor_is_unfocused(descriptor: &str) -> bool {
     matches!(descriptor, "body" | "html" | "none")
 }
 
+/// Whether a focus/press landed on an `<iframe>` element itself.
+///
+/// Focus stops at the frame boundary: giving an `<iframe>` focus does not focus
+/// anything inside it, and keystrokes dispatched afterwards go to the container,
+/// not to the control the caller could see through it (issue #218). The command
+/// still "worked" by every check we had — an element was focused, a key was
+/// dispatched — which is exactly what makes it a silent wrong target.
+pub fn descriptor_is_iframe(descriptor: &str) -> bool {
+    let tag = descriptor
+        .split(['[', '#', '.', ':'])
+        .next()
+        .unwrap_or(descriptor)
+        .trim();
+    tag.eq_ignore_ascii_case("iframe") || tag.eq_ignore_ascii_case("frame")
+}
+
+/// What to say when a key or a focus landed on a frame container.
+pub fn frame_boundary_warning(action: &str, descriptor: &str) -> String {
+    format!(
+        "{action} landed on <{descriptor}>, the frame element itself — focus and keystrokes do \
+         not cross into a frame, so nothing inside it received this. List the frames with \
+         `frames`, then drive the element inside: `frame <id>` switches the session into it \
+         (`snapshot -i` / `click` / `fill` then act inside), or `eval --frame <id>` for a \
+         one-off. A cross-origin overlay (a bank/branch picker, a payment field) is always a \
+         separate frame like this."
+    )
+}
+
 /// Would this key do anything app-visible ONLY if the page listens for it?
 ///
 /// Arrow/Home/End/Page keys on a text field just move the caret, Escape has no
@@ -3699,6 +3727,33 @@ async fn active_element_object_id(client: &CdpClient, session_id: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
+    /// Focus stops at a frame boundary, so a key dispatched after focusing an
+    /// `<iframe>` reaches the container and nothing inside it — a success by
+    /// every check the command had, and the wrong target every time (#218).
+    #[test]
+    fn a_frame_container_is_recognised_as_a_wrong_target() {
+        assert!(descriptor_is_iframe("iframe"));
+        assert!(descriptor_is_iframe(
+            "iframe[name=\"stripe-connect-ui-layer-1\"]"
+        ));
+        assert!(descriptor_is_iframe("iframe#checkout"));
+        assert!(descriptor_is_iframe("IFRAME"));
+        // Not every element whose name merely starts with the letters.
+        assert!(!descriptor_is_iframe("input[name=\"iframe\"]"));
+        assert!(!descriptor_is_iframe("body"));
+        assert!(!descriptor_is_iframe("textarea[name=\"q\"]"));
+    }
+
+    #[test]
+    fn the_frame_boundary_warning_points_at_the_way_in() {
+        let w = frame_boundary_warning("Enter", "iframe[name=\"pay\"]");
+        assert!(w.contains("frame element itself"), "{w}");
+        assert!(w.contains("do not cross into a frame"), "{w}");
+        // The escape hatch has to be a command that exists.
+        assert!(w.contains("`frames`") && w.contains("frame <id>"), "{w}");
+        assert!(w.contains("eval --frame"), "{w}");
+    }
+
     use super::*;
 
     #[test]

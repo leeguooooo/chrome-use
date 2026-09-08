@@ -112,6 +112,10 @@ npx skills add leeguooooo/chrome-use
 
 把 `skills/chrome-use` 拉进当前项目，让你的 AI agent 拿到正确的用法和预授权的 bash 权限。
 
+升级二进制**不会**更新已经拷到 runner 里的 SKILL.md —— 那份副本在二进制之外。
+用 `chrome-use skills update` 刷新（`refresh` / `install` 是同一个命令；加 `--project`
+装到 `./` 而不是全局）。
+
 ## 命令名
 
 `chrome-use`、`chrome-use`、`abs` 是**同一个二进制** —— `abs` 只是短别名。没有单独的「隐身可执行文件」；隐身是**运行时行为**（见下方 [反检测](#反检测)），根据你是连接真实 Chrome 还是 `--launch` 全新实例自动启用。

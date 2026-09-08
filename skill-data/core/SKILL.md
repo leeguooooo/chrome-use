@@ -47,8 +47,13 @@ discover newly rendered controls.
 > relocates to the matching element on the *current* page and proceeds. So after a
 > React/Vue list re-render that keeps the same labels, `click @e3` still hits the
 > right element. If the element is genuinely gone, it refuses (loud error) rather
-> than click the wrong node — it never silently mis-targets. Re-snapshot when you
-> navigated, switched tabs, or need refs for newly created elements.
+> than click the wrong node — it never silently mis-targets. **The boundary, so
+> you can decide without guessing:** a ref survives a re-render that keeps the
+> control's role and accessible name (and, for a nameless control, its value).
+> It does NOT survive a navigation, a tab switch, or a relabelling into a
+> different control — those hard-reset the identity map. So re-snapshot after a
+> navigation or tab switch, and when you need refs for newly rendered elements;
+> not after every DOM churn.
 
 > **Hard rule: snapshot-first, never screenshot-to-locate.** For form fields and
 > buttons, ALWAYS `snapshot -i` and act on refs/selectors. Do **not** reach for
@@ -116,11 +121,17 @@ transient relay drops — usually just retry the command.
 Chrome tab group + dedicated daemon and drives only tabs it created or explicitly
 adopted, so
 concurrent agents share one real Chrome without cross-talk and never touch
-unadopted user tabs; an unset session auto-derives a stable per-agent name from supported
-runner IDs, including Codex's `CODEX_THREAD_ID`. Other runners can set
-`AGENT_BROWSER_SESSION_ID`. The derived name is `cu-<repo>-<tag>`; a command run
-from another directory reuses the live daemon carrying the same agent tag, so
-tabs and refs survive `cd` (explicit `--session` still wins). `adopt
+unadopted user tabs. With no `--session` / `AGENT_BROWSER_SESSION`, the name is
+derived as `cu-<repo>-<tag>`, where `<tag>` hashes the first of these that is
+set: an **agent** id (`AGENT_BROWSER_SESSION_ID`, `OPENCODE_PID`,
+`CODEX_THREAD_ID`, `CMUX_SURFACE_ID`, `CMUX_CLAUDE_PID`, `CLAUDE_PID`), then a
+conventionally-named one, then a **terminal** id (`TERM_SESSION_ID`,
+`ITERM_SESSION_ID`, `TMUX_PANE`, `WT_SESSION`, …) — agent ids outrank terminal
+ids, because two agents in one terminal tab share the terminal's. With none of
+them set it falls back to the shared `default`. A command run from another
+directory reuses the live daemon carrying the same tag, so tabs and refs survive
+`cd` (explicit `--session` still wins). `chrome-use doctor` prints the name and
+the variable it was keyed on. `adopt
 <url|targetId>` drives a pre-existing tab on demand; OAuth/SSO popups and
 cross-process redirects are followed automatically.
 
@@ -138,8 +149,11 @@ You have a **real Chrome with the user's DOM**. Two layers, mix them freely:
 
 1. **Structured** (`snapshot` + `@ref`, `find`, typed actions) — convenient and
    readable; best for straightforward forms and navigation. But the a11y view is
-   *lossy and fragile*: refs go stale on any change, hidden inputs never show up,
-   overlays can block coordinate clicks.
+   *lossy*: hidden inputs never show up, overlays can block coordinate clicks, and
+   anything a page paints instead of exposing (canvas, an unlabelled custom
+   control) is not in it. Refs themselves are sturdier than that list suggests —
+   see [the self-heal rule](#the-core-loop) above for exactly when one survives
+   and when you must re-snapshot.
 2. **eval-first** (`chrome-use eval "<js>"`) — your eyes and hands on the real
    DOM: read hidden inputs, reach into Shadow DOM / iframes, inspect
    `form.elements` and `.validity`, extract the exact shape you want, or call
@@ -951,6 +965,17 @@ user for the tab. It's **zero-impact until you call `handoff`** — the agent ow
 and drives every session by default, autonomous login included. Check state with
 `chrome-use session status`; `chrome-use session list` shows every session's owner.
 Never call `session resume` on your own to grab control back — wait for the user.
+A handed-off session is also **never reaped by the idle timer** — the window the
+human is working in stays open however long they take.
+
+Every other session's launched browser *is* closed after the daemon sits idle
+(`AGENT_BROWSER_IDLE_TIMEOUT_MS`, default `600000`; set `0` to keep it). If that
+happens, the next command launches a fresh browser rather than failing — and
+says so in a warning. Read it: the new window is empty, so a half-filled form,
+a logged-in tab, or anything typed into the old window is gone. That warning is
+the difference between "the page navigated away" (it did not) and "the browser
+was replaced" (it was). For a long-running flow with idle gaps, set
+`AGENT_BROWSER_IDLE_TIMEOUT_MS=0` or keep the session busy.
 
 To reclaim daemon workers without restarting every browser connection, use
 `chrome-use session stop [name]` for one session or `chrome-use session prune`
@@ -1223,6 +1248,21 @@ chrome-use snapshot -i
 chrome-use frame main     # back to main frame
 ```
 
+When a click makes a cross-origin frame appear (a payment sheet, an OAuth
+picker, a captcha overlay), the observation after that click reports it as
+`newFrames` with a note — the frame's *content* is not in the tree you just
+got. Follow the note into the frame instead of concluding the click did
+nothing.
+
+**Never target the `<iframe>` element itself.** `focus` and `press` on an
+Iframe ref land on the *container* in the parent document — the keystroke goes
+to the parent page, not to the field inside. That used to read as a plain `✓`
+on the wrong target; it now returns a warning naming the boundary. When you see
+it, go through the frame instead: `chrome-use frames` to list them, then
+`chrome-use frame <id>` and act on a ref *inside* the frame, or
+`chrome-use eval --frame <id> "…"`. Clicking an Iframe ref is the same trap in
+reverse — click the control inside, not the box around it.
+
 ### Viewport / window size (responsive & overflow debugging)
 
 To reproduce width-dependent bugs (responsive breakpoints, horizontal-overflow
@@ -1344,10 +1384,25 @@ such as `eval` still fail while the page main thread is blocked. On reconnect,
 the extension also validates every attached Chrome tab before re-announcing it,
 so dead bootstrap `about:blank` records are dropped instead of becoming active.
 
-If `tab select` reports that the liveness probe did not complete, read the full
-warning before judging the renderer. An outdated or unknown ab-connect version
-can make the probe channel unavailable. `tab inspect` requires ab-connect
-0.5.16 or newer; update or reload it from `chrome://extensions` and retry.
+`tab select` and `tab adopt` report one of three outcomes, and the third is
+not a success:
+
+- `✓ … verified: confirmed` — the liveness probe answered from the new tab.
+  The switch happened; drive it.
+- a warning naming a stale/closed target — the switch failed outright.
+- `⚠ … verified: unconfirmed` — the switch was **requested** but never
+  confirmed. The tab printed under it is what was *asked for*, not what
+  answered. Do not treat the title/URL as a read of the live page.
+
+An unconfirmed switch is not fixed by repeating it: the probe already had its
+turn. Re-open the target instead (`open <url>` / `navigate <url>`). If you do
+retry and the next command fails the same way, the error says so and tells you
+to stop looping. `tab inspect <ref>` reads browser-level target metadata over
+the *browser* connection — it can succeed while driving that tab still fails,
+so a successful inspect is not evidence the tab is drivable. An outdated or
+unknown ab-connect version can also make the probe channel unavailable;
+`tab inspect` requires ab-connect 0.5.16 or newer, so update or reload it from
+`chrome://extensions` and retry.
 
 **Reads landing on the wrong page**
 `eval`, `screenshot`, and `network requests` print the page they ran
