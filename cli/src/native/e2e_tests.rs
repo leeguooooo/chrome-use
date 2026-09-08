@@ -239,6 +239,137 @@ async fn spawn_fake_daemon_socket(
 // Core: launch, navigate, evaluate, url, title, close
 // ---------------------------------------------------------------------------
 
+/// `actions` / `do` end to end against a real page.
+///
+/// The derivation has unit tests, but nothing covered the chain that actually
+/// matters: snapshot mints a ref → the action set is read from the live
+/// accessibility tree → performing one changes the page → the set flips. Each
+/// link has broken independently at some point (`<summary>` had no ref at all;
+/// `--observe` handed out refs that resolved to nothing).
+#[tokio::test]
+#[ignore]
+async fn e2e_accessibility_actions_query_and_perform() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>a11y actions</title>
+<details><summary>Disclosure summary</summary><p>body</p></details>
+<input type="number" min="0" max="10" value="3" aria-label="Qty">
+<a href="#x">Plain link</a>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let tree = get_data(&resp)["snapshot"].as_str().unwrap_or_default();
+
+    let ref_for = |role_marker: &str| -> String {
+        let line = tree
+            .lines()
+            .find(|l| l.contains(role_marker))
+            .unwrap_or_else(|| panic!("no `{role_marker}` in snapshot:\n{tree}"));
+        let start = line.find("ref=").expect("line has a ref") + 4;
+        let rest = &line[start..];
+        let end = rest
+            .find(|c: char| !c.is_alphanumeric())
+            .unwrap_or(rest.len());
+        format!("@{}", &rest[..end])
+    };
+
+    // `<summary>` must be reachable at all — it had no ref before, which made
+    // the flagship "expand a disclosure" case impossible to express.
+    let disclosure = ref_for("DisclosureTriangle");
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "actions", "selector": disclosure }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["actions"], json!(["expand"]));
+
+    // Performing it must change the page, and the set must flip to the opposite.
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "do", "selector": disclosure, "actionName": "expand" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["performed"], "expand");
+    assert_eq!(get_data(&resp)["actionsNow"], json!(["collapse"]));
+    assert!(
+        get_data(&resp).get("warning").is_none(),
+        "a disclosure that really opened must not be flagged as stalled"
+    );
+
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "document.querySelector('details').open" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], json!(true));
+
+    // A range step moves the value, and is never reported as stalled even
+    // though its action set is unchanged.
+    let qty = ref_for("spinbutton");
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "do", "selector": qty, "actionName": "increment" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(get_data(&resp).get("warning").is_none());
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "evaluate", "script": "document.querySelector('input[type=number]').value" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], json!("4"));
+
+    // An action the element does not expose is refused, not attempted.
+    let resp = execute_command(
+        &json!({ "id": "9", "action": "do", "selector": qty, "actionName": "showMenu" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "an unsupported action must fail");
+    let err = resp["error"].as_str().unwrap_or_default();
+    assert!(
+        err.contains("increment"),
+        "the refusal lists what is supported: {err}"
+    );
+
+    // A plain link exposes nothing beyond a click, and says so.
+    let link = ref_for("link \"Plain link\"");
+    let resp = execute_command(
+        &json!({ "id": "10", "action": "actions", "selector": link }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["actions"], json!([]));
+
+    let _ = execute_command(&json!({ "id": "11", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
 #[tokio::test]
 #[ignore]
 async fn e2e_launch_navigate_evaluate_close() {
