@@ -176,7 +176,10 @@ fn session_command_route(sub: Option<&str>) -> SessionCommandRoute {
 /// cannot (no daemon yet, or an older extension), the reply says which tabs the
 /// new name applies to rather than implying it applied to all of them.
 fn run_session_name(session: &str, json_mode: bool, zh: bool) {
-    let requested: Vec<String> = std::env::args().skip_while(|a| a != "name").skip(1).collect();
+    let requested: Vec<String> = std::env::args()
+        .skip_while(|a| a != "name")
+        .skip(1)
+        .collect();
     let requested = requested
         .iter()
         .filter(|a| !a.starts_with("--"))

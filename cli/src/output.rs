@@ -4263,6 +4263,9 @@ Usage: chrome-use skills [subcommand] [options]
 Subcommands:
   list                       List all available skills (default)
   get <name> [name...]       Output a skill's full content
+  get <skill>/<reference>    Output one reference on its own, so the entry
+                             point can stay small without putting detail out
+                             of reach (e.g. `skills get core/waiting`)
   get <name> --full          Include references and templates
   get --all                  Output every skill
   path [name]                Print filesystem path to skill directory

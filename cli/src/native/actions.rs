@@ -3913,7 +3913,11 @@ async fn handle_rename_group(cmd: &Value, state: &mut DaemonState) -> Result<Val
     }
     let result: Value = mgr
         .client
-        .send_command_typed("ABExt.renameGroup", &json!({ "from": from, "to": to }), None)
+        .send_command_typed(
+            "ABExt.renameGroup",
+            &json!({ "from": from, "to": to }),
+            None,
+        )
         .await
         .unwrap_or_else(|e| json!({ "renamed": 0, "reason": e }));
     Ok(result)

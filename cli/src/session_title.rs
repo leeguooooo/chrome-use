@@ -63,7 +63,8 @@ pub fn set_title(session: &str, raw: &str) -> Result<String, String> {
         .ok_or_else(|| "a session name needs at least one visible character".to_string())?;
     let path = title_path(session);
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     std::fs::write(&path, &title).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     Ok(title)
