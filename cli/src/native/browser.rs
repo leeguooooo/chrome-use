@@ -166,10 +166,22 @@ fn validate_lightpanda_options(options: &LaunchOptions) -> Result<(), String> {
 
 /// Returns true for Chrome internal targets that should not be selected
 /// during auto-connect (e.g. chrome://, chrome-extension://, devtools://).
-fn is_internal_chrome_target(url: &str) -> bool {
-    url.starts_with("chrome://")
-        || url.starts_with("chrome-extension://")
-        || url.starts_with("devtools://")
+///
+/// Also the test for "a driven web tab can never have navigated here", used
+/// when deciding whether a session that answered from an unexpected url was
+/// pinned to a page it cannot leave or had simply redirected. Matching is
+/// case-insensitive and tolerates surrounding space, because the url comes back
+/// from the page rather than from us.
+pub(crate) fn is_internal_chrome_target(url: &str) -> bool {
+    const INTERNAL: &[&str] = &[
+        "chrome://",
+        "chrome-extension://",
+        "chrome-untrusted://",
+        "devtools://",
+        "edge://",
+    ];
+    let lowered = url.trim().to_ascii_lowercase();
+    INTERNAL.iter().any(|prefix| lowered.starts_with(prefix))
 }
 
 pub(crate) fn should_track_target(target: &TargetInfo) -> bool {

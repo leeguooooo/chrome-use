@@ -3765,7 +3765,6 @@ mod tests {
         assert!(!descriptor_is_iframe("textarea[name=\"q\"]"));
     }
 
-    #[test]
     /// The descriptor is built from page-controlled `id`/`name` and printed to a
     /// terminal. An escape sequence in it could repaint the warning line.
     #[test]
