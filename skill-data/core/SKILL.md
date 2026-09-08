@@ -47,6 +47,8 @@ single reference unless you genuinely need the whole set.
 
 ## The core loop
 
+Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or heading-bearing groups. It preserves local text such as product prices without changing accessible names or refs. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
+
 Check `observed.status` as well as the action result. An unavailable observation
 does not mean the action failed; inspect current state instead of replaying it.
 

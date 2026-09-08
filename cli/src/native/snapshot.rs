@@ -2033,6 +2033,80 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
     (tree_nodes, root_indices)
 }
 
+/// Recover short, local text lost by interactive filtering without changing
+/// accessible names or ref identity. Never cross a nested item boundary or
+/// walk an unbounded subtree merely to annotate one control.
+fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
+    if !is_interactive_role(&nodes[idx].role) {
+        return None;
+    }
+    let mut parent = nodes[idx].parent_idx;
+    for _ in 0..4 {
+        let root = parent?;
+        let node = &nodes[root];
+        if matches!(
+            node.role.as_str(),
+            "RootWebArea" | "WebArea" | "dialog" | "document"
+        ) {
+            return None;
+        }
+        parent = node.parent_idx;
+        if !matches!(
+            node.role.as_str(),
+            "article" | "listitem" | "row" | "group" | "generic"
+        ) {
+            continue;
+        }
+        let semantic = matches!(node.role.as_str(), "article" | "listitem" | "row");
+        let mut pending: Vec<usize> = node.children.iter().rev().copied().collect();
+        let mut visited = 0;
+        let mut headings = 0;
+        let mut text = Vec::new();
+        while let Some(child) = pending.pop() {
+            visited += 1;
+            if visited > 64 {
+                return None;
+            }
+            let n = &nodes[child];
+            if matches!(n.role.as_str(), "article" | "listitem" | "row") {
+                // An outer container must not mix sibling products or rows.
+                return None;
+            }
+            if is_interactive_role(&n.role) {
+                continue;
+            }
+            if n.role == "heading" {
+                headings += 1;
+                if headings > 1 {
+                    return None;
+                }
+            }
+            if matches!(n.role.as_str(), "heading" | "StaticText") && !n.name.trim().is_empty() {
+                let value = n.name.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !text.contains(&value) {
+                    text.push(value);
+                }
+            } else {
+                pending.extend(n.children.iter().rev().copied());
+            }
+        }
+        if (!semantic && headings == 0) || text.is_empty() {
+            continue;
+        }
+        let mut context = text.join(" | ");
+        if context.len() > 256 {
+            let mut end = 256;
+            while !context.is_char_boundary(end) {
+                end -= 1;
+            }
+            context.truncate(end);
+            context.push_str(" [truncated]");
+        }
+        return Some(context);
+    }
+    None
+}
+
 fn render_tree(
     nodes: &[TreeNode],
     idx: usize,
@@ -2129,6 +2203,14 @@ fn render_tree(
 
     if let Some(ref ref_id) = node.ref_id {
         attrs.push(format!("ref={}", ref_id));
+    }
+
+    if options.interactive {
+        if let Some(context) = control_context(nodes, idx) {
+            if let Ok(encoded) = serde_json::to_string(&context) {
+                attrs.push(format!("context={}", encoded));
+            }
+        }
     }
 
     // Top-layer marker (issue #90): distinguishes controls inside the open
@@ -2807,6 +2889,66 @@ mod tests {
         node.name = name.to_string();
         node.backend_node_id = backend_node_id;
         node
+    }
+
+    #[test]
+    fn control_context_keeps_price_in_its_own_card() {
+        let mut nodes = vec![
+            make_node("RootWebArea", "", None),
+            make_node("article", "", None),
+            make_node("heading", "Folder", None),
+            make_node("StaticText", "Price: $9.00", None),
+            make_node("button", "Add to cart", Some(1)),
+            make_node("article", "", None),
+            make_node("StaticText", "Price: $4.00", None),
+        ];
+        nodes[0].children = vec![1, 5];
+        nodes[1].parent_idx = Some(0);
+        nodes[1].children = vec![2, 3, 4];
+        nodes[4].parent_idx = Some(1);
+        nodes[5].children = vec![6];
+        assert_eq!(
+            control_context(&nodes, 4).as_deref(),
+            Some("Folder | Price: $9.00")
+        );
+        assert_eq!(nodes[4].name, "Add to cart");
+        // A page-wide wrapper cannot combine two independent cards.
+        nodes[4].parent_idx = Some(0);
+        assert_eq!(control_context(&nodes, 4), None);
+    }
+
+    #[test]
+    fn control_context_rejects_ambiguous_generic_groups() {
+        let mut nodes = vec![
+            make_node("generic", "", None),
+            make_node("heading", "Folder", None),
+            make_node("StaticText", "$9.00", None),
+            make_node("button", "Buy", Some(1)),
+            make_node("heading", "Notebook", None),
+        ];
+        nodes[0].children = vec![1, 2, 3];
+        nodes[3].parent_idx = Some(0);
+        assert_eq!(
+            control_context(&nodes, 3).as_deref(),
+            Some("Folder | $9.00")
+        );
+        nodes[0].children.push(4);
+        assert_eq!(control_context(&nodes, 3), None);
+    }
+
+    #[test]
+    fn control_context_bounds_text_and_subtree_work() {
+        let mut nodes = vec![
+            make_node("article", "", None),
+            make_node("StaticText", &"字".repeat(200), None),
+            make_node("button", "Buy", Some(1)),
+        ];
+        nodes[0].children = vec![1, 2];
+        nodes[2].parent_idx = Some(0);
+        let text = control_context(&nodes, 2).unwrap();
+        assert!(text.len() <= 268 && text.ends_with(" [truncated]"));
+        nodes[0].children = vec![1; 65];
+        assert_eq!(control_context(&nodes, 2), None);
     }
 
     fn make_cursor_info(
