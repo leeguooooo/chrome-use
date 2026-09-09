@@ -2745,6 +2745,41 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let clear = rest.contains(&"--clear");
             Ok(json!({ "id": id, "action": "errors", "clear": clear }))
         }
+        // `extension call <namespace.method> [json-args]`: the generic,
+        // allow-listed chrome.* door (ab-connect 0.5.25+). Args are one JSON
+        // value: an array is positional, anything else is the single argument.
+        "extension_call" => {
+            let target = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "extension call".to_string(),
+                usage: "extension call <namespace.method> [json-args]   e.g. extension call tabs.query '{\"active\":true}'",
+            })?;
+            let (namespace, method) = target.split_once('.').ok_or_else(|| ParseError::MissingArguments {
+                context: "extension call".to_string(),
+                usage: "extension call <namespace.method> [json-args]   (the target must be `namespace.method`)",
+            })?;
+            let args: Value = match rest.get(1) {
+                None => json!([]),
+                Some(raw) => {
+                    let v: Value = serde_json::from_str(raw).map_err(|e| ParseError::InvalidValue {
+                        message: format!("extension call: json-args must be valid JSON: {e}"),
+                        usage: "extension call <namespace.method> [json-args]   e.g. extension call tabs.query '{\"active\":true}'",
+                    })?;
+                    if v.is_array() {
+                        v
+                    } else {
+                        json!([v])
+                    }
+                }
+            };
+            Ok(json!({
+                "id": id,
+                "action": "extension_call",
+                "namespace": namespace,
+                "method": method,
+                "args": args,
+            }))
+        }
+        "extension_state" => Ok(json!({ "id": id, "action": "extension_state" })),
         "highlight" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "highlight".to_string(),

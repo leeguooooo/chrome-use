@@ -1749,6 +1749,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "headers" => handle_headers(cmd, state).await,
             "offline" => handle_offline(cmd, state).await,
             "console" => handle_console(cmd, state).await,
+            "extension_call" => handle_extension_call(cmd, state).await,
+            "extension_state" => handle_extension_state(cmd, state).await,
             "errors" => handle_errors(state).await,
             "state_save" => handle_state_save(cmd, state).await,
             "state_load" => handle_state_load(cmd, state).await,
@@ -8764,6 +8766,102 @@ fn move_downloaded_file(source: &std::path::Path, dest: &std::path::Path) -> Res
         })?;
     }
     Ok(())
+}
+
+/// Capability names the extension announced in its `hello`, as the relay holds
+/// them. Empty when not on the relay or when the question cannot be answered.
+async fn relay_capabilities(mgr: &BrowserManager) -> Vec<String> {
+    if !mgr.on_relay() {
+        return Vec::new();
+    }
+    mgr.client
+        .send_command_no_params("ABRelay.getCapabilities", None)
+        .await
+        .ok()
+        .and_then(|value| value.get("capabilities").and_then(Value::as_array).cloned())
+        .map(|caps| {
+            caps.iter()
+                .filter_map(|c| c.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The generic-call policy version the extension implements, if any: the
+/// `call:<policy>` capability from `hello`.
+fn generic_call_policy(capabilities: &[String]) -> Option<&str> {
+    capabilities
+        .iter()
+        .find_map(|c| c.strip_prefix("call:"))
+}
+
+const GENERIC_CALL_MIN_EXTENSION_VERSION: &str = "0.5.25";
+
+fn generic_call_unsupported(what: &str) -> String {
+    format!(
+        "{what} requires ab-connect {GENERIC_CALL_MIN_EXTENSION_VERSION} or newer (the extension \
+         did not announce the `call` capability). Update it from chrome://extensions and retry; \
+         `chrome-use extension status` shows the installed and the store version."
+    )
+}
+
+/// `extension call <namespace.method> [json-args]`: forward one allow-listed
+/// chrome.* call to the extension. The allow-list and the ownership gate live
+/// in the extension (api-passthrough.js); this side only makes sure an older
+/// extension answers with an update instruction instead of Chrome's own
+/// "'ABExt.call' wasn't found".
+async fn handle_extension_call(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    if !mgr.on_relay() {
+        return Err("extension call only works over the extension relay (the session is on a direct CDP connection)".to_string());
+    }
+    let caps = relay_capabilities(mgr).await;
+    let policy = generic_call_policy(&caps).ok_or_else(|| generic_call_unsupported("extension call"))?;
+    let params = json!({
+        "namespace": cmd.get("namespace").and_then(Value::as_str).unwrap_or(""),
+        "method": cmd.get("method").and_then(Value::as_str).unwrap_or(""),
+        "args": cmd.get("args").cloned().unwrap_or_else(|| json!([])),
+    });
+    let out = mgr
+        .client
+        .send_command("ABExt.call", Some(params), None)
+        .await
+        .map_err(|e| {
+            let lower = e.to_lowercase();
+            if lower.contains("wasn't found") || lower.contains("method not found") {
+                generic_call_unsupported("extension call")
+            } else {
+                e
+            }
+        })?;
+    Ok(json!({
+        "policy": policy,
+        "result": out.get("result").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+/// `extension state`: everything the extension knows about what it holds,
+/// owns and how it is configured, in one round trip.
+async fn handle_extension_state(_cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    if !mgr.on_relay() {
+        return Err("extension state only works over the extension relay (the session is on a direct CDP connection)".to_string());
+    }
+    let caps = relay_capabilities(mgr).await;
+    if !caps.iter().any(|c| c == "state") {
+        return Err(generic_call_unsupported("extension state"));
+    }
+    mgr.client
+        .send_command_no_params("ABExt.state", None)
+        .await
+        .map_err(|e| {
+            let lower = e.to_lowercase();
+            if lower.contains("wasn't found") || lower.contains("method not found") {
+                generic_call_unsupported("extension state")
+            } else {
+                e
+            }
+        })
 }
 
 async fn relay_supports_downloads(mgr: &BrowserManager) -> bool {
