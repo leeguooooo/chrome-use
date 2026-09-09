@@ -4087,6 +4087,36 @@ pub(crate) fn action_stalled(
     }
 }
 
+/// Whether the accessibility state can decide, after the fact, that this action
+/// did what it was asked to do.
+///
+/// Only expand/collapse can: afterwards the element must offer the opposite
+/// action. For everything else the state after a success and the state after a
+/// no-op are the same, so `action_stalled` returning `false` means "cannot
+/// tell", not "it worked" — and a plain ✓ would turn the first into the second.
+/// `showMenu` is the case that motivated saying so: a menu drawn outside the
+/// page, or a component that opens on `mousedown` and closes again on `click`,
+/// leaves no trace in the tree either way (issue #230).
+pub(crate) fn action_outcome_is_decidable(chosen: super::snapshot::SecondaryAction) -> bool {
+    use super::snapshot::SecondaryAction as A;
+    matches!(chosen, A::Expand | A::Collapse)
+}
+
+/// What to tell the caller when the outcome cannot be decided from the tree.
+pub(crate) fn unconfirmable_action_note(
+    chosen: super::snapshot::SecondaryAction,
+    role: &str,
+    name: &str,
+) -> String {
+    format!(
+        "`{}` was dispatched to [{role} \"{name}\"], but the accessibility state cannot \
+         confirm the result: it looks the same whether the control responded or ignored the \
+         click. Read the page (`snapshot -i`, or the action with `--observe`) before treating \
+         this as done.",
+        chosen.as_str()
+    )
+}
+
 /// `do <@ref> <action>` — perform one of the actions the element actually
 /// exposes.
 ///
@@ -4178,6 +4208,9 @@ async fn handle_do_action(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     // opposite action. When it still offers the same one, the control did not
     // move, and a bare ✓ would be exactly the silent success this command
     // exists to avoid.
+    // Three outcomes, not two: it moved, it did not move, or the tree cannot
+    // say. The third used to render as the first (#230).
+    let decidable = action_outcome_is_decidable(chosen);
     let mut warning = None;
     if let Some(ref now) = after_actions {
         if action_stalled(chosen, now) {
@@ -4192,17 +4225,28 @@ async fn handle_do_action(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         }
     }
 
+    // `confirmed` is the field to branch on, and it is deliberately tri-state:
+    // true (the tree shows it moved), false (the tree shows it did not), null
+    // (the tree cannot say for this action). Callers that treat null as true
+    // are back to the silent success this command exists to avoid.
+    let confirmed = match (&after_actions, decidable) {
+        (Some(_), true) => Some(!warning.is_some()),
+        _ => None,
+    };
     let mut out = json!({
         "ref": selector,
         "role": role,
         "name": name,
         "performed": chosen.as_str(),
+        "confirmed": confirmed,
         "actionsNow": after_actions
             .as_ref()
             .map(|a| a.iter().map(|x| x.as_str()).collect::<Vec<_>>()),
     });
     if let Some(w) = warning {
         out["warning"] = json!(w);
+    } else if confirmed.is_none() {
+        out["note"] = json!(unconfirmable_action_note(chosen, &role, &name));
     }
     Ok(out)
 }
@@ -15975,6 +16019,38 @@ mod tests {
         let normal = pinned_tab_note("t1", "https://app.example.com/form");
         assert!(normal.contains("the pin did not move"), "{normal}");
         assert!(normal.contains("https://app.example.com/form"), "{normal}");
+    }
+
+    /// Only expand/collapse can be judged from the tree. For the rest,
+    /// `action_stalled` returning false means "cannot tell" — reporting that as
+    /// success is the shape this whole command exists to avoid (#230).
+    #[test]
+    fn only_expand_and_collapse_have_a_decidable_outcome() {
+        use super::super::snapshot::SecondaryAction as A;
+        assert!(action_outcome_is_decidable(A::Expand));
+        assert!(action_outcome_is_decidable(A::Collapse));
+        for a in [A::ShowMenu, A::Toggle, A::Increment, A::Decrement] {
+            assert!(!action_outcome_is_decidable(a), "{a:?} is not decidable");
+            assert!(!action_stalled(a, &[a]), "{a:?}");
+        }
+    }
+
+    /// The note has to say what was done and what to do next; "unknown" on its
+    /// own would just move the guessing to the caller.
+    #[test]
+    fn the_unconfirmable_note_names_the_action_and_a_way_to_check() {
+        let n = unconfirmable_action_note(
+            super::super::snapshot::SecondaryAction::ShowMenu,
+            "button",
+            "More",
+        );
+        assert!(n.contains("showMenu"), "{n}");
+        assert!(n.contains("button \"More\""), "{n}");
+        assert!(
+            n.contains("cannot \\\n         confirm") || n.contains("cannot confirm"),
+            "{n}"
+        );
+        assert!(n.contains("snapshot -i"), "{n}");
     }
 
     /// Increment/decrement leave the action set unchanged even when they work
