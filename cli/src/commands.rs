@@ -730,10 +730,24 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "commitEnter": commit_enter, "clear": clear, "delay": delay,
                 }));
             }
-            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
-                context: "type".to_string(),
-                usage: type_usage,
-            })?;
+            // A lone argument used to become the SELECTOR with empty text, so
+            // `type "12491249"` went looking for an element called `12491249`
+            // and failed with "selector matched nothing in the page DOM" — a
+            // hint that sends the reader hunting for a label instead of telling
+            // them the command shape is wrong (issue #280). Both parts are
+            // required; typing nothing into something is not a thing to do.
+            if rest.len() < 2 {
+                return Err(ParseError::MissingArguments {
+                    context: match rest.first() {
+                        Some(only) => format!(
+                            "type: got one argument ('{only}') but needs a target AND the text.                              If '{only}' is the text you want typed, name where it goes                              (`type <selector|@ref> \"{only}\"`) or type into the focused                              element (`type --focused \"{only}\"`)"
+                        ),
+                        None => "type".to_string(),
+                    },
+                    usage: type_usage,
+                });
+            }
+            let sel = rest[0];
             Ok(
                 json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" "), "keyEvents": key_events, "commitEnter": commit_enter, "clear": clear, "delay": delay }),
             )
@@ -8460,5 +8474,33 @@ mod tests {
         let cmd = parse_command(&args("wait 500"), &default_flags()).unwrap();
         assert_eq!(cmd["timeout"], 500);
         assert!(cmd.get("selector").is_none());
+    }
+
+    /// A lone argument used to become the selector with empty text, so
+    /// `type "12491249"` reported "selector matched nothing" and sent the
+    /// reader hunting for a label that never existed (#280).
+    #[test]
+    fn type_with_only_one_argument_is_a_usage_error_not_a_selector_miss() {
+        let err = parse_command(&["type".into(), "12491249".into()], &default_flags())
+            .expect_err("one argument cannot be both target and text");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("12491249"), "{msg}");
+        assert!(
+            msg.contains("--focused"),
+            "must offer the no-selector form: {msg}"
+        );
+        assert!(!msg.contains("matched nothing"), "{msg}");
+    }
+
+    /// Two arguments stay the ordinary shape.
+    #[test]
+    fn type_with_a_target_and_text_still_parses() {
+        let cmd = parse_command(
+            &["type".into(), "#q".into(), "hello".into()],
+            &default_flags(),
+        )
+        .expect("selector + text");
+        assert_eq!(cmd["selector"], "#q");
+        assert_eq!(cmd["text"], "hello");
     }
 }

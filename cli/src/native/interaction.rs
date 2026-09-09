@@ -1010,9 +1010,90 @@ pub async fn fill(
         }
     }
 
-    verify_fill_value(client, &effective_session_id, &object_id, value, &engine).await?;
+    // A control whose `onFocus` resets its own state wipes what we just wrote.
+    // The fill path deliberately blurs (so blur-triggered validation and
+    // lookups run) and then restores focus (#167) — and that restore is what
+    // re-fires `onFocus`. On a hand-rolled combobox that clears its query on
+    // focus, the value is gone by the time we read it back (issue #280).
+    //
+    // So: one re-apply, without touching focus, and then the SAME verification.
+    // Nothing is reported as filled that the field does not actually hold.
+    if let Err(first) =
+        verify_fill_value(client, &effective_session_id, &object_id, value, &engine).await
+    {
+        if !value.is_empty() && first.contains("read back an empty value") {
+            let reapplied = reapply_value_without_focus_change(
+                client,
+                &effective_session_id,
+                &object_id,
+                value,
+            )
+            .await
+            .is_ok();
+            if !reapplied {
+                return Err(first);
+            }
+            verify_fill_value(client, &effective_session_id, &object_id, value, &engine).await?;
+            // Say which path produced the value: a control that needed this is
+            // one whose focus handler fights writes, and the caller may need to
+            // know that before pressing Enter into it.
+            return Ok(format!("{engine}+refocus-reset"));
+        }
+        return Err(first);
+    }
 
     Ok(engine)
+}
+
+/// Write the value once more with the native setter, firing `input`/`change`
+/// and leaving focus exactly where it is.
+///
+/// Deliberately no blur and no focus restore: those already ran once, and
+/// repeating them is what erased the value in the first place.
+async fn reapply_value_without_focus_change(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    value: &str,
+) -> Result<(), String> {
+    let js = format!(
+        r#"function() {{
+            const el = this;
+            const v = {v};
+            const tag = el.tagName;
+            if (tag !== 'INPUT' && tag !== 'TEXTAREA') {{
+                el.textContent = v;
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                return true;
+            }}
+            const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
+                                             : window.HTMLInputElement.prototype;
+            const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+            if (desc && desc.set) {{ desc.set.call(el, v); }} else {{ el.value = v; }}
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            return true;
+        }}"#,
+        v = serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string()),
+    );
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: js,
+                object_id: Some(object_id.to_string()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(ex) = result.exception_details {
+        return Err(ex.text);
+    }
+    Ok(())
 }
 
 async fn fill_monaco_via_clipboard(
