@@ -3139,6 +3139,13 @@ mod tests {
         nodes[1].children = vec![2, 5];
         nodes[2].children = vec![3, 4];
         nodes[5].children = vec![6, 7];
+        nodes[1].parent_idx = Some(0);
+        nodes[2].parent_idx = Some(1);
+        nodes[3].parent_idx = Some(2);
+        nodes[4].parent_idx = Some(2);
+        nodes[5].parent_idx = Some(1);
+        nodes[6].parent_idx = Some(5);
+        nodes[7].parent_idx = Some(5);
         nodes[4].ref_id = Some("e1".to_string());
         nodes[7].ref_id = Some("e2".to_string());
 
@@ -3166,6 +3173,9 @@ mod tests {
         ];
         nodes[0].children = vec![1];
         nodes[1].children = vec![2, 3];
+        nodes[1].parent_idx = Some(0);
+        nodes[2].parent_idx = Some(1);
+        nodes[3].parent_idx = Some(1);
         nodes[3].ref_id = Some("e1".to_string());
         assert_eq!(disambiguating_context(&nodes, 3), None);
     }
@@ -3188,6 +3198,13 @@ mod tests {
         nodes[1].children = vec![2, 5];
         nodes[2].children = vec![3, 4];
         nodes[5].children = vec![6, 7];
+        nodes[1].parent_idx = Some(0);
+        nodes[2].parent_idx = Some(1);
+        nodes[3].parent_idx = Some(2);
+        nodes[4].parent_idx = Some(2);
+        nodes[5].parent_idx = Some(1);
+        nodes[6].parent_idx = Some(5);
+        nodes[7].parent_idx = Some(5);
         nodes[4].ref_id = Some("e1".to_string());
         nodes[7].ref_id = Some("e2".to_string());
         assert_eq!(disambiguating_context(&nodes, 4), None);
@@ -3207,6 +3224,10 @@ mod tests {
         ];
         nodes[0].children = vec![1];
         nodes[1].children = vec![2, 3, 4];
+        nodes[1].parent_idx = Some(0);
+        nodes[2].parent_idx = Some(1);
+        nodes[3].parent_idx = Some(1);
+        nodes[4].parent_idx = Some(1);
         nodes[3].ref_id = Some("e1".to_string());
         nodes[4].ref_id = Some("e2".to_string());
         assert_eq!(disambiguating_context(&nodes, 3), None);

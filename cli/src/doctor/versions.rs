@@ -53,11 +53,14 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                         Status::Warn,
                         format!("extension {ext} is behind the published {store}"),
                     )
-                    .with_fix(
-                        "update ab-connect in Chrome: chrome://extensions \u{2192} \
-                         Developer mode \u{2192} Update (or reload the unpacked build)"
-                            .to_string(),
-                    ),
+                    // Advice a policy-installed user cannot follow is worse
+                    // than none: their extension row has no update control at
+                    // all, which reads as "chrome-use took my ability to
+                    // upgrade away".
+                    .with_fix(format!(
+                        "update ab-connect: {}",
+                        connect::update_instruction()
+                    )),
                 ),
                 connect::ExtVersionVerdict::NewestPublished { store } => checks.push(Check::new(
                     "versions.extension",
