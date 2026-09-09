@@ -90,7 +90,18 @@ fn embedded_skills_root() -> Option<PathBuf> {
         .join("chrome-use")
         .join(concat!("skills-", env!("CARGO_PKG_VERSION")));
     let marker = base.join(".extracted");
-    if !marker.exists() {
+    // The version alone is not the cache key: a rebuild at the same version
+    // (a dev build, a release candidate) with different skill content would
+    // keep serving whatever was extracted first, and a reference added in
+    // that build reads as "No reference 'x' in skill 'core'". Fingerprint the
+    // embedded content too, and re-extract when it differs.
+    let fingerprint = embedded_fingerprint();
+    let stale = match fs::read_to_string(&marker) {
+        Ok(existing) => existing.trim() != fingerprint,
+        Err(_) => true,
+    };
+    if stale {
+        let _ = fs::remove_dir_all(&base);
         let _ = fs::create_dir_all(base.join("skills"));
         let _ = fs::create_dir_all(base.join("skill-data"));
         if EMBEDDED_SKILLS.extract(base.join("skills")).is_err()
@@ -100,9 +111,27 @@ fn embedded_skills_root() -> Option<PathBuf> {
         {
             return None;
         }
-        let _ = fs::write(&marker, env!("CARGO_PKG_VERSION"));
+        let _ = fs::write(&marker, &fingerprint);
     }
     base.join("skills").is_dir().then_some(base)
+}
+
+/// Version plus a cheap digest of the embedded skill trees (file count and
+/// total bytes). Walks the in-memory `Dir`, so it costs no I/O.
+fn embedded_fingerprint() -> String {
+    fn walk(dir: &Dir, files: &mut usize, bytes: &mut usize) {
+        for f in dir.files() {
+            *files += 1;
+            *bytes += f.contents().len();
+        }
+        for d in dir.dirs() {
+            walk(d, files, bytes);
+        }
+    }
+    let (mut files, mut bytes) = (0usize, 0usize);
+    walk(&EMBEDDED_SKILLS, &mut files, &mut bytes);
+    walk(&EMBEDDED_SKILL_DATA, &mut files, &mut bytes);
+    format!("{}:{files}:{bytes}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Collect all skill directories to search, respecting the env var override.
