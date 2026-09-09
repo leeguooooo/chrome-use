@@ -2963,7 +2963,15 @@ fn main() {
                                 // approval — so this is where the rule offer
                                 // belongs. Reaching the generic tail instead
                                 // would have dropped it without a word.
-                                if let Some((request, host)) = &remember_request {
+                                //
+                                // Still gated on the confirmed command actually
+                                // working: approving a navigation that then
+                                // fails must not produce a rule for a site that
+                                // never opened, which is the same mistake in a
+                                // later place.
+                                if let (true, Some((request, host))) =
+                                    (r.success, &remember_request)
+                                {
                                     send_remember_request(
                                         request,
                                         host,
@@ -3531,5 +3539,27 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("macOS-only"), "{err}");
+    }
+    /// `--browser`'s value looks exactly like a url to the scanner that picks
+    /// the target (no leading dash, contains a dot), so the two have to be read
+    /// together: `clean_args` drops it because `--browser` takes a value, and
+    /// only then is the first dot-bearing argument really the site.
+    ///
+    /// Tested as one property rather than two, because each half is correct on
+    /// its own and the bug would live in the seam — `open --browser
+    /// leo@gmail.com https://github.com/` writing a rule for gmail.com.
+    #[test]
+    fn a_browser_selector_is_never_mistaken_for_the_target_url() {
+        let raw = argv(&[
+            "open",
+            "--browser",
+            "leo@gmail.com",
+            "https://github.com/leeguooooo",
+        ]);
+        let clean = crate::flags::clean_args(&raw);
+        assert_eq!(
+            target_url_for_choosebrowser(&clean).as_deref(),
+            Some("https://github.com/leeguooooo")
+        );
     }
 }
