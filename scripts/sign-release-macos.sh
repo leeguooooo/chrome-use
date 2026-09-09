@@ -7,12 +7,14 @@
 # same job from a machine that already holds the key, so the key never leaves
 # it.
 #
-# What signing buys (measured, not assumed): an ad-hoc signature does NOT
-# survive being copied — macOS then SIGKILLs the process as soon as it spawns a
-# thread, which surfaces as a daemon dying with rc=137. A Developer ID
-# signature survives. Notarization additionally flips `spctl -a` from
-# `rejected` to `accepted / source=Notarized Developer ID`, which is what a
+# What signing buys (measured): `spctl -a` goes from `rejected` to
+# `accepted / source=Notarized Developer ID`, which is what a
 # browser-downloaded (quarantined) copy is checked against.
+#
+# What it does NOT fix: the rc=137 SIGKILL seen when replacing an installed
+# binary. That comes from overwriting a file some process is executing, and
+# happens regardless of signature — `mv` (rename) is safe, `cp` over the same
+# path is not. This comment previously claimed the opposite.
 #
 # Usage:
 #   scripts/sign-release-macos.sh v1.5.113                # sign + notarize + re-upload
