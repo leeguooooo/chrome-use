@@ -501,6 +501,12 @@ pub fn remember_url(host: &str, path: Option<&str>, key: &str) -> Option<String>
         "&target={}",
         encode_query_value(&format!("com.google.Chrome::profile::{key}"))
     ));
+    // Who is asking, so the dialog can say so. ChooseBrowser shows it as
+    // "an app calling itself chrome-use" — macOS does not authenticate the
+    // sender of a url scheme, so the name is a courtesy, not a credential.
+    // Letters, digits, `-_. ` only, ≤40 chars; anything else drops the whole
+    // request, which is why this is a constant and not a caller-supplied value.
+    url.push_str("&source=chrome-use");
     Some(url)
 }
 
@@ -866,12 +872,16 @@ mod tests {
             portable_key_for_email(&state, "Work@Example.COM").expect("key for a known account");
         let url = remember_url("github.com", None, &key).expect("a valid request");
 
-        // Pull the target back out the way ChooseBrowser would.
-        let target = url
-            .split("&target=")
-            .nth(1)
-            .expect("target parameter")
-            .to_string();
+        // Pull the target back out the way ChooseBrowser would: as one
+        // decoded query parameter, not a substring. (A naive `split` here once
+        // swallowed the `&source=` that follows it — which is exactly the kind
+        // of seam this test exists to catch.)
+        let parsed = url::Url::parse(&url).expect("a parseable url");
+        let target = parsed
+            .query_pairs()
+            .find(|(k, _)| k == "target")
+            .map(|(_, v)| v.into_owned())
+            .expect("target parameter");
         let read_key = parse_chrome_profile_key(&target).expect("a chrome profile target");
         assert_eq!(
             resolve_profile_directory(&state, &read_key).map(|p| p.directory),

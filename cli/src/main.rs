@@ -3430,7 +3430,8 @@ mod tests {
         assert_eq!(
             url,
             "choosebrowser://remember?domain=github.com\
-             &target=com.google.Chrome::profile::103695396640962395023"
+             &target=com.google.Chrome::profile::103695396640962395023\
+             &source=chrome-use"
                 .replace(' ', "")
         );
     }
