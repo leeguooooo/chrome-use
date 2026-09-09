@@ -702,12 +702,17 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         }
         if let Some(done) = data.get("performed").and_then(|v| v.as_str()) {
             let r = data.get("ref").and_then(|v| v.as_str()).unwrap_or("");
-            // A stalled expand/collapse must not wear a plain ✓.
+            // Three marks for three outcomes: ✓ confirmed, ⚠ confirmed-stalled,
+            // and · dispatched-but-unconfirmable. A plain ✓ on the third would
+            // say the menu opened when nothing here knows that (#230).
             let stalled = data.get("warning").and_then(|v| v.as_str());
+            let unconfirmable = data.get("note").and_then(|v| v.as_str());
             let mark = if stalled.is_some() {
-                color::warning_indicator()
+                color::warning_indicator().to_string()
+            } else if unconfirmable.is_some() {
+                color::dim("·")
             } else {
-                color::success_indicator()
+                color::success_indicator().to_string()
             };
             println!("{} {} on {}", mark, done, r);
             if let Some(now) = data.get("actionsNow").and_then(|v| v.as_array()) {
@@ -726,6 +731,8 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             }
             if let Some(w) = stalled {
                 eprintln!("{} {}", color::warning_indicator(), w);
+            } else if let Some(n) = unconfirmable {
+                eprintln!("{} {}", color::dim("·"), n);
             }
             return;
         }

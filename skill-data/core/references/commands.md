@@ -90,6 +90,13 @@ value range, `toggle` for a pressable control. `do` refuses anything outside tha
 set rather than doing something adjacent, and reports the set again afterwards so a
 control that refused to move does not read as success.
 
+**Only `expand`/`collapse` can be confirmed afterwards**, because the element must
+then offer the opposite action. For `showMenu`, `toggle`, `increment` and
+`decrement` the tree looks the same whether the control responded or ignored the
+click, so `do` marks those `·` instead of `✓` and sets `confirmed: null` in JSON
+— dispatched, outcome unknown. Read the page before treating one as done. Do not
+read `confirmed: null` as success.
+
 ## Interactions (use @refs from snapshot)
 
 ```bash
