@@ -4719,6 +4719,10 @@ Options:
                              (run `chrome-use browsers` to list; for multi-profile
                              relay setups). Sticky per session.
   --no-choosebrowser         Ignore ChooseBrowser's site rules for this command.
+  --remember                 With an explicit --browser, ask ChooseBrowser to route this
+                             site to that profile from now on. macOS + ChooseBrowser only.
+                             Asks — ChooseBrowser shows a dialog and nothing is saved
+                             until you confirm there.
                              When that app is installed, `open <url>` without an
                              explicit --browser follows the rule the user already
                              wrote for that site. Nothing happens either way if

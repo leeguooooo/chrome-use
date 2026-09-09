@@ -87,6 +87,50 @@ written by then.
 This applies with more force when the mechanism belongs to someone else's
 system, where you have no way to be corrected by a failing test.
 
+## The cheapest checks are the ones that get skipped
+
+Every verification skipped on this codebase so far has been one of the cheap
+ones: adding a line of `eprintln!`, scrolling up seventy lines to read a guard
+condition, `ls`-ing two other paths, running `open` on a bogus url scheme. None
+of the expensive verifications were skipped, because an expensive one announces
+itself as necessary.
+
+The reason is not that thirty seconds feels like a lot. It is that a check
+which costs thirty seconds looks like one you could have done in your head —
+so it gets filed under "experience is enough here". But **cheap is correlated
+with ignorant, not with unimportant**: a check is cheap precisely because you
+have no evidence yet, whereas the expensive ones are expensive because a pile
+of evidence already exists and only the last step is missing.
+
+Two consequences:
+
+- Treat "I can just tell" on a thirty-second question as the signal to run it.
+  That reflex is what wrote `Option<String>` for a field the real files carry
+  as a number, and what described one code path as unreachable without reading
+  the `if` seventy lines above it.
+- When something cannot be checked cheaply, that is a design problem worth
+  fixing rather than a fact to work around. `chrome-use doctor`'s ChooseBrowser
+  section exists for this: it collapsed "which of four ways is this silently
+  failing?" from *read the source and run six urls by hand* down to one
+  command. Lower the cost and skipping stops paying.
+
+The most expensive version of this so far: a claim that `--browser` on an
+already-running daemon is silently ignored, made after reading one function
+(`ensure_daemon_with_lifecycle_lock` does ignore `opts.cdp`) and not the
+`launch` command the CLI sends right afterwards. It was filed as an issue, and
+another agent then listed it as the top risk in a handoff document. Two
+commands against a debug build showed the daemon rebinding and exiting 1.
+A conclusion that has been written down travels; check it before it does.
+
+And be careful about concluding you *cannot* check something. "Only the other
+side can test the four states" was stated here as a fact and used to divide up
+work — it was wrong, because `dirs::home_dir()` honours `$HOME` and a temporary
+directory reproduces all four. That is worse than skipping a check: it is
+skipping one and then handing the consequence to somebody else.
+
+(The framing in this section came from the ChooseBrowser side of the
+integration work, not from here.)
+
 ## Measuring performance
 
 Three separate wrong conclusions came out of careless measurement here, and each

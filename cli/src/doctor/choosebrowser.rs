@@ -14,6 +14,7 @@ use super::{Check, Status};
 use crate::choosebrowser;
 
 pub(super) fn check(checks: &mut Vec<Check>) {
+    check_app(checks);
     let category = "ChooseBrowser rules";
     let d = choosebrowser::diagnose();
 
@@ -33,7 +34,9 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 "no rules file — profile selection is unaffected",
             )
             .with_fix(format!(
-                "if you do use ChooseBrowser, its rules are not in any path this build reads: {}",
+                "if you do use ChooseBrowser, its rules are not in any path this build reads: {}. \
+                 The shared copy only appears after the first save on ChooseBrowser 0.2.1+; \
+                 nothing needs fixing until then",
                 looked.join(", ")
             )),
         );
@@ -83,4 +86,127 @@ pub(super) fn check(checks: &mut Vec<Check>) {
             ));
         }
     }
+
+    // Two truths, and we picked one. A file in a later path is not being
+    // read, but something may still be writing to it — a downgrade to a build
+    // that uses the old location, or a half-finished migration — in which case
+    // every url routes by whichever copy stopped changing. Not a failure, so
+    // not a warning; but it is exactly the kind of thing the silent path
+    // cannot say for itself.
+    let shadowed: Vec<String> = d
+        .probed
+        .iter()
+        .filter(|(p, exists)| *exists && p != source)
+        .map(|(p, _)| p.display().to_string())
+        .collect();
+    if !shadowed.is_empty() {
+        checks.push(
+            Check::new(
+                "choosebrowser.rules.shadowed",
+                category,
+                Status::Info,
+                format!(
+                    "another rules file exists and is not being read: {}",
+                    shadowed.join(", ")
+                ),
+            )
+            .with_fix(
+                "only the first path found is read. The Group Containers copy is derived — \
+                 ChooseBrowser 0.2.1+ republishes it on every save — so if the rules in use \
+                 look stale, delete that copy (nothing is lost) and save any rule once in \
+                 ChooseBrowser to republish it",
+            ),
+        );
+    }
 }
+
+/// The app itself: which version, and does it register `choosebrowser://`.
+///
+/// Reported as two facts, not one verdict. `0.2.0 / no` means upgrade;
+/// `0.2.1 / no` means something else (two copies installed, LaunchServices
+/// not refreshed) and "upgrade" would be the wrong advice.
+#[cfg(target_os = "macos")]
+fn check_app(checks: &mut Vec<Check>) {
+    let category = "ChooseBrowser app";
+    // Two copies at the fixed locations means two channels installed (store
+    // and direct-sale, say). LaunchServices picks one of them for links, and it
+    // is not necessarily the one whose settings the user is editing — which
+    // reads as "my rules do not apply". Say it before anything else.
+    let installed: Vec<String> = choosebrowser::app_candidates()
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .map(|p| p.display().to_string())
+        .collect();
+    if installed.len() > 1 {
+        checks.push(
+            Check::new(
+                "choosebrowser.app.duplicates",
+                category,
+                Status::Warn,
+                format!(
+                    "ChooseBrowser is installed twice: {}",
+                    installed.join(" and ")
+                ),
+            )
+            .with_fix(
+                "macOS opens links with one of them, not necessarily the one whose settings you \
+                 edit — remove the copy you do not use",
+            ),
+        );
+    }
+    let Some(app) = choosebrowser::probe_app() else {
+        let looked: Vec<String> = choosebrowser::app_candidates()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        checks.push(Check::new(
+            "choosebrowser.app",
+            category,
+            Status::Info,
+            format!(
+                "not found in {} — --remember has nothing to talk to",
+                looked.join(" or ")
+            ),
+        ));
+        return;
+    };
+    let version = app
+        .version
+        .clone()
+        .unwrap_or_else(|| "unknown version".into());
+    if app.accepts_rule_requests() {
+        checks.push(Check::new(
+            "choosebrowser.app",
+            category,
+            Status::Pass,
+            format!(
+                "ChooseBrowser {version} at {} — accepts rule requests: yes",
+                app.path.display()
+            ),
+        ));
+    } else {
+        checks.push(
+            Check::new(
+                "choosebrowser.app",
+                category,
+                Status::Info,
+                format!(
+                    "ChooseBrowser {version} at {} — accepts rule requests: no (registers: {})",
+                    app.path.display(),
+                    if app.schemes.is_empty() {
+                        "nothing".to_string()
+                    } else {
+                        app.schemes.join(" ")
+                    }
+                ),
+            )
+            .with_fix(format!(
+                "--remember needs ChooseBrowser ≥ {}; reading rules works on any version",
+                choosebrowser::MIN_APP_VERSION_FOR_RULE_REQUESTS
+            )),
+        );
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_app(_checks: &mut Vec<Check>) {}

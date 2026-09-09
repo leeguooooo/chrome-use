@@ -33,6 +33,8 @@ One-time setup:
 
 On macOS, `open` / `goto` / `navigate` can consult existing ChooseBrowser site rules when no explicit connection or browser is selected. The rule must resolve to a connected relay profile. `--browser <id|email>` takes precedence; `--no-choosebrowser` skips rule lookup. Reads are local and do not modify the rules.
 
+To write one back, add `--remember` alongside an explicit `--browser`: after the navigation succeeds it asks ChooseBrowser to route that domain to that profile from now on. It is a request, not a save — ChooseBrowser shows its own dialog and reports no result back, so never tell the user a rule was saved. If `--remember` cannot produce a valid request it refuses before navigating and says why. It needs ChooseBrowser ≥ 0.2.1 (the version that registers the `choosebrowser://` scheme; `chrome-use doctor` reports what is installed); on an older one nothing handles the url and chrome-use says so — no rule is proposed.
+
 If the rule target is unavailable, normal profile selection applies. This fallback does not verify the website account. Check `browsers` and the site's identity, or pin `--browser`, when the task requires a specific account. `click` and `snapshot` do not consult routing rules to move an existing session.
 
 Once installed, plain `chrome-use open <url>` auto-connects through the

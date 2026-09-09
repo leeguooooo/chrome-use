@@ -2773,7 +2773,26 @@ pub fn list_relay_profiles() -> Vec<(String, Option<String>, String)> {
 /// profileId (exact or prefix) or an email substring (case-insensitive).
 /// Returns `Err` with the available list when nothing/ambiguous matches.
 pub fn relay_url_for_browser(selector: &str) -> Result<String, String> {
-    match_browser(&list_relay_profiles(), selector)
+    relay_profile_for_browser(selector).map(|(_, _, ws)| ws)
+}
+
+/// The same resolution, but keeping the profile's identity as well as its
+/// endpoint.
+///
+/// `--remember` needs the *account*, not the socket: a rule is written against
+/// a portable key (a gaia id) that only `Local State` can supply, and email is
+/// the one field both the relay and `Local State` carry. Dropping it here and
+/// re-resolving later would mean matching the selector twice and possibly
+/// landing on a different profile the second time.
+pub fn relay_profile_for_browser(
+    selector: &str,
+) -> Result<(String, Option<String>, String), String> {
+    let profiles = list_relay_profiles();
+    let ws = match_browser(&profiles, selector)?;
+    profiles
+        .into_iter()
+        .find(|(_, _, w)| *w == ws)
+        .ok_or_else(|| format!("--browser: could not identify the profile behind '{selector}'"))
 }
 
 /// Pure selector→ws-url resolution (separated from the filesystem read so it can

@@ -202,6 +202,129 @@ fn target_url_for_choosebrowser(argv: &[String]) -> Option<String> {
     url::Url::parse(&normalized).ok().map(|u| u.to_string())
 }
 
+/// Turn a `--remember` invocation into the request to hand ChooseBrowser, or
+/// into the reason it cannot be one.
+///
+/// Every check lives here, before the navigation runs, because ChooseBrowser
+/// drops a malformed request **without showing a dialog** — so a mistake caught
+/// later would look exactly like the user declining to save. The one thing this
+/// feature must never do is stay quiet about not working.
+///
+/// Returns the `choosebrowser://` url plus the host it is about, for the line
+/// the user sees.
+///
+/// `on_macos` is a parameter rather than a `cfg!` so the platform refusal is
+/// testable — and so the other checks stay reachable on a Linux CI runner,
+/// which a `cfg!` made them not: every test hit the platform branch instead of
+/// what it meant to exercise.
+fn remember_request(
+    argv: &[String],
+    browser_selector: Option<&str>,
+    no_choosebrowser: bool,
+    profile_email: Option<&str>,
+    local_state: Option<&str>,
+    on_macos: bool,
+) -> Result<(String, String), String> {
+    if !on_macos {
+        return Err(
+            "--remember needs ChooseBrowser, which is macOS-only. Nothing was recorded.".into(),
+        );
+    }
+    if no_choosebrowser {
+        return Err(
+            "--remember and --no-choosebrowser ask for opposite things — one writes a \
+             ChooseBrowser rule, the other ignores them. Drop whichever you did not mean."
+                .into(),
+        );
+    }
+    // Deliberately explicit-only. Remembering the profile *we* guessed would
+    // turn one inference into a permanent rule the user never stated.
+    let Some(selector) = browser_selector else {
+        return Err(
+            "--remember records which Chrome profile a site belongs to, so it needs \
+             you to name one: add --browser <id|email>. Run `chrome-use browsers` for the list."
+                .into(),
+        );
+    };
+    let verb = argv.first().map(String::as_str).unwrap_or("");
+    let Some(url) = target_url_for_choosebrowser(argv) else {
+        return Err(format!(
+            "--remember applies to a command that opens a url — `open`, `goto` or `navigate`. \
+             `{verb}` acts on whatever the session already has open, so there is no site to \
+             write a rule for."
+        ));
+    };
+    let host = url::Url::parse(&url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .ok_or_else(|| format!("--remember: could not read a hostname out of '{url}'."))?;
+
+    // The relay knows a profile by uuid; ChooseBrowser writes a gaia id. Email
+    // is the only field both sides carry, so a profile that never granted the
+    // extension's `identity` permission cannot be named in a rule at all.
+    let Some(email) = profile_email.map(str::trim).filter(|e| !e.is_empty()) else {
+        return Err(format!(
+            "--remember: --browser '{selector}' matched a connected profile with no signed-in \
+             account, and a rule has to point at an account. Grant the ab-connect extension \
+             the identity permission in that profile, or add the rule in ChooseBrowser directly."
+        ));
+    };
+    let Some(local_state) = local_state else {
+        return Err(
+            "--remember: could not read Chrome's profile registry (Local State), which \
+             is where the portable profile key comes from."
+                .into(),
+        );
+    };
+    let Some(key) = choosebrowser::portable_key_for_email(local_state, email) else {
+        return Err(format!(
+            "--remember: '{email}' is not in Chrome's profile registry on this machine, so \
+             there is no stable key to write into a rule. Add the rule in ChooseBrowser directly."
+        ));
+    };
+    // Domain-only on purpose: a rule scoped to the exact path this command
+    // happened to open would stop applying on the next page of the same site.
+    let Some(request) = choosebrowser::remember_url(&host, None, &key) else {
+        return Err(format!(
+            "--remember: '{host}' is not a plain hostname, and ChooseBrowser drops a request \
+             it cannot parse without telling anyone. Add the rule in ChooseBrowser directly."
+        ));
+    };
+    Ok((request, host))
+}
+
+/// Hand the request to ChooseBrowser and say what was — and was not — done.
+///
+/// `open` exiting 0 means the url reached a handler, nothing more. There is no
+/// success callback by design, so the wording stops at "asked": the user reads
+/// the outcome off ChooseBrowser's own dialog.
+fn send_remember_request(request: &str, host: &str, profile: &str) {
+    let launched = std::process::Command::new("/usr/bin/open")
+        .arg(request)
+        .status();
+    match launched {
+        Ok(st) if st.success() => eprintln!(
+            "{} asked ChooseBrowser to route {} to {} from now on — confirm in its dialog. \
+             Nothing is saved unless you do.",
+            color::dim("·"),
+            host,
+            profile,
+        ),
+        // A non-zero exit means no application claimed `choosebrowser://`.
+        // That is the common case today, not an edge case: the ChooseBrowser
+        // builds in the store register only http/https, and the scheme ships in
+        // a later version. So "is it installed?" would be the wrong question
+        // for most people who see this — they have it, just not that version.
+        Ok(_) | Err(_) => eprintln!(
+            "{} --remember: nothing on this Mac handles choosebrowser:// urls, so no rule was \
+             proposed for {host}. ChooseBrowser is either not installed or older than {} — \
+             update it, or add the rule in ChooseBrowser directly.",
+            color::warning_indicator(),
+            choosebrowser::MIN_APP_VERSION_FOR_RULE_REQUESTS,
+        ),
+    }
+}
+
 fn run_session_name(session: &str, json_mode: bool, zh: bool) {
     let requested: Vec<String> = std::env::args()
         .skip_while(|a| a != "name")
@@ -1895,9 +2018,11 @@ fn main() {
     // (a different session can pick a different profile — no global state, so
     // concurrent agents don't fight). To switch a *running* session's profile,
     // start a fresh `--session` (or close it first).
+    let mut browser_email: Option<String> = None;
     if let Some(sel) = flags.browser.clone() {
-        match connect::relay_url_for_browser(&sel) {
-            Ok(url) => {
+        match connect::relay_profile_for_browser(&sel) {
+            Ok((_, email, url)) => {
+                browser_email = email;
                 flags.cdp = Some(url);
                 flags.auto_connect = false;
             }
@@ -1995,6 +2120,29 @@ fn main() {
             }
         }
     }
+
+    // `--remember` (issue #244, write-back): resolve the whole request NOW, while
+    // nothing has happened yet. Everything it needs is already known here, and a
+    // failure discovered after the page has opened would be a confusing half-done
+    // command. Validated but not sent — it is sent only if the navigation works.
+    let remember_request = if flags.remember {
+        match remember_request(
+            &clean,
+            flags.browser.as_deref(),
+            flags.no_choosebrowser,
+            browser_email.as_deref(),
+            choosebrowser::read_local_state().as_deref(),
+            cfg!(target_os = "macos"),
+        ) {
+            Ok(req) => Some(req),
+            Err(msg) => {
+                eprintln!("{} {msg}", color::error_indicator());
+                exit(1);
+            }
+        }
+    } else {
+        None
+    };
 
     // Handle daemon management (doesn't talk to a daemon — it manages them).
     if clean.first().map(|s| s.as_str()) == Some("daemon") {
@@ -2821,6 +2969,17 @@ fn main() {
                 }
             }
             let success = resp.success;
+            // A gated action reports `success: true` while it is still only
+            // *pending* — the page has not been opened. `--remember` must not
+            // treat that as a navigation that happened, and must not be dropped
+            // when the user does approve it, so both paths are handled below
+            // rather than left to the generic tail.
+            let awaiting_confirmation = resp
+                .data
+                .as_ref()
+                .and_then(|d| d.get("confirmation_required"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             // Handle interactive confirmation
             if flags.confirm_interactive {
                 if let Some(data) = &resp.data {
@@ -2864,6 +3023,25 @@ fn main() {
                                     exit(1);
                                 }
                                 print_response_with_opts(&r, None, &output_opts);
+                                // The navigation only happened here, after the
+                                // approval — so this is where the rule offer
+                                // belongs. Reaching the generic tail instead
+                                // would have dropped it without a word.
+                                //
+                                // Still gated on the confirmed command actually
+                                // working: approving a navigation that then
+                                // fails must not produce a rule for a site that
+                                // never opened, which is the same mistake in a
+                                // later place.
+                                if let (true, Some((request, host))) =
+                                    (r.success, &remember_request)
+                                {
+                                    send_remember_request(
+                                        request,
+                                        host,
+                                        browser_email.as_deref().unwrap_or("that profile"),
+                                    );
+                                }
                             }
                             Err(e) => {
                                 eprintln!("{} {}", color::error_indicator(), e);
@@ -2895,6 +3073,26 @@ fn main() {
             }
             if !success {
                 exit(1);
+            }
+            // Only now, and only on a navigation that actually ran: a rule
+            // saying "this site belongs to that profile" is worth nothing if the
+            // site would not open there, and an action still waiting for
+            // confirmation has not opened anything yet.
+            if let Some((request, host)) = &remember_request {
+                if awaiting_confirmation {
+                    eprintln!(
+                        "{} --remember: this navigation is waiting for confirmation, so no rule \
+                         was proposed. Run `chrome-use confirm <id>` and repeat the command with \
+                         --remember once it goes through.",
+                        color::warning_indicator(),
+                    );
+                } else {
+                    send_remember_request(
+                        request,
+                        host,
+                        browser_email.as_deref().unwrap_or("that profile"),
+                    );
+                }
             }
         }
         Err(e) => {
@@ -3266,6 +3464,168 @@ mod tests {
         let mut cli_true_cmd = json!({ "action": "launch" });
         apply_hide_scrollbars_launch_option(&mut cli_true_cmd, true, true);
         assert_eq!(cli_true_cmd["hideScrollbars"], true);
+    }
+    // --- `--remember` refusals ------------------------------------------------
+    //
+    // Each of these is a way the request would have been dropped by
+    // ChooseBrowser without a dialog. Showing no dialog is also what declining
+    // looks like, so every one of them has to be caught here and named.
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    const STATE: &str = r#"{"profile":{"info_cache":{
+        "Default": {"gaia_id":"103695396640962395023","user_name":"leo@gmail.com"}
+    }}}"#;
+
+    #[test]
+    fn remember_produces_a_request_for_the_named_profile() {
+        let (url, host) = remember_request(
+            &argv(&["open", "https://github.com/leeguooooo/chrome-use"]),
+            Some("leo@gmail.com"),
+            false,
+            Some("leo@gmail.com"),
+            Some(STATE),
+            true,
+        )
+        .expect("a valid request");
+        assert_eq!(host, "github.com");
+        assert_eq!(
+            url,
+            "choosebrowser://remember?domain=github.com\
+             &target=com.google.Chrome::profile::103695396640962395023\
+             &source=chrome-use"
+                .replace(' ', "")
+        );
+    }
+
+    /// Domain-only by design: scoping the rule to the path this one command
+    /// happened to open would stop it applying on the site's next page.
+    #[test]
+    fn remember_writes_a_domain_rule_not_a_path_one() {
+        let (url, _) = remember_request(
+            &argv(&[
+                "open",
+                "https://github.com/leeguooooo/chrome-use/issues/244",
+            ]),
+            Some("leo@gmail.com"),
+            false,
+            Some("leo@gmail.com"),
+            Some(STATE),
+            true,
+        )
+        .unwrap();
+        assert!(!url.contains("path="), "{url}");
+    }
+
+    /// Remembering a profile the user never named would turn one of our own
+    /// guesses into a permanent rule.
+    #[test]
+    fn remember_needs_an_explicit_browser() {
+        let err = remember_request(
+            &argv(&["open", "https://github.com/"]),
+            None,
+            false,
+            Some("leo@gmail.com"),
+            Some(STATE),
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("--browser"), "{err}");
+    }
+
+    #[test]
+    fn remember_rejects_a_command_that_opens_nothing() {
+        let err = remember_request(
+            &argv(&["snapshot"]),
+            Some("leo@gmail.com"),
+            false,
+            Some("leo@gmail.com"),
+            Some(STATE),
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("snapshot"), "{err}");
+    }
+
+    #[test]
+    fn remember_and_no_choosebrowser_cannot_both_be_meant() {
+        let err = remember_request(
+            &argv(&["open", "https://github.com/"]),
+            Some("leo@gmail.com"),
+            true,
+            Some("leo@gmail.com"),
+            Some(STATE),
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("--no-choosebrowser"), "{err}");
+    }
+
+    /// A profile that never granted the extension's identity permission has no
+    /// email, and email is the only field the relay and Chrome's registry share
+    /// — so there is no way to name it in a rule.
+    #[test]
+    fn remember_refuses_a_profile_with_no_account() {
+        let err = remember_request(
+            &argv(&["open", "https://github.com/"]),
+            Some("27ade1bc"),
+            false,
+            None,
+            Some(STATE),
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("identity"), "{err}");
+
+        let err = remember_request(
+            &argv(&["open", "https://github.com/"]),
+            Some("someone@else.test"),
+            false,
+            Some("someone@else.test"),
+            Some(STATE),
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("profile registry"), "{err}");
+    }
+    /// ChooseBrowser is macOS-only, and `/usr/bin/open` is not a url opener
+    /// anywhere else, so the flag has to refuse rather than quietly do nothing.
+    #[test]
+    fn remember_refuses_off_macos() {
+        let err = remember_request(
+            &argv(&["open", "https://github.com/"]),
+            Some("leo@gmail.com"),
+            false,
+            Some("leo@gmail.com"),
+            Some(STATE),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("macOS-only"), "{err}");
+    }
+    /// `--browser`'s value looks exactly like a url to the scanner that picks
+    /// the target (no leading dash, contains a dot), so the two have to be read
+    /// together: `clean_args` drops it because `--browser` takes a value, and
+    /// only then is the first dot-bearing argument really the site.
+    ///
+    /// Tested as one property rather than two, because each half is correct on
+    /// its own and the bug would live in the seam — `open --browser
+    /// leo@gmail.com https://github.com/` writing a rule for gmail.com.
+    #[test]
+    fn a_browser_selector_is_never_mistaken_for_the_target_url() {
+        let raw = argv(&[
+            "open",
+            "--browser",
+            "leo@gmail.com",
+            "https://github.com/leeguooooo",
+        ]);
+        let clean = crate::flags::clean_args(&raw);
+        assert_eq!(
+            target_url_for_choosebrowser(&clean).as_deref(),
+            Some("https://github.com/leeguooooo")
+        );
     }
 
     // --- session stop wording (#256) ------------------------------------------
