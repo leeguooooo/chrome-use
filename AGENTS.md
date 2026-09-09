@@ -114,6 +114,14 @@ Two consequences:
   failing?" from *read the source and run six urls by hand* down to one
   command. Lower the cost and skipping stops paying.
 
+The most expensive version of this so far: a claim that `--browser` on an
+already-running daemon is silently ignored, made after reading one function
+(`ensure_daemon_with_lifecycle_lock` does ignore `opts.cdp`) and not the
+`launch` command the CLI sends right afterwards. It was filed as an issue, and
+another agent then listed it as the top risk in a handoff document. Two
+commands against a debug build showed the daemon rebinding and exiting 1.
+A conclusion that has been written down travels; check it before it does.
+
 And be careful about concluding you *cannot* check something. "Only the other
 side can test the four states" was stated here as a fact and used to divide up
 work — it was wrong, because `dirs::home_dir()` honours `$HOME` and a temporary
