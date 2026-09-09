@@ -555,7 +555,7 @@ pub(crate) fn is_stale_target_error(error: &str) -> bool {
 }
 
 /// A Chrome access decision is not a lost tab and cannot be fixed by reattachment.
-fn is_debugger_access_denied(error: &str) -> bool {
+pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
     lower.contains("debugger_access_denied:")
         || (lower.contains("cannot access a chrome-extension://")
@@ -2507,6 +2507,20 @@ impl BrowserManager {
             removed_index,
             self.pages.len(),
         );
+    }
+
+    /// The tab this session is pinned to, as `(handle, url)` — for saying which
+    /// page a failure was actually about.
+    ///
+    /// A `debugger_access_denied` reads as a permissions bug and gives the
+    /// reader nothing to check (issue #217). Naming the pinned tab and its url
+    /// settles it either way: a `chrome-extension://` url IS the cause, and the
+    /// expected page rules out "the relay followed the user's active tab" and
+    /// sends the next report somewhere useful.
+    pub fn pinned_tab_summary(&self) -> Option<(String, String)> {
+        let pinned = self.active_target_id.as_deref()?;
+        let page = self.pages.iter().find(|p| p.target_id == pinned)?;
+        Some((format_tab_id(page.tab_id), page.url.clone()))
     }
 
     pub fn tab_list(&self) -> Vec<Value> {
