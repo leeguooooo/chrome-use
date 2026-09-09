@@ -1818,6 +1818,57 @@ pub fn store_extension_version() -> Option<String> {
     parse_store_update_version(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The published version, from a cache that expires after twelve hours.
+///
+/// [`store_extension_version`] shells out to `curl` with a 4s budget. That is
+/// fine for `doctor`, which the user ran on purpose, and far too expensive for
+/// anything on a command's path — so callers that want the fact opportunistically
+/// use this. A miss still pays the fetch once; everything for the next twelve
+/// hours is a small file read.
+pub fn cached_store_extension_version() -> Option<String> {
+    let path = relay_url_path().with_file_name("store-ext-version");
+    const TTL: std::time::Duration = std::time::Duration::from_secs(12 * 60 * 60);
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta
+            .modified()
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|age| age < TTL)
+        {
+            let cached = std::fs::read_to_string(&path).ok()?.trim().to_string();
+            // An empty file is a remembered "the lookup failed" — honour the TTL
+            // rather than retrying the network on every failing command.
+            return (!cached.is_empty()).then_some(cached);
+        }
+    }
+    let fetched = store_extension_version();
+    let _ = std::fs::write(&path, fetched.as_deref().unwrap_or(""));
+    fetched
+}
+
+/// One line naming the installed and published extension versions, when the
+/// installed one is genuinely behind something the user can install today.
+///
+/// `None` in every other case, including "we could not ask the store" — being
+/// behind the version this CLI bundles is the normal state for Web Store users
+/// and not a problem to report (#186).
+pub fn outdated_extension_note() -> Option<String> {
+    let live = relay_ext_version()?;
+    let bundled = env!("AB_CONNECT_VERSION");
+    if !crate::upgrade::version_is_newer(bundled, &live) {
+        return None;
+    }
+    match classify_ext_version(&live, bundled, cached_store_extension_version().as_deref()) {
+        ExtVersionVerdict::BehindStore { store } => Some(format!(
+            "\nThe ab-connect extension driving this browser is {live}; the Web Store serves \
+             {store}. Relay failures like this one are what those builds keep fixing, so update \
+             before digging further: chrome://extensions → Developer mode → Update (a reload is \
+             enough for an unpacked build, which never updates itself)."
+        )),
+        _ => None,
+    }
+}
+
 /// Pull `version="x.y.z"` out of the update service's XML response. The
 /// `updatecheck` element carries it; `status="noupdate"`/error responses don't,
 /// and yield `None`.
@@ -3770,5 +3821,27 @@ mod tests {
 
         assert_eq!(status.version.as_deref(), Some("0.5.1"));
         assert_eq!(status.disable_reasons, vec!["4", "permissions_increase"]);
+    }
+
+    /// Only "a newer build exists in the store" is actionable. Being behind the
+    /// bundled build while sitting on the newest published one is the normal
+    /// state for Web Store users, and nagging about it sends people to an
+    /// Update button that does nothing (#186).
+    #[test]
+    fn the_outdated_note_only_fires_when_something_installable_is_newer() {
+        assert!(matches!(
+            classify_ext_version("0.5.20", "0.5.22", Some("0.5.21")),
+            ExtVersionVerdict::BehindStore { .. }
+        ));
+        assert!(!matches!(
+            classify_ext_version("0.5.21", "0.5.22", Some("0.5.21")),
+            ExtVersionVerdict::BehindStore { .. }
+        ));
+        // Store unreachable: we do not know that anything is installable, so
+        // there is nothing honest to say.
+        assert!(!matches!(
+            classify_ext_version("0.5.20", "0.5.22", None),
+            ExtVersionVerdict::BehindStore { .. }
+        ));
     }
 }

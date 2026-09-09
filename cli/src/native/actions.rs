@@ -1953,6 +1953,20 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                     msg.push_str(&note);
                 }
             }
+            // A relay failure on an extension the store has already moved past
+            // is worth saying out loud right here. `doctor` reports it, but the
+            // people it matters to are exactly the ones who never run `doctor`
+            // and never open chrome://extensions — and an unpacked build never
+            // updates itself at all. Only on the failure path: the lookup is
+            // cached for twelve hours and the command has already failed, so it
+            // costs nothing anyone is waiting on.
+            if super::browser::is_debugger_access_denied(&e)
+                || super::browser::is_stale_target_error(&e)
+            {
+                if let Some(note) = crate::connect::outdated_extension_note() {
+                    msg.push_str(&note);
+                }
+            }
             // Say which page the failure was about. Without it a blocked
             // debugger access is indistinguishable from a permissions problem
             // and the reader has nothing to check (#217).
