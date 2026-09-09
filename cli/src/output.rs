@@ -708,11 +708,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             let stalled = data.get("warning").and_then(|v| v.as_str());
             let unconfirmable = data.get("note").and_then(|v| v.as_str());
             let mark = if stalled.is_some() {
-                color::warning_indicator()
+                color::warning_indicator().to_string()
             } else if unconfirmable.is_some() {
                 color::dim("·")
             } else {
-                color::success_indicator()
+                color::success_indicator().to_string()
             };
             println!("{} {} on {}", mark, done, r);
             if let Some(now) = data.get("actionsNow").and_then(|v| v.as_array()) {
