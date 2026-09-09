@@ -111,12 +111,17 @@ jobs:
         if: '!matrix.use_zigbuild'
         run: cargo build --release --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
 
-      # Sign and notarize the macOS binaries. Without this they ship ad-hoc
-      # signed, and an ad-hoc signature does not survive being copied: macOS
-      # then SIGKILLs the process the moment it spawns a thread, which shows up
-      # as a daemon that dies with rc=137 for no visible reason. Every install
-      # that moves the binary (a package manager, `cp` into ~/.local/bin) hits
-      # it. A Developer ID signature survives the copy.
+      # Sign and notarize the macOS binaries. Ad-hoc signed ones are rejected
+      # by `spctl`, so a copy downloaded through a browser (which carries a
+      # quarantine flag) is refused by Gatekeeper. Signed + notarized reports
+      # `accepted / source=Notarized Developer ID`.
+      #
+      # Note for whoever reads this next: the `rc=137` SIGKILL that install
+      # steps sometimes hit is NOT a signature problem. It comes from
+      # overwriting a binary while a process is executing it — `install.sh`
+      # uses `mv` (a rename), which is why it never sees this, and `cp` over
+      # the same path is what fails. Measured, after this comment first said
+      # otherwise.
       #
       # Skipped, not failed, when the secrets are absent: a fork building a tag
       # has no certificate, and an unsigned build is still a usable build.
