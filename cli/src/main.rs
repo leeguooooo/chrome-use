@@ -2905,6 +2905,17 @@ fn main() {
                 }
             }
             let success = resp.success;
+            // A gated action reports `success: true` while it is still only
+            // *pending* — the page has not been opened. `--remember` must not
+            // treat that as a navigation that happened, and must not be dropped
+            // when the user does approve it, so both paths are handled below
+            // rather than left to the generic tail.
+            let awaiting_confirmation = resp
+                .data
+                .as_ref()
+                .and_then(|d| d.get("confirmation_required"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             // Handle interactive confirmation
             if flags.confirm_interactive {
                 if let Some(data) = &resp.data {
@@ -2948,6 +2959,17 @@ fn main() {
                                     exit(1);
                                 }
                                 print_response_with_opts(&r, None, &output_opts);
+                                // The navigation only happened here, after the
+                                // approval — so this is where the rule offer
+                                // belongs. Reaching the generic tail instead
+                                // would have dropped it without a word.
+                                if let Some((request, host)) = &remember_request {
+                                    send_remember_request(
+                                        request,
+                                        host,
+                                        browser_email.as_deref().unwrap_or("that profile"),
+                                    );
+                                }
                             }
                             Err(e) => {
                                 eprintln!("{} {}", color::error_indicator(), e);
@@ -2980,14 +3002,25 @@ fn main() {
             if !success {
                 exit(1);
             }
-            // Only now, and only on success: a rule saying "this site belongs to
-            // that profile" is worth nothing if the site would not open there.
+            // Only now, and only on a navigation that actually ran: a rule
+            // saying "this site belongs to that profile" is worth nothing if the
+            // site would not open there, and an action still waiting for
+            // confirmation has not opened anything yet.
             if let Some((request, host)) = &remember_request {
-                send_remember_request(
-                    request,
-                    host,
-                    flags.browser.as_deref().unwrap_or("that profile"),
-                );
+                if awaiting_confirmation {
+                    eprintln!(
+                        "{} --remember: this navigation is waiting for confirmation, so no rule \
+                         was proposed. Run `chrome-use confirm <id>` and repeat the command with \
+                         --remember once it goes through.",
+                        color::warning_indicator(),
+                    );
+                } else {
+                    send_remember_request(
+                        request,
+                        host,
+                        browser_email.as_deref().unwrap_or("that profile"),
+                    );
+                }
             }
         }
         Err(e) => {
