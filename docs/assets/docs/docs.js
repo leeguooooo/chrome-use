@@ -102,6 +102,7 @@
       { slug: "login-auth",  ico: "🔐", zh: "登录与凭证", en: "Login & Credentials", kw: "login auth password 2fa 登录 凭证" },
       { slug: "sessions",    ico: "💾", zh: "会话与持久化", en: "Sessions & Persistence", kw: "session persist cookie profile 会话 持久化" },
       { slug: "real-chrome", ico: "🌐", zh: "驱动真实 Chrome", en: "Real Chrome (Extension)", kw: "real chrome extension native messaging 真实 扩展" },
+      { slug: "choosebrowser", ico: "🧭", zh: "多 profile 路由：ChooseBrowser", en: "Multi-profile Routing: ChooseBrowser", kw: "choosebrowser profile router rules remember browser picker macos 多账号 profile 路由 规则 选择器" },
       { slug: "stealth",     ico: "🥷", zh: "反检测与隐身", en: "Stealth & Anti-detection", kw: "stealth anti-detection antibot cloudflare creepjs humanize 反检测 隐身 封号 指纹 bot" },
     ]},
     { id: "advanced", label: { zh: "进阶", en: "Advanced" }, items: [

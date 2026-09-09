@@ -45,7 +45,7 @@ chrome-use points **any** agent (Claude Code, Cursor, Codex, your own scripts) a
 | Real-browser fingerprint (CreepJS ~0%)¹ | ❌ automation markers / headless | ✅ | ✅ | ✅ **verified 0%** |
 | **No `Runtime.enable` CDP leak** (rebrowser)² | ❌ leaks | ❌ leaks | — | ✅ **off by default** |
 | Many agents on **one** real Chrome, isolated tab groups³ | ❌ separate browsers | ⚠️ shared tabs, no isolation | ❌ single app | ✅ |
-| Permissions footprint | full control | full CDP | 16 incl. `<all_urls>` | **7, no `<all_urls>`** |
+| Permissions footprint | full control | full CDP | 16 incl. `<all_urls>` | **12, no `<all_urls>`** |
 
 <sub>¹ All three real-Chrome tools score ~0% on CreepJS (it's a real browser); we've measured ours. ² rebrowser's `runtimeEnableLeak`: verified clean on our relay path; Claude in Chrome not independently tested (—). ³ web-access can run parallel sub-agents on one browser, but without per-session isolation; each `--session` here gets its own colored, command-isolated tab group. See [Anti-detection](#anti-detection) for the measured numbers.</sub>
 
@@ -155,9 +155,20 @@ $ chrome-use open https://github.com/my-org/repo
   --no-choosebrowser.
 ```
 
-Read-only, and invisible if you do not use it: no rules file means no behaviour change and no message. A rule naming a profile that is not running the extension falls back to the normal profile choice. That fallback does not verify the site account; check its identity or pin `--browser` when a specific account is required.
+Read-only, and invisible if you do not use it: no rules file means no behaviour change and no message. A rule naming a profile that is not running the extension falls back to the normal profile choice. That fallback does not verify the site account; check its identity or pin `--browser` when a specific account is required. Add `--remember` to an explicit `--browser` and chrome-use asks ChooseBrowser to write the rule back, behind its own confirmation dialog.
 
-> **Disclosure:** ChooseBrowser is a paid macOS app (US$4.99, 7-day trial) by the same author as chrome-use. This is a companion-tool note, not an independent review. chrome-use needs none of it.
+<a href="https://choosebrowser.leeguoo.com"><img src="docs/assets/choosebrowser-profiles-en.jpg" alt="ChooseBrowser: every Chrome profile gets a row" width="640" align="right"></a>
+
+**ChooseBrowser** is a macOS link router by the chrome-use author. Set it as your default browser once, and every link you click asks which browser, or which Chrome profile, it should open in.
+
+- A row for every profile in Chrome, Edge, Brave, Vivaldi or Chromium; work, personal and client accounts stay apart.
+- Rules that match a path, not just a domain, so one site can route to two browsers.
+- `⌘1`–`⌘9` opens instantly, `⌥↵` teaches it once, and it learns which browser you prefer per site.
+- No accounts, no tracking, no analytics. Optional sync through your own iCloud.
+
+Free for 7 days, then **US$4.99 one-time for up to 3 Macs**. Notarized `.dmg`; macOS 26 or later. [Download](https://choosebrowser.leeguoo.com) · [Full guide](https://chrome-use.leeguoo.com/en/choosebrowser.html). chrome-use does not depend on it.
+
+<br clear="all">
 
 ## Usage
 

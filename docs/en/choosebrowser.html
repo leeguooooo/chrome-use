@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChooseBrowser: every site lands in the right Chrome profile · chrome-use docs</title>
+  <meta name="description" content="ChooseBrowser is the macOS link router by the chrome-use author: a row for every Chrome profile, rules that match a path, and it learns your preference. With it installed, chrome-use open picks the right account by itself and --remember writes a rule back. 7-day trial, US$4.99 one-time." />
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+  <meta property="og:title" content="ChooseBrowser: every site lands in the right Chrome profile" />
+  <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/choosebrowser-profiles-en.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+  <style>
+    .cb-hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 28px; align-items: center; margin: 22px 0 8px; }
+    .cb-hero img { width: 100%; border-radius: 14px; border: 2px solid var(--line-ink); box-shadow: var(--shadow-lift); }
+    .cb-hero-copy h2 { margin-top: 0; }
+    .cb-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0 6px; }
+    .cb-actions a { text-decoration: none; }
+    .cb-price { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0; }
+    .cb-price div { padding: 16px 18px; border: 2px solid var(--line-ink); border-radius: 14px; background: var(--paper); }
+    .cb-price strong { display: block; font-size: 22px; margin-bottom: 4px; }
+    .cb-fine { color: var(--ink-2, #6b6b6b); font-size: 13px; }
+    @media (max-width: 820px) { .cb-hero, .cb-price { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body data-page="choosebrowser" data-lang="en">
+  <div id="du-topbar"></div>
+  <div class="du-shell">
+    <nav id="du-sidebar"></nav>
+    <main class="du-main">
+
+      <p class="du-eyebrow">Sessions &amp; Auth</p>
+      <div class="du-title-row">
+        <h1>ChooseBrowser: every site, in the right account</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Work, personal and client accounts each live in their own Chrome profile, and you already know which site
+        belongs to which. <span class="mark">ChooseBrowser keeps that knowledge</span>: a macOS link router with a row
+        for every profile and rules that can match a path. With it installed, <code>chrome-use open</code> picks the
+        right profile by itself, and an agent never works in the wrong account again.
+      </p>
+
+      <div class="cb-hero">
+        <img src="/assets/choosebrowser-profiles-en.jpg" alt="ChooseBrowser settings: every Chrome profile is its own row in the picker" loading="eager" />
+        <div class="cb-hero-copy">
+          <h2>Every link asks first</h2>
+          <p>
+            Set it as your default browser once. From then on, a link clicked in Mail, Messages, Slack or any other app
+            opens a compact picker listing every browser on your Mac and every Chrome profile. Click one, or press
+            <code>⌘1</code>–<code>⌘9</code>, and the link opens there.
+          </p>
+          <p>
+            Press <code>⌥↵</code> to teach it once: that site always opens in the browser you chose. Rules can be reviewed
+            or removed any time.
+          </p>
+          <div class="cb-actions">
+            <a class="du-btn-primary" href="https://choosebrowser.leeguoo.com">Download ChooseBrowser, free for 7 days</a>
+            <a class="du-btn-ghost" href="#with-chrome-use">Using it with chrome-use</a>
+          </div>
+        </div>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2 id="with-chrome-use">Why a chrome-use user wants it</h2>
+      <p>
+        chrome-use drives your real, logged-in Chrome. With several profiles, "which one" used to be something you
+        said with <code>--browser</code> on every command, and a wrong guess put the agent in the wrong account.
+        With ChooseBrowser installed, that decision becomes a rule you wrote once:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">a rule picks for you</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/my-org/repo
+<span class="du-cmt">· using Chrome profile Profile 14 — a ChooseBrowser rule routes this site there</span>
+<span class="du-cmt">  (github.com|/my-org*). Override with --browser &lt;id|email&gt;, or skip with --no-choosebrowser.</span>
+
+<span class="du-cmt"># the other way round: you named the profile this time, so write the rule back</span>
+<span class="du-prompt">$</span> chrome-use open https://github.com/my-org/repo <span class="du-flag">--browser</span> work@example.com <span class="du-flag">--remember</span>
+<span class="du-cmt">· asked ChooseBrowser to route github.com to work@example.com from now on — confirm in its dialog.</span></code></pre>
+      </div>
+
+      <div class="du-cards">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🎯</span> The agent stops landing in the wrong account</div>
+          <p>A rule is something you wrote down, so it is consulted before the "most recently focused window" guess. <code>open</code> says which rule it followed.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">✍️</span> Writing a rule back is one flag</div>
+          <p><code>--remember</code> proposes a rule; ChooseBrowser shows a dialog for you to confirm. Nothing is saved unless you do.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🙈</span> Invisible when not installed</div>
+          <p>No rules file means no change in behaviour and no message. <code>--no-choosebrowser</code> skips it for one command.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔍</span> doctor knows about it</div>
+          <p><code>chrome-use doctor</code> reports which version is installed and whether the rules are readable. Needs ChooseBrowser 0.2.1 or later.</p>
+        </div>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>A good browser picker on its own</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">👥</span> Every Chrome profile gets a row</div>
+          <p>After a one-time local setup, each profile in Chrome, Edge, Brave, Vivaldi or Chromium is its own entry in the picker. Work, personal and client accounts stay apart.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🛤️</span> One site, two destinations</div>
+          <p>Rules match the path, not just the domain. <code>github.com/my-org</code> goes to the work profile; the rest of GitHub to the personal one.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🧠</span> It learns</div>
+          <p>Keep choosing the same browser for a site and it moves to the front, with the reason shown. <code>⌘1</code>–<code>⌘9</code> opens instantly; <code>⌘C</code> copies the link without opening anything.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔒</span> No accounts, no tracking, no analytics</div>
+          <p>Rules and preferences stay on your Mac. Optional sync to your other Macs goes through your own iCloud.</p>
+        </div>
+      </div>
+
+      <h3>How it works</h3>
+      <p>
+        ChooseBrowser registers as a handler for http and https links. After you make it your default browser
+        (System Settings › Desktop &amp; Dock › Default web browser), macOS sends every link to it first. It shows the
+        picker, hands the link to the browser you pick, and quits. An optional short countdown can open the obvious
+        choice for you; any key stops it. It lists every installed browser automatically, drag to set the order
+        (which also sets <code>⌘1</code>–<code>⌘9</code>), and apps you never want links in can be hidden and brought back.
+      </p>
+
+      <hr class="du-divider" />
+
+      <h2>Pricing</h2>
+      <div class="cb-price">
+        <div><strong>7 days</strong>free trial, full features</div>
+        <div><strong>US$4.99</strong>one-time purchase, no subscription</div>
+        <div><strong>3 Macs</strong>on one licence</div>
+      </div>
+      <p>
+        Notarized <code>.dmg</code>, direct download. A Mac App Store version is in review. Requires macOS 26 or later.
+      </p>
+      <div class="cb-actions">
+        <a class="du-btn-primary" href="https://choosebrowser.leeguoo.com">Download ChooseBrowser</a>
+        <a class="du-btn-ghost" href="/en/real-chrome.html">Back to Real Chrome</a>
+      </div>
+      <p class="cb-fine">
+        ChooseBrowser and chrome-use are by the same author. chrome-use does not depend on it: without it, everything works as before.
+      </p>
+
+    </main>
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

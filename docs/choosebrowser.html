@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChooseBrowser：让每个站点落在对的 Chrome profile 上 · chrome-use 文档</title>
+  <meta name="description" content="ChooseBrowser 是 chrome-use 作者做的 macOS 链接路由器：每个 Chrome profile 一行、规则可匹配路径、学习你的偏好。装了它，chrome-use open 会自动选对账号，--remember 一条命令写回规则。7 天试用，US$4.99 买断。" />
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+  <meta property="og:title" content="ChooseBrowser：让每个站点落在对的 Chrome profile 上" />
+  <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/choosebrowser-profiles-zh.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+  <style>
+    .cb-hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 28px; align-items: center; margin: 22px 0 8px; }
+    .cb-hero img { width: 100%; border-radius: 14px; border: 2px solid var(--line-ink); box-shadow: var(--shadow-lift); }
+    .cb-hero-copy h2 { margin-top: 0; }
+    .cb-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0 6px; }
+    .cb-actions a { text-decoration: none; }
+    .cb-price { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0; }
+    .cb-price div { padding: 16px 18px; border: 2px solid var(--line-ink); border-radius: 14px; background: var(--paper); }
+    .cb-price strong { display: block; font-size: 22px; margin-bottom: 4px; }
+    .cb-fine { color: var(--ink-2, #6b6b6b); font-size: 13px; }
+    @media (max-width: 820px) { .cb-hero, .cb-price { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body data-page="choosebrowser" data-lang="zh">
+  <div id="du-topbar"></div>
+  <div class="du-shell">
+    <nav id="du-sidebar"></nav>
+    <main class="du-main">
+
+      <p class="du-eyebrow">会话与登录 / Sessions &amp; Auth</p>
+      <div class="du-title-row">
+        <h1>ChooseBrowser：每个站点，落在对的账号上</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        工作、个人、客户的账号各住一个 Chrome profile，你心里清楚哪个站点归谁。
+        <span class="mark">ChooseBrowser 把这份清楚存下来</span>：一个 macOS 链接路由器，每个 profile 一行，
+        规则可以精确到路径。装了它，<code>chrome-use open</code> 自动选对 profile，agent 再也不会在错的账号里干活。
+      </p>
+
+      <div class="cb-hero">
+        <img src="/assets/choosebrowser-profiles-zh.jpg" alt="ChooseBrowser 设置界面：每个 Chrome profile 都是选择器里的一行" loading="eager" />
+        <div class="cb-hero-copy">
+          <h2>先问再开</h2>
+          <p>
+            把它设为默认浏览器，之后从「邮件」「信息」、Slack 或任何 App 点出来的链接都会先弹一个紧凑的选择器，
+            列出这台 Mac 上装的所有浏览器和每一个 Chrome profile。点一下，或者按 <code>⌘1</code>–<code>⌘9</code>，链接就开在那里。
+          </p>
+          <p>
+            按 <code>⌥↵</code> 记住一次，这个站点以后永远走那个浏览器。规则随时能看、能删。
+          </p>
+          <div class="cb-actions">
+            <a class="du-btn-primary" href="https://choosebrowser.leeguoo.com">下载 ChooseBrowser，免费试 7 天</a>
+            <a class="du-btn-ghost" href="#with-chrome-use">和 chrome-use 一起用</a>
+          </div>
+        </div>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2 id="with-chrome-use">为什么 chrome-use 用户会想要它</h2>
+      <p>
+        chrome-use 驱动的是你真实的、已登录的 Chrome。多个 profile 时，「用哪一个」原本要每次用
+        <code>--browser</code> 说一遍，说错了 agent 就在错的账号里操作。ChooseBrowser 装上之后，
+        这个决定变成一条你写过一次的规则：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">规则替你选</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/my-org/repo
+<span class="du-cmt">· using Chrome profile Profile 14 — a ChooseBrowser rule routes this site there</span>
+<span class="du-cmt">  (github.com|/my-org*). Override with --browser &lt;id|email&gt;, or skip with --no-choosebrowser.</span>
+
+<span class="du-cmt"># 反过来：这次显式指定了 profile，顺手把规则写回去</span>
+<span class="du-prompt">$</span> chrome-use open https://github.com/my-org/repo <span class="du-flag">--browser</span> work@example.com <span class="du-flag">--remember</span>
+<span class="du-cmt">· asked ChooseBrowser to route github.com to work@example.com from now on — confirm in its dialog.</span></code></pre>
+      </div>
+
+      <div class="du-cards">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🎯</span> agent 不再进错账号</div>
+          <p>规则是你写下的意图，排在「猜最近聚焦的窗口」之前。<code>open</code> 会说明选择来自哪条规则。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">✍️</span> 写回也只要一个 flag</div>
+          <p><code>--remember</code> 提议一条规则，ChooseBrowser 弹窗让你确认。没点确认，什么都不会存。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🙈</span> 没装就完全无感</div>
+          <p>没有规则文件就不改变任何行为、不打任何提示。<code>--no-choosebrowser</code> 单次跳过。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔍</span> doctor 认得它</div>
+          <p><code>chrome-use doctor</code> 报告装的是哪个版本，以及规则是否可读。需要 ChooseBrowser 0.2.1 或更高。</p>
+        </div>
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>它本身就是一个好用的浏览器选择器</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">👥</span> 每个 Chrome profile 一行</div>
+          <p>一次本地设置后，Chrome、Edge、Brave、Vivaldi、Chromium 的每个 profile 都是选择器里独立的一项。工作、个人、客户账号各走各的。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🛤️</span> 同一网站，两个去向</div>
+          <p>规则可以匹配路径，不只看域名。<code>github.com/my-org</code> 走工作号，其余 GitHub 走个人号。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🧠</span> 它会学</div>
+          <p>同一网站反复选同一个浏览器，它就排到最前，并显示原因。<code>⌘1</code>–<code>⌘9</code> 直接开，<code>⌘C</code> 只复制链接。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔒</span> 无账号、无跟踪、无统计</div>
+          <p>规则和偏好只在这台 Mac 上。想要多台同步，走你自己的 iCloud，可选。</p>
+        </div>
+      </div>
+
+      <h3>它怎么工作</h3>
+      <p>
+        ChooseBrowser 注册为 http 和 https 链接的处理程序。在「系统设置 › 桌面与程序坞 › 默认网页浏览器」把它设为默认后，
+        macOS 会把每个链接先交给它。它显示选择器，把链接交给你选中的浏览器，然后退出。
+        可以开启一个短倒计时，让它自动打开那个显而易见的选择，按任意键即可停下。
+        自动列出所有已安装浏览器；拖动排序即决定 <code>⌘1</code>–<code>⌘9</code> 的顺序；不想出现的 App 可以隐藏，随时再显示。
+      </p>
+
+      <hr class="du-divider" />
+
+      <h2>价格</h2>
+      <div class="cb-price">
+        <div><strong>7 天</strong>免费试用，功能完整</div>
+        <div><strong>US$4.99</strong>一次性买断，不订阅</div>
+        <div><strong>3 台 Mac</strong>一个许可证激活</div>
+      </div>
+      <p>
+        公证过的 <code>.dmg</code> 直接下载。Mac App Store 版本在审核中。需要 macOS 26 或更高版本。
+      </p>
+      <div class="cb-actions">
+        <a class="du-btn-primary" href="https://choosebrowser.leeguoo.com">下载 ChooseBrowser</a>
+        <a class="du-btn-ghost" href="/real-chrome.html">回到「驱动真实 Chrome」</a>
+      </div>
+      <p class="cb-fine">
+        ChooseBrowser 与 chrome-use 出自同一位作者。chrome-use 不依赖它：不装，一切照常。
+      </p>
+
+    </main>
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
