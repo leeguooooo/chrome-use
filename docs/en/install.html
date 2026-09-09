@@ -239,6 +239,22 @@ programs.chrome-use = {
       </div>
 
       <p>
+        <strong>Codex users:</strong> Codex ships its own browser plugin and picks it for browser tasks. Measured on a
+        machine with many skills installed, Codex also trims every skill description to a few characters or none,
+        so the skill's description cannot win the routing, and naming <code>chrome-use</code> in the prompt was not
+        enough either. What worked was one line in the project's <code>AGENTS.md</code>:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">AGENTS.md</span>
+        </div>
+<pre><code>Use the `chrome-use` CLI from the shell for every browser task; start with `chrome-use skills get core`.
+Do not use the built-in Chrome plugin for browser work here.</code></pre>
+      </div>
+
+      <p>
         Either way the AI agent gets the right usage patterns and pre-authorized bash permissions for <code>chrome-use</code> and <code>abs</code>;
         the specialized guides (electron / slack / agentcore / …) are served by the binary itself via <code>chrome-use skills get &lt;name&gt;</code>,
         so they always match the installed version. Once installed, it's worth reading

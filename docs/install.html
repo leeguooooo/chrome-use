@@ -237,6 +237,21 @@ programs.chrome-use = {
       </div>
 
       <p>
+        <strong>Codex 用户注意：</strong>Codex 自带浏览器插件，遇到浏览器任务会优先选它。实测在装了很多技能的机器上，
+        Codex 会把每条技能描述截到几个字符甚至截空，所以技能描述赢不了路由，在提示词里点名
+        <code>chrome-use</code> 也不够。有效的办法是在项目的 <code>AGENTS.md</code> 里写一行：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">AGENTS.md</span>
+        </div>
+<pre><code>Use the `chrome-use` CLI from the shell for every browser task; start with `chrome-use skills get core`.
+Do not use the built-in Chrome plugin for browser work here.</code></pre>
+      </div>
+
+      <p>
         两种装法都让 AI agent 拿到正确的用法模式和对 <code>chrome-use</code>、<code>abs</code> 预授权的 bash 权限；
         专门化指南（electron / slack / agentcore …）由二进制经 <code>chrome-use skills get &lt;name&gt;</code> 提供，
         永远和已装版本一致。装好后建议先读一遍 <a href="/core-loop.html">核心循环</a>。

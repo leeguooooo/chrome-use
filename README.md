@@ -201,6 +201,12 @@ npx skills add leeguooooo/chrome-use -g
 
 > The `install.sh` one-liner above already runs this step for you (opt out with `AGENT_BROWSER_NO_SKILL=1`). Run it by hand only when you skipped the installer or use a non-default agent runner.
 
+> **Codex users:** Codex ships its own browser plugin and picks it for browser tasks. Measured on a machine with many skills installed, Codex also trims every skill description to a few characters (or none), so the skill's description cannot win the routing, and naming `chrome-use` in the prompt was not enough either. What worked was one line in the project's `AGENTS.md`:
+>
+> ```
+> Use the `chrome-use` CLI from the shell for every browser task; start with `chrome-use skills get core`. Do not use the built-in Chrome plugin for browser work here.
+> ```
+
 Either way the agent gets the right usage patterns and pre-approved bash permissions for `chrome-use` and `abs`; the skill self-heals a missing binary by re-running the `install.sh` one-liner above. Specialized guides (`electron`, `slack`, `agentcore`, …) are served by the binary itself via `chrome-use skills get <name>`, so instructions always match the installed version.
 
 Upgrading the binary does **not** move a SKILL.md already copied into a runner — that copy lives outside the binary. Refresh it with `chrome-use skills update` (`refresh` and `install` are the same command; add `--project` to install into `./` instead of globally).
