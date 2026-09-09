@@ -231,17 +231,69 @@ fn report_markdown(agg: &Value) -> String {
     };
     format!(
         "## What happened\n<!-- what you were doing, the exact command, expected vs actual -->\n\n\
-         ## Environment\n- chrome-use: {ver}\n- platform: {os}/{arch}\n<!-- run `chrome-use doctor` and paste its output here if the issue is about connect/send -->\n\n\
-         ## Local friction summary\n_{total} failed command(s) recorded locally (de-identified: command + error category + host only, never full URLs)._\n\n\
-         **By command**\n{by_cmd}\n\n**By category**\n{by_cat}\n\n**By host**\n{by_host}\n",
-        ver = env!("CARGO_PKG_VERSION"),
-        os = std::env::consts::OS,
-        arch = std::env::consts::ARCH,
+         ## Environment\n{env}\n\n\
+         ## Local friction summary\n_{total} failed command(s) recorded locally._\n\n\
+         **By command**\n{by_cmd}\n\n**By category**\n{by_cat}\n\n**By host**\n{by_host}\n\n\
+         ---\n{scope}\n",
+        env = environment_block(),
         total = total,
         by_cmd = list("byCommand"),
         by_cat = list("byCategory"),
         by_host = list("byHost"),
+        scope = REPORT_SCOPE,
     )
+}
+
+/// What the report contains and what it deliberately leaves out.
+///
+/// Stating the boundary is the point, not politeness: a person deciding
+/// whether to paste this into a public issue cannot verify it line by line,
+/// and "de-identified" on its own is a claim they have to take on faith. The
+/// last line is the one that matters most — text redaction says nothing about
+/// pixels, and assuming otherwise is how a token ends up in a screenshot
+/// attached to a public issue (issue #275).
+pub const REPORT_SCOPE: &str = "\
+_Included: chrome-use and extension versions, platform, and per-command failure counts \
+grouped by error category and **host name only**._\n\n\
+_Excluded: full URLs and query strings, page content, form input, cookies, tokens, \
+credentials, and anything about tabs other than the ones that failed. The local log this \
+is built from (`~/.chrome-use/friction.jsonl`) never records them either._\n\n\
+_**Screenshots are not included, and are a separate decision.** If you attach one, nothing \
+above redacts it — check the image yourself for logged-in pages, tokens in the address bar, \
+and other tabs._";
+
+/// Version and connection facts, gathered without touching a page.
+///
+/// The extension version and whether the relay is up are the two things that
+/// explain most reports, and both are already sitting in sidecar files — asking
+/// the user to run `doctor` separately and paste it was one step that mostly
+/// did not happen.
+fn environment_block() -> String {
+    let mut out = format!(
+        "- chrome-use: {}\n- platform: {}/{}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    match crate::connect::relay_ext_version() {
+        Some(v) => out.push_str(&format!(
+            "\n- ab-connect: {v} (bundled with this CLI: {})",
+            env!("AB_CONNECT_VERSION")
+        )),
+        None => out.push_str(&format!(
+            "\n- ab-connect: not connected (this CLI bundles {})",
+            env!("AB_CONNECT_VERSION")
+        )),
+    }
+    out.push_str(&format!(
+        "\n- extension relay: {}",
+        if crate::connect::relay_url().is_some() {
+            "up"
+        } else {
+            "down"
+        }
+    ));
+    out
 }
 
 /// `chrome-use report [--open] [--json]` — OPT-IN. Packages the local friction
@@ -267,7 +319,10 @@ pub fn run_report(args: &[String], json_out: bool) {
     println!("{}", body);
     println!("─────────────────────────────────────────────");
     println!("Copy the block above into a new issue: {ISSUES_NEW_URL}");
-    println!("(Nothing was uploaded. `--open` opens the new-issue page in your browser.)");
+    println!(
+        "(Nothing was uploaded, and `--open` only opens the empty new-issue page — \
+         what gets posted is whatever you paste.)"
+    );
 
     if args.iter().any(|a| a == "--open") {
         let opener = if cfg!(target_os = "macos") {
@@ -284,6 +339,36 @@ pub fn run_report(args: &[String], json_out: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The boundary has to be stated, and the screenshot line has to be its
+    /// own sentence: text redaction says nothing about pixels (#275).
+    #[test]
+    fn the_report_states_what_it_leaves_out() {
+        for excluded in [
+            "full URLs",
+            "cookies",
+            "tokens",
+            "credentials",
+            "form input",
+        ] {
+            assert!(REPORT_SCOPE.contains(excluded), "missing: {excluded}");
+        }
+        assert!(REPORT_SCOPE.contains("Screenshots are not included"));
+        assert!(
+            REPORT_SCOPE.contains("nothing \nabove redacts it")
+                || REPORT_SCOPE.contains("nothing above redacts it")
+        );
+    }
+
+    /// The two facts that explain most reports have to be in the block itself,
+    /// not behind "please also run doctor and paste it".
+    #[test]
+    fn the_environment_block_carries_the_extension_and_relay_state() {
+        let env = environment_block();
+        assert!(env.contains("chrome-use:"), "{env}");
+        assert!(env.contains("ab-connect:"), "{env}");
+        assert!(env.contains("extension relay:"), "{env}");
+    }
 
     #[test]
     fn test_categorize() {
