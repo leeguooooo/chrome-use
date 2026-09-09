@@ -2035,6 +2035,107 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
 /// Recover short, local text lost by interactive filtering without changing
 /// accessible names or ref identity. Never cross a nested item boundary or
 /// walk an unbounded subtree merely to annotate one control.
+/// Context for a control whose name is not unique on the page.
+///
+/// [`control_context`] only speaks for containers it can vouch for — a semantic
+/// `article`/`listitem`/`row`, one with a heading, or a linked product card.
+/// A card header that is just a title and a button matches none of those, so
+/// three cards produced three identical `button "进入"` lines with nothing to
+/// tell them apart, and the caller had to walk the DOM by hand (issue #281).
+///
+/// Duplication is exactly when the risk of adding noise is worth taking: a
+/// unique name needs no help, and an ambiguous one is unusable without it. So
+/// this runs only for repeated (role, name) pairs, and accepts a looser
+/// container — text plus this one control.
+///
+/// The result must actually separate them. If a sibling duplicate would get
+/// the same words, the context has told the reader nothing and is dropped:
+/// a second identical line is worse than a short one.
+fn disambiguating_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
+    let me = &nodes[idx];
+    if me.ref_id.is_none() || me.name.trim().is_empty() || !is_interactive_role(&me.role) {
+        return None;
+    }
+    let twins: Vec<usize> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(j, n)| *j != idx && n.ref_id.is_some() && n.role == me.role && n.name == me.name)
+        .map(|(j, _)| j)
+        .collect();
+    if twins.is_empty() {
+        return None;
+    }
+    let mine = nearest_labelling_text(nodes, idx)?;
+    if twins
+        .iter()
+        .any(|&j| nearest_labelling_text(nodes, j).as_deref() == Some(mine.as_str()))
+    {
+        return None;
+    }
+    Some(mine)
+}
+
+/// Text from the nearest ancestor that holds this control and nothing else
+/// interactive — a card header, a table cell, a labelled row.
+///
+/// Stops at the first such ancestor rather than climbing to the widest one:
+/// the outer grid holds every card, and its text describes all of them equally.
+fn nearest_labelling_text(nodes: &[TreeNode], idx: usize) -> Option<String> {
+    let mut parent = nodes[idx].parent_idx;
+    for _ in 0..4 {
+        let root = parent?;
+        let node = &nodes[root];
+        if matches!(
+            node.role.as_str(),
+            "RootWebArea" | "WebArea" | "dialog" | "document"
+        ) {
+            return None;
+        }
+        parent = node.parent_idx;
+
+        let mut pending: Vec<usize> = node.children.iter().rev().copied().collect();
+        let mut visited = 0;
+        let mut controls = 0;
+        let mut text: Vec<String> = Vec::new();
+        while let Some(child) = pending.pop() {
+            visited += 1;
+            if visited > 64 {
+                return None;
+            }
+            let n = &nodes[child];
+            if is_interactive_role(&n.role) || n.cursor_info.is_some() {
+                controls += 1;
+                // More than this one control means the ancestor covers
+                // several actions, so its text does not belong to ours.
+                if controls > 1 {
+                    break;
+                }
+                continue;
+            }
+            if matches!(n.role.as_str(), "heading" | "StaticText") && !n.name.trim().is_empty() {
+                let value = n.name.split_whitespace().collect::<Vec<_>>().join(" ");
+                // The control's own name is not context for itself.
+                if value != nodes[idx].name && !text.contains(&value) {
+                    text.push(value);
+                }
+            } else {
+                pending.extend(n.children.iter().rev().copied());
+            }
+        }
+        if controls > 1 || text.is_empty() {
+            continue;
+        }
+        let joined = text.join(" | ");
+        let trimmed: String = joined.chars().take(120).collect();
+        return Some(if trimmed.len() < joined.len() {
+            format!("{trimmed} [truncated]")
+        } else {
+            trimmed
+        });
+    }
+    None
+}
+
 fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
     if !is_interactive_role(&nodes[idx].role) {
         return None;
@@ -2294,7 +2395,9 @@ fn render_tree(
     }
 
     if options.interactive {
-        if let Some(context) = control_context(nodes, idx) {
+        if let Some(context) =
+            control_context(nodes, idx).or_else(|| disambiguating_context(nodes, idx))
+        {
             if let Ok(encoded) = serde_json::to_string(&context) {
                 attrs.push(format!("context={}", encoded));
             }
@@ -3015,6 +3118,98 @@ mod tests {
         nodes[1].name = "字".repeat(600);
         let summary = status_summary(&nodes, 0);
         assert!(summary.len() <= 524 && summary.ends_with(" [truncated]"));
+    }
+
+    /// The real shape from #281: a card grid where every card header is just a
+    /// title and one button. `control_context` vouches for none of these
+    /// containers, so three cards rendered three identical `button "进入"`.
+    #[test]
+    fn duplicate_button_names_get_the_text_that_separates_them() {
+        let mut nodes = vec![
+            make_node("RootWebArea", "", None),
+            make_node("generic", "", Some(0)), // grid
+            make_node("generic", "", Some(1)), // card header A
+            make_node("StaticText", "飞行棋", Some(2)),
+            make_node("button", "进入", Some(2)),
+            make_node("generic", "", Some(1)), // card header B
+            make_node("StaticText", "H5 Games", Some(5)),
+            make_node("button", "进入", Some(5)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[1].children = vec![2, 5];
+        nodes[2].children = vec![3, 4];
+        nodes[5].children = vec![6, 7];
+        nodes[4].ref_id = Some("e1".to_string());
+        nodes[7].ref_id = Some("e2".to_string());
+
+        assert_eq!(
+            control_context(&nodes, 4),
+            None,
+            "the plain shape is unchanged"
+        );
+        assert_eq!(disambiguating_context(&nodes, 4).as_deref(), Some("飞行棋"));
+        assert_eq!(
+            disambiguating_context(&nodes, 7).as_deref(),
+            Some("H5 Games")
+        );
+    }
+
+    /// A unique name needs no help — adding context there is pure noise, which
+    /// is why this is gated on duplication rather than applied everywhere.
+    #[test]
+    fn a_unique_name_gets_no_disambiguating_context() {
+        let mut nodes = vec![
+            make_node("RootWebArea", "", None),
+            make_node("generic", "", Some(0)),
+            make_node("StaticText", "飞行棋", Some(1)),
+            make_node("button", "进入", Some(1)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[1].children = vec![2, 3];
+        nodes[3].ref_id = Some("e1".to_string());
+        assert_eq!(disambiguating_context(&nodes, 3), None);
+    }
+
+    /// Context that does not separate them is worse than none: it makes each
+    /// line longer while leaving the reader exactly as stuck.
+    #[test]
+    fn context_that_does_not_distinguish_is_dropped() {
+        let mut nodes = vec![
+            make_node("RootWebArea", "", None),
+            make_node("generic", "", Some(0)),
+            make_node("generic", "", Some(1)),
+            make_node("StaticText", "操作", Some(2)),
+            make_node("button", "删除", Some(2)),
+            make_node("generic", "", Some(1)),
+            make_node("StaticText", "操作", Some(5)),
+            make_node("button", "删除", Some(5)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[1].children = vec![2, 5];
+        nodes[2].children = vec![3, 4];
+        nodes[5].children = vec![6, 7];
+        nodes[4].ref_id = Some("e1".to_string());
+        nodes[7].ref_id = Some("e2".to_string());
+        assert_eq!(disambiguating_context(&nodes, 4), None);
+        assert_eq!(disambiguating_context(&nodes, 7), None);
+    }
+
+    /// An ancestor holding several controls describes all of them equally, so
+    /// its text is not this control's label — climb no further.
+    #[test]
+    fn a_container_with_several_controls_is_not_a_label() {
+        let mut nodes = vec![
+            make_node("RootWebArea", "", None),
+            make_node("generic", "", Some(0)),
+            make_node("StaticText", "工具栏", Some(1)),
+            make_node("button", "保存", Some(1)),
+            make_node("button", "保存", Some(1)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[1].children = vec![2, 3, 4];
+        nodes[3].ref_id = Some("e1".to_string());
+        nodes[4].ref_id = Some("e2".to_string());
+        assert_eq!(disambiguating_context(&nodes, 3), None);
     }
 
     #[test]
