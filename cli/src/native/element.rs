@@ -2012,6 +2012,148 @@ pub async fn get_pierced_text(client: &CdpClient, session_id: &str) -> Result<St
     Ok(out)
 }
 
+/// Why an action that ran left the tree unchanged (issue #274).
+///
+/// "Nothing changed" has at least three causes and they need opposite
+/// responses: the action legitimately changes no visible structure (a toggle
+/// of internal state, a request that has not answered), the action never
+/// reached its target (gone, disabled, covered), or the result is still on its
+/// way. Reporting the tree delta alone makes all three look identical, and a
+/// caller that reads "no change" as failure will retry something that worked.
+///
+/// This runs ONLY when the delta was empty, so it costs nothing on the path
+/// where the action visibly did something. `None` when there is nothing useful
+/// to say — never a guess.
+pub async fn diagnose_unchanged(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Option<Value> {
+    use serde_json::json;
+
+    let resolved = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await;
+    let (object_id, effective_session_id) = match resolved {
+        Ok(v) => v,
+        // The element the action named is not on the page any more. That is a
+        // fact worth reporting: it also means this diagnosis cannot say
+        // whether the action worked before it went.
+        Err(_) => {
+            return Some(json!({
+                "target": "unresolvable",
+                "note": "the element this action named cannot be resolved now — it may have                          been replaced by the very change you are looking for, or it may be                          gone. Re-read the page rather than repeating the action."
+            }))
+        }
+    };
+
+    let func = r#"function() {
+        const el = this;
+        if (!el || !el.getBoundingClientRect) return null;
+        const r = el.getBoundingClientRect();
+        const disabled = !!(el.disabled || el.getAttribute?.('aria-disabled') === 'true');
+        const rendered = r.width > 0 && r.height > 0;
+        const inViewport = rendered && r.bottom > 0 && r.right > 0 &&
+            r.top < (innerHeight || 0) && r.left < (innerWidth || 0);
+        let covering = null;
+        if (inViewport) {
+            const x = r.left + r.width / 2, y = r.top + r.height / 2;
+            const at = document.elementFromPoint(x, y);
+            if (at && at !== el && !el.contains(at) && !at.contains(el)) {
+                const id = at.id ? '#' + at.id : '';
+                const cls = (at.className && typeof at.className === 'string')
+                    ? '.' + at.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
+                covering = (at.tagName || '').toLowerCase() + id + cls;
+            }
+        }
+        return JSON.stringify({ disabled, rendered, inViewport, covering });
+    }"#;
+
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: func.to_string(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await
+        .ok()?;
+    if result.exception_details.is_some() {
+        return None;
+    }
+    let raw = result.result.value.as_ref()?.as_str()?;
+    let probe: Value = serde_json::from_str(raw).ok()?;
+
+    let disabled = probe
+        .get("disabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let rendered = probe
+        .get("rendered")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let in_viewport = probe
+        .get("inViewport")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let covering = probe
+        .get("covering")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    let note = unchanged_note(disabled, rendered, in_viewport, covering);
+    Some(json!({
+        "target": "present",
+        "disabled": disabled,
+        "rendered": rendered,
+        "inViewport": in_viewport,
+        "coveredBy": covering,
+        "note": note,
+    }))
+}
+
+/// The sentence that goes with the probe. Split out so the wording is testable
+/// without a browser, and so each state says something different — "unknown"
+/// repeated four ways would just move the guessing back to the caller.
+pub fn unchanged_note(
+    disabled: bool,
+    rendered: bool,
+    in_viewport: bool,
+    covering: Option<&str>,
+) -> String {
+    if disabled {
+        return "the target is disabled, so the action could not have taken effect. Enable it                 (usually by filling whatever it depends on) and repeat."
+            .to_string();
+    }
+    if !rendered {
+        return "the target has no box (display:none or zero-sized), so nothing could receive                 this action. Re-read the page: the control you want is probably a different                 element now."
+            .to_string();
+    }
+    if let Some(what) = covering {
+        return format!(
+            "the target is covered by <{what}> at its centre, so the action most likely went to              that instead. Dismiss the overlay (a cookie banner, a modal backdrop) and repeat."
+        );
+    }
+    if !in_viewport {
+        return "the target is outside the viewport. The action was still dispatched to it, but                 a page that acts on visibility may have ignored it — `scroll` it into view and                 repeat if nothing happened."
+            .to_string();
+    }
+    "the target is present, enabled and unobstructed — this action legitimately changed nothing      visible, or its result has not arrived yet. Do NOT treat an empty delta as failure; re-read      before repeating anything."
+        .to_string()
+}
+
 pub async fn get_element_attribute(
     client: &CdpClient,
     session_id: &str,
@@ -2506,6 +2648,44 @@ pub async fn get_element_styles(
 
 #[cfg(test)]
 mod tests {
+
+    /// Each state has to say something different and actionable. Four ways of
+    /// saying "unknown" would move the guessing back to the caller, which is
+    /// the thing this diagnosis exists to stop (#274).
+    #[test]
+    fn every_unchanged_state_says_something_different() {
+        let disabled = unchanged_note(true, true, true, None);
+        assert!(disabled.contains("disabled"), "{disabled}");
+
+        let unrendered = unchanged_note(false, false, false, None);
+        assert!(unrendered.contains("no box"), "{unrendered}");
+
+        let covered = unchanged_note(false, true, true, Some("div#cookie-banner"));
+        assert!(covered.contains("div#cookie-banner"), "{covered}");
+        assert!(covered.contains("covered"), "{covered}");
+
+        let offscreen = unchanged_note(false, true, false, None);
+        assert!(offscreen.contains("outside the viewport"), "{offscreen}");
+
+        // The case that matters most: everything is fine, so an empty delta is
+        // NOT evidence of failure.
+        let fine = unchanged_note(false, true, true, None);
+        assert!(fine.contains("legitimately changed nothing"), "{fine}");
+        assert!(
+            fine.contains("Do NOT treat an empty delta as failure"),
+            "{fine}"
+        );
+    }
+
+    /// Disabled outranks covered: a disabled control could not have acted
+    /// whatever is on top of it, and telling the reader to dismiss an overlay
+    /// would send them at the wrong thing.
+    #[test]
+    fn the_most_decisive_reason_wins() {
+        let both = unchanged_note(true, true, true, Some("div.modal"));
+        assert!(both.contains("disabled"), "{both}");
+        assert!(!both.contains("div.modal"), "{both}");
+    }
     use super::*;
 
     #[test]

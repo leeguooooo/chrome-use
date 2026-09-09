@@ -2044,6 +2044,39 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 )),
             );
         }
+        // An empty delta is three different situations wearing one face
+        // (#274). Probe the target only when there was nothing to report —
+        // on the path where the action visibly did something this costs
+        // nothing, which is the constraint the request came with.
+        if observed.get("changed").and_then(|v| v.as_bool()) == Some(false) {
+            if let Some(sel) = cmd
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                let probe = match state.browser.as_ref() {
+                    Some(mgr) => match mgr.active_session_id() {
+                        Ok(sid) => {
+                            let sid = sid.to_string();
+                            super::element::diagnose_unchanged(
+                                &mgr.client,
+                                &sid,
+                                &state.ref_map,
+                                sel,
+                                &state.iframe_sessions,
+                            )
+                            .await
+                        }
+                        Err(_) => None,
+                    },
+                    None => None,
+                };
+                if let Some(p) = probe {
+                    observed.insert("noChange".into(), p);
+                }
+            }
+        }
+
         // Name the target this observation came from. Without it a caller
         // cannot tell a delta on the page they meant from a delta on a page
         // they were silently moved to — after a rebinding, a cross-process

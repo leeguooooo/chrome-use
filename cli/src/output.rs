@@ -4949,6 +4949,16 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
             Some(ms) => println!("{}", color::dim(&format!("observed: no change ({ms}ms)"))),
             None => println!("{}", color::dim("observed: no change")),
         }
+        // Why nothing changed. "No change" is evidence, not a verdict — the
+        // note distinguishes "this action changes nothing visible" from "it
+        // never reached its target" (#274).
+        if let Some(note) = obs
+            .get("noChange")
+            .and_then(|d| d.get("note"))
+            .and_then(|v| v.as_str())
+        {
+            println!("{} {}", color::dim("  why:"), color::dim(note));
+        }
     }
     if let Some(url) = obs.get("urlChanged").and_then(|v| v.as_object()) {
         let from = url.get("from").and_then(|v| v.as_str()).unwrap_or("");
