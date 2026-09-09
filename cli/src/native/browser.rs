@@ -4052,6 +4052,36 @@ impl BrowserManager {
 
     /// Return browser-level tab metadata without evaluating page JavaScript.
     /// This remains useful when the renderer main thread is blocked.
+    /// Which targets the relay is actually holding right now.
+    ///
+    /// `tab_list` reports the session's pin as "active" — what was asked for.
+    /// Whether the relay still has that tab is a different fact, and until now
+    /// nothing could state it: a mismatch surfaced only as a command failing
+    /// with Chrome's own words about a different extension's URL, which reads
+    /// like a permissions bug (issue #217).
+    ///
+    /// `None` when the answer is unavailable rather than negative — an older
+    /// extension has no such method, and "we could not ask" must not render as
+    /// "not attached".
+    pub async fn relay_attached_target_ids(&self) -> Option<std::collections::HashSet<String>> {
+        if !self.on_relay() {
+            return None;
+        }
+        let result: Value = self
+            .client
+            .send_command_typed("ABExt.attachedTargets", &json!({}), None)
+            .await
+            .ok()?;
+        let rows = result.get("targets")?.as_array()?;
+        Some(
+            rows.iter()
+                .filter(|r| r.get("attached").and_then(|v| v.as_bool()).unwrap_or(false))
+                .filter_map(|r| r.get("targetId").and_then(|v| v.as_str()))
+                .map(str::to_string)
+                .collect(),
+        )
+    }
+
     pub async fn tab_inspect_by_id(&self, tab_id: u32) -> Result<Value, String> {
         let page = self
             .pages

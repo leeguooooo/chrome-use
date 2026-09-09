@@ -48,6 +48,7 @@ import {
   selectIdleTabs,
 } from './idle-detach.js';
 import { shouldCheckForUpdate, canApplyUpdateNow } from './update-check.js';
+import { attachedTargetsFrom } from './attached-targets.js';
 
 const HOST_NAME = 'com.agent_browser.connect';
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
@@ -897,6 +898,14 @@ async function handleForwardCdpCommand(msg) {
   // Browser-level tab diagnostics that remain available even when the page's
   // renderer/main thread is stuck. This deliberately uses chrome.tabs metadata
   // only: no Runtime/Page command, no navigation, and no page-state mutation.
+  // Which tabs the relay is actually holding, for `tabs` to show alongside the
+  // tab a session ASKED for. The daemon reports its pin as "current"; nothing
+  // could say whether the relay still had that tab, so a mismatch looked like
+  // a permissions bug (issue #217).
+  if (method === 'ABExt.attachedTargets') {
+    return { targets: attachedTargetsFrom(tabs.entries()) };
+  }
+
   if (method === 'ABExt.inspectTab') {
     const requestedSession = String(params?.sessionId || '');
     const requestedTarget = String(params?.targetId || '');

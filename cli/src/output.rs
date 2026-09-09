@@ -1083,7 +1083,18 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     .and_then(|v| v.as_str())
                     .map(|ownership| format!(" [{}]", ownership))
                     .unwrap_or_default();
-                let marker = if active {
+                // The pin and the relay's actual attachment are two different
+                // facts, and only their DISAGREEMENT is worth a mark: an
+                // unattached tab the session thinks it is driving is exactly
+                // the state that used to surface only as Chrome's own words
+                // about a different extension's URL (#217). `relayAttached`
+                // absent means we could not ask — say nothing rather than
+                // invent a second false statement.
+                let pinned_but_detached =
+                    active && tab.get("relayAttached").and_then(|v| v.as_bool()) == Some(false);
+                let marker = if pinned_but_detached {
+                    color::warning_indicator().to_string()
+                } else if active {
                     color::cyan("→")
                 } else {
                     " ".to_string()
@@ -1102,6 +1113,16 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 // `--full` also surfaces the stable cross-session CDP targetId so
                 // a stranded tab can be explicitly adopted from another session
                 // via `tab adopt <targetId>` (issue #21).
+                if pinned_but_detached {
+                    println!(
+                        "      {}",
+                        color::dim(
+                            "the relay is NOT attached to this tab, though the session is \
+                             pinned to it — commands against it will fail. Re-open the url \
+                             (`open <url>`) to rebind; repeating `tab select` does not help."
+                        )
+                    );
+                }
                 if full {
                     if let Some(target_id) = tab.get("targetId").and_then(|v| v.as_str()) {
                         println!("      {}", color::dim(&format!("target: {}", target_id)));
