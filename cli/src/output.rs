@@ -740,19 +740,18 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             // `--diff` fell back to a full tree, or found nothing changed. Say
             // which: a diff printed without saying its baseline was missing
             // reads exactly like "nothing changed".
-            if let Some(note) = data.get("diffNote").and_then(|v| v.as_str()) {
-                eprintln!("{}", color::dim(note));
-            }
             // A `--diff` that found nothing changed has an empty tree to print.
             // A bare newline on stdout reads as "empty page" to whoever only
-            // captures stdout, so the note itself is the output in that case.
-            if snapshot.trim().is_empty()
-                && data.get("diffMode").and_then(|v| v.as_bool()) == Some(false)
-            {
-                if let Some(note) = data.get("diffNote").and_then(|v| v.as_str()) {
+            // captures stdout, so the note itself is the output in that case
+            // (and only there — not on stderr as well).
+            let no_change = snapshot.trim().is_empty()
+                && data.get("diffMode").and_then(|v| v.as_bool()) == Some(false);
+            if let Some(note) = data.get("diffNote").and_then(|v| v.as_str()) {
+                if no_change {
                     println!("{}", color::dim(&format!("({note})")));
+                    return;
                 }
-                return;
+                eprintln!("{}", color::dim(note));
             }
             print_with_boundaries(snapshot, origin, opts);
             // `--with-screenshot`: the image is an output, so its path is

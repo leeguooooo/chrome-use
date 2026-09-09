@@ -65,7 +65,8 @@ chrome-use snapshot -i --diff    # 4. Re-read only when you need to: just the de
 ```
 
 Steps 3 and 4 are one round trip each. `--observe` returns the delta (or the
-new tree after a navigation) plus the requests the action fired, so a
+new tree after `navigate`, or when a click replaced the whole page) plus the
+requests the action fired, so a
 separate re-snapshot after every click is the expensive habit to drop.
 `--diff` says "no change" explicitly when nothing moved. Load
 `core/behaviour` for the rules around this loop.

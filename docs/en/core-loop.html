@@ -68,7 +68,7 @@
 
       <p>
         Steps 3 and 4 are one round trip each. <code>--observe</code> returns the delta after the action (the new
-        page's whole tree after a navigation) together with the requests the action fired, so "re-snapshot after
+        page's whole tree after <code>navigate</code>, or when a click replaced the whole page) together with the requests the action fired, so "re-snapshot after
         every click" is the habit to drop. <code>--diff</code> says <code>no change</code> explicitly when nothing
         moved instead of handing you the same tree again. The rules around this loop live in
         <code>chrome-use skills get core/behaviour</code>.

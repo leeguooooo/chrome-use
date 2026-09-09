@@ -67,7 +67,7 @@
       </div>
 
       <p>
-        第 3、4 步各只有一次往返。<code>--observe</code> 把动作后的差异（导航则是新页面的整棵树）和动作触发的请求
+        第 3、4 步各只有一次往返。<code>--observe</code> 把动作后的差异（<code>navigate</code> 之后、或一次点击把整页换掉时，则是新页面的整棵树）和动作触发的请求
         一起带回来，所以「每点一下就重新快照」是最该戒掉的习惯；<code>--diff</code> 在什么都没变时会明确说
         <code>no change</code>，而不是给你一棵一样的树。围绕这个循环的行为规则见
         <code>chrome-use skills get core/behaviour</code>。
