@@ -518,6 +518,10 @@ pub fn remember_url(host: &str, path: Option<&str>, key: &str) -> Option<String>
 pub const MIN_APP_VERSION_FOR_RULE_REQUESTS: &str = "0.2.1";
 
 /// What `doctor` found out about the app itself, as opposed to its rules.
+/// Only `doctor` on macOS reaches these; the tests exercise them everywhere,
+/// which is why they are not `cfg`-gated away — a `cfg` here once made six
+/// tests silently skip what they meant to check on the Linux runner.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, PartialEq)]
 pub struct AppProbe {
     pub path: PathBuf,
@@ -525,6 +529,10 @@ pub struct AppProbe {
     pub schemes: Vec<String>,
 }
 
+/// Only `doctor` on macOS reaches these; the tests exercise them everywhere,
+/// which is why they are not `cfg`-gated away — a `cfg` here once made six
+/// tests silently skip what they meant to check on the Linux runner.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl AppProbe {
     /// Exact match on the scheme, not a substring: the bundle id is
     /// `com.choosebrowser.app`, so `grep choosebrowser` against the plist says
@@ -538,6 +546,10 @@ impl AppProbe {
 /// Fixed locations only — no Spotlight. `mdfind` also returns DerivedData and
 /// build directories, and returns nothing when the index is off, which reads
 /// as "not installed" when it means "could not look".
+/// Only `doctor` on macOS reaches these; the tests exercise them everywhere,
+/// which is why they are not `cfg`-gated away — a `cfg` here once made six
+/// tests silently skip what they meant to check on the Linux runner.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn app_candidates() -> Vec<PathBuf> {
     let mut v = vec![PathBuf::from("/Applications/ChooseBrowser.app")];
     if let Some(home) = dirs::home_dir() {
@@ -548,6 +560,10 @@ pub fn app_candidates() -> Vec<PathBuf> {
 
 /// Flatten `CFBundleURLTypes` (as `plutil -extract … json` prints it) into the
 /// schemes it registers.
+/// Only `doctor` on macOS reaches these; the tests exercise them everywhere,
+/// which is why they are not `cfg`-gated away — a `cfg` here once made six
+/// tests silently skip what they meant to check on the Linux runner.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn schemes_from_url_types_json(json: &str) -> Vec<String> {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
         return Vec::new();
