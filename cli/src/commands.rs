@@ -2757,6 +2757,15 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 context: "extension call".to_string(),
                 usage: "extension call <namespace.method> [json-args]   (the target must be `namespace.method`)",
             })?;
+            if rest.len() > 2 {
+                return Err(ParseError::InvalidValue {
+                    message: format!(
+                        "extension call: unexpected extra argument '{}'; pass every argument inside one JSON value",
+                        rest[2]
+                    ),
+                    usage: "extension call <namespace.method> [json-args]   e.g. extension call tabs.update '[12, {\"active\":true}]'",
+                });
+            }
             let args: Value = match rest.get(1) {
                 None => json!([]),
                 Some(raw) => {

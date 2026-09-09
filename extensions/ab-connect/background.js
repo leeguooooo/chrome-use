@@ -1014,6 +1014,9 @@ async function handleForwardCdpCommand(msg) {
   // `ownedTabs` set only: adopted tabs are readable through here but not
   // closable or movable, same as `close` treats them.
   if (method === 'ABExt.call') {
+    // After a service-worker restart the persisted ownership set is loaded
+    // lazily; a mutation arriving before that would be refused as "not owned".
+    await loadOwnedTabs();
     return await executeCall(params, {
       api: chrome,
       isOwned: (tabId) => ownedTabs.has(tabId),
@@ -1027,6 +1030,7 @@ async function handleForwardCdpCommand(msg) {
   // Everything the daemon otherwise assembles from several calls, in one:
   // what the relay holds, what it owns, how it is configured. Ids only.
   if (method === 'ABExt.state') {
+    await loadOwnedTabs();
     return {
       version: chrome.runtime.getManifest().version,
       policy: policySummary(),
@@ -1038,7 +1042,6 @@ async function handleForwardCdpCommand(msg) {
       cursorEnabled,
       notifyEnabled,
       idleDetachMs,
-      lastConnected,
     };
   }
 
