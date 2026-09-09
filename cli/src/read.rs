@@ -2015,15 +2015,23 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
     /// A title and a "please enable JavaScript" line is not the page either.
     #[test]
     fn a_shell_with_a_noscript_notice_is_flagged_not_trusted() {
-        let html = r#"<html><body><div id="root"></div>
+        let html = r#"<html><body><div id="root"><h1>Loading…</h1></div>
             <noscript>You need to enable JavaScript to run this app.</noscript>
             <script src="/static/js/main.js"></script></body></html>"#;
         let content = html_to_markdownish(html);
-        assert!(!content.trim().is_empty());
+        assert!(
+            !content.trim().is_empty(),
+            "the extractor dropped the placeholder text: {content:?}"
+        );
         assert!(matches!(
             app_shell_verdict(html, &content),
             Some(AppShell::Little(_))
         ));
+        // No placeholder at all: the extractor may drop <noscript>, and then
+        // this is the empty case — still a refusal, never a pass.
+        let bare = r#"<html><body><div id="root"></div>
+            <noscript>enable JavaScript</noscript><script src="/x.js"></script></body></html>"#;
+        assert!(app_shell_verdict(bare, &html_to_markdownish(bare)).is_some());
     }
 
     /// Server-rendered pages carry scripts too; text is what decides.
