@@ -35,13 +35,20 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         return;
     }
 
+    // Short on purpose. A unix socket path is capped at 103 bytes, and the
+    // whole config directory sits in front of the session name — under a deep
+    // HOME (a sandbox, a CI workspace, a container mount) a long name is what
+    // pushes it over, and the failure blames a name the user never chose
+    // (issue #259). Base-36 pid and millis keep it unique and readable while
+    // costing ~14 bytes instead of ~28.
+    let millis = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     let session = format!(
         "doctor-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
+        to_base36(std::process::id() as u128),
+        to_base36(millis)
     );
 
     // Armed after `ensure_daemon` succeeds so we don't send a stray `close`
@@ -185,4 +192,19 @@ impl Drop for LaunchGuard {
         let _ = send_command(close_cmd, &self.session);
         cleanup_stale_files(&self.session);
     }
+}
+
+/// Lowercase base-36, for keeping generated session names short.
+fn to_base36(mut n: u128) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut out = Vec::new();
+    while n > 0 {
+        out.push(DIGITS[(n % 36) as usize]);
+        n /= 36;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
 }
