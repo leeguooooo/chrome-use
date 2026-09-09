@@ -1666,6 +1666,16 @@ impl PolicyState {
 /// Read the forcelist Chrome sees from macOS managed preferences (user scope,
 /// then device scope). `defaults read` fails when the key is absent, which maps
 /// to `Absent`; corporate forcelists for OTHER extensions are ignored.
+/// Whether this Chrome has our extension force-installed by policy.
+///
+/// It changes what the user can DO about a stale extension: a policy install
+/// has no per-row update control and no Remove button, so "open
+/// chrome://extensions and hit Update" is advice they cannot follow on the
+/// extension itself. Reported by users as "chrome-use 管理之后就没法手动升级了".
+pub fn extension_is_policy_installed() -> bool {
+    matches!(managed_policy_state(), PolicyState::Active)
+}
+
 fn managed_policy_state() -> PolicyState {
     if !cfg!(target_os = "macos") {
         return PolicyState::Unknown;
@@ -1846,6 +1856,27 @@ pub fn cached_store_extension_version() -> Option<String> {
     fetched
 }
 
+/// How to actually pull an extension update on THIS machine.
+///
+/// A policy install has no update control on the extension's own row and no
+/// Remove button — telling those users to "hit Update" points at a button that
+/// is not there. The toolbar-level Update still works, and so does restarting
+/// Chrome.
+pub fn update_instruction() -> String {
+    if extension_is_policy_installed() {
+        "this profile has the extension installed by policy, so its own row has no update or \
+         remove control. Use chrome://extensions → enable Developer mode → the **Update** \
+         button in the toolbar (not the extension row), or restart Chrome. Chrome also updates \
+         policy-installed extensions on its own schedule and grants new permissions without \
+         asking."
+            .to_string()
+    } else {
+        "chrome://extensions → Developer mode → Update (a reload is enough for an unpacked \
+         build, which never updates itself)."
+            .to_string()
+    }
+}
+
 /// One line naming the installed and published extension versions, when the
 /// installed one is genuinely behind something the user can install today.
 ///
@@ -1862,8 +1893,8 @@ pub fn outdated_extension_note() -> Option<String> {
         ExtVersionVerdict::BehindStore { store } => Some(format!(
             "\nThe ab-connect extension driving this browser is {live}; the Web Store serves \
              {store}. Relay failures like this one are what those builds keep fixing, so update \
-             before digging further: chrome://extensions → Developer mode → Update (a reload is \
-             enough for an unpacked build, which never updates itself)."
+             before digging further: {}",
+            update_instruction()
         )),
         _ => None,
     }
@@ -3843,5 +3874,31 @@ mod tests {
             classify_ext_version("0.5.20", "0.5.22", None),
             ExtVersionVerdict::BehindStore { .. }
         ));
+    }
+
+    /// A policy install has no update control on the extension's own row, so
+    /// the two audiences need different instructions. Sending a managed user
+    /// to a button that is not there is what got reported as "chrome-use
+    /// 管理之后就没法手动升级了".
+    #[test]
+    fn the_update_instruction_names_a_control_that_exists() {
+        let managed = "this profile has the extension installed by policy";
+        let plain = "chrome://extensions → Developer mode → Update";
+        let text = update_instruction();
+        // Whichever branch this machine is on, the text must name a real path
+        // and never claim the row-level control on a policy install.
+        assert!(
+            text.contains("chrome://extensions") || text.contains("restart Chrome"),
+            "{text}"
+        );
+        if text.starts_with(managed) {
+            assert!(
+                text.contains("toolbar"),
+                "must point at the toolbar button: {text}"
+            );
+            assert!(text.contains("restart Chrome"), "{text}");
+        } else {
+            assert!(text.starts_with(plain), "{text}");
+        }
     }
 }
