@@ -114,7 +114,7 @@ npx skills add leeguooooo/chrome-use -g
 >
 > ```text
 > Use the `chrome-use` CLI from the shell for every browser task; start with `chrome-use skills get core`. Do not use the built-in Chrome plugin for browser work here.
-> ```text
+> ```
 
 Either way the agent gets the right usage patterns and pre-approved bash permissions for `chrome-use` and `abs`; the skill self-heals a missing binary by re-running the `install.sh` one-liner above. Specialized guides (`electron`, `slack`, `agentcore`, …) are served by the binary itself via `chrome-use skills get <name>`, so instructions always match the installed version.
 
