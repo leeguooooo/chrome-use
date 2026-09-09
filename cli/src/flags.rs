@@ -1531,10 +1531,17 @@ mod tests {
         assert_eq!(flags.executable_path, Some("/path/to/chromium".to_string()));
     }
 
+    /// A trailing `--executable-path` with nothing after it must not invent a
+    /// value — but it also must not be asserted against `None`, because
+    /// `AGENT_BROWSER_EXECUTABLE_PATH` legitimately supplies a default and the
+    /// test then fails on any machine that exports it (issue #260). Compare
+    /// against the no-argument parse instead: that is the property the flag is
+    /// actually responsible for, and it holds whatever the environment says.
     #[test]
     fn test_parse_executable_path_flag_no_value() {
+        let baseline = parse_flags(&args(""));
         let flags = parse_flags(&args("--executable-path"));
-        assert_eq!(flags.executable_path, None);
+        assert_eq!(flags.executable_path, baseline.executable_path);
     }
 
     #[test]

@@ -230,6 +230,41 @@ pub fn get_socket_dir() -> PathBuf {
     env::temp_dir().join(config_dir_basename(false))
 }
 
+/// Reject a socket path that cannot fit in `sun_path` before anything is
+/// created, and say how the 103 bytes were spent.
+#[cfg(unix)]
+fn ensure_socket_path_fits(session: &str) -> Result<(), String> {
+    socket_path_length_error(&get_socket_dir(), session).map_or(Ok(()), Err)
+}
+
+/// `Some(message)` when `dir/<session>.sock` exceeds the 103-byte `sun_path`
+/// limit. Takes the directory so it can be tested without touching the
+/// environment (the env is process-global and parallel tests share it).
+///
+/// Blaming the session name is wrong whenever the directory is what used up
+/// the budget — and it often is, since the name may be one we generated
+/// (`doctor` does, and a deep HOME then makes its check fail with advice the
+/// user cannot act on, issue #259). Say how the bytes were spent so the reader
+/// can see which half to change.
+#[cfg(unix)]
+fn socket_path_length_error(dir: &std::path::Path, session: &str) -> Option<String> {
+    let path_len = dir.join(format!("{session}.sock")).as_os_str().len();
+    if path_len <= 103 {
+        return None;
+    }
+    let dir_len = dir.as_os_str().len();
+    let budget = 103usize.saturating_sub(dir_len + 1 + ".sock".len());
+    Some(format!(
+        "Socket path is {path_len} bytes; the unix limit is 103.\n\
+         The directory {} takes {dir_len} of them, leaving {budget} for a session name, \
+         and '{session}' is {}.\n\
+         Point AGENT_BROWSER_SOCKET_DIR at a shorter directory \
+         (e.g. AGENT_BROWSER_SOCKET_DIR=/tmp/cu), or use a shorter --session name.",
+        dir.display(),
+        session.len(),
+    ))
+}
+
 #[cfg(unix)]
 fn get_socket_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.sock", session))
@@ -977,17 +1012,7 @@ pub(crate) fn ensure_daemon_with_lifecycle_lock(
 
     // Pre-flight check: Validate socket path length (Unix limit is 104 bytes including null terminator)
     #[cfg(unix)]
-    {
-        let socket_path = get_socket_path(session);
-        let path_len = socket_path.as_os_str().len();
-        if path_len > 103 {
-            return Err(format!(
-                "Session name '{}' is too long. Socket path would be {} bytes (max 103).\n\
-                 Use a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.",
-                session, path_len
-            ));
-        }
-    }
+    ensure_socket_path_fits(session)?;
 
     // Pre-flight check: Verify socket directory is writable
     {
@@ -1881,5 +1906,29 @@ mod tests {
         assert!(!is_session_unresponsive_error(
             "Failed to read: connection reset by peer"
         ));
+    }
+
+    /// The 103-byte cap is usually spent by the directory, not by a name the
+    /// user chose — `doctor` generates its own. The message has to show both
+    /// halves, or it sends people to rename something that is not the problem.
+    #[cfg(unix)]
+    #[test]
+    fn a_too_long_socket_path_reports_where_the_bytes_went() {
+        let dir = PathBuf::from(format!("/{}", "d".repeat(120)));
+        let err = socket_path_length_error(&dir, "s").expect("120-byte dir cannot fit");
+        assert!(err.contains("the unix limit is 103"), "{err}");
+        assert!(
+            err.contains(&dir.display().to_string()),
+            "must name the dir: {err}"
+        );
+        assert!(err.contains("AGENT_BROWSER_SOCKET_DIR"), "{err}");
+
+        // A short directory leaves room; nothing to report.
+        assert_eq!(
+            socket_path_length_error(&PathBuf::from("/tmp/cu"), "s"),
+            None
+        );
+        // …and the name can still be what overflows it.
+        assert!(socket_path_length_error(&PathBuf::from("/tmp/cu"), &"x".repeat(120)).is_some());
     }
 }
