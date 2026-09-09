@@ -105,6 +105,66 @@ jobs:
         if: '!matrix.use_zigbuild'
         run: cargo build --release --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
 
+      # Sign and notarize the macOS binaries. Without this they ship ad-hoc
+      # signed, and an ad-hoc signature does not survive being copied: macOS
+      # then SIGKILLs the process the moment it spawns a thread, which shows up
+      # as a daemon that dies with rc=137 for no visible reason. Every install
+      # that moves the binary (a package manager, `cp` into ~/.local/bin) hits
+      # it. A Developer ID signature survives the copy.
+      #
+      # Skipped, not failed, when the secrets are absent: a fork building a tag
+      # has no certificate, and an unsigned build is still a usable build.
+      - name: Sign and notarize (macOS)
+        if: startsWith(matrix.os, 'macos') && secrets.MACOS_CERT_P12 != ''
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="cli/target/${{ matrix.target }}/release/chrome-use"
+
+          # A throwaway keychain, so nothing is added to the runner's login one.
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          pw="$(openssl rand -hex 20)"
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" >/dev/null
+          security list-keychain -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          # `--options runtime` is required for notarization. Verified locally
+          # that the daemon still starts and drives a browser under it.
+          codesign --force --options runtime --timestamp \
+            -s "$MACOS_SIGN_IDENTITY" --keychain "$kc" "$bin"
+          codesign --verify --strict --verbose=2 "$bin"
+
+          if [ -n "${ASC_KEY_P8:-}" ]; then
+            echo "$ASC_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc.p8"
+            ditto -c -k --keepParent "$bin" "$RUNNER_TEMP/notarize.zip"
+            xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+              --key "$RUNNER_TEMP/asc.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+              --wait --timeout 30m
+            rm -f "$RUNNER_TEMP/asc.p8" "$RUNNER_TEMP/notarize.zip"
+            # A bare executable cannot carry a stapled ticket (only .app/.dmg/
+            # .pkg can), so there is nothing to staple — Gatekeeper checks the
+            # notarization online. Verified: `spctl -a` goes from `rejected` to
+            # `accepted / source=Notarized Developer ID`.
+            echo "notarized (no staple: bare executables cannot hold a ticket)"
+          else
+            echo "signed but NOT notarized (no App Store Connect key configured)"
+          fi
+
+          security delete-keychain "$kc" || true
+
       - name: Package (.tar.gz + .sha256)
         shell: bash
         run: |
