@@ -155,6 +155,15 @@
         <span class="mark">a control that did not move cannot read as a success</span>. See
         <a href="interacting.html">Interacting</a>.
       </p>
+      <p>
+        But <span class="mark">only <code>expand</code> / <code>collapse</code> can be confirmed
+        afterwards</span> — the element must then offer the opposite action. For
+        <code>showMenu</code>, <code>toggle</code>, <code>increment</code> and
+        <code>decrement</code> the tree looks the same whether the control responded or ignored
+        the click, so those are marked <code>·</code> rather than <code>✓</code> and carry
+        <code>confirmed: null</code> in JSON — dispatched, outcome unknown. Read the page before
+        treating one as done; never read <code>null</code> as success.
+      </p>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Tip</div>

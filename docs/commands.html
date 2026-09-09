@@ -148,6 +148,13 @@
         <span class="mark">没动的控件不会读起来像成功</span>。详见
         <a href="interacting.html">交互</a>。
       </p>
+      <p>
+        不过<span class="mark">只有 <code>expand</code> / <code>collapse</code> 事后判得出成败</span>——
+        做完元素必须提供相反的那个动作。<code>showMenu</code>、<code>toggle</code>、
+        <code>increment</code> / <code>decrement</code> 无论控件响应与否，树里看起来都一样，
+        所以它们标 <code>·</code> 而不是 <code>✓</code>，JSON 里 <code>confirmed</code> 为
+        <code>null</code>：已派发，结果未知。别把 <code>null</code> 当成功，自己读一眼页面。
+      </p>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 小贴士</div>
