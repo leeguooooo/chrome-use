@@ -1254,6 +1254,14 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         }
         // Console logs
         if let Some(logs) = data.get("messages").and_then(|v| v.as_array()) {
+            // Capture is off by default for stealth. An empty list with no
+            // word about why reads as "the page logged nothing"; the hint
+            // used to reach only `--json`.
+            if logs.is_empty() {
+                if let Some(hint) = data.get("hint").and_then(|v| v.as_str()) {
+                    eprintln!("{} {}", color::dim("·"), hint);
+                }
+            }
             if opts.content_boundaries {
                 let mut console_output = String::new();
                 for log in logs {
