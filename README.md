@@ -15,71 +15,46 @@
 ![chrome-use](assets/hero.png)
 
 <p align="center">
-  <img src="assets/demo.gif" alt="chrome-use demo — open Hacker News in your real Chrome and pull the top stories as structured JSON in one command" width="820">
+  <img src="assets/demo.gif" alt="chrome-use demo: open Hacker News in your real Chrome and pull the top stories as structured JSON in one command" width="820">
   <br>
   <sub>Point it at a page in your <b>real</b> Chrome → get structured data in one command. <a href="assets/demo.tape">(regenerate: <code>vhs assets/demo.tape</code>)</a></sub>
 </p>
 
-**chrome-use** drives your real, logged-in Chrome from any AI agent — it shares your existing login sessions and is undetectable by anti-bot systems because it *is* your real browser. Part of the `*-use` family ([iphone-use](https://github.com/leeguooooo/iphone-use) drives your real iPhone; [bitwarden-use](https://github.com/leeguooooo/bitwarden-use) pulls passwords/2FA/passkeys from your Bitwarden vault so an agent can log in with credentials; chrome-use drives your real Chrome).
+**chrome-use** drives your real, logged-in Chrome from any AI agent. It shares your existing login sessions and is undetectable by anti-bot systems because it *is* your real browser. Part of the `*-use` family ([iphone-use](https://github.com/leeguooooo/iphone-use) drives your real iPhone; [bitwarden-use](https://github.com/leeguooooo/bitwarden-use) pulls passwords/2FA/passkeys from your Bitwarden vault so an agent can log in with credentials; chrome-use drives your real Chrome).
 
-<sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); now a standalone project — the stealth/extension-relay architecture, anti-detection, humanize, multi-agent isolation, and CLI have diverged substantially.</sub>
+<sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); now a standalone project. The stealth/extension-relay architecture, anti-detection, humanize, multi-agent isolation, and CLI have diverged substantially.</sub>
 
-> 📚 **Documentation:** **[chrome-use.leeguoo.com](https://chrome-use.leeguoo.com)** — full guides, workflows & command reference (中文 · English).
+> 📚 **Documentation:** **[chrome-use.leeguoo.com](https://chrome-use.leeguoo.com)**: full guides, workflows & command reference (中文 · English).
 >
-> 📖 **Deep dive:** [Letting an agent click into cross-origin iframes — how chrome-use solves the hardest part of browser control](https://blog.leeguoo.com/en/posts/chrome-use-cross-origin-iframe/)
-> · [Driving your already-logged-in real Chrome (CreepJS scores it 0% bot) — 中文](https://blog.leeguoo.com/zh/posts/chrome-use-drive-your-real-chrome/)
+> 📖 **Deep dive:** [Letting an agent click into cross-origin iframes: how chrome-use solves the hardest part of browser control](https://blog.leeguoo.com/en/posts/chrome-use-cross-origin-iframe/)
+> · [Driving your already-logged-in real Chrome (CreepJS scores it 0% bot), 中文](https://blog.leeguoo.com/zh/posts/chrome-use-drive-your-real-chrome/)
 
 ## Give your AI agent the browser you already live in
 
 **No fresh Chrome. No re-login. No "are you a robot?" walls.**
 
-chrome-use points **any** agent — Claude Code, Cursor, Codex, your own scripts — at the **Chrome you're already signed into everything on**. It clicks in *your* window, so you watch it work and grab the wheel the moment it hits a 2FA prompt or captcha. And because it's literally your real browser (over a one-click extension, native messaging — no debug port), sites read it as 100% human: **[CreepJS scores it 0% bot](#anti-detection).**
+chrome-use points **any** agent (Claude Code, Cursor, Codex, your own scripts) at the **Chrome you're already signed into everything on**. It clicks in *your* window, so you watch it work and grab the wheel the moment it hits a 2FA prompt or captcha. And because it's literally your real browser (over a one-click extension, native messaging, no debug port), sites read it as 100% human: **[CreepJS scores it 0% bot](#anti-detection).**
 
-**Why not just use…**
+**Typical browser automation** (Playwright, Puppeteer, or a fresh `--launch`) opens a brand-new browser with an empty profile. You have to log in again, and websites can tell it's automated. **chrome-use** connects to your existing Chrome. Your cookies, sessions, and browser fingerprint are all real, because it IS your real browser. Since **Chrome 136**, every raw `--remote-debugging-port` connection pops a blocking **"Allow remote debugging?"** consent dialog. Our extension uses native messaging instead: **install once, then zero per-use confirmation.**
 
-- **Playwright / Puppeteer / browser-use?** They boot an *empty* browser — so you redo every login, fight every captcha, and still get flagged as automation. We use the session you already have.
-- **Claude's Chrome extension?** Great, but it only drives Claude. This drives *any* agent or CLI.
-- **A raw `--remote-debugging-port`** (web-access, etc.)? Chrome 136+ pops **"Allow remote debugging?"** on *every* connect. This never does — one-click Store extension, native messaging.
-
-<details>
-<summary><b>Full feature comparison</b> (the receipts)</summary>
-
-| | [Claude in Chrome](https://www.anthropic.com/claude/chrome) | web-access / raw CDP port | Playwright · Puppeteer · browser-use | **chrome-use** |
+| | Typical automation (Playwright · Puppeteer · browser-use) | web-access / raw CDP port | [Claude in Chrome](https://www.anthropic.com/claude/chrome) | **chrome-use** |
 |---|:---:|:---:|:---:|:---:|
-| Works with **any** agent / CLI (not one app) | ❌ Claude only | ✅ | ✅ | ✅ |
-| Drives your **real, logged-in** Chrome | ✅ | ✅ | ❌ fresh empty profile | ✅ |
-| **No "Allow remote debugging?" popup** | ✅ | ❌ every connect | — (own browser) | ✅ native messaging |
-| Real-browser fingerprint (CreepJS ~0%)¹ | ✅ | ✅ | ❌ automation markers / headless | ✅ **verified 0%** |
-| **No `Runtime.enable` CDP leak** (rebrowser)² | — | ❌ leaks | ❌ leaks | ✅ **off by default** |
-| Many agents on **one** real Chrome, isolated tab groups³ | ❌ single app | ⚠️ shared tabs, no isolation | ❌ separate browsers | ✅ |
-| Permissions footprint | 16 incl. `<all_urls>` | full CDP | full control | **7, no `<all_urls>`** |
+| Works with **any** agent / CLI (not one app) | ✅ | ✅ | ❌ Claude only | ✅ |
+| Drives your **real, logged-in** Chrome | ❌ fresh empty profile | ✅ | ✅ | ✅ |
+| Connect method / **"Allow remote debugging?" popup** | — (own browser) | `--remote-debugging-port` · **every connection** 🔴 | `chrome.debugger` · no | native messaging · **never** ✅ |
+| Real-browser fingerprint (CreepJS ~0%)¹ | ❌ automation markers / headless | ✅ | ✅ | ✅ **verified 0%** |
+| **No `Runtime.enable` CDP leak** (rebrowser)² | ❌ leaks | ❌ leaks | — | ✅ **off by default** |
+| Many agents on **one** real Chrome, isolated tab groups³ | ❌ separate browsers | ⚠️ shared tabs, no isolation | ❌ single app | ✅ |
+| Permissions footprint | full control | full CDP | 16 incl. `<all_urls>` | **7, no `<all_urls>`** |
 
-<sub>¹ All three real-Chrome tools score ~0% on CreepJS (it's a real browser); we've measured ours. ² rebrowser's `runtimeEnableLeak` — verified clean on our relay path; Claude in Chrome not independently tested (—). ³ web-access can run parallel sub-agents on one browser, but without per-session isolation; each `--session` here gets its own colored, command-isolated tab group. See [Anti-detection](#anti-detection) for the measured numbers.</sub>
-
-</details>
-
-## Why chrome-use?
-
-<img src="assets/fingerprint.png" alt="real but undetectable fingerprint" width="300" align="right" />
-
-**Typical browser automation** (Playwright, Puppeteer, or a fresh `--launch`) opens a brand-new browser with an empty profile. You have to log in again, and websites can tell it's automated.
-
-**chrome-use** connects to your existing Chrome. Your cookies, sessions, and browser fingerprint are all real — because it IS your real browser.
-
-| | chrome-use | chrome-use |
-|---|---|---|
-| Browser | Launches new Chrome | Connects to your Chrome |
-| Login state | Empty, need to re-login | Your existing sessions |
-| Fingerprint | Automation markers present | Your real fingerprint |
-| User collaboration | Separate window | Same window, take over anytime |
-| CAPTCHA | Agent stuck | You solve it, agent continues |
+<sub>¹ All three real-Chrome tools score ~0% on CreepJS (it's a real browser); we've measured ours. ² rebrowser's `runtimeEnableLeak`: verified clean on our relay path; Claude in Chrome not independently tested (—). ³ web-access can run parallel sub-agents on one browser, but without per-session isolation; each `--session` here gets its own colored, command-isolated tab group. See [Anti-detection](#anti-detection) for the measured numbers.</sub>
 
 ## How it works
 
 ![how it works](assets/how-it-works.png)
 
 Your **chrome-use CLI** talks to a tiny **browser extension** over Chrome
-**native messaging** — a local inter-process channel, *no network socket, no
+**native messaging**: a local inter-process channel, *no network socket, no
 token, no remote server*. The extension uses `chrome.debugger` to drive the tabs
 you target in **your own, already-logged-in Chrome**, then hands results back to
 the CLI. Everything stays on your machine.
@@ -87,52 +62,12 @@ the CLI. Everything stays on your machine.
 ![architecture](assets/architecture.png)
 
 Each `--session` gets its **own colored Chrome tab group**, so multiple agents
-can share one real browser concurrently without stepping on each other — or your
+can share one real browser concurrently without stepping on each other, or your
 own tabs. When `--session` is omitted, chrome-use derives a stable per-agent
-session from supported runner IDs, including Codex's `CODEX_THREAD_ID`. A plain
-shell with no runner ID retains the `default` session; set
-`AGENT_BROWSER_SESSION_ID` or pass `--session` for parallel workers there.
-The derived name is `cu-<repo>-<tag>`, where `<repo>` is only the cwd
-basename: a command run from another directory reuses the live daemon that
-already carries the same agent tag, so an agent keeps its tabs and refs across
-`cd`. Explicit `--session` / `AGENT_BROWSER_SESSION` always win.
-
-Manage those workers with `chrome-use session list`, stop one gracefully with
-`chrome-use session stop [name]`, or reclaim all session daemons with
-`chrome-use session prune`. Ownership handoff remains available through
-`session handoff`, `session status`, and `session resume`.
-
-If a session daemon stays alive but its local socket disappears, the next
-browser command stops that unreachable worker and starts a clean replacement
-for the same session. Rerun the command if chrome-use reports that an endpoint
-disappeared during an in-flight operation; use `chrome-use daemon restart` to
-reset every session worker explicitly. The extension relay and existing Chrome
-tabs stay open.
-
-## Why the extension (not a raw debug port)
-
-Other local tools drive Chrome over a raw `--remote-debugging-port` (CDP). Since
-**Chrome 136**, every such connection pops a blocking **"Allow remote debugging?"**
-consent dialog — and the port has to be enabled up front. Our extension uses
-native messaging instead: **install once, then zero per-use confirmation.**
-
-| | **chrome-use** (this extension) | web-access (raw CDP port) | Claude in Chrome (chrome.debugger) |
-|---|---|---|---|
-| Connect method | native messaging — no port, no token | `--remote-debugging-port` | `chrome.debugger` |
-| **"Allow remote debugging?" popup** | **never** ✅ | **every connection** 🔴 | no |
-| Uses your real login | yes | yes | yes |
-| `Runtime.enable` (CDP) leak¹ | **off by default → clean** ✅ | domain enabled | n/a |
-| CreepJS stealth score² | **0% stealth · 0% headless** ✅ | real Chrome | real Chrome |
-| Per-session tab groups / concurrent agents | **yes** ✅ | no | no |
-| Built for the chrome-use CLI | yes | a separate proxy | a single-app assistant |
-
-> ¹ Verified against [rebrowser-bot-detector](https://bot-detector.rebrowser.net/):
-> our relay reports `runtimeEnableLeak: 🟢 No leak` and `navigatorWebdriver: 🟢`.
-> ² Verified against [CreepJS](https://abrahamjuliot.github.io/creepjs/) on the
-> connected real-Chrome path — see [Anti-detection](#anti-detection).
->
-> The consent dialog isn't hypothetical: a raw-port tool pops it on **every**
-> attach (Chrome 136+ security). The extension path never does.
+session from supported runner IDs, including Codex's `CODEX_THREAD_ID`.
+Explicit `--session` / `AGENT_BROWSER_SESSION` always win. Session naming,
+`session list` / `stop` / `prune`, ownership handoff, and daemon recovery are
+covered in the [sessions guide](https://chrome-use.leeguoo.com/en/sessions.html).
 
 ## Install
 
@@ -148,45 +83,19 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 - **Pin a version:** `AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh`
 - **Custom location:** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
 - **Windows:** download `chrome-use-win32-x64.tar.gz` from the [Releases page](https://github.com/leeguooooo/chrome-use/releases) and put `chrome-use.exe` on your PATH.
-- **npm (legacy):** `npm install -g chrome-use` — still published, but GitHub Releases is the primary channel now.
+- **npm (legacy):** `npm install -g chrome-use`. Still published, but GitHub Releases is the primary channel now.
 </details>
 
 ### Install with Nix
 
-Run it once, no install:
-
-```bash
-nix run github:leeguooooo/chrome-use -- --help
-```
-
-Add to a flake and enable declaratively:
-
-```nix
-# home-manager — registers the user-level native-messaging host on activation
-{ inputs, ... }: {
-  imports = [ inputs.chrome-use.homeManagerModules.default ];
-  programs.chrome-use.enable = true;
-}
-```
-
-```nix
-# NixOS — system-wide install; optional Chrome-policy force-install of the extension
-{ inputs, ... }: {
-  imports = [ inputs.chrome-use.nixosModules.default ];
-  programs.chrome-use = {
-    enable = true;
-    forceInstallExtension = true;
-  };
-}
-```
-
-> On NixOS the native-messaging host is registered per-user — after switching, run `chrome-use extension connect` once (or add the home-manager module above) to connect the extension.
-
+Run it once, no install: `nix run github:leeguooooo/chrome-use -- --help`.
+The flake also ships a home-manager module and a NixOS module (`programs.chrome-use.enable = true`); on NixOS the native-messaging host is registered per-user, so run `chrome-use extension connect` once after switching.
 Dev shell: `nix develop` (rust toolchain + node 24 + pnpm + chromium + vhs).
+Full snippets: [install guide](https://chrome-use.leeguoo.com/en/install.html).
 
 ### Install the AI agent skill
 
-**Claude Code — plugin marketplace (recommended):** installs the skill globally (all projects), auto-updates, and lists the rest of the [`*-use` family](https://github.com/leeguooooo/plugins):
+**Claude Code, plugin marketplace (recommended):** installs the skill globally (all projects), auto-updates, and lists the rest of the [`*-use` family](https://github.com/leeguooooo/plugins):
 
 ```
 /plugin marketplace add leeguooooo/plugins
@@ -205,23 +114,15 @@ npx skills add leeguooooo/chrome-use -g
 >
 > ```text
 > Use the `chrome-use` CLI from the shell for every browser task; start with `chrome-use skills get core`. Do not use the built-in Chrome plugin for browser work here.
-> ```
+> ```text
 
 Either way the agent gets the right usage patterns and pre-approved bash permissions for `chrome-use` and `abs`; the skill self-heals a missing binary by re-running the `install.sh` one-liner above. Specialized guides (`electron`, `slack`, `agentcore`, …) are served by the binary itself via `chrome-use skills get <name>`, so instructions always match the installed version.
 
-Upgrading the binary does **not** move a SKILL.md already copied into a runner — that copy lives outside the binary. Refresh it with `chrome-use skills update` (`refresh` and `install` are the same command; add `--project` to install into `./` instead of globally).
+Upgrading the binary does **not** move a SKILL.md already copied into a runner; that copy lives outside the binary. Refresh it with `chrome-use skills update` (`refresh` and `install` are the same command; add `--project` to install into `./` instead of globally).
 
 ### Use from an MCP client (Claude Desktop, etc.)
 
-Agents that run a shell should use the skill above (it's lighter). For hosts that
-speak **MCP but can't run arbitrary shell commands** — Claude Desktop, ChatGPT
-connectors, n8n/Dify — run chrome-use as an MCP stdio server instead:
-
-```bash
-chrome-use mcp        # stdio Model Context Protocol server (core tool profile)
-```
-
-Wire it into Claude Desktop's `claude_desktop_config.json`:
+For hosts that speak **MCP but can't run arbitrary shell commands** (Claude Desktop, ChatGPT connectors, n8n/Dify), run chrome-use as an MCP stdio server by wiring it into Claude Desktop's `claude_desktop_config.json`:
 
 ```json
 {
@@ -231,27 +132,9 @@ Wire it into Claude Desktop's `claude_desktop_config.json`:
 }
 ```
 
-Exposes a core profile of typed tools (`chrome_use_open` / `read` / `snapshot` /
-`click` / `fill` / `type` / `press` / `eval` / `wait` / `back` / `forward` /
-`reload`); each tool-call delegates to the same binary in `--json` mode. Use the
-absolute path as `command` if `chrome-use` isn't on the host's PATH. Start with
-`chrome-use mcp --tools all` when the host also needs screenshots, accessibility
-audits, tabs, structured extraction, assertions, site adapters, uploads, downloads,
-or network interception.
-
-## Command names
-
-`chrome-use`, `chrome-use`, and `abs` are **the same binary** —
-`abs` is just a short alias. There is no separate "stealth executable"; stealth
-is a runtime behavior (see [Anti-detection](#anti-detection) below), applied
-automatically based on whether you attach to your real Chrome or `--launch` a
-fresh one.
-
 ## Setup: connect to your Chrome
 
-**Recommended — the browser extension (one click, no popups).** Install the
-[**chrome-use** extension from the Chrome Web Store](https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk),
-then register the local bridge once:
+Install the [**chrome-use** extension from the Chrome Web Store](https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk), then register the local bridge once:
 
 ```bash
 chrome-use extension install      # register the native-messaging host (one-time)
@@ -259,611 +142,128 @@ chrome-use open https://x.com/home
 chrome-use status                 # relay, profile, extension, and session health
 ```
 
-`chrome-use open` then drives your real, logged-in Chrome over **native
-messaging** — no debug port, no token, and **no "Allow remote debugging?" dialog,
-ever**. The extension auto-updates and survives Chrome restarts, so it stays
-connected with zero per-use confirmation (ideal for unattended/agent use).
-`chrome-use status` is daemon-free, so it still answers when the current session
-worker is the component that became unresponsive. It also validates that the
-native-host launcher resolves to a runnable binary; JSON output exposes this as
-`extension.hostHealthy`.
+`chrome-use open` then drives your real, logged-in Chrome over **native messaging**: no debug port, no token, and **no "Allow remote debugging?" dialog, ever**. The raw remote-debugging-port alternative (which pops a consent dialog) is described in the [real Chrome guide](https://chrome-use.leeguoo.com/en/real-chrome.html).
 
-<details>
-<summary>Alternative — raw remote-debugging port (pops a consent dialog)</summary>
+### Multi-profile Chrome: ChooseBrowser rules
 
-Without the extension, chrome-use attaches over the Chrome DevTools Protocol,
-which Chrome only exposes when **launched with a remote-debugging port** (a
-startup flag — the `chrome://inspect` toggle alone is not enough):
+If you keep several Chrome profiles (work, personal, a client's), you already know which account each site belongs to, and you tell us with `--browser` every time. [ChooseBrowser](https://choosebrowser.leeguoo.com) is a macOS link router that stores that mapping. When it is installed, `chrome-use open <url>` without an explicit `--browser` follows the rule you already wrote for that site, and says so:
 
-```bash
-# macOS
-open -a "Google Chrome" --args --remote-debugging-port=9222
-# Linux
-google-chrome --remote-debugging-port=9222
-# Windows: add --remote-debugging-port=9222 to your Chrome shortcut's target
+```
+$ chrome-use open https://github.com/my-org/repo
+· using Chrome profile Profile 14 — a ChooseBrowser rule routes this site there
+  (github.com|/my-org*). Override with --browser <id|email>, or skip with
+  --no-choosebrowser.
 ```
 
-Then `chrome-use open <url>` auto-discovers the port. On first attach,
-**Chrome 136+ shows an "Allow remote debugging?" dialog** — click Allow once (it
-persists for that Chrome session). The extension above avoids this entirely.
-</details>
+Read-only, and invisible if you do not use it: no rules file means no behaviour change and no message. A rule naming a profile that is not running the extension falls back to the normal profile choice. That fallback does not verify the site account; check its identity or pin `--browser` when a specific account is required.
 
-**No setup / don't want to touch your real Chrome?** Use
-`chrome-use --launch open <url>` to spawn a fresh isolated stealth browser
-(full anti-detection patches applied; see below). This always works without any
-port setup and is what CI uses automatically.
+> **Disclosure:** ChooseBrowser is a paid macOS app (US$4.99, 7-day trial) by the same author as chrome-use. This is a companion-tool note, not an independent review. chrome-use needs none of it.
 
 ## Usage
 
-```bash
-# Connect to your Chrome and navigate
-chrome-use open https://example.com
-
-# Everything works through your logged-in browser
-chrome-use click "Post"
-chrome-use click 449 320            # …or click a raw viewport coordinate
-chrome-use fill "Title" "Hello World"
-chrome-use screenshot ./page.png
-
-# Native Duplicate tab on extension-connected real Chrome. The copy stays in
-# the background and becomes chrome-use's internal active tab.
-chrome-use tab duplicate --label working-copy
-
-# Work with an existing tab without reloading away its diagnostic state.
-chrome-use tab select t2
-chrome-use tab adopt "example.com/problem-page"
-chrome-use tab inspect t2
-```
-
-`tab duplicate [ref] [--label <name>]` uses Chrome's native Duplicate tab
-operation and preserves its navigation history. It requires the browser
-extension path and never falls back to opening the same URL on launched Chrome,
-raw CDP, Lightpanda, or cloud providers. Chrome controls whether a background
-duplicate starts loading.
-
-`tab select <ref>` is the explicit form of `tab <ref>`. `tab adopt
-<url-substring|targetId>` attaches an already-open tab inside the current
-session without navigating it. `tab inspect <ref>` reads URL, load status,
-discard/freeze state, and debugger attachment from Chrome's browser metadata,
-so it still works when page JavaScript has blocked the renderer main thread.
-Runtime evaluation cannot finish while that thread is blocked, but the tab is
-kept selected and is no longer misreported as closed.
-
-On an external or extension-connected Chrome, `tab list` marks tabs as
-`created`, `adopted`, or `foreign`. `tab select` accepts only created or
-explicitly adopted tabs, and `tab close` accepts only tabs created by the
-current session. Use `tab adopt <url-substring|targetId>` before driving an
-existing tab; adopted tabs remain user-owned and cannot be closed by the
-session. Created ownership is persisted by session name and connected browser
-endpoint across daemon restarts, so an interrupted cleanup can safely resume
-without granting adopted tabs deletion rights.
-
-The default daemon idle recycle preserves session-created tabs in an external or
-extension-connected Chrome, including their current URL and in-page state. An
-explicit `close` or `session stop` still closes the session-created tabs.
-After an idle exit, `session stop` rediscovers the original browser and checks
-its saved ownership before closing tabs. If that browser cannot be matched,
-it reports incomplete cleanup and retains ownership for a later reconnect.
-
-On extension-connected Chrome, `tab inspect` requires ab-connect 0.5.16 or
-newer. If a tab liveness probe fails while the live extension is older than the
-bundled version, chrome-use reports the version mismatch instead of diagnosing
-the renderer as unresponsive. Open `chrome://extensions`, update or reload
-ab-connect, and retry.
-
-The agent operates in your Chrome — you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
-
-If a click opens native `confirm()` or `prompt()`, the click returns with a
-pending-dialog result instead of blocking the session. Follow with
-`chrome-use dialog status` and `chrome-use dialog accept|dismiss`.
-
-The extension popup shows Connected only after a reply from the native host.
-While confirmation is pending it shows Connecting; missing-host errors are shown
-verbatim. With an older host that does not answer the initial ping, the first
-real CLI command can confirm the connection. This status confirms the host link,
-not that every page or frame is drivable.
-
-Chrome debugger relay calls are also time-bounded, so a process-swapped tab
-fails with recovery guidance rather than hanging indefinitely.
-
-A restricted or detached child-frame command returns its error without detaching
-the parent tab. Top-level recovery retries against the recovered tab ID, rather
-than reusing an obsolete target. Re-read the page before retrying a failed frame action.
-If a top-level action is interrupted after dispatch, the relay does not replay it
-unless the command is safe to repeat or Chrome explicitly rejected it before dispatch.
-`action_outcome_unknown` means the action may already have executed; JSON reports
-`retryable: false`. Observe the current page before choosing another action.
-
-
-Chrome can refuse debugger access to an ordinary web tab containing another
-extension's protected iframe. `debugger_access_denied` is non-retryable; use
-`tab inspect <ref>` for browser metadata or a separate test profile. Reattaching
-does not remove this restriction.
-
-Relay navigation makes up to three bounded access checks while waiting for a
-lifecycle event. A confirmed debugger access denial ends the wait early; a
-successful check or a transient failure does not substitute for page readiness.
-Fast pages can finish before any check is sent.
-
-For isolated development, set `CHROME_USE_RELAY_DIR` to the same absolute
-directory in the native-host launcher and the CLI. This scopes relay discovery
-without changing HOME; combine it with unique session names and an explicit
-`--browser` ID. Relative paths are rejected before discovery. Omit it for ordinary shared-profile discovery.
-
-### Standalone mode (`--launch`)
-
-Spawn a separate browser instead of attaching to your running Chrome:
+The core loop: open, read, act, re-read only what changed.
 
 ```bash
-# Throwaway: fresh, EMPTY profile — no cookies, no login (good for CI/testing)
-chrome-use --launch open https://example.com
-
-# Keep your login: launch with your real Chrome profile (cookies/sessions intact)
-chrome-use --launch --profile auto open https://x.com/home
-# or name it explicitly: --profile Default / --profile "Profile 1"
+chrome-use open https://example.com    # connect to your Chrome and navigate
+chrome-use snapshot -i                 # the start of every interaction: interactive elements with @refs
+chrome-use click @e3 --observe         # act, and watch for the page's reaction
+chrome-use snapshot -i --diff          # only what changed since the last snapshot
 ```
 
-> ⚠️ Plain `--launch` (no `--profile`) uses a **temporary empty profile** — you will
-> NOT be logged into anything. For logged-in sites use `--profile auto` (picks the
-> Chrome profile you used most recently) or `--profile <name>`. chrome-use prints
-> a warning when you `--launch` without a profile.
-
-In CI environments, standalone mode is used automatically.
-
-## Site adapters — turn a website into a structured-data CLI
-
-Most "read GitHub issues" / "search Reddit" / "get my Bilibili feed" tasks don't
-need clicking and screenshotting at all — the site already has a JSON API behind
-its own login. A **site adapter** is a tiny JS function that calls that API *from
-inside your logged-in tab* (your cookies, same-origin `fetch`, the site's own
-modules) and returns clean JSON. The site can't tell it apart from you, because it
-*is* you.
-
-chrome-use ships none of these adapters. `site update` fetches two default packs at
-runtime: the community [**bb-sites**](https://github.com/epiral/bb-sites) pack and
-the official [**chrome-use-sites**](https://github.com/leeguooooo/chrome-use-sites)
-pack. It works like a package manager pulling dependencies, then runs the adapters
-over chrome-use's stealth transport:
-
-```bash
-chrome-use site update                          # fetch both default packs + configured extras
-chrome-use site list                            # github/issues, reddit/search, bilibili/feed, …
-chrome-use site info github/issues              # see an adapter's args + domain
-chrome-use site sources                         # show community, official, and extra sources
-
-# Run one — navigates to the site (reusing the tab if you're already there) and returns JSON
-chrome-use site github/issues epiral/bb-browser --json
-chrome-use site reddit/search "rust async" --json
-chrome-use site bilibili/feed --json            # works because it's your logged-in session
-```
-
-Positional args fill the adapter's declared args in order; `--key value` overrides
-by name. Adapters remain their authors' property; chrome-use just runs them.
-
-**Auto-sync + auto-suggest.** You rarely type `site update` yourself: chrome-use
-syncs both default packs on first use and refreshes them weekly in the background (tune with
-`AGENT_BROWSER_SITES_TTL_DAYS`, disable with `AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`).
-And when you `open`/`snapshot` a page whose domain has adapters, chrome-use surfaces
-them right in the output — a `site adapters for <domain>` line, plus a
-`siteAdapters` field under `--json` — so an agent reaches for the structured-data
-adapter instead of scraping the DOM:
-
-```text
-$ chrome-use open https://github.com
-site adapters for github.com — prefer these for structured data:
-   github/issues, github/me, github/repo, …
-   e.g. chrome-use site github/issues --json
-✓ GitHub
-```
-
-**Sources.** The community `epiral/bb-sites` pack and official
-`leeguooooo/chrome-use-sites` pack are built-in defaults; no `site add` is needed.
-The official source overrides same-named community adapters and currently ships
-the stable Twitter engagement schema (`replies`, `bookmarks`, and numeric `views`).
-For other private or org-internal adapters, register an **extra source** as a GitHub
-`owner/repo`, a `.zip` URL, or a local directory. Extra sources sync into
-`~/.chrome-use/sites` with the same auto-sync lifecycle:
-
-```bash
-chrome-use site sources                            # lists both defaults + extras
-chrome-use site add acme/internal-sites            # a private/extra adapter repo
-chrome-use site add /path/to/local/adapters       # or a local dir / .zip URL
-chrome-use site remove acme/internal-sites
-chrome-use site update                             # syncs both defaults + every extra
-```
-
-Sources also come from `CHROME_USE_SITES_SOURCES` (comma-separated) or the
-`~/.chrome-use/sites.sources` file. Private repos authenticate via
-`CHROME_USE_SITES_TOKEN` (or `GITHUB_TOKEN`/`GH_TOKEN`). The two built-in defaults
-cannot be removed. Packs are namespaced by their directory, and a later source wins
-on a name collision.
-
-## Automated testing (`chrome-use test`)
-
-Turn the repetitive "open it, click around, check it's right" work into a
-**re-runnable suite** — unit tests for the frontend. Write cases in YAML; steps
-reuse chrome-use's own commands and assertions compile to a single check:
-
-```yaml
-# smoke.yaml
-suite: chatgpt smoke
-setup:
-  - account: chatgpt/huayue          # inject a cookie-use login (optional)
-cases:
-  - name: home loads logged in
-    steps:
-      - open: https://chatgpt.com/
-      - wait: { load: networkidle }
-    assert:
-      - url: { contains: chatgpt.com }
-      - visible: "#prompt-textarea"
-```
-
-```bash
-chrome-use test smoke.yaml                     # launches an isolated browser, runs cases
-chrome-use test smoke.yaml --session default   # …or against your connected Chrome
-```
-
-```
-suite: chatgpt smoke  (session cu-test)
-  ✓ home loads logged in   1.2s
-  ✗ composer takes text    0.8s
-      assert text "#prompt-textarea" contains "hi" → got ""
-      ↳ cu-test-artifacts/composer-takes-text.png
-2 cases · 1 passed · 1 failed
-```
-
-Exit code is non-zero if any case fails (drop it into CI), and failed cases save
-a screenshot. Assertions: `url` · `visible` · `hidden` · `text` · `count` ·
-`eval`. Steps: `open` · `click` · `fill` · `type` · `press` · `wait` · `scroll`
-· `eval`. Full guide: `chrome-use skills get test`. Deep-dive writeup (中文):
-[给前端写「单元测试」:chrome-use test 详解](https://blog.leeguoo.com/zh/posts/chrome-use-test-suite/).
-Found a regression? Add a case — the suite gets more valuable the more you use it.
-
-## Accessibility audits (`chrome-use a11y`)
-
-Run axe-core against the current page, or navigate and audit in one command. The
-engine is vendored into the binary, so it makes no CDN request, works under strict
-page CSP, and leaves any page-owned `window.axe` value untouched. Findings from
-same-origin and cross-origin iframes retain their frame selector paths.
-
-```bash
-chrome-use a11y                                  # audit the current page
-chrome-use a11y https://example.com              # navigate, then audit
-chrome-use a11y --tags wcag2a,wcag2aa            # filter by axe rule tags
-chrome-use a11y --selector "#main"               # scope to one subtree
-chrome-use a11y https://example.com --json        # structured CI/agent output
-```
-
-The text report lists each violation's impact, rule id, fix guidance, and failing
-selectors. JSON output includes counts plus trimmed `violations` and `incomplete`
-arrays. Audits require a CDP browser and are unavailable on Safari or iOS
-WebDriver sessions. MCP-only hosts can use `chrome_use_a11y` from the `all` tool
-profile.
-
-## Reading a page for fewer bytes
-
-Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or groups identified by a heading or one distinct linked product name and one action control. Named product links omit repeated context when their sibling action carries it. It preserves local text such as product prices without changing accessible names or refs. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
-
-`snapshot -i` is the start of every interaction, and re-reading a page you just
-read is the largest avoidable cost in an agent's context. Two flags cut it:
-
-```bash
-chrome-use snapshot -i --diff              # only what changed since the last snapshot
-chrome-use snapshot -i --max-bytes 4000    # cap the tree, cut between whole nodes
-chrome-use snapshot -i --max-bytes 4000 --from 70   # read on from where it stopped
-```
-
-`--diff` compares against this session's last snapshot **of the same page, with
-the same options**; on a 143 KB comment thread an unchanged re-read costs 1 byte.
-With no valid baseline it returns the full tree and says why, because an empty
-diff and an unchanged page are indistinguishable.
-
-`--max-bytes` needs no advance knowledge of what you are looking for (unlike
-`-i` / `-s` / `-d` / `-f`). It cuts only on whole-node boundaries — truncating
-the string would leave a severed `[ref=eN]` you can neither use nor recognise as
-severed — and reports what it left out plus a cursor to resume from.
-
-## Waiting before a read
-
-An observation is only worth what the page was doing when it was taken.
-Observations report `status: complete|partial|unavailable` separately from the
-action result. Failed captures do not become empty pages or URLs. `changed:null`
-means the evidence cannot establish whether anything changed; a known change can
-still be true in a partial observation. If the baseline failed but the after-tree
-was captured, that tree is returned instead of a fabricated diff. Incomplete
-observations include errors and `retryAction:false`: inspect current state rather
-than replaying the action. The command keeps its original action success value.
-For `form fill`, unavailable validation is `errors:null`, not an empty error list.
-
-Action observations include at most 20 request summaries, each capped at 256 UTF-8
-bytes. Data URLs show their media header and encoded payload size instead of the
-payload. `requestsTotal`, `requestsOmitted`, and `requestsShortened` describe the
-summary; use `network requests --json` for full captured details. Request summaries remain
-visible when `changed:false`: that flag describes tree/URL changes, not network activity.
-
-`snapshot` and `--observe` wait for the page to stop changing before they
-capture, so you do not have to guess a sleep:
-
-- the DOM has gone 100ms without a mutation,
-- no finite CSS transition or animation is still running (a spinner that loops
-  forever is ignored — it never ends),
-- and no request fired by the action you just ran is still in flight.
-
-Whichever takes longest wins, bounded by a 1 second ceiling. A static page
-costs about 100ms; a click that fires an XHR waits for the response instead of
-returning the pre-response tree as though it were the result.
-
-They differ in one way. A plain `snapshot` has no action to react to, so a still
-page is its answer. After a mutating action, `--observe` keeps watching for a
-first reaction for half the ceiling (500ms by default) before reporting
-`changed:false` — otherwise a control that renders on a 300ms timer reads as
-"nothing happened". Only actions that really change nothing pay that.
-
-When the ceiling expires with the page still moving, the reply says so rather
-than passing a mid-transition capture off as settled:
-
-```
-⚠ Page had not settled after 1000ms (request in flight still active) — this
-  capture may be mid-transition.
-```
-
-```bash
-chrome-use snapshot -i --settle-ms 3000   # raise the ceiling for a slow page
-chrome-use snapshot -i --no-settle        # capture now, mid-flight
-```
-
-Because the wait already happened, the pixels can ride along with it:
-
-```bash
-chrome-use snapshot -i --with-screenshot ./page.png
-chrome-use click @e8 --observe --with-screenshot ./after.png
-```
-
-Both captures come from that one settled moment — two separately-waited
-captures would describe two different states, which is worse than not combining
-them. The tree still goes to stdout and the image to disk: a screenshot is an
-output here, for looking at or attaching, never the way an agent reads a page.
-
-`AGENT_BROWSER_SETTLE_MS` sets the ceiling for every command (0 disables the
-wait) and `AGENT_BROWSER_SETTLE_QUIET_MS` sets the quiet window. Waiting for
-something *specific* is still `wait`'s job: the settle knows the page stopped,
-not that what you wanted appeared.
-
-## Editing inside a field, and pasting with a MIME type
-
-`fill` replaces a whole value and `type` appends. Two things that needs but
-neither does:
-
-```bash
-chrome-use select-text @e3 "confirm" --prefix "please "   # select one phrase
-chrome-use select-text @e3 "Hi Sam," --cursor-after       # place the caret
-chrome-use type @e3 " quick note:"                        # continues there
-
-chrome-use paste $'line one\nline two' --selector "#notes"
-chrome-use paste "<b>bold</b> text" --format html --selector "#editor"
-```
-
-`select-text` works on `<input>`, `<textarea>` and contenteditable. The prefix
-and suffix are context, not part of the selection: with `--prefix "please "` the
-selected text is `confirm`. A phrase that appears more than once is refused with
-the count rather than resolved to the first one, and "not found", "found but not
-with that context" and "too many matches" are three different messages, because
-they have three different fixes. Monaco and CodeMirror keep their own selection
-model and are refused by name — a DOM selection there looks applied and does
-nothing.
-
-`paste` matters wherever typing and pasting produce different documents:
-`type "<b>bold</b>"` gives you those eleven characters, `paste --format html`
-gives you bold text, and a newline stays a newline instead of becoming Enter.
-`--format md` inserts Markdown source as plain text. **The user's real clipboard
-is never touched** — the content rides on a synthetic ClipboardEvent, with no
-`navigator.clipboard` call and no Ctrl+V. Such an event is untrusted and so has
-no default action: an editor that listens gets it through its own handler, and
-one that ignores it gets a real insert instead. The reply names which path ran,
-and a paste that produced nothing is an error rather than a ✓.
-
-## Actions beyond a click
-
-Some controls do more than click: a disclosure expands, a menu button opens a
-popup, a spinbutton steps through a range.
-
-```bash
-chrome-use actions @e15      # what this element supports right now
-chrome-use do @e15 expand    # perform one of exactly those
-```
-
-`expand` / `collapse`, `showMenu`, `increment` / `decrement` and `toggle`, all
-derived from the element's computed accessibility properties. The set is read
-live, because what an element supports is state, not identity — a disclosure
-that was collapsed when you snapshotted may be open now. An action outside the
-set is refused with the supported list rather than attempted, and after acting
-the set is reported again so a control that did not move cannot read as success.
-
-## Finding elements and stable refs
-
-Use an explicit semantic locator when you know it, or pass a natural-language
-description to get ranked, non-acting candidates:
-
-```bash
-chrome-use find role button click --name "Save"
-chrome-use find "edit web service settings button"
-```
-
-Bare descriptions never click automatically. Candidate rows include role/name,
-visible text, computed cursor, and compact `id` / `data-testid` / class selector
-anchors so you can choose an explicit follow-up action.
-
-Selectors starting with `//`, `/`, `(`, `./` or `..` are treated as XPath
-automatically (no `xpath=` prefix). Keep in mind that `text()` only tests the
-first direct text node, so a label split across nodes (React `{a} - {b}`) or
-nested in a child never matches; use `contains(normalize-space(.), '…')`,
-`find "<label>"`, or a snapshot `@ref` instead. "Element not found" errors keep
-the selector and the resolver's diagnosis, and an XPath with `text()` that
-matched nothing explains this gotcha.
-
-Within the same document, unchanged DOM nodes keep their `@ref` across repeated
-snapshots even when a modal or list inserts other nodes. Navigation and tab
-switches still invalidate refs. `snapshot -i` also surfaces deliberate cursor
-styles such as `grab` and `col-resize`, plus compact DOM anchors for otherwise
-indistinguishable generic controls. When the accessibility tree yields no refs
-at all (web-component SPAs whose whole page lives inside shadow roots),
-`snapshot` automatically lists actionable elements from a DOM walk through open
-and closed shadow roots; those refs work with `click`/`type`/`fill` like any
-other, the JSON says `source: "dom"`, and `snapshot --dom` forces that path.
-
-`screenshot --annotate` refreshes its labels from the current document without
-hard-resetting that identity map. A ref from the immediately preceding snapshot
-remains valid when the document and referenced node are unchanged and the page
-did not navigate or switch tabs.
-
-## Downloads
-
-With ab-connect 0.5.13 or newer, URL downloads and download history use Chrome's
-native downloads API. The download runs in the connected profile, so it uses the
-same cookies as the logged-in browser without navigating the current tab.
-
-```bash
-chrome-use download @e2 ./video.mp4
-chrome-use download-url "https://example.com/report.pdf" ./report.pdf
-chrome-use download-url "https://example.com/archive.zip"
-chrome-use downloads --limit 10 --json
-chrome-use downloads --clear
-```
-
-For HTTP(S) anchors, `download` resolves the element's `href` first and starts a
-URL download. This also covers dynamically-created anchors exposed by
-`snapshot -i`. `downloads --clear` erases Chrome's download history only; it
-never deletes files.
-
-## Local HTTP API
-
-Every session's localhost stream port exposes a versioned HTTP integration
-surface. Use `stream status --json` to discover the port, then send the same
-daemon command JSON used by the CLI and MCP:
-
-```bash
-PORT=$(chrome-use --session demo stream status --json | jq -r '.data.port')
-ORIGIN="http://127.0.0.1:$PORT"
-
-curl -fsS "$ORIGIN/api/v1/status"
-curl -fsS "$ORIGIN/api/v1/tabs"
-curl -fsS -X POST "$ORIGIN/api/v1/command" \
-  -H "Origin: $ORIGIN" \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"curl-1","action":"snapshot","interactive":true}'
-```
-
-Versioned reads require a loopback `Host` and reject mismatched browser origins.
-Command POSTs additionally require matching `Origin` or `Referer`; this blocks
-cross-site requests and DNS rebinding. Failed CLI, MCP, and HTTP commands share
-`success`, `error`, stable `code`, and `retryable` fields.
-See [the HTTP API guide](docs/en/http-api.html).
-
-## Network interception (`chrome-use network route`)
-
-Mock a response, rewrite an outgoing request, or block one — right on the Chrome
-you're driving, over the CDP Fetch domain. No proxy, no CA cert, no JS injection,
-no extra extension permission.
-
-```bash
-chrome-use network route "*/api/me" --body '{"vip":true}' --status 200 --content-type application/json  # mock response
-chrome-use network route "*/api/save" --method POST --set-header Authorization="Bearer test"            # rewrite request
-chrome-use network route "*/v1/*" --rewrite-url https://staging.example.com/v1/thing                     # redirect
-chrome-use network route "*/api/me" --edit-status 503 --edit-header X-Env=test --replace 'prod=>staging' # edit the real response
-chrome-use network route "*/analytics" --abort                                                           # block
-chrome-use network requests --type websocket                                                              # connection metadata only, no frame payloads
-```
-
-Verbs/fields mirror Playwright's `route`/`fulfill`/`continue`/`abort`. Deep-dive
-writeup (中文): [改网络请求和响应:chrome-use network route 详解](https://blog.leeguoo.com/zh/posts/chrome-use-network-mock-rewrite/).
+The agent operates in your Chrome: you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
+
+| Command | Purpose |
+|---|---|
+| `chrome-use open <url>` | Connect to your Chrome and navigate |
+| `chrome-use snapshot -i` | Read the page; the start of every interaction |
+| `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |
+| `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends |
+| `chrome-use screenshot ./page.png` | Save a screenshot (an output for looking at, never the way an agent reads a page) |
+| `chrome-use find "edit web service settings button"` | Ranked, non-acting candidates from a natural-language description |
+| `chrome-use actions @e15` · `do @e15 expand` | What this element supports right now, and perform one of exactly those |
+| `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | List tabs; select a created or adopted tab; attach an already-open tab without navigating it |
+| `chrome-use dialog status` · `dialog accept\|dismiss` | Handle a native `confirm()` / `prompt()` opened by a click |
+| `chrome-use download @e2 ./video.mp4` | Download with the same cookies as the logged-in browser, without navigating the current tab |
+| `chrome-use network route "*/api/me" --body '{"vip":true}'` | Mock a response, rewrite an outgoing request, or block one |
+| `chrome-use site github/issues epiral/bb-browser --json` | Run a site adapter and get clean JSON from the site's own API |
+| `chrome-use session list` · `session stop [name]` | Manage session workers |
+| `chrome-use status` | Relay, profile, extension, and session health |
 
 ## Anti-detection
 
 <img src="assets/shield.png" alt="stealth shield" width="320" align="right" />
 
-When connected to your real Chrome, we inject **zero** JavaScript patches. Your browser's fingerprint is completely genuine. The guiding rule is **native CDP/Chrome overrides over JS lies** — a re-defined getter is itself detectable; a native override isn't.
+When connected to your real Chrome, we inject **zero** JavaScript patches. Your browser's fingerprint is completely genuine. The guiding rule is **native CDP/Chrome overrides over JS lies**: a re-defined getter is itself detectable; a native override isn't.
 
 - `navigator.webdriver = false` via `Emulation.setAutomationOverride` (native, undetectable by CreepJS-style lie tests).
-- **`Runtime.enable` is left OFF by default.** A live `Runtime` domain is a detectable CDP signal (the patchright/rebrowser "runtime leak") — even when attached to your real Chrome. We only enable it when you opt into console/error capture (see below). `click`, `fill`, `eval`, etc. work without it.
+- **`Runtime.enable` is left OFF by default.** A live `Runtime` domain is a detectable CDP signal (the patchright/rebrowser "runtime leak"), even when attached to your real Chrome. We only enable it when you opt into console/error capture. `click`, `fill`, `eval`, etc. work without it.
 
 **Test results (connected to real Chrome):**
 
 | Test site | Result |
 |---|---|
 | [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0% stealth · 0% headless** (no override traces at all) |
-| [bot.incolumitas.com](https://bot.incolumitas.com/) | all checks OK — `overflowTest`, `overrideTest`, `puppeteerExtraStealthUsed`, worker consistency |
+| [bot.incolumitas.com](https://bot.incolumitas.com/) | all checks OK: `overflowTest`, `overrideTest`, `puppeteerExtraStealthUsed`, worker consistency |
 | [bot.sannysoft.com](https://bot.sannysoft.com) | all green |
 | [BrowserScan](https://www.browserscan.net/bot-detection) | Webdriver · User-Agent · CDP all clean |
 | [Cloudflare Turnstile](https://nowsecure.nl) | passed |
 
-`0% stealth` on CreepJS is the key number: because the connect path patches **nothing**, there is no override for a lie-detector to catch. (Dashboards that read `navigator.languages` order or IP geolocation may show a soft "navigator"/"location" flag — that tracks *your real Chrome's* language list and network, not an automation tell.)
+`0% stealth` on CreepJS is the key number: because the connect path patches **nothing**, there is no override for a lie-detector to catch. (Dashboards that read `navigator.languages` order or IP geolocation may show a soft "navigator"/"location" flag. That tracks *your real Chrome's* language list and network, not an automation tell.)
 
-When using `--launch` mode (standalone browser), a full suite of stealth patches is applied instead, and it passes the suite above — with one caveat: CreepJS reports **~20% stealth** because the srcdoc-iframe `contentWindow` patch trips its `hasIframeProxy` probe (the proxy that hides automation is itself a tell). Everything else is clean (`0% headless`, sannysoft/browserscan green, Cloudflare passed). Set **`AGENT_BROWSER_DISABLE_IFRAME_PROXY=1`** to drop that patch for a clean **0% stealth** (trades the niche srcdoc-iframe masking). The **extension-connect path** (your real Chrome) injects zero JS and is unaffected — it's the genuine 0% path.
-
-### Human-like input (behavioural stealth)
-
-Fingerprint stealth isn't the whole story — the strongest anti-bot vendors (Akamai, PerimeterX, DataDome) also score *behaviour*. A click that teleports the cursor to an element's exact centre with no approach path and zero press delay is a tell, **even though our CDP events are `isTrusted`**.
-
-Drag mode follows the current session connection and target frame; an extension running in another Chrome profile does not change a launched browser’s drag mode.
-
-With humanize on, the cursor moves like a hand: clicks follow a curved, decelerating Bézier path and land on a jittered point *inside* the element (never the dead centre); typing uses variable inter-keystroke timing; scrolling eases in segments; drags follow a curve. It's **adaptive** — every navigation is probed for known anti-bot vendors (cookies / scripts / globals) and a guarded page auto-escalates to full human motion, while ordinary sites stay instant (zero overhead).
-
-What the page's own `mousemove` stream sees (this *is* what a behavioural detector analyses):
-
-| | trajectory |
-|---|---|
-| **off** (default) | straight lines · dead-centre · instant |
-| **human** | curved trails · slow-in/slow-out · off-centre landings |
-
-Control with `--humanize off\|fast\|human` or `AGENT_BROWSER_HUMANIZE`. Default `off`; the adaptive detector escalates per page.
-
-### Silent operation
-
-Driving your real Chrome should never interrupt your work. The agent operates **entirely in the background**: new tabs open un-focused (in their own colored per-session tab group), the agent **never force-fronts a tab**, and `Emulation.setFocusEmulationEnabled` keeps each agent tab rendering and reporting `document.hasFocus()` / `visibilityState: 'visible'`. So screenshots still work, pages aren't render-throttled, and "the tab was hidden the whole session" never becomes its own bot tell. You keep working in your active tab; the agent works alongside you, silently. (Surfacing a tab stays available as an explicit command.)
+When using `--launch` mode (standalone browser), a full suite of stealth patches is applied instead, and it passes the suite above, with one caveat: CreepJS reports **~20% stealth** because the srcdoc-iframe `contentWindow` patch trips its `hasIframeProxy` probe (the proxy that hides automation is itself a tell). Everything else is clean (`0% headless`, sannysoft/browserscan green, Cloudflare passed). Set **`AGENT_BROWSER_DISABLE_IFRAME_PROXY=1`** to drop that patch for a clean **0% stealth** (trades the niche srcdoc-iframe masking). The **extension-connect path** (your real Chrome) injects zero JS and is unaffected; it's the genuine 0% path.
 
 ### Verify it yourself
 
-Don't take our word for it — point your connected Chrome at the toughest public detectors and compare:
+Don't take our word for it. Point your connected Chrome at the toughest public detectors and compare:
 
-- **[CreepJS](https://abrahamjuliot.github.io/creepjs/)** — the most thorough fingerprint / lie detector
-- **[bot.incolumitas.com](https://bot.incolumitas.com/)** — behavioral + fingerprint scoring with a public methodology
-- **[BrowserScan](https://www.browserscan.net/bot-detection)** — Webdriver / User-Agent / CDP / Navigator
-- **[bot.sannysoft.com](https://bot.sannysoft.com)** — the classic automation-marker checklist
-- **[pixelscan.net](https://pixelscan.net/)** · **[iphey.com](https://iphey.com/)** — consistency & identity
+- **[CreepJS](https://abrahamjuliot.github.io/creepjs/)**: the most thorough fingerprint / lie detector
+- **[bot.incolumitas.com](https://bot.incolumitas.com/)**: behavioral + fingerprint scoring with a public methodology
+- **[BrowserScan](https://www.browserscan.net/bot-detection)**: Webdriver / User-Agent / CDP / Navigator
+- **[bot.sannysoft.com](https://bot.sannysoft.com)**: the classic automation-marker checklist
+- **[pixelscan.net](https://pixelscan.net/)** · **[iphey.com](https://iphey.com/)**: consistency & identity
 
-We deliberately **don't ship our own bot detector** — the strongest, most honest benchmark is the market's best detectors run against your real browser.
+We deliberately **don't ship our own bot detector**. The strongest, most honest benchmark is the market's best detectors run against your real browser.
 
-### Tuning knobs (environment variables)
+## More in the docs
 
-| Variable | Default | Effect |
-|---|---|---|
-| `AGENT_BROWSER_CAPTURE_CONSOLE` | off | Enable `Runtime` domain so `console` / `errors` capture page output. Off keeps the stealthiest profile. |
-| `AGENT_BROWSER_HUMANIZE` | off | Human-like input motion: `off` (instant), `fast` (light eased trajectory), `human` (full curved trajectory + landing jitter + typing cadence + eased scroll/drag). Also `--humanize`. Default `off`; the adaptive detector auto-escalates pages guarded by Akamai/PerimeterX/DataDome to `human`. |
-| `AGENT_BROWSER_TIMEZONE` | unset | `--launch` only. An IANA id (e.g. `Asia/Tokyo`) sets the timezone natively (Intl + Date follow, no JS lie) to match a proxy; `auto` derives one from the locale. |
-| `AGENT_BROWSER_BLOCK_WEBRTC` | auto | `--launch` only. Auto-forces WebRTC through the proxy when one is set (no real-IP leak). `1` hides the local IP without a proxy; `0` opts out. |
-| `AGENT_BROWSER_HIDE_CANVAS` | off | `--launch` only. Adds session-stable canvas/audio fingerprint noise. Off by default (noise is itself a "lie"). |
-| `AGENT_BROWSER_ADAPTIVE_REF` | on | When a saved `@ref` moves and the role/name re-query fails, relocate it by fingerprint similarity (high score + clear margin required, else it fails loudly). `0` disables. |
-| `AGENT_BROWSER_CLICK_MODE` | _(auto)_ | Click strategy. Default scrolls the target into view, dispatches a coordinate click, and falls back to a DOM `.click()` if a floating layer occludes the point. `dom` always uses `.click()` (best for autocomplete/menu items that close on blur); `coord` is strict coordinate-only (hard-fail on occlusion). |
+- [Site adapters](https://chrome-use.leeguoo.com/en/site-adapters.html): turn a website into a structured-data CLI (`chrome-use site`)
+- [Automated testing](https://chrome-use.leeguoo.com/en/testing.html): re-runnable YAML suites with `chrome-use test`
+- [Accessibility audits](https://chrome-use.leeguoo.com/en/commands.html): axe-core via `chrome-use a11y`
+- [Reading a page for fewer bytes](https://chrome-use.leeguoo.com/en/reading.html): `snapshot -i --diff`, `--max-bytes`, `--from`
+- [Waiting before a read](https://chrome-use.leeguoo.com/en/waiting.html): settle detection, `--settle-ms`, `--with-screenshot`
+- [Editing inside a field, and pasting with a MIME type](https://chrome-use.leeguoo.com/en/interacting.html): `select-text`, `paste --format html`
+- [Actions beyond a click](https://chrome-use.leeguoo.com/en/interacting.html): `actions`, `do expand|showMenu|increment`
+- [Finding elements and stable refs](https://chrome-use.leeguoo.com/en/finding.html): `find`, XPath, shadow-DOM refs
+- [Downloads](https://chrome-use.leeguoo.com/en/interacting.html): `download`, `download-url`, `downloads`
+- [Local HTTP API](https://chrome-use.leeguoo.com/en/http-api.html): the versioned `/api/v1` surface on each session's stream port
+- [Network interception](https://chrome-use.leeguoo.com/en/network.html): `network route` to mock, rewrite, or block
+- [Human-like input (humanize)](https://chrome-use.leeguoo.com/en/stealth.html): `--humanize off|fast|human`, adaptive anti-bot escalation
+- [Silent operation](https://chrome-use.leeguoo.com/en/real-chrome.html): background tabs, never steals your foreground tab
+- [Tuning knobs](https://chrome-use.leeguoo.com/en/commands.html): `AGENT_BROWSER_*` environment variables
+- [Standalone mode (`--launch`)](https://chrome-use.leeguoo.com/en/real-chrome.html): a fresh isolated browser, `--profile auto` to keep your login
+- [Tabs, dialogs, and sessions](https://chrome-use.leeguoo.com/en/commands.html): `tab duplicate|select|adopt|inspect`, `dialog`, `session handoff`
+- [MCP server](https://chrome-use.leeguoo.com/en/mcp.html): `chrome-use mcp`, `--tools all`
+- [Troubleshooting](https://chrome-use.leeguoo.com/en/troubleshooting.html)
 
-## What makes chrome-use different
+<!-- use-family -->
+## The `*-use` family
 
-- **Auto-connect is default** — `chrome-use open <url>` drives your existing Chrome instead of launching a new one
-- **Extension-relay transport** — a one-click Chrome Web Store extension + native messaging, so there's no debug port and no "Allow remote debugging?" dialog
-- **Browser-level relay navigation** — top-level `open`/`navigate` uses Chrome's normal tab API first, matching manual navigation and avoiding sites that loop or stall on CDP-driven navigation; CDP remains the fallback
-- **Reload-loop diagnosis** — four rapid commits to the same URL surface an actionable error instead of returning an empty, unstable DOM
-- **Relay tab reconciliation** — reconnect validates Chrome tab IDs before re-announcing them, so a dead bootstrap `about:blank` cannot remain active beside the recovered page
-- **CDP-native stealth** — anti-detection via Chrome/CDP overrides rather than JS patches; zero patches when attached to your real Chrome, full patches only for `--launch`
-- **Humanize** — human-like cursor trajectories + adaptive anti-bot handling
-- **Multi-agent isolation** — concurrent agents share one real Chrome via per-session tab groups; Codex tasks auto-isolate through `CODEX_THREAD_ID`
-- **Silent operation** — runs in the background; never steals your foreground tab
+Small, composable CLIs that give an AI agent hands on one real thing. Same shape
+everywhere: `curl … install.sh | sh` to install, `npx skills add leeguooooo/<name>`
+to teach your agent, JSON on stdout.
 
-On macOS, launched Chrome instances include
-`--disable-features=MacAppCodeSignClone`. Automation does not need Chrome's
-in-place-update clone, and disabling it prevents interrupted sessions from
-leaving gigabyte-scale APFS clones behind.
-
-<sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); the projects have since diverged substantially.</sub>
+| Repo | Gives your agent |
+|---|---|
+| [mail-use](https://github.com/leeguooooo/mail-use) | Email: read, search, send, triage across Gmail / QQ / 163 / any IMAP |
+| [iphone-use](https://github.com/leeguooooo/iphone-use) | A real iPhone: tap, type, screenshot, pull on-device data |
+| [wechat-use](https://github.com/leeguooooo/wechat-use) | WeChat on macOS: send messages, query contacts and history |
+| [discord-use](https://github.com/leeguooooo/discord-use) | Discord: messages, channels, forums, webhooks (REST-only, Rust) |
+| [cookie-use](https://github.com/leeguooooo/cookie-use) | Many logged-in accounts per site: capture, switch, apply sessions |
+| [profile-use](https://github.com/leeguooooo/profile-use) | Your personal profile, safely: fill signup / KYC / checkout forms |
+| [bitwarden-use](https://github.com/leeguooooo/bitwarden-use) | Bitwarden / Vaultwarden: headless passkey (FIDO2) login |
+| [chatgpt-use](https://github.com/leeguooooo/chatgpt-use) | Your ChatGPT subscription as a coding-agent backend, no API key |
+| [computer-use](https://github.com/leeguooooo/computer-use) | The macOS desktop itself |
+| [pixcake-use](https://github.com/leeguooooo/pixcake-use) | Read-only PixCake probing: snapshot / diff / SQLite inspection |
 
 ## Contributing
 
@@ -871,8 +271,6 @@ leaving gigabyte-scale APFS clones behind.
 build and test, and two hard-won rules about never shipping a silent success and
 about measuring performance honestly. Open work is tracked in
 [issues](https://github.com/leeguooooo/chrome-use/issues).
-
-## Contributors
 
 Thanks to everyone who has contributed to chrome-use!
 
@@ -883,54 +281,7 @@ Thanks to everyone who has contributed to chrome-use!
 ## License
 
 Apache-2.0
+
 ---
 
-> Built by **leeguooooo** — field notes on AI agents, reverse engineering & Cloudflare Workers at **[blog.leeguoo.com](https://blog.leeguoo.com)** · follow on **[X @leeguooooo](https://x.com/leeguooooo)**
-
-<!-- use-family -->
-## Multi-profile Chrome: ChooseBrowser rules
-
-If you keep several Chrome profiles — work, personal, a client's — you already
-know which account each site belongs to, and you tell us with `--browser` every
-time.
-
-[ChooseBrowser](https://choosebrowser.leeguoo.com) is a macOS link router that
-stores that mapping. When it is installed, `chrome-use open <url>` without an
-explicit `--browser` follows the rule you already wrote for that site, and says
-so:
-
-```
-$ chrome-use open https://github.com/my-org/repo
-· using Chrome profile Profile 14 — a ChooseBrowser rule routes this site there
-  (github.com|/my-org*). Override with --browser <id|email>, or skip with
-  --no-choosebrowser.
-```
-
-Read-only, and invisible if you do not use it: no rules file means no behaviour
-change and no message. A rule naming a profile that is not running the extension
-falls back to the normal profile choice. That fallback does not verify the site
-account; check its identity or pin `--browser` when a specific account is required.
-
-> **Disclosure:** ChooseBrowser is a paid macOS app (US$4.99, 7-day trial) by the
-> same author as chrome-use. This is a companion-tool note, not an independent
-> review. chrome-use needs none of it — the integration reads a file if it
-> happens to be there.
-
-## The `*-use` family
-
-Small, composable CLIs that give an AI agent hands on one real thing. Same shape
-everywhere: `curl … install.sh | sh` to install, `npx skills add leeguooooo/<name>`
-to teach your agent, JSON on stdout.
-
-| Repo | Gives your agent |
-|---|---|
-| [mail-use](https://github.com/leeguooooo/mail-use) | Email — read, search, send, triage across Gmail / QQ / 163 / any IMAP |
-| [iphone-use](https://github.com/leeguooooo/iphone-use) | A real iPhone — tap, type, screenshot, pull on-device data |
-| [wechat-use](https://github.com/leeguooooo/wechat-use) | WeChat on macOS — send messages, query contacts and history |
-| [discord-use](https://github.com/leeguooooo/discord-use) | Discord — messages, channels, forums, webhooks (REST-only, Rust) |
-| [cookie-use](https://github.com/leeguooooo/cookie-use) | Many logged-in accounts per site — capture, switch, apply sessions |
-| [profile-use](https://github.com/leeguooooo/profile-use) | Your personal profile, safely — fill signup / KYC / checkout forms |
-| [bitwarden-use](https://github.com/leeguooooo/bitwarden-use) | Bitwarden / Vaultwarden — headless passkey (FIDO2) login |
-| [chatgpt-use](https://github.com/leeguooooo/chatgpt-use) | Your ChatGPT subscription as a coding-agent backend — no API key |
-| [computer-use](https://github.com/leeguooooo/computer-use) | The macOS desktop itself |
-| [pixcake-use](https://github.com/leeguooooo/pixcake-use) | Read-only PixCake probing — snapshot / diff / SQLite inspection |
+> Built by **leeguooooo**. Field notes on AI agents, reverse engineering & Cloudflare Workers at **[blog.leeguoo.com](https://blog.leeguoo.com)** · follow on **[X @leeguooooo](https://x.com/leeguooooo)**
