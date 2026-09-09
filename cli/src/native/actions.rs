@@ -8039,7 +8039,24 @@ async fn handle_tab_list(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     // sessions or re-attached after a cross-process nav, and drops gone ones
     // (issue #21). Best-effort: a stale list still beats erroring the command.
     mgr.resync_targets().await.ok();
-    let tabs = mgr.tab_list();
+    // What the relay is actually holding, next to what this session asked for.
+    // Absent (older extension, or the call failed) means "could not ask" — the
+    // field is then left off entirely rather than rendered as "not attached",
+    // which would be a new false statement in place of the missing one (#217).
+    let attached = mgr.relay_attached_target_ids().await;
+    let mut tabs = mgr.tab_list();
+    if let Some(attached) = attached {
+        for tab in tabs.iter_mut() {
+            let Some(tid) = tab.get("targetId").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let is_attached = attached.contains(tid);
+            if let Some(obj) = tab.as_object_mut() {
+                obj.insert("relayAttached".to_string(), json!(is_attached));
+            }
+        }
+    }
+    let tabs = tabs;
     // Echo `full` so the formatter prints untruncated URLs (issue #19).
     if cmd.get("full").and_then(|v| v.as_bool()).unwrap_or(false) {
         Ok(json!({ "tabs": tabs, "full": true }))
