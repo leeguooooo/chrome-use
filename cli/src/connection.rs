@@ -291,6 +291,22 @@ pub fn rename_session_group(session: &str, from: &str, to: &str) -> bool {
 }
 
 /// Ownership survives idle daemon exit; explicit stop must not silently ignore it.
+/// How many tabs the saved ownership record lists, regardless of endpoint —
+/// for telling the user what a stale record is about.
+pub fn created_target_count(session: &str) -> usize {
+    fs::read_to_string(get_created_targets_path(session))
+        .ok()
+        .and_then(|value| serde_json::from_str::<CreatedTargetRegistry>(&value).ok())
+        .map(|registry| registry.target_ids.len())
+        .unwrap_or(0)
+}
+
+/// Drop the saved ownership record without closing anything. The tabs stay
+/// open; only the session's claim on them is forgotten.
+pub fn forget_created_targets(session: &str) -> Result<(), String> {
+    write_created_targets(session, "", &HashSet::new())
+}
+
 pub fn has_created_targets(session: &str) -> bool {
     fs::read_to_string(get_created_targets_path(session))
         .ok()

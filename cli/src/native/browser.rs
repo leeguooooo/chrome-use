@@ -630,7 +630,12 @@ pub fn to_ai_friendly_error(error: &str) -> String {
         if lower.contains("debugger_access_denied:") {
             return error.to_string();
         }
-        return format!("debugger_access_denied: Chrome blocked debugger access to protected extension content in this tab, which can be a child frame. Reattaching does not resolve this restriction. Use `tab inspect` for browser metadata or a separate test profile. Original error: {error}");
+        // The same words come back when the tab was opened by ANOTHER
+        // chrome-use session daemon (its extension context, not ours). That
+        // reads like a permissions problem and sends people debugging the
+        // wrong thing for a long time (#256); the fix is to stop the other
+        // daemon.
+        return format!("debugger_access_denied: Chrome blocked debugger access to protected extension content in this tab, which can be a child frame. Reattaching does not resolve this restriction. If this session did not open the tab, another chrome-use session daemon may hold it: run `chrome-use sessions`, then `chrome-use session stop <that session>`. Otherwise use `tab inspect` for browser metadata or a separate test profile. Original error: {error}");
     }
     // Top-level `await` in `eval` fails with a bare "await is not defined" /
     // "await is only valid in async" — unhelpful. Point at the wrapper (issue #65).
