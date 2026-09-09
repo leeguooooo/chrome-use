@@ -2031,6 +2031,8 @@ pub async fn diagnose_unchanged(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Option<Value> {
+    use serde_json::json;
+
     let resolved = resolve_element_object_id(
         client,
         session_id,
