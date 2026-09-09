@@ -8790,9 +8790,7 @@ async fn relay_capabilities(mgr: &BrowserManager) -> Vec<String> {
 /// The generic-call policy version the extension implements, if any: the
 /// `call:<policy>` capability from `hello`.
 fn generic_call_policy(capabilities: &[String]) -> Option<&str> {
-    capabilities
-        .iter()
-        .find_map(|c| c.strip_prefix("call:"))
+    capabilities.iter().find_map(|c| c.strip_prefix("call:"))
 }
 
 const GENERIC_CALL_MIN_EXTENSION_VERSION: &str = "0.5.25";

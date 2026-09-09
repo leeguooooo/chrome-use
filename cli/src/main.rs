@@ -1944,7 +1944,10 @@ fn main() {
                     exit(1);
                 }
             }
-        } else if matches!(clean.get(1).map(|s| s.as_str()), Some("call") | Some("state")) {
+        } else if matches!(
+            clean.get(1).map(|s| s.as_str()),
+            Some("call") | Some("state")
+        ) {
             // `extension call <ns.method> [json-args]` / `extension state` need a
             // live relay session, so they run as ordinary daemon commands.
             // Rewritten here (the `extension` word is otherwise local-only) and
