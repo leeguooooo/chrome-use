@@ -45,7 +45,7 @@ chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚�
 | 真实浏览器指纹（CreepJS ~0%）¹ | ❌ 自动化特征 / headless | ✅ | ✅ | ✅ **已实测 0%** |
 | **无 `Runtime.enable` CDP 泄漏**（rebrowser）² | ❌ 泄漏 | ❌ 泄漏 | — | ✅ **默认关闭** |
 | 多 agent 共用**同一个**真实 Chrome、标签组隔离³ | ❌ 各开各的浏览器 | ⚠️ 共享 tab、无隔离 | ❌ 单 app | ✅ |
-| 权限面 | 完全控制 | 完整 CDP | 16 个，含 `<all_urls>` | **7 个，无 `<all_urls>`** |
+| 权限面 | 完全控制 | 完整 CDP | 16 个，含 `<all_urls>` | **12 个，无 `<all_urls>`** |
 
 <sub>¹ 三家「真实 Chrome」工具在 CreepJS 上都 ~0%（毕竟是真浏览器），我们的是实测过的。² rebrowser `runtimeEnableLeak`：我们的中继路径实测无泄漏；Claude in Chrome 未独立测试（—）。³ web-access 也能跑并行子 agent，但无每会话隔离；本工具每个 `--session` 拿到自己彩色、命令隔离的标签组。实测数字见 [反检测](#反检测)。</sub>
 
@@ -145,9 +145,20 @@ $ chrome-use open https://github.com/my-org/repo
   --no-choosebrowser.
 ```
 
-只读，没装的话完全无感：没有规则文件就不改变任何行为、也不打任何提示。规则指向的 profile 如果没在跑扩展，会退回正常的 profile 选择逻辑。该回退不保证网站账号正确；需要特定账号时，应检查身份或显式指定 `--browser`。
+只读，没装的话完全无感：没有规则文件就不改变任何行为、也不打任何提示。规则指向的 profile 如果没在跑扩展，会退回正常的 profile 选择逻辑。该回退不保证网站账号正确；需要特定账号时，应检查身份或显式指定 `--browser`。在显式 `--browser` 后面加 `--remember`，chrome-use 会请 ChooseBrowser 把规则写回去，由它自己的确认弹窗把关。
 
-> **利益披露：** ChooseBrowser 是一款付费 macOS 应用（US$4.99，7 天试用），作者与 chrome-use 是同一人。这是配套工具说明，不是独立第三方评价。chrome-use 不依赖它。
+<a href="https://choosebrowser.leeguoo.com"><img src="docs/assets/choosebrowser-profiles-zh.jpg" alt="ChooseBrowser：每个 Chrome profile 一行" width="640" align="right"></a>
+
+**ChooseBrowser** 是 chrome-use 作者做的 macOS 链接路由器。设为默认浏览器之后，你点的每个链接都会先问一句：开在哪个浏览器、哪个 Chrome profile。
+
+- Chrome、Edge、Brave、Vivaldi、Chromium 的每个 profile 都是独立的一行，工作、个人、客户账号各走各的。
+- 规则可以匹配路径，不只看域名，同一个网站可以有两个去向。
+- `⌘1`–`⌘9` 直接打开，`⌥↵` 记住一次，它还会学你在每个网站的偏好。
+- 无账号、无跟踪、无统计。多台 Mac 同步走你自己的 iCloud，可选。
+
+免费试用 7 天，之后 **US$4.99 一次性买断，最多 3 台 Mac**。公证过的 `.dmg`，需要 macOS 26 或更高。[下载](https://choosebrowser.leeguoo.com) · [完整介绍](https://chrome-use.leeguoo.com/choosebrowser.html)。chrome-use 不依赖它。
+
+<br clear="all">
 
 ## 用法
 

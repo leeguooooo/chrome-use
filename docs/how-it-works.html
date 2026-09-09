@@ -146,7 +146,7 @@
       <h2>扩展端只做一件事</h2>
       <p>
         ab-connect 是个 MV3 扩展，核心就是拿 <code>chrome.debugger</code> 按标签页执行 CDP 命令，把结果通过原生消息交回中继。
-        权限足迹是 7 项，没有 <code>&lt;all_urls&gt;</code>。两条对指纹重要的性质：
+        权限足迹是 12 项，没有 <code>&lt;all_urls&gt;</code>。两条对指纹重要的性质：
       </p>
       <ol>
         <li>它<strong>只附加 agent 自己的标签</strong>。你正在看的页面不会被 attach，也就不会出现「chrome-use 已开始调试此浏览器」的横幅（扩展 0.5.5 起，只 attach agent 拥有的标签；0.5.19 起，agent 标签页闲置 30 秒会自动释放调试器，横幅自行消失，下一条命令再透明重连）。</li>

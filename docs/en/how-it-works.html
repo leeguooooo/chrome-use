@@ -135,7 +135,7 @@
       <h2>The extension does one thing</h2>
       <p>
         ab-connect is an MV3 extension whose core job is to run CDP commands per tab via <code>chrome.debugger</code> and hand results back to the relay over native messaging.
-        Its permission footprint is 7 items, with no <code>&lt;all_urls&gt;</code>. Two properties that matter for fingerprinting:
+        Its permission footprint is 12 items, with no <code>&lt;all_urls&gt;</code>. Two properties that matter for fingerprinting:
       </p>
       <ol>
         <li>it <strong>attaches only to the agent's own tabs</strong>. The page you're looking at is never attached, so you never see the "chrome-use has started debugging this browser" banner (since extension 0.5.5, it attaches only agent-owned tabs; since 0.5.19 an agent tab idle for 30 seconds releases its debugger, so the banner clears itself and the next command re-attaches transparently).</li>
