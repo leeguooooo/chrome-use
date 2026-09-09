@@ -2030,6 +2030,26 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 )),
             );
         }
+        // Name the target this observation came from. Without it a caller
+        // cannot tell a delta on the page they meant from a delta on a page
+        // they were silently moved to — after a rebinding, a cross-process
+        // navigation, or a tab switch — and reuses refs across the boundary
+        // (issue #237). Ids only: no account email, no query string beyond the
+        // url the page itself reports.
+        if let Some((tab_id, target_id, url)) =
+            state.browser.as_ref().and_then(|mgr| mgr.observed_target())
+        {
+            observed.insert(
+                "target".into(),
+                json!({
+                    "session": state.session_id,
+                    "tabId": tab_id,
+                    "targetId": target_id,
+                    "url": url,
+                }),
+            );
+        }
+
         if let Some(obj) = resp.as_object_mut() {
             let data = obj
                 .entry("data")
