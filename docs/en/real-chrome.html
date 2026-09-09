@@ -237,6 +237,9 @@
         stated. If a valid request cannot be built (the command does not navigate, the profile has
         no signed-in account, the account is not in Chrome's registry), it refuses before
         navigating and says why, rather than sending something that would be discarded in silence.
+        It needs a ChooseBrowser version that accepts rule requests (the <code>choosebrowser://</code>
+        scheme); on an older one nothing handles the url, and chrome-use says so instead of
+        pretending the request went through.
       </p>
 
       <div class="du-callout note">

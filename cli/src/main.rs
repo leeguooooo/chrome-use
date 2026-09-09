@@ -311,9 +311,15 @@ fn send_remember_request(request: &str, host: &str, profile: &str) {
             profile,
         ),
         // A non-zero exit means no application claimed `choosebrowser://`.
+        // That is the common case today, not an edge case: the ChooseBrowser
+        // builds in the store register only http/https, and the scheme ships in
+        // a later version. So "is it installed?" would be the wrong question
+        // for most people who see this — they have it, just not that version.
         Ok(_) | Err(_) => eprintln!(
             "{} --remember: nothing on this Mac handles choosebrowser:// urls, so no rule was \
-             proposed for {host}. Is ChooseBrowser installed?",
+             proposed for {host}. ChooseBrowser is either not installed or older than the \
+             version that accepts rule requests — update it, or add the rule in ChooseBrowser \
+             directly.",
             color::warning_indicator(),
         ),
     }
