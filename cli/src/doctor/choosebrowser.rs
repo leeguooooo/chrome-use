@@ -41,6 +41,37 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         return;
     };
 
+    // Two truths, and we picked one. A file in a later path is not being
+    // read, but something may still be writing to it — a downgrade to a build
+    // that uses the old location, or a half-finished migration — in which case
+    // every url routes by whichever copy stopped changing. Not a failure, so
+    // not a warning; but it is exactly the kind of thing the silent path
+    // cannot say for itself.
+    let shadowed: Vec<String> = d
+        .probed
+        .iter()
+        .filter(|(p, exists)| *exists && p != source)
+        .map(|(p, _)| p.display().to_string())
+        .collect();
+    if !shadowed.is_empty() {
+        checks.push(
+            Check::new(
+                "choosebrowser.rules.shadowed",
+                category,
+                Status::Info,
+                format!(
+                    "another rules file exists and is not being read: {}",
+                    shadowed.join(", ")
+                ),
+            )
+            .with_fix(
+                "only the first path found is used — if ChooseBrowser is still writing to the \
+                 other one (after a downgrade, say), the rules in use are stale; remove or \
+                 merge the copy you no longer want",
+            ),
+        );
+    }
+
     match (d.parsed, d.version) {
         (Some(n), _) => {
             checks.push(Check::new(
