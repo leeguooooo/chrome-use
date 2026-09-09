@@ -467,10 +467,19 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">frame</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use frame <span class="du-str">"#iframe"</span>     <span class="du-cmt"># 按 CSS 选择器切换到 iframe</span>
+<pre><code><span class="du-prompt">$</span> chrome-use frames              <span class="du-cmt"># [0] top … [1] accessory_layer …</span>
+<span class="du-prompt">$</span> chrome-use frame 1             <span class="du-cmt"># 按 frames 打印的序号切换（0 = 顶层文档）</span>
+<span class="du-prompt">$</span> chrome-use frame <span class="du-str">"#iframe"</span>     <span class="du-cmt"># 按 CSS 选择器切换到 iframe</span>
 <span class="du-prompt">$</span> chrome-use frame @e3           <span class="du-cmt"># 按元素 ref 切换到 iframe</span>
 <span class="du-prompt">$</span> chrome-use frame main          <span class="du-cmt"># 返回主框架</span></code></pre>
       </div>
+      <p>
+        <span class="mark">跨域浮层是独立的框架</span>——银行/分行选择器、支付字段这类，
+        页面上的 <code>snapshot -i</code> 看不到里面的东西，<code>focus</code> / <code>press</code>
+        也只会落在 iframe 元素本身。路径是 <code>frames</code> → <code>frame &lt;序号&gt;</code>
+        → 在里面 <code>snapshot -i</code> / <code>click</code> / <code>fill</code>；
+        只做一次的话用 <code>eval --frame &lt;f&gt;</code>。
+      </p>
       <p>
         <code>frame</code> 接受三种输入：<strong>元素 ref</strong>（<code>frame @e3</code>）、
         <strong>CSS 选择器</strong>（<code>frame "#payment-iframe"</code>）、以及
