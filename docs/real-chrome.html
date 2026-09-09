@@ -196,6 +196,37 @@
         <code>snapshot</code>、<code>click</code> 作用在会话已经打开的东西上，不查。
       </p>
 
+      <p>
+        反过来也可以：在显式 <code>--browser</code> 后面加 <code>--remember</code>，
+        导航成功之后它会请求 ChooseBrowser 把这个域名长期指向那个 profile，
+        下次就不用再传 <code>--browser</code> 了。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">写回一条规则</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/my-org/repo --browser work@example.com --remember
+<span class="du-cmt">· asked ChooseBrowser to route github.com to work@example.com from now on — confirm in</span>
+<span class="du-cmt">  its dialog. Nothing is saved unless you do.</span></code></pre>
+      </div>
+
+      <p>
+        <span class="mark">这是一次提议，不是一次保存。</span>
+        ChooseBrowser 每次写入都会弹窗让你确认，并且刻意不给成功回调——
+        任何进程都能打开 URL scheme，静默写入意味着别的工具可以悄悄把你的
+        银行域名指到一个你不看的浏览器上。所以 chrome-use 只能说「已请求」，
+        结果以那个弹窗为准。取消了就什么都不会发生。
+      </p>
+      <p>
+        只写域名、不写路径：规则如果绑在这条命令碰巧打开的那个路径上，翻到站内下一页就不生效了。
+        只在你<span class="mark">显式传了 <code>--browser</code></span> 时才提议——
+        把我们自己猜出来的 profile 写成永久规则，等于把一次推断变成你从没说过的长期决定。
+        请求要是构造不出来（命令不导航、profile 没有登录账号、账号不在 Chrome 注册表里……），
+        它会在导航之前就退出并说明原因，而不是发一个会被静默丢弃的请求。
+      </p>
+
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 利益披露</div>
         ChooseBrowser 是一款付费 macOS 应用（US$4.99，7 天试用），作者与 chrome-use 是同一人。
