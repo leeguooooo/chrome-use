@@ -4601,6 +4601,8 @@ Sessions:
   session resume             Return control to the agent
   session stop [name]        Stop one session daemon (default: current) — graceful,
                              closes the tabs it created
+    --force                  If those tabs can no longer be reached (endpoint changed after
+                             an upgrade/restart), drop the record and leave them open
   session prune              Stop ALL session daemons now (closes their tabs; they
                              respawn clean on next use). For clearing idle daemons.
   sessions                   List running session daemons (alias of daemon status)
