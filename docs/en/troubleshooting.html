@@ -546,8 +546,32 @@ EOF</code></pre>
         the user's explicit task. If the user gave a dev server URL, stay on that origin: hitting a real production host with a
         dev-only endpoint either fails or misbehaves, and it exposes attack surface. <code>network route</code>,
         <code>har start/stop</code>, and screenshots/recordings can all capture or alter sensitive traffic—confirm with the
-        user before using them against a non-dev server, and redact before sharing a HAR/screenshot. These three callouts
-        are the full set of red lines to hold when driving a real browser.
+        user before using them against a non-dev server, and redact before sharing a HAR/screenshot.
+      </div>
+
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Side effects need the user's say-so</div>
+        Reading a page is free. Anything that leaves the browser is not: submitting a form, sending a message, posting,
+        uploading, buying, deleting, changing who can see something, and typing personal or secret data into a third-party
+        page (typing is transmission). Three tiers, applied <strong>at the moment the step comes up</strong>, not at the
+        start of the task:
+        <ul>
+          <li><strong>Hand it back to the user:</strong> the final submit of a password change; anything that bypasses a
+            security interstitial, a paywall, or a bot check. Say what is left and stop.</li>
+          <li><strong>Confirm right before the step, every time:</strong> deleting data (cloud or local); sending a message
+            or posting a comment on the user's behalf; purchases and payments, including scheduling or cancelling them;
+            granting or changing permissions and API keys; creating an account; installing software or extensions; solving
+            a CAPTCHA; sending personal, financial, medical, or credential data anywhere. A general request ("fill in the
+            form", "reply to these") does <strong>not</strong> pre-approve these steps.</li>
+          <li><strong>Pre-approval in the task is enough:</strong> logging in to the site the user named ("go to
+            github.com" implies the login); accepting a browser permission prompt the task obviously needs; uploading a
+            file the user handed you; moving or renaming files.</li>
+        </ul>
+        Cookie banners, terms checkboxes, and downloads need no confirmation. When you ask, name the exact action, the
+        destination site or account, and the data involved; "Continue?" is not a confirmation.
+        <code>--confirm-actions</code> holds these categories for <code>confirm &lt;id&gt;</code> /
+        <code>deny &lt;id&gt;</code>, but the rule applies whether or not the flag is set. These four callouts are the
+        full set of red lines to hold when driving a real browser.
       </div>
 
       <hr class="du-divider" />
