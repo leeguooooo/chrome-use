@@ -3382,19 +3382,30 @@ Examples:
             r##"
 chrome-use frame - Switch frame context
 
-Usage: chrome-use frame <selector|main>
+Usage: chrome-use frame <index|frameId|selector|@ref|main>
 
 Switch to an iframe or back to the main frame.
 
 Arguments:
-  <selector>           CSS selector for iframe
+  <index>              The number `frames` prints in brackets ([2] …). 0 is the
+                       top document, i.e. the same as `main`
+  <frameId>            A frame id, e.g. from an observation's `newFrames`
+  <selector>           CSS selector for the iframe element
+  @ref                 An iframe element's ref from `snapshot -i`
   main                 Switch back to main frame
+
+A cross-origin overlay (a bank/branch picker, a payment field) is a separate
+frame: `snapshot -i` on the page will not show what is inside it. List frames
+with `frames`, switch in with `frame <index>`, then `snapshot -i` / `click` /
+`fill` act inside it. `eval --frame <f>` is the one-off form.
 
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
 
 Examples:
+  chrome-use frames                        # [0] top … [1] accessory_layer …
+  chrome-use frame 1                       # switch into it by index
   chrome-use frame "#embed-iframe"
   chrome-use frame "iframe[name='content']"
   chrome-use frame main

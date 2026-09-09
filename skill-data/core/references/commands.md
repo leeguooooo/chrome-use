@@ -382,6 +382,7 @@ version, update or reload ab-connect at `chrome://extensions`, then retry.
 ## Frames
 
 ```bash
+chrome-use frame 2             # Switch by the index `frames` prints ([2] …)
 chrome-use frame "#iframe"     # Switch to iframe by CSS selector
 chrome-use frame @e3           # Switch to iframe by element ref
 chrome-use frame main          # Back to main frame
