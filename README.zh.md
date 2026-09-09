@@ -2,15 +2,32 @@
 
 [English](README.md) · **简体中文**
 
+<p align="center">
+  <a href="https://github.com/leeguooooo/chrome-use/releases"><img alt="Release" src="https://img.shields.io/github/v/release/leeguooooo/chrome-use?sort=semver&color=2f81f7"></a>
+  <a href="https://github.com/leeguooooo/chrome-use/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/leeguooooo/chrome-use?color=f0b429"></a>
+  <a href="https://bot-detector.rebrowser.net/"><img alt="CreepJS 0% bot" src="https://img.shields.io/badge/CreepJS-0%25%20bot-2ea043"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-informational">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/github/license/leeguooooo/chrome-use?color=8957e5"></a>
+</p>
+
+<p align="center"><i>⭐ 如果它帮你省掉了一次重新登录，点个 star 能让更多开发者找到它。</i></p>
+
 ![chrome-use](assets/hero.png)
 
-**chrome-use** 让任意 AI agent 直接操作你自己正在用的、已登录的 Chrome —— 复用你的登录态，对反爬/反自动化系统**完全不可检测**，因为它**就是**你的真实浏览器。属于 `*-use` 家族（[iphone-use](https://github.com/leeguooooo/iphone-use) 驱动你的真实 iPhone，[bitwarden-use](https://github.com/leeguooooo/bitwarden-use) 从你的 Bitwarden 库里取密码、2FA 和 passkey，让 agent 用账号密码登录，chrome-use 驱动你的真实 Chrome）。
+<p align="center">
+  <img src="assets/demo.gif" alt="chrome-use 演示：在你的真实 Chrome 里打开 Hacker News，一条命令把热门内容拉成结构化 JSON" width="820">
+  <br>
+  <sub>指向你<b>真实</b> Chrome 里的一个页面 → 一条命令拿到结构化数据。<a href="assets/demo.tape">（重新生成：<code>vhs assets/demo.tape</code>）</a></sub>
+</p>
 
-<sub>最初基于 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)（Apache-2.0）；现已是独立项目 —— 隐身/扩展中继架构、反检测、humanize、多 agent 隔离与 CLI 都已大幅分化。</sub>
+**chrome-use** 让任意 AI agent 直接操作你自己正在用的、已登录的 Chrome。它复用你的登录态，对反爬/反自动化系统**完全不可检测**，因为它**就是**你的真实浏览器。属于 `*-use` 家族（[iphone-use](https://github.com/leeguooooo/iphone-use) 驱动你的真实 iPhone，[bitwarden-use](https://github.com/leeguooooo/bitwarden-use) 从你的 Bitwarden 库里取密码、2FA 和 passkey，让 agent 用账号密码登录，chrome-use 驱动你的真实 Chrome）。
 
-> 📚 **文档站：** **[chrome-use.leeguoo.com](https://chrome-use.leeguoo.com)** —— 完整指南、工作流与命令参考（中文 · English）。
+<sub>最初基于 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)（Apache-2.0）；现已是独立项目。隐身/扩展中继架构、反检测、humanize、多 agent 隔离与 CLI 都已大幅分化。</sub>
+
+> 📚 **文档站：** **[chrome-use.leeguoo.com](https://chrome-use.leeguoo.com)**：完整指南、工作流与命令参考（中文 · English）。
 >
-> 📖 **深入原理：** [让任何 AI Agent 直接驱动你已登录的真实 Chrome，CreepJS 给它打 0% bot](https://blog.leeguoo.com/zh/posts/chrome-use-drive-your-real-chrome/)
+> 📖 **深入原理：** [让 agent 点进跨域 iframe：chrome-use 如何解决浏览器控制里最难的一环（English）](https://blog.leeguoo.com/en/posts/chrome-use-cross-origin-iframe/)
+> · [让任何 AI Agent 直接驱动你已登录的真实 Chrome，CreepJS 给它打 0% bot](https://blog.leeguoo.com/zh/posts/chrome-use-drive-your-real-chrome/)
 
 ## 把你**已经登录好**的浏览器，交给你的 AI agent
 
@@ -18,74 +35,29 @@
 
 chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚本）直接操作你**已经登录了所有网站**的那个 Chrome。它在**你的窗口里**点击，你看着它干活，撞到 2FA / 验证码的瞬间你接管一下，它接着跑。因为它**就是你的真实浏览器**（一键装的扩展、原生消息、无调试端口），网站眼里它 100% 是人：**[CreepJS 实测 0% 机器人](#反检测)。**
 
-**为什么不用……**
+**常规浏览器自动化**（Playwright / Puppeteer，或全新 `--launch`）启动的是空 profile 的全新浏览器：你得重新登录，网站也能看出是自动化。**chrome-use** 连接你**现有**的 Chrome：cookies、会话、浏览器指纹全是真的，因为它**就是**你的真实浏览器。从 **Chrome 136** 起，每次走裸 `--remote-debugging-port` 连接都会弹出一个阻塞式的 **"Allow remote debugging?"** 同意框。我们的扩展改用原生消息：**装一次，之后零确认。**
 
-- **Playwright / Puppeteer / browser-use？** 它们开的是**空**浏览器 —— 每个登录你重做、每个验证码你硬扛、最后还被标成自动化。我们直接用你**现成的**会话。
-- **Claude 的 Chrome 插件？** 很好，但**只能给 Claude 用**。我们给**任意** agent / CLI 用。
-- **裸 `--remote-debugging-port`**（web-access 等）？ Chrome 136+ **每次连都弹** "Allow remote debugging?"。我们**永不弹** —— 商店一键装，原生消息。
-
-<details>
-<summary><b>完整对比矩阵</b>（要细节的看这里）</summary>
-
-| | [Claude in Chrome](https://www.anthropic.com/claude/chrome) | web-access / 裸 CDP 端口 | Playwright · Puppeteer · browser-use | **chrome-use** |
+| | 常规自动化（Playwright · Puppeteer · browser-use） | web-access / 裸 CDP 端口 | [Claude in Chrome](https://www.anthropic.com/claude/chrome) | **chrome-use** |
 |---|:---:|:---:|:---:|:---:|
-| **任意** agent / CLI 都能用（不绑单一 app） | ❌ 仅 Claude | ✅ | ✅ | ✅ |
-| 驱动你**真实、已登录**的 Chrome | ✅ | ✅ | ❌ 全新空 profile | ✅ |
-| **不弹 "Allow remote debugging?"** | ✅ | ❌ 每次连都弹 | —（自带浏览器） | ✅ 原生消息 |
-| 真实浏览器指纹（CreepJS ~0%）¹ | ✅ | ✅ | ❌ 自动化特征 / headless | ✅ **已实测 0%** |
-| **无 `Runtime.enable` CDP 泄漏**（rebrowser）² | — | ❌ 泄漏 | ❌ 泄漏 | ✅ **默认关闭** |
-| 多 agent 共用**同一个**真实 Chrome、标签组隔离³ | ❌ 单 app | ⚠️ 共享 tab、无隔离 | ❌ 各开各的浏览器 | ✅ |
-| 权限面 | 16 个，含 `<all_urls>` | 完整 CDP | 完全控制 | **7 个，无 `<all_urls>`** |
+| **任意** agent / CLI 都能用（不绑单一 app） | ✅ | ✅ | ❌ 仅 Claude | ✅ |
+| 驱动你**真实、已登录**的 Chrome | ❌ 全新空 profile | ✅ | ✅ | ✅ |
+| 连接方式 / **"Allow remote debugging?" 弹框** | —（自带浏览器） | `--remote-debugging-port` · **每次连都弹** 🔴 | `chrome.debugger` · 无 | 原生消息 · **从不** ✅ |
+| 真实浏览器指纹（CreepJS ~0%）¹ | ❌ 自动化特征 / headless | ✅ | ✅ | ✅ **已实测 0%** |
+| **无 `Runtime.enable` CDP 泄漏**（rebrowser）² | ❌ 泄漏 | ❌ 泄漏 | — | ✅ **默认关闭** |
+| 多 agent 共用**同一个**真实 Chrome、标签组隔离³ | ❌ 各开各的浏览器 | ⚠️ 共享 tab、无隔离 | ❌ 单 app | ✅ |
+| 权限面 | 完全控制 | 完整 CDP | 16 个，含 `<all_urls>` | **7 个，无 `<all_urls>`** |
 
-<sub>¹ 三家"真实 Chrome"工具在 CreepJS 上都 ~0%（毕竟是真浏览器），我们的是实测过的。² rebrowser `runtimeEnableLeak` —— 我们的中继路径实测无泄漏；Claude in Chrome 未独立测试（—）。³ web-access 也能跑并行子 agent，但无每会话隔离；本工具每个 `--session` 拿到自己彩色、命令隔离的标签组。实测数字见 [反检测](#反检测)。</sub>
-
-</details>
-
-## 为什么选 chrome-use
-
-<img src="assets/fingerprint.png" alt="真实但不可检测的指纹" width="300" align="right" />
-
-**常规浏览器自动化**（Playwright / Puppeteer，或全新 `--launch`）启动的是空 profile 的全新浏览器：你得重新登录，网站也能看出是自动化。
-
-**chrome-use** 连接你**现有**的 Chrome —— cookies、会话、浏览器指纹全是真的，因为它**就是**你的真实浏览器。
-
-| | 常规自动化 | chrome-use |
-|---|---|---|
-| 浏览器 | 启动新 Chrome | 连接你的 Chrome |
-| 登录态 | 空，要重新登 | 你现有的会话 |
-| 指纹 | 带自动化标记 | 你的真实指纹 |
-| 协作 | 独立窗口 | 同一窗口，随时接管 |
-| 验证码 | Agent 卡住 | 你点一下，Agent 继续 |
+<sub>¹ 三家「真实 Chrome」工具在 CreepJS 上都 ~0%（毕竟是真浏览器），我们的是实测过的。² rebrowser `runtimeEnableLeak`：我们的中继路径实测无泄漏；Claude in Chrome 未独立测试（—）。³ web-access 也能跑并行子 agent，但无每会话隔离；本工具每个 `--session` 拿到自己彩色、命令隔离的标签组。实测数字见 [反检测](#反检测)。</sub>
 
 ## 工作原理
 
 ![工作原理](assets/how-it-works.png)
 
-你的 **chrome-use CLI** 通过 Chrome **原生消息（native messaging）** 和一个小**浏览器扩展**通信 —— 这是本机进程间通道，**无网络端口、无 token、无远程服务器**。扩展用 `chrome.debugger` 驱动你指定的标签页（在你**已登录**的 Chrome 里），再把结果交还给 CLI。全程都在你本机。
+你的 **chrome-use CLI** 通过 Chrome **原生消息（native messaging）** 和一个小**浏览器扩展**通信：这是本机进程间通道，**无网络端口、无 token、无远程服务器**。扩展用 `chrome.debugger` 驱动你指定的标签页（在你**已登录**的 Chrome 里），再把结果交还给 CLI。全程都在你本机。
 
 ![架构](assets/architecture.png)
 
-每个 `--session` 拿到**自己的彩色标签组**，多个 agent 共用同一个真实浏览器、互不干扰，也不动你自己的标签页。
-省略 `--session` 时会按 agent/终端 id 派生 `cu-<目录名>-<tag>`；换到别的目录执行时会复用已经带着同一个 agent tag 的守护进程，标签和 ref 不会因为 `cd` 丢失（显式 `--session` / `AGENT_BROWSER_SESSION` 优先）。
-
-## 为什么用扩展（而非裸调试端口）
-
-其他本地工具走裸 `--remote-debugging-port`（CDP）驱动 Chrome。从 **Chrome 136** 起，每次这样连接都会弹出一个阻塞式的 **"Allow remote debugging?"** 同意框 —— 而且端口得提前开好。我们的扩展改用原生消息：**装一次，之后零确认。**
-
-| | **chrome-use**（本扩展） | web-access（裸 CDP 端口） | Claude in Chrome（chrome.debugger） |
-|---|---|---|---|
-| 连接方式 | 原生消息 —— 无端口、无 token | `--remote-debugging-port` | `chrome.debugger` |
-| **"Allow remote debugging?" 弹框** | **从不** ✅ | **每次连都弹** 🔴 | 无 |
-| 复用你的真实登录 | 是 | 是 | 是 |
-| `Runtime.enable`（CDP）泄漏¹ | **默认关闭 → 干净** ✅ | 域已启用 | 不适用 |
-| CreepJS 隐身分² | **0% stealth · 0% headless** ✅ | 真实 Chrome | 真实 Chrome |
-| 每会话标签组 / 并发 agent | **支持** ✅ | 无 | 无 |
-| 为 chrome-use CLI 打造 | 是 | 独立代理 | 单 app 助手 |
-
-> ¹ 对 [rebrowser-bot-detector](https://bot-detector.rebrowser.net/) 实测：我们的中继报 `runtimeEnableLeak: 🟢 No leak`、`navigatorWebdriver: 🟢`。
-> ² 对 [CreepJS](https://abrahamjuliot.github.io/creepjs/) 在「连接真实 Chrome」路径上实测 —— 见 [反检测](#反检测)。
->
-> 同意框不是假想：裸端口工具**每次** attach 都会弹（Chrome 136+ 安全策略）。扩展路径从不弹。
+每个 `--session` 拿到**自己的彩色标签组**，多个 agent 共用同一个真实浏览器、互不干扰，也不动你自己的标签页。省略 `--session` 时，chrome-use 会按支持的 runner id（包括 Codex 的 `CODEX_THREAD_ID`）派生稳定的 per-agent 会话；显式 `--session` / `AGENT_BROWSER_SESSION` 始终优先。会话命名、`session list` / `stop` / `prune`、所有权交接与 daemon 恢复见[会话指南](https://chrome-use.leeguoo.com/sessions.html)。
 
 ## 安装
 
@@ -101,28 +73,58 @@ curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.
 - **锁定版本：** `AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh`
 - **自定义路径：** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
 - **Windows：** 从 [Releases 页](https://github.com/leeguooooo/chrome-use/releases) 下载 `chrome-use-win32-x64.tar.gz`，把 `chrome-use.exe` 放进 PATH。
-- **npm（旧渠道）：** `npm install -g chrome-use` —— 仍在发布，但 GitHub Releases 现在是主渠道。
+- **npm（旧渠道）：** `npm install -g chrome-use`。仍在发布，但 GitHub Releases 现在是主渠道。
 </details>
 
-### 安装 AI agent skills
+### 用 Nix 安装
 
-```bash
-npx skills add leeguooooo/chrome-use
+免安装直接运行一次：`nix run github:leeguooooo/chrome-use -- --help`。
+flake 同时提供 home-manager 模块和 NixOS 模块（`programs.chrome-use.enable = true`）；NixOS 上原生消息 host 是按用户注册的，切换后运行一次 `chrome-use extension connect`。
+开发环境：`nix develop`（rust 工具链 + node 24 + pnpm + chromium + vhs）。
+完整片段见[安装指南](https://chrome-use.leeguoo.com/install.html)。
+
+### 安装 AI agent skill
+
+**Claude Code，插件市场（推荐）：** 全局安装 skill（所有项目可见）、自动更新，并列出 [`*-use` 家族](https://github.com/leeguooooo/plugins)的其他成员：
+
+```
+/plugin marketplace add leeguooooo/plugins
+/plugin install chrome-use@leeguooooo-plugins
 ```
 
-把 `skills/chrome-use` 拉进当前项目，让你的 AI agent 拿到正确的用法和预授权的 bash 权限。
+**其他 agent runner（Cursor、Codex、自定义）：** 用 [skills.sh](https://skills.sh) 拉取 SKILL.md。加 `-g` 全局安装（每个项目可见）；不加则只装进当前项目：
 
-升级二进制**不会**更新已经拷到 runner 里的 SKILL.md —— 那份副本在二进制之外。
-用 `chrome-use skills update` 刷新（`refresh` / `install` 是同一个命令；加 `--project`
-装到 `./` 而不是全局）。
+```bash
+npx skills add leeguooooo/chrome-use -g
+```
 
-## 命令名
+> 上面的 `install.sh` 一行命令已经替你跑过这一步（用 `AGENT_BROWSER_NO_SKILL=1` 跳过）。只有跳过了安装器、或用非默认 agent runner 时才需要手动运行。
 
-`chrome-use`、`chrome-use`、`abs` 是**同一个二进制** —— `abs` 只是短别名。没有单独的「隐身可执行文件」；隐身是**运行时行为**（见下方 [反检测](#反检测)），根据你是连接真实 Chrome 还是 `--launch` 全新实例自动启用。
+> **Codex 用户注意：** Codex 自带浏览器插件，遇到浏览器任务会优先选它。在一台装了很多 skill 的机器上实测，Codex 还会把每个 skill 的描述截到只剩几个字符（甚至没有），所以 skill 描述赢不了路由，在 prompt 里点名 `chrome-use` 也不够。有效的做法是在项目的 `AGENTS.md` 里加一行：
+>
+> ```
+> Use the `chrome-use` CLI from the shell for every browser task; start with `chrome-use skills get core`. Do not use the built-in Chrome plugin for browser work here.
+> ```
+
+无论哪种方式，agent 都会拿到正确的用法和 `chrome-use` / `abs` 的预授权 bash 权限；二进制缺失时 skill 会自动重跑上面的 `install.sh` 一行命令来修复。专项指南（`electron`、`slack`、`agentcore` 等）由二进制自己通过 `chrome-use skills get <name>` 提供，所以说明永远和已安装版本一致。
+
+升级二进制**不会**更新已经拷到 runner 里的 SKILL.md；那份副本在二进制之外。用 `chrome-use skills update` 刷新（`refresh` / `install` 是同一个命令；加 `--project` 装到 `./` 而不是全局）。
+
+### 从 MCP 客户端使用（Claude Desktop 等）
+
+对于**支持 MCP 但不能执行任意 shell 命令**的宿主（Claude Desktop、ChatGPT connectors、n8n/Dify），把 chrome-use 作为 MCP stdio server 写进 Claude Desktop 的 `claude_desktop_config.json`：
+
+```json
+{
+  "mcpServers": {
+    "chrome-use": { "command": "chrome-use", "args": ["mcp"] }
+  }
+}
+```
 
 ## 连接你的 Chrome
 
-**推荐 —— 浏览器扩展（一键，无弹窗）。** 从 Chrome 应用商店安装 [**chrome-use** 扩展](https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk)，再注册一次本地桥：
+从 Chrome 应用商店安装 [**chrome-use** 扩展](https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk)，再注册一次本地桥：
 
 ```bash
 chrome-use extension install      # 注册原生消息 host（一次性）
@@ -130,420 +132,11 @@ chrome-use open https://x.com/home
 chrome-use status                 # 中继、profile、扩展与会话健康总览
 ```
 
-之后 `chrome-use open` 就通过**原生消息**驱动你真实、已登录的 Chrome —— 无调试端口、无 token、**永远不弹 "Allow remote debugging?"**。扩展自动更新、重启不掉，零确认（适合无人值守 / agent 场景）。`chrome-use status` 不依赖会话 daemon，因此即使当前 worker 卡住也能返回健康状态；它还会验证原生消息 host 的 launcher 是否指向可执行文件，JSON 输出对应 `extension.hostHealthy`。
+之后 `chrome-use open` 就通过**原生消息**驱动你真实、已登录的 Chrome：无调试端口、无 token、**永远不弹 "Allow remote debugging?"**。裸 remote-debugging 端口的备选方案（会弹同意框）见[真实 Chrome 指南](https://chrome-use.leeguoo.com/real-chrome.html)。
 
-如果会话 daemon 进程仍在、但本地 socket 消失，下一条浏览器命令会停止这个不可达 worker，并为同一会话启动干净的新 daemon。若 socket 恰好在命令执行途中消失，按错误提示重跑一次即可；也可用 `chrome-use daemon restart` 明确重置全部会话 worker。扩展 relay 和现有 Chrome 标签页不会被关闭。
+### 多 profile 的 Chrome：读 ChooseBrowser 的规则
 
-<details>
-<summary>备选 —— 裸 remote-debugging 端口（会弹同意框）</summary>
-
-不装扩展时，chrome-use 退回用 CDP 连接，而 Chrome 只在带 remote-debugging 端口启动时才暴露它：
-
-```bash
-# macOS
-open -a "Google Chrome" --args --remote-debugging-port=9222
-# Linux
-google-chrome --remote-debugging-port=9222
-# Windows: 给 Chrome 快捷方式 target 加 --remote-debugging-port=9222
-```
-
-然后 `chrome-use open <url>` 自动发现端口。首次连接 **Chrome 136+ 会弹 "Allow remote debugging?"** —— 点一次 Allow（该 Chrome 会话内持续有效）。上面的扩展则完全避开这个框。
-</details>
-
-## 用法
-
-```bash
-# 连接你的 Chrome 并导航
-chrome-use open https://example.com
-
-# 一切都在你已登录的浏览器里进行
-chrome-use click "Post"
-chrome-use fill "Title" "Hello World"
-chrome-use screenshot ./page.png
-
-# 不刷新页面，直接选择、接管和检查已经打开的标签
-chrome-use tab select t2
-chrome-use tab adopt "example.com/problem-page"
-chrome-use tab inspect t2
-```
-
-Agent 在你的 Chrome 里操作 —— 你能实时看到开标签、加载、点击。任意时刻都能接管（比如手动过验证码），然后让 agent 继续。
-
-`tab select <ref>` 是 `tab <ref>` 的显式写法。`tab adopt
-<url-substring|targetId>` 会在当前会话中接管已打开的标签，不触发导航。
-`tab inspect <ref>` 从 Chrome 的浏览器级元数据读取 URL、加载状态、
-discard/freeze 状态和 debugger 附加状态，所以页面 JavaScript 阻塞 renderer
-主线程时仍可使用。主线程阻塞期间 Runtime 求值无法完成，但该标签会保持选中，
-不会再被误报为已经关闭。
-
-通过扩展连接真实 Chrome 时，`tab inspect` 需要 ab-connect 0.5.16 或更新版本。
-如果标签存活探针失败，而当前扩展比 CLI 内置版本旧，chrome-use 会先报告版本不匹配，
-不会据此断言 renderer 已无响应。请打开 `chrome://extensions` 更新或重新加载
-ab-connect，然后重试。
-
-若点击触发原生 `confirm()` 或 `prompt()`，click 会返回待处理 dialog，而不是把会话卡死；
-接着运行 `chrome-use dialog status` 与 `chrome-use dialog accept|dismiss` 即可。
-
-扩展弹窗收到原生主机回应后才显示 Connected，确认前显示 Connecting；主机未找到等错误会直接显示。旧主机若不响应初始 ping，可由首次实际 CLI 命令确认连接。该状态只证明主机链路已接通，不代表每个页面或框架都可操作。
-
-扩展中继的 Chrome debugger 调用也有明确超时，跨进程跳转后的坏句柄会返回恢复提示，不再无限挂起。
-
-受限或已解绑子框架的命令会返回错误，不会因此解绑父标签。顶层标签恢复后，重试使用恢复得到的标签 ID，避免继续向旧目标发命令。重试框架内动作前先重新读取页面。
-顶层动作发出后若连接中断，中继仅对可安全重复的命令或明确尚未派发的命令自动重试。`action_outcome_unknown` 表示动作可能已执行，JSON 返回 `retryable: false`；先观察当前页面，再决定下一步。
-默认的 daemon 空闲回收会保留真实 Chrome 中由 session 创建的标签页，包括当前 URL 与页内状态；
-显式执行 `close` 或 `session stop` 仍会关闭这些标签页。
-空闲退出后，`session stop` 会重新发现原浏览器并校验所有权再清理；若无法匹配，会明确报告未完成并保留记录，供使用原连接选项重连后执行 `close`。
-
-
-普通网页嵌入另一个扩展的受限 iframe 时，Chrome 也可能拒绝整个标签的 debugger 访问。此时 `debugger_access_denied` 不建议重试；用 `tab inspect <ref>` 查浏览器级状态，或选用独立测试 profile。重新连接不能解除这项限制。
-
-中继导航等待加载事件时，最多附带三次有时限的访问检查。确认访问被拒绝会提前结束等待；检查成功或临时失败都不会替代页面就绪条件。快速页面可在首次检查前完成。
-
-隔离开发时，在原生主机启动脚本和 CLI 中把 `CHROME_USE_RELAY_DIR` 设为同一个绝对路径。它只隔离中继登记与发现，不修改 HOME；同时使用唯一 session 名和明确的 `--browser` ID。相对路径会在发现中继前被拒绝。普通共享 profile 不需要设置该变量。
-
-### 独立模式（`--launch`）
-
-```bash
-# 临时：全新空 profile —— 无 cookie 无登录（适合 CI / 测试）
-chrome-use --launch open https://example.com
-
-# 保留登录：用你真实的 Chrome profile 启动
-chrome-use --launch --profile auto open https://x.com/home
-# 或显式指定：--profile Default / --profile "Profile 1"
-```
-
-## 更省字节地读页面
-
-交互快照会为邻近商品卡片、列表项、表格行或带标题的分组中的控件附加有限长度的 `context`，保留价格等局部文字，不改变控件名称与引用。只有一个商品链接名称和一个操作控件的局部分组也可提供上下文；上下文已附在操作控件上时，同名商品链接省略这段重复文字。交互快照和动作观察也会保留 `status` 状态回执，限制文字长度并明确标记截断。上下文可能缺失或标记为截断；需要的信息不完整时，读取局部或完整快照。
-
-`snapshot -i` 是每次交互的起点，而「刚读过又读一遍」是 agent 上下文里最大的
-可省成本。两个 flag 专治这个：
-
-```bash
-chrome-use snapshot -i --diff              # 只回传相对上一张快照变化的部分
-chrome-use snapshot -i --max-bytes 4000    # 按整节点裁剪，并说明漏了什么
-chrome-use snapshot -i --max-bytes 4000 --from 70   # 从上次停下的地方续读
-```
-
-`--diff` 的基线是本会话上一张**同页面、同选项**的快照；一个 143 KB 的评论页，
-页面没动时再读一次只要 1 个字节。没有有效基线时它退回整树**并说明是哪一种** ——
-空 diff 和「什么都没变」在调用方看来一模一样。
-
-`--max-bytes` 走的是另一条路：跟 `-i` / `-s` / `-d` / `-f` 不同，用预算
-**不需要事先知道要找什么**。它只在完整节点边界切开（截字符串会留下残缺的
-`[ref=eN]`，既用不了也看不出是残的），并告诉你漏了哪些、从哪继续。
-
-## 读之前的等待
-
-观察通过 `status: complete|partial|unavailable` 单独报告质量，保留动作原来的 success 值。捕获失败不会被伪装成空页面或空 URL；`changed:null` 表示证据不足，部分观察若已确认有变化仍可为 true。前置捕获失败但后置树可用时，返回后置树，不编造 diff。不完整的观察携带错误和 `retryAction:false`，应先检查当前状态，不要重放动作。 `form fill` 无法确认校验结果时返回 `errors:null`，不冒充空错误列表。
-
-动作观察最多附带 20 条请求摘要，每条最多 256 个 UTF-8 字节。data URL 只显示媒体头和编码后载荷大小。JSON 的 `requestsTotal`、`requestsOmitted`、`requestsShortened` 分别说明总数、省略数和已显示摘要中缩短的 URL 数；完整捕获记录用 `network requests --json` 查看。即使 `changed:false`，请求摘要仍会显示，因为该字段只描述树和 URL 的变化。
-
-一次观察值多少，取决于它拍下的那一刻页面在做什么。`snapshot` 和 `--observe`
-会先等页面不再变化再采集，你不需要自己猜一个 sleep：
-
-- DOM 连续 100ms 没有变更，
-- 没有还在跑的有限时长过渡/动画（无限循环的 loading 转圈会被忽略 —— 它永远不结束），
-- 你刚触发的动作发出的请求都已经回来。
-
-以最慢的那个为准，上限 1 秒。静态页面大约只花 100ms；而一次触发 XHR 的点击会等到
-响应回来，而不是把「响应前的树」当成结果返回。
-
-两者有一处不同：单独的 `snapshot` 没有动作要反应，页面静止就是答案；而动作之后的
-`--observe` 会先花上限的一半（默认 500ms）盯着「有没有第一个反应」，才肯报
-`changed:false` —— 否则一个 300ms 后才渲染的控件会被读成「什么都没发生」。
-这份代价只由真的什么都没做的动作承担。
-
-上限到点而页面仍在动时，它会**说出来**，不会把中间态冒充成最终态：
-
-```
-⚠ Page had not settled after 1000ms (request in flight still active) — this
-  capture may be mid-transition.
-```
-
-```bash
-chrome-use snapshot -i --settle-ms 3000   # 慢页面：把上限调高
-chrome-use snapshot -i --no-settle        # 就要中间态：不等，立刻采
-```
-
-既然已经等过一次，像素就可以搭这趟车：
-
-```bash
-chrome-use snapshot -i --with-screenshot ./page.png
-chrome-use click @e8 --observe --with-screenshot ./after.png
-```
-
-两份采集来自**同一个稳定时刻** —— 各等各的会得到两个时刻的快照，那比不合并还糟。
-结构照旧走 stdout，图片落盘：截图在这里是**输出**，用于看和附上，不是 agent 读页面的方式。
-
-`AGENT_BROWSER_SETTLE_MS` 全局设置上限（设 0 关闭等待），
-`AGENT_BROWSER_SETTLE_QUIET_MS` 设置静默窗口。等**某个具体条件**仍然是 `wait`
-的活：settle 只知道页面停了，不知道你要的东西出现了没有。
-
-## 在字段内部编辑，以及带格式粘贴
-
-`fill` 是整体替换，`type` 是追加。有两件事它们都做不到：
-
-```bash
-chrome-use select-text @e3 "确认" --prefix "请"      # 选中其中一段
-chrome-use select-text @e3 "Hi Sam," --cursor-after  # 只放光标
-chrome-use type @e3 " 顺便说一句："                    # 从光标处继续
-
-chrome-use paste $'第一行\n第二行' --selector "#notes"
-chrome-use paste "<b>粗体</b>文字" --format html --selector "#editor"
-```
-
-`select-text` 支持 `<input>`、`<textarea>` 和 contenteditable。prefix / suffix
-是**消歧用的上下文，不属于被选中的内容**：`--prefix "请"` 选中的是「确认」。
-出现多次而没有消歧信息时它**报错并说清有几处**，不会替你挑第一个；而且
-「找不到」「找到了但上下文对不上」「有多处」是三条不同的提示 —— 它们的解法本来就不同。
-Monaco 和 CodeMirror 有自己的选区模型，会被点名拒绝：在那上面做 DOM 选区，
-看起来成功、实际什么也没发生。
-
-`paste` 用在「敲字和粘贴结果不一样」的地方：`type "<b>粗体</b>"` 得到的是这几个字符，
-`paste --format html` 得到的才是粗体；换行也保持换行，而不是变成 Enter。
-`--format md` 把 Markdown 源码作为纯文本插入。**全程不碰用户的真实剪贴板** ——
-内容走的是合成 ClipboardEvent，不调用 `navigator.clipboard`，也不模拟 Ctrl+V。
-这种事件是 untrusted 的、没有默认行为：监听 paste 的编辑器从自己的 handler 里拿到内容，
-不监听的则走一次真实插入。回复里会写明走的是哪条路径；两条都没生效时它**报错**，不会打 ✓。
-
-## 点击之外的动作
-
-有些控件不止能点：折叠块要展开，菜单按钮要弹出，数字框和滑块要按范围步进。
-
-```bash
-chrome-use actions @e15      # 这个元素此刻支持什么
-chrome-use do @e15 expand    # 只做其中之一
-```
-
-支持 `expand` / `collapse`、`showMenu`、`increment` / `decrement`、`toggle`，
-全部由元素的无障碍属性推导。动作集是**实时读**的 —— 它是状态不是身份：
-你截图时收着的折叠块现在可能已经开了。集合之外的动作会被拒绝并附上支持列表，
-而不是勉强做点相近的事；执行完会再报一次动作集，所以一个没动的控件不会读起来像成功。
-
-## 站点适配器 —— 把一个网站变成「结构化数据 CLI」
-
-大多数「读 GitHub issue」「搜 Reddit」「拉我的 B 站动态」这类任务，根本不需要点击 +
-截图 —— 网站登录态背后本来就有 JSON 接口。**站点适配器**就是一小段 JS 函数，它在你
-**已登录的标签页内**调用那个接口（用你的 cookie、同源 `fetch`、网站自己的模块），返回
-干净的 JSON。网站分辨不出它和你的区别，因为它**就是你**。
-
-chrome-use 本身不把适配器编进二进制。`site update` 会在运行时默认拉取社区
-[**bb-sites**](https://github.com/epiral/bb-sites) 与官方
-[**chrome-use-sites**](https://github.com/leeguooooo/chrome-use-sites) 两个源，
-然后在 chrome-use 的隐身通道上运行它们。官方源在同名冲突时覆盖社区源，
-其中 Twitter 适配器提供稳定的 `replies`、`bookmarks` 与数字 `views` 字段：
-
-```bash
-chrome-use site update                          # 拉取适配器包（约 145 条命令）
-chrome-use site list                            # github/issues、reddit/search、bilibili/feed…
-chrome-use site info github/issues              # 查看某个适配器的参数 + 域名
-
-# 运行一个 —— 会导航到对应站点（已在该站点则复用当前标签页）并返回 JSON
-chrome-use site github/issues epiral/bb-browser --json
-chrome-use site reddit/search "rust async" --json
-chrome-use site bilibili/feed --json            # 能用，因为走的是你的登录态
-```
-
-位置参数按适配器声明的参数顺序填入；`--key value` 按名覆盖。社区适配器版权归各自作者所有，
-官方适配器由 chrome-use 项目维护；chrome-use CLI 负责同步并运行它们。
-
-**自动同步 + 自动提示。** 你基本不用手动 `site update`:chrome-use 首次使用时自动拉取,
-之后每周后台刷新一次(`AGENT_BROWSER_SITES_TTL_DAYS` 调周期,`AGENT_BROWSER_SITES_NO_AUTO_UPDATE=1`
-关闭)。而当你 `open`/`snapshot` 一个有适配器的域名时,chrome-use 会在输出里直接把可用命令
-亮出来 —— 一行 `💡 site adapters for <域名>`,`--json` 下则是 `siteAdapters` 字段 —— 这样
-agent 会直接改用结构化适配器,而不是去扒 DOM:
-
-```text
-$ chrome-use open https://github.com
-💡 site adapters for github.com — prefer these for structured data:
-   github/issues, github/me, github/repo, …
-   e.g. chrome-use site github/issues --json
-✓ GitHub
-```
-
-## 自动化测试（`chrome-use test`）
-
-把反复的「打开它、点一圈、看对不对」变成**可重跑的测试套件** —— 前端的单元测试。用 YAML 写用例；步骤复用 chrome-use 自己的命令，断言编译成一次检查：
-
-```yaml
-# smoke.yaml
-suite: chatgpt smoke
-setup:
-  - account: chatgpt/huayue          # 注入一个 cookie-use 登录（可选）
-cases:
-  - name: home loads logged in
-    steps:
-      - open: https://chatgpt.com/
-      - wait: { load: networkidle }
-    assert:
-      - url: { contains: chatgpt.com }
-      - visible: "#prompt-textarea"
-```
-
-```bash
-chrome-use test smoke.yaml                     # 启动隔离浏览器，跑用例
-chrome-use test smoke.yaml --session default   # …或对你已连接的 Chrome 跑
-```
-
-```
-suite: chatgpt smoke  (session cu-test)
-  ✓ home loads logged in   1.2s
-  ✗ composer takes text    0.8s
-      assert text "#prompt-textarea" contains "hi" → got ""
-      ↳ cu-test-artifacts/composer-takes-text.png
-2 cases · 1 passed · 1 failed
-```
-
-任一用例失败时退出码非零（可直接丢进 CI），失败用例会存截图。断言：`url` · `visible` · `hidden` · `text` · `count` · `eval`。步骤：`open` · `click` · `fill` · `type` · `press` · `wait` · `scroll` · `eval`。完整指南：`chrome-use skills get test`。发现回归？加个用例 —— 用得越多，套件越值钱。
-
-## 下载
-
-ab-connect 0.5.13 及以上版本通过 Chrome 原生 downloads API 发起 URL
-下载并读取下载历史。下载使用当前已登录 Chrome profile 的 cookie，且不会把
-当前标签页导航到媒体 URL。
-
-```bash
-chrome-use download @e2 ./video.mp4
-chrome-use download-url "https://example.com/report.pdf" ./report.pdf
-chrome-use downloads --limit 10 --json
-chrome-use downloads --clear
-```
-
-对 HTTP(S) 链接，`download` 会先解析元素的 `href`，动态创建且能在
-`snapshot -i` 中看到的链接也适用。`downloads --clear` 只清除 Chrome
-下载历史，不会删除文件。
-
-## 本地 HTTP API
-
-每个 session 的本地 stream 端口同时提供版本化 HTTP API。先用
-`stream status --json` 获取端口，再提交 CLI/MCP 使用的同一份 daemon
-命令 JSON：
-
-```bash
-PORT=$(chrome-use --session demo stream status --json | jq -r '.data.port')
-ORIGIN="http://127.0.0.1:$PORT"
-curl -fsS "$ORIGIN/api/v1/status"
-curl -fsS -X POST "$ORIGIN/api/v1/command" \
-  -H "Origin: $ORIGIN" \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"curl-1","action":"snapshot","interactive":true}'
-```
-
-版本化只读请求必须使用 loopback `Host`，且会拒绝不匹配的浏览器来源。
-命令请求还必须带有匹配的 `Origin` 或 `Referer`。CLI、MCP、HTTP 的失败
-响应统一包含 `success`、`error`、稳定的 `code` 和 `retryable` 字段。
-详见 [HTTP API 文档](docs/http-api.html)。
-
-## 反检测
-
-连接你真实 Chrome 时，我们**零** JS 注入 —— 浏览器指纹完全是真的。指导原则是 **native CDP/Chrome 覆盖优先于 JS 谎言**：被重定义的 getter 本身可被检测，原生覆盖则不会。
-
-- `navigator.webdriver = false` 走 `Emulation.setAutomationOverride`（原生，CreepJS 类说谎检测查不出）。
-- **`Runtime.enable` 默认关闭** —— 活着的 `Runtime` 域是可被检测的 CDP 信号（patchright/rebrowser 的 "runtime leak"），即便连的是你真实 Chrome。只在你主动开启 console/错误捕获时才启用。
-
-**实测结果（连接真实 Chrome，中继路径）：**
-
-| 检测站 | 结果 |
-|---|---|
-| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0% stealth · 0% headless**（零 override 痕迹） |
-| [bot.incolumitas.com](https://bot.incolumitas.com/) | 全部 OK（overflowTest / overrideTest / puppeteerExtraStealth / worker 一致性） |
-| [rebrowser-bot-detector](https://bot-detector.rebrowser.net/) | `runtimeEnableLeak` 🟢 · `pwInitScripts` 🟢 |
-| [bot.sannysoft.com](https://bot.sannysoft.com) | 全绿 |
-
-CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不打补丁**，根本没有可供说谎检测器抓的 override。（读 `navigator.languages` 顺序或 IP 地理位置的面板可能给个软性的「navigator」/「location」标记 —— 那反映的是*你真实 Chrome* 的语言列表和网络，不是自动化破绽。）
-
-`--launch` 独立模式（全新浏览器）会改用一整套隐身补丁，也能过上述检测 —— 唯一例外：CreepJS 报 **~20% stealth**，因为 srcdoc-iframe 的 `contentWindow` 补丁触发了它的 `hasIframeProxy` 探测（用来藏自动化的 proxy 本身成了破绽）。其余全干净（`0% headless`、sannysoft/browserscan 全绿、Cloudflare 通过）。设 **`AGENT_BROWSER_DISABLE_IFRAME_PROXY=1`** 去掉那个补丁即可拿到干净的 **0% stealth**（代价是放弃小众的 srcdoc-iframe 遮蔽）。**扩展连接路径**（你的真实 Chrome）零 JS 注入、不受影响 —— 它才是货真价实的 0% 路径。
-
-### 类人输入（行为隐身）
-
-指纹隐身只是一半——最强的反爬厂商（Akamai、PerimeterX、DataDome）还会给**行为**打分。点击时光标瞬移到元素正中心、没有接近轨迹、按下即抬起,这本身就是破绽,**哪怕我们的 CDP 事件是 `isTrusted`**。
-
-拖拽方式取决于当前会话的连接及目标框架；其他 Chrome profile 中运行的扩展不会改变独立启动浏览器的拖拽方式。
-
-开启 humanize 后,光标像手在动:点击走带减速的贝塞尔曲线、落在元素内**偏离正中心**的抖动点;打字用变速的击键间隔;滚动分段缓动;拖拽走曲线。而且**自适应**——每次导航探测页面是否有已知反爬厂商(cookie/脚本/全局变量),命中就自动升到全套类人动作,普通站点保持瞬时(零开销)。
-
-页面自己的 `mousemove` 流看到的(行为检测器分析的正是这个):
-
-| | 轨迹 |
-|---|---|
-| **off**（默认） | 直线 · 死磕正中心 · 瞬时 |
-| **human** | 曲线 · 先慢后快再慢 · 落点偏移 |
-
-用 `--humanize off\|fast\|human` 或 `AGENT_BROWSER_HUMANIZE` 控制。默认 `off`,自适应检测器按页面自动升档。
-
-### 静默操作
-
-操作你的真实 Chrome 不该打断你的工作。agent **全程在后台操作**:新标签后台打开(在自己的彩色会话标签组里),**从不强制把标签拽到前台**,并用 `Emulation.setFocusEmulationEnabled` 让每个 agent 标签照常渲染、`document.hasFocus()` / `visibilityState` 仍报 `visible`。于是截图正常、页面不被降频,"标签全程隐藏"也不会变成新的机器人信号。你在自己的标签里照常工作,agent 在旁边默默干活。(想置顶某个标签仍可显式调用命令。)
-
-### 自己验证
-
-别光听我们说 —— 把你连接的 Chrome 指向最硬的公开检测器,自己对比:
-
-- **[CreepJS](https://abrahamjuliot.github.io/creepjs/)** —— 最全面的指纹 / 说谎检测器
-- **[bot.incolumitas.com](https://bot.incolumitas.com/)** —— 行为 + 指纹打分,方法公开
-- **[BrowserScan](https://www.browserscan.net/bot-detection)** —— Webdriver / User-Agent / CDP / Navigator
-- **[bot.sannysoft.com](https://bot.sannysoft.com)** —— 经典自动化特征清单
-- **[pixelscan.net](https://pixelscan.net/)** · **[iphey.com](https://iphey.com/)** —— 一致性与身份
-
-我们故意**不自带 bot 检测器** —— 最强、最诚实的基准,就是拿市面上最好的检测器去测你的真实浏览器。
-
-### 调参（环境变量）
-
-| 变量 | 默认 | 作用 |
-|---|---|---|
-| `AGENT_BROWSER_CAPTURE_CONSOLE` | 关 | 启用 `Runtime` 域,让 `console` / `errors` 捕获页面输出。关闭可保持最隐身的画像。 |
-| `AGENT_BROWSER_HUMANIZE` | 关 | 类人输入动作:`off`(瞬时)、`fast`(轻量缓动轨迹)、`human`(全套曲线轨迹 + 落点抖动 + 击键节奏 + 缓动滚动/拖拽)。也可用 `--humanize`。默认 `off`;自适应检测器会把 Akamai/PerimeterX/DataDome 守护的页面自动升到 `human`。 |
-| `AGENT_BROWSER_TIMEZONE` | 未设 | 仅 `--launch`。IANA id(如 `Asia/Tokyo`)原生设置时区(Intl + Date 跟随,无 JS 谎言)以匹配代理;`auto` 按 locale 推导。 |
-| `AGENT_BROWSER_BLOCK_WEBRTC` | auto | 仅 `--launch`。设了代理时自动强制 WebRTC 走代理(不泄漏真实 IP)。`1` 无代理时也隐藏本地 IP;`0` 退出。 |
-| `AGENT_BROWSER_HIDE_CANVAS` | 关 | 仅 `--launch`。加入会话稳定的 canvas/audio 指纹噪声。默认关(噪声本身就是一种「谎言」)。 |
-| `AGENT_BROWSER_ADAPTIVE_REF` | 开 | 当保存的 `@ref` 移动且 role/name 重查失败时,按指纹相似度重定位(需高分 + 明显领先,否则明确报错)。`0` 关闭。 |
-| `AGENT_BROWSER_CLICK_MODE` | _(auto)_ | 点击策略。默认先滚动入视、派发坐标点击,若被浮层遮挡则回退 DOM `.click()`。`dom` 始终用 `.click()`(适合 blur 即关的自动补全/菜单项);`coord` 严格只用坐标(遮挡时硬失败)。 |
-
-## chrome-use 的独特之处
-
-- **默认 auto-connect** —— `chrome-use open` 连你现有的 Chrome 而非启新的
-- **扩展中继传输** —— 一键安装的 Chrome 商店扩展 + 原生消息，无调试端口、无 "Allow remote debugging?" 弹框
-- **浏览器级中继导航** —— 顶层 `open`/`navigate` 优先走 Chrome 的普通标签页 API，更接近手动导航；CDP 作为回退
-- **重载环诊断** —— 同一 URL 在短时间内连续提交四次会明确报错，不再返回空白且不稳定的 DOM
-- **CDP 原生隐身** —— 反检测走 Chrome/CDP 覆盖而非 JS 补丁；连真实 Chrome 零补丁，仅 `--launch` 用全补丁
-- **Humanize** —— 类人光标轨迹 + 自适应反爬处理
-- **多 agent 隔离** —— 多个 agent 通过 per-session 标签组共享同一个真实 Chrome，互不串扰
-- **静默运行** —— 后台操作，绝不抢你的前台标签
-
-<sub>最初基于 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)（Apache-2.0）；两个项目已大幅分化。</sub>
-
-## 参与开发
-
-`AGENTS.md` 是这个仓库的约定：文档放在哪、怎么构建和测试，以及两条用教训换来的
-规矩 —— 绝不发出假成功、怎么诚实地做性能测量。进行中的工作在
-[issues](https://github.com/leeguooooo/chrome-use/issues) 里追踪。
-
-## 贡献者
-
-感谢每一位为 chrome-use 做出贡献的人！
-
-<a href="https://github.com/leeguooooo/chrome-use/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=leeguooooo/chrome-use" alt="Contributors" />
-</a>
-
-## License
-
-Apache-2.0
-
----
-
-> 由 **leeguooooo** 打造 —— AI agent、逆向工程与 Cloudflare Workers 的实战笔记见 **[blog.leeguoo.com](https://blog.leeguoo.com)** · 关注 **[X @leeguooooo](https://x.com/leeguooooo)**
-
-<!-- use-family -->
-## 多 profile 的 Chrome：读 ChooseBrowser 的规则
-
-同时开着工作号、个人号、客户号的人，心里本来就清楚「哪个站点用哪个账号」，
-只是每次都要用 `--browser` 再告诉我们一遍。
-
-[ChooseBrowser](https://choosebrowser.leeguoo.com) 是一个 macOS 链接路由工具，
-它把这份映射存了下来。装了它之后，`chrome-use open <url>` 在你没显式指定
-`--browser` 时会按你自己写的规则选 profile，并且会说明来源：
+同时开着工作号、个人号、客户号的人，心里本来就清楚「哪个站点用哪个账号」，只是每次都要用 `--browser` 再告诉我们一遍。[ChooseBrowser](https://choosebrowser.leeguoo.com) 是一个 macOS 链接路由工具，它把这份映射存了下来。装了它之后，`chrome-use open <url>` 在你没显式指定 `--browser` 时会按你自己写的规则选 profile，并且会说明来源：
 
 ```
 $ chrome-use open https://github.com/my-org/repo
@@ -552,14 +145,97 @@ $ chrome-use open https://github.com/my-org/repo
   --no-choosebrowser.
 ```
 
-只读，没装的话完全无感：没有规则文件就不改变任何行为、也不打任何提示。
-规则指向的 profile 如果没在跑扩展，会退回正常的 profile 选择逻辑，
-该回退不保证网站账号正确；需要特定账号时，应检查身份或显式指定 `--browser`。
+只读，没装的话完全无感：没有规则文件就不改变任何行为、也不打任何提示。规则指向的 profile 如果没在跑扩展，会退回正常的 profile 选择逻辑。该回退不保证网站账号正确；需要特定账号时，应检查身份或显式指定 `--browser`。
 
-> **利益披露：** ChooseBrowser 是一款付费 macOS 应用（US$4.99，7 天试用），
-> 作者与 chrome-use 是同一人。这是配套工具说明，不是独立第三方评价。
-> chrome-use 不依赖它——这个集成只是「文件恰好在就读一下」。
+> **利益披露：** ChooseBrowser 是一款付费 macOS 应用（US$4.99，7 天试用），作者与 chrome-use 是同一人。这是配套工具说明，不是独立第三方评价。chrome-use 不依赖它。
 
+## 用法
+
+核心循环：打开、读取、操作、只重读变化的部分。
+
+```bash
+chrome-use open https://example.com    # 连接你的 Chrome 并导航
+chrome-use snapshot -i                 # 每次交互的起点：带 @ref 的可交互元素
+chrome-use click @e3 --observe         # 操作，并观察页面的反应
+chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的部分
+```
+
+Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击。任意时刻都能接管（比如手动过验证码），然后让 agent 继续。
+
+| 命令 | 用途 |
+|---|---|
+| `chrome-use open <url>` | 连接你的 Chrome 并导航 |
+| `chrome-use snapshot -i` | 读页面；每次交互的起点 |
+| `chrome-use click "Post"` · `click @e3` · `click 449 320` | 按文本、按快照 ref、或按视口坐标点击 |
+| `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` 整体替换，`type` 追加 |
+| `chrome-use screenshot ./page.png` | 保存截图（截图是用来看和附上的输出，不是 agent 读页面的方式） |
+| `chrome-use find "edit web service settings button"` | 按自然语言描述返回排序后的候选，不自动执行 |
+| `chrome-use actions @e15` · `do @e15 expand` | 这个元素此刻支持什么，并只做其中之一 |
+| `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | 列出标签；选择已创建或已接管的标签；不导航地接管已打开的标签 |
+| `chrome-use dialog status` · `dialog accept\|dismiss` | 处理点击触发的原生 `confirm()` / `prompt()` |
+| `chrome-use download @e2 ./video.mp4` | 用已登录浏览器的同一份 cookie 下载，且不导航当前标签页 |
+| `chrome-use network route "*/api/me" --body '{"vip":true}'` | 伪造响应、改写出站请求或拦截请求 |
+| `chrome-use site github/issues epiral/bb-browser --json` | 运行站点适配器，从网站自己的接口拿干净的 JSON |
+| `chrome-use session list` · `session stop [name]` | 管理会话 worker |
+| `chrome-use status` | 中继、profile、扩展与会话健康总览 |
+
+## 反检测
+
+<img src="assets/shield.png" alt="隐身盾牌" width="320" align="right" />
+
+连接你真实 Chrome 时，我们**零** JS 注入。浏览器指纹完全是真的。指导原则是 **native CDP/Chrome 覆盖优先于 JS 谎言**：被重定义的 getter 本身可被检测，原生覆盖则不会。
+
+- `navigator.webdriver = false` 走 `Emulation.setAutomationOverride`（原生，CreepJS 类说谎检测查不出）。
+- **`Runtime.enable` 默认关闭。** 活着的 `Runtime` 域是可被检测的 CDP 信号（patchright/rebrowser 的 "runtime leak"），即便连的是你真实 Chrome。只在你主动开启 console/错误捕获时才启用。`click`、`fill`、`eval` 等不需要它。
+
+**实测结果（连接真实 Chrome）：**
+
+| 检测站 | 结果 |
+|---|---|
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | **0% stealth · 0% headless**（零 override 痕迹） |
+| [bot.incolumitas.com](https://bot.incolumitas.com/) | 全部 OK：`overflowTest`、`overrideTest`、`puppeteerExtraStealthUsed`、worker 一致性 |
+| [bot.sannysoft.com](https://bot.sannysoft.com) | 全绿 |
+| [BrowserScan](https://www.browserscan.net/bot-detection) | Webdriver · User-Agent · CDP 全部干净 |
+| [Cloudflare Turnstile](https://nowsecure.nl) | 通过 |
+
+CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不打补丁**，根本没有可供说谎检测器抓的 override。（读 `navigator.languages` 顺序或 IP 地理位置的面板可能给个软性的「navigator」/「location」标记。那反映的是*你真实 Chrome* 的语言列表和网络，不是自动化破绽。）
+
+`--launch` 独立模式（全新浏览器）会改用一整套隐身补丁，也能过上述检测，唯一例外：CreepJS 报 **~20% stealth**，因为 srcdoc-iframe 的 `contentWindow` 补丁触发了它的 `hasIframeProxy` 探测（用来藏自动化的 proxy 本身成了破绽）。其余全干净（`0% headless`、sannysoft/browserscan 全绿、Cloudflare 通过）。设 **`AGENT_BROWSER_DISABLE_IFRAME_PROXY=1`** 去掉那个补丁即可拿到干净的 **0% stealth**（代价是放弃小众的 srcdoc-iframe 遮蔽）。**扩展连接路径**（你的真实 Chrome）零 JS 注入、不受影响，它才是货真价实的 0% 路径。
+
+### 自己验证
+
+别光听我们说。把你连接的 Chrome 指向最硬的公开检测器，自己对比：
+
+- **[CreepJS](https://abrahamjuliot.github.io/creepjs/)**：最全面的指纹 / 说谎检测器
+- **[bot.incolumitas.com](https://bot.incolumitas.com/)**：行为 + 指纹打分，方法公开
+- **[BrowserScan](https://www.browserscan.net/bot-detection)**：Webdriver / User-Agent / CDP / Navigator
+- **[bot.sannysoft.com](https://bot.sannysoft.com)**：经典自动化特征清单
+- **[pixelscan.net](https://pixelscan.net/)** · **[iphey.com](https://iphey.com/)**：一致性与身份
+
+我们故意**不自带 bot 检测器**。最强、最诚实的基准，就是拿市面上最好的检测器去测你的真实浏览器。
+
+## 文档里还有
+
+- [站点适配器](https://chrome-use.leeguoo.com/site-adapters.html)：把一个网站变成「结构化数据 CLI」（`chrome-use site`）
+- [自动化测试](https://chrome-use.leeguoo.com/testing.html)：用 `chrome-use test` 跑可重跑的 YAML 套件
+- [无障碍审计](https://chrome-use.leeguoo.com/commands.html)：`chrome-use a11y` 运行 axe-core
+- [更省字节地读页面](https://chrome-use.leeguoo.com/reading.html)：`snapshot -i --diff`、`--max-bytes`、`--from`
+- [读之前的等待](https://chrome-use.leeguoo.com/waiting.html)：settle 检测、`--settle-ms`、`--with-screenshot`
+- [在字段内部编辑，以及带格式粘贴](https://chrome-use.leeguoo.com/interacting.html)：`select-text`、`paste --format html`
+- [点击之外的动作](https://chrome-use.leeguoo.com/interacting.html)：`actions`、`do expand|showMenu|increment`
+- [查找元素与稳定 ref](https://chrome-use.leeguoo.com/finding.html)：`find`、XPath、shadow DOM ref
+- [下载](https://chrome-use.leeguoo.com/interacting.html)：`download`、`download-url`、`downloads`
+- [本地 HTTP API](https://chrome-use.leeguoo.com/http-api.html)：每个会话 stream 端口上的版本化 `/api/v1` 接口
+- [网络拦截](https://chrome-use.leeguoo.com/network.html)：`network route` 伪造、改写或拦截
+- [类人输入（humanize）](https://chrome-use.leeguoo.com/stealth.html)：`--humanize off|fast|human`，自适应反爬升档
+- [静默操作](https://chrome-use.leeguoo.com/real-chrome.html)：后台标签，绝不抢你的前台标签
+- [调参](https://chrome-use.leeguoo.com/commands.html)：`AGENT_BROWSER_*` 环境变量
+- [独立模式（`--launch`）](https://chrome-use.leeguoo.com/real-chrome.html)：全新隔离浏览器，`--profile auto` 保留登录
+- [标签、对话框与会话](https://chrome-use.leeguoo.com/commands.html)：`tab duplicate|select|adopt|inspect`、`dialog`、`session handoff`
+- [MCP server](https://chrome-use.leeguoo.com/mcp.html)：`chrome-use mcp`、`--tools all`
+- [排障](https://chrome-use.leeguoo.com/troubleshooting.html)
+
+<!-- use-family -->
 ## `*-use` 家族
 
 一组小而互相独立的 CLI，各自把 agent 的手伸到一个真实的东西上。装法都一样：
@@ -577,3 +253,23 @@ $ chrome-use open https://github.com/my-org/repo
 | [chatgpt-use](https://github.com/leeguooooo/chatgpt-use) | 把 ChatGPT 订阅当成编码 agent 的后端，不用 API key |
 | [computer-use](https://github.com/leeguooooo/computer-use) | macOS 桌面本身 |
 | [pixcake-use](https://github.com/leeguooooo/pixcake-use) | 只读探查 PixCake：快照 / diff / SQLite 检查 |
+
+## 参与开发
+
+`AGENTS.md` 是这个仓库的约定：文档放在哪、怎么构建和测试，以及两条用教训换来的
+规矩：绝不发出假成功、怎么诚实地做性能测量。进行中的工作在
+[issues](https://github.com/leeguooooo/chrome-use/issues) 里追踪。
+
+感谢每一位为 chrome-use 做出贡献的人！
+
+<a href="https://github.com/leeguooooo/chrome-use/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=leeguooooo/chrome-use" alt="Contributors" />
+</a>
+
+## License
+
+Apache-2.0
+
+---
+
+> 由 **leeguooooo** 打造。AI agent、逆向工程与 Cloudflare Workers 的实战笔记见 **[blog.leeguoo.com](https://blog.leeguoo.com)** · 关注 **[X @leeguooooo](https://x.com/leeguooooo)**
