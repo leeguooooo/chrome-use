@@ -34,7 +34,9 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 "no rules file — profile selection is unaffected",
             )
             .with_fix(format!(
-                "if you do use ChooseBrowser, its rules are not in any path this build reads: {}",
+                "if you do use ChooseBrowser, its rules are not in any path this build reads: {}. \
+                 The shared copy only appears after the first save on ChooseBrowser 0.2.1+; \
+                 nothing needs fixing until then",
                 looked.join(", ")
             )),
         );
@@ -109,9 +111,10 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 ),
             )
             .with_fix(
-                "only the first path found is used — if ChooseBrowser is still writing to the \
-                 other one (after a downgrade, say), the rules in use are stale; remove or \
-                 merge the copy you no longer want",
+                "only the first path found is read. The Group Containers copy is derived — \
+                 ChooseBrowser 0.2.1+ republishes it on every save — so if the rules in use \
+                 look stale, delete that copy (nothing is lost) and save any rule once in \
+                 ChooseBrowser to republish it",
             ),
         );
     }
@@ -125,6 +128,32 @@ pub(super) fn check(checks: &mut Vec<Check>) {
 #[cfg(target_os = "macos")]
 fn check_app(checks: &mut Vec<Check>) {
     let category = "ChooseBrowser app";
+    // Two copies at the fixed locations means two channels installed (store
+    // and direct-sale, say). LaunchServices picks one of them for links, and it
+    // is not necessarily the one whose settings the user is editing — which
+    // reads as "my rules do not apply". Say it before anything else.
+    let installed: Vec<String> = choosebrowser::app_candidates()
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .map(|p| p.display().to_string())
+        .collect();
+    if installed.len() > 1 {
+        checks.push(
+            Check::new(
+                "choosebrowser.app.duplicates",
+                category,
+                Status::Warn,
+                format!(
+                    "ChooseBrowser is installed twice: {}",
+                    installed.join(" and ")
+                ),
+            )
+            .with_fix(
+                "macOS opens links with one of them, not necessarily the one whose settings you \
+                 edit — remove the copy you do not use",
+            ),
+        );
+    }
     let Some(app) = choosebrowser::probe_app() else {
         let looked: Vec<String> = choosebrowser::app_candidates()
             .iter()
