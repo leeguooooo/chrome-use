@@ -261,9 +261,90 @@ pub async fn run_read(raw_url: &str, options: ReadOptions) -> Result<Value, Stri
     }
 
     let (source, content) = content_from_fetch(&primary, &options)?;
+    if source == "html-fallback" {
+        if let Some(problem) = app_shell_verdict(&primary.body, &content) {
+            match problem {
+                AppShell::Nothing(why) => {
+                    return Err(format!(
+                        "read got no readable text from {} — the HTML is a JavaScript app shell ({why}) \
+                         that only renders in a browser, not an empty page. Open it instead: \
+                         `chrome-use open <url>` then `text`, `snapshot`, or `read` with no url.",
+                        primary.final_url
+                    ));
+                }
+                AppShell::Little(why) => {
+                    let mut value =
+                        read_json_from_content(&target, &primary, source, content, &options);
+                    value["warning"] = json!(format!(
+                        "only {} characters of readable text — the HTML looks like a JavaScript app shell ({why}); \
+                         the real page content may only render in a browser (`chrome-use open <url>` then `text`).",
+                        value["content"].as_str().map(|c| c.trim().chars().count()).unwrap_or(0)
+                    ));
+                    return Ok(value);
+                }
+            }
+        }
+    }
     Ok(read_json_from_content(
         &target, &primary, source, content, &options,
     ))
+}
+
+/// What a fetch of a client-rendered page looks like from the outside.
+enum AppShell {
+    /// No readable text at all — the answer would have been an empty string,
+    /// which reads as "this page is empty", not "this page needs a browser".
+    Nothing(&'static str),
+    /// A few words (a title, a `<noscript>` notice) — enough to look like an
+    /// answer, not enough to be one.
+    Little(&'static str),
+}
+
+/// Readable text under this many characters, on a page that carries an app
+/// mount point, is treated as "the shell, not the page".
+const APP_SHELL_LITTLE_TEXT: usize = 200;
+
+/// Decide whether `html` is a JavaScript application shell whose content was
+/// never in the response. `content` is the readable text already extracted.
+///
+/// `read` fetches with an HTTP client and does not run JavaScript, so a Nuxt
+/// or Next page comes back as `<div id="__nuxt"></div>` plus scripts. The
+/// extractor then returns "" — identical to what a genuinely empty page
+/// returns, and the caller cannot tell the two apart. One person concluded
+/// from that empty string (and from `curl` agreeing, which it always will)
+/// that a public product page sat behind a login wall, and wrote up advice
+/// on that basis (#255). Failing to render and having nothing to render must
+/// not produce the same answer.
+fn app_shell_verdict(html: &str, content: &str) -> Option<AppShell> {
+    let lower = html.to_ascii_lowercase();
+    if !lower.contains("<script") {
+        return None;
+    }
+    let why = if lower.contains("id=\"__nuxt\"") || lower.contains("id=\"__nuxt\"") {
+        "a Nuxt mount point"
+    } else if lower.contains("id=\"__next\"") {
+        "a Next.js mount point"
+    } else if lower.contains("id=\"___gatsby\"") {
+        "a Gatsby mount point"
+    } else if lower.contains("id=\"root\"") || lower.contains("id=\"app\"") {
+        "an empty app mount point"
+    } else if lower.contains("<noscript") {
+        "a <noscript> fallback"
+    } else {
+        // Scripts but no recognisable mount: only the empty case is confident.
+        return content
+            .trim()
+            .is_empty()
+            .then_some(AppShell::Nothing("scripts and no text"));
+    };
+    let chars = content.trim().chars().count();
+    if chars == 0 {
+        Some(AppShell::Nothing(why))
+    } else if chars < APP_SHELL_LITTLE_TEXT {
+        Some(AppShell::Little(why))
+    } else {
+        None
+    }
 }
 
 async fn run_llms_index(
@@ -1909,5 +1990,57 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         let data = run_read(&base, options).await.unwrap();
         assert_eq!(data["source"], "raw");
         assert_eq!(data["content"], "{\"ok\":true}\n");
+    }
+
+    // --- client-rendered pages (#255) --------------------------------------
+
+    /// The whole point: an app shell must not come back as an empty answer.
+    #[test]
+    fn a_nuxt_shell_with_no_text_is_a_refusal_not_an_empty_page() {
+        let html = r#"<!doctype html><html><head><title>x</title></head>
+            <body><div id="__nuxt"></div><script src="/_nuxt/entry.js"></script></body></html>"#;
+        let content = html_to_markdownish(html);
+        match app_shell_verdict(html, &content) {
+            Some(AppShell::Nothing(why)) => assert!(why.contains("Nuxt"), "{why}"),
+            other => panic!(
+                "expected Nothing, got {}",
+                match other {
+                    Some(AppShell::Little(w)) => format!("Little({w})"),
+                    _ => "None".to_string(),
+                }
+            ),
+        }
+    }
+
+    /// A title and a "please enable JavaScript" line is not the page either.
+    #[test]
+    fn a_shell_with_a_noscript_notice_is_flagged_not_trusted() {
+        let html = r#"<html><body><div id="root"></div>
+            <noscript>You need to enable JavaScript to run this app.</noscript>
+            <script src="/static/js/main.js"></script></body></html>"#;
+        let content = html_to_markdownish(html);
+        assert!(!content.trim().is_empty());
+        assert!(matches!(
+            app_shell_verdict(html, &content),
+            Some(AppShell::Little(_))
+        ));
+    }
+
+    /// Server-rendered pages carry scripts too; text is what decides.
+    #[test]
+    fn a_rendered_page_with_scripts_is_left_alone() {
+        let body = "<p>".to_string() + &"real content here. ".repeat(20) + "</p>";
+        let html = format!(
+            r#"<html><body><div id="app">{body}</div><script>init()</script></body></html>"#
+        );
+        let content = html_to_markdownish(&html);
+        assert!(app_shell_verdict(&html, &content).is_none());
+    }
+
+    /// No scripts means no rendering step was skipped: an empty page is empty.
+    #[test]
+    fn an_empty_static_page_is_just_empty() {
+        let html = "<html><body></body></html>";
+        assert!(app_shell_verdict(html, "").is_none());
     }
 }

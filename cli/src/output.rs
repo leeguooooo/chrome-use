@@ -437,6 +437,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     .or_else(|| data.get("url").and_then(|v| v.as_str()));
                 print_with_boundaries(content, origin, opts);
             }
+            // A thin answer that looks like an app shell: say so on stderr,
+            // where it cannot be mistaken for part of the page (#255).
+            if let Some(warning) = data.get("warning").and_then(|v| v.as_str()) {
+                eprintln!("{} {}", color::warning_indicator(), warning);
+            }
             return;
         }
 
