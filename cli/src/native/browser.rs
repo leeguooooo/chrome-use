@@ -630,7 +630,12 @@ pub fn to_ai_friendly_error(error: &str) -> String {
         if lower.contains("debugger_access_denied:") {
             return error.to_string();
         }
-        return format!("debugger_access_denied: Chrome blocked debugger access to protected extension content in this tab, which can be a child frame. Reattaching does not resolve this restriction. Use `tab inspect` for browser metadata or a separate test profile. Original error: {error}");
+        // The same words come back when the tab was opened by ANOTHER
+        // chrome-use session daemon (its extension context, not ours). That
+        // reads like a permissions problem and sends people debugging the
+        // wrong thing for a long time (#256); the fix is to stop the other
+        // daemon.
+        return format!("debugger_access_denied: Chrome blocked debugger access to protected extension content in this tab, which can be a child frame. Reattaching does not resolve this restriction. If this session did not open the tab, another chrome-use session daemon may hold it: run `chrome-use sessions`, then `chrome-use session stop <that session>`. Otherwise use `tab inspect` for browser metadata or a separate test profile. Original error: {error}");
     }
     // Top-level `await` in `eval` fails with a bare "await is not defined" /
     // "await is only valid in async" — unhelpful. Point at the wrapper (issue #65).
@@ -3640,11 +3645,15 @@ impl BrowserManager {
 
         // `DOM.setFileInputFiles` (or the relay fallback above) has already
         // delivered the files and fired input/change. Read the live input only
-        // as confirmation. React dropzones are allowed to consume the FileList
-        // and synchronously clear or replace the input; that is successful page
-        // behavior, not a rejected upload (#208).
+        // as confirmation — and only read it. This step used to dispatch a
+        // second input/change "to be safe", which is the one thing a page's
+        // upload handler cannot tolerate: React/Livewire queued the file twice,
+        // and the second entry sat at 0% forever with no delete control and
+        // the form's Save button disabled (#254). React dropzones are allowed
+        // to consume the FileList and synchronously clear or replace the input;
+        // that is successful page behavior, not a rejected upload (#208).
         match self
-            .notify_and_count_file_input(&input_object_id, &effective_session_id)
+            .count_file_input(&input_object_id, &effective_session_id)
             .await
         {
             Ok(attached) if attached > 0 => Ok(UploadOutcome {
@@ -3749,7 +3758,12 @@ impl BrowserManager {
 
     /// Read the file input's `files.length` and dispatch bubbling `input`+`change`
     /// so Vue/React register the new files. Returns the attached file count.
-    async fn notify_and_count_file_input(
+    /// How many files the input holds now. Deliberately does not dispatch
+    /// anything: both delivery paths have already fired `input`/`change`
+    /// (Chrome does it natively for `DOM.setFileInputFiles`; the relay
+    /// fallback does it itself), and a page counts every `change` as a new
+    /// upload.
+    async fn count_file_input(
         &self,
         input_object_id: &str,
         session_id: &str,
@@ -3757,12 +3771,7 @@ impl BrowserManager {
         let func = r#"function() {
             const el = this;
             if (!el || el.tagName !== 'INPUT' || el.type !== 'file') return -1;
-            const n = el.files ? el.files.length : 0;
-            if (n > 0) {
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            return n;
+            return el.files ? el.files.length : 0;
         }"#;
 
         let result: EvaluateResult = self

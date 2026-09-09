@@ -703,6 +703,34 @@ fn run_cookies_export(args: &[String], flags: &Flags) {
     }
 }
 
+/// What to say when the daemon is stopped but its tabs could not be closed.
+///
+/// The old text asked the user to "reconnect this session to its original
+/// browser with the original connection options" — but the daemon has just
+/// been killed, and the usual reason the tabs are unreachable is that the
+/// original browser endpoint no longer exists (a relay restart after an
+/// upgrade, a Chrome restart). Advice that cannot be followed reads as a dead
+/// end (#256). Say what is true instead: stopped; some tabs remain; here is
+/// how to either pick them back up or let go of the record.
+fn session_stop_incomplete_message(session: &str, error: &str, tabs: usize) -> String {
+    let tab_word = if tabs == 1 { "tab" } else { "tabs" };
+    format!(
+        "stopped session daemon {session}, but {tabs} {tab_word} it created could not be closed: {error}. \
+         This usually means the browser endpoint changed since those tabs were opened (an upgrade or a \
+         Chrome restart), not that anything is wrong with them — they are still open. \
+         Run `chrome-use open <url>` in this session to pick them back up, or \
+         `chrome-use session stop {session} --force` to drop the record and leave them as they are."
+    )
+}
+
+fn session_stop_forced_note(session: &str, tabs: usize) -> String {
+    let tab_word = if tabs == 1 { "tab" } else { "tabs" };
+    format!(
+        "stopped session daemon {session} and dropped its record of {tabs} {tab_word} — \
+         they were not closed and stay open in the browser; close them by hand if you no longer want them."
+    )
+}
+
 fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
     let subcommand = args.get(1).map(|s| s.as_str());
 
@@ -711,7 +739,13 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
         // sends SIGTERM first, so the daemon's shutdown handler runs `close()` and
         // tidies the tabs IT created (its tab group) before exiting.
         Some("stop") => {
-            let target = args.get(2).map(|s| s.as_str()).unwrap_or(session);
+            let force = args.iter().skip(2).any(|a| a == "--force");
+            let target = args
+                .iter()
+                .skip(2)
+                .find(|a| !a.starts_with("--"))
+                .map(|s| s.as_str())
+                .unwrap_or(session);
             if !validation::is_valid_session_name(target) {
                 let msg = validation::session_name_error(target);
                 if json_mode {
@@ -740,7 +774,31 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
                 Ok(())
             })();
             if let Err(error) = stopped {
-                let message = format!("session stop incomplete: {error}. Reconnect this session to its original browser with the original connection options, then run close. Saved tab ownership was retained.");
+                let tabs = connection::created_target_count(target);
+                if force {
+                    // The daemon is already gone; only the claim on its tabs
+                    // remains, and that claim cannot be exercised against a
+                    // browser we cannot reach. Forget it. Nothing is closed —
+                    // deletion rights come from the record, and we are giving
+                    // the record up, not using it.
+                    if let Err(e) = connection::forget_created_targets(target) {
+                        eprintln!(
+                            "{} could not drop the ownership record: {e}",
+                            color::error_indicator()
+                        );
+                        exit(1);
+                    }
+                    let note = session_stop_forced_note(target, tabs);
+                    if json_mode {
+                        print_json_value(
+                            json!({ "success": true, "data": { "stopped": target, "forgottenTabs": tabs } }),
+                        );
+                    } else {
+                        println!("{} {note}", color::success_indicator());
+                    }
+                    return;
+                }
+                let message = session_stop_incomplete_message(target, &error, tabs);
                 if json_mode {
                     print_json_error(&message);
                 } else {
@@ -3568,5 +3626,28 @@ mod tests {
             target_url_for_choosebrowser(&clean).as_deref(),
             Some("https://github.com/leeguooooo")
         );
+    }
+
+    // --- session stop wording (#256) ------------------------------------------
+
+    /// The advice must be followable after the daemon is already gone.
+    #[test]
+    fn stop_incomplete_message_does_not_ask_for_a_browser_that_no_longer_exists() {
+        let m = session_stop_incomplete_message("cu-x", "the connected browser does not match", 3);
+        assert!(m.starts_with("stopped session daemon cu-x"), "{m}");
+        assert!(m.contains("3 tabs"), "{m}");
+        assert!(m.contains("still open"), "{m}");
+        assert!(m.contains("--force"), "{m}");
+        assert!(
+            !m.contains("Reconnect this session to its original browser"),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn forced_stop_says_nothing_was_closed() {
+        let m = session_stop_forced_note("cu-x", 1);
+        assert!(m.contains("1 tab —"), "{m}");
+        assert!(m.contains("not closed"), "{m}");
     }
 }

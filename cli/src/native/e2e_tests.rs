@@ -6764,6 +6764,61 @@ async fn e2e_upload_no_input_does_not_navigate() {
     assert_success(&resp);
 }
 
+/// One upload, one `change`. The post-upload confirmation step used to fire a
+/// second input/change on top of the one delivery already produced; a page
+/// that enqueues an upload per `change` then showed two entries, the second
+/// stuck at 0% with no way to remove it and the form's submit disabled (#254).
+#[tokio::test]
+#[ignore]
+async fn e2e_upload_fires_change_exactly_once() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = r#"<input id="f" type="file"><script>
+      window.__changes = 0; window.__inputs = 0;
+      f.addEventListener('change', () => { window.__changes++; });
+      f.addEventListener('input', () => { window.__inputs++; });
+    </script>"#;
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let tmp = std::env::temp_dir().join(format!("ab-upload-once-{}.txt", std::process::id()));
+    std::fs::write(&tmp, "once").unwrap();
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "upload", "selector": "#f", "files": [tmp.to_string_lossy()] }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["attached"], 1);
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "[window.__changes, window.__inputs].join(',')" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"].as_str().unwrap(),
+        "1,1",
+        "upload must produce exactly one change and one input event"
+    );
+
+    let _ = std::fs::remove_file(&tmp);
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 /// React-style dropzones often consume the FileList synchronously and clear the
 /// input. Delivery succeeded and the CLI must return success with a soft warning.
 #[tokio::test]

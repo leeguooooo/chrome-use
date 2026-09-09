@@ -437,6 +437,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     .or_else(|| data.get("url").and_then(|v| v.as_str()));
                 print_with_boundaries(content, origin, opts);
             }
+            // A thin answer that looks like an app shell: say so on stderr,
+            // where it cannot be mistaken for part of the page (#255).
+            if let Some(warning) = data.get("warning").and_then(|v| v.as_str()) {
+                eprintln!("{} {}", color::warning_indicator(), warning);
+            }
             return;
         }
 
@@ -4601,6 +4606,8 @@ Sessions:
   session resume             Return control to the agent
   session stop [name]        Stop one session daemon (default: current) — graceful,
                              closes the tabs it created
+    --force                  If those tabs can no longer be reached (endpoint changed after
+                             an upgrade/restart), drop the record and leave them open
   session prune              Stop ALL session daemons now (closes their tabs; they
                              respawn clean on next use). For clearing idle daemons.
   sessions                   List running session daemons (alias of daemon status)
