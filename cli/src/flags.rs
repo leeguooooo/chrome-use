@@ -415,6 +415,12 @@ pub struct Flags {
     /// silent when ChooseBrowser is not installed, so this exists for the user
     /// who *has* rules and wants one command to ignore them.
     pub no_choosebrowser: bool,
+    /// `--remember`: after this navigation succeeds, ask ChooseBrowser to route
+    /// this site to the profile `--browser` named, from now on.
+    ///
+    /// A *request*, never a save: ChooseBrowser shows its own dialog and gives
+    /// no callback, so nothing here can report the rule as written.
+    pub remember: bool,
     /// `--as <vault-account-id>`: before executing the command, verify the
     /// session's live cookies match this cookie-use account's fingerprint;
     /// on mismatch auto-apply the account's session (or fail with --as-strict).
@@ -808,6 +814,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
 
     let mut flags = Flags {
         no_choosebrowser: false,
+        remember: false,
         json: env_var_is_truthy("AGENT_BROWSER_JSON") || config.json.unwrap_or(false),
         headed: env_var_is_truthy("AGENT_BROWSER_HEADED") || config.headed.unwrap_or(false),
         debug: env_var_is_truthy("AGENT_BROWSER_DEBUG") || config.debug.unwrap_or(false),
@@ -1055,6 +1062,9 @@ pub fn parse_flags(args: &[String]) -> Flags {
             }
             "--no-choosebrowser" => {
                 flags.no_choosebrowser = true;
+            }
+            "--remember" => {
+                flags.remember = true;
             }
             "--as" => {
                 if let Some(s) = args.get(i + 1) {

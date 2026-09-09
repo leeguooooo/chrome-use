@@ -372,14 +372,124 @@ pub fn profile_for_url(url: &str) -> Option<(ResolvedProfile, ProfileChoice)> {
         let body = std::fs::read_to_string(p).ok()?;
         choose_for_url(&body, url)
     })?;
-    let local_state = dirs::home_dir()
-        .map(|h| h.join("Library/Application Support/Google/Chrome/Local State"))
-        .and_then(|p| std::fs::read_to_string(p).ok())?;
+    let local_state = read_local_state()?;
     // A key that resolves to nothing means launching with no profile argument.
     // Falling back to *some other* profile would open the link as the wrong
     // identity, which is worse than opening it as the default one.
     let profile = resolve_profile_directory(&local_state, &choice.key)?;
     Some((profile, choice))
+}
+
+/// Chrome's profile registry, as text. `None` when Chrome has never run here.
+pub fn read_local_state() -> Option<String> {
+    dirs::home_dir()
+        .map(|h| h.join("Library/Application Support/Google/Chrome/Local State"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+}
+
+// --- Writing a rule back (`--remember`) --------------------------------------
+//
+// The reverse of the read path, and deliberately not symmetric with it. Reading
+// is an inference we make on the user's behalf; writing changes what every
+// browser launch on this machine does from now on, so it happens only when the
+// user says so, and ChooseBrowser itself — not us — takes the final consent.
+//
+// The hard requirement from ChooseBrowser's owner: **every save shows a dialog,
+// and there is deliberately no success callback.** So this module can build and
+// hand over a request and nothing more. It must never report a rule as saved,
+// because it cannot know. A malformed request is dropped without a dialog, which
+// means an unnoticed typo would look exactly like a user declining — hence the
+// validation below happens before anything is sent, and refuses loudly.
+
+/// The portable key to write into a rule for the account `email` is signed into.
+///
+/// Prefers the gaia id because that is what ChooseBrowser's own UI writes (the
+/// rules on this machine carry 21-digit gaia ids, not emails) and because it
+/// survives the account being renamed. Falls back to the email, which the
+/// reader also accepts.
+///
+/// `None` when the account is not in Chrome's registry at all — better to
+/// refuse than to write a key that resolves to nothing or, worse, to somebody
+/// else.
+///
+/// One account can own several profile directories (this machine has three for
+/// the same address). That is fine here precisely because the key is a gaia id:
+/// all three carry the same one, so which entry is found first does not change
+/// what gets written.
+pub fn portable_key_for_email(local_state_json: &str, email: &str) -> Option<String> {
+    let state: serde_json::Value = serde_json::from_str(local_state_json).ok()?;
+    let cache = state.get("profile")?.get("info_cache")?.as_object()?;
+    let email = email.trim();
+    if email.is_empty() {
+        return None;
+    }
+    let entry = cache.values().find(|info| {
+        info.get("user_name")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case(email))
+    })?;
+    let field = |name: &str| {
+        entry
+            .get(name)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    field("gaia_id").or_else(|| field("user_name"))
+}
+
+/// Percent-encode one query value.
+///
+/// Hand-rolled rather than `Url::query_pairs_mut`, which is form-urlencoded and
+/// would turn `:` into `%3A` — but the target's `com.google.Chrome::profile::…`
+/// shape requires literal colons, and a target ChooseBrowser cannot parse is
+/// dropped silently. Everything that would end or split a query is escaped;
+/// characters that are legal inside one are left as they are.
+fn encode_query_value(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for b in v.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b':' | b'/'
+            | b'*' | b'@' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Build the `choosebrowser://remember` request, or `None` when the inputs
+/// could not produce one ChooseBrowser would accept.
+///
+/// Validating here rather than letting the app reject it matters because
+/// rejection is invisible: a malformed request shows no dialog, which looks
+/// identical to the user having dismissed one.
+pub fn remember_url(host: &str, path: Option<&str>, key: &str) -> Option<String> {
+    let host = host.trim();
+    let key = key.trim();
+    // A bare hostname, per the scheme's contract — no scheme, port, or path
+    // smuggled in, and no wildcard: the app writes the rule verbatim.
+    if host.is_empty()
+        || key.is_empty()
+        || host.contains(['/', ':', '?', '#', '@', ' '])
+        || !host.contains('.')
+    {
+        return None;
+    }
+    let mut url = format!("choosebrowser://remember?domain={}", encode_query_value(host));
+    if let Some(path) = path {
+        // The contract requires a leading slash; anything else is malformed and
+        // would be dropped without a word.
+        if !path.starts_with('/') {
+            return None;
+        }
+        url.push_str(&format!("&path={}", encode_query_value(path)));
+    }
+    url.push_str(&format!(
+        "&target={}",
+        encode_query_value(&format!("com.google.Chrome::profile::{key}"))
+    ));
+    Some(url)
 }
 
 #[cfg(test)]
@@ -727,5 +837,97 @@ mod tests {
                 "action":{"type":"ask","bundleIdentifier":"com.google.Chrome::profile::k"}}"#,
         );
         assert_eq!(choose_for_url(&f, "https://a.example/"), None);
+    }
+    // --- `--remember` write-back ---------------------------------------------
+
+    /// The one test that would have caught all three of this feature's earlier
+    /// "never worked" bugs, which were every time a mismatch between what one
+    /// side writes and what the other side reads.
+    ///
+    /// So it does not check the url's shape against a spec. It feeds what we
+    /// write straight back into the reader and requires it to land on the same
+    /// profile — the two halves are only correct relative to each other.
+    #[test]
+    fn a_written_target_reads_back_as_the_same_profile() {
+        let state = local_state();
+        let key = portable_key_for_email(&state, "Work@Example.COM").expect("key for a known account");
+        let url = remember_url("github.com", None, &key).expect("a valid request");
+
+        // Pull the target back out the way ChooseBrowser would.
+        let target = url
+            .split("&target=")
+            .nth(1)
+            .expect("target parameter")
+            .to_string();
+        let read_key = parse_chrome_profile_key(&target).expect("a chrome profile target");
+        assert_eq!(
+            resolve_profile_directory(&state, &read_key).map(|p| p.directory),
+            Some("Profile 14".to_string()),
+            "the profile we wrote a rule for is not the one the reader finds"
+        );
+    }
+
+    /// ChooseBrowser's own UI writes gaia ids (the four rules on a real machine
+    /// all carry 21-digit ones), and a gaia id survives the account being
+    /// renamed. The email is the fallback, not the preference.
+    #[test]
+    fn a_gaia_id_is_preferred_over_the_email() {
+        assert_eq!(
+            portable_key_for_email(&local_state(), "leo@gmail.com").as_deref(),
+            Some("103695396640962395023")
+        );
+    }
+
+    /// Matching an account is case-insensitive because Chrome stores whatever
+    /// the user typed, but an account Chrome has never seen must produce
+    /// nothing rather than a guess: a wrong key writes a rule pointing at
+    /// somebody else's profile.
+    #[test]
+    fn an_unknown_account_yields_no_key() {
+        let s = local_state();
+        assert!(portable_key_for_email(&s, "work@example.com").is_some());
+        assert_eq!(portable_key_for_email(&s, "nobody@example.com"), None);
+        assert_eq!(portable_key_for_email(&s, "  "), None);
+    }
+
+    /// The colons in `com.google.Chrome::profile::…` are load-bearing, and a
+    /// form-urlencoder would turn them into `%3A` — producing a request that is
+    /// dropped with no dialog, which looks exactly like the user declining.
+    #[test]
+    fn the_targets_colons_survive_encoding() {
+        let url = remember_url("github.com", Some("/my-org*"), "1036953966").unwrap();
+        assert!(
+            url.contains("target=com.google.Chrome::profile::1036953966"),
+            "colons were escaped: {url}"
+        );
+        assert!(url.contains("path=/my-org*"), "path was escaped: {url}");
+        assert!(url.starts_with("choosebrowser://remember?domain=github.com"));
+    }
+
+    /// A request ChooseBrowser cannot parse is discarded silently, so anything
+    /// that would produce one has to be refused here, where we can still say
+    /// why.
+    #[test]
+    fn a_request_the_app_would_drop_is_refused_here() {
+        // A url, not a hostname.
+        assert_eq!(remember_url("https://github.com/x", None, "k"), None);
+        // Port and path smuggled into the host.
+        assert_eq!(remember_url("github.com:443", None, "k"), None);
+        assert_eq!(remember_url("github.com/x", None, "k"), None);
+        // Not a hostname at all.
+        assert_eq!(remember_url("localhost", None, "k"), None);
+        assert_eq!(remember_url("", None, "k"), None);
+        // The contract requires a leading slash on the path.
+        assert_eq!(remember_url("github.com", Some("my-org"), "k"), None);
+        // No key means no profile to point at.
+        assert_eq!(remember_url("github.com", None, "  "), None);
+    }
+
+    /// Values that would end or split the query must be escaped even though
+    /// the common ones are not.
+    #[test]
+    fn characters_that_would_break_the_query_are_escaped() {
+        assert_eq!(encode_query_value("a b&c=d#e"), "a%20b%26c%3Dd%23e");
+        assert_eq!(encode_query_value("a.b-c_d~e"), "a.b-c_d~e");
     }
 }
