@@ -2523,6 +2523,22 @@ impl BrowserManager {
         Some((format_tab_id(page.tab_id), page.url.clone()))
     }
 
+    /// Which tab this observation is about: `(tabId, targetId, url)`.
+    ///
+    /// Deliberately no account or profile email. The point is only "is this
+    /// still the same target as last time" — a caller that cannot tell reuses
+    /// refs from one page against another, which is how a rebinding or a
+    /// navigation turns into a mis-click (issue #237).
+    pub fn observed_target(&self) -> Option<(String, String, String)> {
+        let i = self.resolved_active_index();
+        let page = self.pages.get(i)?;
+        Some((
+            format_tab_id(page.tab_id),
+            page.target_id.clone(),
+            page.url.clone(),
+        ))
+    }
+
     pub fn tab_list(&self) -> Vec<Value> {
         let active = self.resolved_active_index();
         let pinned = self.active_target_id.as_deref();
