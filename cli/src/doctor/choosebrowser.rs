@@ -14,6 +14,7 @@ use super::{Check, Status};
 use crate::choosebrowser;
 
 pub(super) fn check(checks: &mut Vec<Check>) {
+    check_app(checks);
     let category = "ChooseBrowser rules";
     let d = choosebrowser::diagnose();
 
@@ -84,3 +85,68 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         }
     }
 }
+
+/// The app itself: which version, and does it register `choosebrowser://`.
+///
+/// Reported as two facts, not one verdict. `0.2.0 / no` means upgrade;
+/// `0.2.1 / no` means something else (two copies installed, LaunchServices
+/// not refreshed) and "upgrade" would be the wrong advice.
+#[cfg(target_os = "macos")]
+fn check_app(checks: &mut Vec<Check>) {
+    let category = "ChooseBrowser app";
+    let Some(app) = choosebrowser::probe_app() else {
+        let looked: Vec<String> = choosebrowser::app_candidates()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        checks.push(Check::new(
+            "choosebrowser.app",
+            category,
+            Status::Info,
+            format!(
+                "not found in {} — --remember has nothing to talk to",
+                looked.join(" or ")
+            ),
+        ));
+        return;
+    };
+    let version = app
+        .version
+        .clone()
+        .unwrap_or_else(|| "unknown version".into());
+    if app.accepts_rule_requests() {
+        checks.push(Check::new(
+            "choosebrowser.app",
+            category,
+            Status::Pass,
+            format!(
+                "ChooseBrowser {version} at {} — accepts rule requests: yes",
+                app.path.display()
+            ),
+        ));
+    } else {
+        checks.push(
+            Check::new(
+                "choosebrowser.app",
+                category,
+                Status::Info,
+                format!(
+                    "ChooseBrowser {version} at {} — accepts rule requests: no (registers: {})",
+                    app.path.display(),
+                    if app.schemes.is_empty() {
+                        "nothing".to_string()
+                    } else {
+                        app.schemes.join(" ")
+                    }
+                ),
+            )
+            .with_fix(format!(
+                "--remember needs ChooseBrowser ≥ {}; reading rules works on any version",
+                choosebrowser::MIN_APP_VERSION_FOR_RULE_REQUESTS
+            )),
+        );
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_app(_checks: &mut Vec<Check>) {}

@@ -317,10 +317,10 @@ fn send_remember_request(request: &str, host: &str, profile: &str) {
         // for most people who see this — they have it, just not that version.
         Ok(_) | Err(_) => eprintln!(
             "{} --remember: nothing on this Mac handles choosebrowser:// urls, so no rule was \
-             proposed for {host}. ChooseBrowser is either not installed or older than the \
-             version that accepts rule requests — update it, or add the rule in ChooseBrowser \
-             directly.",
+             proposed for {host}. ChooseBrowser is either not installed or older than {} — \
+             update it, or add the rule in ChooseBrowser directly.",
             color::warning_indicator(),
+            choosebrowser::MIN_APP_VERSION_FOR_RULE_REQUESTS,
         ),
     }
 }

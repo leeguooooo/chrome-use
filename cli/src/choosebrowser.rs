@@ -510,6 +510,82 @@ pub fn remember_url(host: &str, path: Option<&str>, key: &str) -> Option<String>
     Some(url)
 }
 
+// --- Is the installed app one that accepts rule requests? -------------------
+
+/// The ChooseBrowser version that registers `choosebrowser://` (and reads
+/// `source`). Everything the store has shipped so far registers http/https
+/// only, so on those a `--remember` request has no handler at all.
+pub const MIN_APP_VERSION_FOR_RULE_REQUESTS: &str = "0.2.1";
+
+/// What `doctor` found out about the app itself, as opposed to its rules.
+#[derive(Debug, PartialEq)]
+pub struct AppProbe {
+    pub path: PathBuf,
+    pub version: Option<String>,
+    pub schemes: Vec<String>,
+}
+
+impl AppProbe {
+    /// Exact match on the scheme, not a substring: the bundle id is
+    /// `com.choosebrowser.app`, so `grep choosebrowser` against the plist says
+    /// yes to every version ever shipped. That mistake was made twice in one
+    /// day on the other side of this integration.
+    pub fn accepts_rule_requests(&self) -> bool {
+        self.schemes.iter().any(|s| s == "choosebrowser")
+    }
+}
+
+/// Fixed locations only — no Spotlight. `mdfind` also returns DerivedData and
+/// build directories, and returns nothing when the index is off, which reads
+/// as "not installed" when it means "could not look".
+pub fn app_candidates() -> Vec<PathBuf> {
+    let mut v = vec![PathBuf::from("/Applications/ChooseBrowser.app")];
+    if let Some(home) = dirs::home_dir() {
+        v.push(home.join("Applications/ChooseBrowser.app"));
+    }
+    v
+}
+
+/// Flatten `CFBundleURLTypes` (as `plutil -extract … json` prints it) into the
+/// schemes it registers.
+pub fn schemes_from_url_types_json(json: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.get("CFBundleURLSchemes").and_then(|s| s.as_array()))
+        .flatten()
+        .filter_map(|s| s.as_str().map(str::to_string))
+        .collect()
+}
+
+/// Probe the first candidate that exists. `None` means none of the fixed
+/// locations has the app — say which ones were checked, since that is not
+/// the same as "not installed".
+#[cfg(target_os = "macos")]
+pub fn probe_app() -> Option<AppProbe> {
+    let path = app_candidates().into_iter().find(|p| p.is_dir())?;
+    let plist = path.join("Contents/Info.plist");
+    let extract = |key: &str, fmt: &str| {
+        std::process::Command::new("/usr/bin/plutil")
+            .args(["-extract", key, fmt, "-o", "-"])
+            .arg(&plist)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    Some(AppProbe {
+        version: extract("CFBundleShortVersionString", "raw"),
+        schemes: extract("CFBundleURLTypes", "json")
+            .map(|j| schemes_from_url_types_json(&j))
+            .unwrap_or_default(),
+        path,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -952,5 +1028,36 @@ mod tests {
     fn characters_that_would_break_the_query_are_escaped() {
         assert_eq!(encode_query_value("a b&c=d#e"), "a%20b%26c%3Dd%23e");
         assert_eq!(encode_query_value("a.b-c_d~e"), "a.b-c_d~e");
+    }
+
+    // --- app probe ------------------------------------------------------------
+
+    /// The trap: the url-type *name* contains "choosebrowser" on every version
+    /// ever shipped. Only the scheme list counts.
+    #[test]
+    fn a_bundle_id_containing_the_word_is_not_a_registered_scheme() {
+        let store_0_2_0 = r#"[{"CFBundleTypeRole":"Viewer",
+            "CFBundleURLName":"com.choosebrowser.http-https",
+            "CFBundleURLSchemes":["http","https"]}]"#;
+        let probe = AppProbe {
+            path: PathBuf::from("/Applications/ChooseBrowser.app"),
+            version: Some("0.2.0".into()),
+            schemes: schemes_from_url_types_json(store_0_2_0),
+        };
+        assert_eq!(probe.schemes, vec!["http", "https"]);
+        assert!(!probe.accepts_rule_requests());
+    }
+
+    #[test]
+    fn the_scheme_is_recognised_wherever_it_is_listed() {
+        let next = r#"[{"CFBundleURLSchemes":["http","https"]},
+            {"CFBundleURLName":"com.choosebrowser.rules","CFBundleURLSchemes":["choosebrowser"]}]"#;
+        let probe = AppProbe {
+            path: PathBuf::new(),
+            version: Some("0.2.1".into()),
+            schemes: schemes_from_url_types_json(next),
+        };
+        assert!(probe.accepts_rule_requests());
+        assert!(schemes_from_url_types_json("not json").is_empty());
     }
 }
