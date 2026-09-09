@@ -212,14 +212,20 @@ fn target_url_for_choosebrowser(argv: &[String]) -> Option<String> {
 ///
 /// Returns the `choosebrowser://` url plus the host it is about, for the line
 /// the user sees.
+///
+/// `on_macos` is a parameter rather than a `cfg!` so the platform refusal is
+/// testable — and so the other checks stay reachable on a Linux CI runner,
+/// which a `cfg!` made them not: every test hit the platform branch instead of
+/// what it meant to exercise.
 fn remember_request(
     argv: &[String],
     browser_selector: Option<&str>,
     no_choosebrowser: bool,
     profile_email: Option<&str>,
     local_state: Option<&str>,
+    on_macos: bool,
 ) -> Result<(String, String), String> {
-    if !cfg!(target_os = "macos") {
+    if !on_macos {
         return Err(
             "--remember needs ChooseBrowser, which is macOS-only. Nothing was recorded.".into(),
         );
@@ -2062,6 +2068,7 @@ fn main() {
             flags.no_choosebrowser,
             browser_email.as_deref(),
             choosebrowser::read_local_state().as_deref(),
+            cfg!(target_os = "macos"),
         ) {
             Ok(req) => Some(req),
             Err(msg) => {
@@ -3375,6 +3382,7 @@ mod tests {
             false,
             Some("leo@gmail.com"),
             Some(STATE),
+            true,
         )
         .expect("a valid request");
         assert_eq!(host, "github.com");
@@ -3399,6 +3407,7 @@ mod tests {
             false,
             Some("leo@gmail.com"),
             Some(STATE),
+            true,
         )
         .unwrap();
         assert!(!url.contains("path="), "{url}");
@@ -3414,6 +3423,7 @@ mod tests {
             false,
             Some("leo@gmail.com"),
             Some(STATE),
+            true,
         )
         .unwrap_err();
         assert!(err.contains("--browser"), "{err}");
@@ -3427,6 +3437,7 @@ mod tests {
             false,
             Some("leo@gmail.com"),
             Some(STATE),
+            true,
         )
         .unwrap_err();
         assert!(err.contains("snapshot"), "{err}");
@@ -3440,6 +3451,7 @@ mod tests {
             true,
             Some("leo@gmail.com"),
             Some(STATE),
+            true,
         )
         .unwrap_err();
         assert!(err.contains("--no-choosebrowser"), "{err}");
@@ -3456,6 +3468,7 @@ mod tests {
             false,
             None,
             Some(STATE),
+            true,
         )
         .unwrap_err();
         assert!(err.contains("identity"), "{err}");
@@ -3466,8 +3479,24 @@ mod tests {
             false,
             Some("someone@else.test"),
             Some(STATE),
+            true,
         )
         .unwrap_err();
         assert!(err.contains("profile registry"), "{err}");
+    }
+    /// ChooseBrowser is macOS-only, and `/usr/bin/open` is not a url opener
+    /// anywhere else, so the flag has to refuse rather than quietly do nothing.
+    #[test]
+    fn remember_refuses_off_macos() {
+        let err = remember_request(
+            &argv(&["open", "https://github.com/"]),
+            Some("leo@gmail.com"),
+            false,
+            Some("leo@gmail.com"),
+            Some(STATE),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("macOS-only"), "{err}");
     }
 }
