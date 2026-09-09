@@ -1953,6 +1953,19 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                     msg.push_str(&note);
                 }
             }
+            // Say which page the failure was about. Without it a blocked
+            // debugger access is indistinguishable from a permissions problem
+            // and the reader has nothing to check (#217).
+            if super::browser::is_debugger_access_denied(&e) {
+                if let Some(note) = state
+                    .browser
+                    .as_ref()
+                    .and_then(|mgr| mgr.pinned_tab_summary())
+                    .map(|(tab, url)| pinned_tab_note(&tab, &url))
+                {
+                    msg.push_str(&note);
+                }
+            }
             error_response(&id, &msg)
         }
     };
@@ -14210,6 +14223,27 @@ fn success_response(id: &str, data: Value) -> Value {
     })
 }
 
+/// Append the pinned tab and its url to a blocked-access error.
+///
+/// Two readings, and the url decides which: an extension page is the cause
+/// itself; the page the caller expected means the pin did not move and the
+/// problem is elsewhere — which is the fact missing from every report of this
+/// so far (#217).
+fn pinned_tab_note(tab: &str, url: &str) -> String {
+    let diagnosis = if url.starts_with("chrome-extension://") {
+        " — that is an extension page, which Chrome will not let this extension drive. \
+         The tab navigated there; re-open your target url in it."
+    } else if url.starts_with("chrome://") || url.starts_with("devtools://") {
+        " — that is an internal Chrome page, which no extension can drive. \
+         Re-open your target url in it."
+    } else {
+        " — the pin did not move, so this is not the session driving somebody else's tab. \
+         A child frame on the page (an embedded extension widget) is the likely target of \
+         the block; `tab inspect` still reads browser-level metadata."
+    };
+    format!("\nThis session is driving {tab} ({url}){diagnosis}")
+}
+
 fn error_response(id: &str, error: &str) -> Value {
     let mut response = json!({
         "id": id,
@@ -15966,6 +16000,25 @@ mod tests {
         assert!(!action_stalled(A::Expand, &[A::Collapse, A::ShowMenu]));
         assert!(action_stalled(A::Collapse, &[A::Collapse]));
         assert!(!action_stalled(A::Collapse, &[A::Expand]));
+    }
+
+    /// The url is what turns "permissions bug?" into an answer, so each shape
+    /// has to say something different (#217).
+    #[test]
+    fn the_pinned_tab_note_reads_the_url_rather_than_repeating_the_error() {
+        let ext = pinned_tab_note("t1", "chrome-extension://abc/options.html");
+        assert!(ext.contains("t1"), "{ext}");
+        assert!(ext.contains("extension page"), "{ext}");
+
+        let internal = pinned_tab_note("t1", "chrome://settings");
+        assert!(internal.contains("internal Chrome page"), "{internal}");
+
+        // The case the reports keep hitting: the pin is exactly where it was
+        // asked to be, which rules out the usual hypothesis instead of
+        // repeating it.
+        let normal = pinned_tab_note("t1", "https://app.example.com/form");
+        assert!(normal.contains("the pin did not move"), "{normal}");
+        assert!(normal.contains("https://app.example.com/form"), "{normal}");
     }
 
     /// Only expand/collapse can be judged from the tree. For the rest,
