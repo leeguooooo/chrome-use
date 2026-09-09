@@ -491,10 +491,20 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">frame</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use frame <span class="du-str">"#iframe"</span>     <span class="du-cmt"># switch to an iframe by CSS selector</span>
+<pre><code><span class="du-prompt">$</span> chrome-use frames              <span class="du-cmt"># [0] top … [1] accessory_layer …</span>
+<span class="du-prompt">$</span> chrome-use frame 1             <span class="du-cmt"># switch by the index frames prints (0 = top document)</span>
+<span class="du-prompt">$</span> chrome-use frame <span class="du-str">"#iframe"</span>     <span class="du-cmt"># switch to an iframe by CSS selector</span>
 <span class="du-prompt">$</span> chrome-use frame @e3           <span class="du-cmt"># switch to an iframe by element ref</span>
 <span class="du-prompt">$</span> chrome-use frame main          <span class="du-cmt"># return to the main frame</span></code></pre>
       </div>
+      <p>
+        <span class="mark">A cross-origin overlay is a separate frame</span> — a bank/branch
+        picker, a payment field. <code>snapshot -i</code> on the page shows nothing of what is
+        inside it, and <code>focus</code> / <code>press</code> land on the iframe element itself.
+        The path is <code>frames</code> → <code>frame &lt;index&gt;</code> → <code>snapshot -i</code>
+        / <code>click</code> / <code>fill</code> inside it; <code>eval --frame &lt;f&gt;</code> is
+        the one-off form.
+      </p>
       <p>
         <code>frame</code> accepts three kinds of input: an <strong>element ref</strong> (<code>frame @e3</code>),
         a <strong>CSS selector</strong> (<code>frame "#payment-iframe"</code>), and a

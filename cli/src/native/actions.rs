@@ -10592,6 +10592,39 @@ async fn handle_frame(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         }
     }
 
+    // A bare index, because that is what `frames` prints (`[0] top …`) and what
+    // the frame-boundary error tells the reader to pass. It used to fall
+    // through to CSS resolution and come back as a raw
+    // `SyntaxError: '0' is not a valid selector` — a documented recovery path
+    // that did not work when followed literally (issue #218).
+    if let Some(index) = cmd
+        .get("selector")
+        .and_then(|v| v.as_str())
+        .and_then(|sel| sel.trim().parse::<usize>().ok())
+    {
+        let frames = {
+            let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+            let session_id = mgr.active_session_id()?.to_string();
+            super::element::collect_all_frames_text(
+                &mgr.client,
+                &session_id,
+                &state.iframe_sessions,
+            )
+            .await?
+        };
+        let frame = frames.get(index).ok_or_else(|| {
+            format!(
+                "frame {index}: this page has {} frame(s), numbered 0..{}. Run `frames` for the list.",
+                frames.len(),
+                frames.len().saturating_sub(1)
+            )
+        })?;
+        // Index 0 is the top document — switching "into" it means leaving any
+        // frame, which is the useful reading of `frame 0`.
+        state.active_frame_id = (index != 0).then(|| frame.frame_id.clone());
+        return Ok(json!({ "frame": frame.frame_id, "index": index, "url": frame.url }));
+    }
+
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
