@@ -115,14 +115,16 @@ jobs:
       # Skipped, not failed, when the secrets are absent: a fork building a tag
       # has no certificate, and an unsigned build is still a usable build.
       - name: Sign and notarize (macOS)
-        if: startsWith(matrix.os, 'macos') && secrets.MACOS_CERT_P12 != ''
+        if: startsWith(matrix.os, 'macos') && secrets.APPLE_SIGNING_CERTIFICATE != ''
         env:
-          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
-          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          # Same secret names as leeguooooo/iphone-use, which already signs and
+          # notarizes this way — one convention across the repos, not two.
+          APPLE_SIGNING_CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE }}
+          APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+          APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -134,8 +136,8 @@ jobs:
           security create-keychain -p "$pw" "$kc"
           security set-keychain-settings -lut 21600 "$kc"
           security unlock-keychain -p "$pw" "$kc"
-          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" \
+          echo "$APPLE_SIGNING_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD" \
             -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" >/dev/null
           security list-keychain -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
@@ -144,14 +146,14 @@ jobs:
           # `--options runtime` is required for notarization. Verified locally
           # that the daemon still starts and drives a browser under it.
           codesign --force --options runtime --timestamp \
-            -s "$MACOS_SIGN_IDENTITY" --keychain "$kc" "$bin"
+            -s "$APPLE_SIGN_IDENTITY" --keychain "$kc" "$bin"
           codesign --verify --strict --verbose=2 "$bin"
 
-          if [ -n "${ASC_KEY_P8:-}" ]; then
-            echo "$ASC_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc.p8"
+          if [ -n "${APPLE_API_KEY_P8:-}" ]; then
+            echo "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc.p8"
             ditto -c -k --keepParent "$bin" "$RUNNER_TEMP/notarize.zip"
             xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
-              --key "$RUNNER_TEMP/asc.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+              --key "$RUNNER_TEMP/asc.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
               --wait --timeout 30m
             rm -f "$RUNNER_TEMP/asc.p8" "$RUNNER_TEMP/notarize.zip"
             # A bare executable cannot carry a stapled ticket (only .app/.dmg/
