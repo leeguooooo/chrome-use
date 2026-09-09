@@ -431,9 +431,10 @@ impl EventTracker {
         let level_matches = |level: &str| {
             levels.is_none_or(|wanted| {
                 let level = level.to_ascii_lowercase();
-                wanted
-                    .iter()
-                    .any(|w| w == &level || (w == "warn" && level == "warning"))
+                wanted.iter().any(|w| {
+                    let w = w.to_ascii_lowercase();
+                    w == level || (w == "warn" && level == "warning")
+                })
             })
         };
         let selected: Vec<&ConsoleEntry> = self

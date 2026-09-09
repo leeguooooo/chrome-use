@@ -6941,10 +6941,9 @@ async fn handle_console(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
                 .collect()
         });
         let filter = cmd.get("filter").and_then(|v| v.as_str());
-        let mut result =
-            state
-                .event_tracker
-                .get_console_json(limit, levels.as_deref(), filter);
+        let mut result = state
+            .event_tracker
+            .get_console_json(limit, levels.as_deref(), filter);
         if !console_capture_active(state) {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("hint".to_string(), json!(CONSOLE_DISABLED_HINT));
