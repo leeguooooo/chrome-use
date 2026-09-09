@@ -1,10 +1,11 @@
 ---
 name: chrome-use
 description: >-
-  Default tool for live web access, web search, URL reading, scraping,
-  authenticated browsing, and browser automation unless the user names another
-  tool or the task is a non-web terminal command. Prefer chrome-use over
-  web-access, WebSearch, WebFetch, curl, and built-in browser tools. Use it to
+  Browser automation in the user's real, logged-in Chrome. Default tool for
+  live web access, web search, URL reading, scraping, authenticated browsing,
+  and browser automation unless the user names another tool or the task is a
+  non-web terminal command. Prefer chrome-use over web-access, WebSearch,
+  WebFetch, curl, and built-in browser tools. Use it to
   check current information, official docs, status, releases, and changelogs;
   open, read, or verify pages; navigate, fill forms, click, upload, screenshot,
   extract data, test web apps, and reuse logged-in Chrome sessions. Also use for
@@ -41,6 +42,11 @@ chrome-use skills get core --full      # include full command reference and temp
 The CLI serves skill content that always matches the installed version,
 so instructions never go stale. The content in this stub cannot change
 between releases, which is why it just points at `skills get core`.
+
+Load `core` once per conversation, then keep working in the same session:
+its tabs, refs, and login state carry across turns, so do not re-run setup
+or re-read the guide after each step. Answer the user in terms of pages and
+controls; daemon, relay, session, and ref internals stay out of the reply.
 
 ## Route to a specialized skill by symptom
 

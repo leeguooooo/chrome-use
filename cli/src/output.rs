@@ -740,7 +740,17 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             // `--diff` fell back to a full tree, or found nothing changed. Say
             // which: a diff printed without saying its baseline was missing
             // reads exactly like "nothing changed".
+            // A `--diff` that found nothing changed has an empty tree to print.
+            // A bare newline on stdout reads as "empty page" to whoever only
+            // captures stdout, so the note itself is the output in that case
+            // (and only there — not on stderr as well).
+            let no_change = snapshot.trim().is_empty()
+                && data.get("diffMode").and_then(|v| v.as_bool()) == Some(false);
             if let Some(note) = data.get("diffNote").and_then(|v| v.as_str()) {
+                if no_change {
+                    println!("{}", color::dim(&format!("({note})")));
+                    return;
+                }
                 eprintln!("{}", color::dim(note));
             }
             print_with_boundaries(snapshot, origin, opts);
@@ -1243,6 +1253,14 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         }
         // Console logs
         if let Some(logs) = data.get("messages").and_then(|v| v.as_array()) {
+            // Capture is off by default for stealth. An empty list with no
+            // word about why reads as "the page logged nothing"; the hint
+            // used to reach only `--json`.
+            if logs.is_empty() {
+                if let Some(hint) = data.get("hint").and_then(|v| v.as_str()) {
+                    eprintln!("{} {}", color::dim("·"), hint);
+                }
+            }
             if opts.content_boundaries {
                 let mut console_output = String::new();
                 for log in logs {
@@ -3638,13 +3656,16 @@ Examples:
             r##"
 chrome-use console - View console logs
 
-Usage: chrome-use console [--clear] [--limit N]
+Usage: chrome-use console [--clear] [--level <l>[,<l>]] [--filter <text>] [--limit N]
 
-View browser console output (log, warn, error, info).
+View browser console output (log, warn, error, info, debug).
 
 Options:
   --clear              Clear console log buffer
-  --limit N            Show only the last N entries (newest kept)
+  --level <l>[,<l>]    Keep only these levels (log, info, warn, error, debug)
+  --filter <text>      Keep only messages containing this text
+  --limit N            Show only the last N entries (newest kept), applied
+                       after --level / --filter
 
 Global Options:
   --json               Output as JSON
@@ -3652,6 +3673,8 @@ Global Options:
 
 Examples:
   chrome-use console
+  chrome-use console --level error,warn        # what went wrong
+  chrome-use console --filter "cart" --limit 5 # last 5 lines mentioning cart
   chrome-use console --limit 20
   chrome-use console --clear
 "##
@@ -4955,6 +4978,16 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         }
     }
     if let Some(snapshot) = obs.get("snapshot").and_then(|v| v.as_str()) {
+        // A click that replaced the page: say so, then show the new tree
+        // instead of a diff that is the old page struck through.
+        if obs.get("replaced").and_then(|v| v.as_bool()) == Some(true) {
+            let removed = obs.get("removed").and_then(|v| v.as_i64()).unwrap_or(0);
+            println!(
+                "{} page replaced ({} lines gone); refs below are the new page's",
+                color::dim("observed:"),
+                color::red(&removed.to_string())
+            );
+        }
         print_observed_snapshot(snapshot);
     }
     // How long the adaptive wait watched (#228). On "no change" this is the

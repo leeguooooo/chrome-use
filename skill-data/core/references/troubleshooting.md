@@ -76,6 +76,15 @@ unknown ab-connect version can also make the probe channel unavailable;
 `tab inspect` requires ab-connect 0.5.16 or newer, so update or reload it from
 `chrome://extensions` and retry.
 
+**`tab list` marks the active tab with ⚠ instead of →**
+The session still points at that tab, but the extension relay reports it
+is not attached to it. Every command would run against nothing or against
+whatever tab the relay does hold. Do not keep driving: `open <url>` the page
+you need (a fresh attach), or `tab adopt <targetId>` for a tab that is still
+open, and check that the next `tab list` shows → again. In `--json` the same
+fact is `relayAttached: false` on the tab; when the key is absent the relay
+could not be asked, which is not the same as detached.
+
 **Reads landing on the wrong page**
 `eval`, `screenshot`, and `network requests` print the page they ran
 against to stderr: `eval @ <url>`, `screenshot @ <url>`, `network @ <url>`.

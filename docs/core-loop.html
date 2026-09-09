@@ -62,9 +62,16 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use open &lt;url&gt;        <span class="du-cmt"># 1. 打开一个页面</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>       <span class="du-cmt"># 2. 看清页面上有什么（只列可交互元素）</span>
-<span class="du-prompt">$</span> chrome-use click @e3         <span class="du-cmt"># 3. 对着快照给出的 ref 动手</span>
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>       <span class="du-cmt"># 4. 页面一变，就重新快照</span></code></pre>
+<span class="du-prompt">$</span> chrome-use click @e3 <span class="du-flag">--observe</span>   <span class="du-cmt"># 3. 动手，同一次调用里拿到变化</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i --diff</span>    <span class="du-cmt"># 4. 需要重读时，只要差异</span></code></pre>
       </div>
+
+      <p>
+        第 3、4 步各只有一次往返。<code>--observe</code> 把动作后的差异（<code>navigate</code> 之后、或一次点击把整页换掉时，则是新页面的整棵树）和动作触发的请求
+        一起带回来，所以「每点一下就重新快照」是最该戒掉的习惯；<code>--diff</code> 在什么都没变时会明确说
+        <code>no change</code>，而不是给你一棵一样的树。围绕这个循环的行为规则见
+        <code>chrome-use skills get core/behaviour</code>。
+      </p>
 
       <p>
         浏览器在多条命令之间保持运行，所以这些命令感觉像同一个会话。完事后用 <code>chrome-use close</code>

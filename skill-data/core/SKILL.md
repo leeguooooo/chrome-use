@@ -40,6 +40,8 @@ all of it up front costs more context than the task usually needs.
 | A command failed and the error did not tell you enough | `chrome-use skills get core/troubleshooting` |
 | Refs went stale, or you need to understand `@ref` identity | `chrome-use skills get core/snapshot-refs` |
 | Logging in, cookies, saved sessions | `chrome-use skills get core/authentication` |
+| Repeating a step, a lookup turning into a crawl, unsure what to `keep` | `chrome-use skills get core/behaviour` |
+| About to submit, send, buy, delete, upload, or type personal data | `chrome-use skills get core/trust-boundaries` |
 | The full command surface | `chrome-use skills get core/commands` |
 
 `chrome-use skills get core --full` still returns everything at once; prefer a
@@ -56,11 +58,18 @@ Use `--observe` to get action results with bounded request context; load
 `core/waiting` for the summary limits and how to retrieve full captured details.
 
 ```bash
-chrome-use open <url>        # 1. Open a page
-chrome-use snapshot -i       # 2. See what's on it (interactive elements only)
-chrome-use click @e3         # 3. Act on refs from the snapshot
-chrome-use snapshot -i       # 4. Re-snapshot after any page change
+chrome-use open <url>            # 1. Open a page
+chrome-use snapshot -i           # 2. See what's on it (interactive elements only)
+chrome-use click @e3 --observe   # 3. Act, and get what changed in the same call
+chrome-use snapshot -i --diff    # 4. Re-read only when you need to: just the delta
 ```
+
+Steps 3 and 4 are one round trip each. `--observe` returns the delta (or the
+new tree after `navigate`, or when a click replaced the whole page) plus the
+requests the action fired, so a
+separate re-snapshot after every click is the expensive habit to drop.
+`--diff` says "no change" explicitly when nothing moved. Load
+`core/behaviour` for the rules around this loop.
 
 Refs (`@e1`, `@e2`, ...) are stable for the same backend DOM node across
 successive snapshots of one document, so inserting or removing a modal no

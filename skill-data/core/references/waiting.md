@@ -49,6 +49,19 @@ output to look at or attach, and never a substitute for the structural read. Wai
 something *specific* is still `wait`'s job — the settle only knows that the
 page stopped, not that what you wanted appeared.
 
+**When `--observe` says `no change`, read the `why:` line under it.** The
+daemon probes the target after a quiet action and reports the first decisive
+finding: the control is disabled, it is not rendered, it sits outside the
+viewport, or another element covers it (named). Fix that one thing and retry
+the same semantic action. When the note says none of those apply, the action
+reached a control that genuinely changes nothing visible; do not read an
+empty delta as failure, and do not repeat the action.
+
+**When an action replaced the page** (a link click, a submit that
+navigated), `--observe` returns the new tree under `observed snapshot:`
+instead of a diff, with a line saying how many lines of the old page are
+gone. Refs in that tree are live; use them directly.
+
 ### Confirm an action worked — `expect`
 
 After acting, **assert the result instead of eyeballing a snapshot**. `expect`

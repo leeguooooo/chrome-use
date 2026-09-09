@@ -126,6 +126,21 @@ pub(super) fn capture_error(stage: &str, error: &str) -> serde_json::Value {
     serde_json::json!({"stage":stage,"message":error,"code":metadata.code,"retryable":metadata.retryable})
 }
 
+/// Whether a delta is really a whole-page replacement: nearly every line of the
+/// old tree gone and nearly every line of the new one added. A delta like that
+/// costs more than the new tree and says less. Pure over the diff counts so
+/// the threshold is testable without a browser.
+pub(super) fn page_replaced(delta: &super::diff::SnapshotDiffResult) -> bool {
+    let before_lines = delta.removals + delta.unchanged;
+    let after_lines = delta.additions + delta.unchanged;
+    // Small trees (a dialog, an empty page) are cheap either way; only a
+    // page-sized delta is worth swapping for the tree.
+    if before_lines < 20 || after_lines < 20 {
+        return false;
+    }
+    delta.removals * 10 >= before_lines * 8 && delta.additions * 10 >= after_lines * 8
+}
+
 /// Compare only evidence actually captured. Missing evidence is never an empty
 /// page, an empty URL, or proof that an action changed nothing.
 pub(super) fn changes(
@@ -156,9 +171,19 @@ pub(super) fn changes(
             );
             changed = delta.changed;
             if delta.changed {
-                out.insert("delta".into(), json!(delta.diff));
-                out.insert("added".into(), json!(delta.additions));
-                out.insert("removed".into(), json!(delta.removals));
+                if page_replaced(&delta) {
+                    // A click that navigated: the diff is the whole old tree
+                    // as removals plus the whole new tree as additions, twice
+                    // the bytes of the page for no information the new tree
+                    // does not carry. Return the new tree, as navigation does.
+                    out.insert("snapshot".into(), json!(after));
+                    out.insert("replaced".into(), json!(true));
+                    out.insert("removed".into(), json!(delta.removals));
+                } else {
+                    out.insert("delta".into(), json!(delta.diff));
+                    out.insert("added".into(), json!(delta.additions));
+                    out.insert("removed".into(), json!(delta.removals));
+                }
             }
         }
         (Err(_), Ok(after)) => {
@@ -276,6 +301,56 @@ mod capture_tests {
         let out = changes(&ok("button Save"), &ok("button Next"), &ok("u"), &missing());
         assert_eq!(out["changed"], true);
         assert_eq!(out["status"], "partial");
+    }
+
+    fn tree(prefix: &str, n: usize) -> String {
+        (0..n)
+            .map(|i| format!("- link \"{prefix}{i}\" [ref=e{i}]"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_navigating_click_returns_the_new_tree_not_a_struck_through_old_page() {
+        // Every line of the old page gone, every line of the new page added:
+        // the diff would be both pages. The observation carries the new tree.
+        let before = tree("old", 40);
+        let after = tree("new", 35);
+        let out = changes(&ok(&before), &ok(&after), &ok("/a"), &ok("/b"));
+        assert_eq!(out["changed"], true);
+        assert_eq!(out["replaced"], true);
+        assert_eq!(out["snapshot"], after);
+        assert_eq!(out["removed"], 40);
+        assert!(!out.contains_key("delta"));
+        assert!(!out.contains_key("added"));
+    }
+
+    #[test]
+    fn an_in_page_change_still_returns_a_delta() {
+        // One row re-sorted on a 40-line page is a delta, not a replacement.
+        let before = tree("row", 40);
+        let mut lines: Vec<&str> = before.lines().collect();
+        lines.swap(3, 30);
+        let after = lines.join("\n");
+        let out = changes(&ok(&before), &ok(&after), &ok("u"), &ok("u"));
+        assert_eq!(out["changed"], true);
+        assert!(out.contains_key("delta"));
+        assert!(!out.contains_key("replaced"));
+        assert!(!out.contains_key("snapshot"));
+    }
+
+    #[test]
+    fn small_trees_are_never_reported_as_replaced() {
+        // A dialog swapping for another dialog is cheap as a diff, and a
+        // "replaced" flag there would make agents expect a page-sized tree.
+        let out = changes(
+            &ok("- button \"OK\" [ref=e1]"),
+            &ok("- button \"Done\" [ref=e2]"),
+            &ok("u"),
+            &ok("u"),
+        );
+        assert!(out.contains_key("delta"));
+        assert!(!out.contains_key("replaced"));
     }
 
     #[test]

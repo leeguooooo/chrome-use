@@ -219,6 +219,21 @@
 <pre><code><span class="du-prompt">$</span> chrome-use click @e8 <span class="du-flag">--observe</span>   <span class="du-cmt"># 读取动作后的变化和有界请求摘要</span></code></pre>
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 报 no change 时，先读下面的 why: 行</div>
+        动作之后什么都没变，daemon 会探一下目标并报出第一个决定性的原因：控件被禁用、没有渲染、
+        在视口外，或被另一个元素盖住（会点名是谁）。修掉那一件事，再用同一个语义动作重试。
+        如果 why 说这些都不成立，那就是动作到了一个本来就不产生可见变化的控件——
+        <strong>不要把空的 delta 读成失败，也不要重复这个动作。</strong>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 一次点击把整页换掉时，给的是新树</div>
+        点了链接、提交后跳转这类动作，<code>--observe</code> 不再给「旧树全删 + 新树全增」的 diff，
+        而是在 <code>observed snapshot:</code> 下直接给新页面的树，前面一行说明旧页面有多少行已不在。
+        判定条件是两棵树都有页面规模（≥20 行）且各自 ≥80% 的行换掉；树里的 ref 是活的，直接用。
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect 还是 --observe？</div>
         想要一个<strong>硬性 pass/fail 门禁</strong>（配合退出码、<code>&amp;&amp;</code>、批处理）用

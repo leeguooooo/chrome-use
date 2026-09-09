@@ -418,16 +418,37 @@ impl EventTracker {
         self.console_entries.clear();
     }
 
-    pub fn get_console_json(&self, limit: Option<usize>) -> Value {
-        // `--limit N` tails the last N entries (newest kept), for a quick peek at
-        // what just happened without dumping a long session (#110).
-        let start = match limit {
-            Some(n) => self.console_entries.len().saturating_sub(n),
-            None => 0,
+    pub fn get_console_json(
+        &self,
+        limit: Option<usize>,
+        levels: Option<&[String]>,
+        filter: Option<&str>,
+    ) -> Value {
+        // `--level` and `--filter` narrow the buffer first; `--limit N` then
+        // tails the last N of what survived (newest kept), so "the last five
+        // errors" is exactly that and not the errors among the last five lines
+        // (#110). `warning` is accepted as a spelling of `warn`.
+        let level_matches = |level: &str| {
+            levels.is_none_or(|wanted| {
+                let level = level.to_ascii_lowercase();
+                wanted.iter().any(|w| {
+                    let w = w.to_ascii_lowercase();
+                    w == level || (w == "warn" && level == "warning")
+                })
+            })
         };
-        let messages: Vec<Value> = self
+        let selected: Vec<&ConsoleEntry> = self
             .console_entries
             .iter()
+            .filter(|e| level_matches(&e.level))
+            .filter(|e| filter.is_none_or(|needle| e.text.contains(needle)))
+            .collect();
+        let start = match limit {
+            Some(n) => selected.len().saturating_sub(n),
+            None => 0,
+        };
+        let messages: Vec<Value> = selected
+            .into_iter()
             .skip(start)
             .map(|e| {
                 let mut msg = json!({ "type": e.level, "text": e.text });
@@ -519,7 +540,7 @@ mod tests {
         ];
         tracker.add_console("log", "hello 42", raw_args);
 
-        let result = tracker.get_console_json(None);
+        let result = tracker.get_console_json(None, None, None);
         let messages = result.get("messages").unwrap().as_array().unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].get("text").unwrap(), "hello 42");
@@ -534,7 +555,7 @@ mod tests {
         let mut tracker = EventTracker::new();
         tracker.add_console("log", "text only", vec![]);
 
-        let result = tracker.get_console_json(None);
+        let result = tracker.get_console_json(None, None, None);
         let messages = result.get("messages").unwrap().as_array().unwrap();
         assert!(messages[0].get("args").is_none());
     }
@@ -546,7 +567,7 @@ mod tests {
             tracker.add_console("log", &format!("m{i}"), vec![]);
         }
         // limit keeps the last N (newest), in order
-        let msgs = tracker.get_console_json(Some(2));
+        let msgs = tracker.get_console_json(Some(2), None, None);
         let arr = msgs.get("messages").unwrap().as_array().unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0].get("text").unwrap(), "m3");
@@ -554,7 +575,7 @@ mod tests {
         // limit larger than the buffer returns everything
         assert_eq!(
             tracker
-                .get_console_json(Some(99))
+                .get_console_json(Some(99), None, None)
                 .get("messages")
                 .unwrap()
                 .as_array()
@@ -565,7 +586,7 @@ mod tests {
         // None returns everything
         assert_eq!(
             tracker
-                .get_console_json(None)
+                .get_console_json(None, None, None)
                 .get("messages")
                 .unwrap()
                 .as_array()
@@ -573,6 +594,45 @@ mod tests {
                 .len(),
             5
         );
+    }
+
+    #[test]
+    fn console_level_and_filter_narrow_before_limit_tails() {
+        let mut tracker = EventTracker::new();
+        tracker.add_console("log", "cart loaded", vec![]);
+        tracker.add_console("error", "cart total NaN", vec![]);
+        tracker.add_console("warning", "deprecated api", vec![]);
+        tracker.add_console("log", "checkout ready", vec![]);
+        tracker.add_console("error", "payment failed", vec![]);
+
+        let texts = |v: Value| -> Vec<String> {
+            v["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["text"].as_str().unwrap().to_string())
+                .collect()
+        };
+        // `warn` matches Chrome's `warning` spelling; case does not matter.
+        let levels = vec!["Error".to_string(), "warn".to_string()];
+        assert_eq!(
+            texts(tracker.get_console_json(None, Some(&levels), None)),
+            ["cart total NaN", "deprecated api", "payment failed"]
+        );
+        // Substring filter on the rendered text.
+        assert_eq!(
+            texts(tracker.get_console_json(None, None, Some("cart"))),
+            ["cart loaded", "cart total NaN"]
+        );
+        // "The last error" is the last of the errors, not the errors among
+        // the last line.
+        let errors = vec!["error".to_string()];
+        assert_eq!(
+            texts(tracker.get_console_json(Some(1), Some(&errors), None)),
+            ["payment failed"]
+        );
+        // Level + filter compose; nothing matching is an empty list, not an error.
+        assert!(texts(tracker.get_console_json(None, Some(&errors), Some("checkout"))).is_empty());
     }
 
     // -- format_console_arg: primitives --

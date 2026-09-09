@@ -62,9 +62,17 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use open &lt;url&gt;        <span class="du-cmt"># 1. open a page</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>       <span class="du-cmt"># 2. see what's on the page (interactive elements only)</span>
-<span class="du-prompt">$</span> chrome-use click @e3         <span class="du-cmt"># 3. act on the ref the snapshot gave you</span>
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>       <span class="du-cmt"># 4. the page changed, so snapshot again</span></code></pre>
+<span class="du-prompt">$</span> chrome-use click @e3 <span class="du-flag">--observe</span>   <span class="du-cmt"># 3. act, and get what changed in the same call</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i --diff</span>    <span class="du-cmt"># 4. re-read only when you need to: just the delta</span></code></pre>
       </div>
+
+      <p>
+        Steps 3 and 4 are one round trip each. <code>--observe</code> returns the delta after the action (the new
+        page's whole tree after <code>navigate</code>, or when a click replaced the whole page) together with the requests the action fired, so "re-snapshot after
+        every click" is the habit to drop. <code>--diff</code> says <code>no change</code> explicitly when nothing
+        moved instead of handing you the same tree again. The rules around this loop live in
+        <code>chrome-use skills get core/behaviour</code>.
+      </p>
 
       <p>
         The browser stays running between commands, so these feel like one session. When you're done, wrap up with <code>chrome-use close</code>
