@@ -8,6 +8,7 @@
 //! repairs (reinstalling Chrome, purging old state files, generating a
 //! missing encryption key) are gated behind `--fix`.
 
+mod choosebrowser;
 mod chrome;
 mod config;
 mod daemon;
@@ -108,6 +109,7 @@ pub fn run_doctor(opts: DoctorOptions) -> i32 {
     security::check(&mut checks);
     providers::check(&mut checks);
     skill::check(&mut checks);
+    choosebrowser::check(&mut checks);
 
     if !opts.offline {
         network::check(&mut checks);
