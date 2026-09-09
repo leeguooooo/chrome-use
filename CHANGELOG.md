@@ -1,8 +1,20 @@
 # Changelog
 
-## 1.5.115
+## 1.5.116
 
 <!-- release:start -->
+### New Features
+
+- **One extension door instead of one extension release per feature (ab-connect 0.5.25).** `ABExt.call` forwards one allow-listed `chrome.*` call: `tabs`, `tabGroups`, `windows`, `downloads`, `webNavigation`, read methods freely, mutating methods only on tabs this relay created (adopted tabs stay read-only; `windows.create` / `windows.remove` are refused outright; `debugger`, `identity`, `storage`, `runtime`, `management` are never reachable this way). Of the eleven hand-written `ABExt.*` handlers shipped between 0.5.13 and 0.5.24, seven are wrappers over calls this door admits; behaviour fixes inside the worker still need releases, which 0.5.23's self-update delivers without user action. `ABExt.state` returns everything the extension holds, owns and is configured to in one round trip. The manifest's permissions are unchanged, so the update installs without re-approval.
+- **`extension call <namespace.method> [json-args]` and `extension state`.** Debugging-level access to the door above; on an extension without the `call` capability both say "requires ab-connect 0.5.25 or newer" instead of Chrome's "'ABExt.call' wasn't found".
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.115
+
 ### New Features
 
 - **The core loop is one round trip per step.** The skill now teaches `click @e3 --observe` and `snapshot -i --diff` instead of a fresh snapshot after every action. A new `core/behaviour` reference covers the rules around that loop: read the `why:` line before retrying a quiet action, never drop to coordinates because a ref click was silent, `reload` instead of re-`open`ing the page you are on, one direct navigation for a lookup rather than a grid of guessed URLs, the page's own signal ends verification, and what `keep` is for. `trust-boundaries` gains the three tiers of side effects: hand back to the user, confirm at the step, or task-level pre-approval is enough. Learned from reading the browser-use plugin bundled with Codex; written against chrome-use's own commands.
@@ -20,7 +32,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.114
 
