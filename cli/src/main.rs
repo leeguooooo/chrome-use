@@ -234,9 +234,11 @@ fn remember_request(
     // Deliberately explicit-only. Remembering the profile *we* guessed would
     // turn one inference into a permanent rule the user never stated.
     let Some(selector) = browser_selector else {
-        return Err("--remember records which Chrome profile a site belongs to, so it needs \
+        return Err(
+            "--remember records which Chrome profile a site belongs to, so it needs \
              you to name one: add --browser <id|email>. Run `chrome-use browsers` for the list."
-            .into());
+                .into(),
+        );
     };
     let verb = argv.first().map(String::as_str).unwrap_or("");
     let Some(url) = target_url_for_choosebrowser(argv) else {
@@ -262,9 +264,11 @@ fn remember_request(
         ));
     };
     let Some(local_state) = local_state else {
-        return Err("--remember: could not read Chrome's profile registry (Local State), which \
+        return Err(
+            "--remember: could not read Chrome's profile registry (Local State), which \
              is where the portable profile key comes from."
-            .into());
+                .into(),
+        );
     };
     let Some(key) = choosebrowser::portable_key_for_email(local_state, email) else {
         return Err(format!(
@@ -3387,7 +3391,10 @@ mod tests {
     #[test]
     fn remember_writes_a_domain_rule_not_a_path_one() {
         let (url, _) = remember_request(
-            &argv(&["open", "https://github.com/leeguooooo/chrome-use/issues/244"]),
+            &argv(&[
+                "open",
+                "https://github.com/leeguooooo/chrome-use/issues/244",
+            ]),
             Some("leo@gmail.com"),
             false,
             Some("leo@gmail.com"),

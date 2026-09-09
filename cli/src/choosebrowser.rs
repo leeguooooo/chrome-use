@@ -450,8 +450,17 @@ fn encode_query_value(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     for b in v.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b':' | b'/'
-            | b'*' | b'@' => out.push(b as char),
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~'
+            | b':'
+            | b'/'
+            | b'*'
+            | b'@' => out.push(b as char),
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -476,7 +485,10 @@ pub fn remember_url(host: &str, path: Option<&str>, key: &str) -> Option<String>
     {
         return None;
     }
-    let mut url = format!("choosebrowser://remember?domain={}", encode_query_value(host));
+    let mut url = format!(
+        "choosebrowser://remember?domain={}",
+        encode_query_value(host)
+    );
     if let Some(path) = path {
         // The contract requires a leading slash; anything else is malformed and
         // would be dropped without a word.
@@ -850,7 +862,8 @@ mod tests {
     #[test]
     fn a_written_target_reads_back_as_the_same_profile() {
         let state = local_state();
-        let key = portable_key_for_email(&state, "Work@Example.COM").expect("key for a known account");
+        let key =
+            portable_key_for_email(&state, "Work@Example.COM").expect("key for a known account");
         let url = remember_url("github.com", None, &key).expect("a valid request");
 
         // Pull the target back out the way ChooseBrowser would.
