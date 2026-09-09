@@ -743,6 +743,17 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             if let Some(note) = data.get("diffNote").and_then(|v| v.as_str()) {
                 eprintln!("{}", color::dim(note));
             }
+            // A `--diff` that found nothing changed has an empty tree to print.
+            // A bare newline on stdout reads as "empty page" to whoever only
+            // captures stdout, so the note itself is the output in that case.
+            if snapshot.trim().is_empty()
+                && data.get("diffMode").and_then(|v| v.as_bool()) == Some(false)
+            {
+                if let Some(note) = data.get("diffNote").and_then(|v| v.as_str()) {
+                    println!("{}", color::dim(&format!("({note})")));
+                }
+                return;
+            }
             print_with_boundaries(snapshot, origin, opts);
             // `--with-screenshot`: the image is an output, so its path is
             // reported and nothing more — the tree above is what the agent
@@ -3638,13 +3649,16 @@ Examples:
             r##"
 chrome-use console - View console logs
 
-Usage: chrome-use console [--clear] [--limit N]
+Usage: chrome-use console [--clear] [--level <l>[,<l>]] [--filter <text>] [--limit N]
 
-View browser console output (log, warn, error, info).
+View browser console output (log, warn, error, info, debug).
 
 Options:
   --clear              Clear console log buffer
-  --limit N            Show only the last N entries (newest kept)
+  --level <l>[,<l>]    Keep only these levels (log, info, warn, error, debug)
+  --filter <text>      Keep only messages containing this text
+  --limit N            Show only the last N entries (newest kept), applied
+                       after --level / --filter
 
 Global Options:
   --json               Output as JSON
@@ -3652,6 +3666,8 @@ Global Options:
 
 Examples:
   chrome-use console
+  chrome-use console --level error,warn        # what went wrong
+  chrome-use console --filter "cart" --limit 5 # last 5 lines mentioning cart
   chrome-use console --limit 20
   chrome-use console --clear
 "##
@@ -4955,6 +4971,16 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         }
     }
     if let Some(snapshot) = obs.get("snapshot").and_then(|v| v.as_str()) {
+        // A click that replaced the page: say so, then show the new tree
+        // instead of a diff that is the old page struck through.
+        if obs.get("replaced").and_then(|v| v.as_bool()) == Some(true) {
+            let removed = obs.get("removed").and_then(|v| v.as_i64()).unwrap_or(0);
+            println!(
+                "{} page replaced ({} lines gone); refs below are the new page's",
+                color::dim("observed:"),
+                color::red(&removed.to_string())
+            );
+        }
         print_observed_snapshot(snapshot);
     }
     // How long the adaptive wait watched (#228). On "no change" this is the

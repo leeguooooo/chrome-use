@@ -6934,7 +6934,17 @@ async fn handle_console(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
             .get("limit")
             .and_then(|v| v.as_u64())
             .map(|n| n as usize);
-        let mut result = state.event_tracker.get_console_json(limit);
+        let levels: Option<Vec<String>> = cmd.get("levels").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        });
+        let filter = cmd.get("filter").and_then(|v| v.as_str());
+        let mut result =
+            state
+                .event_tracker
+                .get_console_json(limit, levels.as_deref(), filter);
         if !console_capture_active(state) {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("hint".to_string(), json!(CONSOLE_DISABLED_HINT));

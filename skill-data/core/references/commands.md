@@ -149,6 +149,10 @@ diagnosis instead of always blaming a closed shadow root or cross-origin iframe.
 ## Get Information
 
 ```bash
+chrome-use extract --schema '{"rows":".product","fields":{"name":".name","price":".price","href":{"sel":"a","get":"@href"}}}'
+                               # Scrape structured JSON in one call: rows = repeating
+                               # container (omit for one object), get = text|@attr|html|value,
+                               # "all": true for arrays. --schema-file / --stdin for long schemas.
 chrome-use get text @e1        # Get element text
 chrome-use get html @e1        # Get innerHTML
 chrome-use get value @e1       # Get input value
@@ -560,6 +564,20 @@ Security: the extension↔host link is authenticated by Chrome (extension id); t
 host↔chrome-use CDP link uses an unguessable URL in a 0600 file. Use this when
 you need the user's real cookies/login on their actual machine. (`--extension
 <path>` is unrelated — that loads an extension into a *launched* browser.)
+
+### Remember which profile a site belongs to (`--remember`, macOS + ChooseBrowser)
+
+```bash
+chrome-use open https://github.com --browser work@example.com --remember
+```
+
+With an explicit `--browser`, `--remember` asks ChooseBrowser to route that
+site to that profile from now on. It only asks: ChooseBrowser shows its own
+dialog and nothing is saved until the user confirms there, and the command
+reports which of the four outcomes happened (saved, declined, no app, app
+too old). Without ChooseBrowser installed the flag does nothing. Once a rule
+exists, a plain `open <url>` follows it, so you stop passing `--browser` for
+that site. `--no-choosebrowser` ignores the rules for one command.
 
 ## Debugging
 

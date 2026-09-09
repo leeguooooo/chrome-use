@@ -2710,6 +2710,35 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             if let Some(n) = limit {
                 cmd["limit"] = json!(n);
             }
+            // `--level error,warn` keeps only those levels; `--filter <text>`
+            // keeps entries whose message contains the text. Both narrow the
+            // buffer before `--limit` tails it, so "the last 5 errors" is
+            // `--level error --limit 5`, not the errors among the last 5 lines.
+            if let Some(levels) = rest
+                .iter()
+                .position(|a| *a == "--level")
+                .and_then(|i| rest.get(i + 1))
+            {
+                let levels: Vec<String> = levels
+                    .split(',')
+                    .map(|l| l.trim().to_ascii_lowercase())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                if levels.is_empty() {
+                    return Err(ParseError::MissingArguments {
+                        context: "console --level".to_string(),
+                        usage: "console --level <log|info|warn|error|debug>[,...]",
+                    });
+                }
+                cmd["levels"] = json!(levels);
+            }
+            if let Some(filter) = rest
+                .iter()
+                .position(|a| *a == "--filter")
+                .and_then(|i| rest.get(i + 1))
+            {
+                cmd["filter"] = json!(filter);
+            }
             Ok(cmd)
         }
         "errors" => {
