@@ -49,6 +49,7 @@ import {
 } from './idle-detach.js';
 import { shouldCheckForUpdate, canApplyUpdateNow } from './update-check.js';
 import { attachedTargetsFrom } from './attached-targets.js';
+import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
 
 const HOST_NAME = 'com.agent_browser.connect';
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
@@ -591,7 +592,11 @@ function connectHost() {
       postToHost({
         method: 'hello',
         version: chrome.runtime.getManifest().version,
-        capabilities: ['nativeTabDuplicate', 'downloadsApi'],
+        // `call:<policy>` / `state`: the generic chrome.* door and the one-call
+        // state read (0.5.25). The daemon feature-detects on these names, so a
+        // CLI that wants them on an older extension says "update" instead of
+        // sending a method Chrome answers with "wasn't found".
+        capabilities: ['nativeTabDuplicate', 'downloadsApi', `call:${POLICY_VERSION}`, 'state'],
         ...extra,
       });
     } catch {}
@@ -1001,6 +1006,43 @@ async function handleForwardCdpCommand(msg) {
     return await clearDownloads(params, {
       erase: (query) => chrome.downloads.erase(query),
     });
+  }
+
+  // Generic, allow-listed door onto chrome.* (see api-passthrough.js). The
+  // point is that the NEXT CLI feature built on an existing browser API needs
+  // no extension release. Ownership for mutations is the persisted
+  // `ownedTabs` set only: adopted tabs are readable through here but not
+  // closable or movable, same as `close` treats them.
+  if (method === 'ABExt.call') {
+    // After a service-worker restart the persisted ownership set is loaded
+    // lazily; a mutation arriving before that would be refused as "not owned".
+    await loadOwnedTabs();
+    return await executeCall(params, {
+      api: chrome,
+      isOwned: (tabId) => ownedTabs.has(tabId),
+      tabsInGroup: async (groupId) =>
+        (await chrome.tabs.query({ groupId }).catch(() => [])).map((t) => t.id),
+      tabsInWindow: async (windowId) =>
+        (await chrome.tabs.query({ windowId }).catch(() => [])).map((t) => t.id),
+    });
+  }
+
+  // Everything the daemon otherwise assembles from several calls, in one:
+  // what the relay holds, what it owns, how it is configured. Ids only.
+  if (method === 'ABExt.state') {
+    await loadOwnedTabs();
+    return {
+      version: chrome.runtime.getManifest().version,
+      policy: policySummary(),
+      connected: port != null,
+      attachedTargets: attachedTargetsFrom(tabs.entries()),
+      ownedTabs: [...ownedTabs],
+      groups: [...groupIdByName.entries()].map(([name, id]) => ({ name, id })),
+      agentWindowId,
+      cursorEnabled,
+      notifyEnabled,
+      idleDetachMs,
+    };
   }
 
   // Browser-level Target methods that map onto chrome.tabs.
