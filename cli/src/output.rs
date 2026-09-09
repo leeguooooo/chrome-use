@@ -4727,7 +4727,7 @@ Setup:
                              Debugging: one allow-listed chrome.* call through the
                              extension (tabs, tabGroups, windows, downloads,
                              webNavigation; mutations only on tabs this relay owns).
-                             e.g. extension call tabs.query '{"active":true}'
+                             e.g. extension call tabs.query '{{"active":true}}'
                              Needs ab-connect 0.5.25+.
   extension state            Everything the extension holds, owns and is set to, in
                              one call (attached targets, owned tabs, groups, cursor,

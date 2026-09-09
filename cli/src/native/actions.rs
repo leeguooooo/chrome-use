@@ -8816,7 +8816,8 @@ async fn handle_extension_call(cmd: &Value, state: &mut DaemonState) -> Result<V
         return Err("extension call only works over the extension relay (the session is on a direct CDP connection)".to_string());
     }
     let caps = relay_capabilities(mgr).await;
-    let policy = generic_call_policy(&caps).ok_or_else(|| generic_call_unsupported("extension call"))?;
+    let policy =
+        generic_call_policy(&caps).ok_or_else(|| generic_call_unsupported("extension call"))?;
     let params = json!({
         "namespace": cmd.get("namespace").and_then(Value::as_str).unwrap_or(""),
         "method": cmd.get("method").and_then(Value::as_str).unwrap_or(""),
