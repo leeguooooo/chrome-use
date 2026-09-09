@@ -1,0 +1,51 @@
+# Publish ab-connect to the Chrome Web Store from CI, so a release never depends
+# on someone being at a logged-in Mac. Manual trigger only (workflow_dispatch):
+# publishing is deliberate, never a side effect of a push.
+#
+# One-time: add three repository secrets (Settings → Secrets and variables →
+# Actions), the same values as .secrets/cws.env locally:
+#   CWS_CLIENT_ID  CWS_CLIENT_SECRET  CWS_REFRESH_TOKEN
+# See scripts/publish-extension.sh for how to obtain them.
+name: Publish extension (Chrome Web Store)
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Upload only, do not submit for review"
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify the packaged zip matches the manifest version
+        run: |
+          python3 - <<'PY'
+          import json, zipfile
+          m = json.load(open("extensions/ab-connect/manifest.json"))["version"]
+          z = json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json"))["version"]
+          assert m == z, f"manifest {m} != zip {z}; run scripts/pack-extension.sh and commit the zip"
+          assert "key" not in json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json")), "zip must not contain manifest key"
+          print(f"ab-connect {z} ready to publish")
+          PY
+      - name: Publish
+        env:
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          if [ -z "$CWS_CLIENT_ID" ]; then
+            echo "::error::CWS_CLIENT_ID / CWS_CLIENT_SECRET / CWS_REFRESH_TOKEN secrets are not set." >&2
+            exit 1
+          fi
+          if [ "${{ inputs.draft }}" = "true" ]; then
+            sh scripts/publish-extension.sh --draft
+          else
+            sh scripts/publish-extension.sh
+          fi
