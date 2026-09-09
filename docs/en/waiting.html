@@ -230,6 +230,23 @@
 <pre><code><span class="du-prompt">$</span> chrome-use click @e8 <span class="du-flag">--observe</span>   <span class="du-cmt"># read changes and bounded request context after the action</span></code></pre>
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ On no change, read the why: line under it first</div>
+        When nothing changed after an action, the daemon probes the target and reports the first decisive finding:
+        the control is disabled, not rendered, outside the viewport, or covered by another element (named).
+        Fix that one thing and retry the same semantic action. When the note says none of those apply, the action
+        reached a control that genuinely changes nothing visible:
+        <strong>do not read an empty delta as failure, and do not repeat the action.</strong>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ When a click replaced the page, you get the new tree</div>
+        For a link click or a submit that navigated, <code>--observe</code> no longer emits the old tree as removals
+        plus the new tree as additions. It prints the new page's tree under <code>observed snapshot:</code>, with one
+        line saying how many lines of the old page are gone. The rule: both trees are page-sized (20+ lines) and at
+        least 80% of each changed. Refs in that tree are live; use them directly.
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect or --observe?</div>
         For a <strong>hard pass/fail gate</strong> (with exit codes, <code>&amp;&amp;</code>, batches) use
