@@ -330,6 +330,15 @@ pub fn build_eval(adapter: &Adapter, args: &Value, helper_src: Option<&str>) -> 
 }
 
 /// List installed adapters as `name/cmd` strings (sorted).
+/// Whether a `.js` file stem in a pack directory is a runnable adapter.
+/// `_`-prefixed files are loader internals (family helpers like `_helper`,
+/// injected automatically), and `*.test.js` are the pack's own tests — neither
+/// is invokable as `site name/<stem>`, so listing them sends an agent to a
+/// command that does nothing (#302).
+pub fn is_runnable_adapter_stem(stem: &str) -> bool {
+    !stem.starts_with('_') && !stem.ends_with(".test")
+}
+
 pub fn list_adapters() -> Result<Vec<String>, String> {
     let dir = sites_dir().ok_or("site: cannot resolve home dir")?;
     if !dir.exists() {
@@ -351,7 +360,9 @@ pub fn list_adapters() -> Result<Vec<String>, String> {
             let p = cmd.path();
             if p.extension().and_then(|e| e.to_str()) == Some("js") {
                 if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    out.push(format!("{name}/{stem}"));
+                    if is_runnable_adapter_stem(stem) {
+                        out.push(format!("{name}/{stem}"));
+                    }
                 }
             }
         }
@@ -817,5 +828,21 @@ async function(args){ return args; }"#;
         let args = map_args(&a, &["the-uuid".into(), "misonote.dc.html".into()], &[]);
         assert_eq!(args["projectId"], "the-uuid");
         assert_eq!(args["path"], "misonote.dc.html");
+    }
+
+    #[test]
+    fn loader_internals_and_tests_are_not_listed_as_adapters() {
+        // Real adapters list; the loader's `_helper` family file and a pack's
+        // own `*.test.js` do not (#302).
+        assert!(is_runnable_adapter_stem("issues"));
+        assert!(is_runnable_adapter_stem("top"));
+        assert!(!is_runnable_adapter_stem("_helper"));
+        assert!(!is_runnable_adapter_stem("_"));
+        // `foo.test.js` → stem is `foo.test`.
+        assert!(!is_runnable_adapter_stem("adapters.test"));
+        assert!(!is_runnable_adapter_stem("thread.test"));
+        // A normal adapter that merely contains "test" in its name still lists.
+        assert!(is_runnable_adapter_stem("latest"));
+        assert!(is_runnable_adapter_stem("testimonials"));
     }
 }

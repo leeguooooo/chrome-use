@@ -1021,11 +1021,45 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     Ok(json!({ "id": id, "action": "keyboard", "subaction": "type", "text": text }))
                 }
                 "inserttext" | "insertText" => {
-                    let text: String = rest[1..].join(" ");
+                    // `--file <path>` / `--stdin` send the WHOLE payload in one
+                    // `Input.insertText`, the way `fill` already does (#301).
+                    // Chunking a large insert into back-to-back `inserttext`
+                    // calls corrupts text at each boundary: a call returns when
+                    // Chrome dispatched the insert, not when the editor (e.g.
+                    // ProseMirror) committed it, so the next chunk races the
+                    // uncommitted tail. Total length is preserved, so a
+                    // char-count check passes and the scrambled text ships. One
+                    // insert removes the boundary entirely.
+                    let text: String = match rest.get(1).copied() {
+                        Some("--file") => {
+                            let path = rest.get(2).ok_or(ParseError::InvalidValue {
+                                message: "keyboard inserttext --file requires a path".to_string(),
+                                usage: "keyboard inserttext --file <path>",
+                            })?;
+                            std::fs::read_to_string(path).map_err(|e| ParseError::InvalidValue {
+                                message: format!(
+                                    "keyboard inserttext --file: cannot read {path}: {e}"
+                                ),
+                                usage: "keyboard inserttext --file <path>",
+                            })?
+                        }
+                        Some("--stdin") => {
+                            use std::io::Read;
+                            let mut buf = String::new();
+                            io::stdin().read_to_string(&mut buf).map_err(|e| {
+                                ParseError::InvalidValue {
+                                    message: format!("keyboard inserttext --stdin: {e}"),
+                                    usage: "keyboard inserttext --stdin",
+                                }
+                            })?;
+                            buf
+                        }
+                        _ => rest[1..].join(" "),
+                    };
                     if text.is_empty() {
                         return Err(ParseError::MissingArguments {
                             context: "keyboard inserttext".to_string(),
-                            usage: "keyboard inserttext <text>",
+                            usage: "keyboard inserttext <text> | --file <path> | --stdin",
                         });
                     }
                     Ok(
@@ -5470,6 +5504,45 @@ mod tests {
             &default_flags(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn keyboard_inserttext_reads_whole_payload_from_a_file() {
+        // #301: chunking a large insert corrupts the boundary; --file sends the
+        // whole payload in one Input.insertText.
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("cu-inserttext-{}.txt", std::process::id()));
+        let payload = "line one\nline two with `backticks` and \"quotes\"\n中文尾部";
+        std::fs::write(&path, payload).unwrap();
+        let cmd = parse_command(
+            &args(&format!("keyboard inserttext --file {}", path.display())),
+            &default_flags(),
+        )
+        .unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(cmd["action"], "keyboard");
+        assert_eq!(cmd["subaction"], "insertText");
+        assert_eq!(cmd["text"], payload);
+    }
+
+    #[test]
+    fn keyboard_inserttext_missing_file_is_an_error_not_a_literal() {
+        let result = parse_command(
+            &args("keyboard inserttext --file /no/such/cu-path-xyz.txt"),
+            &default_flags(),
+        );
+        assert!(result.is_err(), "a missing --file path must error, not insert the flag text");
+    }
+
+    #[test]
+    fn keyboard_inserttext_inline_text_still_works() {
+        let cmd = parse_command(
+            &args("keyboard inserttext pasted content"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["subaction"], "insertText");
+        assert_eq!(cmd["text"], "pasted content");
     }
 
     // === Storage Tests ===

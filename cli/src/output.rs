@@ -2455,6 +2455,13 @@ Subcommands:
   type <text>          Type text character-by-character with real
                        key events (keydown, keypress, keyup per char)
   inserttext <text>    Insert text without key events (like paste)
+  inserttext --file <path> | --stdin
+                       Insert a whole payload in ONE call. Use this for large
+                       or multiline text instead of chunking into back-to-back
+                       inserttext calls — a chunked insert corrupts text at each
+                       boundary (the call returns when Chrome dispatched, not
+                       when the editor committed), and the length is preserved
+                       so a char-count check misses it (#301).
 
 Note: For key combos (Enter, Control+a), use the 'press' command
 directly — it already operates on the current focus.
@@ -4402,6 +4409,40 @@ Environment:
 "##
         }
 
+        // === Site adapters ===
+        "site" => {
+            r##"
+chrome-use site - Run a community site adapter over your logged-in session
+
+Usage:
+  chrome-use site <name>/<command> [positional...] [--key value]
+  chrome-use site list                 List installed adapters (name/command)
+  chrome-use site update               Fetch/refresh the adapter packs
+  chrome-use site info <name>          Show one pack's adapters and their args
+
+An adapter extracts structured JSON from a site through its own API/DOM,
+in the site's real logged-in page — so it replaces a snapshot+click scrape
+with one call. Adapters ship in community packs (epiral/bb-sites) and the
+official leeguooooo/chrome-use-sites pack; `update` syncs both.
+
+The spec is always `name/command`. `site` alone, or a wrong spec, prints a
+one-line usage and points you at `site list`.
+
+Global Options:
+  --json               Output as JSON (adapters usually return JSON already)
+  --session <name>     Use specific session
+
+Examples:
+  chrome-use site list
+  chrome-use site github/issues epiral/bb-browser --json
+  chrome-use site hackernews/top --json
+  chrome-use site update
+
+See also: `chrome-use skills get core` documents adapters with a decision
+table and a full "Site adapters" section.
+"##
+        }
+
         _ => return false,
     };
     println!("{}", help.trim());
@@ -5190,8 +5231,17 @@ pub fn print_version() {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_a11y_text, format_storage_text};
+    use super::{format_a11y_text, format_storage_text, print_command_help};
     use serde_json::json;
+
+    #[test]
+    fn site_has_its_own_help_topic() {
+        // #299: `site --help` used to fall through to the 534-line generic help,
+        // which reads to an agent as "that command does not exist".
+        assert!(print_command_help("site"), "site must print its own help");
+        // A genuinely unknown command still falls back (returns false).
+        assert!(!print_command_help("definitely-not-a-command"));
+    }
 
     #[test]
     fn observation_output_survives_early_return_branches() {
