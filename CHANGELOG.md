@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.119
+## 1.5.120
 
 <!-- release:start -->
+### Bug Fixes
+
+- **The insert-timeout hint no longer recommends the one thing that corrupts text.** It told the caller to "split the text and send it as separate `keyboard inserttext` calls" — the exact pattern #301 was filed for: a call returns when Chrome dispatched the insert, not when the editor committed it, so the next piece races the uncommitted tail and scrambles the text while preserving the total length, which is why a character-count check passes and the damage ships. The repo already said this in `commands.rs`; the error message said the opposite. If a split is mentioned at all, the hint now says to compare the field's **content** between pieces, never just its length.
+- **The hint now says the insert was not cancelled.** Losing the timeout race cancels nothing: the command was already dispatched before the race began, and CDP has no primitive to recall it. A renderer was measured still working roughly 14 minutes after the caller got the error, with memory still climbing — so a command sent right after the failure lands on a tab that is still busy. The hint now says to let the tab go quiet and re-read the field first, because some or all of the text may have landed (#315).
+- The per-character cost quoted in the hint is now `~0.45-0.53s/KB`, the range actually measured, rather than the single early figure.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.119
+
 ### Bug Fixes
 
 - **A large insert no longer dies at ~55s looking like a dead session.** Three layers budget the same CDP command — the extension (8s + 2ms/byte, capped at 120s), the daemon (30s + 4ms/byte, capped at 180s), and the client's socket read. v1.5.117/118 scaled the first two by payload but left the read budget flat at 45s, so the outermost layer cut first and the inner, more specific "the payload needed more time" error never reached the caller. That flat 45s plus the 8s `DAEMON_SHUTDOWN_GRACE` is exactly the ~55s wall reported from live use (measured 53.6s / 54.0s / 55.6s). The read budget now scales by the same rule, and a test pins it against the budget the CDP client actually enforces, so the two cannot drift. Commands without a payload keep the flat 45s, so a genuinely hung session still fails just as fast. The real ceiling is now the extension's 120s cap — roughly 226 KB at the 0.53s/KB measured on chatgpt.com.
@@ -11,7 +24,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.118
 
