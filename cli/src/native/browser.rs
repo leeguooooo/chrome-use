@@ -691,6 +691,20 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     // `sessions` still reports the daemon alive (issue #117). Keep the concrete
     // failing method and spell out recovery instead of leaving a bare timeout.
     if lower.contains("timed out") {
+        // A payload-sized command that ran out its (payload-scaled) budget is a
+        // different situation: the connection is fine, the command legitimately
+        // needed longer than we allowed. Sending that caller to `connect` or to
+        // hunt a stale service worker is the wrong direction — reported from
+        // live use after a 150 KB insert hit the daemon budget (#301).
+        if lower.contains("input.inserttext") {
+            return format!(
+                "{error}\nHint: this is a size limit, not a dead connection. `Input.insertText` \
+                 costs time per character (~0.45s/KB in a rich editor), and this payload needed \
+                 more than the budget. The connection is fine — do NOT reconnect. Insert less at \
+                 once (split the text and send it as separate `keyboard inserttext` calls, \
+                 re-reading the field between them), or use a smaller payload."
+            );
+        }
         return format!(
             "{error}\nHint: the session's browser connection is unresponsive (likely a stale \
              relay/service-worker mid-session). Reconnect with `connect`, or close the session \
@@ -4457,6 +4471,32 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::to_ai_friendly_error;
+
+    #[test]
+    fn a_payload_sized_timeout_is_not_reported_as_a_dead_connection() {
+        // 150KB into a rich editor ran out the daemon budget. The connection was
+        // healthy; the command simply needed longer than we allowed. Telling the
+        // caller to reconnect sent them after a stale service worker that was
+        // not there (#301).
+        let out = to_ai_friendly_error("CDP command timed out after 180s: Input.insertText");
+        assert!(
+            out.contains("size limit, not a dead connection"),
+            "got: {out}"
+        );
+        assert!(out.contains("do NOT reconnect"), "got: {out}");
+        assert!(
+            !out.contains("stale relay/service-worker"),
+            "must not send the caller after a stale worker: {out}"
+        );
+
+        // An ordinary command running out its budget keeps the connection
+        // diagnosis — that one really is the likely cause there.
+        let other = to_ai_friendly_error("CDP command timed out after 30s: Runtime.evaluate");
+        assert!(other.contains("stale relay/service-worker"), "got: {other}");
+        assert!(!other.contains("size limit"), "got: {other}");
+    }
+
     use super::*;
     use tokio::time::sleep;
 
