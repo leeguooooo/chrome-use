@@ -1,8 +1,20 @@
 # Changelog
 
-## 1.5.122
+## 1.5.123
 
 <!-- release:start -->
+### Bug Fixes
+
+- **v1.5.122's fix for #319 did not work; this is the real one.** `status` prints "driving A" above "profile: B" with two different ids. v1.5.122 moved the extension version into a per-profile file but still looked it up with the wrong id, so the same mistake simply entered somewhere else and the symptom survived — one `status` run after upgrading showed it unchanged. The actual defect is larger than the original diagnosis: "which profile is driving" had **two unrelated implementations**. The one that decides which browser is actually bound picks by window focus; the ones that report it to you — the `profile:` line, `drivingProfileId`, `browsers`' default column, `doctor`, and the version resolver — all used the other one, "whichever worker connected last". With two profiles connected those disagree. They are now a single resolver, preferring the focus-based answer that the endpoint selection actually uses and falling back to the generic sidecar only where the focus answer is deliberately absent (fewer than two profiles, an extension too old to report focus, or a tie) — which are exactly the cases where the generic one is right.
+- **Honest limitation: this is not verified.** The symptom only appears with two Chrome profiles connected, and that environment was not available. What is established is that the two notions are unified in code and the suite passes — *the same evidence v1.5.122 offered before turning out to be ineffective*. #319 is therefore left open rather than closed. If you have two profiles, run `chrome-use status` and check whether the `driving` and `profile:` lines name the same id.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.122
+
 ### Bug Fixes
 
 - **With two Chrome profiles connected, `status` reported the other profile's extension version (#319).** It printed `driving 27ade1bc-…` and `extension: live 0.5.21, expected 0.5.26` together, where the `0.5.21` belonged to a different profile — so the reader is told to update an extension that is already current. The cause was a missing dimension rather than a race: the version sidecar is a single file written by whichever worker sent `hello` last, while "which profile is driving" is decided separately by focus timestamp. #60 had already given the *endpoint* per-profile treatment for exactly this reason ("regardless of who last clobbered the generic file"); the version never followed. It now has its own per-profile sidecar, written next to the endpoint on `hello` and removed with it on disconnect, and the places that print a version next to a profile read the driving profile's copy. An extension too old to report a profile id still writes only the generic file, so those keep working rather than degrading to "unknown". CLI-side only — no extension update needed.
@@ -10,7 +22,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.121
 
