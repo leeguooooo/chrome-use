@@ -45,6 +45,42 @@ pub struct CdpClient {
     _keepalive_handle: tokio::task::JoinHandle<()>,
 }
 
+/// Flat budget for an ordinary CDP round trip.
+const CDP_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Extra budget per byte of a size-proportional payload. `Input.insertText`
+/// makes the renderer process the text character by character, so its cost
+/// scales with size, not with round-trip health: 34 KB into a rich editor
+/// measured ~0.45s/KB. A flat budget for a payload-sized command is a size
+/// limit in disguise — it made the one-call `keyboard inserttext --file` path
+/// fail at exactly the sizes it exists for. 4ms/byte is generous headroom over
+/// the measured worst case; the ceiling keeps a pathological payload from
+/// pinning a session.
+const CDP_PAYLOAD_MICROS_PER_BYTE: u64 = 4_000;
+const CDP_PAYLOAD_MAX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Budget for one CDP command. Pure so the scaling rule is testable without a
+/// browser. Anything without a size-proportional payload keeps the flat budget,
+/// so an ordinary hung command still fails as fast as it used to.
+pub(crate) fn command_timeout(method: &str, params: Option<&Value>) -> std::time::Duration {
+    if method != "Input.insertText" {
+        return CDP_COMMAND_TIMEOUT;
+    }
+    let len = params
+        .and_then(|p| p.get("text"))
+        .and_then(|t| t.as_str())
+        .map(|t| t.len() as u64)
+        .unwrap_or(0);
+    if len == 0 {
+        return CDP_COMMAND_TIMEOUT;
+    }
+    // The daemon must outlast the extension's own (also payload-scaled) budget,
+    // or the daemon cuts the command off first and the relay's more specific
+    // error never reaches the caller.
+    let scaled = CDP_COMMAND_TIMEOUT
+        + std::time::Duration::from_micros(len.saturating_mul(CDP_PAYLOAD_MICROS_PER_BYTE));
+    scaled.min(CDP_PAYLOAD_MAX_TIMEOUT)
+}
+
 impl CdpClient {
     pub async fn connect(url: &str) -> Result<Self, String> {
         Self::connect_with_headers(url, None).await
@@ -236,12 +272,17 @@ impl CdpClient {
                 .map_err(|e| format!("Failed to send CDP command: {}", e))?;
         }
 
-        let response = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+        let budget = command_timeout(method, params.as_ref());
+        let response = match tokio::time::timeout(budget, rx).await {
             Ok(Ok(resp)) => resp,
             Ok(Err(_)) => return Err("CDP response channel closed".to_string()),
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                return Err(format!("CDP command timed out: {}", method));
+                return Err(format!(
+                    "CDP command timed out after {}s: {}",
+                    budget.as_secs(),
+                    method
+                ));
             }
         };
 
@@ -358,4 +399,63 @@ fn enable_tcp_keepalive(stream: &tokio_tungstenite::MaybeTlsStream<tokio::net::T
     let keepalive = keepalive.with_interval(std::time::Duration::from_secs(10));
 
     let _ = sock.set_tcp_keepalive(&keepalive);
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::command_timeout;
+    use serde_json::json;
+
+    #[test]
+    fn only_payload_sized_commands_get_a_scaled_budget() {
+        // An ordinary command keeps the flat 30s — scaling must never slow the
+        // failure of a genuinely hung round trip.
+        assert_eq!(command_timeout("Runtime.evaluate", None).as_secs(), 30);
+        let big_eval = json!({ "expression": "x".repeat(50_000) });
+        assert_eq!(
+            command_timeout("Runtime.evaluate", Some(&big_eval)).as_secs(),
+            30
+        );
+        // insertText without text, or with empty text, is still a flat command.
+        assert_eq!(command_timeout("Input.insertText", None).as_secs(), 30);
+        let empty = json!({ "text": "" });
+        assert_eq!(command_timeout("Input.insertText", Some(&empty)).as_secs(), 30);
+    }
+
+    #[test]
+    fn insert_text_budget_grows_with_the_payload_and_is_capped() {
+        // 20KB is where the flat relay budget used to cut the one-call
+        // `keyboard inserttext --file` path off (#301).
+        let twenty_kb = json!({ "text": "a".repeat(20_000) });
+        assert_eq!(
+            command_timeout("Input.insertText", Some(&twenty_kb)).as_secs(),
+            30 + 80
+        );
+        // 34KB — the payload that motivated the flag.
+        let thirty_four_kb = json!({ "text": "a".repeat(34_000) });
+        assert_eq!(
+            command_timeout("Input.insertText", Some(&thirty_four_kb)).as_secs(),
+            30 + 136
+        );
+        // Capped, so a pathological payload cannot pin a session indefinitely.
+        let huge = json!({ "text": "a".repeat(10_000_000) });
+        assert_eq!(command_timeout("Input.insertText", Some(&huge)).as_secs(), 180);
+    }
+
+    #[test]
+    fn the_daemon_budget_outlasts_the_extension_budget() {
+        // The extension scales at 2ms/byte on top of its own 8s flat budget and
+        // caps at 120s. The daemon must always be the looser of the two, or it
+        // cuts the command off first and the relay's more specific error never
+        // reaches the caller.
+        for len in [1_000u64, 20_000, 34_000, 100_000, 10_000_000] {
+            let params = json!({ "text": "a".repeat(len as usize) });
+            let daemon = command_timeout("Input.insertText", Some(&params)).as_millis() as u64;
+            let extension = std::cmp::min(8_000 + len * 2, 120_000);
+            assert!(
+                daemon > extension,
+                "daemon budget {daemon}ms must outlast extension {extension}ms for {len} bytes"
+            );
+        }
+    }
 }
