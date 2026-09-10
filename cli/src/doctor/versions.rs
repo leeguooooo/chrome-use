@@ -38,7 +38,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     // Extension — the build this CLI shipped alongside (embedded at compile time
     // from the extension manifest) is what we expect to be running.
     let expected_ext = env!("AB_CONNECT_VERSION");
-    match connect::relay_ext_version() {
+    match connect::relay_ext_version_driving() {
         // Behind the bundled build is only a WARNING when a newer build is
         // actually published — the bundled version routinely runs ahead of the
         // Web Store, and telling people to hit Update for a build that isn't
