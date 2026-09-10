@@ -48,6 +48,15 @@
 
       <h2>0.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>0.5.26</strong> (September 10, 2026): <code>Input.insertText</code>'s timeout now scales
+          with the payload. For a command that costs time per character, a flat 8s budget is not a health
+          check — it is a size limit in disguise: 34 KB into a rich-text editor measured ~15s and was cut off
+          at 8s, which made <code>keyboard inserttext --file</code> useless at exactly the sizes it exists for.
+          The budget is now 8s + 2ms/byte, capped at 120s — roughly 4× the measured worst case, so a healthy
+          renderer never trips it, while the cap keeps a pathological payload from hanging a session forever.
+          The timeout message is distinct too: a budget that already scaled with the payload and still ran out
+          means the page is slower per byte than expected (a heavy editor, a busy tab), not that "the debugger
+          stopped responding" — which sent callers looking for a hung page that isn't there (#301).</li>
         <li><strong>0.5.25</strong> (2026-09-10): one generic door, <code>ABExt.call</code> — a CLI feature
           that only needs an allow-listed <code>chrome.tabs / tabGroups / windows / downloads / webNavigation</code>
           method no longer needs a new extension release. Mutating calls are allowed only on tabs the agent
