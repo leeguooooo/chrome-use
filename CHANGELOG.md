@@ -1,8 +1,20 @@
 # Changelog
 
-## 1.5.117
+## 1.5.118
 
 <!-- release:start -->
+### Bug Fixes
+
+- **The daemon half of the payload-scaled insert budget actually ships.** v1.5.117's release artifact was published 36 seconds *before* the fix merged, so it carried only the extension side. The result was exactly the failure the fix predicted: a 150 KB `keyboard inserttext --file` was cut off at 30.170s by the daemon's hard-coded budget while the extension would have allowed 308s. The daemon budget now scales with the payload too (30s + 4ms/byte, capped at 180s), and a cross-side test pins the invariant that the daemon always outlasts the extension — otherwise the daemon cuts first and the relay's more specific error never reaches the caller.
+- **A payload-sized timeout no longer claims the connection is dead.** `CDP command timed out: Input.insertText` used to add "the session's browser connection is unresponsive (likely a stale relay/service-worker mid-session). Reconnect with `connect`" — sending the caller after a stale worker that is not there. The connection is fine; `Input.insertText` costs time per character (~0.45s/KB in a rich editor) and the payload needed more than the budget. It now says this is a size limit, says explicitly not to reconnect, and suggests inserting less at once. Every other command's timeout keeps the connection diagnosis, where it is the likely cause.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.117
+
 ### Bug Fixes
 
 - **`keyboard inserttext` gains `--file` / `--stdin` — and chunking a large insert no longer corrupts it (#301).** Back-to-back `keyboard inserttext` calls scrambled text at each chunk boundary while preserving total length, so a char-count check passed and the scrambled text shipped. The cause: `Input.insertText` returns when Chrome dispatched the insert, not when the editor (e.g. ProseMirror) committed it, so the next chunk raced the uncommitted tail. Reading the whole payload from a file or stdin sends it in one `Input.insertText`, removing the boundary entirely — the fix a caller actually wants, since it removes the need to chunk. Reported by the chatgpt-use session from live ChatGPT-composer use.
@@ -14,7 +26,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.116
 
