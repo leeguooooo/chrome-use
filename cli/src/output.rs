@@ -1102,6 +1102,14 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 // invent a second false statement.
                 let pinned_but_detached =
                     active && tab.get("relayAttached").and_then(|v| v.as_bool()) == Some(false);
+                // Why this tab is still open, when the session deliberately
+                // left it. Only present for tabs `keep` recorded, so an
+                // ordinary row gains nothing and the common case stays quiet.
+                let kept_marker = tab
+                    .get("keptAs")
+                    .and_then(|v| v.as_str())
+                    .map(|reason| format!(" [kept: {}]", reason))
+                    .unwrap_or_default();
                 let marker = if pinned_but_detached {
                     color::warning_indicator().to_string()
                 } else if active {
@@ -1111,13 +1119,13 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 };
                 if let Some(label) = tab_label {
                     println!(
-                        "{} [{}]{} {} {} - {}",
-                        marker, tab_id, ownership_marker, label, title, url
+                        "{} [{}]{}{} {} {} - {}",
+                        marker, tab_id, ownership_marker, kept_marker, label, title, url
                     );
                 } else {
                     println!(
-                        "{} [{}]{} {} - {}",
-                        marker, tab_id, ownership_marker, title, url
+                        "{} [{}]{}{} {} - {}",
+                        marker, tab_id, ownership_marker, kept_marker, title, url
                     );
                 }
                 // `--full` also surfaces the stable cross-session CDP targetId so
@@ -4418,6 +4426,47 @@ Environment:
         }
 
         // === Site adapters ===
+        "keep" => {
+            r##"
+chrome-use keep - Leave the active tab for the user
+
+Usage: chrome-use keep [--as deliverable|handoff]
+       chrome-use keep --release
+
+Exempts the active tab from the daemon's auto-close and removes it from the
+session's tab group, so it survives after the session ends.
+
+Keeping works by dropping ownership: the tab leaves the session's created-tab
+record, which is what exempts it. That erases the only trace we had, so
+`--as` records WHY it was left — otherwise `tab list` shows it as `foreign`
+and cannot answer "why is this still open?".
+
+  --as deliverable   (default) the tab IS the result: an edited document, a
+                     checkout page, something the user asked to keep open.
+  --as handoff       the next turn resumes here: waiting on a login, an
+                     approval, a payment, a code.
+
+`tab list` marks them `[kept: deliverable]` / `[kept: handoff]`.
+
+Bare `keep` means `--as deliverable`, so existing callers are unchanged.
+
+  --release          take the tab back: ownership is restored and it closes
+                     with the session again.
+
+`--release` only works on a tab THIS session created and then kept — the
+recorded keep is the proof. Without that record the command would claim the
+right to close a tab it never opened, so it refuses instead. Note the tab does
+NOT rejoin the session's tab group: ungrouping is one-way today.
+
+Do NOT keep research, search results, sources, intermediate steps, duplicates,
+blank tabs, error pages, or routine navigation. Keeping everything makes the
+mark meaningless and leaves the user's window full of the agent's scratch work.
+
+Global Options:
+  --json               Output as JSON
+  --session <name>     Use specific session
+"##
+        }
         "site" => {
             r##"
 chrome-use site - Run a community site adapter over your logged-in session
@@ -5247,6 +5296,9 @@ mod tests {
         // #299: `site --help` used to fall through to the 534-line generic help,
         // which reads to an agent as "that command does not exist".
         assert!(print_command_help("site"), "site must print its own help");
+        // `keep` grew flags (`--as`, `--release`); without its own topic help it
+        // falls back to the 534-line top-level help, which is how #299 looked.
+        assert!(print_command_help("keep"), "keep must print its own help");
         // A genuinely unknown command still falls back (returns false).
         assert!(!print_command_help("definitely-not-a-command"));
     }
