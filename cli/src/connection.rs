@@ -1506,7 +1506,10 @@ mod tests {
         // An ordinary command keeps the flat 45s, so a genuinely hung session
         // still fails as fast as it used to.
         let plain = json!({ "action": "eval", "expression": "1" });
-        assert_eq!(client_read_budget(&plain), std::time::Duration::from_secs(45));
+        assert_eq!(
+            client_read_budget(&plain),
+            std::time::Duration::from_secs(45)
+        );
         let empty_insert = json!({ "action": "keyboard", "subaction": "insertText", "text": "" });
         assert_eq!(
             client_read_budget(&empty_insert),
