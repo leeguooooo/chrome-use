@@ -197,7 +197,9 @@ pub fn run_connect(args: &[String], json: bool) {
     let installed = !manifests.is_empty();
     let extension_status = chrome_extension_status();
     let relay_url = relay_url();
-    let live_extension_version = relay_ext_version();
+    // Emitted and printed right next to `drivingProfileId`, so it must describe
+    // THAT profile rather than whichever worker last wrote the generic sidecar.
+    let live_extension_version = relay_ext_version_driving();
     let expected_extension_version = env!("AB_CONNECT_VERSION");
     let driving_profile = relay_ext_profile();
     let profiles = chrome_profiles();
@@ -2743,6 +2745,32 @@ fn relay_ext_profile_path() -> PathBuf {
     relay_url_path().with_file_name("relay-ext-profile")
 }
 
+/// Read one version sidecar, treating blank as absent.
+fn read_ext_version_file(path: PathBuf) -> Option<String> {
+    let s = std::fs::read_to_string(path).ok()?.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// The extension version of the profile the relay is actually DRIVING.
+///
+/// Use this wherever a version is shown next to a profile. Falls back to the
+/// generic sidecar when the driving profile is unknown or has no per-profile
+/// file: an extension too old to report `profileId` writes only the generic
+/// one, and reporting "unknown" for those would be a regression dressed up as
+/// a fix.
+pub fn relay_ext_version_driving() -> Option<String> {
+    if let Some((id, _)) = relay_ext_profile() {
+        if let Some(version) = read_ext_version_file(relay_ext_version_path_for(&id)) {
+            return Some(version);
+        }
+    }
+    relay_ext_version()
+}
+
 /// The Chrome profile the relay is currently driving, as `(id, email)` learned
 /// from the extension's `hello`. `id` is a stable per-profile UUID (always
 /// present on a new-enough extension); `email` is the signed-in account, only
@@ -2811,6 +2839,18 @@ fn relay_url_path_for(id: &str) -> PathBuf {
 
 fn relay_ext_profile_path_for(id: &str) -> PathBuf {
     relay_url_path().with_file_name(format!("relay-ext-profile-{}", sanitize_profile_id(id)))
+}
+
+/// The extension version reported by ONE profile's worker.
+///
+/// The generic `relay-ext-version` is written by whichever worker sent `hello`
+/// last, so with several profiles connected it can describe a profile other
+/// than the one being driven — `status` printed "live 0.5.21" next to a driving
+/// profile that was on 0.5.26 (#319). The endpoint already had this per-profile
+/// treatment (`relay_url_path_for`); the version did not. Same naming and same
+/// sanitiser, so the pair stays findable together on disk.
+fn relay_ext_version_path_for(id: &str) -> PathBuf {
+    relay_url_path().with_file_name(format!("relay-ext-version-{}", sanitize_profile_id(id)))
 }
 
 /// Every profile whose extension worker is currently connected: `(id, email,
@@ -3128,7 +3168,8 @@ async fn nm_host_main() {
                 .flatten()
                 .filter_map(|x| x.as_str().map(ToString::to_string));
             state.lock().await.set_extension_capabilities(capabilities);
-            if let Some(ver) = v.get("version").and_then(|x| x.as_str()) {
+            let reported_version = v.get("version").and_then(|x| x.as_str());
+            if let Some(ver) = reported_version {
                 let _ = std::fs::write(relay_ext_version_path(), ver);
             }
             // Record which profile is driving (issue #60), if the extension
@@ -3140,6 +3181,14 @@ async fn nm_host_main() {
                 // Stable per-profile endpoint so `--browser <id>` can pin to THIS
                 // profile regardless of who last clobbered the generic file.
                 let _ = std::fs::write(relay_url_path_for(id), &url);
+                // ...and the version alongside it, for the same reason: the
+                // generic file belongs to whoever said `hello` last, which is
+                // not necessarily the profile we drive (#319). Only here — the
+                // `focus` ping below carries no version, so it must not write
+                // one and blank out a good value.
+                if let Some(ver) = reported_version {
+                    let _ = std::fs::write(relay_ext_version_path_for(id), ver);
+                }
                 // The per-profile record also carries a focus timestamp (host
                 // clock, so it's comparable across profiles) — baseline it at
                 // connect and refresh it on `focus` pings. Lets the CLI default to
@@ -3211,6 +3260,11 @@ async fn nm_host_main() {
     if let Some(id) = &bound_profile_id {
         let _ = std::fs::remove_file(relay_url_path_for(id));
         let _ = std::fs::remove_file(relay_ext_profile_path_for(id));
+        // The version sidecar belongs to this set too. Leaving it behind is the
+        // same shape as the bug this fix is about: a per-profile file added
+        // without being added to the group that gets written, read and cleaned
+        // together.
+        let _ = std::fs::remove_file(relay_ext_version_path_for(id));
     }
 }
 
@@ -3574,6 +3628,40 @@ mod tests {
         assert_eq!(profile_label("uuid", Some("me@x.com")), "me@x.com (uuid)");
         assert_eq!(profile_label("uuid", None), "uuid");
         assert_eq!(profile_label("uuid", Some("")), "uuid");
+    }
+    #[test]
+    fn the_per_profile_version_sidecar_is_named_like_its_endpoint_sibling() {
+        // This bug was exactly "the endpoint got per-profile treatment, the
+        // version did not" (#319). Pin the pair so they cannot drift apart
+        // again: same directory, same sanitiser, matching prefixes.
+        let id = "27ade1bc-9f/00 XX";
+        let endpoint = super::relay_url_path_for(id);
+        let version = super::relay_ext_version_path_for(id);
+        let profile = super::relay_ext_profile_path_for(id);
+
+        assert_eq!(
+            endpoint.parent(),
+            version.parent(),
+            "the version sidecar must sit next to the endpoint it describes"
+        );
+        assert_eq!(
+            version.file_name().and_then(|n| n.to_str()),
+            Some("relay-ext-version-27ade1bc-9f_00_XX"),
+            "unexpected name — the id must be sanitised the same way as the siblings"
+        );
+        assert_eq!(
+            profile.file_name().and_then(|n| n.to_str()),
+            Some("relay-ext-profile-27ade1bc-9f_00_XX")
+        );
+        // A path separator in a profile id must never escape the directory.
+        assert!(
+            !version
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap()
+                .contains('/'),
+            "a sanitised id must not reintroduce a path separator"
+        );
     }
 
     #[test]

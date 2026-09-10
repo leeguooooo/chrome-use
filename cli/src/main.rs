@@ -945,7 +945,9 @@ fn run_status(session: &str, json_mode: bool) {
     let host_installed = !host_report.manifests.is_empty();
     let host_healthy = host_report.is_healthy();
     let relay_up = connect::relay_url().is_some();
-    let extension_version = connect::relay_ext_version();
+    // Printed next to the driving profile below, so it must be that profile's
+    // version, not the last `hello` writer's (#319).
+    let extension_version = connect::relay_ext_version_driving();
     let profile = connect::relay_ext_profile();
     let current = inventory.sessions.iter().find(|item| item.name == session);
 
