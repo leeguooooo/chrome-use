@@ -1,8 +1,20 @@
 # Changelog
 
-## 1.5.118
+## 1.5.119
 
 <!-- release:start -->
+### Bug Fixes
+
+- **A large insert no longer dies at ~55s looking like a dead session.** Three layers budget the same CDP command — the extension (8s + 2ms/byte, capped at 120s), the daemon (30s + 4ms/byte, capped at 180s), and the client's socket read. v1.5.117/118 scaled the first two by payload but left the read budget flat at 45s, so the outermost layer cut first and the inner, more specific "the payload needed more time" error never reached the caller. That flat 45s plus the 8s `DAEMON_SHUTDOWN_GRACE` is exactly the ~55s wall reported from live use (measured 53.6s / 54.0s / 55.6s). The read budget now scales by the same rule, and a test pins it against the budget the CDP client actually enforces, so the two cannot drift. Commands without a payload keep the flat 45s, so a genuinely hung session still fails just as fast. The real ceiling is now the extension's 120s cap — roughly 226 KB at the 0.53s/KB measured on chatgpt.com.
+- **The "session unresponsive" message no longer guesses at a cause.** It used to assert the page was still finishing a long command. That fit one reproduction and not another (60 seconds versus over an hour), and the mechanism was never observed. It now states only what was observed — the name has been seen to free up on its own, so it is not permanently taken — and gives a move that works immediately: use a different `--session` name, or `adopt` the tab into a fresh session.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.118
+
 ### Bug Fixes
 
 - **The daemon half of the payload-scaled insert budget actually ships.** v1.5.117's release artifact was published 36 seconds *before* the fix merged, so it carried only the extension side. The result was exactly the failure the fix predicted: a 150 KB `keyboard inserttext --file` was cut off at 30.170s by the daemon's hard-coded budget while the extension would have allowed 308s. The daemon budget now scales with the payload too (30s + 4ms/byte, capped at 180s), and a cross-side test pins the invariant that the daemon always outlasts the extension — otherwise the daemon cuts first and the relay's more specific error never reaches the caller.
@@ -11,7 +23,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.117
 
