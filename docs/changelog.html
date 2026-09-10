@@ -76,6 +76,17 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.120</strong>（2026-09-10）：插入超时的提示不再推荐那个唯一会损坏文本的做法。
+          它原本让调用方「拆成多次 <code>keyboard inserttext</code> 调用」——而这正是 #301 的成因：
+          调用在 Chrome 派发时就返回，不是在编辑器提交时返回，所以下一块会和还没提交的尾巴赛跑，
+          文本错乱但<strong>总长度不变</strong>，于是字数检查会过、坏掉的内容照样发出去。
+          仓库里 <code>commands.rs</code> 的注释早就写明了这件事，报错文案却说了反话。现在如果提到分块，
+          必须同时说清要比对字段的<strong>内容</strong>，绝不能只比长度。另外提示里现在会明说：
+          这次插入<strong>没有被取消</strong>——输掉超时竞速不取消任何东西，命令在竞速开始前就已派发，
+          CDP 也没有撤回原语；实测渲染器在调用方收到报错之后还干了约 14 分钟、内存仍在增长，
+          所以失败后立刻发下一条命令会打在一个仍然忙碌的标签上。提示改为：先让标签安静下来、
+          重读字段，因为部分或全部文本可能已经落地（#315）。每字符耗时也从早期的单一数字
+          改为实测区间 <code>~0.45-0.53s/KB</code>。</li>
         <li><strong>v1.5.119</strong>（2026-09-10）：大载荷插入不再在 ~55 秒死掉、还装成「会话已死」。同一条 CDP 命令被三层预算同时看着——扩展（8s + 2ms/byte，上限 120s）、daemon（30s + 4ms/byte，上限 180s）、客户端 socket 读。v1.5.117/118 把前两层按载荷放宽了，唯独读预算还是平铺 45 秒，于是最外层先切，里层那条更具体的「载荷需要更多时间」永远送不到调用方手里。那 45 秒加上 8 秒的 <code>DAEMON_SHUTDOWN_GRACE</code>，正是实际使用中报上来的那堵 ~55 秒的墙（实测 53.6s / 54.0s / 55.6s）。读预算现在按同一条规则放宽，并有测试把它和 CDP 客户端真正执行的预算钉在一起，防止两边悄悄漂开。没有载荷的命令仍是平铺 45 秒，所以真正卡死的会话失败得和以前一样快。真实天花板变成扩展那 120 秒上限——按 chatgpt.com 上实测的 0.53s/KB 约合 226 KB。另外，「会话无响应」的提示不再猜原因：它原本断言页面还在跑一条长命令，但这个说法只符合其中一次复现、不符合另一次（60 秒 vs 一个多小时），机制从未被观察到。现在只陈述观察到的事实——这个名字被观察到会自己恢复、不是永久占用——并给出立刻可用的做法：换一个 <code>--session</code> 名，或用 <code>adopt</code> 把标签接进新会话。</li>
         <li><strong>v1.5.118</strong>（2026-09-10）：把 v1.5.117 漏发的那半补上。v1.5.117 的发布产物比修复合并早 36 秒切出，只带了扩展侧，结果正是该修复自己预言的失败形态：150KB 的 <code>keyboard inserttext --file</code> 在 30.170 秒被 daemon 硬编码的预算掐断，而扩展侧本可以给到 308 秒。daemon 的预算现在同样按载荷放宽（30s + 4ms/byte，上限 180s），并有一条跨侧不变量测试钉住「daemon 恒宽于扩展」——否则 daemon 先掐断，relay 那条更具体的错误就传不回来。另外，大载荷插入超时不再谎报连接失效：<code>CDP command timed out: Input.insertText</code> 原本会补一句「连接失效，可能是 stale relay/service-worker，请 <code>connect</code> 重连」，把人指去查根本不存在的问题；连接好得很，只是 <code>Input.insertText</code> 按字符计费（富文本编辑器里约 0.45s/KB）、这次载荷超出了预算。现在明说这是尺寸上限、明确不要重连、并给出可行做法；其他命令的超时保持原有诊断。</li>
         <li><strong>v1.5.117</strong>（2026-09-10）：来自 chatgpt-use 会话在真实 ChatGPT 编辑器上的重度使用反馈。<code>keyboard inserttext</code> 新增 <code>--file</code> / <code>--stdin</code>：背靠背分块插入会在每个块边界处把文本搞乱、而总长度守恒（所以字符数校验通过、损坏文本被发出去），根因是 <code>Input.insertText</code> 在 Chrome 派发后即返回、不等编辑器（如 ProseMirror）提交，下一块撞上未落定的尾部；整段一次插入即彻底消除边界，调用方不再需要分块（#301）。<code>site --help</code> 打印自己的帮助，不再落到 534 行通用帮助——agent 反射性跑 <code>&lt;cmd&gt; --help</code>，看不到 site 就当成命令不存在，退回昂贵的 snapshot+click（#299）。<code>site list</code> 过滤掉 <code>_</code> 前缀的加载器内部文件（如自动注入的 <code>_helper</code>）与 <code>*.test.js</code>，只列可运行的适配器（#302）。纯数字的 <code>click</code> 参数不再被静默当选择器发给 DOM、报出误导的「selector matched nothing」，改为明确指出它像坐标并给出 <code>click x y</code> / <code>--coords x,y</code>。<code>press</code> 帮助补上浮层陷阱：<code>--selector</code> 会穿选择器聚焦从而关掉已打开的菜单，浮层内的控件要先按坐标点击再用裸 <code>press</code>。</li>
