@@ -1254,20 +1254,20 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                 }
                 if is_session_unresponsive_error(&e) {
                     kill_stale_daemon(session);
-                    // "rerun to start a fresh daemon" is only true once whatever
-                    // wedged the page has finished. A renderer still busy with a
-                    // long command answers the next attempt exactly the same way,
-                    // which reads as a permanently unusable session name — that is
-                    // what a live report concluded, and the name did in fact
-                    // recover on its own once the page freed up. Say which it is.
+                    // "rerun to start a fresh daemon" is misleading while the
+                    // name is still refusing: the next attempt answers exactly
+                    // the same way, which is what led a live report to conclude
+                    // the name was permanently burned. Observed instead: the
+                    // name became usable again on its own, without any cleanup
+                    // command. State that, and give the caller a move that
+                    // works right now. Why it is busy is not established, so
+                    // this does not guess at one.
                     return Err(format!(
                         "session unresponsive: the stuck '{session}' daemon was stopped \
-                         automatically. If the page was mid-way through a long command (a large \
-                         `keyboard inserttext`, a blocking script), it is still finishing — \
-                         rerunning right now returns this same message until it does, and the \
-                         session name works again afterwards. It is not permanently taken. To \
-                         proceed immediately, use a different --session name, or `adopt` the \
-                         tab into a fresh session."
+                         automatically. Rerunning right now can return this same message for a \
+                         while; the name has been observed to free up on its own, so it is not \
+                         permanently taken. To proceed immediately, use a different --session \
+                         name, or `adopt` the tab into a fresh session."
                     ));
                 }
                 // Non-transient error, fail immediately
@@ -1474,6 +1474,20 @@ mod tests {
             });
             let daemon = daemon_cdp_budget(&cmd);
             let client = client_read_budget(&cmd);
+            // `daemon_cdp_budget` restates what the CDP client actually
+            // enforces, because this side only ever sees the CLI-shaped
+            // command. A restatement that is not checked is a copy waiting to
+            // drift, so pin the two together on every size: if someone retunes
+            // `command_timeout` alone, this fails instead of silently
+            // reopening the gap the branch just closed.
+            let enforced = crate::native::cdp::client::command_timeout(
+                "Input.insertText",
+                Some(&json!({ "text": "a".repeat(len) })),
+            );
+            assert_eq!(
+                daemon, enforced,
+                "connection.rs mirror drifted from the enforced CDP budget at {len} bytes"
+            );
             assert!(
                 client > daemon,
                 "client {client:?} must outlast daemon {daemon:?} for {len} bytes"
