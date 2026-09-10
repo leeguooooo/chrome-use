@@ -386,7 +386,11 @@ pub fn write_kept_tabs(session: &str, kept: &BTreeMap<String, String>) -> Result
 }
 
 /// Record one tab's reason. Returns the reason it replaced, if any.
-pub fn set_kept_tab(session: &str, target_id: &str, reason: &str) -> Result<Option<String>, String> {
+pub fn set_kept_tab(
+    session: &str,
+    target_id: &str,
+    reason: &str,
+) -> Result<Option<String>, String> {
     let mut kept = read_kept_tabs(session);
     let previous = kept.insert(target_id.to_string(), reason.to_string());
     write_kept_tabs(session, &kept)?;
@@ -1525,7 +1529,10 @@ mod tests {
     fn a_kept_reason_round_trips_and_an_empty_map_removes_the_file() {
         let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
         let dir = tempfile::tempdir().expect("tempdir");
-        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().expect("utf-8"));
+        guard.set(
+            "AGENT_BROWSER_SOCKET_DIR",
+            dir.path().to_str().expect("utf-8"),
+        );
         let session = "kept-round-trip";
 
         assert!(super::read_kept_tabs(session).is_empty(), "starts empty");
@@ -1535,7 +1542,9 @@ mod tests {
             "first write replaces nothing"
         );
         assert_eq!(
-            super::read_kept_tabs(session).get("TARGET-A").map(String::as_str),
+            super::read_kept_tabs(session)
+                .get("TARGET-A")
+                .map(String::as_str),
             Some("handoff")
         );
         // Re-keeping the same tab reports what it replaced, so a caller can say
@@ -1552,7 +1561,9 @@ mod tests {
         // Emptying removes the file rather than leaving `{}` behind: "no kept
         // tabs" must have one representation, not two.
         assert!(
-            !dir.path().join(format!("{session}.kept-tabs.json")).exists(),
+            !dir.path()
+                .join(format!("{session}.kept-tabs.json"))
+                .exists(),
             "an empty map must remove the file"
         );
         assert_eq!(
@@ -1566,7 +1577,10 @@ mod tests {
     fn a_malformed_kept_tabs_file_reads_as_empty_not_as_an_error() {
         let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
         let dir = tempfile::tempdir().expect("tempdir");
-        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().expect("utf-8"));
+        guard.set(
+            "AGENT_BROWSER_SOCKET_DIR",
+            dir.path().to_str().expect("utf-8"),
+        );
         let session = "kept-malformed";
         std::fs::write(
             dir.path().join(format!("{session}.kept-tabs.json")),
