@@ -948,7 +948,7 @@ fn run_status(session: &str, json_mode: bool) {
     // Printed next to the driving profile below, so it must be that profile's
     // version, not the last `hello` writer's (#319).
     let extension_version = connect::relay_ext_version_driving();
-    let profile = connect::relay_ext_profile();
+    let profile = connect::driving_profile();
     let current = inventory.sessions.iter().find(|item| item.name == session);
 
     if json_mode {
