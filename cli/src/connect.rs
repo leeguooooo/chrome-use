@@ -3260,6 +3260,11 @@ async fn nm_host_main() {
     if let Some(id) = &bound_profile_id {
         let _ = std::fs::remove_file(relay_url_path_for(id));
         let _ = std::fs::remove_file(relay_ext_profile_path_for(id));
+        // The version sidecar belongs to this set too. Leaving it behind is the
+        // same shape as the bug this fix is about: a per-profile file added
+        // without being added to the group that gets written, read and cleaned
+        // together.
+        let _ = std::fs::remove_file(relay_ext_version_path_for(id));
     }
 }
 
