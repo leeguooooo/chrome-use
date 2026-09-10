@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Extension Changelog · chrome-use docs</title>
+  <meta name="description" content="Version history of the ab-connect extension (the browser plugin that drives real Chrome): from 0.5.25's generic ABExt.call door back through self-update, attached-tab reporting, and the no-debugger-banner work, newest first." />
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="extension-changelog" data-lang="en">
+  <div id="du-topbar"></div>
+  <div class="du-shell">
+    <nav id="du-sidebar"></nav>
+    <main class="du-main">
+
+      <p class="du-eyebrow">Reference</p>
+      <div class="du-title-row">
+        <h1>Extension Changelog</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        <strong>ab-connect</strong> is the browser extension that drives your real Chrome, talking to the
+        CLI over native messaging. It has <span class="mark">its own version numbers</span>
+        (<code>0.5.x</code>), separate from the CLI. <code>chrome-use extension status</code> shows which
+        version is installed and which the store serves. Since 0.5.23 the extension asks Chrome to check
+        for updates itself, so most users never update it by hand.
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">📝 Looking for the CLI?</div>
+        This page is the <strong>extension</strong> history. The <code>chrome-use</code> command line's own
+        versions (<code>1.5.x</code>) are on the <a href="/en/changelog.html">CLI Changelog</a>. The two ship
+        independently: the extension through the Chrome Web Store, the CLI through GitHub Releases.
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>0.5.x</h2>
+      <ul class="du-changelog">
+        <li><strong>0.5.25</strong> (2026-09-10): one generic door, <code>ABExt.call</code> — a CLI feature
+          that only needs an allow-listed <code>chrome.tabs / tabGroups / windows / downloads / webNavigation</code>
+          method no longer needs a new extension release. Mutating calls are allowed only on tabs the agent
+          created (adopted tabs stay read-only, <code>windows.create/remove</code> are refused, and
+          <code>debugger / identity / storage / runtime / management</code> are never reachable this way). New
+          <code>ABExt.state</code> returns everything the extension holds, owns and is configured to in one call.
+          Permissions unchanged, so the update installs without re-approval (#294).</li>
+        <li><strong>0.5.24</strong> (2026-09-09): <code>tabs</code> reports the tab the relay is
+          <strong>actually attached to</strong>, not only the one the session requested, and speaks up when the two
+          disagree — so a dropped relay tab no longer reads like a permissions bug (#279).</li>
+        <li><strong>0.5.23</strong> (2026-09-09): <strong>self-update</strong> — the extension asks Chrome to
+          check the store instead of waiting for its own multi-hour schedule, and applies a downloaded update the
+          moment no tab is attached. No new permission; an update that never finds a quiet moment is applied by
+          Chrome when the worker stops (#272).</li>
+        <li><strong>0.5.22</strong> (2026-09-09): raised the trustworthiness of relay recovery, observations, and
+          connection status.</li>
+        <li><strong>0.5.21</strong> (2026-09-08): tab-group naming for <code>session name</code> — name the session
+          at the start of a task, before opening tabs (#236).</li>
+        <li><strong>0.5.20</strong> (2026-09-04): fixed a batch of upload, select, idle and relay regressions (#212).</li>
+        <li><strong>0.5.19</strong> (2026-09-02): fixed #201–#206 (idle detach, press/xpath, CJK read-back, click
+          focus, cwd session, shadow-DOM snapshot).</li>
+        <li><strong>0.5.18</strong> (2026-08-30): converged relay, ref and macOS leak issues; an explicit
+          <code>open</code>/<code>navigate</code> now recovers a renderer-scoped <code>Page.navigate</code> timeout
+          through Chrome's browser-level tab API, keeping the same session and tab (#198).</li>
+        <li><strong>0.5.17</strong> (2026-08-24): store package, permission notes completed.</li>
+        <li><strong>0.5.16</strong> (2026-07-31): fixed recording, snapshot, find and frozen-tab issues; the
+          <code>tab inspect</code> probe channel dates from here (#151 #154–#157).</li>
+        <li><strong>0.5.14 – 0.5.15</strong> (2026-07-28): fixed open-relay, dialog, status and site-adapter issues,
+          plus release-review follow-ups.</li>
+        <li><strong>0.5.13</strong> (2026-07-24): native downloads and a versioned local HTTP API (#132).</li>
+        <li><strong>0.5.12</strong> (2026-07-16): agent tabs open in a <strong>dedicated window</strong> by default,
+          plus a smarter default profile choice (#120).</li>
+        <li><strong>0.5.10</strong> (2026-07-06): traffic links in the popup footer; silenced the native-host lastError.</li>
+        <li><strong>0.5.9</strong> (2026-07-02): added <code>identity</code> / <code>identity.email</code> so the hello
+          carries the profile's account email.</li>
+        <li><strong>0.5.8</strong> (2026-06-30): pierced the OAuth GSI sign-in iframe (OOPIF) and early-attached login popups.</li>
+        <li><strong>0.5.7</strong> (2026-06-29): reconnect the relay on wake-from-sleep via <code>chrome.idle</code> (#72).</li>
+        <li><strong>0.5.6</strong> (2026-06-29): stopped persisting adopted tabs, clearing a stuck "debugging this browser" banner (#71).</li>
+        <li><strong>0.5.5</strong> (2026-06-28): <strong>attach only the agent's own tabs</strong> — no debugger banner on user pages (#68).</li>
+        <li><strong>0.5.4</strong> (2026-06-27): stopped the reattach retry storm on permanently-unattachable tabs (#64).</li>
+        <li><strong>0.5.3</strong> (2026-06-26): the hello reports which Chrome profile the relay is driving (#60).</li>
+        <li><strong>0.5.2</strong> (2026-06-26): a proactive 20s heartbeat so the MV3 worker never idle-drops the relay (#59).</li>
+        <li><strong>0.5.0 – 0.5.1</strong> (2026-06-24): icon and UX overhaul (friendly icon, polished popup, options page, agent cursor); rounded transparent icon.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>0.4.x and earlier (early history)</h2>
+      <p>
+        The 0.4 series is where the relay was made reliable: a stable per-tab session id, auto-reconnect after a
+        cross-process detach, recovery of a churned-tabId session by its stable CDP <code>targetId</code>, loud
+        failure on a stale sessionId instead of routing to a random tab, plus <code>adopt</code> for pre-existing
+        tabs, group-scoped <code>Target.getTargets</code>, and default idle-shutdown with <code>keep</code>.
+        Before that, <code>0.1.0 – 0.3.0</code> (2026-06-09) laid the foundation: the MV3 connect extension adapted
+        from openclaw-browser-relay, the zero-token native-messaging transport, and force-install through a Chrome
+        config profile (no Load-unpacked).
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Per-commit diffs: GitHub</div>
+        This page summarizes each version. For the full diff of any extension version, see
+        <a href="https://github.com/leeguooooo/chrome-use/commits/main/extensions/ab-connect">ab-connect's commit history on GitHub</a>.
+      </div>
+
+    </main>
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

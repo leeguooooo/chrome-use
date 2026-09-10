@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>插件更新日志 · chrome-use 文档</title>
+  <meta name="description" content="ab-connect 扩展（驱动真实 Chrome 的浏览器插件）的版本历史：从 0.5.25 的通用直通 ABExt.call，到自更新、附着标签上报、无调试横幅等，按版本号新到旧排列。" />
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+</head>
+
+<body data-page="extension-changelog" data-lang="zh">
+  <div id="du-topbar"></div>
+  <div class="du-shell">
+    <nav id="du-sidebar"></nav>
+    <main class="du-main">
+
+      <p class="du-eyebrow">参考 / Reference</p>
+      <div class="du-title-row">
+        <h1>插件更新日志</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        <strong>ab-connect</strong> 是驱动你真实 Chrome 的浏览器扩展，通过原生消息和 CLI 通信。
+        它有<span class="mark">独立于 CLI 的版本号</span>（<code>0.5.x</code>）。
+        <code>chrome-use extension status</code> 会告诉你装的是哪个版本、商店发的是哪个版本。
+        0.5.23 起扩展会自己催 Chrome 检查更新，所以大多数用户无需手动升级。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">📝 找 CLI 的版本？</div>
+        这一页是<strong>扩展</strong>的历史。<code>chrome-use</code> 命令行本身的版本（<code>1.5.x</code>）在
+        <a href="/changelog.html">CLI 更新日志</a>。两者独立发布：扩展走 Chrome Web Store，CLI 走 GitHub Releases。
+      </div>
+
+      <hr class="du-divider" />
+
+      <h2>0.5.x</h2>
+      <ul class="du-changelog">
+        <li><strong>0.5.25</strong>（2026-09-10）：一扇通用的门 <code>ABExt.call</code> —— CLI 想调
+          <code>chrome.tabs / tabGroups / windows / downloads / webNavigation</code> 的白名单方法时，不再需要发一个新扩展版本。
+          改动类调用只允许作用在 agent 自己创建的标签上（adopted 标签只读、<code>windows.create/remove</code> 不开、
+          <code>debugger / identity / storage / runtime / management</code> 永远不经这扇门）。新增 <code>ABExt.state</code>，
+          一次返回扩展持有、拥有与配置的全部状态。权限不变，升级不触发重新授权（#294）。</li>
+        <li><strong>0.5.24</strong>（2026-09-09）：<code>tabs</code> 报出中继<strong>实际附着</strong>的标签，而不只是会话请求的那个；
+          两者不一致时明确出声，避免把中继掉标签的情况误读成权限问题（#279）。</li>
+        <li><strong>0.5.23</strong>（2026-09-09）：<strong>自更新</strong> —— 扩展主动请 Chrome 去商店查更新，
+          而不是等它自己的多小时排期；下载好的更新在没有标签附着时就地应用。不需要新权限；
+          一直找不到空隙的更新，会在 worker 停止时由 Chrome 应用（#272）。</li>
+        <li><strong>0.5.22</strong>（2026-09-09）：提高中继恢复、观察结果与连接状态的可信度。</li>
+        <li><strong>0.5.21</strong>（2026-09-08）：配合 <code>session name</code> 的标签组命名，任务开始、开标签之前先给会话起名（#236）。</li>
+        <li><strong>0.5.20</strong>（2026-09-04）：修复上传、select、idle 与中继的一批回归（#212）。</li>
+        <li><strong>0.5.19</strong>（2026-09-02）：修复 #201–#206（idle 分离、press/xpath、中文读回、点击移焦、cwd 会话、shadow-DOM 快照）。</li>
+        <li><strong>0.5.18</strong>（2026-08-30）：收敛中继、ref 与 macOS 泄漏问题；显式 <code>open</code>/<code>navigate</code> 遇到渲染器级
+          <code>Page.navigate</code> 超时时，通过浏览器级标签 API 恢复，保住同一会话和标签（#198）。</li>
+        <li><strong>0.5.17</strong>（2026-08-24）：上架包，权限说明补齐。</li>
+        <li><strong>0.5.16</strong>（2026-07-31）：修复录像、快照、find 与冻结标签的问题；<code>tab inspect</code> 的探测通道自此可用（#151 #154–#157）。</li>
+        <li><strong>0.5.14 – 0.5.15</strong>（2026-07-28）：修复开启中继、对话框、status 与站点适配器的问题，以及发版评审的跟进。</li>
+        <li><strong>0.5.13</strong>（2026-07-24）：原生下载与带版本的本地 HTTP API（#132）。</li>
+        <li><strong>0.5.12</strong>（2026-07-16）：默认把 agent 标签开在<strong>独立窗口</strong>里，加上更聪明的默认 profile 选择（#120）。</li>
+        <li><strong>0.5.10</strong>（2026-07-06）：popup 底部流量链接，静默原生宿主的 lastError。</li>
+        <li><strong>0.5.9</strong>（2026-07-02）：加 <code>identity</code> / <code>identity.email</code> 权限，让 hello 带上该 profile 的账号邮箱。</li>
+        <li><strong>0.5.8</strong>（2026-06-30）：穿透 OAuth GSI 登录 iframe（OOPIF），提前附着登录弹窗。</li>
+        <li><strong>0.5.7</strong>（2026-06-29）：通过 <code>chrome.idle</code> 在睡眠唤醒后重连中继（#72）。</li>
+        <li><strong>0.5.6</strong>（2026-06-29）：不再持久化 adopted 标签，清掉卡住的「正在调试此浏览器」横幅（#71）。</li>
+        <li><strong>0.5.5</strong>（2026-06-28）：<strong>只附着 agent 自己的标签</strong>，用户页面上不再出现调试横幅（#68）。</li>
+        <li><strong>0.5.4</strong>（2026-06-27）：对永远无法附着的标签停止重连风暴（#64）。</li>
+        <li><strong>0.5.3</strong>（2026-06-26）：hello 里报出中继正在驱动哪个 Chrome profile（#60）。</li>
+        <li><strong>0.5.2</strong>（2026-06-26）：主动 20 秒心跳，MV3 worker 不再空闲掉线中继（#59）。</li>
+        <li><strong>0.5.0 – 0.5.1</strong>（2026-06-24）：图标与 UX 翻新（友好图标、打磨的 popup、options 页、agent 光标），圆角透明图标。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>0.4.x 与更早（早期历史）</h2>
+      <p>
+        0.4 系列是把中继做稳的一段：稳定的 per-tab 会话 id、跨进程分离后自动重连、
+        用稳定的 CDP <code>targetId</code> 恢复被换了 tabId 的会话、stale sessionId 时响亮失败而不是路由到随机标签、
+        以及 <code>adopt</code> 读取已有标签、按标签组 scope 的 <code>Target.getTargets</code>、默认空闲关闭 + <code>keep</code>。
+        再往前，<code>0.1.0 – 0.3.0</code>（2026-06-09）是奠基：从 openclaw-browser-relay 改写的 MV3 连接扩展、
+        零 token 的原生消息传输、以及通过 Chrome 配置 profile 强制安装（无需 Load-unpacked）。
+      </p>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 逐条 commit diff：GitHub</div>
+        这一页按版本汇总要点。想看某个扩展版本的完整 diff，去
+        <a href="https://github.com/leeguooooo/chrome-use/commits/main/extensions/ab-connect">GitHub 上 ab-connect 的提交历史</a>。
+      </div>
+
+    </main>
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
