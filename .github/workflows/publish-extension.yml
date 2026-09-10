@@ -61,12 +61,19 @@ jobs:
           CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
           MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
           import json, os, urllib.parse, urllib.request, zipfile
           ITEM = "knfcmbamhjmaonkfnjhldjedeobeafmk"
           zver = json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json"))["version"]
+          def decide(value):
+              # Only this line belongs in GITHUB_OUTPUT. Redirecting the whole
+              # script there made the ::notice:: line parse as an output
+              # assignment and failed the step ("Invalid format").
+              with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+                  fh.write(f"publish={value}\n")
+
           if os.environ.get("MANUAL") == "true":
-              print("publish=true"); raise SystemExit
+              decide("true"); raise SystemExit
           tok = json.load(urllib.request.urlopen(urllib.request.Request(
               "https://oauth2.googleapis.com/token",
               data=urllib.parse.urlencode({
@@ -79,7 +86,7 @@ jobs:
               headers={"Authorization": f"Bearer {tok}", "x-goog-api-version": "2"})
           cur = json.load(urllib.request.urlopen(req)).get("crxVersion")
           print(f"::notice::store draft version {cur}, packaged {zver}")
-          print("publish=" + ("false" if cur == zver else "true"))
+          decide("false" if cur == zver else "true")
           PY
       - name: Publish
         if: steps.decide.outputs.publish == 'true'
