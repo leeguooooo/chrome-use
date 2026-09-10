@@ -1705,7 +1705,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "site" => handle_site(cmd, state).await,
             "script" => super::script::handle_script(cmd, state).await,
             "close" => handle_close(state).await,
-            "keep" => handle_keep(state).await,
+            "keep" => handle_keep(cmd, state).await,
             "stealth_status" => handle_stealth_status(state).await,
             "snapshot" => handle_snapshot(cmd, state).await,
             "select_text" => handle_select_text(cmd, state).await,
@@ -3984,10 +3984,53 @@ async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
 /// user" half of the auto-close-on-idle cleanup: scratch tabs get closed, tabs
 /// the agent explicitly `keep`s stay. (Adopted user tabs are never owned, so
 /// they're already safe.)
-async fn handle_keep(state: &mut DaemonState) -> Result<Value, String> {
+async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let release = cmd
+        .get("release")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let reason = cmd
+        .get("reason")
+        .and_then(|value| value.as_str())
+        .unwrap_or("deliverable");
+    let session = super::browser::DAEMON_SESSION.get().cloned();
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
     let target_id = mgr.active_target_id()?.to_string();
     let session_id = mgr.active_session_id()?.to_string();
+
+    if release {
+        // Only a recorded keep can be undone. The record is written solely for a
+        // tab that was owned when it was kept, so restoring ownership from it
+        // gives back a right we held — it never mints one. Releasing "whatever
+        // is active" would do exactly that, over the user's own tab.
+        let recorded = session
+            .as_deref()
+            .map(crate::connection::read_kept_tabs)
+            .unwrap_or_default();
+        let Some(was_kept_as) = recorded.get(&target_id).cloned() else {
+            return Err(format!(
+                "keep --release: this session has no `keep` record for the active tab ({target_id}). \
+                 Only a tab this session created and then kept can be taken back — otherwise the \
+                 command would claim the right to close a tab it never opened. Run `tab list` to \
+                 see which tabs are marked kept."
+            ));
+        };
+        let reowned = mgr.reown_target(&target_id)?;
+        if let Some(session) = session.as_deref() {
+            crate::connection::clear_kept_tab(session, &target_id)?;
+        }
+        return Ok(json!({
+            "released": target_id,
+            "wasKeptAs": was_kept_as,
+            "reowned": reowned,
+            // Say what did NOT happen: the tab is not back in the session's tab
+            // group. Ungrouping is a one-way door today — the extension exposes
+            // `ABExt.ungroupTab` but no re-group command — and implying the
+            // group was restored would be a second false statement.
+            "note": "ownership restored — this tab closes with the session again.                      It is NOT back in the session's tab group; the extension has no re-group                      command, so it stays ungrouped.",
+        }));
+    }
+
     let was_owned = mgr.unown_target(&target_id)?;
     // Best-effort: ask the extension to ungroup the tab (relay only; no-ops on a
     // launched browser or an older extension that doesn't know ABExt.ungroupTab).
@@ -3999,10 +4042,27 @@ async fn handle_keep(state: &mut DaemonState) -> Result<Value, String> {
             None,
         )
         .await;
+    // Record the reason ONLY when we actually owned the tab. `keep` on a tab we
+    // merely adopted is a no-op for ownership, and writing a record for it would
+    // let `--release` later claim deletion rights over the user's own tab.
+    let previously = if was_owned {
+        match session.as_deref() {
+            Some(session) => crate::connection::set_kept_tab(session, &target_id, reason)?,
+            None => None,
+        }
+    } else {
+        None
+    };
     Ok(json!({
         "kept": target_id,
         "wasOwned": was_owned,
-        "note": "tab left for the user — exempt from auto-close, removed from the session tab group",
+        "as": if was_owned { Some(reason) } else { None },
+        "previously": previously,
+        "note": if was_owned {
+            "tab left for the user — exempt from auto-close, removed from the session tab group"
+        } else {
+            "this session did not create this tab, so there was nothing to release: it was already              exempt from auto-close. No keep reason was recorded."
+        },
     }))
 }
 
@@ -8064,6 +8124,28 @@ async fn handle_tab_list(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
             let is_attached = attached.contains(tid);
             if let Some(obj) = tab.as_object_mut() {
                 obj.insert("relayAttached".to_string(), json!(is_attached));
+            }
+        }
+    }
+    // Why a tab is still open, for tabs this session deliberately left behind.
+    // `keep` exempts a tab by DROPPING ownership, which erases the only record —
+    // so without this the row renders `foreign` and `tab list` cannot answer
+    // "why is this one still here?". Read here rather than in `tab_list()` so
+    // the manager stays free of filesystem access. Absent record = say nothing.
+    let kept = super::browser::DAEMON_SESSION
+        .get()
+        .map(|session| crate::connection::read_kept_tabs(session))
+        .unwrap_or_default();
+    if !kept.is_empty() {
+        for tab in tabs.iter_mut() {
+            let Some(target_id) = tab.get("targetId").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(reason) = kept.get(target_id).cloned() else {
+                continue;
+            };
+            if let Some(object) = tab.as_object_mut() {
+                object.insert("keptAs".to_string(), json!(reason));
             }
         }
     }

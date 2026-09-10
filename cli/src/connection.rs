@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -340,6 +340,67 @@ pub fn created_target_count(session: &str) -> usize {
 /// open; only the session's claim on them is forgotten.
 pub fn forget_created_targets(session: &str) -> Result<(), String> {
     write_created_targets(session, "", &HashSet::new())
+}
+
+/// Why a `keep` tab was left behind, recorded per session.
+///
+/// `keep` works by DROPPING ownership: the target leaves `created_targets` and
+/// the sidecar, which is what exempts it from the shutdown sweep. That erases
+/// the only record we had, so a kept tab is afterwards indistinguishable from a
+/// tab we never touched — `tab list` renders it `foreign` and cannot say why it
+/// is still open. This store is the missing half: the REASON, kept separately.
+///
+/// **It grants no rights.** Deletion rights come only from
+/// `<session>.created-targets.json`; nothing here is ever consulted to decide
+/// whether a tab may be closed. Keeping the two apart is deliberate — a second
+/// source of deletion rights is exactly the v1.5.95 shape. This file is
+/// presentation and bookkeeping, so it needs no endpoint guard and fails open:
+/// an unreadable or malformed file means "no reason recorded", never "closable".
+fn get_kept_tabs_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{}.kept-tabs.json", session))
+}
+
+/// Read the recorded reasons as `target_id -> reason`. Missing or malformed
+/// reads as empty: a lost reason costs a label, never a tab.
+pub fn read_kept_tabs(session: &str) -> BTreeMap<String, String> {
+    fs::read_to_string(get_kept_tabs_path(session))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Replace the whole map. An empty map removes the file rather than leaving
+/// `{}` behind, so "no kept tabs" has one representation, not two.
+pub fn write_kept_tabs(session: &str, kept: &BTreeMap<String, String>) -> Result<(), String> {
+    let path = get_kept_tabs_path(session);
+    if kept.is_empty() {
+        return match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.to_string()),
+        };
+    }
+    fs::create_dir_all(get_socket_dir()).map_err(|error| error.to_string())?;
+    let encoded = serde_json::to_vec(kept).map_err(|error| error.to_string())?;
+    fs::write(&path, encoded).map_err(|error| error.to_string())
+}
+
+/// Record one tab's reason. Returns the reason it replaced, if any.
+pub fn set_kept_tab(session: &str, target_id: &str, reason: &str) -> Result<Option<String>, String> {
+    let mut kept = read_kept_tabs(session);
+    let previous = kept.insert(target_id.to_string(), reason.to_string());
+    write_kept_tabs(session, &kept)?;
+    Ok(previous)
+}
+
+/// Forget one tab's reason. Returns the reason that was recorded, if any.
+pub fn clear_kept_tab(session: &str, target_id: &str) -> Result<Option<String>, String> {
+    let mut kept = read_kept_tabs(session);
+    let previous = kept.remove(target_id);
+    if previous.is_some() {
+        write_kept_tabs(session, &kept)?;
+    }
+    Ok(previous)
 }
 
 pub fn has_created_targets(session: &str) -> bool {
@@ -1459,6 +1520,67 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
 mod tests {
     use super::{client_read_budget, daemon_cdp_budget};
     use serde_json::json;
+
+    #[test]
+    fn a_kept_reason_round_trips_and_an_empty_map_removes_the_file() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().expect("utf-8"));
+        let session = "kept-round-trip";
+
+        assert!(super::read_kept_tabs(session).is_empty(), "starts empty");
+        assert_eq!(
+            super::set_kept_tab(session, "TARGET-A", "handoff").expect("set"),
+            None,
+            "first write replaces nothing"
+        );
+        assert_eq!(
+            super::read_kept_tabs(session).get("TARGET-A").map(String::as_str),
+            Some("handoff")
+        );
+        // Re-keeping the same tab reports what it replaced, so a caller can say
+        // "was handoff, now deliverable" instead of silently overwriting.
+        assert_eq!(
+            super::set_kept_tab(session, "TARGET-A", "deliverable").expect("re-set"),
+            Some("handoff".to_string())
+        );
+
+        assert_eq!(
+            super::clear_kept_tab(session, "TARGET-A").expect("clear"),
+            Some("deliverable".to_string())
+        );
+        // Emptying removes the file rather than leaving `{}` behind: "no kept
+        // tabs" must have one representation, not two.
+        assert!(
+            !dir.path().join(format!("{session}.kept-tabs.json")).exists(),
+            "an empty map must remove the file"
+        );
+        assert_eq!(
+            super::clear_kept_tab(session, "TARGET-A").expect("clear again"),
+            None,
+            "clearing an absent tab is not an error"
+        );
+    }
+
+    #[test]
+    fn a_malformed_kept_tabs_file_reads_as_empty_not_as_an_error() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().expect("utf-8"));
+        let session = "kept-malformed";
+        std::fs::write(
+            dir.path().join(format!("{session}.kept-tabs.json")),
+            b"{ not json",
+        )
+        .expect("write garbage");
+
+        // This store is labels, never rights: a lost reason costs a label, and
+        // must never be able to fail a command or imply a tab is closable.
+        assert!(
+            super::read_kept_tabs(session).is_empty(),
+            "a malformed file reads as 'no reason recorded'"
+        );
+    }
 
     #[test]
     fn the_client_read_budget_always_outlasts_the_daemon_budget() {

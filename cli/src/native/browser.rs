@@ -2436,6 +2436,28 @@ impl BrowserManager {
         self.forget_created_target(target_id)
     }
 
+    /// Re-take a tab this session created and later released with `keep`.
+    ///
+    /// The caller MUST establish that we created it — `handle_keep` does that by
+    /// requiring a `kept-tabs` record, which is only ever written for a target
+    /// that was owned at the time it was kept. Re-owning on any other basis
+    /// would mint deletion rights over a tab we never created, which is the
+    /// v1.5.95 shape: rights must be restored from a record, never inferred
+    /// from the fact that a tab happens to be active right now.
+    ///
+    /// Returns whether this call changed anything (false = already owned).
+    pub fn reown_target(&mut self, target_id: &str) -> Result<bool, String> {
+        if self.created_targets.contains(target_id) {
+            return Ok(false);
+        }
+        self.created_targets.insert(target_id.to_string());
+        if let Err(error) = self.persist_created_targets() {
+            self.created_targets.remove(target_id);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
     /// Returns true if this manager was connected via CDP (as opposed to local launch).
     pub fn is_cdp_connection(&self) -> bool {
         self.browser_process.is_none()

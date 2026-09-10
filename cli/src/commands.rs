@@ -1867,7 +1867,51 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
         // `keep`: leave the active tab for the user — exempt it from the daemon's
         // auto-close/idle cleanup and remove it from the session's tab group.
-        "keep" => Ok(json!({ "id": id, "action": "keep" })),
+        //
+        // `--as <reason>` records WHY it was left, because keeping works by
+        // dropping ownership and that erases the only record: afterwards a kept
+        // tab is indistinguishable from one we never touched, so `tab list`
+        // cannot answer "why is this still open?". Two reasons, from the tab
+        // model this mirrors: `deliverable` (the tab IS the result — an edited
+        // doc, a checkout page) and `handoff` (next turn resumes here — waiting
+        // on a login, an approval, a code). Bare `keep` stays `deliverable`, so
+        // every existing caller keeps its current meaning.
+        "keep" => {
+            const REASONS: [&str; 2] = ["deliverable", "handoff"];
+            const USAGE: &str = "keep [--as deliverable|handoff] | keep --release";
+            match rest.first().copied() {
+                None => Ok(json!({ "id": id, "action": "keep", "reason": "deliverable" })),
+                Some("--release") => {
+                    if let Some(extra) = rest.get(1) {
+                        return Err(ParseError::InvalidValue {
+                            message: format!("keep --release takes no arguments (got `{extra}`)"),
+                            usage: USAGE,
+                        });
+                    }
+                    Ok(json!({ "id": id, "action": "keep", "release": true }))
+                }
+                Some("--as") => {
+                    let reason = rest.get(1).copied().ok_or(ParseError::InvalidValue {
+                        message: "keep --as requires a reason".to_string(),
+                        usage: USAGE,
+                    })?;
+                    if !REASONS.contains(&reason) {
+                        return Err(ParseError::InvalidValue {
+                            message: format!(
+                                "`{reason}` is not a keep reason. Use `deliverable` (the tab is \
+                                 the result) or `handoff` (next turn resumes here)."
+                            ),
+                            usage: USAGE,
+                        });
+                    }
+                    Ok(json!({ "id": id, "action": "keep", "reason": reason }))
+                }
+                Some(other) => Err(ParseError::InvalidValue {
+                    message: format!("unknown option `{other}` for keep"),
+                    usage: USAGE,
+                }),
+            }
+        }
 
         // === Stealth self-check ===
         "stealth" => {
@@ -4952,6 +4996,37 @@ pub fn shell_words_split(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keep_defaults_to_deliverable_and_validates_its_reason() {
+        let flags = default_flags();
+        let parse = |args: &[&str]| {
+            let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            parse_command(&owned, &flags)
+        };
+
+        // Bare `keep` must keep meaning exactly what it meant before the flags
+        // existed, or every existing caller changes behaviour on upgrade.
+        let bare = parse(&["keep"]).expect("bare keep parses");
+        assert_eq!(bare["action"], "keep");
+        assert_eq!(bare["reason"], "deliverable");
+        assert!(bare.get("release").is_none());
+
+        let handoff = parse(&["keep", "--as", "handoff"]).expect("--as handoff parses");
+        assert_eq!(handoff["reason"], "handoff");
+
+        let released = parse(&["keep", "--release"]).expect("--release parses");
+        assert_eq!(released["release"], true);
+        // `--release` carries no reason: it is the undo, not another way to keep.
+        assert!(released.get("reason").is_none());
+
+        // An unknown reason is refused rather than silently recorded, otherwise
+        // `tab list` would show a label nothing else understands.
+        assert!(parse(&["keep", "--as", "important"]).is_err());
+        assert!(parse(&["keep", "--as"]).is_err());
+        assert!(parse(&["keep", "--unknown"]).is_err());
+        assert!(parse(&["keep", "--release", "extra"]).is_err());
+    }
 
     fn default_flags() -> Flags {
         Flags {
