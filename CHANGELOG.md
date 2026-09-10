@@ -1,8 +1,19 @@
 # Changelog
 
-## 1.5.121
+## 1.5.122
 
 <!-- release:start -->
+### Bug Fixes
+
+- **With two Chrome profiles connected, `status` reported the other profile's extension version (#319).** It printed `driving 27ade1bc-…` and `extension: live 0.5.21, expected 0.5.26` together, where the `0.5.21` belonged to a different profile — so the reader is told to update an extension that is already current. The cause was a missing dimension rather than a race: the version sidecar is a single file written by whichever worker sent `hello` last, while "which profile is driving" is decided separately by focus timestamp. #60 had already given the *endpoint* per-profile treatment for exactly this reason ("regardless of who last clobbered the generic file"); the version never followed. It now has its own per-profile sidecar, written next to the endpoint on `hello` and removed with it on disconnect, and the places that print a version next to a profile read the driving profile's copy. An extension too old to report a profile id still writes only the generic file, so those keep working rather than degrading to "unknown". CLI-side only — no extension update needed.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.121
+
 ### Features
 
 - **`keep` now says why a tab was left behind, and can be undone (#290).** `keep` exempts a tab from the shutdown sweep by *dropping ownership*, which erased the only record we had — afterwards the tab was indistinguishable from one we never touched, so `tab list` showed it as `foreign` and could not answer "why is this still open?". It now takes a reason: `keep --as deliverable` for a tab that IS the result (an edited document, a checkout the user must finish), `keep --as handoff` for one a later turn resumes from (waiting on a login, an approval, a code). Bare `keep` still means `deliverable`, so existing callers are unchanged. `tab list` marks them `[kept: deliverable]` / `[kept: handoff]`. `keep --release` takes a tab back so it closes with the session again — and only works on a tab this session created and then kept, because the recorded keep is the proof: without it the command would claim the right to close a tab it never opened. The tab does not rejoin the session's tab group; ungrouping is one-way today, and the message says so rather than implying otherwise. `keep` also gained its own `--help`, which it never had.
@@ -14,7 +25,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.120
 
