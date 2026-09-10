@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.116
+## 1.5.117
 
 <!-- release:start -->
+### Bug Fixes
+
+- **`keyboard inserttext` gains `--file` / `--stdin` — and chunking a large insert no longer corrupts it (#301).** Back-to-back `keyboard inserttext` calls scrambled text at each chunk boundary while preserving total length, so a char-count check passed and the scrambled text shipped. The cause: `Input.insertText` returns when Chrome dispatched the insert, not when the editor (e.g. ProseMirror) committed it, so the next chunk raced the uncommitted tail. Reading the whole payload from a file or stdin sends it in one `Input.insertText`, removing the boundary entirely — the fix a caller actually wants, since it removes the need to chunk. Reported by the chatgpt-use session from live ChatGPT-composer use.
+- **`site --help` prints site's own help (#299).** It was the only subcommand that fell through to the 534-line top-level help, which an agent reads as "that command does not exist" — then falls back to the expensive snapshot+click path adapters exist to replace.
+- **`site list` no longer lists loader internals as adapters (#302).** `_`-prefixed files (family helpers like `_helper`, injected automatically) and `*.test.js` are filtered, so the list holds only runnable `name/command` adapters.
+- **A purely numeric `click` argument errors instead of silently becoming a selector.** `click 1155` (e.g. a coordinate that lost its pair to a stray token) used to be sent to the DOM as a selector and reported the misleading "selector matched nothing"; it now says the argument looks like a coordinate and points at `click x y` / `click --coords x,y`. Prompted by a chatgpt-use report; the two-number form itself parses correctly through the full pipeline.
+- **`press` help documents the popover trap.** `press <key> --selector <sel>` focuses through the selector, which dismisses an open popover/menu; to press a key against a control inside one, click it by coordinate first, then use a bare `press`.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.116
+
 ### New Features
 
 - **One extension door instead of one extension release per feature (ab-connect 0.5.25).** `ABExt.call` forwards one allow-listed `chrome.*` call: `tabs`, `tabGroups`, `windows`, `downloads`, `webNavigation`, read methods freely, mutating methods only on tabs this relay created (adopted tabs stay read-only; `windows.create` / `windows.remove` are refused outright; `debugger`, `identity`, `storage`, `runtime`, `management` are never reachable this way). Of the eleven hand-written `ABExt.*` handlers shipped between 0.5.13 and 0.5.24, seven are wrappers over calls this door admits; behaviour fixes inside the worker still need releases, which 0.5.23's self-update delivers without user action. `ABExt.state` returns everything the extension holds, owns and is configured to in one round trip. The manifest's permissions are unchanged, so the update installs without re-approval.
@@ -11,7 +26,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.115
 
