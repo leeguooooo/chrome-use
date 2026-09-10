@@ -5531,7 +5531,10 @@ mod tests {
             &args("keyboard inserttext --file /no/such/cu-path-xyz.txt"),
             &default_flags(),
         );
-        assert!(result.is_err(), "a missing --file path must error, not insert the flag text");
+        assert!(
+            result.is_err(),
+            "a missing --file path must error, not insert the flag text"
+        );
     }
 
     #[test]

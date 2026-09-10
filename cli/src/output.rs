@@ -2368,6 +2368,11 @@ target first when you can't be sure focus is where you left it. A preceding
 `click <input>` moves focus to that input, also over the extension relay
 where clicks are DOM-dispatched, so click-then-press works.
 
+To press a key against a control INSIDE an open popover/menu, do NOT use
+--selector: focusing through a selector moves focus out of the popover and
+dismisses it. Click the control by a real coordinate first (`click x y`),
+then use a bare `press` on the now-focused control.
+
 For keys whose only effect depends on page JavaScript (Arrow/Home/End/
 PageUp/PageDown on a text field, Escape, Enter on a bare input outside a
 form) press probes for keydown/keyup/keypress listeners on the focused
