@@ -614,6 +614,27 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     usage:
                         "click <selector> | click <x> <y> | click --coords <x>,<y> [--new-tab] [--follow]",
                 })?;
+            // A purely numeric first arg is never a valid CSS selector or @ref,
+            // so it is almost certainly a coordinate that failed to parse as a
+            // pair — e.g. an odd token count when a stray value slipped into the
+            // args. Say so loudly instead of shipping `1155` to the DOM as a
+            // selector and reporting the misleading "selector matched nothing"
+            // (reported by the chatgpt-use session).
+            if coord_args
+                .iter()
+                .any(|a| !a.is_empty() && a.chars().all(|c| c.is_ascii_digit()))
+                && parse_coords(&coord_args).is_none()
+            {
+                return Err(ParseError::InvalidValue {
+                    message: format!(
+                        "click: `{}` looks like a coordinate but the arguments are not a single \
+                         `x y` (or `x,y`) pair — got {:?}. Pass exactly two numbers, e.g. \
+                         `click 1155 467` or `click --coords 1155,467`.",
+                        sel, coord_args
+                    ),
+                    usage: "click <x> <y> | click --coords <x>,<y>",
+                });
+            }
             let mut cmd = json!({ "id": id, "action": "click", "selector": sel });
             if new_tab {
                 cmd["newTab"] = json!(true);
@@ -5884,6 +5905,33 @@ mod tests {
         assert_eq!(cmd["action"], "click");
         assert_eq!(cmd["selector"], "button.submit");
         assert!(cmd.get("x").is_none());
+    }
+
+    #[test]
+    fn click_two_numbers_through_the_full_pipeline_is_a_coordinate() {
+        // The chatgpt-use report: `click 1155 467 --session mp`. clean_args must
+        // strip the global flag so parse sees exactly two numbers.
+        let raw: Vec<String> = "click 1155 467 --session mp"
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        let clean = crate::flags::clean_args(&raw);
+        let cmd = parse_command(&clean, &default_flags()).unwrap();
+        assert_eq!(cmd["x"], 1155.0, "clean args were {clean:?}");
+        assert_eq!(cmd["y"], 467.0);
+        assert!(cmd.get("selector").is_none());
+    }
+
+    #[test]
+    fn click_a_bare_number_that_is_not_a_pair_errors_instead_of_becoming_a_selector() {
+        // A stray token making an odd count must not silently send `1155` to the
+        // DOM as a selector (which then reports "selector matched nothing").
+        let err = parse_command(&args("click 1155 467 890"), &default_flags());
+        assert!(err.is_err(), "three numbers should be a loud error, not a selector click");
+        // A real numeric-looking selector is still not valid; a genuine CSS
+        // selector with letters is unaffected.
+        let ok = parse_command(&args("click #main"), &default_flags()).unwrap();
+        assert_eq!(ok["selector"], "#main");
     }
 
     #[test]
