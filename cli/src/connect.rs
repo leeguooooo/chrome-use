@@ -2748,7 +2748,11 @@ fn relay_ext_profile_path() -> PathBuf {
 /// Read one version sidecar, treating blank as absent.
 fn read_ext_version_file(path: PathBuf) -> Option<String> {
     let s = std::fs::read_to_string(path).ok()?.trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// The extension version of the profile the relay is actually DRIVING.
@@ -3646,11 +3650,14 @@ mod tests {
         );
         // A path separator in a profile id must never escape the directory.
         assert!(
-            !version.file_name().and_then(|n| n.to_str()).unwrap().contains('/'),
+            !version
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap()
+                .contains('/'),
             "a sanitised id must not reintroduce a path separator"
         );
     }
-
 
     #[test]
     fn parse_ext_profile_reads_id_and_optional_email() {
