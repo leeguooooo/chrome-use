@@ -5927,7 +5927,10 @@ mod tests {
         // A stray token making an odd count must not silently send `1155` to the
         // DOM as a selector (which then reports "selector matched nothing").
         let err = parse_command(&args("click 1155 467 890"), &default_flags());
-        assert!(err.is_err(), "three numbers should be a loud error, not a selector click");
+        assert!(
+            err.is_err(),
+            "three numbers should be a loud error, not a selector click"
+        );
         // A real numeric-looking selector is still not valid; a genuine CSS
         // selector with letters is unaffected.
         let ok = parse_command(&args("click #main"), &default_flags()).unwrap();
