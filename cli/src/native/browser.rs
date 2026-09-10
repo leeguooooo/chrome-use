@@ -4480,7 +4480,10 @@ mod tests {
         // caller to reconnect sent them after a stale service worker that was
         // not there (#301).
         let out = to_ai_friendly_error("CDP command timed out after 180s: Input.insertText");
-        assert!(out.contains("size limit, not a dead connection"), "got: {out}");
+        assert!(
+            out.contains("size limit, not a dead connection"),
+            "got: {out}"
+        );
         assert!(out.contains("do NOT reconnect"), "got: {out}");
         assert!(
             !out.contains("stale relay/service-worker"),
