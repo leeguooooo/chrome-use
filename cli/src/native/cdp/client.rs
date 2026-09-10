@@ -247,6 +247,10 @@ impl CdpClient {
     ) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
+        // Computed before `params` moves into the command: the budget for a
+        // payload-sized command depends on that payload.
+        let budget = command_timeout(method, params.as_ref());
+
         let cmd = CdpCommand {
             id,
             method: method.to_string(),
@@ -272,7 +276,6 @@ impl CdpClient {
                 .map_err(|e| format!("Failed to send CDP command: {}", e))?;
         }
 
-        let budget = command_timeout(method, params.as_ref());
         let response = match tokio::time::timeout(budget, rx).await {
             Ok(Ok(resp)) => resp,
             Ok(Err(_)) => return Err("CDP response channel closed".to_string()),
