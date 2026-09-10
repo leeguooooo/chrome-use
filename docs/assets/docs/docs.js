@@ -126,6 +126,8 @@
     { id: "ref", label: { zh: "参考", en: "Reference" }, items: [
       { slug: "commands",        ico: "📚", zh: "命令参考",   en: "Command Reference",  kw: "commands cli flags reference 命令 参考" },
       { slug: "troubleshooting", ico: "🩹", zh: "故障排查",   en: "Troubleshooting",    kw: "troubleshoot debug relay error 故障 排查" },
+      { slug: "changelog",           ico: "📝", zh: "CLI 更新日志",  en: "CLI Changelog",       kw: "changelog cli version release history 更新 版本 日志 发版" },
+      { slug: "extension-changelog", ico: "🧩", zh: "插件更新日志",  en: "Extension Changelog", kw: "changelog extension ab-connect plugin version 0.5 更新 扩展 插件 版本 日志" },
       { slug: "family",          ico: "🧩", zh: "*-use 家族", en: "The *-use Family",   kw: "family iphone-use cookie-use bitwarden 家族" },
       { slug: "lineage",         ico: "🌱", zh: "血统与上游", en: "Lineage & Upstream", kw: "fork upstream vercel agent-browser apache license attribution 上游 分叉 血统 许可证 出身" },
     ]},
