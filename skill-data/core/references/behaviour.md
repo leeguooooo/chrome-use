@@ -89,11 +89,20 @@ next task.
 
 - Name the session before opening anything: `session name "🔎 short task
   name"`. The user sees it as the tab group label.
-- Your tabs are scratch. The daemon closes them when it goes idle. Use `keep`
-  only for a tab that is itself the deliverable (a document you edited, a
-  checkout the user must finish, a page they asked to see) or that a later
-  turn must continue from. Never `keep` research, search, source, duplicate,
-  blank, or error tabs.
+- Your tabs are scratch. The daemon closes them when it goes idle. `keep`
+  exempts one, and it takes the reason: `keep --as deliverable` for a tab that
+  IS the result (a document you edited, a checkout the user must finish, a page
+  they asked to see), `keep --as handoff` for one a later turn resumes from
+  (waiting on a login, an approval, a payment, a code). Bare `keep` means
+  `deliverable`. `tab list` shows them as `[kept: deliverable]` /
+  `[kept: handoff]`, which is how the user finds out why a tab is still open —
+  so a wrong reason is worse than none. Never `keep` research, search, source,
+  intermediate, duplicate, blank, or error tabs: if everything is kept, the
+  mark means nothing and the user's window fills with your scratch work.
+- Changed your mind? `keep --release` takes the tab back, so it closes with the
+  session again. It works only on a tab you kept earlier — that record is the
+  proof you opened it. The tab does not rejoin your tab group; ungrouping is
+  one-way.
 - An empty `tab list`, a tab that went stale, or one command that timed out is
   not a disconnected browser. Keep the session, `open` the URL you need, and
   carry on. Do not restart the daemon, re-run setup, or re-read this skill for
