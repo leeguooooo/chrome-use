@@ -422,7 +422,10 @@ mod timeout_tests {
         // insertText without text, or with empty text, is still a flat command.
         assert_eq!(command_timeout("Input.insertText", None).as_secs(), 30);
         let empty = json!({ "text": "" });
-        assert_eq!(command_timeout("Input.insertText", Some(&empty)).as_secs(), 30);
+        assert_eq!(
+            command_timeout("Input.insertText", Some(&empty)).as_secs(),
+            30
+        );
     }
 
     #[test]
@@ -442,7 +445,10 @@ mod timeout_tests {
         );
         // Capped, so a pathological payload cannot pin a session indefinitely.
         let huge = json!({ "text": "a".repeat(10_000_000) });
-        assert_eq!(command_timeout("Input.insertText", Some(&huge)).as_secs(), 180);
+        assert_eq!(
+            command_timeout("Input.insertText", Some(&huge)).as_secs(),
+            180
+        );
     }
 
     #[test]
