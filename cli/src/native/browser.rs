@@ -699,8 +699,8 @@ pub fn to_ai_friendly_error(error: &str) -> String {
         if lower.contains("input.inserttext") {
             return format!(
                 "{error}\nHint: this is a size limit, not a dead connection. `Input.insertText` \
-                 costs time per character (~0.6-1.0s/KB in a rich editor, and the per-KB cost \
-                 RISES with size), and this payload \
+                 costs time in proportion to its size (~0.6-1.0s/KB in a rich editor, and that \
+                 per-KB cost RISES as the payload grows), and this payload \
                  needed more than the budget. The connection is fine — do NOT reconnect.\n\
                  The insert was NOT cancelled. The page can keep working on it for minutes after \
                  this error, so let the tab go quiet and re-read the field before sending anything \
