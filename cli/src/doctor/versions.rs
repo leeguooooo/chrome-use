@@ -125,7 +125,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     // Driving Chrome profile — with many profiles, the relay binds to whichever
     // profile's extension worker connected; naming it disambiguates a "logged
     // out" result (wrong profile vs. genuinely not logged in) (issue #60).
-    match connect::relay_ext_profile() {
+    match connect::driving_profile() {
         Some((id, Some(email))) => checks.push(Check::new(
             "relay.profile",
             category,

@@ -84,8 +84,10 @@ const OLD_PROFILE_IDS: &[&str] = &[
 /// with `--browser <id|email>` (issue #60). Local; no daemon.
 pub fn run_browsers(json: bool) {
     let profiles = list_relay_profiles();
-    // The generic (last-writer) default the relay binds to without `--browser`.
-    let default = relay_ext_profile().map(|(id, _)| id);
+    // The profile the CLI drives without `--browser`. Must match what actually
+    // gets bound, not the last `hello` writer — marking the wrong row `default`
+    // was the third symptom of #319.
+    let default = driving_profile().map(|(id, _)| id);
     if json {
         let arr: Vec<_> = profiles
             .iter()
@@ -201,7 +203,7 @@ pub fn run_connect(args: &[String], json: bool) {
     // THAT profile rather than whichever worker last wrote the generic sidecar.
     let live_extension_version = relay_ext_version_driving();
     let expected_extension_version = env!("AB_CONNECT_VERSION");
-    let driving_profile = relay_ext_profile();
+    let driving_profile = driving_profile();
     let profiles = chrome_profiles();
     let policy = managed_policy_state();
     let (_, old_ids) = approved_config_profiles();
@@ -2755,6 +2757,40 @@ fn read_ext_version_file(path: PathBuf) -> Option<String> {
     }
 }
 
+/// Choose between the two notions of "driving": the focus-based winner (same
+/// source the endpoint selection uses) and the generic last-`hello` sidecar.
+///
+/// Pure, so the preference is testable without touching the filesystem.
+/// `most_recently_focused_profile` deliberately returns `None` when the choice
+/// is not clean — fewer than two profiles, any profile whose extension is too
+/// old to report focus, or a tie — and in exactly those cases the generic
+/// sidecar is the best answer available, so it is the fallback, not the
+/// primary.
+fn prefer_focused_profile(
+    focused: Option<(String, Option<String>)>,
+    generic: Option<(String, Option<String>)>,
+) -> Option<(String, Option<String>)> {
+    focused.or(generic)
+}
+
+/// The profile the CLI is actually driving, for anything that REPORTS it.
+///
+/// There used to be two answers in this codebase. The header line and the
+/// endpoint selection used `most_recently_focused_profile()`; the `profile:`
+/// line, `drivingProfileId`, `browsers`' default column, doctor, and the
+/// version resolver used `relay_ext_profile()` — the generic sidecar, which
+/// belongs to whoever sent `hello` last. With two profiles connected those
+/// disagree, which is what #319 actually was: `status` printed
+/// `driving 27ade1bc…` above `profile: 696d9cb7…`. Fixing the version's
+/// per-profile storage (v1.5.122) did not help, because the lookup still used
+/// the wrong id. One answer, used everywhere that reports it.
+pub fn driving_profile() -> Option<(String, Option<String>)> {
+    prefer_focused_profile(
+        most_recently_focused_profile().map(|(id, email, _)| (id, email)),
+        relay_ext_profile(),
+    )
+}
+
 /// The extension version of the profile the relay is actually DRIVING.
 ///
 /// Use this wherever a version is shown next to a profile. Falls back to the
@@ -2763,7 +2799,7 @@ fn read_ext_version_file(path: PathBuf) -> Option<String> {
 /// one, and reporting "unknown" for those would be a regression dressed up as
 /// a fix.
 pub fn relay_ext_version_driving() -> Option<String> {
-    if let Some((id, _)) = relay_ext_profile() {
+    if let Some((id, _)) = driving_profile() {
         if let Some(version) = read_ext_version_file(relay_ext_version_path_for(&id)) {
             return Some(version);
         }
@@ -3629,6 +3665,28 @@ mod tests {
         assert_eq!(profile_label("uuid", None), "uuid");
         assert_eq!(profile_label("uuid", Some("")), "uuid");
     }
+    #[test]
+    fn the_reported_driving_profile_prefers_focus_over_the_last_hello_writer() {
+        let focused = || Some(("focused".to_string(), Some("f@x".to_string())));
+        let generic = || Some(("last-hello".to_string(), None));
+
+        // The whole point: when the two disagree, focus wins — that is the one
+        // the endpoint selection actually binds (#319).
+        assert_eq!(
+            super::prefer_focused_profile(focused(), generic()).map(|(id, _)| id),
+            Some("focused".to_string())
+        );
+        // `most_recently_focused_profile` returns None whenever the choice is
+        // not clean (one profile, an extension too old to report focus, a tie).
+        // Those are exactly the cases where the generic sidecar is right, so it
+        // must still be used rather than reporting nothing.
+        assert_eq!(
+            super::prefer_focused_profile(None, generic()).map(|(id, _)| id),
+            Some("last-hello".to_string())
+        );
+        assert_eq!(super::prefer_focused_profile(None, None), None);
+    }
+
     #[test]
     fn the_per_profile_version_sidecar_is_named_like_its_endpoint_sibling() {
         // This bug was exactly "the endpoint got per-profile treatment, the
