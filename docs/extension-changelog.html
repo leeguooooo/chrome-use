@@ -46,6 +46,13 @@
 
       <h2>0.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>0.5.26</strong>（2026-09-10）：<code>Input.insertText</code> 的超时按载荷放宽。对一条
+          按字符计费的命令来说，固定 8 秒预算不是健康检查，而是伪装成健康检查的尺寸上限——34KB 文本插进
+          富文本编辑器实测约 15 秒，8 秒就被掐断，正好让 <code>keyboard inserttext --file</code> 在它最该
+          起作用的尺寸上失效。现在按载荷给时间（8s + 2ms/字节，上限 120 秒），约为实测最坏情况的 4 倍，
+          健康的渲染器不会触发；上限则保证一个病态载荷不会把会话永远挂住。超时文案也分开了：预算已经
+          按载荷放宽却仍然超时，说明这个页面每字节比预期更慢（重型编辑器、繁忙标签），而不是
+          「调试器失去响应」——后者会把人指去找一个根本不存在的卡死页面（#301）。</li>
         <li><strong>0.5.25</strong>（2026-09-10）：一扇通用的门 <code>ABExt.call</code> —— CLI 想调
           <code>chrome.tabs / tabGroups / windows / downloads / webNavigation</code> 的白名单方法时，不再需要发一个新扩展版本。
           改动类调用只允许作用在 agent 自己创建的标签上（adopted 标签只读、<code>windows.create/remove</code> 不开、
