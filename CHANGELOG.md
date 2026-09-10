@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.120
+## 1.5.121
 
 <!-- release:start -->
+### Features
+
+- **`keep` now says why a tab was left behind, and can be undone (#290).** `keep` exempts a tab from the shutdown sweep by *dropping ownership*, which erased the only record we had — afterwards the tab was indistinguishable from one we never touched, so `tab list` showed it as `foreign` and could not answer "why is this still open?". It now takes a reason: `keep --as deliverable` for a tab that IS the result (an edited document, a checkout the user must finish), `keep --as handoff` for one a later turn resumes from (waiting on a login, an approval, a code). Bare `keep` still means `deliverable`, so existing callers are unchanged. `tab list` marks them `[kept: deliverable]` / `[kept: handoff]`. `keep --release` takes a tab back so it closes with the session again — and only works on a tab this session created and then kept, because the recorded keep is the proof: without it the command would claim the right to close a tab it never opened. The tab does not rejoin the session's tab group; ungrouping is one-way today, and the message says so rather than implying otherwise. `keep` also gained its own `--help`, which it never had.
+
+### Bug Fixes
+
+- **The per-character cost quoted in the insert-timeout hint is now the measured one.** It said `~0.45-0.53s/KB`, from an early small sample. Measured on chatgpt.com: 60 KB took 37s (0.62s/KB) and 90 KB took 88s (0.98s/KB). The point is not that the constant was low — it is that the per-KB cost **rises with size**, so quoting a flat range invites extrapolating from it, which is exactly how a "roughly 226 KB" ceiling got published and then corrected. The hint now gives the measured range and says the cost rises.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.120
+
 ### Bug Fixes
 
 - **The insert-timeout hint no longer recommends the one thing that corrupts text.** It told the caller to "split the text and send it as separate `keyboard inserttext` calls" — the exact pattern #301 was filed for: a call returns when Chrome dispatched the insert, not when the editor committed it, so the next piece races the uncommitted tail and scrambles the text while preserving the total length, which is why a character-count check passes and the damage ships. The repo already said this in `commands.rs`; the error message said the opposite. If a split is mentioned at all, the hint now says to compare the field's **content** between pieces, never just its length.
@@ -12,7 +27,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.119
 
