@@ -699,10 +699,16 @@ pub fn to_ai_friendly_error(error: &str) -> String {
         if lower.contains("input.inserttext") {
             return format!(
                 "{error}\nHint: this is a size limit, not a dead connection. `Input.insertText` \
-                 costs time per character (~0.45s/KB in a rich editor), and this payload needed \
-                 more than the budget. The connection is fine — do NOT reconnect. Insert less at \
-                 once (split the text and send it as separate `keyboard inserttext` calls, \
-                 re-reading the field between them), or use a smaller payload."
+                 costs time per character (~0.45-0.53s/KB in a rich editor), and this payload \
+                 needed more than the budget. The connection is fine — do NOT reconnect.\n\
+                 The insert was NOT cancelled. The page can keep working on it for minutes after \
+                 this error, so let the tab go quiet and re-read the field before sending anything \
+                 else — some or all of the text may have landed, and a command sent now hits a \
+                 renderer that is still busy (#315).\n\
+                 If you must send it in pieces, compare the field's CONTENT between pieces, never \
+                 just its length: a call returns when Chrome dispatched the insert, not when the \
+                 editor committed it, so the next piece can race the uncommitted tail and scramble \
+                 the text while preserving the total length (#301)."
             );
         }
         return format!(
@@ -4489,6 +4495,29 @@ mod tests {
             !out.contains("stale relay/service-worker"),
             "must not send the caller after a stale worker: {out}"
         );
+
+        // The command failing is not the page stopping: `withRelayTimeout` races
+        // a timer against a `sendCommand` promise that was already dispatched,
+        // and losing that race cancels nothing. The renderer was measured still
+        // working ~14 minutes after the caller got this error, so a command sent
+        // "right after the failure" lands on a busy tab (#315). Say so.
+        assert!(
+            out.contains("NOT cancelled"),
+            "must say the insert keeps running: {out}"
+        );
+
+        // The old wording told the caller to split into back-to-back
+        // `keyboard inserttext` calls — the exact thing #301 proved corrupts
+        // text at every boundary, because a call returns on dispatch and not on
+        // commit, and total length survives so a length check passes. If a
+        // split is mentioned at all, the content check must be mentioned with
+        // it; advising the split alone is the regression this pins.
+        if out.contains("pieces") || out.contains("split") {
+            assert!(
+                out.contains("CONTENT"),
+                "a split must be paired with a content comparison, not a length check: {out}"
+            );
+        }
 
         // An ordinary command running out its budget keeps the connection
         // diagnosis — that one really is the likely cause there.
