@@ -1,6 +1,11 @@
 # Publish ab-connect to the Chrome Web Store from CI, so a release never depends
-# on someone being at a logged-in Mac. Manual trigger only (workflow_dispatch):
-# publishing is deliberate, never a side effect of a push.
+# on someone being at a logged-in Mac.
+#
+# Fires automatically when extensions/ab-connect.zip changes on main — i.e. when
+# a repacked package lands, which is exactly the "ship this" signal. A guard
+# skips the run when the store already serves that version, so a re-push of the
+# same zip does nothing (submitting a version already in review is an API error,
+# not a no-op). Also runnable by hand (workflow_dispatch), with a draft option.
 #
 # One-time: add three repository secrets (Settings → Secrets and variables →
 # Actions), the same values as .secrets/cws.env locally:
@@ -9,6 +14,9 @@
 name: Publish extension (Chrome Web Store)
 
 on:
+  push:
+    branches: [main]
+    paths: ["extensions/ab-connect.zip"]
   workflow_dispatch:
     inputs:
       draft:
@@ -19,6 +27,11 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # `secrets` is not allowed in a step-level `if:` (it invalidates the whole
+    # workflow), so lift the "are creds present" check to a job-level env the
+    # steps can read.
+    env:
+      HAS_CREDS: ${{ secrets.CWS_CLIENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,7 +47,42 @@ jobs:
           assert "key" not in json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json")), "zip must not contain manifest key"
           print(f"ab-connect {z} ready to publish")
           PY
+      # Idempotency: on an automatic push run, skip when the store already holds
+      # this version (a re-push of the same zip, a docs commit that happened to
+      # touch the file). A manual run always proceeds. Submitting a version that
+      # is already uploaded/in-review is an API error, not a no-op, so this guard
+      # is what keeps the automatic trigger safe to fire on any main push.
+      - name: Decide whether to publish
+        id: decide
+        if: env.HAS_CREDS == 'true'
+        env:
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, urllib.parse, urllib.request, zipfile
+          ITEM = "knfcmbamhjmaonkfnjhldjedeobeafmk"
+          zver = json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json"))["version"]
+          if os.environ.get("MANUAL") == "true":
+              print("publish=true"); raise SystemExit
+          tok = json.load(urllib.request.urlopen(urllib.request.Request(
+              "https://oauth2.googleapis.com/token",
+              data=urllib.parse.urlencode({
+                  "client_id": os.environ["CWS_CLIENT_ID"],
+                  "client_secret": os.environ["CWS_CLIENT_SECRET"],
+                  "refresh_token": os.environ["CWS_REFRESH_TOKEN"],
+                  "grant_type": "refresh_token"}).encode())))["access_token"]
+          req = urllib.request.Request(
+              f"https://www.googleapis.com/chromewebstore/v1.1/items/{ITEM}?projection=DRAFT",
+              headers={"Authorization": f"Bearer {tok}", "x-goog-api-version": "2"})
+          cur = json.load(urllib.request.urlopen(req)).get("crxVersion")
+          print(f"::notice::store draft version {cur}, packaged {zver}")
+          print("publish=" + ("false" if cur == zver else "true"))
+          PY
       - name: Publish
+        if: steps.decide.outputs.publish == 'true'
         env:
           CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
           CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
