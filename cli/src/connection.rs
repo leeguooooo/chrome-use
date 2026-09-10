@@ -1254,10 +1254,20 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                 }
                 if is_session_unresponsive_error(&e) {
                     kill_stale_daemon(session);
+                    // "rerun to start a fresh daemon" is only true once whatever
+                    // wedged the page has finished. A renderer still busy with a
+                    // long command answers the next attempt exactly the same way,
+                    // which reads as a permanently unusable session name — that is
+                    // what a live report concluded, and the name did in fact
+                    // recover on its own once the page freed up. Say which it is.
                     return Err(format!(
                         "session unresponsive: the stuck '{session}' daemon was stopped \
-                         automatically; rerun the command to start a fresh daemon, or adopt \
-                         the tab into a fresh session."
+                         automatically. If the page was mid-way through a long command (a large \
+                         `keyboard inserttext`, a blocking script), it is still finishing — \
+                         rerunning right now returns this same message until it does, and the \
+                         session name works again afterwards. It is not permanently taken. To \
+                         proceed immediately, use a different --session name, or `adopt` the \
+                         tab into a fresh session."
                     ));
                 }
                 // Non-transient error, fail immediately
@@ -1353,6 +1363,49 @@ pub fn probe_daemon_healthy(session: &str, timeout: Duration) -> bool {
     reader.read_line(&mut line).is_ok() && !line.trim().is_empty()
 }
 
+/// Daemon-side CDP budget for a command, mirrored here so the client can stay
+/// above it. Kept in sync with `native::cdp::client::command_timeout` — the two
+/// are separate processes, so this is a deliberate duplication with a test that
+/// pins the relationship rather than a shared constant nobody re-checks.
+fn daemon_cdp_budget(cmd: &Value) -> Duration {
+    let is_insert = cmd.get("action").and_then(|v| v.as_str()) == Some("keyboard")
+        && cmd.get("subaction").and_then(|v| v.as_str()) == Some("insertText");
+    if !is_insert {
+        return Duration::from_secs(30);
+    }
+    let len = cmd
+        .get("text")
+        .and_then(|v| v.as_str())
+        .map(|t| t.len() as u64)
+        .unwrap_or(0);
+    if len == 0 {
+        return Duration::from_secs(30);
+    }
+    (Duration::from_secs(30) + Duration::from_micros(len.saturating_mul(4_000)))
+        .min(Duration::from_secs(180))
+}
+
+/// How long the socket read waits for the daemon's answer.
+///
+/// The invariant that matters: **this budget must exceed the daemon's budget for
+/// the same command.** Otherwise the read fires first, we abandon the connection
+/// before the daemon's own error line arrives, and the actionable diagnostic is
+/// swallowed (issue #117) — and worse, the caller is told the session is
+/// unresponsive when it is merely busy.
+///
+/// That invariant was broken again the moment the daemon's budget started
+/// scaling with payload size: a flat 45s here silently became the real ceiling
+/// for a large `keyboard inserttext`, cutting off at ~55s (read budget plus
+/// retry and shutdown grace) no matter how much room the layers below allowed.
+/// Reported from live use after a 100 KB insert. So this scales too, by the same
+/// rule, plus the same 15s margin.
+fn client_read_budget(cmd: &Value) -> Duration {
+    if let Some(ms) = cmd.get("timeout_ms").and_then(|v| v.as_u64()) {
+        return Duration::from_millis(ms.saturating_add(15_000));
+    }
+    daemon_cdp_budget(cmd) + Duration::from_secs(15)
+}
+
 fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
     let mut stream = connect(session)?;
 
@@ -1366,11 +1419,7 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
     // at the same 30s, we abandon the connection before the daemon's error line
     // arrives, and the actionable diagnostic is lost — the exact swallow behind
     // issue #117. 45s = daemon's 30s CDP budget + 15s margin.
-    let read_to = cmd
-        .get("timeout_ms")
-        .and_then(|v| v.as_u64())
-        .map(|ms| Duration::from_millis(ms.saturating_add(15_000)))
-        .unwrap_or(Duration::from_secs(45));
+    let read_to = client_read_budget(cmd);
     stream.set_read_timeout(Some(read_to)).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
@@ -1408,6 +1457,55 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{client_read_budget, daemon_cdp_budget};
+    use serde_json::json;
+
+    #[test]
+    fn the_client_read_budget_always_outlasts_the_daemon_budget() {
+        // Three layers police the same command: extension (8s + 2ms/byte, cap
+        // 120s), daemon (30s + 4ms/byte, cap 180s), and this socket read. Each
+        // must outlast the one below, or the outer one cuts first and the
+        // inner, more specific error never reaches the caller. Scaling the
+        // lower two while leaving this one flat is exactly how a 100 KB insert
+        // died at ~55s and looked like a dead session.
+        for len in [0usize, 1_000, 34_000, 100_000, 150_000, 10_000_000] {
+            let cmd = json!({
+                "action": "keyboard", "subaction": "insertText", "text": "a".repeat(len)
+            });
+            let daemon = daemon_cdp_budget(&cmd);
+            let client = client_read_budget(&cmd);
+            assert!(
+                client > daemon,
+                "client {client:?} must outlast daemon {daemon:?} for {len} bytes"
+            );
+            // And the daemon must outlast the extension's own scaled budget.
+            let extension = std::cmp::min(8_000 + (len as u64) * 2, 120_000);
+            assert!(
+                daemon.as_millis() as u64 > extension,
+                "daemon {daemon:?} must outlast extension {extension}ms for {len} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn only_payload_sized_commands_widen_the_read_budget() {
+        // An ordinary command keeps the flat 45s, so a genuinely hung session
+        // still fails as fast as it used to.
+        let plain = json!({ "action": "eval", "expression": "1" });
+        assert_eq!(client_read_budget(&plain), std::time::Duration::from_secs(45));
+        let empty_insert = json!({ "action": "keyboard", "subaction": "insertText", "text": "" });
+        assert_eq!(
+            client_read_budget(&empty_insert),
+            std::time::Duration::from_secs(45)
+        );
+        // An explicit per-command timeout still wins (script's op-list budget).
+        let scripted = json!({ "action": "script", "timeout_ms": 90_000u64 });
+        assert_eq!(
+            client_read_budget(&scripted),
+            std::time::Duration::from_secs(105)
+        );
+    }
+
     use super::*;
     use crate::test_utils::EnvGuard;
 
