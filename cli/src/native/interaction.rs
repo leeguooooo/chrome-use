@@ -175,23 +175,9 @@ pub async fn click(
         )
         .await;
     }
-    // On the relay (the user's real Chrome) a TOP-document coordinate click used to
-    // drift onto the foreground tab; that root cause is fixed (#5: the agent drives
-    // its own pinned tab), but DOM-dispatch stays the conservative default here.
-    if mode != "coord"
-        && button == "left"
-        && click_count == 1
-        && crate::connect::relay_url().is_some()
-    {
-        return dom_click(
-            client,
-            session_id,
-            ref_map,
-            selector_or_ref,
-            iframe_sessions,
-        )
-        .await;
-    }
+    // Coordinate clicks dispatch trusted Input.dispatchMouseEvent events (isTrusted: true),
+    // which security-sensitive buttons and forms require. If coordinate resolution fails
+    // or the target is occluded, execution automatically falls back to DOM dispatch below.
 
     let resolved = resolve_element_center(
         client,

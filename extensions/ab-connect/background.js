@@ -1648,6 +1648,15 @@ chrome.tabs.onRemoved.addListener(
       setTimeout(() => {
         if (reloadStates.get(tabId) === removedState) reloadStates.delete(tabId);
       }, RELOAD_LOOP_WINDOW_MS);
+      const removedSessionId = `cb-tab-${tabId}`;
+      const removedTargetId = sessionTargets.get(removedSessionId);
+      if (removedTargetId) {
+        setTimeout(() => {
+          if (sessionTargets.get(removedSessionId) === removedTargetId) {
+            sessionTargets.delete(removedSessionId);
+          }
+        }, RELOAD_LOOP_WINDOW_MS);
+      }
       unmarkOwned(tabId);
       detachTab(tabId, true);
     })
