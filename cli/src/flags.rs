@@ -517,6 +517,9 @@ pub struct Flags {
 /// agent's MCP server.
 const AGENT_ID_VARS: &[&str] = &[
     "AGENT_BROWSER_SESSION_ID",
+    "ANTIGRAVITY_CONVERSATION_ID",
+    "ANTIGRAVITY_AGENT_ID",
+    "GEMINI_CONVERSATION_ID",
     "OPENCODE_PID",
     "CODEX_THREAD_ID",
     "CMUX_SURFACE_ID",

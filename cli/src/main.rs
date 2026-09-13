@@ -2033,7 +2033,14 @@ fn main() {
     // concurrent agents don't fight). To switch a *running* session's profile,
     // start a fresh `--session` (or close it first).
     let mut browser_email: Option<String> = None;
-    if let Some(sel) = flags.browser.clone() {
+    let browser_selector = flags.browser.clone().or_else(|| {
+        flags
+            .profile
+            .as_ref()
+            .filter(|p| connect::relay_profile_for_browser(p).is_ok())
+            .cloned()
+    });
+    if let Some(sel) = browser_selector {
         match connect::relay_profile_for_browser(&sel) {
             Ok((_, email, url)) => {
                 browser_email = email;

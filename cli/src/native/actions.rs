@@ -4841,6 +4841,7 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
             }
 
             let base64_data = wb.screenshot().await?;
+            let want_b64 = cmd.get("base64").and_then(|v| v.as_bool()).unwrap_or(false);
             let path = cmd.get("path").and_then(|v| v.as_str());
             if let Some(p) = path {
                 let bytes = base64::Engine::decode(
@@ -4850,21 +4851,32 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 .map_err(|e| format!("Base64 decode error: {}", e))?;
                 std::fs::write(p, bytes)
                     .map_err(|e| format!("Failed to write screenshot: {}", e))?;
-                return Ok(json!({ "path": absolutize_saved_path(p) }));
+                let mut res = json!({ "path": absolutize_saved_path(p) });
+                if want_b64 {
+                    res["base64"] = json!(base64_data);
+                }
+                return Ok(res);
             }
-            let tmp = format!(
-                "/tmp/screenshot-{}.png",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis())
-                    .unwrap_or(0)
-            );
+            let tmp = std::env::temp_dir()
+                .join(format!(
+                    "screenshot-{}.png",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
+                ))
+                .to_string_lossy()
+                .to_string();
             let bytes =
                 base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &base64_data)
                     .map_err(|e| format!("Base64 decode error: {}", e))?;
             std::fs::write(&tmp, bytes)
                 .map_err(|e| format!("Failed to write screenshot: {}", e))?;
-            return Ok(json!({ "path": tmp }));
+            let mut res = json!({ "path": tmp });
+            if want_b64 {
+                res["base64"] = json!(base64_data);
+            }
+            return Ok(res);
         }
     }
     // Re-sync with the live browser before resolving the active tab, mirroring
@@ -5053,6 +5065,16 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     if !result.annotations.is_empty() {
         response["annotations"] = serde_json::to_value(&result.annotations)
             .map_err(|e| format!("Failed to serialize annotations: {}", e))?;
+    }
+    if cmd.get("base64").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let b64 = if resized.is_some() {
+            std::fs::read(&result.path)
+                .map(|bytes| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes))
+                .unwrap_or_else(|_| result.base64.clone())
+        } else {
+            result.base64.clone()
+        };
+        response["base64"] = json!(b64);
     }
     // Stamp which page was captured so a screenshot of the wrong tab is obvious
     // (issue #8.1: relay sessions can drift to whatever tab the user activated).

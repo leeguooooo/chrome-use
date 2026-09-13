@@ -1,12 +1,12 @@
 // Idle auto-detach rules (issue #201), kept free of `chrome.*` globals so the
 // service worker's release/replay decisions are unit-testable.
 
-export const IDLE_DETACH_DEFAULT_SECS = 30
+export const IDLE_DETACH_DEFAULT_SECS = 0
 
 /** Parse the options-page setting (seconds) into milliseconds; 0 = never. */
 export function idleDetachMsFrom(secs) {
   const n = Number(secs)
-  if (!Number.isFinite(n) || n < 0) return IDLE_DETACH_DEFAULT_SECS * 1000
+  if (!Number.isFinite(n) || n <= 0) return IDLE_DETACH_DEFAULT_SECS * 1000
   return Math.round(n * 1000)
 }
 

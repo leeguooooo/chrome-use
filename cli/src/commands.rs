@@ -1334,6 +1334,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // selector: @ref or CSS selector
             // path: file path (contains / or . or ends with known extension)
             let mut full_page = false;
+            let mut base64 = false;
             let mut clip: Option<Value> = None;
             let mut max_width: Option<u32> = None;
             let mut max_height: Option<u32> = None;
@@ -1355,6 +1356,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             while i < rest.len() {
                 match rest[i] {
                     "--full" | "-f" => full_page = true,
+                    "--base64" | "-b" => base64 = true,
                     // Downscale the saved image so retina/full-page shots fit an
                     // agent's image reader and screenshot px line up with click px (#42).
                     "--max-width" => {
@@ -1457,6 +1459,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 "path": path, "selector": selector,
                 "fullPage": full_page, "annotate": flags.annotate
             });
+            if base64 {
+                cmd["base64"] = json!(true);
+            }
             if let Some(c) = clip {
                 cmd["clip"] = c;
             }
@@ -6628,6 +6633,20 @@ mod tests {
         let cmd = parse_command(&args("screenshot -f"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "screenshot");
         assert_eq!(cmd["fullPage"], true);
+    }
+
+    #[test]
+    fn test_screenshot_base64() {
+        let cmd = parse_command(&args("screenshot --base64"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "screenshot");
+        assert_eq!(cmd["base64"], true);
+    }
+
+    #[test]
+    fn test_screenshot_base64_shorthand() {
+        let cmd = parse_command(&args("screenshot -b"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "screenshot");
+        assert_eq!(cmd["base64"], true);
     }
 
     #[test]
