@@ -1529,6 +1529,9 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                         color::success_indicator()
                     };
                     println!("{} Screenshot saved to {}", indicator, color::green(path));
+                    if let Some(b64) = data.get("base64").and_then(|v| v.as_str()) {
+                        println!("{b64}");
+                    }
                     // Stamp which page was captured (mirrors `eval @ url`) so a
                     // screenshot of the wrong/drifted tab is obvious (issue #8.1).
                     if let Some(o) = data
@@ -2750,6 +2753,7 @@ pixels did not come from the page you think they did. Confirm the target with
 
 Options:
   --full, -f           Capture full page (not just viewport)
+  -b, --base64         Include base64-encoded image directly in output (ideal for agents)
   [selector]           Capture just an element (CSS or @ref), e.g. `screenshot ".header" h.png`
   --clip <x,y,w,h>     Capture a pixel region, e.g. `screenshot --clip 0,0,200,40 corner.png`
   --max-width <px>     Downscale so the image's width ≤ px (preserves aspect)

@@ -3020,7 +3020,7 @@ async fn wait_for_paint_settled(client: &CdpClient, session_id: &str) {
     if std::env::var("AGENT_BROWSER_CLICK_WAIT_STABLE").as_deref() == Ok("0") {
         return;
     }
-    let script = "new Promise(resolve => \
+    let script = "document.hidden ? Promise.resolve(true) : new Promise(resolve => \
         requestAnimationFrame(() => \
             requestAnimationFrame(() => \
                 queueMicrotask(() => resolve(true)))))";

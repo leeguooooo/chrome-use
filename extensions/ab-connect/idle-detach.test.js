@@ -7,8 +7,8 @@ test('idle setting parses seconds, 0 disables, garbage falls back to the default
   assert.equal(idleDetachMsFrom(45), 45000)
   assert.equal(idleDetachMsFrom('10'), 10000)
   assert.equal(idleDetachMsFrom(0), 0)
-  assert.equal(idleDetachMsFrom(-3), 30000)
-  assert.equal(idleDetachMsFrom(undefined), 30000)
+  assert.equal(idleDetachMsFrom(-3), 0)
+  assert.equal(idleDetachMsFrom(undefined), 0)
 })
 
 test('only quiet, attached, non-busy tabs are released', () => {

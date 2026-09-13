@@ -2666,13 +2666,16 @@ pub fn validate_relay_configuration() -> Result<(), String> {
 /// (it writes the file on connect and removes it on exit). Used by
 /// `chrome-use extension connect` to attach without the user copying a URL.
 pub fn relay_url() -> Option<String> {
-    let s = std::fs::read_to_string(relay_url_path()).ok()?;
-    let s = s.trim().to_string();
-    if s.starts_with("ws://") {
-        Some(s)
-    } else {
-        None
+    if let Ok(s) = std::fs::read_to_string(relay_url_path()) {
+        let s = s.trim().to_string();
+        if s.starts_with("ws://") {
+            return Some(s);
+        }
     }
+    if let Some((_, _, ws)) = most_recently_focused_profile() {
+        return Some(ws);
+    }
+    list_relay_profiles().into_iter().next().map(|(_, _, ws)| ws)
 }
 
 /// Append a one-line record of how a CDP connection was established, to
@@ -3288,9 +3291,6 @@ async fn nm_host_main() {
         }
     }
     nm_log("[nm-host] stdin EOF — Chrome closed the port");
-    let _ = std::fs::remove_file(relay_url_path());
-    let _ = std::fs::remove_file(relay_ext_version_path());
-    let _ = std::fs::remove_file(relay_ext_profile_path());
     // Drop this profile's per-profile sidecars so `browsers` doesn't list a dead
     // endpoint (issue #60).
     if let Some(id) = &bound_profile_id {
@@ -3301,6 +3301,21 @@ async fn nm_host_main() {
         // without being added to the group that gets written, read and cleaned
         // together.
         let _ = std::fs::remove_file(relay_ext_version_path_for(id));
+    }
+    // If other Chrome profiles are still connected, restore the generic files
+    // to point to an active profile instead of breaking the relay for remaining profiles.
+    let remaining = list_relay_profiles();
+    if let Some((rem_id, rem_email, rem_ws)) = remaining.into_iter().next() {
+        let _ = std::fs::write(relay_url_path(), &rem_ws);
+        let rec = serde_json::json!({ "id": rem_id, "email": rem_email }).to_string();
+        let _ = std::fs::write(relay_ext_profile_path(), &rec);
+        if let Some(ver) = read_ext_version_file(relay_ext_version_path_for(&rem_id)) {
+            let _ = std::fs::write(relay_ext_version_path(), &ver);
+        }
+    } else {
+        let _ = std::fs::remove_file(relay_url_path());
+        let _ = std::fs::remove_file(relay_ext_version_path());
+        let _ = std::fs::remove_file(relay_ext_profile_path());
     }
 }
 

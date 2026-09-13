@@ -4,7 +4,7 @@
 // Opens standalone (file://) too, with a friendly demo state, so the design is
 // viewable without the extension context.
 
-const DEFAULTS = { ab_notify: false, ab_cursor: false, ab_sites: [], ab_idle_detach_secs: 30 }
+const DEFAULTS = { ab_notify: false, ab_cursor: false, ab_sites: [], ab_idle_detach_secs: 0 }
 const hasChrome = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync
 
 // ---- elements ----
@@ -91,7 +91,7 @@ el('ver').textContent = hasChrome ? 'v' + chrome.runtime.getManifest().version :
 loadSettings((s) => {
   optNotify.checked = !!s.ab_notify
   optCursor.checked = !!s.ab_cursor
-  optIdleSecs.value = Number.isFinite(Number(s.ab_idle_detach_secs)) ? Number(s.ab_idle_detach_secs) : 30
+  optIdleSecs.value = Number.isFinite(Number(s.ab_idle_detach_secs)) ? Number(s.ab_idle_detach_secs) : 0
   sites = Array.isArray(s.ab_sites) ? s.ab_sites.slice() : []
   renderSites()
 })
