@@ -5066,6 +5066,9 @@ mod tests {
         Flags {
             no_choosebrowser: false,
             remember: false,
+            new_tab: false,
+            tab: None,
+            tab_label: None,
             session: "test".to_string(),
             session_explicit: true,
             json: false,

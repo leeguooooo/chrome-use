@@ -2040,8 +2040,8 @@ fn main() {
             .filter(|p| connect::relay_profile_for_browser(p).is_ok())
             .cloned()
     });
-    if let Some(sel) = browser_selector {
-        match connect::relay_profile_for_browser(&sel) {
+    if let Some(sel) = browser_selector.as_ref() {
+        match connect::relay_profile_for_browser(sel) {
             Ok((_, email, url)) => {
                 browser_email = email;
                 flags.cdp = Some(url);

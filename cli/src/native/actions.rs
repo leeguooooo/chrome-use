@@ -3512,7 +3512,8 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     if new_tab {
         let new_tab_info = mgr.tab_new(None, label).await?;
-        if let Some(sid) = mgr.active_session_id().ok().map(|s| s.to_string()) {
+        let sid = mgr.active_session_id().ok().map(|s| s.to_string());
+        if let Some(sid) = sid {
             apply_stealth_to_session(state, &sid).await;
             let has_origin_headers = !state.origin_headers.read().await.is_empty();
             let has_proxy_creds = state.proxy_credentials.read().await.is_some();
@@ -3521,7 +3522,9 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
                 if has_proxy_creds {
                     params["handleAuthRequests"] = json!(true);
                 }
-                let _ = mgr.client.send_command("Fetch.enable", Some(params), Some(&sid)).await;
+                if let Some(mgr) = state.browser.as_ref() {
+                    let _ = mgr.client.send_command("Fetch.enable", Some(params), Some(&sid)).await;
+                }
             }
         }
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;

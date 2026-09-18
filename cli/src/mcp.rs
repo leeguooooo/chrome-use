@@ -1966,6 +1966,7 @@ mod tests {
         TOOL_BACK,
         TOOL_FORWARD,
         TOOL_RELOAD,
+        TOOL_TABS,
     ];
 
     const EXTENDED_ONLY_TOOL_NAMES: &[&str] = &[
@@ -1974,7 +1975,6 @@ mod tests {
         TOOL_SCREENSHOT,
         TOOL_A11Y,
         TOOL_SCROLL,
-        TOOL_TABS,
         TOOL_EXTRACT,
         TOOL_EXPECT,
         TOOL_FIND,
@@ -1998,7 +1998,7 @@ mod tests {
     /// extended tool on top of `core` — so growing the extended set can never
     /// silently shrink or rename what `core` promises callers.
     #[test]
-    fn core_profile_is_exactly_the_known_12_tools() {
+    fn core_profile_is_exactly_the_known_core_tools() {
         let core = tools_for(Profile::Core);
         let names = tool_names(&core);
         assert_eq!(names.len(), CORE_TOOL_NAMES.len());
