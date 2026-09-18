@@ -2675,7 +2675,10 @@ pub fn relay_url() -> Option<String> {
     if let Some((_, _, ws)) = most_recently_focused_profile() {
         return Some(ws);
     }
-    list_relay_profiles().into_iter().next().map(|(_, _, ws)| ws)
+    list_relay_profiles()
+        .into_iter()
+        .next()
+        .map(|(_, _, ws)| ws)
 }
 
 /// Append a one-line record of how a CDP connection was established, to

@@ -1670,7 +1670,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                             Err(e) => {
                                 return error_response(
                                     &id,
-                                    &format!("Could not resolve target tab `{}`: {}", tab_ref_str, e),
+                                    &format!(
+                                        "Could not resolve target tab `{}`: {}",
+                                        tab_ref_str, e
+                                    ),
                                 );
                             }
                         },
@@ -3504,10 +3507,7 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     state.iframe_sessions.clear();
     state.active_frame_id = None;
 
-    let new_tab = cmd
-        .get("newTab")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let new_tab = cmd.get("newTab").and_then(|v| v.as_bool()).unwrap_or(false);
     let label = cmd.get("label").and_then(|v| v.as_str());
 
     if new_tab {
@@ -3523,7 +3523,10 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
                     params["handleAuthRequests"] = json!(true);
                 }
                 if let Some(mgr) = state.browser.as_ref() {
-                    let _ = mgr.client.send_command("Fetch.enable", Some(params), Some(&sid)).await;
+                    let _ = mgr
+                        .client
+                        .send_command("Fetch.enable", Some(params), Some(&sid))
+                        .await;
                 }
             }
         }
@@ -4496,7 +4499,7 @@ async fn handle_do_action(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     // (the tree cannot say for this action). Callers that treat null as true
     // are back to the silent success this command exists to avoid.
     let confirmed = match (&after_actions, decidable) {
-        (Some(_), true) => Some(!warning.is_some()),
+        (Some(_), true) => Some(warning.is_none()),
         _ => None,
     };
     let mut out = json!({
@@ -4989,7 +4992,11 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // `tab <id>` (targetId, then `t<N>`/label).
     if let Some(mgr) = state.browser.as_mut() {
         mgr.resync_targets().await.ok();
-        if let Some(tab_ref_str) = cmd.get("tab").or_else(|| cmd.get("tabId")).and_then(|v| v.as_str()) {
+        if let Some(tab_ref_str) = cmd
+            .get("tab")
+            .or_else(|| cmd.get("tabId"))
+            .and_then(|v| v.as_str())
+        {
             let tab_id = match mgr.tab_id_for_target(tab_ref_str) {
                 Some(id) => id,
                 None => {
@@ -5166,7 +5173,9 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     if cmd.get("base64").and_then(|v| v.as_bool()).unwrap_or(false) {
         let b64 = if resized.is_some() {
             std::fs::read(&result.path)
-                .map(|bytes| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes))
+                .map(|bytes| {
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+                })
                 .unwrap_or_else(|_| result.base64.clone())
         } else {
             result.base64.clone()
