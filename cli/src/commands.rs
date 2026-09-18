@@ -3125,6 +3125,40 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "diff" => parse_diff(&rest, &id),
 
         // === Batch ===
+        "jev" => {
+            if rest.first() != Some(&"run") {
+                return Err(ParseError::InvalidValue {
+                    message: "Usage: chrome-use jev run --goal <text> [--url <url>]".to_string(),
+                    usage: "jev run --goal <text> [--url <url>]",
+                });
+            }
+            let mut cmd = json!({ "id": id, "action": "jev" });
+            let mut goal: Vec<&str> = Vec::new();
+            let mut i = 1;
+            while i < rest.len() {
+                match rest[i] {
+                    "--goal" if i + 1 < rest.len() => {
+                        goal.push(rest[i + 1]);
+                        i += 1;
+                    }
+                    "--url" if i + 1 < rest.len() => {
+                        cmd["url"] = json!(rest[i + 1]);
+                        i += 1;
+                    }
+                    other => goal.push(other),
+                }
+                i += 1;
+            }
+            if goal.is_empty() {
+                return Err(ParseError::InvalidValue {
+                    message: "jev run needs a goal: --goal <text>".to_string(),
+                    usage: "jev run --goal <text> [--url <url>]",
+                });
+            }
+            cmd["goal"] = json!(goal.join(" "));
+            Ok(cmd)
+        }
+
         "batch" => {
             let bail = rest.contains(&"--bail");
             let commands: Vec<&str> = rest.iter().filter(|a| **a != "--bail").copied().collect();

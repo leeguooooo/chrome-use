@@ -12,6 +12,7 @@ mod findurl;
 mod flags;
 mod friction;
 mod install;
+mod jev;
 mod mcp;
 mod native;
 mod output;
@@ -2936,6 +2937,46 @@ fn main() {
             }
             exit(1);
         }
+    }
+
+    // `jev run --goal <text> [--url <url>]`: Jev-driven agent loop, in-process.
+    if cmd.get("action").and_then(|v| v.as_str()) == Some("jev") {
+        let opts = jev::Options {
+            goal: cmd["goal"].as_str().unwrap_or("").to_string(),
+            url: cmd["url"].as_str().map(str::to_string),
+        };
+        match jev::run(&flags, opts) {
+            Ok(result) => {
+                if flags.json {
+                    println!(
+                        "{}",
+                        json!({"success": true, "data": result, "error": null})
+                    );
+                } else {
+                    println!(
+                        "{} {} in {:.1}s ({} decisions, {} actions) - {}",
+                        color::success_indicator(),
+                        result["status"].as_str().unwrap_or(""),
+                        result["elapsed_ms"].as_f64().unwrap_or(0.0) / 1000.0,
+                        result["decisions"],
+                        result["actions"],
+                        result["url"].as_str().unwrap_or("")
+                    );
+                }
+                if result["status"] != "done" {
+                    exit(1);
+                }
+            }
+            Err(e) => {
+                if flags.json {
+                    print_json_error(e);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), e);
+                }
+                exit(1);
+            }
+        }
+        return;
     }
 
     // Handle batch command: from args or stdin
