@@ -1,8 +1,29 @@
 # Changelog
 
-## 1.5.123
+## 1.5.124
 
 <!-- release:start -->
+### Performance
+
+- **Every command was ~150ms slower than it needed to be.** Before dispatching anything, the CLI slept 150ms and probed the daemon socket a second time, on every call, even when the daemon was healthy. That sleep was about 95% of a warm command: `eval` goes from 167ms to 11ms median. On a Jev-driven Google Flights search (about 60 browser calls) the whole task went from 20.0s to 14.1s median over five alternating runs, all verified. The sleep guarded against connecting to a daemon that was shutting down; `close` now unlinks the socket before its shutdown delay, so a successful connect already means the daemon is serving.
+
+### Bug Fixes
+
+- **`eval` of an `async` function that declares a variable returned `{}`.** `(async () => { const x = {a: 1}; return x; })()` came back empty. Scripts that declare a top-level `let`/`const` run in Chrome's replMode so they can be redeclared across calls, and replMode does not await promises. The "might return a promise" check did not look for `async`. It now matches `async` and `Promise` as whole words, so identifiers like `asyncData` still get replMode.
+- `main` did not compile after the multi-tab change (two borrow errors), and three unit tests had not been updated for it; `chrome_use_tabs` is now counted as a core MCP tool in the tests, as it already was in the server.
+
+### New Features
+
+- Concurrent multi-tab workflows: `--new-tab` on navigation and explicit tab targeting (#330).
+- Trusted coordinate clicks on the extension relay; background tabs no longer wait on a paint before screenshots; agent screenshots as base64.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.123
+
 ### Bug Fixes
 
 - **v1.5.122's fix for #319 did not work; this is the real one.** `status` prints "driving A" above "profile: B" with two different ids. v1.5.122 moved the extension version into a per-profile file but still looked it up with the wrong id, so the same mistake simply entered somewhere else and the symptom survived — one `status` run after upgrading showed it unchanged. The actual defect is larger than the original diagnosis: "which profile is driving" had **two unrelated implementations**. The one that decides which browser is actually bound picks by window focus; the ones that report it to you — the `profile:` line, `drivingProfileId`, `browsers`' default column, `doctor`, and the version resolver — all used the other one, "whichever worker connected last". With two profiles connected those disagree. They are now a single resolver, preferring the focus-based answer that the endpoint selection actually uses and falling back to the generic sidecar only where the focus answer is deliberately absent (fewer than two profiles, an extension too old to report focus, or a tie) — which are exactly the cases where the generic one is right.
@@ -11,7 +32,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.122
 

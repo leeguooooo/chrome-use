@@ -5821,10 +5821,20 @@ mod tests {
 /// Whether an `eval` script may evaluate to a promise, which must be awaited
 /// and so cannot run under `replMode`. An `async` function returns a promise
 /// even when it never awaits, so `async` counts on its own.
+///
+/// `async` and `Promise` match as whole words only, so an identifier such as
+/// `asyncData` or `myPromise` keeps replMode and can still be redeclared.
 fn script_may_return_promise(script: &str) -> bool {
-    ["async", "await", ".then(", "fetch(", "Promise"]
+    if ["await", ".then(", "fetch("]
         .iter()
         .any(|needle| script.contains(needle))
+    {
+        return true;
+    }
+    static WORDS: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
+    WORDS
+        .get_or_init(|| regex_lite::Regex::new(r"\b(async|Promise)\b").unwrap())
+        .is_match(script)
 }
 
 #[cfg(test)]
@@ -5842,5 +5852,8 @@ mod eval_mode_tests {
         assert!(!script_may_return_promise(
             "(() => { const x = {a: 1}; return x; })()"
         ));
+        assert!(!script_may_return_promise("let asyncData = 1; asyncData"));
+        assert!(!script_may_return_promise("const myPromise = 2; myPromise"));
+        assert!(script_may_return_promise("new Promise(r => r(1))"));
     }
 }
