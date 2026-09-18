@@ -517,6 +517,17 @@ async fn handle_connection<S>(
                     if let Some(ref path) = stream_file_cleanup {
                         let _ = fs::remove_file(path);
                     }
+                    // Unlink the socket before the shutdown delay so a new CLI
+                    // call sees no daemon and spawns one, instead of connecting
+                    // to this one while it exits.
+                    #[cfg(unix)]
+                    {
+                        let session_id = state.lock().await.session_id.clone();
+                        let _ = fs::remove_file(
+                            crate::connection::get_socket_dir()
+                                .join(format!("{}.sock", session_id)),
+                        );
+                    }
                     // Signal the daemon loop to exit gracefully instead of
                     // calling process::exit(), which skips destructors and
                     // can leave Chrome processes orphaned (issue #1113).

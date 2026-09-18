@@ -1030,11 +1030,10 @@ pub(crate) fn ensure_daemon_with_lifecycle_lock(
     }
 
     if ready {
-        // Double-check it's actually responsive by waiting and checking again
-        // This handles the race condition where daemon is shutting down
-        // (daemon has a 100ms shutdown delay, so we wait longer)
-        thread::sleep(Duration::from_millis(150));
-        if daemon_ready(session) {
+        // No settle-and-recheck sleep here: it cost every command ~150ms. A
+        // closing daemon unlinks its socket before its 100ms shutdown delay,
+        // so a successful connect already means it is still serving.
+        {
             // Check version: if the running daemon is from a different CLI
             // version (e.g. after an upgrade), kill it and start a fresh one.
             if !daemon_version_matches(session) {
