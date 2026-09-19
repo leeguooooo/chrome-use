@@ -11,9 +11,12 @@
 
 - **`--cdp` could adopt a hung tab and fail every command for 30s.** On connect, every existing page tab was adopted and the first made active without checking it. When that tab's renderer was hung, the first command waited out a 30s `Page.enable` and reported the tab as gone. Each tab is now released from any debugger wait and probed with a 2s evaluation; the first that answers is driven, otherwise a fresh tab is opened and the hung ones are left alone. On a 1 GB Linux host with a hung Google Flights tab, `open` went from 3/6 (each failure 30s) to 6/6.
 
+- **Multi-tab concurrency isolation** (#334 by @AmeerAliAnwar, integrated in #335): per-tab state so concurrent sessions driving different tabs do not clobber each other, a `tab switch` alias, `chrome_use_tabs` back in the extended MCP profile so `core` is the original 12 tools, and screenshots bring a background tab to front so headful Chrome keeps producing frames for the capture.
+
 ### Contributors
 
 - @leeguooooo
+- @AmeerAliAnwar
 <!-- release:end -->
 
 ## 1.5.124
