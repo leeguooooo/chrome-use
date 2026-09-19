@@ -4161,7 +4161,8 @@ impl BrowserManager {
             &self.owned_targets(),
         ) {
             return Err(format!(
-                "Refusing to select tab {} because this session did not create or adopt it",
+                "Refusing to select tab {} because this session did not create or adopt it (use `tab adopt {}` or `--adopt` to drive it)",
+                format_tab_id(target.tab_id),
                 format_tab_id(target.tab_id)
             ));
         }

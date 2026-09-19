@@ -8484,18 +8484,26 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
         .ok_or("Missing 'tabId' parameter (expected `t<N>`, a label, or a targetId)")?;
     let (mut result, old_target, new_target) = {
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-        // Re-sync first so a tab opened by another session, or one that re-attached
-        // after a cross-process nav, is adoptable from here (issue #21).
-        mgr.resync_targets().await.ok();
-        // A CDP `targetId` (shown in `tab list`) is stable across sessions, so resolve
-        // it directly before falling back to the per-session `t<N>` / label form.
-        // `tab_switch_by_id` still refuses foreign targets; callers must explicitly
-        // `tab adopt <targetId>` before driving a pre-existing tab.
-        let tab_id = match mgr.tab_id_for_target(tab_ref_str) {
+        // Try resolving locally first. Only resync targets if the target is unknown,
+        // avoiding an unnecessary duplicate discovery round-trip on every switch.
+        let resolved = mgr.tab_id_for_target(tab_ref_str).or_else(|| {
+            super::browser::TabRef::parse(tab_ref_str)
+                .ok()
+                .and_then(|r| mgr.resolve_tab_ref(&r).ok())
+        });
+        let tab_id = match resolved {
             Some(id) => id,
             None => {
-                let tab_ref = super::browser::TabRef::parse(tab_ref_str)?;
-                mgr.resolve_tab_ref(&tab_ref)?
+                // Re-sync first so a tab opened by another session, or one that re-attached
+                // after a cross-process nav, is adoptable from here (issue #21).
+                mgr.resync_targets().await.ok();
+                match mgr.tab_id_for_target(tab_ref_str) {
+                    Some(id) => id,
+                    None => {
+                        let tab_ref = super::browser::TabRef::parse(tab_ref_str)?;
+                        mgr.resolve_tab_ref(&tab_ref)?
+                    }
+                }
             }
         };
         let old_target = mgr.active_target_id().ok().map(ToString::to_string);

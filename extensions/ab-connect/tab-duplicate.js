@@ -54,7 +54,13 @@ async function settleOrVerify(operation, verify, deadline, operationTimeoutMs, s
       stage,
     )
   } catch (error) {
-    if (await observeWithin(verify, remainingTime(deadline))) return
+    if (
+      await observeWithin(
+        verify,
+        Math.max(remainingTime(deadline), Math.min(operationTimeoutMs, 25)),
+      )
+    )
+      return
     throw error
   }
 }
