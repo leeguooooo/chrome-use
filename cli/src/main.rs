@@ -2948,9 +2948,11 @@ fn main() {
         match jev::run(&flags, opts) {
             Ok(result) => {
                 if flags.json {
+                    let done = result["status"] == "done";
+                    let error = (!done).then(|| format!("jev run ended {}", result["status"]));
                     println!(
                         "{}",
-                        json!({"success": true, "data": result, "error": null})
+                        json!({"success": done, "data": result, "error": error})
                     );
                 } else {
                     let indicator = if result["status"] == "done" {
