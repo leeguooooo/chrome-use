@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.124
+## 1.5.125
 
 <!-- release:start -->
+### New Features
+
+- **`chrome-use jev run --goal <text> [--url <url>]`**: a browser agent in which TypeSafe's Jev picks each step's operation and target from an indexed element table, and a small OpenAI-compatible model (default `inception/mercury-2.5` on OpenRouter) writes text only when a field needs typing. The policy is adapted from browser-use/jev-ultrafast (MIT); the browser layer is this CLI's own daemon socket, so no process is spawned per step. Keys come from `TYPESAFE_API_KEY` / `TEXT_MODEL_API_KEY` or `~/.config/typesafe/key` / `~/.config/openrouter/key`. On the Google Flights task (Zurich to London) from Tokyo it finishes in 11 to 13s; most of that is Jev round trips, about 460 ms each from Japan versus about 150 ms from Los Angeles. An explicit "no value for this field" from the text model ends the run as `blocked`, and `--json` reports `success` from the run status.
+
+### Bug Fixes
+
+- **`--cdp` could adopt a hung tab and fail every command for 30s.** On connect, every existing page tab was adopted and the first made active without checking it. When that tab's renderer was hung, the first command waited out a 30s `Page.enable` and reported the tab as gone. Each tab is now released from any debugger wait and probed with a 2s evaluation; the first that answers is driven, otherwise a fresh tab is opened and the hung ones are left alone. On a 1 GB Linux host with a hung Google Flights tab, `open` went from 3/6 (each failure 30s) to 6/6.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.124
+
 ### Performance
 
 - **Every command was ~150ms slower than it needed to be.** Before dispatching anything, the CLI slept 150ms and probed the daemon socket a second time, on every call, even when the daemon was healthy. That sleep was about 95% of a warm command: `eval` goes from 167ms to 11ms median. On a Jev-driven Google Flights search (about 60 browser calls) the whole task went from 20.0s to 14.1s median over five alternating runs, all verified. The sleep guarded against connecting to a daemon that was shutting down; `close` now unlinks the socket before its shutdown delay, so a successful connect already means the daemon is serving.
@@ -20,7 +35,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.123
 
