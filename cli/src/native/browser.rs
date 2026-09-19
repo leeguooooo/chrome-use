@@ -985,6 +985,8 @@ pub fn console_capture_enabled() -> bool {
 }
 
 const LIGHTPANDA_CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long an existing tab gets to answer before `connect` skips it as hung.
+const ADOPT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const LIGHTPANDA_CDP_CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const LIGHTPANDA_TARGET_INIT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -1576,10 +1578,37 @@ impl BrowserManager {
                     target_type: target.target_type.clone(),
                 });
             }
-            self.active_page_index = 0;
-            self.pin_active_target();
-            let session_id = self.pages[0].session_id.clone();
-            self.enable_domains(&session_id).await?;
+            // Drive the first tab whose renderer answers. A hung renderer (seen on
+            // memory-starved hosts) never replies, so adopting it blindly made the
+            // first command wait out a 30s Page.enable and report the tab as gone.
+            let mut responsive = None;
+            for (index, page) in self.pages.iter().enumerate() {
+                let probe = self.client.send_command(
+                    "Runtime.evaluate",
+                    Some(json!({ "expression": "1", "returnByValue": true })),
+                    Some(&page.session_id),
+                );
+                if matches!(
+                    tokio::time::timeout(ADOPT_PROBE_TIMEOUT, probe).await,
+                    Ok(Ok(_))
+                ) {
+                    responsive = Some(index);
+                    break;
+                }
+            }
+            match responsive {
+                Some(index) => {
+                    self.active_page_index = index;
+                    self.pin_active_target();
+                    let session_id = self.pages[index].session_id.clone();
+                    self.enable_domains(&session_id).await?;
+                }
+                // Leave the unresponsive tabs alone (they may be the user's) and
+                // work in a fresh one.
+                None => {
+                    self.tab_new(None, None).await?;
+                }
+            }
         }
 
         Ok(())
