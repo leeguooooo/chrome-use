@@ -1583,6 +1583,16 @@ impl BrowserManager {
             // first command wait out a 30s Page.enable and report the tab as gone.
             let mut responsive = None;
             for (index, page) in self.pages.iter().enumerate() {
+                // An explicitly attached target can be waiting for the debugger;
+                // release it first so a healthy tab is not mistaken for a hung one.
+                let _ = tokio::time::timeout(
+                    ADOPT_PROBE_TIMEOUT,
+                    self.client.send_command_no_params(
+                        "Runtime.runIfWaitingForDebugger",
+                        Some(&page.session_id),
+                    ),
+                )
+                .await;
                 let probe = self.client.send_command(
                     "Runtime.evaluate",
                     Some(json!({ "expression": "1", "returnByValue": true })),

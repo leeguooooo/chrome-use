@@ -573,7 +573,9 @@ impl Models {
         })
     }
 
-    fn field_text(&self, context: Value) -> Result<(String, u128), String> {
+    /// `Ok(None)` when the helper answers `{"text": null}`: the goal does not
+    /// supply a value for this field, which ends the run as blocked.
+    fn field_text(&self, context: Value) -> Result<Option<(String, u128)>, String> {
         let key = self.text_key.as_deref().ok_or(
             "TYPE_TEXT needs TEXT_MODEL_API_KEY (or ~/.config/openrouter/key); nothing is typed without it",
         )?;
@@ -608,8 +610,9 @@ impl Models {
             .and_then(Result::ok)
             .unwrap_or(Value::Null);
         match (parsed.as_object(), parsed["text"].as_str()) {
+            (Some(o), _) if o.len() == 1 && o.get("text") == Some(&Value::Null) => Ok(None),
             (Some(o), Some(t)) if o.len() == 1 && !t.trim().is_empty() && t.len() <= 2000 => {
-                Ok((t.to_string(), started.elapsed().as_millis()))
+                Ok(Some((t.to_string(), started.elapsed().as_millis())))
             }
             _ => {
                 let mut shown = result.to_string();
@@ -728,7 +731,9 @@ pub fn run(flags: &Flags, opts: Options) -> Result<Value, String> {
                     "page": {"title": page["title"], "text": page_text},
                     "recent_actions": recent,
                 });
-                let (value, ms) = models.field_text(context)?;
+                let Some((value, ms)) = models.field_text(context)? else {
+                    return Ok(Some("blocked"));
+                };
                 text_ms += ms;
                 text = Some(value);
             }

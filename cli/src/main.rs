@@ -2953,9 +2953,14 @@ fn main() {
                         json!({"success": true, "data": result, "error": null})
                     );
                 } else {
+                    let indicator = if result["status"] == "done" {
+                        color::success_indicator()
+                    } else {
+                        color::error_indicator()
+                    };
                     println!(
                         "{} {} in {:.1}s ({} decisions, {} actions) - {}",
-                        color::success_indicator(),
+                        indicator,
                         result["status"].as_str().unwrap_or(""),
                         result["elapsed_ms"].as_f64().unwrap_or(0.0) / 1000.0,
                         result["decisions"],

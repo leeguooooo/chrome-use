@@ -3137,12 +3137,20 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let mut i = 1;
             while i < rest.len() {
                 match rest[i] {
-                    "--goal" if i + 1 < rest.len() => {
-                        goal.push(rest[i + 1]);
-                        i += 1;
-                    }
-                    "--url" if i + 1 < rest.len() => {
-                        cmd["url"] = json!(rest[i + 1]);
+                    flag @ ("--goal" | "--url") => {
+                        let value = rest
+                            .get(i + 1)
+                            .copied()
+                            .filter(|v| !v.starts_with("--"))
+                            .ok_or_else(|| ParseError::InvalidValue {
+                                message: format!("jev run: {flag} needs a value"),
+                                usage: "jev run --goal <text> [--url <url>]",
+                            })?;
+                        if flag == "--goal" {
+                            goal.push(value);
+                        } else {
+                            cmd["url"] = json!(value);
+                        }
                         i += 1;
                     }
                     other => goal.push(other),
@@ -5101,6 +5109,34 @@ mod tests {
         assert!(parse(&["keep", "--as"]).is_err());
         assert!(parse(&["keep", "--unknown"]).is_err());
         assert!(parse(&["keep", "--release", "extra"]).is_err());
+    }
+
+    #[test]
+    fn jev_run_requires_a_goal_and_flag_values() {
+        let parse = |a: &[&str]| {
+            let a: Vec<String> = a.iter().map(|s| s.to_string()).collect();
+            parse_command(&a, &default_flags())
+        };
+        let cmd = parse(&[
+            "jev",
+            "run",
+            "--url",
+            "https://x.test",
+            "--goal",
+            "find",
+            "flights",
+        ])
+        .expect("jev run parses");
+        assert_eq!(cmd["action"], "jev");
+        assert_eq!(cmd["url"], "https://x.test");
+        assert_eq!(cmd["goal"], "find flights");
+
+        // A flag without its value is a usage error, not part of the goal.
+        assert!(parse(&["jev", "run", "--goal"]).is_err());
+        assert!(parse(&["jev", "run", "--goal", "x", "--url"]).is_err());
+        assert!(parse(&["jev", "run", "--goal", "--url", "https://x.test"]).is_err());
+        assert!(parse(&["jev", "run"]).is_err());
+        assert!(parse(&["jev"]).is_err());
     }
 
     fn default_flags() -> Flags {
