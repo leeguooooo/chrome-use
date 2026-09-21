@@ -1,4 +1,4 @@
-# Skill loading audit and local pilot, 2026-09-21
+# Skill loading audit and local pilot, 2026-09-21 to 2026-09-22
 
 The core reduction has a loading-path limitation. The repository discovery skill
 and the locally installed skill were identical (SHA-256
@@ -34,7 +34,7 @@ to old core (9,443) versus new core (2,460).
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | Old core + CLI | PASS, one correct submission | 59.68 | 15 | 3 | 249,352 | 219,392 | 29,960 | 871 |
 | New core + CLI | PASS, one correct submission | 50.74 | 12 | 2 | 180,979 | 145,792 | 35,187 | 743 |
-| Native MCP | SETUP_BLOCKED by tool approval | 18.57 | 1 rejected | 0 | 82,033 | 62,464 | 19,569 | 161 |
+| Native MCP, approved local retry | PASS, one correct submission | 42.24 | 13 | 0 | 257,646 | 228,608 | 29,038 | 581 |
 
 Both CLI agents selected Folder, filled every requested value correctly, submitted
 exactly once, and reported the matching visible receipt. The server-side oracle
@@ -51,9 +51,29 @@ calls, but it establishes neither general quality nor a speedup distribution.
 Uncached input increased even though total input decreased; do not claim a
 billing reduction. Run order and cache reuse were not counterbalanced.
 
-The MCP attempt never reached the page. Its approval rejection must not be
-ranked as a performance or task-quality result. The runner requests explicit
-permission before a process-local test-server approval override.
+The first MCP attempt was SETUP_BLOCKED (18.57 seconds, one rejected call,
+82,033 input / 62,464 cached input / 161 output tokens) and never reached the
+page. It is excluded from the table and must not be ranked as a performance
+or task-quality result.
+
+On 2026-09-22, the user explicitly approved this local evaluation process only.
+The retry used `--approve-mcp`, which adds
+`mcp_servers.chrome_eval.default_tools_approval_mode="approve"` to that child
+process's argv. No global config was modified. It used the same fixed binary,
+fixture server and synthetic task, with a new case ID and isolated browser.
+All 13 calls were native MCP calls; none used shell commands, page scripts,
+fixture source, or the oracle API. The agent selected Folder, submitted the
+exact expected values once, and reported a receipt matching the oracle. All
+MCP calls completed without errors. Session cleanup exited zero.
+
+MCP made five snapshots, one open, three fills, one select, and three clicks.
+It did not load a skill reference. Its total input was higher than new core +
+CLI, while uncached input was lower. The shorter elapsed time is one observation,
+not proof that MCP is faster: the approved retry ran later than the CLI arms,
+with uncontrolled provider latency/cache history, and the concrete model ID
+was not exposed. MCP also used a shorter policy, so this does not isolate the
+protocol from guidance differences. The result supports further evaluation,
+not switching the default interface or claiming equivalent general reliability.
 
 Raw prompts/events and command records remain in a private temporary directory,
 not in this repository. The fixture and runner live in `bench/skill-eval/`.
