@@ -160,6 +160,8 @@ $ chrome-use open https://github.com/my-org/repo
 
 <br clear="all">
 
+已安装的发现入口应引导 agent 执行 `chrome-use skills get core`，不应另带一套命令手册。若旧副本只有自己的操作说明而没有这一步，应先用 `chrome-use skills update` 刷新入口，再比较 core 指南的变化。
+
 ## 用法
 
 `chrome-use skills get core` 包含日常操作循环和普通表单命令。按任务需要加载 `core/reading`、`core/connection` 或 `core/site-adapters`；普通点击不必另读 reference。每次只读取能回答下一步问题的状态，页面给出足以确认目标的信号后就停止验证。

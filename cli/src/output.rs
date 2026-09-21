@@ -4413,6 +4413,9 @@ Subcommands:
 Options:
   --json                     Output as JSON
 
+The installed discovery skill loads `skills get core` before browser commands.
+If an older copy carries its own manual without that handoff, refresh it below.
+
 Two different things can be out of date, and only one of them needs `update`:
 
   * the content `skills get` prints is bundled INTO this binary, so it always

@@ -35,7 +35,8 @@ struct SkillInfo {
 /// - `skills/` — discovery stubs (picked up by `npx skills add`). Hidden from
 ///   `skills list` and `skills get --all` inside the CLI by virtue of living
 ///   here, since they exist only to redirect external agents to
-///   `skills get core`.
+///   `skills get core`; the installed stub must explicitly perform this handoff
+///   rather than duplicating the runtime command manual.
 /// - `skill-data/` — runtime skill content served by the CLI (`core`,
 ///   `electron`, `slack`, `dogfood`, etc.). Core keeps ordinary actions and
 ///   observation rules in its entry point; task-specific reading, connection,
