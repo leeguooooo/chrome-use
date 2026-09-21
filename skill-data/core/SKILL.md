@@ -197,7 +197,8 @@ reference, not the entire collection. Basic actions above are self-contained.
 `chrome-use skills get core --full` includes references and templates; use it
 only when you need the whole collection. Content is bundled into the binary,
 so upgrading the binary updates it. `skills update` refreshes the runner's
-installed discovery stub instead.
+installed discovery stub instead. If the installed entry contains its own
+command manual without loading core, refresh that entry before relying on it.
 
 Unexpected failures are logged locally by `chrome-use friction` (disable with
 `AGENT_BROWSER_NO_FRICTION_LOG=1`). If reporting a bug is authorized, include
