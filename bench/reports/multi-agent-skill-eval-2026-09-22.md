@@ -126,3 +126,20 @@ migration was introduced. The separate wait-diagnostic repair is reviewed and
 validated before integration. The discovery-entry PR also fixes historical-only
 fixture provisioning, requires explicit browser-trace review before PASS, and
 bounds its setup/process cleanup.
+
+## Wait diagnostic repair validation
+
+The follow-up source change keeps wait matching unchanged, reports an unobserved
+condition without diagnosing connection health, and replaces the core guide's
+literal `Saved` example with an explicit expected-text placeholder. Both READMEs,
+command help and the bilingual waiting pages explain case-sensitive matching and
+avoiding another wait after the requested receipt is already visible.
+
+The coordinator rebuilt the candidate and used a fresh isolated real browser:
+with visible text `Delivery saved.`, `wait --text Saved --timeout 500` failed
+with the neutral condition hint; `wait --text "Delivery saved." --timeout 500`
+succeeded, and a subsequent text read succeeded in the same session. Cleanup
+exited zero. The focused Rust regression also passed and preserves the separate
+CDP-timeout diagnostic path. No model rerun or general performance gain is claimed
+for this follow-up. The installed public binary remained v1.5.133 at validation;
+source integration is distinct from publishing a new binary.
