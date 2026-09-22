@@ -77,3 +77,17 @@ not switching the default interface or claiming equivalent general reliability.
 
 Raw prompts/events and command records remain in a private temporary directory,
 not in this repository. The fixture and runner live in `bench/skill-eval/`.
+
+## Review follow-up
+
+The pilot runner initially copied current skill data before overlaying historical
+files. Three current-only references therefore remained available in the old arm.
+The recorded old-arm calls loaded only `core`, `core/interacting`, and
+`core/trust-boundaries`, whose actual contents were historical; none of the extra
+references was loaded. This preparation defect is retained as a limitation of
+the pilot. Future old arms now materialize only the historical Git tree.
+
+PASS labels above include the coordinator's browser-call and receipt review,
+not just the fixture's server acceptance. The runner now labels a server-accepted
+run `NEEDS_TRACE_REVIEW` until that separate review is performed, captures
+provenance, refuses an existing output directory, and always attempts cleanup.

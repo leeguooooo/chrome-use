@@ -60,3 +60,22 @@ One run per arm is a smoke test, not evidence of a performance distribution or
 non-inferiority. Follow with fresh sessions, repeated trials in counterbalanced
 order, and tasks covering dynamic options, failed submissions, auth boundaries,
 and canvas before selecting a default or claiming general improvement.
+
+## Trace review is mandatory
+
+The fixture's `accepted` field only confirms application values and submission
+count. It does not prove browser use: directly posting the expected body could
+also satisfy it. The runner never promotes that field to PASS. A successful
+server result produces `NEEDS_TRACE_REVIEW`; failed server checks produce FAIL.
+
+Before marking a run PASS, the coordinator must inspect the raw CLI/MCP events
+for the same case URL, required visible UI flow, one submission, and observed
+receipt matching the final answer. Direct HTTP submissions, fabricated tool
+logs, or missing browser evidence are not passing runs. Preserve the review
+alongside the run. This is an evaluation harness with manual trace review, not
+an adversarially isolated execution environment.
+
+A run directory must be new; existing artifacts are never overwritten. Old-arm
+guides come only from the historical Git tree. `provenance.json` records the
+repository revision, dirty-state flag, guide hashes and redacted invocation.
+Browser cleanup is attempted in `finally`, including result-reader failures.
