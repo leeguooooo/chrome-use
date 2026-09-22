@@ -88,7 +88,7 @@
       </div>
 
       <ul>
-        <li><strong>Windows:</strong> download <code>chrome-use-win32-x64.tar.gz</code> from the <a href="https://github.com/leeguooooo/chrome-use/releases">Releases page</a> and put <code>chrome-use.exe</code> on your PATH. The extension path for connecting to your real Chrome works on Windows too—see the next section.</li>
+        <li><strong>Windows:</strong> download <code>chrome-use-win32-x64.tar.gz</code> and its <code>.sha256</code> from the <a href="https://github.com/leeguooooo/chrome-use/releases">Releases page</a>, check that <code>(Get-FileHash chrome-use-win32-x64.tar.gz -Algorithm SHA256).Hash</code> matches the <code>.sha256</code>, extract with <code>tar -xzf</code>, and put <code>chrome-use.exe</code> on your PATH. Check the hash before running it: an interrupted download still extracts into an <code>.exe</code>, which then fails at launch with an access violation (<code>0xC0000005</code>) rather than saying the download was incomplete. The extension path for connecting to your real Chrome works on Windows too—see the next section.</li>
         <li><strong>npm (legacy):</strong> <code>npm install -g chrome-use</code> is still published, but GitHub Releases is the primary channel now.</li>
       </ul>
 

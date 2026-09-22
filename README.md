@@ -82,7 +82,7 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 
 - **Pin a version:** `AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh`
 - **Custom location:** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
-- **Windows:** download `chrome-use-win32-x64.tar.gz` from the [Releases page](https://github.com/leeguooooo/chrome-use/releases) and put `chrome-use.exe` on your PATH.
+- **Windows:** download `chrome-use-win32-x64.tar.gz` and its `.sha256` from the [Releases page](https://github.com/leeguooooo/chrome-use/releases), check that `(Get-FileHash chrome-use-win32-x64.tar.gz -Algorithm SHA256).Hash` matches the `.sha256` file, extract with `tar -xzf chrome-use-win32-x64.tar.gz`, and put `chrome-use.exe` on your PATH. Check the hash before running it: an interrupted download still extracts into an `.exe`, which then fails at launch with an access violation (exit code `-1073741819`, `0xC0000005`) rather than anything that says the download was incomplete.
 - **npm (legacy):** `npm install -g chrome-use`. Still published, but GitHub Releases is the primary channel now.
 </details>
 
