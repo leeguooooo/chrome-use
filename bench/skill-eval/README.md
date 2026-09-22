@@ -79,3 +79,11 @@ A run directory must be new; existing artifacts are never overwritten. Old-arm
 guides come only from the historical Git tree. `provenance.json` records the
 repository revision, dirty-state flag, guide hashes and redacted invocation.
 Browser cleanup is attempted in `finally`, including result-reader failures.
+
+Provisioning Git calls have a 60-second budget each. The runner requires a POSIX
+host and starts the model CLI in a separate process group, terminating the group
+on timeout and escalating to KILL after a short grace period. Detached browser
+workers are handled by the separate session cleanup. On macOS, a temporary
+`caffeinate -i -w <child-pid>` assertion prevents idle system sleep only while
+that test child runs; it does not keep the display awake or change global settings.
+Manual sleep and other environment interruptions still invalidate latency claims.

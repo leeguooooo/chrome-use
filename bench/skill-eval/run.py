@@ -5,7 +5,38 @@ Raw logs stay in --output (use a private temporary directory). The fixture
 server independently checks the submitted values and duplicate submissions.
 """
 
-import argparse, json, os, pathlib, shutil, subprocess, time, urllib.request
+import argparse
+import json
+import os
+import pathlib
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
+
+
+GIT_TIMEOUT_SECONDS = 60
+
+
+def git_output(argv, *, cwd, text=False):
+    try:
+        return subprocess.check_output(
+            argv, cwd=cwd, text=text, timeout=GIT_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SystemExit(
+            f"Git provisioning timed out after {GIT_TIMEOUT_SECONDS}s: {argv[1]}"
+        ) from exc
+
+
+def signal_group(process, sig):
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
 
 p = argparse.ArgumentParser()
 p.add_argument("--binary", required=True)
@@ -20,6 +51,8 @@ p.add_argument(
     help="Use only with explicit user approval for this local test server",
 )
 a = p.parse_args()
+if os.name != "posix":
+    p.error("This evaluation runner requires POSIX process-group isolation")
 root = pathlib.Path(a.output).resolve()
 root.mkdir(parents=True, exist_ok=True)
 run = root / a.arm
@@ -43,7 +76,7 @@ if a.arm != "mcp":
     data = run / "skill-data"
     if a.arm == "old":
         data.mkdir()
-        for relative in subprocess.check_output(
+        for relative in git_output(
             ["git", "ls-tree", "-r", "--name-only", "95ea98e7", "skill-data"],
             cwd=repo,
             text=True,
@@ -51,9 +84,7 @@ if a.arm != "mcp":
             target = data / pathlib.Path(relative).relative_to("skill-data")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(
-                subprocess.check_output(
-                    ["git", "show", "95ea98e7:" + relative], cwd=repo
-                )
+                git_output(["git", "show", "95ea98e7:" + relative], cwd=repo)
             )
     else:
         shutil.copytree(repo / "skill-data", data)
@@ -173,13 +204,11 @@ try:
     (run / "provenance.json").write_text(
         json.dumps(
             {
-                "repository_revision": subprocess.check_output(
+                "repository_revision": git_output(
                     ["git", "rev-parse", "HEAD"], cwd=repo, text=True
                 ).strip(),
                 "repository_dirty": bool(
-                    subprocess.check_output(
-                        ["git", "status", "--porcelain"], cwd=repo, text=True
-                    )
+                    git_output(["git", "status", "--porcelain"], cwd=repo, text=True)
                 ),
                 "guide_files_sha256": files,
                 "codex_argv": redacted_argv,
@@ -199,17 +228,34 @@ try:
             stdout=out,
             stderr=err,
             text=True,
+            start_new_session=True,
         )
+        guard = None
+        if sys.platform == "darwin":
+            guard = subprocess.Popen(
+                ["/usr/bin/caffeinate", "-i", "-w", str(process.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         try:
             process.communicate(prompt, timeout=a.timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            process.terminate()
+            signal_group(process, signal.SIGTERM)
             try:
-                process.wait(timeout=10)
+                process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                pass
+            # A child may ignore TERM even if its parent exited; kill the group.
+            signal_group(process, signal.SIGKILL)
+            process.wait(timeout=3)
+        finally:
+            if guard is not None:
+                try:
+                    guard.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    guard.terminate()
+                    guard.wait(timeout=3)
     elapsed = time.monotonic() - started
     with urllib.request.urlopen(
         f"http://127.0.0.1:{a.port}/result/{case_id}", timeout=5
