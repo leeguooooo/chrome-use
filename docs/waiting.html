@@ -80,6 +80,14 @@
       <p>任何会改变页面的动作之后，从下面三种里挑一个：</p>
       <ul>
         <li>等你预期会出现的<strong>具体元素</strong>：<code>wait @ref</code> 或 <code>wait --text "..."</code>。</li>
+        <li><code>--text</code> 匹配的是页面可见文本的<strong>精确、区分大小写</strong>的子串。
+          <code>--text "Saved"</code> 匹配不上写着 <code>Delivery saved.</code> 的页面——
+          先读页面，按它实际渲染出来的字匹配。</li>
+        <li>已经能看见的结果<strong>就是</strong>答案。屏幕上已有的回执或确认不需要再用一次
+          <code>wait</code> 去确认第二遍，那只是白花预算。</li>
+        <li><code>Wait timed out after …</code> 的意思是在预算内没有观察到该条件。失败的探测会一直重试到截止，
+          所以无论页面每次都回应还是一次都没回应，这条消息都长一样——<strong>它对连接好坏什么都没说</strong>。
+          先检查页面和条件，不要仅凭它去重连。</li>
         <li>等 <strong>URL 变化</strong>：<code>wait --url "**/new-page"</code>。</li>
         <li>等<strong>网络空闲</strong>（SPA 导航的万能兜底）：<code>wait --load networkidle</code>。</li>
       </ul>

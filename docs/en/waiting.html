@@ -80,6 +80,15 @@
       <p>After any action that changes the page, pick one of these three:</p>
       <ul>
         <li>Wait for the <strong>specific element</strong> you expect to appear: <code>wait @ref</code> or <code>wait --text "..."</code>.</li>
+        <li><code>--text</code> matches an <strong>exact, case-sensitive</strong> substring of the
+          page's visible text. <code>--text "Saved"</code> does not match a page reading
+          <code>Delivery saved.</code> — read the page and match what it actually renders.</li>
+        <li>A result you can already see <strong>is</strong> the answer. A receipt or confirmation
+          already on screen does not need a <code>wait</code> to confirm it a second time.</li>
+        <li><code>Wait timed out after …</code> means the condition was not observed in time. A failing
+          probe is retried until the deadline, so the message reads the same whether the page answered
+          every poll or none of them — <strong>it says nothing about the connection either way</strong>.
+          Check the page and the condition first; do not reconnect on the strength of it alone.</li>
         <li>Wait for the <strong>URL to change</strong>: <code>wait --url "**/new-page"</code>.</li>
         <li>Wait for the <strong>network to go idle</strong> (the catch-all for SPA navigations): <code>wait --load networkidle</code>.</li>
       </ul>

@@ -16,6 +16,17 @@ chrome-use wait --fn "window.myApp.ready === true"  # until JS condition
 After any page-changing action, pick one:
 
 - Wait for a specific element you expect to appear: `wait @ref` or `wait --text "..."`.
+- `--text` is an EXACT, case-sensitive substring of the page's visible text.
+  `--text "Saved"` does not match a page reading `Delivery saved.` Read the page
+  and match what it actually renders.
+- If a result you can already see answers the question, that IS the answer. A
+  receipt or confirmation already on screen does not need a `wait` to confirm it
+  a second time; that only spends the budget.
+- `Wait timed out after …` means the condition was not observed in time. A probe
+  that fails is retried until the deadline, so the message reads the same whether
+  the page answered every poll or none of them: it tells you nothing about the
+  connection either way. Check the page and the condition first; do not reconnect
+  on the strength of this message alone.
 - Wait for URL change: `wait --url "**/new-page"`.
 - Wait for network idle (catch-all for SPA navigation): `wait --load networkidle`.
 

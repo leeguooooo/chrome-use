@@ -2589,7 +2589,11 @@ Modes:
   --url <pattern>      Wait for URL to match pattern
   --load <state>       Wait for load state (load, domcontentloaded, networkidle)
   --fn <expression>    Wait for JavaScript expression to be truthy
-  --text <text>        Wait for text to appear on page (substring match)
+  --text <text>        Wait for text to appear on page. EXACT, case-sensitive
+                       substring of the page's visible text ("Saved" does not
+                       match "saved"), so match what the page actually renders.
+                       A timeout here means the condition was not observed; on
+                       its own it says nothing about the connection
   --download [path]    Wait for a download to complete (optionally save to path)
 
 Download Options (with --download):
