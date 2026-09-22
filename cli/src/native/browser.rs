@@ -706,30 +706,16 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     // `sessions` still reports the daemon alive (issue #117). Keep the concrete
     // failing method and spell out recovery instead of leaving a bare timeout.
     if lower.contains("timed out") {
-        // Our own polling wait reaching its deadline. It says the condition was
-        // not observed in time and NOTHING about the connection: `poll_until_true`
-        // deliberately swallows a probe that timed out or errored and keeps
-        // polling (actions.rs, "transient — keep polling until the deadline"),
-        // so every probe could have failed and this message would read the same.
-        //
-        // The generic branch below claimed a stale relay and told the caller to
-        // reconnect or close the session. A benchmark run hit that after
-        // `wait --text Saved` missed on case against a page already reading
-        // "Delivery saved. Receipt …", and the very next `get text` succeeded —
-        // a working session, thrown away on the strength of a message that could
-        // not support the claim. This branch does not make the opposite claim
-        // either; it says what is actually known and where to look first.
+        // Polling can reach this deadline after false results or failed probes.
+        // The deadline alone cannot diagnose transport health.
         if lower.contains("wait timed out after") {
             return format!(
                 "{error}\nHint: the condition was not observed within the budget. This timeout \
-                 on its own says nothing about the health of the connection — a probe that \
-                 fails is retried until the deadline, so it reads the same either way. Check \
-                 the current page and the condition before concluding anything, and do not \
-                 reconnect on the strength of this message alone.\n\
-                 `--text` matches an EXACT, case-sensitive substring of the page's visible text, \
-                 so match what the page actually renders (`Saved` will not match `saved`). If a \
-                 result you can already see answers the question, that IS the answer — do not \
-                 wait for a second confirmation of it."
+                 alone does not establish a connection failure. Check the current page and \
+                 the wait condition before reconnecting.\n\
+                 For `--text`, matching is case-sensitive (`Saved` does not match `saved`). \
+                 Use the page's actual wording. If the requested receipt or confirmation is \
+                 already visible, do not wait for a second confirmation."
             );
         }
         // A payload-sized command that ran out its (payload-scaled) budget is a
@@ -4699,7 +4685,7 @@ mod tests {
             "must not vouch for the connection: {out}"
         );
         assert!(
-            out.contains("says nothing about the health of the connection"),
+            out.contains("does not establish a connection failure"),
             "{out}"
         );
 

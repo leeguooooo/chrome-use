@@ -164,6 +164,8 @@ $ chrome-use open https://github.com/my-org/repo
 
 ## 用法
 
+等待条件超时本身不能判断浏览器是否断线。`wait --text` 按区分大小写的子串匹配，需使用页面实际文案；所需回执已经出现时，不要重复等待。
+
 `chrome-use skills get core` 包含日常操作循环和普通表单命令。按任务需要加载 `core/reading`、`core/connection` 或 `core/site-adapters`；普通点击不必另读 reference。每次只读取能回答下一步问题的状态，页面给出足以确认目标的信号后就停止验证。
 
 核心循环：打开、读取、操作、只重读变化的部分。
