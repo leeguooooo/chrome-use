@@ -5,13 +5,13 @@
 <!-- release:start -->
 ### Improvements
 
-- **Agent skill installation no longer needs Node, npx or Git.** `chrome-use skill install` writes the discovery entry bundled with the CLI, verifies the saved contents, and reports each installed path. It covers shared skills, Claude Code and Cursor, plus detected Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. Codex uses the shared directory so it does not discover a second copy. `--project`, `skills update` and `skills refresh` use the same offline installer. Other runners can still use skills.sh.
-- **The Windows installer also works with older CLI releases.** It extracts their bundled discovery skill directly, bypassing the old npx installer. UTF-8 decoding preserves Chinese content on Windows PowerShell 5.1. Replacing an existing skill is staged beside the destination; failed writes leave the previous file intact.
+- **Agent skill installation no longer needs Node, npx or Git.** `chrome-use skill install` writes the discovery entry bundled with the CLI, verifies the saved contents, and reports each installed path. It covers shared skills, Claude Code and Cursor, plus detected Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. Codex uses the shared directory so it does not discover a second copy. `--project`, `skills update` and `skills refresh` use the same offline installer. Other runners can still use skills.sh. (#343)
+- **The Windows installer also works with older CLI releases.** It extracts their bundled discovery skill directly, bypassing the old npx installer. UTF-8 decoding preserves Chinese content on Windows PowerShell 5.1. Replacing an existing skill is staged beside the destination; failed writes leave the previous file intact. (#343)
 
 ### Bug Fixes
 
-- **Installers no longer claim everything is ready after a failed step.** Skill installation failures, extension setup failures and doctor failures stop the completion message. The Windows self-check also reports its timeout. An explicitly skipped skill step is identified as skipped; successful CLI installation does not claim that the Chrome extension is connected.
-- **Windows doctor output matches the platform.** Disk space is checked through the Windows API, optional chat-key guidance uses PowerShell syntax, and macOS-only ChooseBrowser paths are omitted. Automatic encryption-key creation no longer comes with an unnecessary Unix setup command. Skill detection recognizes the native installer's destinations and custom runner configuration paths.
+- **Installers no longer claim everything is ready after a failed step.** Skill installation failures, extension setup failures and doctor failures stop the completion message. The Windows self-check also reports its timeout. An explicitly skipped skill step is identified as skipped; successful CLI installation does not claim that the Chrome extension is connected. (#343)
+- **Windows doctor output matches the platform.** Disk space is checked through the Windows API, optional chat-key guidance uses PowerShell syntax, and macOS-only ChooseBrowser paths are omitted. Automatic encryption-key creation no longer comes with an unnecessary Unix setup command. Skill detection recognizes the native installer's destinations and custom runner configuration paths. (#343)
 
 ### Contributors
 
