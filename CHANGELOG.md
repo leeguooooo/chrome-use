@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.135
+## 1.5.136
 
 <!-- release:start -->
+### Bug Fixes
+
+- **`jev run` no longer offers a field it already filled with the same text.** Retyping a field that still holds the exact text the run typed into it is a no-op, and offering it is not free: the TYPE_TEXT target question has no "none of these" answer, so once the operation question picks TYPE_TEXT some field has to be chosen. On a 16-question form every text field left in view after scrolling was already filled, and that is what the run kept choosing — at 0.48 for TYPE_TEXT against 0.43 for CLICK, while a radio and four checkboxes sat visibly unset beside it. With those candidates withheld, five runs in a row click both radio groups instead, spending the same 13 actions on work that counts. Only an exact match with the run's own typed text is dropped, so a field the page reset, or one holding something the run did not write, is still offered — as is the `Open <label>` click that re-triggers an autocomplete. **The form still does not complete**: with only checkboxes and Submit left, Jev answers BLOCKED (0.53) over CLICK (0.40) from a state that correctly shows every box unchecked and clickable. That is the model's judgement on complete input, and nothing here addresses it.
+
+### Improvements
+
+- **`JEV_TRACE` now records the request body too**, alongside the candidates, the choice and Jev's answer probabilities. The candidate list alone does not show what the model was told about the page, and both defects found in this area were questions about the input rather than the choice. It records the goal, the page text and field values, so treat the file as sensitive.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.135
+
 ### Bug Fixes
 
 - **`press Meta+a` now selects all on macOS.** It never did: Chrome resolves Cmd+A there through the OS text system, which a synthetic CDP key event does not reach, so the key was delivered, nothing was selected, and the next `keyboard inserttext` appended to what the field held. A field reading `hello` became `helloX` instead of `X`. That broke the documented `click <input>` then `press Meta+a` pattern for every agent on macOS. The platform select-all chord (Cmd+A on macOS, Ctrl+A elsewhere, with no other modifier) now goes through the same editor command `fill` already used. Ctrl+A on macOS keeps its own meaning. Copy, paste, cut and undo were not reproduced and are unchanged.
@@ -15,7 +30,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.134
 
