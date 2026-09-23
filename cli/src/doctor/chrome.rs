@@ -114,6 +114,46 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     }
 }
 
+/// On Windows, never run `chrome.exe --version`. It does not print a version and
+/// exit there: it starts the browser, against the user's real profile, and never
+/// returns. Measured on Windows 11 over SSH: no output after 15s and nine new
+/// chrome.exe processes, one of them trying to resume a download from the
+/// user's profile — and `doctor --quick --offline`, which the Windows installer
+/// runs as its self-check, hung on it indefinitely. `.output()` would wait even
+/// after the main process exited, since Chrome's children inherit the pipe.
+///
+/// The installer lays out `Application\chrome.exe` beside a directory named for
+/// the installed version (`Application\153.0.8010.53\`), so read that instead:
+/// nothing is launched.
+#[cfg(windows)]
+fn query_chrome_version(path: &Path) -> Option<String> {
+    let dir = path.parent()?;
+    let names = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().into_string().ok());
+    highest_version_dir(names).map(|v| format!("Chrome {v}"))
+}
+
+/// The highest `a.b.c.d` name among `names`, compared numerically. Chrome can
+/// leave the previous version's directory behind until the next restart, so
+/// there may be two.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn highest_version_dir(names: impl Iterator<Item = String>) -> Option<String> {
+    names
+        .filter_map(|n| {
+            let parts: Vec<u32> = n
+                .split('.')
+                .map(|p| p.parse().ok())
+                .collect::<Option<_>>()?;
+            (parts.len() == 4).then_some((parts, n))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, n)| n)
+}
+
+#[cfg(not(windows))]
 fn query_chrome_version(path: &Path) -> Option<String> {
     let output = std::process::Command::new(path)
         .arg("--version")
@@ -139,6 +179,31 @@ pub(super) fn puppeteer_cache_dir() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::highest_version_dir;
+
+    #[test]
+    fn the_newest_version_directory_wins_numerically() {
+        let names = [
+            "152.0.7990.12",
+            "153.0.8010.53",
+            "SetupMetrics",
+            "Locales",
+            "153.0.8010.9",
+        ]
+        .map(String::from);
+        // 53 > 9 numerically, though "9" > "5" as text.
+        assert_eq!(
+            highest_version_dir(names.into_iter()).as_deref(),
+            Some("153.0.8010.53")
+        );
+    }
+
+    #[test]
+    fn nothing_version_shaped_means_unknown() {
+        let names = ["Locales", "1.2.3", "a.b.c.d", "153.0.8010.53.1"].map(String::from);
+        assert_eq!(highest_version_dir(names.into_iter()), None);
+    }
+
     use super::*;
 
     #[test]
