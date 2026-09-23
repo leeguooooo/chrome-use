@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.136
+## 1.5.137
 
 <!-- release:start -->
+### Bug Fixes
+
+- **`jev run` now completes the 16-question form it could not finish.** Six runs out of six submit it with all twelve fields and all four checkboxes as asked — including leaving one unchecked because the goal said so — and report `done`, in 18.4–23.0s (median 19.8s), checked against the form itself rather than against jev's own status. The cause was what the decision model could not see: its request carried only the last ten actions, and by the checkboxes the run had taken thirteen, so "full name", "company" and "role" left that list at the same moment they scrolled out of the viewport. The goal still asked for them and nothing the model was shown said they were done, so BLOCKED climbed from 0.07 to 0.53 over the last three decisions. The request now carries the whole run; an entry is a few dozen bytes and runs are capped.
+- **The text helper is retried once.** A single malformed answer ended the whole run — seen as prose instead of JSON cut off at the token limit, and as an upstream 502. The call only generates text and nothing is typed until it succeeds, so a retry repeats no side effect. One retry, not a loop.
+- A field a run already filled with the same text is now marked rather than removed: it stays in the element list under its own name and with its value — the evidence it is done — while offering nothing to type. Removing it (v1.5.136) left it represented only by its `Open <label>` click.
+
+### Corrections
+
+- **v1.5.136 was wrong about why the form stopped.** It said the remaining stop at the checkboxes was "the model's judgement on complete input, and nothing here addresses it". The input was not complete. Controlled runs isolated it: a page with only the checkboxes and a goal about only them completed every time; the same page with the full 16-item goal went straight to BLOCKED (0.77); a pre-filled form with no history stalled too — each time on goal items the model had no evidence for.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.136
+
 ### Bug Fixes
 
 - **`jev run` no longer offers a field it already filled with the same text.** Retyping a field that still holds the exact text the run typed into it is a no-op, and offering it is not free: the TYPE_TEXT target question has no "none of these" answer, so once the operation question picks TYPE_TEXT some field has to be chosen. On a 16-question form every text field left in view after scrolling was already filled, and that is what the run kept choosing — at 0.48 for TYPE_TEXT against 0.43 for CLICK, while a radio and four checkboxes sat visibly unset beside it. With those candidates withheld, five runs in a row click both radio groups instead, spending the same 13 actions on work that counts. Only an exact match with the run's own typed text is dropped, so a field the page reset, or one holding something the run did not write, is still offered — as is the `Open <label>` click that re-triggers an autocomplete. **The form still does not complete**: with only checkboxes and Submit left, Jev answers BLOCKED (0.53) over CLICK (0.40) from a state that correctly shows every box unchecked and clickable. That is the model's judgement on complete input, and nothing here addresses it.
@@ -14,7 +31,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.135
 
