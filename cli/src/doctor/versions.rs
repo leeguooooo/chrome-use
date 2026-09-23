@@ -145,14 +145,14 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     }
 
     // Skill — ships inside the same release artifact as the binary, so it's
-    // version-locked here. Copies made elsewhere via `skills add` aren't.
+    // version-locked here. Runner copies need refreshing after an upgrade.
     checks.push(Check::new(
         "versions.skill",
         category,
         Status::Info,
         format!(
-            "skills bundled with this CLI ({cli_version}); copies made via `skills add` \
-             elsewhere may be stale — re-run to refresh"
+            "skills bundled with this CLI ({cli_version}); refresh runner copies with \
+             `chrome-use skill install` after upgrading"
         ),
     ));
 }

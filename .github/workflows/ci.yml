@@ -62,6 +62,9 @@ jobs:
       - name: Test release notes extraction
         run: node --test scripts/release-notes.test.js
 
+      - name: Test shell installer completion
+        run: sh scripts/test-install.sh
+
       - name: Run extension tests
         if: steps.changes.outputs.run_heavy == 'true'
         run: node --test extensions/ab-connect/*.test.js
@@ -213,6 +216,21 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
+
+  windows-installer:
+    name: Windows Installer Scripts
+    needs: preflight
+    if: needs.preflight.outputs.run_heavy == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Windows PowerShell 5.1
+        shell: powershell
+        run: ./scripts/test-install-windows.ps1
+      - name: Test PowerShell 7
+        shell: pwsh
+        run: ./scripts/test-install-windows.ps1
 
   windows-integration:
     name: Windows Integration and Global Install

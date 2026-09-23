@@ -104,6 +104,15 @@ Full snippets: [install guide](https://chrome-use.leeguoo.com/en/install.html).
 
 ### Install the AI agent skill
 
+With a current CLI, the installers install and verify its bundled discovery skill without Node, npx, Git or another download. To install or refresh it manually:
+
+```bash
+chrome-use skill install
+chrome-use skill install --project
+```
+
+Global installation covers `~/.agents/skills`, Claude Code, Codex and Cursor, plus existing Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. It respects `CLAUDE_CONFIG_DIR` and `XDG_CONFIG_HOME`. Project installation uses `.agents/skills` and `.claude/skills`, plus existing `.pi`, `.windsurf`, `.codebuddy` and `.trae` configurations. Restart your agent or reload its skills afterward. A failed write is an error, even if other destinations succeeded. See [installation details](https://chrome-use.leeguoo.com/en/install.html).
+
 **Claude Code, plugin marketplace (recommended):** installs the skill globally (all projects), auto-updates, and lists the rest of the [`*-use` family](https://github.com/leeguooooo/plugins):
 
 ```
@@ -111,13 +120,13 @@ Full snippets: [install guide](https://chrome-use.leeguoo.com/en/install.html).
 /plugin install chrome-use@leeguooooo-plugins
 ```
 
-**Other agent runners (Cursor, Codex, custom):** pull the SKILL.md with [skills.sh](https://skills.sh). Add `-g` for a global install (visible to every project); drop it to install only into the current project:
+**Additional runners:** [skills.sh](https://skills.sh) remains available for runners outside the built-in mappings. This alternative requires Node and its own dependencies:
 
 ```bash
 npx skills add leeguooooo/chrome-use -g
 ```
 
-> The install one-liners above already run this step for you (opt out with `AGENT_BROWSER_NO_SKILL=1`). Run it by hand only when you skipped the installer or use a non-default agent runner.
+> The install one-liners already install the bundled skill (opt out with `AGENT_BROWSER_NO_SKILL=1`). PowerShell also extracts it from older pinned CLI releases, bypassing their npx installer. Installation errors stop completion; the final message does not claim that the Chrome extension is connected.
 
 > **Codex users:** Codex ships its own browser plugin and picks it for browser tasks. Measured on a machine with many skills installed, Codex also trims every skill description to a few characters (or none), so the skill's description cannot win the routing, and naming `chrome-use` in the prompt was not enough either. What worked was one line in the project's `AGENTS.md`:
 >

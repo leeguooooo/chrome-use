@@ -7,6 +7,8 @@ use std::process::exit;
 
 use crate::color;
 
+pub(crate) mod install;
+
 /// Skill content compiled into the binary so `skills get` works on a
 /// single-binary install (GitHub Release / install.sh), where there is no
 /// adjacent `skills/` or `skill-data/` on disk the way an npm install has.
@@ -701,9 +703,6 @@ fn run_path(skills_dirs: &[PathBuf], override_used: bool, name: Option<&str>, js
     }
 }
 
-/// Build the argv passed to `npx` for `chrome-use skill install`.
-/// Delegates to skills.sh — we never write runner dirs ourselves.
-/// Global (`-g`) by default; `--project` installs into the current project.
 /// Does this subcommand name mean "install the agent skill"?
 ///
 /// Shared with the test on purpose: asserting against a copy of the `matches!`
@@ -713,26 +712,10 @@ fn is_install_alias(name: Option<&str>) -> bool {
     matches!(name, Some("install") | Some("update") | Some("refresh"))
 }
 
-fn build_skill_install_argv(project: bool) -> Vec<String> {
-    let mut v = vec![
-        "-y".to_string(),
-        "skills@latest".to_string(),
-        "add".to_string(),
-        "leeguooooo/chrome-use".to_string(),
-    ];
-    if !project {
-        v.push("-g".to_string());
-    }
-    v
-}
-
 pub fn run_skills(args: &[String], json_mode: bool) {
-    // `skill install` delegates to skills.sh (npx) and needs no local skill
-    // dirs — handle it before the empty-dirs guard so a single-binary install
-    // with an unwritable cache still reaches npx instead of a misleading
-    // "Skills directory not found" error.
-    // `update` / `refresh` are the same operation as `install`: `skills add`
-    // re-adds the current version over an existing copy. They exist because
+    // Install the bundled discovery entry before the runtime skill-cache guard.
+    // `update` / `refresh` are the same operation as `install`: replace the
+    // existing copy with this binary's bundled entry. They exist because
     // "how do I update the skill?" had no discoverable answer — the command was
     // there, under a name nobody looks for when they already installed it, and
     // `skills update` answered `Unknown skills subcommand` (issue #234).
@@ -810,58 +793,49 @@ pub fn run_skills(args: &[String], json_mode: bool) {
     }
 }
 
-/// `chrome-use skill install` — delegate to skills.sh (`npx skills add …`).
-/// We never write runner skill dirs ourselves; skills.sh owns that mapping
-/// across 20+ runners. Exit codes: npx missing -> 1 (with guidance);
-/// skills.sh ran -> pass through its exit code so scripts can tell
-/// "no Node" apart from "skills.sh failed".
+/// Install and verify the bundled discovery entry without external programs.
+/// Global by default; project installs never write into the user's home.
 fn run_skill_install(project: bool, json_mode: bool) -> ! {
-    use std::process::Command;
-    let zh = crate::connect::ui_zh();
-    let argv = build_skill_install_argv(project);
-
-    match Command::new("npx").args(&argv).status() {
-        Ok(status) => {
-            let code = status.code().unwrap_or(1);
-            if code != 0 && !json_mode {
-                let g = if project { "" } else { " -g" };
-                eprintln!(
-                    "{} {}\n  npx skills add leeguooooo/chrome-use{}",
-                    color::warning_indicator(),
-                    if zh {
-                        "技能安装失败。可手动重试："
-                    } else {
-                        "Skill install failed. Retry manually:"
-                    },
-                    g
-                );
-            }
-            exit(code);
+    let destinations = if project {
+        env::current_dir()
+            .map(|root| install::project_dirs(&root))
+            .map_err(|e| format!("Cannot determine the current directory: {e}"))
+    } else {
+        install::global_dirs()
+    };
+    let (installed, errors) = match destinations {
+        Ok(dirs) => install::install_all(&dirs),
+        Err(error) => (Vec::new(), vec![error]),
+    };
+    let success = errors.is_empty();
+    if json_mode {
+        println!(
+            "{}",
+            json!({
+                "success": success,
+                "data": { "paths": installed, "version": env!("CARGO_PKG_VERSION") },
+                "errors": errors,
+            })
+        );
+    } else {
+        for path in &installed {
+            println!(
+                "{} Agent skill installed and verified: {}",
+                color::success_indicator(),
+                path.display()
+            );
         }
-        Err(_) => {
-            if json_mode {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "success": false,
-                        "error": "npx not found; install Node then run `chrome-use skill install`, or use the Claude Code plugin marketplace",
-                    }))
-                    .unwrap_or_default()
-                );
-            } else if zh {
-                eprintln!(
-                    "{} 没找到 npx（未装 Node）。装 agent 技能有两条出路：\n  1. 装 Node 后重跑：chrome-use skill install\n  2. Claude Code：/plugin marketplace add leeguooooo/plugins 再 /plugin install chrome-use@leeguooooo-plugins",
-                    color::warning_indicator()
-                );
-            } else {
-                eprintln!(
-                    "{} npx not found (no Node). Two ways to install the agent skill:\n  1. Install Node, then rerun: chrome-use skill install\n  2. Claude Code: /plugin marketplace add leeguooooo/plugins then /plugin install chrome-use@leeguooooo-plugins",
-                    color::warning_indicator()
-                );
-            }
-            exit(1);
+        for error in &errors {
+            eprintln!(
+                "{} Skill installation failed: {error}",
+                color::error_indicator()
+            );
+        }
+        if success {
+            println!("Restart your agent or reload its skills to discover chrome-use.");
         }
     }
+    exit(if success { 0 } else { 1 });
 }
 
 #[cfg(test)]
@@ -881,15 +855,6 @@ mod tests {
         assert!(!is_install_alias(Some("get")));
         assert!(!is_install_alias(Some("list")));
         assert!(!is_install_alias(None));
-        // The argv it delegates to is the same for all three.
-        assert_eq!(
-            build_skill_install_argv(false),
-            vec!["-y", "skills@latest", "add", "leeguooooo/chrome-use", "-g"]
-        );
-        assert_eq!(
-            build_skill_install_argv(true),
-            vec!["-y", "skills@latest", "add", "leeguooooo/chrome-use"]
-        );
     }
 
     use super::*;
@@ -906,28 +871,6 @@ mod tests {
             ),
         )
         .unwrap();
-    }
-
-    #[test]
-    fn skill_install_argv_defaults_to_global() {
-        let argv = build_skill_install_argv(false);
-        assert_eq!(
-            argv,
-            vec![
-                "-y".to_string(),
-                "skills@latest".to_string(),
-                "add".to_string(),
-                "leeguooooo/chrome-use".to_string(),
-                "-g".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn skill_install_argv_project_drops_global() {
-        let argv = build_skill_install_argv(true);
-        assert!(!argv.contains(&"-g".to_string()));
-        assert_eq!(argv.last().unwrap(), "leeguooooo/chrome-use");
     }
 
     #[test]

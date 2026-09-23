@@ -222,10 +222,18 @@ programs.chrome-use = {
       <!-- ============ 3. SKILLS ============ -->
       <h2>Pull the agent skills</h2>
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ The <code>install.sh</code> above already did this</div>
-        The <code>curl … | sh</code> one-liner installs the agent skill globally right after the binary (<code>npx skills add leeguooooo/chrome-use -g</code>).
-        Read on only to install it by hand or on a non–Claude Code runner. Opt out with <code>AGENT_BROWSER_NO_SKILL=1</code>.
+        <div class="du-callout-title">The installers include skill installation and verification</div>
+        <code>install.sh</code> and <code>install.ps1</code> install the CLI's bundled discovery entry without Node, npx, Git or another download.
+        A failed destination is an error; completion is no longer unconditional. Opt out with <code>AGENT_BROWSER_NO_SKILL=1</code>.
       </div>
+      <p>Install or refresh manually with <code>chrome-use skill install</code>; use <code>chrome-use skill install --project</code> for the current project.
+        Restart your agent or reload its skills afterward. Global destinations cover <code>~/.agents/skills</code>, Claude Code, Codex, Cursor,
+        and existing Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. <code>CLAUDE_CONFIG_DIR</code> and <code>XDG_CONFIG_HOME</code> are respected.
+        Project installs use <code>.agents/skills</code> and <code>.claude/skills</code>, plus existing <code>.pi</code>, <code>.windsurf</code>, <code>.codebuddy</code> and <code>.trae</code> configuration directories.</p>
+      <p>PowerShell also extracts the bundled skill from older CLI releases, bypassing their npx dependency. Explicit UTF-8 decoding preserves content on Windows PowerShell 5.1.
+        A self-check timeout or failure is reported as an error. Windows Chrome detection does not launch the browser; doctor checks disk space, gives PowerShell environment-variable guidance,
+        and omits macOS-only ChooseBrowser paths. Optional cloud keys need no setup; encryption keys are generated on first auth save.
+        The Chrome Web Store extension still requires a one-time manual install. Installer completion does not verify its connection.</p>
       <p>
         <strong>Claude Code — plugin marketplace (recommended)</strong>: installs the skill globally (all projects), auto-updates, and lists the rest of the
         <a href="https://github.com/leeguooooo/plugins"><code>*-use</code> family</a>:
@@ -241,8 +249,8 @@ programs.chrome-use = {
       </div>
 
       <p>
-        Other agent runners (Cursor, Codex, CodeBuddy, Trae, Windsurf, Cline, custom scripts): pull the
-        SKILL.md with <a href="https://skills.sh">skills.sh</a>. Add
+        Runners outside the built-in mappings can still install the
+        SKILL.md with <a href="https://skills.sh">skills.sh</a>. This alternative needs Node and its own dependencies. Add
         <code>-g</code> for a global install (visible to every project); drop it to install only into the current project:
       </p>
 

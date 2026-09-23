@@ -10,6 +10,13 @@ Use Chrome's live accessibility state and short `@eN` refs to read and act.
 This entry point covers ordinary reading, clicks, and forms. Load a reference
 only for a feature or symptom that needs it, not before every ordinary action.
 
+If the runner cannot discover chrome-use, run `chrome-use skill install`.
+It installs and verifies the binary's bundled discovery entry offline, with no
+Node or Git dependency. `chrome-use skills update` refreshes the same entry;
+restart the runner or reload its skills afterward. Use `--project` for a local
+install. For directory mappings and installer failures, load
+`chrome-use skills get core/installation`.
+
 ## Start with the cheapest useful evidence
 
 | Task | First choice |

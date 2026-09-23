@@ -104,42 +104,44 @@ mkdir -p "$bindir"
 mv "$tmp/${BIN_NAME}" "$bindir/${BIN_NAME}"
 
 info "installed -> ${bindir}/${BIN_NAME}"
-"$bindir/${BIN_NAME}" --version 2>/dev/null || true
+"$bindir/${BIN_NAME}" --version || err "the installed CLI could not run"
 
 # --- guided setup: install the Chrome extension + banner preference -----------
 # When a real terminal is available (works even under `curl … | sh`, whose stdin
 # is the piped script — we borrow /dev/tty), run the guided native-host +
 # extension install and ask once whether chrome-use may auto-restart Chrome to
-# remove the "started debugging this browser" banner. Non-fatal: a declined or
-# failed setup never breaks the binary install. Skip with AGENT_BROWSER_NO_SETUP=1.
+# remove the "started debugging this browser" banner. A failed setup does not
+# prevent skill installation, but does make completion
+# fail. Skip with AGENT_BROWSER_NO_SETUP=1.
+extension_setup_failed=0
 if have_tty && [ -z "${AGENT_BROWSER_NO_SETUP:-}" ]; then
   info "setting up the Chrome extension + debugging-banner preference..."
-  "$bindir/${BIN_NAME}" extension install < /dev/tty > /dev/tty 2>&1 || true
+  "$bindir/${BIN_NAME}" extension install < /dev/tty > /dev/tty 2>&1 || extension_setup_failed=1
 else
   info "skipped extension setup (no terminal). Run \`${BIN_NAME} extension install\` later."
 fi
 
-# --- install the AI agent skill (delegates to the binary → skills.sh) --------
-# The binary alone lets *you* run chrome-use; the skill teaches your AI agent
-# (Claude Code, Cursor, Codex, …) how. `chrome-use skill install` shells out to
-# `npx skills add …`; it never writes runner dirs itself. Non-fatal, opt-out
-# with AGENT_BROWSER_NO_SKILL=1. Branch on tty (NOT exit code) so a no-Node box
-# doesn't print the guidance twice.
+# --- install and verify the bundled AI agent skill --------------------------
+# Current binaries install offline without Node. Preserve the terminal for
+# pinned older releases that use skills.sh, but never swallow an install error.
 if [ -z "${AGENT_BROWSER_NO_SKILL:-}" ]; then
   if have_tty; then
-    "$bindir/${BIN_NAME}" skill install < /dev/tty > /dev/tty 2>&1 || true
+    "$bindir/${BIN_NAME}" skill install < /dev/tty > /dev/tty 2>&1 || err "agent skill installation failed; rerun ${BIN_NAME} skill install"
   else
-    "$bindir/${BIN_NAME}" skill install || true
+    "$bindir/${BIN_NAME}" skill install || err "agent skill installation failed; rerun ${BIN_NAME} skill install"
   fi
+else
+  info "agent skill installation skipped (AGENT_BROWSER_NO_SKILL is set)."
 fi
 
 # --- self-check + first prompt ----------------------------------------------
 # One read-only pass so the user sees binary/extension/skill status at a glance,
 # then a copy-paste prompt that exercises the whole chain in their agent.
 info "self-check..."
-"$bindir/${BIN_NAME}" doctor --quick --offline 2>/dev/null || true
+"$bindir/${BIN_NAME}" doctor --quick --offline || err "self-check failed; resolve the doctor failures above"
+[ "$extension_setup_failed" -eq 0 ] || err "extension setup failed; rerun ${BIN_NAME} extension install"
 printf '\n\033[36m==>\033[0m %s\n\n    %s\n\n' \
-  "All set. Paste this into your AI agent (Claude Code / Cursor / Codex):" \
+  "CLI installation complete. Check the extension status above, then try this in your AI agent:" \
   "Use chrome-use to open https://news.ycombinator.com and tell me the top 3 titles"
 
 case ":$PATH:" in
