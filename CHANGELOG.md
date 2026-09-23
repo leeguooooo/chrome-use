@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.138
+## 1.5.139
 
 <!-- release:start -->
+### Features
+
+- **One-line install on Windows.** In PowerShell: `irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex`. It installs to `%LOCALAPPDATA%\Programs\chrome-use` with no admin rights, adds that to your user PATH, and then runs the same extension setup, skill install and self-check as `install.sh`. The download's sha256 is mandatory — a mismatch installs nothing — because an interrupted download otherwise extracts into an `.exe` that dies at launch with an access violation. Your existing PATH entries are kept exactly as they were, `%USERPROFILE%`-style variables included; the usual PowerShell API for this would have expanded them into absolute paths for good. Pin with `$env:AGENT_BROWSER_VERSION`, relocate with `$env:AGENT_BROWSER_BIN_DIR`, or leave PATH alone with `$env:AGENT_BROWSER_NO_PATH = 1`. Tested on Windows 11 with Windows PowerShell 5.1; ARM64 gets the x64 build under emulation, untested.
+
+### Bug Fixes
+
+- **`chrome-use doctor` no longer launches Chrome on Windows.** It read Chrome's version by running `chrome.exe --version`, which on Windows starts the browser — against your real profile — instead of printing a version, and never returns. `doctor --quick --offline` hung indefinitely, and the new installer's self-check with it. The version is now read from the directory beside `chrome.exe`; nothing is launched, and the check finishes in milliseconds. macOS and Linux are unchanged.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.138
+
 ### Improvements
 
 - **The extension relay forwards less noise** (from community PR #342, thanks @AmeerAliAnwar). Nine high-frequency CDP events that nothing in the CLI reads — `Network.dataReceived`, `DOM.attributeModified` and the like — are no longer serialised across the native-messaging pipe. A test scans the CLI sources and fails if anything starts reading one of them, since the daemon would otherwise get no error. A new tab is also attached immediately instead of after an unconditional 100ms, and duplicateTab's inspection reads are now bounded by its transaction deadline instead of able to hang it.
@@ -21,7 +36,6 @@
 
 - @AmeerAliAnwar
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.137
 
