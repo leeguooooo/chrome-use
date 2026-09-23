@@ -1,8 +1,30 @@
 # Changelog
 
-## 1.5.137
+## 1.5.138
 
 <!-- release:start -->
+### Improvements
+
+- **The extension relay forwards less noise** (from community PR #342, thanks @AmeerAliAnwar). Nine high-frequency CDP events that nothing in the CLI reads — `Network.dataReceived`, `DOM.attributeModified` and the like — are no longer serialised across the native-messaging pipe. A test scans the CLI sources and fails if anything starts reading one of them, since the daemon would otherwise get no error. A new tab is also attached immediately instead of after an unconditional 100ms, and duplicateTab's inspection reads are now bounded by its transaction deadline instead of able to hang it.
+
+### Bug Fixes
+
+- **Fixed regressions #342 would have shipped**, each checked before the change:
+  - A 1 MB cap on messages from the extension to the host. Chrome's 1 MB limit is on messages *from* the host; messages *to* it may be 64 MiB. A viewport screenshot of a Wikipedia article is ~1.2 MB once base64'd, so the cap would have turned ordinary screenshots over the relay into errors. Removed.
+  - Session recovery's retry windows had been cut by more than half. Both were sized from live reproductions — #23 (a cross-process checkout navigation) and #24 (a sign-in hop that "takes seconds to settle", ~6.3s). Restored.
+  - duplicateTab no longer fell back when there was no focused window or active tab, and no longer stopped starting stages once its deadline had passed — so side-effecting steps could run after the transaction was over. Both restored, with tests that fail against the PR's version.
+  - URL scheme rewriting turned `blob:` and `view-source:` URLs into `https://blob:...`. The CLI already adds a scheme before a URL reaches the extension, so it is removed.
+- Removed an uncalled viewport scanner that wrote attributes into the user's page and named its results `@e1`, `@e2`, like the CLI's refs, and a test file whose tests re-implemented the code instead of importing it.
+- ab-connect **0.5.28**.
+
+### Contributors
+
+- @AmeerAliAnwar
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.137
+
 ### Bug Fixes
 
 - **`jev run` now completes the 16-question form it could not finish.** Six runs out of six submit it with all twelve fields and all four checkboxes as asked — including leaving one unchecked because the goal said so — and report `done`, in 18.4–23.0s (median 19.8s), checked against the form itself rather than against jev's own status. The cause was what the decision model could not see: its request carried only the last ten actions, and by the checkboxes the run had taken thirteen, so "full name", "company" and "role" left that list at the same moment they scrolled out of the viewport. The goal still asked for them and nothing the model was shown said they were done, so BLOCKED climbed from 0.07 to 0.53 over the last three decisions. The request now carries the whole run; an entry is a few dozen bytes and runs are capped.
@@ -16,7 +38,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.136
 
