@@ -479,33 +479,40 @@ struct Space {
     controls: Vec<(String, Value)>,
 }
 
-/// The actions worth offering the model, which is every observed action except a
-/// fill that would retype what this run already typed into that same field.
+/// Every observed action, with a fill marked `noop` when it would retype what
+/// this run already typed into that same field.
 ///
 /// Such a fill is a no-op by definition: the field's current value is the exact
-/// text we put there. Offering it is not free, because the TYPE_TEXT target
-/// question has no "none of these" answer — once the operation question picks
-/// TYPE_TEXT, some field has to be chosen. Measured on a 16-question form: after
-/// scrolling, every text field in view was already filled, TYPE_TEXT beat CLICK
-/// 0.48 to 0.43, and the run spent its last decisions retyping a finished email
-/// instead of the radios and boxes visibly unset beside it (JEV_TRACE).
+/// text we put there. Offering it as a target is not free, because the TYPE_TEXT
+/// target question has no "none of these" answer — once the operation question
+/// picks TYPE_TEXT, some field has to be chosen. Measured on a 16-question form:
+/// after scrolling, every text field in view was already filled, TYPE_TEXT beat
+/// CLICK 0.48 to 0.43, and the run spent its last decisions retyping a finished
+/// email instead of the radios and boxes visibly unset beside it (JEV_TRACE).
 ///
-/// Only an exact match with our own typed text is dropped, so a field the page
-/// reset, or one holding something we did not write, is still offered — as is
+/// The action is marked rather than removed so the field still appears in the
+/// element list under its own name and with its value — that is the model's
+/// evidence the field is done. Removing it outright (the first version of this)
+/// left the field represented only by its `Open <label>` click.
+///
+/// Only an exact match with our own typed text is marked, so a field the page
+/// reset, or one holding something we did not write, is still a target — as is
 /// the `Open <label>` click on the same element, which is how an autocomplete
 /// gets re-triggered.
-fn offerable_actions(actions: &[Value], history: &[Value]) -> Vec<Value> {
+fn mark_noop_fills(actions: &[Value], history: &[Value]) -> Vec<Value> {
     actions
         .iter()
-        .filter(|a| {
-            if kind(a) != "fill" {
-                return true;
+        .map(|a| {
+            let noop = kind(a) == "fill"
+                && history.iter().any(|h| {
+                    h["kind"] == "fill" && h["action"] == a["label"] && h["text"] == a["value"]
+                });
+            let mut a = a.clone();
+            if noop {
+                a["noop"] = json!(true);
             }
-            !history.iter().any(|h| {
-                h["kind"] == "fill" && h["action"] == a["label"] && h["text"] == a["value"]
-            })
+            a
         })
-        .cloned()
         .collect()
 }
 
@@ -555,6 +562,11 @@ fn action_space(actions: &[Value]) -> Space {
                 index
             }
         };
+        // A no-op fill keeps its element — the name and value are evidence the
+        // field is done — but offers nothing to do there.
+        if action["noop"] == true {
+            continue;
+        }
         let el = &mut elements[index.parse::<usize>().unwrap() - 1];
         let ops = el["operations"].as_array_mut().unwrap();
         if !ops.iter().any(|o| o == op) {
@@ -705,11 +717,11 @@ impl Models {
         history: &[Value],
         ask_terminal: bool,
     ) -> Result<Decision, String> {
-        let offered = offerable_actions(
+        let marked = mark_noop_fills(
             page["actions"].as_array().map(Vec::as_slice).unwrap_or(&[]),
             history,
         );
-        let space = action_space(&offered);
+        let space = action_space(&marked);
         let label = |op: &str| {
             match op {
             "CLICK" => "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
@@ -828,11 +840,16 @@ impl Models {
                 ),
             ));
         }
+        // The whole run, not the last ten actions. The model is asked whether
+        // ALL of the goal is done, and the only evidence it has for work that
+        // has scrolled out of view is this list. With a window of ten, a
+        // 16-question form lost "full name", "company" and "role" from it
+        // exactly when they also left the viewport: the model could see no sign
+        // of them anywhere, and BLOCKED climbed from 0.07 to 0.53 across the
+        // last three decisions (JEV_TRACE). An entry is a few dozen bytes and a
+        // run is capped at MAX_STEPS, so the full list stays small.
         let recent: Vec<Value> = history
             .iter()
-            .rev()
-            .take(10)
-            .rev()
             .map(|h| json!({"action": h["action"], "kind": h["kind"], "text": h["text"], "page_changed": h["page_changed"]}))
             .collect();
         let body = Ordered(vec![
@@ -912,33 +929,59 @@ impl Models {
             ],
         });
         let started = Instant::now();
-        let result = self.post(
-            &format!("{}/chat/completions", self.text_base),
-            key,
-            body.to_string(),
-        )?;
-        let content = result["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("");
-        // Some helpers append a stray code fence after the object; read the first value only.
-        let parsed: Value = serde_json::Deserializer::from_str(content.trim_start())
-            .into_iter::<Value>()
-            .next()
-            .and_then(Result::ok)
-            .unwrap_or(Value::Null);
-        match (parsed.as_object(), parsed["text"].as_str()) {
-            (Some(o), _) if o.len() == 1 && o.get("text") == Some(&Value::Null) => Ok(None),
-            (Some(o), Some(t)) if o.len() == 1 && !t.trim().is_empty() && t.len() <= 2000 => {
-                Ok(Some((t.to_string(), started.elapsed().as_millis())))
-            }
-            _ => {
+        // One retry, because both failures seen in practice were one-offs that
+        // ended a whole run: a helper that answered with prose instead of JSON
+        // (`finish_reason: length`), and an upstream 502 from the provider. The
+        // call only generates text — nothing is typed until it succeeds — so
+        // asking again has no side effect to repeat.
+        let value = with_one_retry(|| {
+            let result = self.post(
+                &format!("{}/chat/completions", self.text_base),
+                key,
+                body.to_string(),
+            )?;
+            let content = result["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or("");
+            parse_field_text(content).ok_or_else(|| {
                 let mut shown = result.to_string();
                 shown.truncate(600);
-                Err(format!(
-                    "Text helper returned no valid field value; nothing typed. Got {shown}"
-                ))
-            }
-        }
+                format!("Text helper returned no valid field value; nothing typed. Got {shown}")
+            })
+        })?;
+        Ok(value.map(|t| (t, started.elapsed().as_millis())))
+    }
+}
+
+/// Run `attempt`, and once more if it fails. The second failure is returned.
+///
+/// Deliberately one retry, not a loop: a helper that fails twice running is
+/// telling us something, and a run that stalls on it is worse than one that
+/// stops and says why.
+fn with_one_retry<T>(mut attempt: impl FnMut() -> Result<T, String>) -> Result<T, String> {
+    attempt().or_else(|_| attempt())
+}
+
+/// Read a text helper's answer. `None` is an unusable answer; `Some(None)` is a
+/// deliberate `{"text": null}` (the value is missing from the goal, so nothing
+/// should be typed); `Some(Some(text))` is the value to type.
+///
+/// Strict on shape — exactly one key, a non-empty string of sane length — since
+/// whatever comes back is typed into a real form.
+fn parse_field_text(content: &str) -> Option<Option<String>> {
+    // Some helpers append a stray code fence after the object; read the first value only.
+    let parsed: Value = serde_json::Deserializer::from_str(content.trim_start())
+        .into_iter::<Value>()
+        .next()
+        .and_then(Result::ok)?;
+    let object = parsed.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    match object.get("text")? {
+        Value::Null => Some(None),
+        Value::String(t) if !t.trim().is_empty() && t.len() <= 2000 => Some(Some(t.clone())),
+        _ => None,
     }
 }
 
@@ -1304,96 +1347,125 @@ mod tests {
     /// without a browser or a model. The rule under test is that the model's
     /// claim alone never ends a run: the named condition has to be visible in
     /// the observation we already take.
-    /// A finished field must not be offered back as somewhere to type.
+    /// A finished field must not be offered back as somewhere to type — but it
+    /// must still be visible as finished.
     ///
-    /// The observation alone cannot say a field is "done" — but this run's own
+    /// The observation alone cannot say a field is "done", but this run's own
     /// history can: if we typed X into that field and it still reads X, typing X
-    /// again is a no-op. Keeping those out of the TYPE_TEXT candidates is what
-    /// stops a run from spending its last decisions retyping a finished email
-    /// while checkboxes beside it sit unset.
-    mod offerable {
-        use super::super::offerable_actions;
-        use serde_json::json;
+    /// again is a no-op. Such a fill is marked, and `action_space` keeps its
+    /// element (name and value: the evidence it is done) while offering no
+    /// TYPE_TEXT target for it.
+    mod noop_fills {
+        use super::super::{action_space, mark_noop_fills};
+        use serde_json::{json, Value};
 
-        fn fill(label: &str, value: &str) -> serde_json::Value {
-            json!({ "kind": "fill", "label": label, "value": value })
+        fn fill(node: i64, label: &str, value: &str) -> Value {
+            json!({ "kind": "fill", "node": node, "label": label, "value": value, "role": "textbox" })
         }
-        fn typed(label: &str, text: &str) -> serde_json::Value {
+        fn typed(label: &str, text: &str) -> Value {
             json!({ "kind": "fill", "action": label, "text": text })
         }
-        fn labels(v: &[serde_json::Value]) -> Vec<String> {
-            v.iter()
-                .map(|a| {
-                    format!(
-                        "{}:{}",
-                        a["kind"].as_str().unwrap_or(""),
-                        a["label"].as_str().unwrap_or("")
-                    )
-                })
-                .collect()
+        fn noop(v: &[Value]) -> Vec<bool> {
+            v.iter().map(|a| a["noop"] == true).collect()
         }
 
         #[test]
-        fn a_field_still_holding_our_own_text_is_dropped() {
-            let actions = vec![fill("Work email", "casey@example.test")];
+        fn a_field_still_holding_our_own_text_is_marked() {
             let history = vec![typed("Work email", "casey@example.test")];
-            assert!(offerable_actions(&actions, &history).is_empty());
+            assert_eq!(
+                noop(&mark_noop_fills(
+                    &[fill(1, "Work email", "casey@example.test")],
+                    &history
+                )),
+                [true]
+            );
         }
 
         #[test]
-        fn anything_we_did_not_write_is_still_offered() {
+        fn anything_we_did_not_write_is_left_alone() {
             let history = vec![typed("Work email", "casey@example.test")];
-            // The page reset the field, or something else wrote to it: retyping
-            // is real work, not a no-op.
-            let reset = vec![fill("Work email", "")];
+            // the page reset it
             assert_eq!(
-                labels(&offerable_actions(&reset, &history)),
-                ["fill:Work email"]
+                noop(&mark_noop_fills(&[fill(1, "Work email", "")], &history)),
+                [false]
             );
-            // Same text, a different field.
-            let other = vec![fill("Personal email", "casey@example.test")];
+            // same text, another field
             assert_eq!(
-                labels(&offerable_actions(&other, &history)),
-                ["fill:Personal email"]
+                noop(&mark_noop_fills(
+                    &[fill(2, "Personal email", "casey@example.test")],
+                    &history
+                )),
+                [false]
             );
-            // Never typed at all.
-            assert_eq!(labels(&offerable_actions(&reset, &[])), ["fill:Work email"]);
+            // never typed
+            assert_eq!(
+                noop(&mark_noop_fills(&[fill(1, "Work email", "")], &[])),
+                [false]
+            );
+            // typed twice: only the value the field holds now is a no-op
+            let twice = vec![typed("Team size", "25"), typed("Team size", "40")];
+            assert_eq!(
+                noop(&mark_noop_fills(&[fill(3, "Team size", "40")], &twice)),
+                [true]
+            );
+            assert_eq!(
+                noop(&mark_noop_fills(&[fill(3, "Team size", "12")], &twice)),
+                [false]
+            );
         }
 
         #[test]
-        fn only_fills_are_ever_dropped() {
+        fn only_fills_are_ever_marked() {
             let history = vec![typed("Work email", "casey@example.test")];
             let actions = vec![
-                fill("Work email", "casey@example.test"),
-                // the click that focuses the same field, which is how an
-                // autocomplete is re-triggered
-                json!({ "kind": "click", "label": "Open Work email", "value": "casey@example.test" }),
-                json!({ "kind": "click", "label": "I agree to the terms", "value": "", "checked": "false" }),
-                json!({ "kind": "select", "label": "Country → Japan", "value": "Japan" }),
-                json!({ "kind": "scroll", "label": "Scroll down" }),
+                json!({ "kind": "click", "node": 1, "label": "Open Work email", "value": "casey@example.test" }),
+                json!({ "kind": "click", "node": 2, "label": "I agree to the terms", "value": "" }),
+                json!({ "kind": "select", "node": 3, "label": "Country → Japan", "value": "Japan" }),
             ];
             assert_eq!(
-                labels(&offerable_actions(&actions, &history)),
-                [
-                    "click:Open Work email",
-                    "click:I agree to the terms",
-                    "select:Country → Japan",
-                    "scroll:Scroll down",
-                ]
+                noop(&mark_noop_fills(&actions, &history)),
+                [false, false, false]
             );
         }
 
+        /// The point of marking rather than removing: the element stays, under
+        /// its own name and with its value, while TYPE_TEXT disappears from it.
         #[test]
-        fn an_earlier_value_does_not_drop_a_field_we_later_changed() {
-            // Typed twice; the field now holds the second value. Only that one
-            // is a no-op — but both are in history, and neither should drop a
-            // field holding something else entirely.
-            let history = vec![typed("Team size", "25"), typed("Team size", "40")];
-            assert!(offerable_actions(&[fill("Team size", "40")], &history).is_empty());
+        fn a_marked_field_keeps_its_element_but_offers_no_typing() {
+            let history = vec![typed("Work email", "casey@example.test")];
+            let actions = vec![
+                fill(1, "Work email", "casey@example.test"),
+                json!({ "kind": "click", "node": 1, "label": "Open Work email", "value": "casey@example.test", "role": "textbox" }),
+                fill(2, "Company website", ""),
+                json!({ "kind": "click", "node": 2, "label": "Open Company website", "value": "", "role": "textbox" }),
+            ];
+            let space = action_space(&mark_noop_fills(&actions, &history));
+
+            let email = &space.elements[0];
             assert_eq!(
-                labels(&offerable_actions(&[fill("Team size", "12")], &history)),
-                ["fill:Team size"]
+                email["label"], "Work email",
+                "named for the field, not its Open click"
             );
+            assert_eq!(
+                email["value"], "casey@example.test",
+                "its value is the evidence it is done"
+            );
+            assert_eq!(
+                email["operations"],
+                json!(["CLICK"]),
+                "nothing left to type there"
+            );
+
+            let website = &space.elements[1];
+            assert_eq!(website["operations"], json!(["TYPE_TEXT", "CLICK"]));
+
+            let fill_targets: Vec<&str> = space
+                .targets
+                .iter()
+                .filter(|(op, _)| *op == "TYPE_TEXT")
+                .flat_map(|(_, group)| group.iter().map(|(_, a)| a["label"].as_str().unwrap_or("")))
+                .collect();
+            assert_eq!(fill_targets, ["Company website"]);
         }
     }
 
