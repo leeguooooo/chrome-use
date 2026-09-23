@@ -36,6 +36,12 @@ If `chrome-use` is missing, install the GitHub Release binary, then load core:
 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 ```
 
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex
+```
+
 The CLI bundles its workflow documentation. Upgrading the binary updates that
 content; `chrome-use skills update` refreshes this installed discovery entry.
 Use `chrome-use skills list` to discover specialized guides.

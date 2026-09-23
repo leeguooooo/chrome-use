@@ -136,6 +136,12 @@ If the binary is missing, install from GitHub Releases:
 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 ```
 
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex
+```
+
 Plain `open` connects through the extension relay after one-time extension
 setup. `extension connect` reconnects explicitly. `--launch` uses an isolated
 empty test profile; it does not carry the user's login. Headed is the default.

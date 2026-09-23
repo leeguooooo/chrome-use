@@ -31,7 +31,7 @@ arch=$(uname -m)
 case "$os" in
   Darwin) plat="darwin" ;;
   Linux)  plat="linux" ;;
-  *) err "unsupported OS: $os (use the Windows .exe asset from the Releases page)" ;;
+  *) err "unsupported OS: $os (on Windows, in PowerShell: irm https://raw.githubusercontent.com/${REPO}/main/install.ps1 | iex)" ;;
 esac
 case "$arch" in
   x86_64|amd64)   cpu="x64" ;;

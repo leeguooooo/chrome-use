@@ -60,10 +60,26 @@
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">one-line install</span>
+          <span class="du-code-name">one-line install · macOS / Linux</span>
         </div>
 <pre><code><span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
       </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">one-line install · Windows (PowerShell)</span>
+        </div>
+<pre><code><span class="du-prompt">&gt;</span> irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex</code></pre>
+      </div>
+
+      <p>
+        On Windows it installs to <code>%LOCALAPPDATA%\Programs\chrome-use</code> with no admin rights and adds that to your
+        <strong>user</strong> PATH, keeping the existing entries exactly as they were, <code>%USERPROFILE%</code>-style variables included.
+        The download's sha256 is checked and a mismatch installs nothing. To pin a version or location, set
+        <code>$env:AGENT_BROWSER_VERSION = 'v1.5.139'</code> or <code>$env:AGENT_BROWSER_BIN_DIR = 'D:\tools'</code> first; set
+        <code>$env:AGENT_BROWSER_NO_PATH = 1</code> to leave PATH alone.
+      </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ One binary, two names</div>

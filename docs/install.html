@@ -59,10 +59,25 @@
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">一行装好</span>
+          <span class="du-code-name">一行装好 · macOS / Linux</span>
         </div>
 <pre><code><span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
       </div>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">一行装好 · Windows（PowerShell）</span>
+        </div>
+<pre><code><span class="du-prompt">&gt;</span> irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex</code></pre>
+      </div>
+
+      <p>
+        Windows 版默认装到 <code>%LOCALAPPDATA%\Programs\chrome-use</code>，不需要管理员权限，并加入<strong>用户</strong> PATH——原有条目原样保留，
+        包括 <code>%USERPROFILE%</code> 这类变量写法。下载后会强制校验 sha256：校验不过就什么都不装。
+        锁定版本或换位置：先设 <code>$env:AGENT_BROWSER_VERSION = 'v1.5.139'</code> 或 <code>$env:AGENT_BROWSER_BIN_DIR = 'D:\tools'</code>，
+        不想动 PATH 就设 <code>$env:AGENT_BROWSER_NO_PATH = 1</code>。
+      </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 一个二进制，两个名字</div>
