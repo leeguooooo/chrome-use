@@ -387,3 +387,64 @@ for (const [stage, failure] of [
     assert.ok(calls.some((call) => call[0] === 'remove' && call[1] === 22))
   })
 }
+
+// The three inspection reads are bounded by the transaction deadline, but a read
+// that fails must still degrade the way it did before #342 rather than reject
+// the whole duplicate.
+test('no focused window falls back to the source window instead of failing', async () => {
+  const { calls, deps } = fixture({
+    getLastFocusedWindow: async () => {
+      throw new Error('no window has focus')
+    },
+  })
+  const result = await duplicateTab(params, deps)
+  assert.equal(result.targetId, 'duplicate-target')
+  assert.ok(calls.some(([c]) => c === 'attach'), 'the duplicate went through')
+})
+
+test('no active tab restores the source tab instead of failing', async () => {
+  const { calls, deps } = fixture({
+    getActiveTabs: async () => {
+      throw new Error('tabs.query failed')
+    },
+  })
+  const result = await duplicateTab(params, deps)
+  assert.equal(result.targetId, 'duplicate-target')
+  assert.deepEqual(calls.find(([c]) => c === 'activate'), ['activate', 11])
+})
+
+test('a source tab that cannot be read is reported as not eligible', async () => {
+  const { calls, deps } = fixture({
+    getTab: async () => {
+      throw new Error('No tab with id: 11')
+    },
+  })
+  await assert.rejects(duplicateTab(params, deps), /not eligible/)
+  assert.deepEqual(calls, [], 'nothing was duplicated')
+})
+
+// Once the transaction deadline has passed, no later stage may start. A 0ms
+// `withTimeout` does not enforce that — an operation settling in a microtask
+// beats the 0ms timer — so without the explicit guard every side-effecting stage
+// (own, group, attach, activate) ran after the deadline and the duplicate
+// "succeeded" late.
+test('stages do not run once the transaction deadline has passed', async () => {
+  const { calls, deps } = fixture({
+    transactionTimeoutMs: 20,
+    getActiveTabs: async () => {
+      await wait(40)
+      return [{ id: 7 }]
+    },
+  })
+  await assert.rejects(duplicateTab(params, deps), /timed out/)
+  // None of the stages that build the duplicate ran...
+  for (const stage of ['markOwned', 'group', 'attach', 'complete']) {
+    assert.ok(!calls.some(([c]) => c === stage), `${stage} must not run after the deadline`)
+  }
+  // ...and the rollback still did its job: the foreground went back (to the
+  // source tab, since reading the active tab timed out) and the duplicate that
+  // Chrome had already made was removed.
+  await waitUntil(() => calls.some(([c]) => c === 'remove'))
+  assert.deepEqual(calls.find(([c]) => c === 'activate'), ['activate', 11])
+  assert.deepEqual(calls.find(([c]) => c === 'remove'), ['remove', 22])
+})

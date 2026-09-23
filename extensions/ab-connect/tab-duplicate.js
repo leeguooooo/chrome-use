@@ -40,6 +40,11 @@ function remainingTime(deadline) {
 
 async function completeBefore(operation, deadline, stage) {
   const timeoutMs = remainingTime(deadline)
+  // An expired deadline has to stop the stage before it starts. `withTimeout`
+  // with 0ms does not: an operation that settles in a microtask still beats a
+  // 0ms timer, so a side-effecting stage (group, activate) could run after the
+  // transaction was already over. #342 dropped this line; restored.
+  if (timeoutMs === 0) throw new Error(`duplicateTab: ${stage} timed out`)
   const result = await withTimeout(operation, timeoutMs)
   if (result !== TIMED_OUT) return result
   throw new Error(`duplicateTab: ${stage} timed out`)
@@ -84,31 +89,36 @@ export async function duplicateTab(params, deps) {
   const sourceTabId = deps.tabForTarget(sourceTargetId)
   if (sourceTabId == null) throw new Error(`duplicateTab: unknown target ${sourceTargetId}`)
 
-  const transactionTimeoutMs = deps.transactionTimeoutMs ?? 5000
-  const cleanupTimeoutMs = deps.cleanupTimeoutMs ?? 2000
+  const transactionTimeoutMs = deps.transactionTimeoutMs ?? DEFAULT_TRANSACTION_TIMEOUT_MS
+  const cleanupTimeoutMs = deps.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS
   const transactionDeadline = Date.now() + transactionTimeoutMs
   let transactionActive = true
 
+  // These three reads are bounded by the transaction deadline (#342 — before,
+  // a read that never settled held the whole duplicate) and still degrade the
+  // way they did before #342: a missing tab is "not eligible", and without a
+  // focused window or an active tab the restore target falls back to the
+  // source. #342 let any of them reject the whole duplicate instead.
   const sourceTab = await completeBefore(
     () => deps.getTab(sourceTabId),
     transactionDeadline,
     'source tab inspection',
-  )
+  ).catch(() => null)
   if (!deps.eligible(sourceTab)) {
     throw new Error(`duplicateTab: tab ${sourceTabId} is not eligible`)
   }
 
   const lastFocusedWindow = await completeBefore(
-    deps.getLastFocusedWindow,
+    () => deps.getLastFocusedWindow(),
     transactionDeadline,
     'window inspection',
-  )
+  ).catch(() => null)
   const restoreWindowId = lastFocusedWindow?.id ?? sourceTab.windowId
   const activeTabs = await completeBefore(
     () => deps.getActiveTabs(restoreWindowId),
     transactionDeadline,
     'active tab inspection',
-  )
+  ).catch(() => [])
   const restoreTabId = activeTabs?.[0]?.id ?? sourceTabId
 
   let duplicateTabId = null

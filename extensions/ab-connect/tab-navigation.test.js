@@ -78,16 +78,13 @@ test('dual navigation failure keeps both errors', async () => {
   )
 })
 
-test('normalizeNavigationUrl prefixes schemes and preserves existing ones', async () => {
-  const { calls, deps } = fixture()
-  await navigateTabWithBrowserFallback({ url: 'google.com' }, deps)
-  assert.equal(calls[0][1], 'https://google.com')
-
-  const { calls: calls2, deps: deps2 } = fixture()
-  await navigateTabWithBrowserFallback({ url: 'localhost:8080/app' }, deps2)
-  assert.equal(calls2[0][1], 'http://localhost:8080/app')
-
-  const { calls: calls3, deps: deps3 } = fixture()
-  await navigateTabWithBrowserFallback({ url: 'http://custom.domain' }, deps3)
-  assert.equal(calls3[0][1], 'http://custom.domain')
+test('a URL is passed through as given, including schemes without //', async () => {
+  // The extension used to rewrite bare hosts itself, which turned `blob:` and
+  // `view-source:` into `https://blob:...`. The CLI adds a scheme before it gets
+  // here, so the extension leaves the URL alone.
+  for (const url of ['https://example.com/', 'blob:https://example.com/abc', 'view-source:https://example.com/']) {
+    const { calls, deps } = fixture()
+    await navigateTabWithBrowserFallback({ url }, deps)
+    assert.equal(calls[0][1], url)
+  }
 })
