@@ -330,11 +330,11 @@ made and still decides. Measurement only — a cheap local check is not a
 completion test, since a checkout bounced to `/login` changes the page exactly
 as a success would.
 
-`JEV_TRACE=<file>` appends one JSON line per decision: the candidates the model
-was shown (id, kind, label, current value, checked state), its choice, and Jev's
-raw answers with probabilities. It is off unless set. It records field labels
-and current values, which includes anything already typed into the form, so
-treat the file as sensitive. The run report also splits `act_ms` into
+`JEV_TRACE=<file>` appends one JSON line per decision: the request that was sent,
+the candidates the model was shown (id, kind, label, current value, checked
+state), its choice, and Jev's raw answers with probabilities. It is off unless
+set. It records the goal, the page text and field values, which includes
+anything already typed into the form, so treat the file as sensitive. The run report also splits `act_ms` into
 `act_read_ms`, `cmd_click_ms`, `cmd_press_ms` and `cmd_insert_ms`.
 
 ## Network

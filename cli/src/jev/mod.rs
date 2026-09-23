@@ -479,6 +479,36 @@ struct Space {
     controls: Vec<(String, Value)>,
 }
 
+/// The actions worth offering the model, which is every observed action except a
+/// fill that would retype what this run already typed into that same field.
+///
+/// Such a fill is a no-op by definition: the field's current value is the exact
+/// text we put there. Offering it is not free, because the TYPE_TEXT target
+/// question has no "none of these" answer — once the operation question picks
+/// TYPE_TEXT, some field has to be chosen. Measured on a 16-question form: after
+/// scrolling, every text field in view was already filled, TYPE_TEXT beat CLICK
+/// 0.48 to 0.43, and the run spent its last decisions retyping a finished email
+/// instead of the radios and boxes visibly unset beside it (JEV_TRACE).
+///
+/// Only an exact match with our own typed text is dropped, so a field the page
+/// reset, or one holding something we did not write, is still offered — as is
+/// the `Open <label>` click on the same element, which is how an autocomplete
+/// gets re-triggered.
+fn offerable_actions(actions: &[Value], history: &[Value]) -> Vec<Value> {
+    actions
+        .iter()
+        .filter(|a| {
+            if kind(a) != "fill" {
+                return true;
+            }
+            !history.iter().any(|h| {
+                h["kind"] == "fill" && h["action"] == a["label"] && h["text"] == a["value"]
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 fn action_space(actions: &[Value]) -> Space {
     let mut elements: Vec<Value> = Vec::new();
     let mut index_of: Vec<(i64, String)> = Vec::new();
@@ -555,6 +585,10 @@ struct Decision {
     /// The model's claim that this action finishes the goal, as a condition we
     /// can check ourselves. Only ever recorded — see `condition_observed`.
     terminal: Terminal,
+    /// The request body this decision was made from. Kept only for `JEV_TRACE`:
+    /// the candidate list alone does not show what the model was told about the
+    /// page, and a wrong choice is usually a question about the input.
+    request: Value,
     /// Jev's raw answers, probabilities included. Kept only for `JEV_TRACE`: a
     /// wrong choice made confidently and one that narrowly beat the right
     /// option call for different fixes, and the choice alone cannot tell them
@@ -671,7 +705,11 @@ impl Models {
         history: &[Value],
         ask_terminal: bool,
     ) -> Result<Decision, String> {
-        let space = action_space(page["actions"].as_array().map(Vec::as_slice).unwrap_or(&[]));
+        let offered = offerable_actions(
+            page["actions"].as_array().map(Vec::as_slice).unwrap_or(&[]),
+            history,
+        );
+        let space = action_space(&offered);
         let label = |op: &str| {
             match op {
             "CLICK" => "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
@@ -814,6 +852,12 @@ impl Models {
         ])
         .to_json();
 
+        // Kept before the body is handed to `post`, which consumes it.
+        let traced_request = if std::env::var("JEV_TRACE").is_ok() {
+            Value::String(body.clone())
+        } else {
+            Value::Null
+        };
         let started = Instant::now();
         let result = self.post(
             "https://api.typesafe.ai/v1/systemone",
@@ -834,6 +878,7 @@ impl Models {
                 operation
             };
         Ok(Decision {
+            request: traced_request,
             answers: answers.clone(),
             choice,
             terminal: if ask_terminal {
@@ -1030,6 +1075,7 @@ pub fn run(flags: &Flags, opts: Options) -> Result<Value, String> {
                     "viewport_h": page["h"],
                     "choice": decision.choice,
                     "answers": decision.answers,
+                    "request": decision.request,
                     "shown": shown,
                 });
                 if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -1258,6 +1304,99 @@ mod tests {
     /// without a browser or a model. The rule under test is that the model's
     /// claim alone never ends a run: the named condition has to be visible in
     /// the observation we already take.
+    /// A finished field must not be offered back as somewhere to type.
+    ///
+    /// The observation alone cannot say a field is "done" — but this run's own
+    /// history can: if we typed X into that field and it still reads X, typing X
+    /// again is a no-op. Keeping those out of the TYPE_TEXT candidates is what
+    /// stops a run from spending its last decisions retyping a finished email
+    /// while checkboxes beside it sit unset.
+    mod offerable {
+        use super::super::offerable_actions;
+        use serde_json::json;
+
+        fn fill(label: &str, value: &str) -> serde_json::Value {
+            json!({ "kind": "fill", "label": label, "value": value })
+        }
+        fn typed(label: &str, text: &str) -> serde_json::Value {
+            json!({ "kind": "fill", "action": label, "text": text })
+        }
+        fn labels(v: &[serde_json::Value]) -> Vec<String> {
+            v.iter()
+                .map(|a| {
+                    format!(
+                        "{}:{}",
+                        a["kind"].as_str().unwrap_or(""),
+                        a["label"].as_str().unwrap_or("")
+                    )
+                })
+                .collect()
+        }
+
+        #[test]
+        fn a_field_still_holding_our_own_text_is_dropped() {
+            let actions = vec![fill("Work email", "casey@example.test")];
+            let history = vec![typed("Work email", "casey@example.test")];
+            assert!(offerable_actions(&actions, &history).is_empty());
+        }
+
+        #[test]
+        fn anything_we_did_not_write_is_still_offered() {
+            let history = vec![typed("Work email", "casey@example.test")];
+            // The page reset the field, or something else wrote to it: retyping
+            // is real work, not a no-op.
+            let reset = vec![fill("Work email", "")];
+            assert_eq!(
+                labels(&offerable_actions(&reset, &history)),
+                ["fill:Work email"]
+            );
+            // Same text, a different field.
+            let other = vec![fill("Personal email", "casey@example.test")];
+            assert_eq!(
+                labels(&offerable_actions(&other, &history)),
+                ["fill:Personal email"]
+            );
+            // Never typed at all.
+            assert_eq!(labels(&offerable_actions(&reset, &[])), ["fill:Work email"]);
+        }
+
+        #[test]
+        fn only_fills_are_ever_dropped() {
+            let history = vec![typed("Work email", "casey@example.test")];
+            let actions = vec![
+                fill("Work email", "casey@example.test"),
+                // the click that focuses the same field, which is how an
+                // autocomplete is re-triggered
+                json!({ "kind": "click", "label": "Open Work email", "value": "casey@example.test" }),
+                json!({ "kind": "click", "label": "I agree to the terms", "value": "", "checked": "false" }),
+                json!({ "kind": "select", "label": "Country → Japan", "value": "Japan" }),
+                json!({ "kind": "scroll", "label": "Scroll down" }),
+            ];
+            assert_eq!(
+                labels(&offerable_actions(&actions, &history)),
+                [
+                    "click:Open Work email",
+                    "click:I agree to the terms",
+                    "select:Country → Japan",
+                    "scroll:Scroll down",
+                ]
+            );
+        }
+
+        #[test]
+        fn an_earlier_value_does_not_drop_a_field_we_later_changed() {
+            // Typed twice; the field now holds the second value. Only that one
+            // is a no-op — but both are in history, and neither should drop a
+            // field holding something else entirely.
+            let history = vec![typed("Team size", "25"), typed("Team size", "40")];
+            assert!(offerable_actions(&[fill("Team size", "40")], &history).is_empty());
+            assert_eq!(
+                labels(&offerable_actions(&[fill("Team size", "12")], &history)),
+                ["fill:Team size"]
+            );
+        }
+    }
+
     mod terminal_shadow {
         use super::super::{condition_observed, Terminal};
         use serde_json::json;

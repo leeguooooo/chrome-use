@@ -595,7 +595,7 @@ JS</code></pre>
       <p>结果包含 <code>elapsed_ms</code>、<code>jev_ms</code>、<code>text_ms</code>、<code>observe_ms</code>、<code>act_ms</code>、<code>fresh_ms</code> 及决策、动作计数。应测量实际任务，不能把某个页面或 provider 的耗时比例推广到其他场景。</p>
       <p><code>--terminal-shadow</code> 在模型请求中增加完成预测问题，记录 <code>terminal_predicted</code>、<code>terminal_condition_observed</code>、<code>terminal_confirmed_done</code> 和 <code>terminal_refuted</code>，不会跳过正常的完成决策。与后续模型判断一致不等于任务已通过独立验收；增加问题也可能影响模型选择和延迟。</p>
       <p><code>stale_by_phase</code> 和 <code>stale_fields</code> 按类别记录 marker 新鲜度检查的拒绝原因，不写入原始正文。click/select 的 guard 拒绝不包含在这些分类统计中。URL 改变或控件离开可操作集合都不能证明目标完成，这些计数也不能证明哪些模型调用可以安全省掉。</p>
-      <p><code>JEV_TRACE=&lt;文件&gt;</code> 每次决策追加一行 JSON：模型看到的候选（id、类型、标签、当前值、勾选状态）、它的选择，以及 Jev 带概率的原始回答。不设置就不启用。它会记录字段标签和当前值，也就包括表单里已经填进去的内容，请把这个文件当作敏感数据。运行报告还会把 <code>act_ms</code> 拆成 <code>act_read_ms</code>、<code>cmd_click_ms</code>、<code>cmd_press_ms</code>、<code>cmd_insert_ms</code>。</p>
+      <p><code>JEV_TRACE=&lt;文件&gt;</code> 每次决策追加一行 JSON：发出去的请求、模型看到的候选（id、类型、标签、当前值、勾选状态）、它的选择，以及 Jev 带概率的原始回答。不设置就不启用。它会记录目标文本、页面文字和字段值，也就包括表单里已经填进去的内容，请把这个文件当作敏感数据。运行报告还会把 <code>act_ms</code> 拆成 <code>act_read_ms</code>、<code>cmd_click_ms</code>、<code>cmd_press_ms</code>、<code>cmd_insert_ms</code>。</p>
 
       <!-- ============================================================ -->
       <h2>状态管理</h2>
