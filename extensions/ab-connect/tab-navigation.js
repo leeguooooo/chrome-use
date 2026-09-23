@@ -7,6 +7,32 @@ export function canUseBrowserNavigationFallback(method, params, childSessionId) 
 }
 
 /**
+ * Normalize and auto-prefix URL schemes for browser and debugger navigation.
+ * Unprefixed hostnames like "google.com" or "localhost:3000" are automatically
+ * resolved with appropriate http/https schemes.
+ */
+export function normalizeNavigationUrl(rawUrl) {
+  let url = typeof rawUrl === 'string' ? rawUrl.trim() : ''
+  if (!url) return ''
+  if (
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url) &&
+    !url.startsWith('about:') &&
+    !url.startsWith('chrome:') &&
+    !url.startsWith('chrome-extension:') &&
+    !url.startsWith('data:') &&
+    !url.startsWith('javascript:') &&
+    !url.startsWith('file:')
+  ) {
+    if (url.startsWith('localhost') || url.startsWith('127.0.0.1')) {
+      url = 'http://' + url
+    } else {
+      url = 'https://' + url
+    }
+  }
+  return url
+}
+
+/**
  * Navigate a top-level relay tab through the browser API first.
  *
  * `chrome.tabs.update` follows Chrome's ordinary tab-navigation path. Besides
@@ -15,7 +41,7 @@ export function canUseBrowserNavigationFallback(method, params, childSessionId) 
  * CDP remains the fallback when the browser API rejects a URL.
  */
 export async function navigateTabWithBrowserFallback(params, deps) {
-  const url = typeof params?.url === 'string' ? params.url.trim() : ''
+  const url = normalizeNavigationUrl(params?.url)
   if (!url) return await deps.navigateWithDebugger()
 
   try {

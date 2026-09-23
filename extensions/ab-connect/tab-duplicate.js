@@ -40,7 +40,6 @@ function remainingTime(deadline) {
 
 async function completeBefore(operation, deadline, stage) {
   const timeoutMs = remainingTime(deadline)
-  if (timeoutMs === 0) throw new Error(`duplicateTab: ${stage} timed out`)
   const result = await withTimeout(operation, timeoutMs)
   if (result !== TIMED_OUT) return result
   throw new Error(`duplicateTab: ${stage} timed out`)
@@ -79,24 +78,39 @@ async function restoreForegroundBestEffort(deps, tabId, windowId, deadline) {
 export async function duplicateTab(params, deps) {
   const sourceTargetId =
     typeof params?.sourceTargetId === 'string' ? params.sourceTargetId.trim() : ''
-  const sourceTabId = sourceTargetId ? deps.tabForTarget(sourceTargetId) : null
-  if (sourceTabId == null) {
-    throw new Error(`duplicateTab: source target not found: ${sourceTargetId}`)
-  }
-
-  const sourceTab = await deps.getTab(sourceTabId).catch(() => null)
-  if (!deps.eligible(sourceTab)) throw new Error('duplicateTab: source tab is unavailable')
-  const focusedWindow = await deps.getLastFocusedWindow().catch(() => null)
-  const restoreWindowId = focusedWindow?.id ?? sourceTab.windowId
-  const activeTabs = await deps.getActiveTabs(restoreWindowId).catch(() => [])
-  const restoreTabId = activeTabs[0]?.id ?? sourceTabId
+  if (!sourceTargetId) throw new Error('duplicateTab: no sourceTargetId')
   const group = typeof params?.agentGroup === 'string' ? params.agentGroup.trim() : ''
-  if (!group) throw new Error('duplicateTab: agentGroup is required')
+  if (!group) throw new Error('duplicateTab: no agentGroup')
+  const sourceTabId = deps.tabForTarget(sourceTargetId)
+  if (sourceTabId == null) throw new Error(`duplicateTab: unknown target ${sourceTargetId}`)
 
-  const cleanupTimeoutMs = deps.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS
-  const transactionTimeoutMs = deps.transactionTimeoutMs ?? DEFAULT_TRANSACTION_TIMEOUT_MS
+  const transactionTimeoutMs = deps.transactionTimeoutMs ?? 5000
+  const cleanupTimeoutMs = deps.cleanupTimeoutMs ?? 2000
   const transactionDeadline = Date.now() + transactionTimeoutMs
   let transactionActive = true
+
+  const sourceTab = await completeBefore(
+    () => deps.getTab(sourceTabId),
+    transactionDeadline,
+    'source tab inspection',
+  )
+  if (!deps.eligible(sourceTab)) {
+    throw new Error(`duplicateTab: tab ${sourceTabId} is not eligible`)
+  }
+
+  const lastFocusedWindow = await completeBefore(
+    deps.getLastFocusedWindow,
+    transactionDeadline,
+    'window inspection',
+  )
+  const restoreWindowId = lastFocusedWindow?.id ?? sourceTab.windowId
+  const activeTabs = await completeBefore(
+    () => deps.getActiveTabs(restoreWindowId),
+    transactionDeadline,
+    'active tab inspection',
+  )
+  const restoreTabId = activeTabs?.[0]?.id ?? sourceTabId
+
   let duplicateTabId = null
   const duplicatePromise = Promise.resolve().then(() => deps.duplicateTab(sourceTabId))
   try {
@@ -107,7 +121,7 @@ export async function duplicateTab(params, deps) {
     )
     duplicateTabId = duplicate?.id ?? null
     if (duplicateTabId == null) throw new Error('duplicateTab: no tab id')
-    deps.markOwned(duplicateTabId)
+    await deps.markOwned(duplicateTabId)
     await completeBefore(
       () => deps.groupTabInto(duplicateTabId, group),
       transactionDeadline,
