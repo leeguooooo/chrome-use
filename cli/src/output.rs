@@ -4408,9 +4408,9 @@ Subcommands:
   get <name> --full          Include references and templates
   get --all                  Output every skill
   path [name]                Print filesystem path to skill directory
-  install                    Install the agent skill for your runner (via npx
-                             skills add); --project installs into ./ instead of
-                             globally
+  install                    Install and verify the bundled agent skill offline
+                             (no Node/Git); --project installs into ./ instead
+                             of globally
   update, refresh            Same operation as install — re-adds the current
                              version over an existing copy
 
@@ -4419,6 +4419,13 @@ Options:
 
 The installed discovery skill loads `skills get core` before browser commands.
 If an older copy carries its own manual without that handoff, refresh it below.
+Global installs cover shared .agents skills, Claude Code, Codex and Cursor,
+plus detected Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations.
+Codex uses the shared .agents directory; no duplicate .codex copy is created.
+CLAUDE_CONFIG_DIR and XDG_CONFIG_HOME overrides are respected.
+Project installs use .agents/skills and .claude/skills, plus existing .pi,
+.windsurf, .codebuddy and .trae directories. Failed writes exit nonzero.
+Restart your agent or reload its skills after installation.
 
 Two different things can be out of date, and only one of them needs `update`:
 

@@ -49,8 +49,22 @@ pub(super) fn disk_free_bytes(path: &Path) -> Option<u64> {
 }
 
 #[cfg(windows)]
-pub(super) fn disk_free_bytes(_path: &Path) -> Option<u64> {
-    None
+pub(super) fn disk_free_bytes(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    // The state directory may not exist on a first install. Query its nearest
+    // existing ancestor on the same volume rather than returning unavailable.
+    let existing = path.ancestors().find(|p| p.is_dir())?;
+    let wide: Vec<u16> = existing.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0;
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(available)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -115,7 +129,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let nested = dir.path().join("a/b/c/d");
         let bytes = disk_free_bytes(&nested);
-        if cfg!(unix) {
+        if cfg!(any(unix, windows)) {
             assert!(bytes.is_some());
             assert!(bytes.unwrap() > 0);
         }

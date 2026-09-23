@@ -14,6 +14,11 @@ use super::{Check, Status};
 use crate::choosebrowser;
 
 pub(super) fn check(checks: &mut Vec<Check>) {
+    // ChooseBrowser's app and rule locations are macOS-specific. Reporting
+    // these paths on Windows/Linux suggests a repair the user cannot perform.
+    if !cfg!(target_os = "macos") {
+        return;
+    }
     check_app(checks);
     let category = "ChooseBrowser rules";
     let d = choosebrowser::diagnose();

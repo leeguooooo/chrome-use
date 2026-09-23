@@ -12,7 +12,7 @@
 #
 # Windows PowerShell 5.1 and PowerShell 7 are both supported. Everything runs
 # inside one function: under `irm | iex` this script executes in the caller's
-# session, where `exit` would close the user's window, so failures `return`.
+# session, where `exit` would close the user's window, so failures throw.
 
 function Install-ChromeUse {
   $ErrorActionPreference = 'Stop'
@@ -26,13 +26,131 @@ function Install-ChromeUse {
   $exeName = 'chrome-use.exe'
 
   function Say($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-  function Fail($msg) { Write-Host "error: $msg" -ForegroundColor Red }
+  function Fail($msg) { throw "chrome-use installation failed: $msg" }
+
+  function Get-InstallArchitecture {
+    if ($env:PROCESSOR_ARCHITEW6432) { return $env:PROCESSOR_ARCHITEW6432 }
+    if ($env:PROCESSOR_ARCHITECTURE) { return $env:PROCESSOR_ARCHITECTURE }
+    # Agent/CI processes can omit the usual architecture environment variables.
+    # Query the OS rather than refusing a supported machine in that case.
+    try {
+      switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+        'X64' { return 'AMD64' }
+        'Arm64' { return 'ARM64' }
+        default { return 'unsupported' }
+      }
+    } catch {
+      # Older .NET Framework versions may not expose RuntimeInformation.
+      # Both supported 64-bit Windows architectures use our x64 artifact.
+      if ([Environment]::Is64BitOperatingSystem) { return 'AMD64' }
+      return 'x86'
+    }
+  }
+
+  # This also works with old releases whose `skill install` requires npx.
+  # Read JSON as UTF-8 explicitly: Windows PowerShell 5.1 otherwise decodes
+  # native stdout using the console code page, corrupting non-ASCII content.
+  function Get-BundledAgentSkill($target) {
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $target
+    $start.Arguments = 'skills get chrome-use --json'
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+      if (-not $process.Start()) { throw 'could not start the CLI to read its bundled skill' }
+      $stdout = $process.StandardOutput.ReadToEndAsync()
+      $stderr = $process.StandardError.ReadToEndAsync()
+      if (-not $process.WaitForExit(30000)) {
+        $process.Kill()
+        throw 'reading the bundled skill timed out after 30s'
+      }
+      $output = $stdout.GetAwaiter().GetResult()
+      $errorText = $stderr.GetAwaiter().GetResult()
+      if ($process.ExitCode -ne 0) {
+        # JSON-mode CLI errors are on stdout, not necessarily stderr.
+        if ([string]::IsNullOrWhiteSpace($errorText)) { $errorText = $output }
+        throw "reading the bundled skill failed (exit $($process.ExitCode)): $errorText"
+      }
+      $document = $output | ConvertFrom-Json
+      $skills = @($document.data | Where-Object { $_.name -eq 'chrome-use' })
+      if (-not $document.success -or $skills.Count -ne 1) { throw 'CLI did not return the chrome-use discovery skill' }
+      $content = [string]$skills[0].content
+      if ($content -notmatch '(?m)^name: chrome-use\s*$' -or $content -notmatch 'chrome-use skills get core') {
+        throw 'bundled skill is missing its name or core-guide handoff; upgrade the CLI'
+      }
+      return $content
+    } finally {
+      $process.Dispose()
+    }
+  }
+
+  # Keep these paths aligned with cli/src/skills/install.rs. Defaults cover
+  # shared skills (including Codex), Claude Code and Cursor. Installing another
+  # copy in .codex/skills would make Codex discover this skill twice.
+  function Get-AgentSkillDirs {
+    $userDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
+    if (-not $userDir) { throw 'could not determine the user profile directory' }
+    $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $userDir '.claude' }
+    $configDir = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $userDir '.config' }
+    $dirs = @(
+      (Join-Path $userDir '.agents\skills'),
+      (Join-Path $claudeDir 'skills'),
+      (Join-Path $userDir '.cursor\skills')
+    )
+    foreach ($runner in @(
+      (Join-Path $userDir '.pi\agent'),
+      (Join-Path $userDir '.codeium\windsurf'),
+      (Join-Path $configDir 'opencode'),
+      (Join-Path $userDir '.codebuddy'),
+      (Join-Path $userDir '.trae'),
+      (Join-Path $userDir '.trae-cn')
+    )) {
+      if (Test-Path -LiteralPath $runner -PathType Container) { $dirs += Join-Path $runner 'skills' }
+    }
+    return $dirs | Select-Object -Unique
+  }
+
+  function Install-AgentSkill($target, $dirs = (Get-AgentSkillDirs)) {
+    $content = Get-BundledAgentSkill $target
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    $errors = @()
+    if (@($dirs).Count -eq 0) { throw 'no skill installation directories found' }
+    foreach ($baseDir in $dirs) {
+      $skillDir = Join-Path $baseDir 'chrome-use'
+      $destination = Join-Path $skillDir 'SKILL.md'
+      $staging = Join-Path $skillDir ('.SKILL-' + [guid]::NewGuid().ToString('N') + '.tmp')
+      try {
+        $null = [IO.Directory]::CreateDirectory($skillDir)
+        [IO.File]::WriteAllText($staging, $content, $utf8)
+        if ([IO.File]::Exists($destination)) {
+          [IO.File]::Replace($staging, $destination, [NullString]::Value)
+        } else {
+          [IO.File]::Move($staging, $destination)
+        }
+        if ([IO.File]::ReadAllText($destination, $utf8) -cne $content) {
+          throw 'installed content differs from the bundled skill'
+        }
+        Say "agent skill installed and verified: $destination"
+      } catch {
+        $errors += "${destination}: $($_.Exception.Message)"
+      } finally {
+        if ([IO.File]::Exists($staging)) { [IO.File]::Delete($staging) }
+      }
+    }
+    if ($errors.Count) { throw ($errors -join "`n") }
+    Say 'Restart your agent or reload its skills to discover chrome-use.'
+  }
 
   # --- platform -> release asset ---------------------------------------------
   # Only an x64 build is published. Windows 11 on ARM runs it under x64
   # emulation, so ARM64 gets the same binary with a note rather than a refusal.
-  $arch = $env:PROCESSOR_ARCHITEW6432
-  if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
+  $arch = Get-InstallArchitecture
   switch ($arch) {
     'AMD64' { }
     'ARM64' { Say 'ARM64 detected: installing the x64 build, which runs under x64 emulation on Windows 11.' }
@@ -106,6 +224,7 @@ function Install-ChromeUse {
     }
 
     & tar.exe -xzf $tgz -C $tmp
+    if ($LASTEXITCODE -ne 0) { Fail 'could not extract the release archive' }
     $newExe = Join-Path $tmp $exeName
     if (-not (Test-Path $newExe)) { Fail "the archive did not contain $exeName"; return }
 
@@ -131,8 +250,14 @@ function Install-ChromeUse {
     }
     Say "installed -> $target"
     & $target --version
+    if ($LASTEXITCODE -ne 0) { Fail 'the installed CLI could not run' }
   } finally {
-    Remove-Item -Recurse -Force -Path $tmp -ErrorAction SilentlyContinue
+    $cleanupRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    $cleanupTarget = [IO.Path]::GetFullPath($tmp)
+    if ($cleanupTarget.StartsWith($cleanupRoot, [StringComparison]::OrdinalIgnoreCase) -and
+        [IO.Path]::GetFileName($cleanupTarget).StartsWith('chrome-use-install-')) {
+      Remove-Item -Recurse -Force -LiteralPath $cleanupTarget -ErrorAction SilentlyContinue
+    }
   }
 
   # --- PATH ------------------------------------------------------------------
@@ -176,16 +301,26 @@ function Install-ChromeUse {
     -not $env:SSH_CONNECTION -and -not $env:CI
 
   # --- guided setup: Chrome extension ----------------------------------------
+  $setupFailed = $false
   if ($interactive -and -not $env:AGENT_BROWSER_NO_SETUP) {
     Say 'setting up the Chrome extension...'
-    try { & $target extension install } catch { }
+    try {
+      & $target extension install
+      if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" }
+    } catch {
+      $setupFailed = $true
+      Write-Warning "Extension setup failed: $($_.Exception.Message). Run chrome-use extension install to retry."
+    }
   } else {
     Say "skipped extension setup (no interactive console). Run ``chrome-use extension install`` later."
   }
 
   # --- AI agent skill ----------------------------------------------------------
   if (-not $env:AGENT_BROWSER_NO_SKILL) {
-    try { & $target skill install } catch { }
+    Say 'installing the bundled agent skill (no Node required)...'
+    try { Install-AgentSkill $target } catch { Fail "agent skill: $($_.Exception.Message)" }
+  } else {
+    Say 'agent skill installation skipped (AGENT_BROWSER_NO_SKILL is set).'
   }
 
   # --- self-check + first prompt ---------------------------------------------
@@ -199,11 +334,13 @@ function Install-ChromeUse {
     $null = $check.Handle
     if (-not $check.WaitForExit(30000)) {
       Stop-Process -Id $check.Id -Force -ErrorAction SilentlyContinue
-      Say 'self-check did not finish in 30s and was stopped; run `chrome-use doctor` later.'
+      throw 'self-check did not finish in 30s and was stopped; run chrome-use doctor later'
     }
-  } catch { }
+    if ($check.ExitCode -ne 0) { throw "doctor exited with code $($check.ExitCode); resolve the failures above" }
+  } catch { Fail "self-check: $($_.Exception.Message)" }
+  if ($setupFailed) { Fail 'CLI and skill steps finished, but extension setup still needs repair' }
   Write-Host ''
-  Say 'All set. Paste this into your AI agent (Claude Code / Cursor / Codex):'
+  Say 'CLI installation complete. Check the extension status above, then try this in your AI agent:'
   Write-Host ''
   Write-Host '    Use chrome-use to open https://news.ycombinator.com and tell me the top 3 titles'
   Write-Host ''

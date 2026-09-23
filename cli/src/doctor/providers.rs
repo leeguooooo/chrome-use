@@ -113,7 +113,11 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 Status::Info,
                 "AI_GATEWAY_API_KEY not set (chat command disabled)",
             )
-            .with_fix("export AI_GATEWAY_API_KEY=gw_..."),
+            .with_fix(if cfg!(windows) {
+                "$env:AI_GATEWAY_API_KEY = 'gw_...' (only needed for chat)"
+            } else {
+                "export AI_GATEWAY_API_KEY=gw_... (only needed for chat)"
+            }),
         );
     }
 

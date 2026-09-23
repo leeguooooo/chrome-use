@@ -94,6 +94,15 @@ flake 同时提供 home-manager 模块和 NixOS 模块（`programs.chrome-use.en
 
 ### 安装 AI agent skill
 
+使用新版 CLI 时，安装脚本直接安装并校验内置的发现入口，不需要 Node、npx、Git 或额外下载。手动安装或刷新：
+
+```bash
+chrome-use skill install
+chrome-use skill install --project
+```
+
+全局安装覆盖 `~/.agents/skills`、Claude Code、Codex 和 Cursor，以及检测到配置目录的 Pi、OpenCode、Windsurf、CodeBuddy 和 Trae；遵循 `CLAUDE_CONFIG_DIR`、`XDG_CONFIG_HOME`。项目安装写入 `.agents/skills`、`.claude/skills`，以及已有的 `.pi`、`.windsurf`、`.codebuddy`、`.trae` 配置目录。安装后重启 agent 或重新加载技能。任一目录写入失败都会报错，即使其他目录已成功。详见[安装说明](https://chrome-use.leeguoo.com/install.html)。
+
 **Claude Code，插件市场（推荐）：** 全局安装 skill（所有项目可见）、自动更新，并列出 [`*-use` 家族](https://github.com/leeguooooo/plugins)的其他成员：
 
 ```
@@ -101,13 +110,13 @@ flake 同时提供 home-manager 模块和 NixOS 模块（`programs.chrome-use.en
 /plugin install chrome-use@leeguooooo-plugins
 ```
 
-**其他 agent runner（Cursor、Codex、自定义）：** 用 [skills.sh](https://skills.sh) 拉取 SKILL.md。加 `-g` 全局安装（每个项目可见）；不加则只装进当前项目：
+**更多 runner：** 内置目录映射之外的 runner 仍可通过 [skills.sh](https://skills.sh) 安装；这条可选路径需要 Node 及其自身依赖：
 
 ```bash
 npx skills add leeguooooo/chrome-use -g
 ```
 
-> 上面的一行安装命令已经替你跑过这一步（用 `AGENT_BROWSER_NO_SKILL=1` 跳过）。只有跳过了安装器、或用非默认 agent runner 时才需要手动运行。
+> 上面的一行安装命令已安装内置技能，可用 `AGENT_BROWSER_NO_SKILL=1` 跳过。PowerShell 安装脚本也能从固定的旧版 CLI 提取技能，绕过旧版的 npx 安装逻辑。安装错误会中止完成提示；脚本完成不代表 Chrome 扩展已经连通。
 
 > **Codex 用户注意：** Codex 自带浏览器插件，遇到浏览器任务会优先选它。在一台装了很多 skill 的机器上实测，Codex 还会把每个 skill 的描述截到只剩几个字符（甚至没有），所以 skill 描述赢不了路由，在 prompt 里点名 `chrome-use` 也不够。有效的做法是在项目的 `AGENTS.md` 里加一行：
 >

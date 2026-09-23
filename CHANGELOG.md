@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.139
+## 1.5.140
 
 <!-- release:start -->
+### Improvements
+
+- **Agent skill installation no longer needs Node, npx or Git.** `chrome-use skill install` writes the discovery entry bundled with the CLI, verifies the saved contents, and reports each installed path. It covers shared skills, Claude Code and Cursor, plus detected Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. Codex uses the shared directory so it does not discover a second copy. `--project`, `skills update` and `skills refresh` use the same offline installer. Other runners can still use skills.sh. (#343)
+- **The Windows installer also works with older CLI releases.** It extracts their bundled discovery skill directly, bypassing the old npx installer. UTF-8 decoding preserves Chinese content on Windows PowerShell 5.1. Architecture detection also works when an agent omits the usual environment variables, and CLI JSON failures retain their error details. Replacing an existing skill is staged beside the destination; failed writes leave the previous file intact. (#343)
+
+### Bug Fixes
+
+- **Installers no longer claim everything is ready after a failed step.** Skill installation failures, extension setup failures and doctor failures stop the completion message. The Windows self-check also reports its timeout. An explicitly skipped skill step is identified as skipped; successful CLI installation does not claim that the Chrome extension is connected. (#343)
+- **Windows doctor output matches the platform.** Disk space is checked through the Windows API, optional chat-key guidance uses PowerShell syntax, and macOS-only ChooseBrowser paths are omitted. Automatic encryption-key creation no longer comes with an unnecessary Unix setup command. Skill detection recognizes the native installer's destinations and custom runner configuration paths. (#343)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.139
+
 ### Features
 
 - **One-line install on Windows.** In PowerShell: `irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex`. It installs to `%LOCALAPPDATA%\Programs\chrome-use` with no admin rights, adds that to your user PATH, and then runs the same extension setup, skill install and self-check as `install.sh`. The download's sha256 is mandatory — a mismatch installs nothing — because an interrupted download otherwise extracts into an `.exe` that dies at launch with an access violation. Your existing PATH entries are kept exactly as they were, `%USERPROFILE%`-style variables included; the usual PowerShell API for this would have expanded them into absolute paths for good. Pin with `$env:AGENT_BROWSER_VERSION`, relocate with `$env:AGENT_BROWSER_BIN_DIR`, or leave PATH alone with `$env:AGENT_BROWSER_NO_PATH = 1`. Tested on Windows 11 with Windows PowerShell 5.1; ARM64 gets the x64 build under emulation, untested.
@@ -14,7 +31,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.138
 

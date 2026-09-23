@@ -34,7 +34,11 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                     Status::Fail,
                     "AGENT_BROWSER_ENCRYPTION_KEY is not a 64-char hex string",
                 )
-                .with_fix("export AGENT_BROWSER_ENCRYPTION_KEY=$(openssl rand -hex 32)"),
+                .with_fix(if cfg!(windows) {
+                    "PowerShell: set $env:AGENT_BROWSER_ENCRYPTION_KEY to your 64-character hexadecimal encryption key"
+                } else {
+                    "export AGENT_BROWSER_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+                }),
             );
         }
     } else if key_file.exists() {
@@ -60,15 +64,12 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         }
         checks.push(check);
     } else {
-        checks.push(
-            Check::new(
-                "security.encryption_key",
-                category,
-                Status::Info,
-                "No encryption key set (will be auto-generated on first auth save)",
-            )
-            .with_fix("export AGENT_BROWSER_ENCRYPTION_KEY=$(openssl rand -hex 32)"),
-        );
+        checks.push(Check::new(
+            "security.encryption_key",
+            category,
+            Status::Info,
+            "No encryption key set (will be auto-generated on first auth save)",
+        ));
     }
 
     let sessions_dir = get_sessions_dir();

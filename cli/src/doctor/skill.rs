@@ -1,7 +1,6 @@
 //! Read-only probe: is the chrome-use agent skill installed anywhere an
-//! agent runner would look? Never writes — installing runner dirs is
-//! skills.sh's job (`chrome-use skill install`). Never Fail: a skill
-//! installed into a runner we don't probe (Cursor/Windsurf/…) is normal.
+//! agent runner would look? Never writes; shares the native installer's paths.
+//! Never Fail: other runners may use directories we do not probe.
 
 use super::{Check, Status};
 use std::path::PathBuf;
@@ -16,20 +15,20 @@ fn probe_installed(candidates: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Candidate skill base dirs across common runners (global + current
-/// project). Read-only. Not exhaustive — skills.sh knows 20+; we probe the
-/// popular ones and say so.
+/// Candidate skill base dirs, using the installer's custom-home handling too.
 fn candidate_dirs() -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        v.push(home.join(".claude/skills"));
-        v.push(home.join(".codex/skills"));
-        v.push(home.join(".cursor/skills"));
-        v.push(home.join(".agents/skills"));
+    let mut v = crate::skills::install::global_dirs().unwrap_or_default();
+    // Older installers used Codex's legacy directory. Keep recognizing those
+    // copies without creating another copy there on a fresh install.
+    let codex = std::env::var_os("CODEX_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".codex")));
+    if let Some(codex) = codex {
+        v.push(codex.join("skills"));
     }
     if let Ok(cwd) = std::env::current_dir() {
-        v.push(cwd.join(".claude/skills"));
-        v.push(cwd.join(".agents/skills"));
+        v.extend(crate::skills::install::project_dirs(&cwd));
     }
     v
 }
@@ -44,7 +43,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 category,
                 Status::Warn,
                 "chrome-use agent skill not found in the probed runner dirs \
-                 (installs into other runners like Cursor/Windsurf won't show here)",
+                 (other runners may use directories not probed here)",
             )
             .with_fix("chrome-use skill install"),
         );
