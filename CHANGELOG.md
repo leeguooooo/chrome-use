@@ -6,7 +6,7 @@
 ### Improvements
 
 - **Agent skill installation no longer needs Node, npx or Git.** `chrome-use skill install` writes the discovery entry bundled with the CLI, verifies the saved contents, and reports each installed path. It covers shared skills, Claude Code and Cursor, plus detected Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. Codex uses the shared directory so it does not discover a second copy. `--project`, `skills update` and `skills refresh` use the same offline installer. Other runners can still use skills.sh. (#343)
-- **The Windows installer also works with older CLI releases.** It extracts their bundled discovery skill directly, bypassing the old npx installer. UTF-8 decoding preserves Chinese content on Windows PowerShell 5.1. Replacing an existing skill is staged beside the destination; failed writes leave the previous file intact. (#343)
+- **The Windows installer also works with older CLI releases.** It extracts their bundled discovery skill directly, bypassing the old npx installer. UTF-8 decoding preserves Chinese content on Windows PowerShell 5.1. Architecture detection also works when an agent omits the usual environment variables, and CLI JSON failures retain their error details. Replacing an existing skill is staged beside the destination; failed writes leave the previous file intact. (#343)
 
 ### Bug Fixes
 

@@ -228,6 +228,7 @@ programs.chrome-use = {
         以及已有配置的 Pi、OpenCode、Windsurf、CodeBuddy、Trae；遵循 <code>CLAUDE_CONFIG_DIR</code>、<code>XDG_CONFIG_HOME</code>。
         项目安装写入 <code>.agents/skills</code>、<code>.claude/skills</code>，以及已有的 <code>.pi</code>、<code>.windsurf</code>、<code>.codebuddy</code>、<code>.trae</code> 配置目录。</p>
       <p>PowerShell 安装脚本也能从旧版 CLI 提取内置技能，绕过旧版 npx 依赖；按 UTF-8 读取内容，兼容 Windows PowerShell 5.1。
+        agent 未传入常见架构环境变量时会改查操作系统，CLI 的 JSON 错误详情也会保留。
         自检超时或失败会明确报错。Windows 的 Chrome 检测不再启动浏览器，支持磁盘空间检测，使用 PowerShell 环境变量提示，
         不再显示 macOS 的 ChooseBrowser 路径。可选云服务密钥无需配置；加密密钥在首次保存认证时自动生成。
         Chrome Web Store 扩展仍需手动添加一次，安装完成不代表扩展已连通。</p>

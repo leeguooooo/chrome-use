@@ -7,7 +7,7 @@ $tokens = $null
 $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'install.ps1'), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors -join "`n") }
-foreach ($name in 'Get-BundledAgentSkill', 'Get-AgentSkillDirs', 'Install-AgentSkill') {
+foreach ($name in 'Get-InstallArchitecture', 'Get-BundledAgentSkill', 'Get-AgentSkillDirs', 'Install-AgentSkill') {
   $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }.GetNewClosure(), $true)
   . ([scriptblock]::Create($definition.Extent.Text))
 }
@@ -21,12 +21,30 @@ $savedCodex = $env:CODEX_HOME
 $savedClaude = $env:CLAUDE_CONFIG_DIR
 $savedSkip = $env:AGENT_BROWSER_NO_SKILL
 $savedSetup = $env:AGENT_BROWSER_NO_SETUP
+$savedArch = $env:PROCESSOR_ARCHITECTURE
+$savedWowArch = $env:PROCESSOR_ARCHITEW6432
+$savedSkillDir = $env:AGENT_BROWSER_SKILLS_DIR
 try {
+  $env:PROCESSOR_ARCHITECTURE = $null
+  $env:PROCESSOR_ARCHITEW6432 = $null
+  $arch = Get-InstallArchitecture
+  Assert ($arch -in @('AMD64', 'ARM64')) 'OS architecture fallback failed'
+  $env:PROCESSOR_ARCHITECTURE = 'x86'
+  $env:PROCESSOR_ARCHITEW6432 = 'AMD64'
+  Assert ((Get-InstallArchitecture) -eq 'AMD64') 'WOW64 native architecture ignored'
+  Write-Output 'pass: architecture detection without environment variables'
   if ($ChromeUse) {
     $actual = Get-BundledAgentSkill $ChromeUse
     Assert ($actual -match 'chrome-use skills get core') 'released CLI did not return its skill'
     Assert ($actual -match ([string][char]0x4e2d + [char]0x6587)) 'UTF-8 Chinese text was corrupted'
     Write-Output 'pass: released CLI extraction preserves UTF-8'
+    $env:AGENT_BROWSER_SKILLS_DIR = Join-Path $testRoot 'empty-skills'
+    $null = [IO.Directory]::CreateDirectory($env:AGENT_BROWSER_SKILLS_DIR)
+    $detail = ''
+    try { Get-BundledAgentSkill $ChromeUse | Out-Null } catch { $detail = $_.Exception.Message }
+    Assert ($detail -match 'not found') 'JSON error on stdout was lost'
+    $env:AGENT_BROWSER_SKILLS_DIR = $savedSkillDir
+    Write-Output 'pass: CLI JSON error details survive extraction failure'
   }
   $script:content = "---`nname: chrome-use`n---`nchrome-use skills get core`n" + [char]0x4e2d + [char]0x6587
   function Get-BundledAgentSkill($target) { return $script:content }
@@ -106,6 +124,9 @@ try {
   $env:CLAUDE_CONFIG_DIR = $savedClaude
   $env:AGENT_BROWSER_NO_SKILL = $savedSkip
   $env:AGENT_BROWSER_NO_SETUP = $savedSetup
+  $env:PROCESSOR_ARCHITECTURE = $savedArch
+  $env:PROCESSOR_ARCHITEW6432 = $savedWowArch
+  $env:AGENT_BROWSER_SKILLS_DIR = $savedSkillDir
   $resolved = [IO.Path]::GetFullPath($testRoot)
   $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
   if ($resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -and

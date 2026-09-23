@@ -27,6 +27,8 @@ Both installers treat skill failures as errors unless `AGENT_BROWSER_NO_SKILL`
 explicitly skips the step. PowerShell extracts the skill through
 `skills get chrome-use --json`, including from older pinned releases; it reads
 UTF-8 explicitly so Chinese text survives Windows PowerShell 5.1.
+If an agent omits the usual Windows architecture environment variables, the
+installer queries the OS instead. CLI JSON error details are preserved.
 The shell installer needs a current CLI for dependency-free installation.
 
 The Windows self-check is bounded to 30 seconds. A timeout or doctor failure

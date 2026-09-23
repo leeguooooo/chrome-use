@@ -217,6 +217,11 @@ jobs:
       - name: Run Rust tests
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
 
+      - name: Verify skill extraction with the built Windows CLI
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/test-install-windows.ps1 -ChromeUse "$pwd/cli/target/${{ matrix.target }}/ci/chrome-use.exe"
+
   windows-installer:
     name: Windows Installer Scripts
     needs: preflight

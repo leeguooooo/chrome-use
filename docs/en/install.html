@@ -231,6 +231,7 @@ programs.chrome-use = {
         and existing Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. <code>CLAUDE_CONFIG_DIR</code> and <code>XDG_CONFIG_HOME</code> are respected.
         Project installs use <code>.agents/skills</code> and <code>.claude/skills</code>, plus existing <code>.pi</code>, <code>.windsurf</code>, <code>.codebuddy</code> and <code>.trae</code> configuration directories.</p>
       <p>PowerShell also extracts the bundled skill from older CLI releases, bypassing their npx dependency. Explicit UTF-8 decoding preserves content on Windows PowerShell 5.1.
+        Architecture detection also works when an agent omits the usual Windows environment variables. CLI JSON errors retain their details.
         A self-check timeout or failure is reported as an error. Windows Chrome detection does not launch the browser; doctor checks disk space, gives PowerShell environment-variable guidance,
         and omits macOS-only ChooseBrowser paths. Optional cloud keys need no setup; encryption keys are generated on first auth save.
         The Chrome Web Store extension still requires a one-time manual install. Installer completion does not verify its connection.</p>

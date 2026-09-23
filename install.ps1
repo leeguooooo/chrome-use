@@ -28,6 +28,25 @@ function Install-ChromeUse {
   function Say($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
   function Fail($msg) { throw "chrome-use installation failed: $msg" }
 
+  function Get-InstallArchitecture {
+    if ($env:PROCESSOR_ARCHITEW6432) { return $env:PROCESSOR_ARCHITEW6432 }
+    if ($env:PROCESSOR_ARCHITECTURE) { return $env:PROCESSOR_ARCHITECTURE }
+    # Agent/CI processes can omit the usual architecture environment variables.
+    # Query the OS rather than refusing a supported machine in that case.
+    try {
+      switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+        'X64' { return 'AMD64' }
+        'Arm64' { return 'ARM64' }
+        default { return 'unsupported' }
+      }
+    } catch {
+      # Older .NET Framework versions may not expose RuntimeInformation.
+      # Both supported 64-bit Windows architectures use our x64 artifact.
+      if ([Environment]::Is64BitOperatingSystem) { return 'AMD64' }
+      return 'x86'
+    }
+  }
+
   # This also works with old releases whose `skill install` requires npx.
   # Read JSON as UTF-8 explicitly: Windows PowerShell 5.1 otherwise decodes
   # native stdout using the console code page, corrupting non-ASCII content.
@@ -53,7 +72,11 @@ function Install-ChromeUse {
       }
       $output = $stdout.GetAwaiter().GetResult()
       $errorText = $stderr.GetAwaiter().GetResult()
-      if ($process.ExitCode -ne 0) { throw "reading the bundled skill failed (exit $($process.ExitCode)): $errorText" }
+      if ($process.ExitCode -ne 0) {
+        # JSON-mode CLI errors are on stdout, not necessarily stderr.
+        if ([string]::IsNullOrWhiteSpace($errorText)) { $errorText = $output }
+        throw "reading the bundled skill failed (exit $($process.ExitCode)): $errorText"
+      }
       $document = $output | ConvertFrom-Json
       $skills = @($document.data | Where-Object { $_.name -eq 'chrome-use' })
       if (-not $document.success -or $skills.Count -ne 1) { throw 'CLI did not return the chrome-use discovery skill' }
@@ -127,8 +150,7 @@ function Install-ChromeUse {
   # --- platform -> release asset ---------------------------------------------
   # Only an x64 build is published. Windows 11 on ARM runs it under x64
   # emulation, so ARM64 gets the same binary with a note rather than a refusal.
-  $arch = $env:PROCESSOR_ARCHITEW6432
-  if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
+  $arch = Get-InstallArchitecture
   switch ($arch) {
     'AMD64' { }
     'ARM64' { Say 'ARM64 detected: installing the x64 build, which runs under x64 emulation on Windows 11.' }
