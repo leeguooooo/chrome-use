@@ -1,8 +1,19 @@
 # Changelog
 
-## 1.5.140
+## 1.5.141
 
 <!-- release:start -->
+### Bug Fixes
+
+- **A `--launch` session no longer hangs or switches browsers once its browser is gone.** Follow-up commands don't repeat `--launch`. That was fine while the session's daemon kept running, but once the launched browser was gone (closed after 10 idle minutes, killed, or crashed along with its daemon), the next command read its missing `--launch` as "use my real Chrome". If the Chrome extension wasn't connected, `get url`, `close` and every other command waited on "Chrome relay dropped — reconnecting…" for a connection this session never used; seen on Windows. If the extension was connected, the command would have gone to your real Chrome instead. A session started with `--launch` now stays that way until you `close` it: the next command launches a fresh browser in about a second, with the existing warning that the old window is gone. To move the session to your Chrome, pass `--auto-connect`, `--cdp`, `--browser` or `--provider`.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.140
+
 ### Improvements
 
 - **Agent skill installation no longer needs Node, npx or Git.** `chrome-use skill install` writes the discovery entry bundled with the CLI, verifies the saved contents, and reports each installed path. It covers shared skills, Claude Code and Cursor, plus detected Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. Codex uses the shared directory so it does not discover a second copy. `--project`, `skills update` and `skills refresh` use the same offline installer. Other runners can still use skills.sh. (#343)
@@ -16,7 +27,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.139
 
