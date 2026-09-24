@@ -4378,6 +4378,9 @@ async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
 }
 
 async fn handle_close(state: &mut DaemonState) -> Result<Value, String> {
+    // A closed session is no longer a launched one; the next command picks its
+    // browser from its own flags again.
+    crate::connection::clear_session_launched(&state.session_id);
     // A fresh daemon after idle has no manager, but still owns the external tabs
     // recorded by its predecessor. Explicit close must not silently ignore them.
     if state.browser.is_none() {

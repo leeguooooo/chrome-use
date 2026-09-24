@@ -280,6 +280,36 @@ fn read_registered_daemon_pid(session: &str) -> Option<u32> {
         .and_then(|value| value.trim().parse::<u32>().ok())
 }
 
+/// Marker that this session drives a browser chrome-use launched (`--launch`),
+/// not the user's Chrome through the extension relay.
+///
+/// Follow-up commands omit `--launch`, and while the session's daemon is alive
+/// that does not matter: the daemon already holds the launched browser. Once
+/// it is gone (idle-reaped, killed, crashed), the next command has nothing but
+/// its own flags to go on, read them as "use the real Chrome", and on a machine
+/// with the native host registered but no relay up it waited for a relay that
+/// was never part of this session — `close` and `get url` hung. The marker
+/// outlives the daemon, like the `.reaped` note, and `close` removes it.
+fn get_launched_marker_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{}.launched", session))
+}
+
+pub fn mark_session_launched(session: &str) {
+    let path = get_launched_marker_path(session);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, "launch");
+}
+
+pub fn session_was_launched(session: &str) -> bool {
+    get_launched_marker_path(session).exists()
+}
+
+pub fn clear_session_launched(session: &str) {
+    let _ = fs::remove_file(get_launched_marker_path(session));
+}
+
 fn get_version_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.version", session))
 }

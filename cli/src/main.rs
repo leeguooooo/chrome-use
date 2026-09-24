@@ -1449,6 +1449,14 @@ fn main() {
         return;
     }
 
+    // A session started with `--launch` stays one until it is closed, even when
+    // its daemon (and browser) went away between commands.
+    match flags.launched_session(connection::session_was_launched(&flags.session)) {
+        flags::LaunchedSession::Continue => flags.continue_launched_session(),
+        flags::LaunchedSession::Switch => connection::clear_session_launched(&flags.session),
+        flags::LaunchedSession::Unchanged => {}
+    }
+
     // Handle install separately
     if clean.first().map(|s| s.as_str()) == Some("install") {
         let with_deps = args.iter().any(|a| a == "--with-deps" || a == "-d");
@@ -2483,6 +2491,9 @@ fn main() {
             }
         };
     drop(_session_lifecycle_lock);
+    if flags.force_launch && flags.cdp.is_none() && flags.provider.is_none() {
+        connection::mark_session_launched(&flags.session);
+    }
 
     // Warn if launch-time options were explicitly passed via CLI but daemon was already running
     // Only warn about flags that were passed on the command line, not those set via environment

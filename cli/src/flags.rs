@@ -487,6 +487,10 @@ pub struct Flags {
     pub verbose: bool,
     pub quiet: bool,
 
+    /// `--auto-connect` was passed on the command line, so this command asks
+    /// for the user's Chrome even in a session that was started with `--launch`.
+    pub cli_auto_connect: bool,
+
     // Track which launch-time options were explicitly passed via CLI
     // (as opposed to being set only via environment variables)
     pub cli_executable_path: bool,
@@ -767,6 +771,41 @@ fn sanitize_session_component(s: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
+/// What a command should do about a session that was started with `--launch`
+/// (see `connection::mark_session_launched`).
+#[derive(Debug, PartialEq, Eq)]
+pub enum LaunchedSession {
+    /// Nothing to do: no marker, or this command already says `--launch`.
+    Unchanged,
+    /// The command names no browser, so it continues the launched session.
+    Continue,
+    /// The command explicitly asks for another browser; the session is no
+    /// longer a launched one.
+    Switch,
+}
+
+impl Flags {
+    pub fn launched_session(&self, marker: bool) -> LaunchedSession {
+        if !marker || self.force_launch {
+            return LaunchedSession::Unchanged;
+        }
+        if self.cli_auto_connect
+            || self.cdp.is_some()
+            || self.provider.is_some()
+            || self.browser.is_some()
+        {
+            return LaunchedSession::Switch;
+        }
+        LaunchedSession::Continue
+    }
+
+    /// Carry on as though `--launch` had been passed.
+    pub fn continue_launched_session(&mut self) {
+        self.force_launch = true;
+        self.auto_connect = false;
+    }
+}
+
 pub fn parse_flags(args: &[String]) -> Flags {
     let config = load_config(args).unwrap_or_else(|e| {
         eprintln!("{} {}", color::warning_indicator(), e);
@@ -948,6 +987,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         model: env::var("AI_GATEWAY_MODEL").ok().or(config.model),
         verbose: false,
         quiet: false,
+        cli_auto_connect: false,
         cli_executable_path: false,
         cli_extensions: false,
         cli_init_scripts: false,
@@ -1167,6 +1207,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--auto-connect" => {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.auto_connect = val;
+                flags.cli_auto_connect = val;
                 if !val {
                     flags.force_launch = true;
                 }
@@ -1177,6 +1218,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--launch" | "--new" => {
                 flags.force_launch = true;
                 flags.auto_connect = false;
+                flags.cli_auto_connect = false;
             }
             "--session-name" => {
                 if let Some(s) = args.get(i + 1) {
@@ -1451,6 +1493,42 @@ mod tests {
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn a_launched_session_continues_without_repeating_launch() {
+        let env = EnvGuard::new(&["CI", "AGENT_BROWSER_FORCE_LAUNCH"]);
+        env.remove("CI");
+        env.remove("AGENT_BROWSER_FORCE_LAUNCH");
+        let mut flags = parse_flags(&args("get url"));
+        assert_eq!(flags.launched_session(true), LaunchedSession::Continue);
+        flags.continue_launched_session();
+        assert!(flags.force_launch);
+        assert!(!flags.auto_connect);
+        assert_eq!(flags.launched_session(false), LaunchedSession::Unchanged);
+    }
+
+    #[test]
+    fn naming_another_browser_leaves_the_launched_session() {
+        let env = EnvGuard::new(&["CI", "AGENT_BROWSER_FORCE_LAUNCH"]);
+        env.remove("CI");
+        env.remove("AGENT_BROWSER_FORCE_LAUNCH");
+        for cmd in [
+            "--auto-connect open example.com",
+            "--cdp 9222 open example.com",
+            "-p browserbase open example.com",
+            "--browser work open example.com",
+        ] {
+            assert_eq!(
+                parse_flags(&args(cmd)).launched_session(true),
+                LaunchedSession::Switch,
+                "{cmd}"
+            );
+        }
+        assert_eq!(
+            parse_flags(&args("--launch open example.com")).launched_session(true),
+            LaunchedSession::Unchanged
+        );
     }
 
     #[test]

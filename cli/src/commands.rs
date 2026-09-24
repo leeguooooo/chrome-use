@@ -5217,6 +5217,7 @@ mod tests {
             auto_connect: false,
             force_launch: false,
             session_name: None,
+            cli_auto_connect: false,
             cli_executable_path: false,
             cli_extensions: false,
             cli_init_scripts: false,
