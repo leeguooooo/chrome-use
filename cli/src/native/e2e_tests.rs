@@ -9338,3 +9338,85 @@ async fn e2e_focus_and_press_on_a_frame_say_they_stopped_at_the_boundary() {
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
 }
+
+/// Direct CDP adoption must resolve the requested renderer without granting deletion rights.
+#[tokio::test]
+#[ignore]
+async fn e2e_direct_cdp_tab_adopt_preserves_user_tab() {
+    let mut owner = DaemonState::new();
+    assert_success(
+        &execute_command(
+            &json!({"id":"1", "action":"launch", "headless":true}),
+            &mut owner,
+        )
+        .await,
+    );
+    let manager = owner.browser.as_ref().unwrap();
+    let endpoint = manager.get_cdp_url().to_string();
+    let target = manager.active_target_id().unwrap().to_string();
+    manager
+        .evaluate("window.adoptionMarker = 'preserved'", None)
+        .await
+        .unwrap();
+    // Two targets ensure close refusal checks ownership, not the last-tab guard.
+    owner
+        .browser
+        .as_mut()
+        .unwrap()
+        .tab_new(Some("about:blank"), None)
+        .await
+        .unwrap();
+    let mut guest = DaemonState::new();
+    guest.browser = Some(
+        super::browser::BrowserManager::connect_cdp(&endpoint)
+            .await
+            .unwrap(),
+    );
+    let adopted = execute_command(
+        &json!({"id":"2", "action":"tab_adopt", "spec":target}),
+        &mut guest,
+    )
+    .await;
+    assert_success(&adopted);
+    assert_eq!(get_data(&adopted)["verified"], "confirmed");
+    let manager = guest.browser.as_mut().unwrap();
+    assert_eq!(manager.active_target_id().unwrap(), target.as_str());
+    assert_eq!(
+        manager
+            .evaluate("window.adoptionMarker", None)
+            .await
+            .unwrap(),
+        "preserved"
+    );
+    assert!(manager
+        .tab_close(None)
+        .await
+        .unwrap_err()
+        .contains("did not create"));
+    let missing = manager
+        .tab_adopt("missing-regression-target")
+        .await
+        .unwrap_err();
+    assert!(missing.contains("No open tab matching"), "{missing}");
+    assert_eq!(manager.active_target_id().unwrap(), target.as_str());
+    assert!(manager.tab_adopt(" ").await.is_err());
+    manager.close().await.unwrap();
+    owner
+        .browser
+        .as_mut()
+        .unwrap()
+        .tab_adopt(&target)
+        .await
+        .unwrap();
+    assert_eq!(
+        owner
+            .browser
+            .as_ref()
+            .unwrap()
+            .evaluate("window.adoptionMarker", None)
+            .await
+            .unwrap(),
+        "preserved"
+    );
+    assert_success(&execute_command(&json!({"id":"3", "action":"close"}), &mut owner).await);
+}

@@ -4706,7 +4706,7 @@ Tabs:
   tab list --full            Full URLs + stable targetId (external: ownership too)
                              Dead relay tab records are removed on reconnect.
   tab select <ref>           Select a tab (external: created or adopted only)
-  tab adopt <url|targetId>   Attach an existing tab in the current session, no reload
+  tab adopt <url|targetId>   Attach an existing tab (extension or CDP), no reload
   tab inspect <ref>          Browser metadata without page JS (ab-connect 0.5.16+ on relay)
   tab close [ref]            Close a tab (external: session-created only)
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning

@@ -408,7 +408,10 @@ copy chrome-use's internal active tab. Providers without native duplication
 return an error; chrome-use never substitutes a same-URL new tab. Background
 loading remains controlled by Chrome.
 
-`tab adopt` works only through the extension-connected real Chrome path. It
+`tab adopt` supports extension-connected Chrome and direct CDP connections (for example,
+`chrome-use --session example --cdp 9222 tab adopt <targetId>`). Keep the same session
+and endpoint on subsequent commands. The top-level `adopt` command still selects
+the extension relay; use `tab adopt` for direct CDP. Adoption
 attaches an existing tab in the current daemon and never navigates it.
 `tab inspect` reads browser-level metadata, so it remains available when a
 page's renderer is unresponsive. Page-JavaScript operations such as `eval`

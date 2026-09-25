@@ -1313,6 +1313,9 @@ impl BrowserManager {
     /// `collect_page_targets` on a relay/browser that doesn't support the
     /// unscoped query. Retries a few times over the relay (discovery is eventual).
     async fn collect_all_targets(&self) -> Result<Vec<TargetInfo>, String> {
+        if !self.via_relay() {
+            return self.collect_page_targets().await;
+        }
         let rounds = if crate::connect::relay_url().is_some() {
             3
         } else {
@@ -1364,7 +1367,12 @@ impl BrowserManager {
             // the user's tabs (so Chrome's debugger banner stays off their pages),
             // ask the extension to discover the tab by URL/targetId via chrome.tabs
             // metadata and attach JUST that one on demand, then adopt it.
-            None => self.adopt_by_url_on_demand(spec).await?,
+            None if self.via_relay() => self.adopt_by_url_on_demand(spec).await?,
+            None => {
+                return Err(format!(
+                    "No open tab matching {spec:?}; run `tab list` for available targets"
+                ))
+            }
         };
 
         let attach: AttachToTargetResult = self
@@ -1414,17 +1422,14 @@ impl BrowserManager {
         Ok(())
     }
 
-    /// Adopt an existing relay tab in the current daemon without navigating it.
+    /// Adopt an existing extension or direct-CDP tab without navigating it.
     ///
     /// Unlike the historical top-level `adopt` command, this does not restart
     /// the daemon, so it preserves the diagnostic state of a white-screen or
     /// unresponsive page (issue #157).
     pub async fn tab_adopt(&mut self, spec: &str) -> Result<Value, String> {
-        if self.agent_group().is_none() {
-            return Err(
-                "`tab adopt` requires Chrome connected through the chrome-use extension"
-                    .to_string(),
-            );
+        if spec.trim().is_empty() {
+            return Err("Expected a non-empty URL substring or targetId".to_string());
         }
         self.adopt_existing_target(spec).await?;
         self.active_page_info()

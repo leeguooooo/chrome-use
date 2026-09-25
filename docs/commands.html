@@ -448,7 +448,7 @@
       </p>
       <p>
         <code>tab select &lt;ref&gt;</code> 与 <code>tab &lt;ref&gt;</code> 等价。
-        <code>tab adopt &lt;URL 子串|targetId&gt;</code> 会在当前会话中附加现有标签，不刷新页面。
+        <code>tab adopt &lt;URL 子串|targetId&gt;</code> 支持扩展和直接 CDP 连接，会在当前会话中附加现有标签，不刷新页面。直接 CDP 请使用 <code>chrome-use --session example --cdp 9222 tab adopt &lt;targetId&gt;</code>，后续命令保持相同 session 和端点；顶层 <code>adopt</code> 仍选择扩展连接。
         在外部或扩展连接的 Chrome 中，<code>tab list</code> 会把标签标记为
         <code>created</code>、<code>adopted</code> 或 <code>foreign</code>。只有 created/adopted
         标签可以切换，只有当前 session 创建的标签可以关闭；adopted 标签仍属于用户。同名 session

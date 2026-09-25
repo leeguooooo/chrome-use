@@ -216,7 +216,7 @@ The agent operates in your Chrome: you'll see tabs opening, pages loading, click
 | `chrome-use screenshot ./page.png` | Save a screenshot (an output for looking at, never the way an agent reads a page) |
 | `chrome-use find "edit web service settings button"` | Ranked, non-acting candidates from a natural-language description |
 | `chrome-use actions @e15` · `do @e15 expand` | What this element supports right now, and perform one of exactly those |
-| `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | List tabs; select a created or adopted tab; attach an already-open tab without navigating it |
+| `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | List tabs; select a created or adopted tab; attach an already-open tab through the extension or direct CDP without navigating it |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | Handle a native `confirm()` / `prompt()` opened by a click |
 | `chrome-use download @e2 ./video.mp4` | Download with the same cookies as the logged-in browser, without navigating the current tab |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | Mock a response, rewrite an outgoing request, or block one |
