@@ -358,11 +358,14 @@ chrome-use network requests --type websocket # View WebSocket connection metadat
 chrome-use tab                              # List tabs with tabId and label
 chrome-use tab new [url]                    # New tab
 chrome-use tab new --label docs [url]       # New tab with a memorable label
+chrome-use tab new [url] --activate         # Activate before renderer initialization
 chrome-use tab duplicate [ref]              # Native Duplicate tab (current by default)
 chrome-use tab duplicate docs --label copy  # Duplicate by ref and label the copy
 chrome-use tab t2                           # Switch to tab by id
 chrome-use tab select t2                    # Explicit switch syntax
+chrome-use tab select t2 --activate         # Activate before the liveness probe
 chrome-use tab adopt "example.com/stuck"   # Adopt without navigating
+chrome-use tab adopt "example.com" --activate # Adopt and leave in the foreground
 chrome-use tab inspect t2                   # Browser metadata without page JS
 chrome-use tab docs                         # Switch to tab by label
 chrome-use tab close                        # Close current tab
@@ -408,8 +411,23 @@ copy chrome-use's internal active tab. Providers without native duplication
 return an error; chrome-use never substitutes a same-URL new tab. Background
 loading remains controlled by Chrome.
 
-`tab adopt` works only through the extension-connected real Chrome path. It
+`tab adopt` supports extension-connected Chrome and direct CDP connections (for example,
+`chrome-use --session example --cdp 9222 tab adopt <targetId>`). Keep the same session
+and endpoint on subsequent commands. The top-level `adopt` command still selects
+the extension relay; use `tab adopt` for direct CDP. Adoption
 attaches an existing tab in the current daemon and never navigates it.
+
+`tab new`, `tab select`, and `tab adopt` stay in the background by default.
+`--activate` (alias `--front`) raises the target **before** renderer initialization
+or the liveness probe, and leaves it in the foreground. It changes the visible
+tab and may help a background tab respond; activation alone is not evidence
+that page reads work. Read the page again to verify recovery.
+
+If new-tab initialization fails, the error includes the retained target ID. Use
+`tab select <targetId> --activate` with the same session and connection endpoint,
+then `snapshot -i`. Do not repeat `tab new` to recover that target or automatically
+replay a click whose outcome is unknown.
+
 `tab inspect` reads browser-level metadata, so it remains available when a
 page's renderer is unresponsive. Page-JavaScript operations such as `eval`
 still require the renderer main thread to respond.

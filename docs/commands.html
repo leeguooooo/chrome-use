@@ -429,11 +429,14 @@
 <pre><code><span class="du-prompt">$</span> chrome-use tab                              <span class="du-cmt"># 列出标签（含 tabId 与 label）</span>
 <span class="du-prompt">$</span> chrome-use tab new [url]                    <span class="du-cmt"># 新标签</span>
 <span class="du-prompt">$</span> chrome-use tab new <span class="du-flag">--label</span> docs [url]       <span class="du-cmt"># 带可读 label 的新标签</span>
+<span class="du-prompt">$</span> chrome-use tab new [url] <span class="du-flag">--activate</span>         <span class="du-cmt"># 初始化前激活标签</span>
 <span class="du-prompt">$</span> chrome-use tab duplicate [ref]              <span class="du-cmt"># 原生复制标签，默认复制当前标签</span>
 <span class="du-prompt">$</span> chrome-use tab duplicate docs <span class="du-flag">--label</span> copy <span class="du-cmt"># 按 ref 复制并设置 label</span>
 <span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># 按 id 切换</span>
 <span class="du-prompt">$</span> chrome-use tab select t2                    <span class="du-cmt"># 显式切换语法</span>
+<span class="du-prompt">$</span> chrome-use tab select t2 <span class="du-flag">--activate</span>         <span class="du-cmt"># 存活探针之前激活标签</span>
 <span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com/stuck"</span> <span class="du-cmt"># 接管现有标签，不导航</span>
+<span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com"</span> <span class="du-flag">--activate</span> <span class="du-cmt"># 接管并保留在前台</span>
 <span class="du-prompt">$</span> chrome-use tab inspect t2                   <span class="du-cmt"># 不运行页面 JS，读取浏览器级状态</span>
 <span class="du-prompt">$</span> chrome-use tab docs                         <span class="du-cmt"># 按 label 切换</span>
 <span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># 关闭当前标签</span>
@@ -448,7 +451,7 @@
       </p>
       <p>
         <code>tab select &lt;ref&gt;</code> 与 <code>tab &lt;ref&gt;</code> 等价。
-        <code>tab adopt &lt;URL 子串|targetId&gt;</code> 会在当前会话中附加现有标签，不刷新页面。
+        <code>tab adopt &lt;URL 子串|targetId&gt;</code> 支持扩展和直接 CDP 连接，会在当前会话中附加现有标签，不刷新页面。直接 CDP 请使用 <code>chrome-use --session example --cdp 9222 tab adopt &lt;targetId&gt;</code>，后续命令保持相同 session 和端点；顶层 <code>adopt</code> 仍选择扩展连接。
         在外部或扩展连接的 Chrome 中，<code>tab list</code> 会把标签标记为
         <code>created</code>、<code>adopted</code> 或 <code>foreign</code>。只有 created/adopted
         标签可以切换，只有当前 session 创建的标签可以关闭；adopted 标签仍属于用户。同名 session
@@ -459,6 +462,14 @@
         通过扩展连接时，<code>tab inspect</code> 需要 ab-connect 0.5.16 或更新版本。
         <code>tab select</code> 的存活探针失败不能单独证明 renderer 已卡死；如果警告显示当前扩展
         落后于 CLI 内置版本，请在 <code>chrome://extensions</code> 更新或重新加载扩展后重试。
+      </p>
+      <p>
+        <code>tab new</code>、<code>tab select</code> 和 <code>tab adopt</code> 默认在后台进行。
+        加上 <code>--activate</code>（别名 <code>--front</code>）会在 renderer 初始化或存活探针
+        <strong>之前</strong>激活目标，并将标签保持在前台。这会切换可见标签；激活本身不代表页面已可读。
+        新标签初始化失败后，错误会报告保留的目标 ID。保持相同 session 和连接端点，执行
+        <code>tab select &lt;targetId&gt; --activate</code>，然后用 <code>snapshot -i</code> 验证恢复。
+        不要反复新建标签，也不要自动重放结果未知的点击。
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ ref 属于快照时的活动标签</div>

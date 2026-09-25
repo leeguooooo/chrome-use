@@ -3400,13 +3400,14 @@ accepted.
 
 Operations:
   list                       List tabs with ids and labels (external: ownership too)
-  new [url]                  Open a new tab
+  new [url] [--activate]     Open a new tab, optionally in the foreground
   new --label <name> [url]   Open a new tab with a label like `docs` or `app`
   duplicate [ref]            Natively duplicate a tab (current if no ref given)
   duplicate [ref] --label <name>
                              Natively duplicate and label a tab
-  select <ref>               Switch tabs (external: created or adopted only)
-  adopt <url|targetId>       Attach an existing tab without navigating it
+  select <ref> [--activate]  Switch tabs (external: created or adopted only)
+  adopt <url|targetId> [--activate]
+                             Attach an existing tab without navigating it
   inspect <ref>              Read browser-level state (relay requires ab-connect 0.5.16+)
   close [ref]                Close a tab (external: session-created only)
   <ref>                      Switch tabs (external: created or adopted only)
@@ -3420,6 +3421,16 @@ External and extension-connected Chrome tab rows are marked `created`,
 `adopted`, or `foreign`. Foreign tabs must be explicitly adopted before they
 can be selected. Adopted and foreign tabs cannot be closed by the session.
 
+Tab options:
+  --activate, --front  Raise new/select/adopt targets before renderer initialization
+                       or the liveness probe. Leaves the tab in the foreground.
+
+Without --activate, tabs stay in the background. If new-tab initialization
+fails, the error retains the target ID: recover that same tab with
+`tab select <targetId> --activate`, then read the page again. Do not repeat
+`tab new` or replay a click whose outcome is unknown. Keep the same session
+and connection endpoint when recovering.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
@@ -3430,11 +3441,14 @@ Examples:
   chrome-use tab new
   chrome-use tab new https://example.com
   chrome-use tab new --label docs https://docs.example.com
+  chrome-use tab new https://example.com --activate
   chrome-use tab duplicate
   chrome-use tab duplicate docs --label docs-copy
   chrome-use tab t2
   chrome-use tab select t2
+  chrome-use tab select t2 --activate
   chrome-use tab adopt "github.com/owner/repo"
+  chrome-use tab adopt "example.com" --activate
   chrome-use tab inspect t2
   chrome-use tab docs
   chrome-use tab close
@@ -4705,8 +4719,13 @@ Tabs:
                              Natively duplicate on extension-connected real Chrome
   tab list --full            Full URLs + stable targetId (external: ownership too)
                              Dead relay tab records are removed on reconnect.
-  tab select <ref>           Select a tab (external: created or adopted only)
-  tab adopt <url|targetId>   Attach an existing tab in the current session, no reload
+  tab new [url] [--activate]
+                             Create a tab; --activate raises it before initialization
+  tab select <ref> [--activate]
+                             Select a tab (external: created or adopted only)
+  tab adopt <url|targetId> [--activate]
+                             Attach an existing tab (extension or CDP), no reload
+                             --activate (alias --front) leaves the target in front
   tab inspect <ref>          Browser metadata without page JS (ab-connect 0.5.16+ on relay)
   tab close [ref]            Close a tab (external: session-created only)
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning

@@ -636,6 +636,9 @@ pub(crate) fn navigation_committed(landed: &str, target: &str) -> bool {
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     let lower = error.to_lowercase();
+    if lower.contains("tab_initialization_incomplete:") {
+        return error.to_string();
+    }
     // Preserve the no-replay instruction even when the nested cause is stale or
     // timed out; generic transport recovery guidance could duplicate the action.
     if lower.contains("action_outcome_unknown:") {
@@ -700,11 +703,8 @@ pub fn to_ai_friendly_error(error: &str) -> String {
              evaluation cannot complete until the page thread responds."
         );
     }
-    // A CDP call that ran to its full budget ("CDP command timed out: …") means
-    // the browser connection is unresponsive — over the extension relay this
-    // happens when the relay/service-worker went stale mid-session while
-    // `sessions` still reports the daemon alive (issue #117). Keep the concrete
-    // failing method and spell out recovery instead of leaving a bare timeout.
+    // A command deadline alone cannot distinguish an unresponsive renderer
+    // from a lost connection. Keep the method and offer target-specific recovery.
     if lower.contains("timed out") {
         // Polling can reach this deadline after false results or failed probes.
         // The deadline alone cannot diagnose transport health.
@@ -740,9 +740,11 @@ pub fn to_ai_friendly_error(error: &str) -> String {
             );
         }
         return format!(
-            "{error}\nHint: the session's browser connection is unresponsive (likely a stale \
-             relay/service-worker mid-session). Reconnect with `connect`, or close the session \
-             and reopen it."
+            "{error}\nHint: the command did not respond within its budget; this alone does not \
+             establish a connection failure. Check `status` and `tab list`. If the target still \
+             exists, `tab select <targetId> --activate` can surface it before initialization; \
+             this changes the visible tab. Verify a read before continuing. Do not automatically \
+             repeat a click or submission: the timed-out action may already have taken effect."
         );
     }
     if lower.contains("timeout") {
@@ -1313,6 +1315,9 @@ impl BrowserManager {
     /// `collect_page_targets` on a relay/browser that doesn't support the
     /// unscoped query. Retries a few times over the relay (discovery is eventual).
     async fn collect_all_targets(&self) -> Result<Vec<TargetInfo>, String> {
+        if !self.via_relay() {
+            return self.collect_page_targets().await;
+        }
         let rounds = if crate::connect::relay_url().is_some() {
             3
         } else {
@@ -1364,7 +1369,12 @@ impl BrowserManager {
             // the user's tabs (so Chrome's debugger banner stays off their pages),
             // ask the extension to discover the tab by URL/targetId via chrome.tabs
             // metadata and attach JUST that one on demand, then adopt it.
-            None => self.adopt_by_url_on_demand(spec).await?,
+            None if self.via_relay() => self.adopt_by_url_on_demand(spec).await?,
+            None => {
+                return Err(format!(
+                    "No open tab matching {spec:?}; run `tab list` for available targets"
+                ))
+            }
         };
 
         let attach: AttachToTargetResult = self
@@ -1414,17 +1424,14 @@ impl BrowserManager {
         Ok(())
     }
 
-    /// Adopt an existing relay tab in the current daemon without navigating it.
+    /// Adopt an existing extension or direct-CDP tab without navigating it.
     ///
     /// Unlike the historical top-level `adopt` command, this does not restart
     /// the daemon, so it preserves the diagnostic state of a white-screen or
     /// unresponsive page (issue #157).
     pub async fn tab_adopt(&mut self, spec: &str) -> Result<Value, String> {
-        if self.agent_group().is_none() {
-            return Err(
-                "`tab adopt` requires Chrome connected through the chrome-use extension"
-                    .to_string(),
-            );
+        if spec.trim().is_empty() {
+            return Err("Expected a non-empty URL substring or targetId".to_string());
         }
         self.adopt_existing_target(spec).await?;
         self.active_page_info()
@@ -1604,6 +1611,20 @@ impl BrowserManager {
                     title: sanitize_title(&target.title),
                     target_type: target.target_type.clone(),
                 });
+            }
+            // Foreign direct-CDP targets are metadata until explicitly adopted.
+            // Probing/initializing one here can block the very command that will
+            // activate it, and the session is not allowed to drive it yet.
+            if self.browser_process.is_none()
+                && !self.via_relay()
+                && !self
+                    .pages
+                    .iter()
+                    .any(|page| self.owned_targets().contains(&page.target_id))
+            {
+                self.active_page_index = 0;
+                self.pin_active_target();
+                return Ok(());
             }
             // Drive the first tab whose renderer answers. A hung renderer (seen on
             // memory-starved hosts) never replies, so adopting it blindly made the
@@ -2877,7 +2898,9 @@ impl BrowserManager {
                 title: sanitize_title(&target.title),
                 target_type: target.target_type.clone(),
             });
-            let _ = self.enable_domains(&attach_result.session_id).await;
+            if self.browser_process.is_some() || self.owned_targets().contains(&target.target_id) {
+                let _ = self.enable_domains(&attach_result.session_id).await;
+            }
         }
 
         // Prune tabs that are gone. On a LAUNCHED browser a missing target really
@@ -3143,6 +3166,17 @@ impl BrowserManager {
         url: Option<&str>,
         label: Option<&str>,
     ) -> Result<Value, String> {
+        self.tab_new_with_activation(url, label, false).await
+    }
+
+    /// Retain the created tab before initialization so a stalled renderer can
+    /// be recovered in place. Foreground activation is explicitly requested.
+    pub async fn tab_new_with_activation(
+        &mut self,
+        url: Option<&str>,
+        label: Option<&str>,
+        activate: bool,
+    ) -> Result<Value, String> {
         if let Some(label) = label {
             if !is_valid_label(label) {
                 return Err(format!(
@@ -3192,8 +3226,6 @@ impl BrowserManager {
             )
             .await?;
 
-        self.enable_domains(&attach.session_id).await?;
-
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
         let index = self.pages.len();
@@ -3201,14 +3233,27 @@ impl BrowserManager {
         self.pages.push(PageInfo {
             tab_id,
             label: label.clone(),
-            target_id: result.target_id,
-            session_id: attach.session_id,
+            target_id: result.target_id.clone(),
+            session_id: attach.session_id.clone(),
             url: target_url.to_string(),
             title: String::new(),
             target_type: "page".to_string(),
         });
         self.active_page_index = index;
         self.pin_active_target();
+
+        let initialize = async {
+            if activate {
+                self.activate_active_tab().await?;
+            }
+            self.enable_domains(&attach.session_id).await
+        };
+        if let Err(error) = initialize.await {
+            return Err(format!(
+                "tab_initialization_incomplete: created tab {} ({}) is retained but initialization failed: {}. Recover this same tab with `tab select {} --activate`; do not repeat `tab new`.",
+                format_tab_id(tab_id), result.target_id, error, result.target_id
+            ));
+        }
 
         // Once this real tab exists, close the daemon's leftover about:blank
         // scratch so the session's tab group isn't left showing a stray blank
@@ -3256,6 +3301,7 @@ impl BrowserManager {
             .unwrap_or_default();
         let mut resp = json!({
             "tabId": format_tab_id(tab_id),
+            "targetId": result.target_id,
             "label": label,
             "url": page_url,
             "total": self.pages.len(),
@@ -3661,6 +3707,24 @@ impl BrowserManager {
         let session_id = self.active_session_id()?;
         self.client
             .send_command("Page.bringToFront", None, Some(session_id))
+            .await?;
+        Ok(())
+    }
+
+    /// Explicit recovery uses the browser connection before renderer probing.
+    pub async fn activate_active_tab(&self) -> Result<(), String> {
+        let target_id = self.active_target_id()?;
+        self.activate_target(target_id).await
+    }
+
+    /// Browser-level activation must not wait for a blocked renderer session.
+    async fn activate_target(&self, target_id: &str) -> Result<(), String> {
+        self.client
+            .send_command(
+                "Target.activateTarget",
+                Some(json!({ "targetId": target_id })),
+                None,
+            )
             .await?;
         Ok(())
     }
@@ -4176,6 +4240,15 @@ impl BrowserManager {
     }
 
     pub async fn tab_switch_by_id(&mut self, tab_id: u32) -> Result<Value, String> {
+        self.tab_switch_by_id_with_activation(tab_id, false).await
+    }
+
+    /// Check ownership before activation, then initialize the requested renderer.
+    pub async fn tab_switch_by_id_with_activation(
+        &mut self,
+        tab_id: u32,
+        activate: bool,
+    ) -> Result<Value, String> {
         let index = self
             .pages
             .iter()
@@ -4188,6 +4261,9 @@ impl BrowserManager {
             &self.owned_targets(),
         ) {
             return Err(refuse_unowned_tab_message(target.tab_id, &target.target_id));
+        }
+        if activate {
+            self.activate_target(&target.target_id).await?;
         }
         self.tab_switch(index).await
     }
@@ -4649,10 +4725,12 @@ mod tests {
             );
         }
 
-        // An ordinary command running out its budget keeps the connection
-        // diagnosis — that one really is the likely cause there.
+        // An ordinary deadline alone cannot diagnose a lost connection.
         let other = to_ai_friendly_error("CDP command timed out after 30s: Runtime.evaluate");
-        assert!(other.contains("stale relay/service-worker"), "got: {other}");
+        assert!(
+            other.contains("does not establish a connection failure"),
+            "got: {other}"
+        );
         assert!(!other.contains("size limit"), "got: {other}");
     }
 
@@ -4699,7 +4777,11 @@ mod tests {
 
         // A genuine CDP/relay timeout keeps its own diagnosis.
         let relay = to_ai_friendly_error("CDP command timed out after 30s: Page.enable");
-        assert!(relay.contains("stale relay/service-worker"), "{relay}");
+        assert!(
+            relay.contains("tab select <targetId> --activate"),
+            "{relay}"
+        );
+        assert!(!relay.contains("stale relay/service-worker"), "{relay}");
         assert!(!relay.contains("case-sensitive"), "{relay}");
     }
 

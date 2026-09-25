@@ -1,8 +1,8 @@
 //! End-to-end tests for the native daemon.
 //!
-//! These tests launch a real Chrome instance and exercise the full command
-//! pipeline. They require Chrome to be installed and are marked `#[ignore]`
-//! so they don't run during normal `cargo test`.
+//! Browser-backed tests launch a real Chrome instance and exercise the full
+//! command pipeline. They require Chrome and are marked `#[ignore]`. Protocol
+//! fixture tests run without Chrome whenever the `e2e-tests` feature is enabled.
 //!
 //! Run serially to avoid Chrome instance contention:
 //!   cargo test --features e2e-tests e2e -- --ignored --test-threads=1
@@ -9337,4 +9337,510 @@ async fn e2e_focus_and_press_on_a_frame_say_they_stopped_at_the_boundary() {
 
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
+}
+
+/// Direct CDP adoption must resolve the requested renderer without granting deletion rights.
+#[tokio::test]
+#[ignore]
+async fn e2e_direct_cdp_tab_adopt_preserves_user_tab() {
+    let mut owner = DaemonState::new();
+    assert_success(
+        &execute_command(
+            &json!({"id":"1", "action":"launch", "headless":true}),
+            &mut owner,
+        )
+        .await,
+    );
+    let manager = owner.browser.as_ref().unwrap();
+    let endpoint = manager.get_cdp_url().to_string();
+    let target = manager.active_target_id().unwrap().to_string();
+    manager
+        .evaluate("window.adoptionMarker = 'preserved'", None)
+        .await
+        .unwrap();
+    // Two targets ensure close refusal checks ownership, not the last-tab guard.
+    owner
+        .browser
+        .as_mut()
+        .unwrap()
+        .tab_new(Some("about:blank"), None)
+        .await
+        .unwrap();
+    let mut guest = DaemonState::new();
+    guest.browser = Some(
+        super::browser::BrowserManager::connect_cdp(&endpoint)
+            .await
+            .unwrap(),
+    );
+    let adopted = execute_command(
+        &json!({"id":"2", "action":"tab_adopt", "spec":target, "activate":true}),
+        &mut guest,
+    )
+    .await;
+    assert_success(&adopted);
+    assert_eq!(get_data(&adopted)["verified"], "confirmed");
+    let manager = guest.browser.as_mut().unwrap();
+    assert_eq!(manager.active_target_id().unwrap(), target.as_str());
+    assert_eq!(
+        manager
+            .evaluate("window.adoptionMarker", None)
+            .await
+            .unwrap(),
+        "preserved"
+    );
+    assert!(manager
+        .tab_close(None)
+        .await
+        .unwrap_err()
+        .contains("did not create"));
+    let missing = manager
+        .tab_adopt("missing-regression-target")
+        .await
+        .unwrap_err();
+    assert!(missing.contains("No open tab matching"), "{missing}");
+    assert_eq!(manager.active_target_id().unwrap(), target.as_str());
+    assert!(manager.tab_adopt(" ").await.is_err());
+    manager.close().await.unwrap();
+    owner
+        .browser
+        .as_mut()
+        .unwrap()
+        .tab_adopt(&target)
+        .await
+        .unwrap();
+    assert_eq!(
+        owner
+            .browser
+            .as_ref()
+            .unwrap()
+            .evaluate("window.adoptionMarker", None)
+            .await
+            .unwrap(),
+        "preserved"
+    );
+    assert_success(&execute_command(&json!({"id":"3", "action":"close"}), &mut owner).await);
+}
+
+/// A renderer can stop answering while the browser connection remains healthy.
+/// Keep that failure deterministic: only browser-level activation releases the
+/// fixture renderer, and an outer deadline catches activation sent too late.
+mod background_activation {
+    use super::*;
+    use futures_util::SinkExt;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::Message;
+
+    #[derive(Clone, Copy)]
+    enum BlockedRenderer {
+        HoldResponse,
+        ReportTimeout,
+    }
+
+    struct ActivationCdpFixture {
+        endpoint: String,
+        commands: Arc<Mutex<Vec<Value>>>,
+        blocked: Arc<Mutex<HashMap<String, BlockedRenderer>>>,
+        unexpected_method: Arc<Mutex<Option<String>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for ActivationCdpFixture {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl ActivationCdpFixture {
+        async fn start() -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!(
+                "ws://{}/devtools/browser/fixture",
+                listener.local_addr().unwrap()
+            );
+            let commands = Arc::new(Mutex::new(Vec::new()));
+            let blocked = Arc::new(Mutex::new(HashMap::new()));
+            let unexpected_method = Arc::new(Mutex::new(None));
+            let recorded = Arc::clone(&commands);
+            let blocked_renderers = Arc::clone(&blocked);
+            let server_error = Arc::clone(&unexpected_method);
+            let task = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let mut targets = vec![json!({
+                    "targetId":"existing", "type":"page", "title":"Existing page",
+                    "url":"https://example.test/existing", "attached":false
+                })];
+                let mut created_count = 0;
+                while let Some(Ok(message)) = websocket.next().await {
+                    let Message::Text(text) = message else {
+                        continue;
+                    };
+                    let command: Value = serde_json::from_str(&text).unwrap();
+                    recorded.lock().unwrap().push(command.clone());
+                    let method = command["method"].as_str().unwrap();
+                    let target = command["sessionId"]
+                        .as_str()
+                        .and_then(|session| session.strip_prefix("session-"))
+                        .unwrap_or("");
+                    let blocked = blocked_renderers.lock().unwrap().get(target).copied();
+                    if matches!(method, "Page.enable" | "Runtime.evaluate") {
+                        match blocked {
+                            Some(BlockedRenderer::HoldResponse) => continue,
+                            Some(BlockedRenderer::ReportTimeout) => {
+                                let response = json!({
+                                    "id":command["id"], "sessionId":command["sessionId"],
+                                    "error":{"code":-32000,"message":format!(
+                                        "CDP command timed out after 30s: {method}"
+                                    )}
+                                });
+                                websocket
+                                    .send(Message::Text(response.to_string()))
+                                    .await
+                                    .unwrap();
+                                continue;
+                            }
+                            None => {}
+                        }
+                    }
+                    let result = match method {
+                        "Target.getTargets" => json!({"targetInfos":targets}),
+                        "Target.attachToTarget" => json!({
+                            "sessionId":format!("session-{}", command["params"]["targetId"].as_str().unwrap())
+                        }),
+                        "Target.createTarget" => {
+                            created_count += 1;
+                            let target = format!("created-{created_count}");
+                            targets.push(json!({
+                                "targetId":target, "type":"page", "title":"",
+                                "url":command["params"]["url"], "attached":false
+                            }));
+                            json!({"targetId":target})
+                        }
+                        "Target.activateTarget" => {
+                            blocked_renderers
+                                .lock()
+                                .unwrap()
+                                .remove(command["params"]["targetId"].as_str().unwrap());
+                            json!({})
+                        }
+                        "Runtime.evaluate" => {
+                            let value = match command["params"]["expression"].as_str().unwrap() {
+                                "location.href" | "window.location.href" => targets
+                                    .iter()
+                                    .find(|item| item["targetId"] == target)
+                                    .unwrap()["url"]
+                                    .clone(),
+                                "document.title" => json!("Existing page"),
+                                "document.readyState" => json!("complete"),
+                                _ => json!(1),
+                            };
+                            json!({"result":{"type":if value.is_string() {"string"} else {"number"}, "value":value}})
+                        }
+                        "Target.closeTarget" => {
+                            targets
+                                .retain(|item| item["targetId"] != command["params"]["targetId"]);
+                            json!({"success":true})
+                        }
+                        "Browser.getVersion" => json!({"product":"Chrome/fixture"}),
+                        "Target.setDiscoverTargets"
+                        | "Page.enable"
+                        | "Runtime.enable"
+                        | "Runtime.runIfWaitingForDebugger"
+                        | "Network.enable"
+                        | "Target.setAutoAttach"
+                        | "Emulation.setFocusEmulationEnabled"
+                        | "Emulation.setAutomationOverride"
+                        | "Page.addScriptToEvaluateOnNewDocument" => json!({}),
+                        other => {
+                            *server_error.lock().unwrap() = Some(other.to_string());
+                            // Keep the browser connection alive so an unsupported
+                            // fixture command cannot trigger a real auto-launch.
+                            let response = json!({
+                                "id":command["id"], "sessionId":command["sessionId"],
+                                "error":{"code":-32601,"message":format!("Unexpected fixture CDP command: {other}")}
+                            });
+                            websocket
+                                .send(Message::Text(response.to_string()))
+                                .await
+                                .unwrap();
+                            continue;
+                        }
+                    };
+                    let response = json!({
+                        "id":command["id"], "sessionId":command["sessionId"], "result":result
+                    });
+                    websocket
+                        .send(Message::Text(response.to_string()))
+                        .await
+                        .unwrap();
+                }
+            });
+            Self {
+                endpoint,
+                commands,
+                blocked,
+                unexpected_method,
+                task,
+            }
+        }
+
+        async fn connect(&self) -> DaemonState {
+            let mut state = DaemonState::new();
+            state.browser = Some(
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    super::super::browser::BrowserManager::connect_cdp(&self.endpoint),
+                )
+                .await
+                .expect("fixture connection must not wait on a renderer")
+                .unwrap(),
+            );
+            self.commands.lock().unwrap().clear();
+            state
+        }
+
+        fn block(&self, target: &str, failure: BlockedRenderer) {
+            self.blocked
+                .lock()
+                .unwrap()
+                .insert(target.to_string(), failure);
+        }
+
+        fn commands(&self) -> Vec<Value> {
+            self.commands.lock().unwrap().clone()
+        }
+
+        fn assert_activation_precedes_renderer(&self, target: &str) {
+            let commands = self.commands();
+            let activation = commands
+                .iter()
+                .position(|command| {
+                    command["method"] == "Target.activateTarget"
+                        && command["params"]["targetId"] == target
+                })
+                .expect("browser must activate the requested target");
+            let session = format!("session-{target}");
+            let renderer = commands
+                .iter()
+                .position(|command| {
+                    command["sessionId"] == session
+                        && matches!(
+                            command["method"].as_str(),
+                            Some("Page.enable" | "Runtime.evaluate")
+                        )
+                })
+                .expect("the activated renderer must actually be used");
+            assert!(
+                activation < renderer,
+                "activation must precede renderer initialization/probe: {commands:?}"
+            );
+        }
+    }
+
+    async fn execute_bounded(
+        fixture: &ActivationCdpFixture,
+        state: &mut DaemonState,
+        command: Value,
+    ) -> Value {
+        assert!(
+            !fixture.task.is_finished(),
+            "fixture stopped; refusing to allow a real browser launch"
+        );
+        let response =
+            tokio::time::timeout(Duration::from_secs(2), execute_command(&command, state))
+                .await
+                .expect("renderer request was sent before browser-level activation");
+        assert_eq!(
+            *fixture.unexpected_method.lock().unwrap(),
+            None,
+            "fixture received an unsupported CDP command"
+        );
+        response
+    }
+
+    #[tokio::test]
+    async fn e2e_mock_tab_activate_precedes_renderer_requests() {
+        let fixture = ActivationCdpFixture::start().await;
+        // Merely connecting must not wait on foreign renderers or create a
+        // replacement tab before the caller can explicitly adopt and activate.
+        fixture.block("existing", BlockedRenderer::HoldResponse);
+        let mut state = fixture.connect().await;
+        fixture.block("created-1", BlockedRenderer::HoldResponse);
+        let created = execute_bounded(
+            &fixture,
+            &mut state,
+            json!({
+                "id":"new", "action":"tab_new", "activate":true
+            }),
+        )
+        .await;
+        assert_success(&created);
+        fixture.assert_activation_precedes_renderer("created-1");
+
+        fixture.commands.lock().unwrap().clear();
+        fixture.block("existing", BlockedRenderer::HoldResponse);
+        let adopted = execute_bounded(
+            &fixture,
+            &mut state,
+            json!({
+                "id":"adopt", "action":"tab_adopt", "spec":"existing", "activate":true
+            }),
+        )
+        .await;
+        assert_success(&adopted);
+        assert_eq!(adopted["data"]["verified"], "confirmed");
+        fixture.assert_activation_precedes_renderer("existing");
+        let commands = fixture.commands();
+        let verification = commands
+            .iter()
+            .position(|command| {
+                command["sessionId"] == "session-existing"
+                    && command["method"] == "Runtime.evaluate"
+                    && command["params"]["expression"] == "location.href"
+            })
+            .expect("adoption must verify the selected page");
+        for method in ["Page.enable", "Network.enable", "Target.setAutoAttach"] {
+            let initialization = commands
+                .iter()
+                .position(|command| {
+                    command["sessionId"] == "session-existing" && command["method"] == method
+                })
+                .unwrap_or_else(|| panic!("adoption must initialize {method}"));
+            assert!(
+                initialization < verification,
+                "adoption must initialize {method} before confirming success"
+            );
+        }
+        let manager = state.browser.as_mut().unwrap();
+        assert_eq!(manager.active_target_id().unwrap(), "existing");
+        assert!(manager
+            .tab_close(None)
+            .await
+            .unwrap_err()
+            .contains("did not create"));
+
+        fixture.commands.lock().unwrap().clear();
+        fixture.block("created-1", BlockedRenderer::HoldResponse);
+        let selected = execute_bounded(
+            &fixture,
+            &mut state,
+            json!({
+                "id":"select", "action":"tab_switch", "tabId":"created-1", "activate":true
+            }),
+        )
+        .await;
+        assert_success(&selected);
+        assert_eq!(selected["data"]["verified"], "confirmed");
+        fixture.assert_activation_precedes_renderer("created-1");
+        assert!(
+            !fixture.commands().iter().any(|command| matches!(
+                command["method"].as_str(),
+                Some("Target.createTarget" | "Page.navigate" | "Page.reload")
+            )),
+            "select recovery must not replace or reload the requested page"
+        );
+    }
+
+    #[tokio::test]
+    async fn e2e_mock_tabs_stay_in_background_without_activate() {
+        let fixture = ActivationCdpFixture::start().await;
+        let mut state = fixture.connect().await;
+        for command in [
+            json!({"id":"new", "action":"tab_new"}),
+            json!({"id":"adopt", "action":"tab_adopt", "spec":"existing"}),
+            json!({"id":"select", "action":"tab_switch", "tabId":"created-1"}),
+        ] {
+            assert_success(&execute_bounded(&fixture, &mut state, command).await);
+        }
+        let commands = fixture.commands();
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command["method"].as_str(),
+                Some("Target.activateTarget" | "Page.bringToFront")
+            )),
+            "ordinary tab commands must preserve foreground focus"
+        );
+        let create = commands
+            .iter()
+            .find(|command| command["method"] == "Target.createTarget")
+            .unwrap();
+        assert_eq!(create["params"]["background"], true);
+    }
+
+    #[tokio::test]
+    async fn e2e_mock_tab_initialization_timeout_preserves_recoverable_target() {
+        let fixture = ActivationCdpFixture::start().await;
+        let mut state = fixture.connect().await;
+        fixture.block("created-1", BlockedRenderer::ReportTimeout);
+        let failed = execute_bounded(
+            &fixture,
+            &mut state,
+            json!({
+                "id":"new", "action":"tab_new", "label":"work"
+            }),
+        )
+        .await;
+        assert_eq!(
+            failed["success"], false,
+            "initialization failure must remain visible: {failed}"
+        );
+        let error = failed["error"].as_str().unwrap();
+        assert!(error.contains("tab_initialization_incomplete"), "{error}");
+        assert!(error.contains("tab select created-1 --activate"), "{error}");
+        let manager = state.browser.as_ref().unwrap();
+        assert_eq!(manager.active_target_id().unwrap(), "created-1");
+        let retained = manager
+            .tab_list()
+            .into_iter()
+            .find(|tab| tab["targetId"] == "created-1")
+            .unwrap();
+        assert_eq!(retained["ownership"], "created");
+        assert_eq!(retained["label"], "work");
+
+        let recovered = execute_bounded(
+            &fixture,
+            &mut state,
+            json!({
+                "id":"recover", "action":"tab_switch", "tabId":"created-1", "activate":true
+            }),
+        )
+        .await;
+        assert_success(&recovered);
+        assert_eq!(recovered["data"]["verified"], "confirmed");
+        assert_eq!(recovered["data"]["tabId"], retained["tabId"]);
+        let commands = fixture.commands();
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command["method"] == "Target.createTarget")
+                .count(),
+            1
+        );
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command["method"].as_str(),
+                Some("Target.closeTarget" | "Page.navigate" | "Page.reload")
+            )),
+            "failed initialization and recovery must keep the same page alive"
+        );
+        assert_success(
+            &execute_bounded(
+                &fixture,
+                &mut state,
+                json!({
+                    "id":"close-owned", "action":"tab_close", "tabId":retained["tabId"]
+                }),
+            )
+            .await,
+        );
+        let closes: Vec<Value> = fixture
+            .commands()
+            .into_iter()
+            .filter(|command| command["method"] == "Target.closeTarget")
+            .collect();
+        assert_eq!(closes.len(), 1);
+        assert_eq!(closes[0]["params"]["targetId"], "created-1");
+    }
 }
