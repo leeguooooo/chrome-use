@@ -224,8 +224,15 @@
         <code>verified: confirmed</code> (the probe answered from the new tab — drive it), an outright failure
         naming a stale or closed target, or <code>verified: unconfirmed</code> — the switch was
         <strong>requested</strong> but never confirmed, so the title and URL printed under it are what was asked
-        for, not a read of the live page. Repeating the switch does not fix an unconfirmed one; re-open the
-        target with <code>open &lt;url&gt;</code> instead. <code>tab inspect</code> reads browser-level metadata
+        for, not a read of the live page. Do not blindly repeat an unconfirmed switch. For a background tab,
+        try <code>tab select &lt;targetId&gt; --activate</code> once; for a foreign tab use
+        <code>tab adopt &lt;targetId&gt; --activate</code>. Then run <code>snapshot -i</code> to verify recovery.
+        Activation precedes renderer initialization or the liveness probe and leaves the tab in the foreground.
+        Keep the same session and connection endpoint. If new-tab initialization fails, recover the retained
+        target ID from the error instead of repeatedly creating tabs. If reads still fail, preserve and inspect
+        the target; do not automatically replay clicks or reload the page. A method timeout alone does not prove
+        that the relay or browser connection is broken. Check <code>status</code> and <code>tab list</code> to
+        distinguish connection health from a page that did not answer. <code>tab inspect</code> reads browser-level metadata
         over a different connection than driving uses, so a successful inspect is not evidence that the tab is
         drivable. On the extension relay, <code>tab inspect</code> requires ab-connect 0.5.16 or
         newer. If the warning says the live extension is behind the bundled version, open

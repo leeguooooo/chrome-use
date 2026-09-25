@@ -442,11 +442,14 @@
 <pre><code><span class="du-prompt">$</span> chrome-use tab                              <span class="du-cmt"># list tabs (with tabId and label)</span>
 <span class="du-prompt">$</span> chrome-use tab new [url]                    <span class="du-cmt"># new tab</span>
 <span class="du-prompt">$</span> chrome-use tab new <span class="du-flag">--label</span> docs [url]       <span class="du-cmt"># new tab with a readable label</span>
+<span class="du-prompt">$</span> chrome-use tab new [url] <span class="du-flag">--activate</span>         <span class="du-cmt"># activate before initialization</span>
 <span class="du-prompt">$</span> chrome-use tab duplicate [ref]              <span class="du-cmt"># native Duplicate tab; current by default</span>
 <span class="du-prompt">$</span> chrome-use tab duplicate docs <span class="du-flag">--label</span> copy <span class="du-cmt"># duplicate by ref and label the copy</span>
 <span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># switch by id</span>
 <span class="du-prompt">$</span> chrome-use tab select t2                    <span class="du-cmt"># explicit switch syntax</span>
+<span class="du-prompt">$</span> chrome-use tab select t2 <span class="du-flag">--activate</span>         <span class="du-cmt"># activate before the liveness probe</span>
 <span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com/stuck"</span> <span class="du-cmt"># adopt without navigating</span>
+<span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com"</span> <span class="du-flag">--activate</span> <span class="du-cmt"># adopt and leave in the foreground</span>
 <span class="du-prompt">$</span> chrome-use tab inspect t2                   <span class="du-cmt"># browser state without page JavaScript</span>
 <span class="du-prompt">$</span> chrome-use tab docs                         <span class="du-cmt"># switch by label</span>
 <span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># close the current tab</span>
@@ -463,7 +466,7 @@
       <p>
         <code>tab select &lt;ref&gt;</code> is equivalent to <code>tab &lt;ref&gt;</code>.
         <code>tab adopt &lt;URL substring|targetId&gt;</code> attaches an existing tab in the current session without
-        reloading it. On external or extension-connected Chrome, <code>tab list</code> marks tabs as
+        reloading it, through either the extension or direct CDP. For direct CDP use <code>chrome-use --session example --cdp 9222 tab adopt &lt;targetId&gt;</code> and retain the same session and endpoint for subsequent commands; top-level <code>adopt</code> still selects the extension relay. On external or extension-connected Chrome, <code>tab list</code> marks tabs as
         <code>created</code>, <code>adopted</code>, or <code>foreign</code>. Only created/adopted tabs can be selected,
         and only tabs created by the current session can be closed; adopted tabs remain user-owned. Created ownership
         survives daemon restarts for the same named session and connected browser endpoint, so interrupted cleanup can resume safely.
@@ -474,6 +477,15 @@
         <code>tab select</code> liveness probe does not by itself prove that the renderer is stuck. If the warning
         reports a live extension older than the bundled version, update or reload it at
         <code>chrome://extensions</code>, then retry.
+      </p>
+      <p>
+        <code>tab new</code>, <code>tab select</code>, and <code>tab adopt</code> stay in the background by default.
+        Add <code>--activate</code> (alias <code>--front</code>) to raise the target <strong>before</strong>
+        renderer initialization or the liveness probe and leave it in the foreground. This changes the visible
+        tab; activation alone does not prove that page reads work. If new-tab initialization fails, the error
+        reports the retained target ID. Use <code>tab select &lt;targetId&gt; --activate</code> with the same session
+        and connection endpoint, then <code>snapshot -i</code> to verify recovery. Do not repeatedly create
+        tabs or automatically replay a click whose outcome is unknown.
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ refs belong to the tab active at snapshot time</div>

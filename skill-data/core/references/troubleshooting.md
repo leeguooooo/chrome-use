@@ -66,10 +66,17 @@ not a success:
   confirmed. The tab printed under it is what was *asked for*, not what
   answered. Do not treat the title/URL as a read of the live page.
 
-An unconfirmed switch is not fixed by repeating it: the probe already had its
-turn. Re-open the target instead (`open <url>` / `navigate <url>`). If you do
-retry and the next command fails the same way, the error says so and tells you
-to stop looping. `tab inspect <ref>` reads browser-level target metadata over
+An unconfirmed switch is not fixed by blindly repeating it. For a background
+tab, try `tab select <targetId> --activate` once, then `snapshot -i` to verify
+recovery. For a foreign tab use `tab adopt <targetId> --activate` first.
+Activation happens before renderer initialization or the liveness probe and
+leaves the tab in the foreground. Keep the same session and connection endpoint.
+If new-tab initialization fails, use the retained target ID reported in the
+error instead of repeating `tab new`. If reads still fail, preserve the target
+and inspect it; do not automatically replay clicks or reload the page.
+A method timeout alone does not prove that the relay or browser connection is
+broken. Check `status` and `tab list` to distinguish connection health from a
+page that did not answer. `tab inspect <ref>` reads browser-level target metadata over
 the *browser* connection — it can succeed while driving that tab still fails,
 so a successful inspect is not evidence the tab is drivable. An outdated or
 unknown ab-connect version can also make the probe channel unavailable;

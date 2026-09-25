@@ -212,7 +212,12 @@
         <code>verified: confirmed</code>（探针从新标签页回答了，可以放心驱动）、明确失败（目标已失效或已关闭），
         以及 <code>verified: unconfirmed</code>——切换只是<strong>发出了请求</strong>但没有得到确认，
         此时打印出来的标题和 URL 是「请求的那个标签页」，不是对当前页面的读取。
-        未确认的切换重试也没用，请改为用 <code>open &lt;url&gt;</code> 重新打开目标。
+        不要盲目重复未确认的切换。后台标签可尝试一次 <code>tab select &lt;targetId&gt; --activate</code>，
+        foreign 标签使用 <code>tab adopt &lt;targetId&gt; --activate</code>，然后用 <code>snapshot -i</code>
+        验证恢复。激活发生在 renderer 初始化或存活探针之前，并让标签保持在前台。
+        保持相同 session 和连接端点。新标签初始化失败时，使用错误中保留的目标 ID，不要反复新建标签。
+        读取仍失败时保留目标并检查，不要自动重放点击或刷新页面。单次方法超时不能证明中继或浏览器连接
+        已断开，可用 <code>status</code> 和 <code>tab list</code> 区分连接状态与页面未响应。
         <code>tab inspect</code> 走的是浏览器级连接，与驱动页面的通道不同，
         因此 inspect 成功并不能证明该标签页可以被驱动。
         通过扩展连接时，<code>tab inspect</code> 需要 ab-connect 0.5.16 或更新版本；

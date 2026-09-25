@@ -216,13 +216,22 @@ The agent operates in your Chrome: you'll see tabs opening, pages loading, click
 | `chrome-use screenshot ./page.png` | Save a screenshot (an output for looking at, never the way an agent reads a page) |
 | `chrome-use find "edit web service settings button"` | Ranked, non-acting candidates from a natural-language description |
 | `chrome-use actions @e15` · `do @e15 expand` | What this element supports right now, and perform one of exactly those |
-| `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | List tabs; select a created or adopted tab; attach an already-open tab without navigating it |
+| `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | List tabs; select a created or adopted tab; attach an already-open tab through the extension or direct CDP without navigating it |
+| `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | Raise the target before initialization or the liveness probe; `--front` is an alias |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | Handle a native `confirm()` / `prompt()` opened by a click |
 | `chrome-use download @e2 ./video.mp4` | Download with the same cookies as the logged-in browser, without navigating the current tab |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | Mock a response, rewrite an outgoing request, or block one |
 | `chrome-use site github/issues epiral/bb-browser --json` | Run a site adapter and get clean JSON from the site's own API |
 | `chrome-use session list` · `session stop [name]` | Manage session workers |
 | `chrome-use status` | Relay, profile, extension, and session health |
+
+Tab creation, selection, and adoption stay in the background by default. Add
+`--activate` (alias `--front`) when a background tab is not responding; it
+changes the visible tab and leaves it in the foreground. If new-tab initialization
+fails, chrome-use retains the target and reports its ID. Use
+`chrome-use tab select <targetId> --activate`, then `chrome-use snapshot -i`
+to verify recovery, keeping the same session and connection endpoint. Do not
+repeat `tab new` or automatically replay an action whose outcome is unknown.
 
 ## Agent loop (experimental)
 

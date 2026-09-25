@@ -206,13 +206,20 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use screenshot ./page.png` | 保存截图（截图是用来看和附上的输出，不是 agent 读页面的方式） |
 | `chrome-use find "edit web service settings button"` | 按自然语言描述返回排序后的候选，不自动执行 |
 | `chrome-use actions @e15` · `do @e15 expand` | 这个元素此刻支持什么，并只做其中之一 |
-| `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | 列出标签；选择已创建或已接管的标签；不导航地接管已打开的标签 |
+| `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | 列出标签；选择已创建或已接管的标签；通过扩展或直接 CDP 连接，不导航地接管已打开的标签 |
+| `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | 在初始化或存活探针之前激活目标；`--front` 是别名 |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | 处理点击触发的原生 `confirm()` / `prompt()` |
 | `chrome-use download @e2 ./video.mp4` | 用已登录浏览器的同一份 cookie 下载，且不导航当前标签页 |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | 伪造响应、改写出站请求或拦截请求 |
 | `chrome-use site github/issues epiral/bb-browser --json` | 运行站点适配器，从网站自己的接口拿干净的 JSON |
 | `chrome-use session list` · `session stop [name]` | 管理会话 worker |
 | `chrome-use status` | 中继、profile、扩展与会话健康总览 |
+
+新建、选择与接管标签默认在后台进行。后台标签不响应时，可加上 `--activate`
+（别名 `--front`）；这会切换可见标签，并让目标保持在前台。新标签初始化失败后，
+chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接端点，执行
+`chrome-use tab select <targetId> --activate`，再用 `chrome-use snapshot -i`
+验证恢复。不要反复执行 `tab new`，也不要自动重放结果未知的动作。
 
 ## Agent 循环（实验性）
 

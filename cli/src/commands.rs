@@ -2533,14 +2533,31 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     //   tab new [url]
                     //   tab new --label <name> [url]
                     //   tab new [url] --label <name>
+                    // `--activate` (alias `--front`) raises the tab before
+                    // renderer initialization rather than after it responds.
                     let mut cmd = json!({ "id": id, "action": "tab_new" });
-                    let mut i = 1;
+                    let subcommand_index = rest
+                        .iter()
+                        .position(|arg| *arg == "new")
+                        .unwrap_or_default();
+                    let mut i = 0;
                     while i < rest.len() {
+                        if i == subcommand_index {
+                            i += 1;
+                            continue;
+                        }
                         match rest[i] {
+                            "--activate" | "--front" => {
+                                cmd["activate"] = json!(true);
+                                i += 1;
+                            }
                             "--label" => {
-                                let name = rest.get(i + 1).ok_or(ParseError::MissingArguments {
+                                let name = rest
+                                    .get(i + 1)
+                                    .filter(|name| !name.starts_with("--"))
+                                    .ok_or(ParseError::MissingArguments {
                                     context: "tab new --label".to_string(),
-                                    usage: "tab new --label <name> [url]",
+                                    usage: "tab new --label <name> [url] [--activate]",
                                 })?;
                                 cmd["label"] = json!(name);
                                 i += 2;
@@ -2552,7 +2569,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                             other => {
                                 return Err(ParseError::UnknownSubcommand {
                                     subcommand: other.to_string(),
-                                    valid_options: &["--label", "<url>"],
+                                    valid_options: &["--label", "--activate", "--front", "<url>"],
                                 });
                             }
                         }
@@ -2630,9 +2647,14 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         .find(|arg| !arg.starts_with("--"))
                         .ok_or(ParseError::MissingArguments {
                             context: "tab adopt".to_string(),
-                            usage: "tab adopt <url-substring|targetId>",
+                            usage: "tab adopt <url-substring|targetId> [--activate]",
                         })?;
-                    Ok(json!({ "id": id, "action": "tab_adopt", "spec": spec }))
+                    let mut cmd = json!({ "id": id, "action": "tab_adopt", "spec": spec });
+                    // Activation is opt-in and must precede the liveness probe.
+                    if rest.iter().any(|a| *a == "--activate" || *a == "--front") {
+                        cmd["activate"] = json!(true);
+                    }
+                    Ok(cmd)
                 }
                 Some("inspect") => {
                     let subcommand_index = rest
@@ -6526,6 +6548,7 @@ mod tests {
     fn test_tab_new() {
         let cmd = parse_command(&args("tab new"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "tab_new");
+        assert!(cmd.get("activate").is_none());
         assert!(
             cmd.get("url").is_none(),
             "url should not be present when not provided"
@@ -6671,6 +6694,25 @@ mod tests {
     }
 
     #[test]
+    fn test_tab_new_activate_with_url_and_label() {
+        for command in [
+            "tab new https://example.com --label docs --activate",
+            "tab new --front --label docs https://example.com",
+            "tab --activate new https://example.com --label docs",
+        ] {
+            let cmd = parse_command(&args(command), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "tab_new");
+            assert_eq!(cmd["url"], "https://example.com");
+            assert_eq!(cmd["label"], "docs");
+            assert_eq!(cmd["activate"], true);
+        }
+        let blank = parse_command(&args("tab new --activate"), &default_flags()).unwrap();
+        assert!(blank.get("url").is_none());
+        assert_eq!(blank["activate"], true);
+        assert!(parse_command(&args("tab new --label --activate"), &default_flags()).is_err());
+    }
+
+    #[test]
     fn test_tab_no_args_defaults_to_list() {
         let cmd = parse_command(&args("tab"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "tab_list");
@@ -6723,10 +6765,26 @@ mod tests {
         let adopt = parse_command(&args("tab adopt drama/videos"), &default_flags()).unwrap();
         assert_eq!(adopt["action"], "tab_adopt");
         assert_eq!(adopt["spec"], "drama/videos");
+        assert!(adopt.get("activate").is_none());
 
         let inspect = parse_command(&args("tab inspect t4"), &default_flags()).unwrap();
         assert_eq!(inspect["action"], "tab_inspect");
         assert_eq!(inspect["tabId"], "t4");
+    }
+
+    #[test]
+    fn test_tab_adopt_activate() {
+        for command in [
+            "tab adopt example.com --activate",
+            "tab adopt --front example.com",
+            "tab --activate adopt example.com",
+        ] {
+            let cmd = parse_command(&args(command), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "tab_adopt");
+            assert_eq!(cmd["spec"], "example.com");
+            assert_eq!(cmd["activate"], true);
+        }
+        assert!(parse_command(&args("tab adopt --activate"), &default_flags()).is_err());
     }
 
     // === Network ===

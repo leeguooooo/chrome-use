@@ -400,6 +400,8 @@ pub struct DaemonState {
     /// means the documented recovery has already been tried and did not work —
     /// repeating it is the loop #235 describes, so the error says so instead.
     pub last_unconfirmed_tab_switch: Option<(&'static str, String, std::time::Instant)>,
+    /// Newly created tabs whose domain initialization failed before session setup.
+    pending_new_tab_setup: std::collections::HashSet<String>,
     /// Named persistent `script` JS contexts (#289). Each holds a resident boa
     /// engine on its own thread, so `const tab = …` in one call is still there
     /// in the next. Dropped with the session's daemon.
@@ -489,6 +491,7 @@ impl DaemonState {
             tracked_requests: Vec::new(),
             request_tracking: false,
             last_unconfirmed_tab_switch: None,
+            pending_new_tab_setup: std::collections::HashSet::new(),
             script_contexts: Default::default(),
             in_flight_requests: Vec::new(),
             active_frame_id: None,
@@ -8549,7 +8552,14 @@ async fn handle_tab_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
         .map(ToString::to_string);
     let result = {
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-        mgr.tab_new(url, label).await?
+        mgr.tab_new_with_activation(
+            url,
+            label,
+            cmd.get("activate")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        )
+        .await
     };
     let new_target = state
         .browser
@@ -8563,6 +8573,14 @@ async fn handle_tab_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
         state.iframe_sessions.clear();
         state.active_frame_id = None;
     }
+    // Initialization failure can still select the retained new target. Commit
+    // the context switch before returning the error, so old refs cannot leak.
+    if result.is_err() && old_target != new_target {
+        if let Some(target) = new_target {
+            state.pending_new_tab_setup.insert(target);
+        }
+    }
+    let result = result?;
     // A new tab is a new CDP session; stealth scripts registered on the prior
     // session don't carry over, so patch the new tab too.
     if let Some(sid) = state
@@ -8616,7 +8634,7 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
         .get("tabId")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'tabId' parameter (expected `t<N>`, a label, or a targetId)")?;
-    let (mut result, old_target, new_target) = {
+    let (result, old_target, new_target) = {
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
         // Try resolving locally first. Only resync targets if the target is unknown,
         // avoiding an unnecessary duplicate discovery round-trip on every switch.
@@ -8641,8 +8659,15 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
             }
         };
         let old_target = mgr.active_target_id().ok().map(ToString::to_string);
-        let new_target = mgr.target_id_for_tab(tab_id).map(ToString::to_string);
-        let result = mgr.tab_switch_by_id(tab_id).await?;
+        let result = mgr
+            .tab_switch_by_id_with_activation(
+                tab_id,
+                cmd.get("activate")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            )
+            .await;
+        let new_target = mgr.active_target_id().ok().map(ToString::to_string);
         (result, old_target, new_target)
     };
     if let Some(ref new_t) = new_target {
@@ -8653,6 +8678,12 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
         state.active_frame_id = None;
     }
 
+    let mut result = result?;
+    if let Some(target) = new_target.as_ref() {
+        if state.pending_new_tab_setup.remove(target) {
+            apply_stealth_to_browser(state).await;
+        }
+    }
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
 
     // Liveness probe: confirm the new session actually answers before we report
@@ -8707,17 +8738,6 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
             // after this is a new problem, not the old unrecovered one.
             state.last_unconfirmed_tab_switch = None;
         }
-    }
-
-    // `--activate`: raise this tab to the foreground (the switch made it active;
-    // bring_to_front acts on the active tab) — for handing a specific tab to the
-    // human (issue #24-C). Best-effort; don't fail the switch if it can't.
-    if cmd
-        .get("activate")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        let _ = mgr.bring_to_front().await;
     }
 
     if let Some(ref server) = state.stream_server {
@@ -8811,20 +8831,21 @@ fn tab_liveness_probe_warning(
      nothing here shows whether this session is driving that tab. This alone does not prove \
      the renderer is unresponsive. `tab inspect <ref>` reads browser-level target metadata \
      over the browser connection and can succeed while driving still fails — the two use \
-     different paths, so a successful inspect is not evidence the tab is drivable. If the \
-     next read fails the same way, this is not recoverable by repeating the switch: re-open \
-     the target with `open <url>` / `navigate <url>` to rebind the session"
+     different paths, so a successful inspect is not evidence the tab is drivable. If you \
+     have not tried foreground activation, try `tab select <targetId> --activate` once \
+     with the same session and connection endpoint; this changes the visible tab. Then \
+     verify recovery with `snapshot -i`. If activation was already tried or reads still \
+     fail, preserve the target and inspect it. Do not repeatedly switch or create tabs, \
+     automatically reload the page, or replay an action whose outcome is unknown"
         .to_string()
 }
 
 /// Add what an agent needs when a tab-gone error follows a `tab select` /
 /// `tab adopt` that was never confirmed (issue #235).
 ///
-/// The generic advice ("run `tab list`, then `tab select <ref>`") is right the
-/// first time and a trap the second: an agent that just did exactly that, and
-/// got an unconfirmed result, is told to do it again. The loop that produces —
-/// `snapshot` fails → "recover" → `snapshot` fails — is worse than a short
-/// error, because every step of it points confidently at the next.
+/// Do not blindly repeat an unconfirmed switch. Foreground activation is a
+/// distinct, explicit recovery attempt when it has not yet been tried; this
+/// record does not establish whether the prior command requested activation.
 pub(crate) fn already_tried_note(
     attempt: Option<&(&'static str, String, std::time::Instant)>,
 ) -> Option<String> {
@@ -8832,8 +8853,12 @@ pub(crate) fn already_tried_note(
     let ago = when.elapsed().as_secs();
     Some(format!(
         "\nYou already ran `{verb} {what}` {ago}s ago and its liveness probe did not \
-         confirm the switch, so repeating it will not help. This session cannot reach that \
-         tab's renderer: re-open the target with `open <url>` / `navigate <url>` to rebind. \
+         confirm the switch. Do not blindly repeat it. If you have not tried foreground \
+         activation, try `{verb} {what} --activate` once with the same session and connection \
+         endpoint; this changes the visible tab. Then verify recovery with `snapshot -i`. \
+         If activation was already tried or reads still fail, preserve the target and \
+         inspect it. Do not repeatedly create tabs, automatically reload the page, or \
+         replay an action whose outcome is unknown. \
          (`tab inspect {what}` may still read its url/title — that path goes through the \
          browser connection, not the page session, so it succeeding does not mean the tab \
          can be driven.)"
@@ -8850,6 +8875,18 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         None => Err("Browser not launched".to_string()),
     };
     let result = finish_tab_adopt(result, state)?;
+    if cmd
+        .get("activate")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        state
+            .browser
+            .as_ref()
+            .ok_or("Browser not launched")?
+            .activate_active_tab()
+            .await?;
+    }
     // Same identity check as `tab select` (issue #223): adopt reported the
     // requested tab's title and url while the session went on driving the page
     // it was stuck on, so the documented recovery for a lost tab silently did
@@ -8860,6 +8897,13 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         .and_then(|v| v.as_str())
         .map(str::to_string);
     if let Some(mgr) = state.browser.as_mut() {
+        // Direct-CDP discovery leaves foreign renderers uninitialized. Adoption
+        // attaches a fresh session, so enable its domains after any requested
+        // browser-level activation and before verifying that it can be driven.
+        if !mgr.on_relay() {
+            let session_id = mgr.active_session_id()?.to_string();
+            mgr.enable_domains_pub(&session_id).await?;
+        }
         match mgr.evaluate("location.href", None).await {
             Ok(actual) => {
                 if let Some(expected) = expected.as_deref() {
@@ -15330,7 +15374,7 @@ mod tests {
     /// The probe that never answered has to read as "nothing was confirmed",
     /// and it has to close the two doors that sent an agent round the loop in
     /// #235: `tab inspect` succeeding is not evidence the tab is drivable, and
-    /// repeating the switch is not the way out.
+    /// an explicit activation attempt must not turn into an unbounded loop.
     #[test]
     fn an_unconfirmed_switch_says_what_it_does_not_know() {
         let warning = tab_liveness_probe_warning(false, None, "0.5.16");
@@ -15341,10 +15385,23 @@ mod tests {
             "inspect succeeding must not read as proof the tab is drivable: {warning}"
         );
         assert!(
-            warning.contains("not recoverable by repeating the switch"),
+            warning.contains("have not tried foreground activation")
+                && warning.contains("tab select <targetId> --activate` once"),
             "{warning}"
         );
-        assert!(warning.contains("open <url>"), "{warning}");
+        assert!(warning.contains("changes the visible tab"), "{warning}");
+        assert!(warning.contains("snapshot -i"), "{warning}");
+        assert!(warning.contains("preserve the target"), "{warning}");
+        assert!(
+            warning.contains("Do not repeatedly switch or create tabs"),
+            "{warning}"
+        );
+        assert!(
+            warning.contains("replay an action whose outcome is unknown"),
+            "{warning}"
+        );
+        assert!(!warning.contains("open <url>"), "{warning}");
+        assert!(!warning.contains("navigate <url>"), "{warning}");
     }
 
     /// A tab-gone error that follows an unconfirmed switch must say the
@@ -15356,8 +15413,26 @@ mod tests {
         let attempt = ("tab select", "t8".to_string(), std::time::Instant::now());
         let note = already_tried_note(Some(&attempt)).expect("an attempt gets a note");
         assert!(note.contains("already ran `tab select t8`"), "{note}");
-        assert!(note.contains("repeating it will not help"), "{note}");
-        assert!(note.contains("open <url>"), "{note}");
+        assert!(note.contains("Do not blindly repeat it"), "{note}");
+        assert!(
+            note.contains("have not tried foreground activation"),
+            "{note}"
+        );
+        assert!(note.contains("tab select t8 --activate` once"), "{note}");
+        assert!(
+            note.contains("same session and connection endpoint"),
+            "{note}"
+        );
+        assert!(note.contains("changes the visible tab"), "{note}");
+        assert!(note.contains("snapshot -i"), "{note}");
+        assert!(note.contains("preserve the target"), "{note}");
+        assert!(note.contains("Do not repeatedly create tabs"), "{note}");
+        assert!(
+            note.contains("replay an action whose outcome is unknown"),
+            "{note}"
+        );
+        assert!(!note.contains("open <url>"), "{note}");
+        assert!(!note.contains("navigate <url>"), "{note}");
         // And it must explain the asymmetry the issue calls out, not just deny
         // the loop: inspect reads over a different connection.
         assert!(note.contains("browser connection"), "{note}");
@@ -15373,6 +15448,10 @@ mod tests {
         let note = already_tried_note(Some(&adopted)).expect("an attempt gets a note");
         assert!(
             note.contains("already ran `tab adopt checkout.example`"),
+            "{note}"
+        );
+        assert!(
+            note.contains("tab adopt checkout.example --activate` once"),
             "{note}"
         );
         assert!(!note.contains("tab select"), "{note}");
