@@ -1,8 +1,27 @@
 # Changelog
 
-## 1.5.141
+## 1.5.142
 
 <!-- release:start -->
+### New Features
+
+- **Bring a tab forward before its renderer responds.** `tab new`, `tab select` and `tab adopt` accept `--activate` (alias `--front`). Activation happens through the browser connection before renderer initialization, so a stalled background tab can be recovered. Tab commands stay in the background by default. (#346)
+- **Adopt an existing tab over direct CDP.** Explicit adoption attaches without navigation or reload, verifies the selected page, and protects the adopted tab from session cleanup. (#346)
+
+### Bug Fixes
+
+- **Recover a new tab without creating a duplicate.** If initialization fails after attachment, keep its target ID, ownership, label and selected-tab context. Selecting that target retries setup; a failed stealth setup remains pending and reports an error until a later retry succeeds. (#346)
+- **Timeout guidance preserves uncertainty.** A command timeout alone no longer diagnoses a lost connection or recommends replaying a potentially completed action. Verify the target and a read before continuing. (#346)
+
+### Contributors
+
+- @Sean529
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.141
+
+
 ### Bug Fixes
 
 - **A `--launch` session no longer hangs or switches browsers once its browser is gone.** Follow-up commands don't repeat `--launch`. That was fine while the session's daemon kept running, but once the launched browser was gone (closed after 10 idle minutes, killed, or crashed along with its daemon), the next command read its missing `--launch` as "use my real Chrome". If the Chrome extension wasn't connected, `get url`, `close` and every other command waited on "Chrome relay dropped — reconnecting…" for a connection this session never used; seen on Windows. If the extension was connected, the command would have gone to your real Chrome instead. A session started with `--launch` now stays that way until you `close` it: the next command launches a fresh browser in about a second, with the existing warning that the old window is gone. To move the session to your Chrome, pass `--auto-connect`, `--cdp`, `--browser` or `--provider`.
@@ -10,7 +29,7 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
+
 
 ## 1.5.140
 
