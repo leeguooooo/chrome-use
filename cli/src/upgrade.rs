@@ -75,20 +75,67 @@ fn now_secs() -> u64 {
 // Versions
 // ---------------------------------------------------------------------------
 
-/// Parse a dotted version (`1.2.1`, `v1.2.1`, `1.2.1-fork.3`) into a comparable
-/// `(major, minor, patch)`, ignoring any pre-release/build suffix.
-fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
-    let core = v.trim().trim_start_matches('v');
-    let core = core.split(['-', '+']).next().unwrap_or(core);
+/// Parse a dotted version (`1.2.1`, `v1.2.1`, `1.2.1-rc.3`) into its
+/// `(major, minor, patch)` core plus the pre-release part (build metadata
+/// after `+` is ignored, as semver says).
+/// `(major, minor, patch)` plus the optional pre-release identifiers.
+type ParsedVersion<'a> = ((u64, u64, u64), Option<&'a str>);
+
+fn parse_version(v: &str) -> Option<ParsedVersion<'_>> {
+    let v = v.trim().trim_start_matches('v');
+    let v = v.split('+').next().unwrap_or(v);
+    let (core, pre) = match v.split_once('-') {
+        Some((core, pre)) => (core, Some(pre).filter(|p| !p.is_empty())),
+        None => (v, None),
+    };
     let mut parts = core.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next().unwrap_or("0").parse().ok()?;
     let patch = parts.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor, patch))
+    Some(((major, minor, patch), pre))
+}
+
+/// Semver pre-release precedence: a release outranks any pre-release of the
+/// same core; identifiers compare numerically when both are numeric, numeric
+/// ranks below alphanumeric, and a longer list wins a shared prefix.
+fn cmp_prerelease(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(a), Some(b)) => {
+            let mut ai = a.split('.');
+            let mut bi = b.split('.');
+            loop {
+                match (ai.next(), bi.next()) {
+                    (None, None) => return Ordering::Equal,
+                    (None, Some(_)) => return Ordering::Less,
+                    (Some(_), None) => return Ordering::Greater,
+                    (Some(x), Some(y)) => {
+                        let ord = match (x.parse::<u64>(), y.parse::<u64>()) {
+                            (Ok(x), Ok(y)) => x.cmp(&y),
+                            (Ok(_), Err(_)) => Ordering::Less,
+                            (Err(_), Ok(_)) => Ordering::Greater,
+                            (Err(_), Err(_)) => x.cmp(y),
+                        };
+                        if ord != Ordering::Equal {
+                            return ord;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn is_newer(latest: &str, current: &str) -> bool {
-    matches!((parse_version(latest), parse_version(current)), (Some(l), Some(c)) if l > c)
+    match (parse_version(latest), parse_version(current)) {
+        (Some((l, lp)), Some((c, cp))) => {
+            l > c || (l == c && cmp_prerelease(lp, cp) == std::cmp::Ordering::Greater)
+        }
+        _ => false,
+    }
 }
 
 /// Public semver-ish comparison (`latest` strictly newer than `current`), so
@@ -220,12 +267,24 @@ fn read_cache_at(path: &Path) -> UpdateCache {
         .unwrap_or_default()
 }
 
+/// Write the cache through a sibling temp file and a rename, so a concurrent
+/// reader (another command, `doctor`, the detached checker) never sees a
+/// truncated file. Failures are ignored: the cache is only a hint.
 fn write_cache_at(path: &Path, cache: &UpdateCache) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(body) = serde_json::to_string(cache) {
-        let _ = std::fs::write(path, body);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(parent);
+    let Ok(body) = serde_json::to_string(cache) else {
+        return;
+    };
+    let tmp = parent.join(format!(
+        ".update-check.{}.{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    if std::fs::write(&tmp, body).is_err() || std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -281,7 +340,7 @@ fn skip_for_args(args: &[String]) -> bool {
     if first.starts_with("__")
         || matches!(
             first,
-            "upgrade" | "install" | "doctor" | "dashboard" | "daemon"
+            "upgrade" | "install" | "doctor" | "dashboard" | "daemon" | "mcp"
         )
     {
         return true;
@@ -664,10 +723,24 @@ fn refresh_git_skills(skills: &[SkillInstall]) {
     }
 }
 
+/// Who refreshes the installer-managed skill folders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallerRefresh {
+    /// install.sh just ran and already rewrote them with the new SKILL.md.
+    Ran,
+    /// No reinstall happened: write this binary's bundled SKILL.md here.
+    InProcess,
+    /// `AGENT_BROWSER_NO_SKILL` is set: leave them alone. (Writing in-process
+    /// after a reinstall would also put the *old* binary's SKILL.md back.)
+    Skip,
+}
+
+fn skill_opt_out() -> bool {
+    std::env::var_os("AGENT_BROWSER_NO_SKILL").is_some()
+}
+
 /// Refresh everything except git checkouts (see [`refresh_git_skills`]).
-/// `installer_ran` means install.sh just ran and already rewrote the
-/// installer-managed folders with the new release's SKILL.md.
-fn refresh_other_skills(skills: &[SkillInstall], scan: &SkillScan, installer_ran: bool) {
+fn refresh_other_skills(skills: &[SkillInstall], scan: &SkillScan, installer: InstallerRefresh) {
     let installer_dirs: Vec<PathBuf> = scan
         .installer_dirs
         .iter()
@@ -706,10 +779,16 @@ fn refresh_other_skills(skills: &[SkillInstall], scan: &SkillScan, installer_ran
                     println!("skill (Claude Code plugin): run `{}`", skill.update);
                 }
             }
-            Channel::Installer if installer_ran => {
+            Channel::Installer if installer == InstallerRefresh::Ran => {
                 println!(
                     "{} skill {}: refreshed by the installer",
                     color::success_indicator(),
+                    skill.path
+                );
+            }
+            Channel::Installer if installer == InstallerRefresh::Skip => {
+                println!(
+                    "skill {}: not refreshed (AGENT_BROWSER_NO_SKILL is set)",
                     skill.path
                 );
             }
@@ -722,7 +801,7 @@ fn refresh_other_skills(skills: &[SkillInstall], scan: &SkillScan, installer_ran
             }
         }
     }
-    if !installer_ran && !installer_dirs.is_empty() {
+    if installer == InstallerRefresh::InProcess && !installer_dirs.is_empty() {
         let (installed, errors) = crate::skills::install::install_all(&installer_dirs);
         for path in installed {
             println!(
@@ -860,6 +939,14 @@ fn installed_version(exe: Option<&Path>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn in_process_or_skip() -> InstallerRefresh {
+    if skill_opt_out() {
+        InstallerRefresh::Skip
+    } else {
+        InstallerRefresh::InProcess
+    }
+}
+
 /// `chrome-use upgrade [--check] [--json]`.
 ///
 /// The stealth fork ships as a prebuilt binary attached to a GitHub Release —
@@ -885,7 +972,7 @@ pub fn run_upgrade(args: &[String]) {
             write_update_cache(now_secs(), latest);
             println!("{NAME} {CURRENT_VERSION} is up to date");
             refresh_git_skills(&skills);
-            refresh_other_skills(&skills, &scan, false);
+            refresh_other_skills(&skills, &scan, in_process_or_skip());
             return;
         }
         Ok(latest) => println!(
@@ -913,8 +1000,8 @@ pub fn run_upgrade(args: &[String]) {
             "    irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex"
         );
         refresh_git_skills(&skills);
-        refresh_other_skills(&skills, &scan, false);
-        exit(1);
+        refresh_other_skills(&skills, &scan, in_process_or_skip());
+        exit(2);
     }
 
     #[cfg(not(windows))]
@@ -957,8 +1044,12 @@ pub fn run_upgrade(args: &[String]) {
                 color::success_indicator()
             );
         }
-        let installer_ran = std::env::var_os("AGENT_BROWSER_NO_SKILL").is_none();
-        refresh_other_skills(&skills, &scan, installer_ran);
+        let installer = if skill_opt_out() {
+            InstallerRefresh::Skip
+        } else {
+            InstallerRefresh::Ran
+        };
+        refresh_other_skills(&skills, &scan, installer);
     }
 }
 
@@ -990,6 +1081,38 @@ mod tests {
         assert!(!is_newer("1.5.143-rc.1", "1.5.143"));
         assert!(!is_newer("", "1.5.143"));
         assert!(!is_newer("garbage", "1.5.143"));
+        assert!(is_newer("0.10.0", "0.9.0"));
+        assert!(!is_newer("0.9.0", "0.10.0"));
+        // semver pre-release precedence
+        assert!(is_newer("1.5.143", "1.5.143-rc.1"), "release beats its rc");
+        assert!(is_newer("1.5.143-rc.2", "1.5.143-rc.1"));
+        assert!(is_newer("1.5.143-rc.10", "1.5.143-rc.9"), "numeric ids");
+        assert!(is_newer("1.5.143-beta", "1.5.143-alpha"));
+        assert!(is_newer("1.5.143-alpha.1", "1.5.143-alpha"));
+        assert!(is_newer("1.5.143-rc", "1.5.143-1"), "alnum above numeric");
+        assert!(is_newer("1.5.144-rc.1", "1.5.143"));
+        assert!(
+            !is_newer("1.5.143+build.5", "1.5.143"),
+            "build metadata ignored"
+        );
+    }
+
+    #[test]
+    fn cache_write_is_atomic_and_leaves_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chrome-use").join("update-check.json");
+        let cache = UpdateCache {
+            checked_at: 7,
+            latest: "1.2.3".into(),
+        };
+        write_cache_at(&path, &cache);
+        write_cache_at(&path, &cache);
+        assert_eq!(read_cache_at(&path), cache);
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("update-check.json")]);
     }
 
     #[test]
@@ -1086,6 +1209,7 @@ mod tests {
             &["open", "--help"],
             &["__update-check"],
             &["doctor"],
+            &["mcp"],
         ] {
             assert!(skip_for_args(&args(skip)), "{skip:?}");
         }
