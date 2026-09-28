@@ -76,6 +76,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.144</strong>（2026-09-28）：<code>chrome-use upgrade --check</code> / <code>--json</code> 只报告当前版本、最新版本和已安装的 skill 副本，不做改动，检查失败退出码 2。<code>upgrade</code> 已是最新时跳过重装，并刷新 Claude Code 插件、chrome-use git 检出和安装器目录里的 skill；<code>AGENT_BROWSER_NO_SKILL=1</code> 时不动 skill。每天最多后台检查一次（2 秒超时，缓存在 <code>~/.cache/chrome-use/update-check.json</code>），有新版时在 stderr 打一行提示，不影响 stdout 和 <code>--json</code>；<code>CHROME_USE_NO_UPDATE_CHECK=1</code>、<code>USE_NO_UPDATE_CHECK=1</code> 或 <code>CI</code> 可关闭。(#352) 贡献者：@leeguooooo。</li>
         <li><strong>v1.5.143</strong>（2026-09-28）：补充第三方扩展 iframe 导致调试权限拒绝的排障说明：保存工作，禁用该站点上的冲突扩展后重新加载，或使用独立 profile。新增隔离 Chrome 复现脚本，验证 auto-attach 开关两种情况下的主页面拒绝、重新附着失败及移除测试 iframe 后的恢复。本版不解除 Chrome 权限限制，也不把失败改为成功。关联：#341、#349。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.142</strong>（2026-09-27）：<code>tab new/select/adopt --activate</code>（别名 <code>--front</code>）在渲染器初始化前激活标签页，默认仍在后台执行；直接 CDP 支持无导航接管已有标签页。新标签初始化失败后保留原目标，恢复时重试未完成的 stealth 设置，失败不再误报成功。超时提示保留结果不确定性，避免重复操作。贡献者：@Sean529、@leeguooooo。 (#346)</li>
         <li><strong>v1.5.141</strong>（2026-09-24）：用 <code>--launch</code> 启动的会话，在浏览器闲置 10 分钟被自动关闭、被结束或崩溃之后，后续命令不再卡在“Chrome relay dropped — reconnecting…”，也不会转去操作你真正的 Chrome；会话一直保持 launch 模式直到 <code>close</code>，下一条命令约 1 秒内重新启动浏览器，并提示旧窗口已不在。想改用真 Chrome，加 <code>--auto-connect</code>、<code>--cdp</code>、<code>--browser</code> 或 <code>--provider</code>。贡献者：@leeguooooo。</li>

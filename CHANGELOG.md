@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.143
+## 1.5.144
 
 <!-- release:start -->
+### New Features
+
+- **`chrome-use upgrade --check` and `--json`.** Report the running and latest versions and every installed copy of the agent skill (Claude Code plugin, git checkout, installer folder, copied folder) without changing anything. `--json` prints `name`, `current`, `latest`, `update_available` and `skills[{channel, path, update}]`. A failed check exits 2. (#352)
+- **`chrome-use upgrade` refreshes the skill too.** It skips the reinstall when the CLI is already current, prints `old -> new`, runs `claude plugin update` for the plugin, `git pull --ff-only` for a chrome-use checkout, and refreshes installer folders; copied folders get the `npx skills update chrome-use` hint. `AGENT_BROWSER_NO_SKILL=1` leaves every skill folder alone. (#352)
+- **Daily update notice follows the *-use family convention.** At most one background check a day (2 s timeout, cached in `${XDG_CACHE_HOME:-~/.cache}/chrome-use/update-check.json`, written atomically). While a newer release exists, each command prints one stderr line: `chrome-use X is available (you have Y). Upgrade: chrome-use upgrade`. stdout and `--json` output are never touched; the `mcp` server and daemon stay silent. Opt out with `CHROME_USE_NO_UPDATE_CHECK=1`, `USE_NO_UPDATE_CHECK=1` or `CI`; hide only the line with `CHROME_USE_NO_UPDATE_NOTICE=1`. (#352)
+
+### Behavior Changes
+
+- The update notice is no longer limited to a terminal or to non-`--json` runs (#170), so agents see it on stderr. Wrappers that quote stderr can set `CHROME_USE_NO_UPDATE_NOTICE=1`. A failed `upgrade` now exits 2 instead of 1. Version comparison follows semver pre-release order. (#352)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.143
+
 ### Documentation
 
 - **Explain protected extension iframe failures.** Chrome can reject parent-page debugger commands when a foreign extension iframe is present, even with auto-attach disabled. The troubleshooting guides explain how to save work, disable the conflicting extension on the affected site and reload, or use a separate profile. This release does not remove Chrome's permission restriction or turn denied commands into successful replies. (#349, #341)
@@ -14,7 +31,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.142
 
