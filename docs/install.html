@@ -291,7 +291,7 @@ Do not use the built-in Chrome plugin for browser work here.</code></pre>
 
       <p>安装到运行器的发现入口会先加载一次 <code>chrome-use skills get core</code>，再按任务读取 reference。若旧副本另带命令手册、没有引导加载 core，用 <code>chrome-use skills update</code> 刷新；只更新二进制不会替换该文件。</p>
 
-      <p>升级用 <code>chrome-use upgrade</code>：安装最新的 GitHub Release，再刷新找到的每一份 skill（Claude Code 插件、git checkout、安装脚本写入的目录）。<code>chrome-use upgrade --check</code> 或 <code>--json</code> 只报告当前和最新版本，不做改动；退出码 2 表示检查失败。其他命令每天最多检查一次新版本，有新版时往 stderr 打一行提示，设 <code>CHROME_USE_NO_UPDATE_CHECK=1</code> 或 <code>USE_NO_UPDATE_CHECK=1</code> 可关闭。</p>
+      <p>升级用 <code>chrome-use upgrade</code>：安装最新的 GitHub Release，再刷新找到的每一份 skill（Claude Code 插件、git checkout、安装脚本写入的目录）。<code>chrome-use upgrade --check</code> 或 <code>--json</code> 只报告当前和最新版本，不做改动；退出码 2 表示检查失败。其他命令每天最多在后台检查一次新版本；只要有新版，每次运行都会往 stderr 打一行提示，设 <code>CHROME_USE_NO_UPDATE_CHECK=1</code> 或 <code>USE_NO_UPDATE_CHECK=1</code> 可关闭。</p>
 
       <!-- ============ QUICKSTART ============ -->
       <h2>跑通第一条命令</h2>

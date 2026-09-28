@@ -3941,9 +3941,9 @@ Options:
 Exit codes: 0 upgraded, already current, or a check that ran; 2 the check or
 download failed. An available update is not an error.
 
-Once a day, other commands check for a newer release (2 s timeout, cached in
-${XDG_CACHE_HOME:-~/.cache}/chrome-use/update-check.json) and print one line
-to stderr when one exists.
+Other commands check for a newer release at most once a day, in the background
+(2 s timeout, cached in ${XDG_CACHE_HOME:-~/.cache}/chrome-use/update-check.json),
+and while one exists print one line to stderr on each run.
 
 Environment:
   AGENT_BROWSER_NO_SETUP=1   Skip the post-install interactive setup

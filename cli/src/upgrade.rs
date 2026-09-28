@@ -9,8 +9,9 @@
 //!   current vs latest plus the installed skills.
 //! - Exit 0 on success (upgraded, already current, or a check that ran),
 //!   2 when the check or the download failed.
-//! - Any other command prints one stderr line, at most once a day, when a
-//!   newer release is cached.
+//! - Any other command checks GitHub at most once a day (in the background)
+//!   and, while the cached release is newer than the running binary, prints
+//!   one stderr line per run.
 
 use crate::color;
 use serde::Serialize;
@@ -841,9 +842,11 @@ fn channel_label(channel: Channel) -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Version reported by the binary at `exe` (after install.sh replaced it).
-fn installed_version() -> Option<String> {
-    let exe = std::env::current_exe().ok()?;
-    let out = Command::new(exe)
+///
+/// `exe` must be resolved before the installer runs: on Linux,
+/// `current_exe()` afterwards points at the replaced inode (`... (deleted)`).
+fn installed_version(exe: Option<&Path>) -> Option<String> {
+    let out = Command::new(exe?)
         .arg("--version")
         .env("CHROME_USE_NO_UPDATE_CHECK", "1")
         .stdin(Stdio::null())
@@ -918,6 +921,11 @@ pub fn run_upgrade(args: &[String]) {
     {
         refresh_git_skills(&skills);
 
+        // Resolve the binary's path now; after install.sh replaces it, the
+        // running process can no longer name it (see installed_version).
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|p| p.canonicalize().unwrap_or(p));
         let install_cmd = format!("curl -fsSL {} | sh", INSTALL_URL);
         println!("Running: {}", install_cmd);
         let mut cmd = Command::new("sh");
@@ -937,7 +945,7 @@ pub fn run_upgrade(args: &[String]) {
             exit(2);
         }
 
-        let now = installed_version().unwrap_or_else(|| "unknown".to_string());
+        let now = installed_version(exe.as_deref()).unwrap_or_else(|| "unknown".to_string());
         if let Ok(latest) = &latest {
             write_update_cache(now_secs(), latest);
         }
