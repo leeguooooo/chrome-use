@@ -1466,7 +1466,7 @@ fn main() {
 
     // Handle upgrade separately
     if clean.first().map(|s| s.as_str()) == Some("upgrade") {
-        run_upgrade();
+        run_upgrade(&args);
         return;
     }
 

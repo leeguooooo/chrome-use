@@ -3918,25 +3918,46 @@ Examples:
             r##"
 chrome-use upgrade - Upgrade to the latest version
 
-Usage: chrome-use upgrade
+Usage: chrome-use upgrade [--check] [--json]
 
 Re-runs the official install script (install.sh from the GitHub repo), which
 downloads the latest GitHub Release archive for this platform, verifies its
-checksum, and replaces the binary in place. Displays the version change on
-success, or tells you when you are already current.
+checksum, and replaces the binary in place. Prints the version change, or says
+the CLI is already up to date. Then refreshes every installed copy of the
+agent skill:
+
+  Claude Code plugin   runs `claude plugin update chrome-use@leeguooooo-plugins`
+                       (printed instead when `claude` is not on PATH)
+  git checkout         `git pull --ff-only` in the checkout; never forced
+  installer folders    rewritten with the bundled SKILL.md (`skills update`)
+  copied folders       prints `npx skills update chrome-use`
+
+Options:
+  --check    Change nothing. Print `chrome-use <current> -> <latest>` or
+             `chrome-use <current> is up to date`, plus the skills found
+  --json     Same as --check, as JSON: name, current, latest,
+             update_available, skills[{channel, path, update}]
+
+Exit codes: 0 upgraded, already current, or a check that ran; 2 the check or
+download failed. An available update is not an error.
+
+Once a day, other commands check for a newer release (2 s timeout, cached in
+${XDG_CACHE_HOME:-~/.cache}/chrome-use/update-check.json) and print one line
+to stderr when one exists.
 
 Environment:
   AGENT_BROWSER_NO_SETUP=1   Skip the post-install interactive setup
   AGENT_BROWSER_NO_SKILL=1   Skip installing/refreshing the agent skill —
                              together these make the upgrade binary-only
-  CHROME_USE_NO_UPDATE_CHECK=1  Do not check for updates on ordinary commands
-
-The bundled skill content travels with the binary, so an upgrade refreshes what
-`chrome-use skills get` prints. A SKILL.md already installed into a runner is a
-separate copy: refresh that with `chrome-use skills update`.
+  CHROME_USE_NO_UPDATE_CHECK=1  No daily check or notice on ordinary commands
+  USE_NO_UPDATE_CHECK=1      Same, for every *-use CLI (CI also disables it)
+  CHROME_USE_NO_UPDATE_NOTICE=1  Keep the daily check, hide the notice line
+  GITHUB_TOKEN               Sent to the GitHub API when set (rate limits)
 
 Examples:
   chrome-use upgrade
+  chrome-use upgrade --check
+  chrome-use upgrade --json
   AGENT_BROWSER_NO_SKILL=1 AGENT_BROWSER_NO_SETUP=1 chrome-use upgrade
 "##
         }
@@ -4900,7 +4921,7 @@ Setup:
   extension state            Everything the extension holds, owns and is set to, in
                              one call (attached targets, owned tabs, groups, cursor,
                              idle timeout). Needs ab-connect 0.5.25+.
-  upgrade                    Upgrade to the latest version
+  upgrade [--check|--json]   Upgrade the CLI and installed skills
   doctor [--fix]             Diagnose install; auto-clean stale files
   dashboard start            Start the observability dashboard
   profiles                   List available Chrome profiles

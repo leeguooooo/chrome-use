@@ -107,7 +107,7 @@ fn install_one(base: &Path) -> Result<PathBuf, String> {
 
 /// Try every destination, but any failed destination makes the command fail.
 /// Partial installation is useful evidence, never overall success.
-pub(super) fn install_all(dirs: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
+pub(crate) fn install_all(dirs: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
     let mut installed = Vec::new();
     let mut errors = Vec::new();
     for dir in dirs {

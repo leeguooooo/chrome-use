@@ -45,3 +45,14 @@ irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | i
 The CLI bundles its workflow documentation. Upgrading the binary updates that
 content; `chrome-use skills update` refreshes this installed discovery entry.
 Use `chrome-use skills list` to discover specialized guides.
+
+## Upgrade
+
+When any `chrome-use` command prints `chrome-use X is available`, tell the user
+and offer to run `chrome-use upgrade` (it updates the CLI and this skill).
+Check without changing anything: `chrome-use upgrade --check`. The user may
+also just say "升级 chrome-use" / "upgrade chrome-use".
+
+If the skill came from somewhere `upgrade` can't refresh:
+- Claude Code plugin: `claude plugin update chrome-use@leeguooooo-plugins`
+- Whole family: `curl -fsSL https://raw.githubusercontent.com/leeguooooo/plugins/main/upgrade-use-family.sh | sh`

@@ -296,6 +296,8 @@ Do not use the built-in Chrome plugin for browser work here.</code></pre>
 
       <p>The installed discovery entry loads <code>chrome-use skills get core</code> once, then uses task-specific references as needed. If an old installed copy contains its own command manual without that handoff, refresh it with <code>chrome-use skills update</code>. Updating the binary alone does not replace that installed file.</p>
 
+      <p>To upgrade, run <code>chrome-use upgrade</code>: it installs the latest GitHub Release, then refreshes each installed copy of the skill it finds (Claude Code plugin, a git checkout, or the folders the installer writes). <code>chrome-use upgrade --check</code> or <code>--json</code> reports current and latest without changing anything; exit code 2 means the check failed. Other commands check for a newer release at most once a day and print one line to stderr when there is one; <code>CHROME_USE_NO_UPDATE_CHECK=1</code> or <code>USE_NO_UPDATE_CHECK=1</code> turns that off.</p>
+
       <!-- ============ QUICKSTART ============ -->
       <h2>Run your first command</h2>
       <p>

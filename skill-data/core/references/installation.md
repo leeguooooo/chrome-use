@@ -20,6 +20,14 @@ and `~/.trae-cn`, each under `skills/chrome-use/SKILL.md`.
 configuration directories under that project. It does not update global skills.
 Other runners can still use `npx skills add leeguooooo/chrome-use -g`.
 
+`chrome-use upgrade` installs the latest release and then refreshes every
+installed copy: the Claude Code plugin (`claude plugin update`), a git checkout
+(`git pull --ff-only`), and these installer folders. For a copy made by
+`npx skills add` elsewhere it prints `npx skills update chrome-use`.
+`chrome-use upgrade --check` / `--json` only report, and exit 2 when the check
+fails. When another command prints `chrome-use X is available`, tell the user
+and offer `chrome-use upgrade`.
+
 Restart the runner or reload its skills after installation. An installed file
 proves disk installation, not that an already-running agent has reloaded it.
 
