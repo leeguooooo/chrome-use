@@ -76,6 +76,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.143</strong>（未发布）：补充第三方扩展 iframe 导致调试权限拒绝的排障说明：保存工作，禁用该站点上的冲突扩展后重新加载，或使用独立 profile。新增隔离 Chrome 复现脚本，验证 auto-attach 开关两种情况下的主页面拒绝、重新附着失败及移除测试 iframe 后的恢复。本版不解除 Chrome 权限限制，也不把失败改为成功。关联：#341、#349。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.142</strong>（2026-09-27）：<code>tab new/select/adopt --activate</code>（别名 <code>--front</code>）在渲染器初始化前激活标签页，默认仍在后台执行；直接 CDP 支持无导航接管已有标签页。新标签初始化失败后保留原目标，恢复时重试未完成的 stealth 设置，失败不再误报成功。超时提示保留结果不确定性，避免重复操作。贡献者：@Sean529、@leeguooooo。 (#346)</li>
         <li><strong>v1.5.141</strong>（2026-09-24）：用 <code>--launch</code> 启动的会话，在浏览器闲置 10 分钟被自动关闭、被结束或崩溃之后，后续命令不再卡在“Chrome relay dropped — reconnecting…”，也不会转去操作你真正的 Chrome；会话一直保持 launch 模式直到 <code>close</code>，下一条命令约 1 秒内重新启动浏览器，并提示旧窗口已不在。想改用真 Chrome，加 <code>--auto-connect</code>、<code>--cdp</code>、<code>--browser</code> 或 <code>--provider</code>。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.140</strong>（2026-09-24）：<code>skill install</code> 改为直接安装并读回校验 CLI 内置的发现入口，不再依赖 Node、npx、Git 或网络。支持全局、项目安装和刷新；覆盖共享目录、Claude Code、Cursor，以及检测到配置的 Pi、OpenCode、Windsurf、CodeBuddy、Trae。Codex 使用共享目录，避免重复发现。Windows 安装脚本也能从旧版 CLI 提取技能，按 UTF-8 解码，兼容 PowerShell 5.1；更新失败保留原文件。技能、扩展安装或自检失败不再输出全部就绪，自检超时也会报错。Windows doctor 新增磁盘空间检查，环境变量提示改用 PowerShell，去掉 macOS 专属 ChooseBrowser 路径和不必要的加密密钥配置提示。贡献者：@leeguooooo。</li>

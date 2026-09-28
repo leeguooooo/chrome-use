@@ -1,8 +1,24 @@
 # Changelog
 
-## 1.5.142
+## 1.5.143
 
 <!-- release:start -->
+### Documentation
+
+- **Explain protected extension iframe failures.** Chrome can reject parent-page debugger commands when a foreign extension iframe is present, even with auto-attach disabled. The troubleshooting guides explain how to save work, disable the conflicting extension on the affected site and reload, or use a separate profile. This release does not remove Chrome's permission restriction or turn denied commands into successful replies. (#349, #341)
+
+### Tests
+
+- **Reproduce the browser restriction in isolation.** A standalone Chrome for Testing script checks parent-command denial and failed reattachment with auto-attach both disabled and enabled, then verifies recovery after the disposable iframe is removed by reload. The investigation links the matching Chromium permission checks. (#349)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.142
+
+
 ### New Features
 
 - **Bring a tab forward before its renderer responds.** `tab new`, `tab select` and `tab adopt` accept `--activate` (alias `--front`). Activation happens through the browser connection before renderer initialization, so a stalled background tab can be recovered. Tab commands stay in the background by default. (#346)
@@ -17,7 +33,7 @@
 
 - @Sean529
 - @leeguooooo
-<!-- release:end -->
+
 
 ## 1.5.141
 
