@@ -198,7 +198,7 @@
 <span class="du-prompt">$</span> chrome-use download-url https://example.com/file.pdf ./file.pdf
 <span class="du-prompt">$</span> chrome-use downloads <span class="du-flag">--limit</span> 10 <span class="du-flag">--json</span> <span class="du-cmt"># 机器可读的 Chrome 下载记录</span></code></pre>
       </div>
-      <p><code>fill</code> 会在返回成功前回读控件或富编辑器 model，并精确比较结果。若 Monaco 隐藏了 model API，则通过一次可信的编辑器 paste 写入，再通过编辑器 copy 处理器精确回读，并在结束后恢复浏览器剪贴板。paste 无法校验或回读不一致时会报错，不会静默成功。报错会同时引用两边的值（如 <code>read back "" after writing "千代田区"</code>）；若非 ASCII 字符全部消失而 ASCII 仍在，会明确指出页面过滤了非拉丁输入（仅限拉丁 / 带掩码的字段），重打一遍没有用。<code>type</code> 也会回读：字段里没有刚输入的文本时打印 ⚠ 警告（退出码仍为 0，JSON 多出 <code>readBack</code>）。</p>
+      <p><code>fill</code> 会在返回成功前回读控件或富编辑器 model，并精确比较结果。若 Monaco 隐藏了 model API，则通过一次可信的编辑器 paste 写入，再通过编辑器 copy 处理器精确回读，并在结束后恢复浏览器剪贴板。paste 无法校验或回读不一致时会报错，不会静默成功。报错会同时引用两边的值（如 <code>read back "" after writing "千代田区"</code>）；若非 ASCII 字符全部消失而 ASCII 仍在，会明确指出页面过滤了非拉丁输入（仅限拉丁 / 带掩码的字段），重打一遍没有用。<code>type</code> 也会回读：字段里没有刚输入的文本时打印 ⚠ 警告（退出码仍为 0，JSON 多出 <code>readBack</code>）。文本输入框用可信输入事件写入；保存 / 提交按钮在填写前后都禁用时 <code>fill</code> 会警告，<code>click</code> 会拒绝点击禁用的控件（#358）。</p>
       <p><code>press</code> 对只靠页面 JavaScript 才有效果的键（文本框上的 Arrow/Home/End/PageUp/PageDown、Escape、表单外裸输入框上的 Enter）会探测从焦点元素到 window 有没有 keydown/keyup/keypress 监听器；一个都没有时仍退出 0，但打印 ⚠ 警告说明页面无法响应该键，建议直接 <code>click</code> 目标选项（JSON 多出 <code>keyListeners</code>）。组合键、Tab、Backspace、可打印字符不探测。</p>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 点击"成功但没反应"</div>

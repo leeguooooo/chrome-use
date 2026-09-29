@@ -5784,21 +5784,25 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         mgr.pages_list().into_iter().map(|p| p.target_id).collect();
 
     let dialog_events = mgr.client.subscribe();
-    if let Some(dialog) = wait_for_click_or_dialog(
-        interaction::click(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            selector,
-            button,
-            click_count,
-            &state.iframe_sessions,
-        ),
-        dialog_events,
-        state.auto_dialog,
-        &session_id,
-    )
-    .await?
+    let mut outcome: Option<interaction::ClickOutcome> = None;
+    let click_future = async {
+        outcome = Some(
+            interaction::click_reporting(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                selector,
+                button,
+                click_count,
+                &state.iframe_sessions,
+            )
+            .await?,
+        );
+        Ok(())
+    };
+    if let Some(dialog) =
+        wait_for_click_or_dialog(click_future, dialog_events, state.auto_dialog, &session_id)
+            .await?
     {
         let dialog_type = dialog.dialog_type.clone();
         let message = dialog.message.clone();
@@ -5815,6 +5819,16 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     let opened = mgr.adopt_newly_opened(&before).await;
 
     let mut out = json!({ "clicked": selector });
+    // How the click was delivered, and a warning when it may not have acted
+    // like a user's click (a DOM-dispatched fallback, an aria-disabled target):
+    // the fallback's reason used to go to the daemon's stderr, where the caller
+    // never sees it (issue #358).
+    if let Some(outcome) = outcome {
+        out["dispatch"] = json!(outcome.dispatch);
+        if let Some(w) = outcome.warning {
+            out["warning"] = json!(w);
+        }
+    }
     if let Some(page) = opened {
         let tab_id = super::browser::format_tab_id(page.tab_id);
         out["openedTab"] = json!({ "tabId": tab_id, "url": page.url, "title": page.title });
@@ -5876,7 +5890,17 @@ async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
-    let engine = interaction::fill(
+    // The form's Save/Submit before the edit, so we can tell afterwards
+    // whether the page reacted to it at all (issue #358).
+    let commit_before = interaction::commit_control_state(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        &state.iframe_sessions,
+    )
+    .await;
+    let outcome = interaction::fill_reporting(
         &mgr.client,
         &session_id,
         &state.ref_map,
@@ -5887,7 +5911,42 @@ async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     .await?;
     // Echo the input path used (input/contenteditable/codemirror5/monaco/select)
     // so the agent can confirm a rich editor was handled, not silently no-op'd (#41).
-    Ok(json!({ "filled": selector, "engine": engine }))
+    let mut out = json!({ "filled": selector, "engine": outcome.engine });
+    let mut warnings: Vec<String> = outcome.warning.into_iter().collect();
+
+    if commit_before.as_ref().is_some_and(|c| c.disabled) {
+        let probe = || {
+            interaction::commit_control_state(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                selector,
+                &state.iframe_sessions,
+            )
+        };
+        let mut commit_after = probe().await;
+        // Validation is often debounced: give a still-disabled button one
+        // short grace period before calling it unmoved.
+        if commit_after.as_ref().is_some_and(|c| c.disabled) {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            commit_after = probe().await;
+        }
+        if let (Some(b), Some(a)) = (&commit_before, &commit_after) {
+            out["commitControl"] = json!({
+                "name": a.name,
+                "disabledBefore": b.disabled,
+                "disabledAfter": a.disabled,
+            });
+        }
+        warnings.extend(interaction::commit_control_warning(
+            commit_before.as_ref(),
+            commit_after.as_ref(),
+        ));
+    }
+    if !warnings.is_empty() {
+        out["warning"] = json!(warnings.join("; "));
+    }
+    Ok(out)
 }
 
 /// `select-text` (issue #226): select one run of text inside an editable
@@ -8478,6 +8537,7 @@ async fn handle_keyboard(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
                 .get("keyEvents")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let before = interaction::focused_field(&mgr.client, &session_id).await;
             interaction::type_text_into_active_context(
                 &mgr.client,
                 &session_id,
@@ -8486,7 +8546,23 @@ async fn handle_keyboard(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
                 key_events,
             )
             .await?;
-            return Ok(json!({ "typed": text }));
+            let after = interaction::focused_field(&mgr.client, &session_id).await;
+            let mut out = json!({ "typed": text });
+            if let Some(f) = &after {
+                out["target"] = json!(f.descriptor);
+                if let Some(v) = &f.value {
+                    out["readBack"] = json!(v);
+                }
+            }
+            // `keyboard type` goes to whatever has focus; say when that was
+            // nothing editable, and fail when a field had focus and did not
+            // change (issue #358).
+            if let Some(w) =
+                interaction::keyboard_type_verdict(text, before.as_ref(), after.as_ref())?
+            {
+                out["warning"] = json!(w);
+            }
+            return Ok(out);
         }
         Some("insertText") => {
             let text = cmd
@@ -11875,7 +11951,7 @@ async fn execute_subaction(
 
     match subaction {
         "click" => {
-            interaction::click(
+            let outcome = interaction::click_reporting(
                 &mgr.client,
                 &session_id,
                 &state.ref_map,
@@ -11885,7 +11961,11 @@ async fn execute_subaction(
                 &state.iframe_sessions,
             )
             .await?;
-            Ok(json!({ "clicked": selector }))
+            let mut out = json!({ "clicked": selector, "dispatch": outcome.dispatch });
+            if let Some(w) = outcome.warning {
+                out["warning"] = json!(w);
+            }
+            Ok(out)
         }
         "type" => {
             let value = cmd
@@ -11953,7 +12033,7 @@ async fn execute_subaction(
                 .get("value")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'value' for fill subaction")?;
-            interaction::fill(
+            let outcome = interaction::fill_reporting(
                 &mgr.client,
                 &session_id,
                 &state.ref_map,
@@ -11962,7 +12042,11 @@ async fn execute_subaction(
                 &state.iframe_sessions,
             )
             .await?;
-            Ok(json!({ "filled": selector }))
+            let mut out = json!({ "filled": selector, "engine": outcome.engine });
+            if let Some(w) = outcome.warning {
+                out["warning"] = json!(w);
+            }
+            Ok(out)
         }
         "check" => {
             interaction::check(

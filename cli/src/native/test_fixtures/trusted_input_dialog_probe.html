@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>trusted input dialog probe</title>
+  </head>
+  <body>
+    <!--
+      Issue #358: LinkedIn's "edit intro" dialog. The field showed the new text,
+      `fill` printed success, and Save did nothing. This page models the part of
+      that pattern chrome-use can be held to: a dialog whose own state is fed
+      ONLY by trusted input events, and whose Save stays disabled until that
+      state changes. `window.__state` is the page's model, `window.__saved` what
+      a Save click committed. Nothing here talks to a network.
+    -->
+    <div id="intro" role="dialog" aria-modal="true" aria-label="Edit intro">
+      <label for="headline">Headline</label>
+      <input id="headline" type="text" value="Old headline" />
+      <label for="bio">Bio</label>
+      <textarea id="bio">Old bio</textarea>
+      <label for="short">Short (maxlength 5)</label>
+      <input id="short" type="text" maxlength="5" />
+      <button id="save" type="button" disabled>Save</button>
+    </div>
+
+    <!--
+      A dialog that never reacts to its field at all: the value lands in the
+      DOM, but nothing on the page listens, so its Save never enables. `fill`
+      must say so instead of printing a clean success, and `click` on the
+      still-disabled Save must refuse.
+    -->
+    <div id="dead" role="dialog" aria-label="Dead dialog">
+      <input id="dead-field" type="text" />
+      <button id="dead-save" type="button" disabled>保存</button>
+      <button id="soft-save" type="button" aria-disabled="true">Apply</button>
+    </div>
+
+    <!--
+      A field that throws away every edit (a controlled input whose state never
+      updates): `keyboard type` into it must fail, not print `✓ Done`.
+    -->
+    <input id="frozen" type="text" value="fixed" />
+
+    <!-- The "language button" from #358: a button that wraps a checkbox. -->
+    <button id="lang" type="button" onclick="window.__deleteQueued = true">
+      简体中文 <input type="checkbox" checked tabindex="-1" aria-hidden="false" />
+    </button>
+
+    <script>
+      window.__state = { headline: 'Old headline', bio: 'Old bio', short: '' };
+      window.__saved = null;
+      window.__untrusted = 0;
+      window.__changes = 0;
+      window.__deleteQueued = false;
+      const save = document.getElementById('save');
+      const dirty = () =>
+        window.__state.headline !== 'Old headline' || window.__state.bio !== 'Old bio' || window.__state.short !== '';
+      for (const id of ['headline', 'bio', 'short']) {
+        const el = document.getElementById(id);
+        el.addEventListener('input', (e) => {
+          if (!e.isTrusted) {
+            window.__untrusted++;
+            return;
+          }
+          window.__state[id] = el.value;
+          save.disabled = !dirty();
+        });
+        el.addEventListener('change', (e) => {
+          if (e.isTrusted) window.__changes++;
+        });
+      }
+      save.addEventListener('click', (e) => {
+        if (!e.isTrusted) return;
+        window.__saved = Object.assign({}, window.__state);
+      });
+      const frozen = document.getElementById('frozen');
+      frozen.addEventListener('input', () => {
+        frozen.value = 'fixed';
+      });
+    </script>
+  </body>
+</html>

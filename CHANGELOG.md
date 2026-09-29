@@ -1,8 +1,27 @@
 # Changelog
 
-## 1.5.145
+## 1.5.146
 
 <!-- release:start -->
+### Bug Fixes
+
+- **`fill` enters text the way a user does.** For text inputs and textareas it wrote the value with the prototype setter and dispatched synthetic `input`/`change` events (`isTrusted: false`). A page that only honours real input kept its old state while the field showed the new text, the read-back matched, and `fill` printed ✓ (LinkedIn's edit-intro dialog: Save never saved). It now selects the current value and replaces it with a trusted `Input.insertText` (trusted `beforeinput`/`input`, a trusted `change` on blur); `fill ""` clears with a trusted Delete. When the trusted insert cannot produce the value (a `maxlength` or mask), the setter path still runs, `engine` reads `input-synthetic`, and a warning says the page may not have registered it. `type --clear` clears with select-all and a trusted Delete too. (#358)
+- **`fill` says when the page did not react.** When the field's form or dialog has a Save/Submit button that was disabled before the fill and is still disabled after it (with no other required field empty), `fill` warns and reports `commitControl` in the JSON. (#358)
+- **`click` refuses a disabled control.** The browser delivers no click to a `:disabled` button, so a click on a Save that had not enabled yet printed ✓ and did nothing; it is now an error that points at the edit before it. An `aria-disabled="true"` target is clicked with a warning. (#358)
+- **`click` reports how it was delivered.** The response carries `dispatch: pointer | keyboard | dom`. A fallback to `element.click()` (`isTrusted: false`) used to be logged only to the daemon's stderr; it now comes back as a warning that names the reason. (#358)
+- **`keyboard type` reads back.** It reports the focused element (`target`) and its value (`readBack`), fails when a focused text field did not change, and warns when nothing editable had focus. (#358)
+
+### Documentation
+
+- The `click` help no longer says relay clicks are DOM-dispatched; they have been trusted pointer clicks since v1.5.124. The skill and docs describe the #358 diagnostics and warn that a `toggles=checkbox(...)` button is a switch that can be destructive (in LinkedIn's profile-language dialog it deletes that language's profile). (#358)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.145
+
 ### Behavior Changes
 
 - **`find` without an action only locates.** It prints the match (tag, role, name, box, visibility, match and visible counts) and does nothing else; the CLI, daemon and MCP `chrome_use_find` all default to `locate`. Callers that relied on the implicit click must now say `click`. A flag in the action slot (`find role button --name X`) is treated as a bare locate instead of "Missing action verb". (#354)
@@ -23,7 +42,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.144
 

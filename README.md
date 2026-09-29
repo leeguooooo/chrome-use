@@ -212,7 +212,7 @@ The agent operates in your Chrome: you'll see tabs opening, pages loading, click
 | `chrome-use open <url>` | Connect to your Chrome and navigate |
 | `chrome-use snapshot -i` | Read the page; the start of every interaction |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |
-| `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends |
+| `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends, both with trusted input events; a ⚠ warning says when the page did not react (e.g. its Save stayed disabled) |
 | `chrome-use screenshot ./page.png` | Save a screenshot (an output for looking at, never the way an agent reads a page) |
 | `chrome-use find "edit web service settings button"` | Ranked, non-acting candidates from a natural-language description |
 | `chrome-use actions @e15` · `do @e15 expand` | What this element supports right now, and perform one of exactly those |
@@ -224,6 +224,14 @@ The agent operates in your Chrome: you'll see tabs opening, pages loading, click
 | `chrome-use site github/issues epiral/bb-browser --json` | Run a site adapter and get clean JSON from the site's own API |
 | `chrome-use session list` · `session stop [name]` | Manage session workers |
 | `chrome-use status` | Relay, profile, extension, and session health |
+
+A field that shows your text is not proof the page saved it. `fill` warns
+when the form's Save/Submit was disabled before the edit and still is,
+`click` refuses a disabled control and reports `dispatch: dom` when it had to
+fall back to an untrusted `element.click()`, and `snapshot` marks a button
+that wraps a checkbox as `[toggles=checkbox(checked=true)]`, because clicking
+it flips a setting (in LinkedIn's profile-language dialog, it deletes that
+language's profile).
 
 Tab creation, selection, and adoption stay in the background by default. Add
 `--activate` (alias `--front`) when a background tab is not responding; it

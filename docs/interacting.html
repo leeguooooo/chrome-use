@@ -142,6 +142,20 @@
         这些提示针对的是会改写输入的页面。
       </div>
 
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 字段显示了新值，页面却没记下（#358）</div>
+        <code>fill</code> 和 <code>type --clear</code> 按用户的方式输入：选中原值后用可信事件
+        （<code>isTrusted: true</code> 的 beforeinput / input，失焦时再触发可信的 change）写入，
+        只认真实输入的页面也能收到。<code>fill</code> 发现所在表单或弹窗的保存 / 提交按钮在填写前后都是禁用状态时会警告
+        （JSON 多出 <code>commitControl</code>）；可信写入得不到目标值时退回原生 setter，<code>engine</code> 显示
+        <code>input-synthetic</code> 并附警告。<code>click</code> 拒绝点击 <code>:disabled</code> 的控件，
+        退回 <code>element.click()</code> 时报告 <code>dispatch: dom</code>。<code>keyboard type</code> 报告焦点元素和回读值，
+        有焦点的字段没变化时报错。保存类按钮用 <code>click @ref --observe</code>，看点击后有没有请求发出。
+        <br /><br />
+        另外：snapshot 里的 <code>button "简体中文" [toggles=checkbox(checked=true)]</code> 是开关，不是链接。
+        在 LinkedIn 的「编辑档案语言」弹窗里点它会删除该语言的档案，不要拿它切换标签。
+      </div>
+
       <hr class="du-divider" />
 
       <!-- ============ 字段内编辑 / 粘贴 ============ -->

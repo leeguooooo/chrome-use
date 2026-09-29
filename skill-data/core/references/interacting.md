@@ -137,6 +137,32 @@ nothing. The ids it reports are accepted by `frame <id>` and `eval --frame
 > `find text "保存"` finds nothing while `snapshot -i` shows `button "收藏" [ref=eN]`
 > all along — just `click @eN`. (issue #55)
 
+### An edit that shows but does not save (issue #358)
+
+`fill` and `type` enter text the way a user does: trusted `beforeinput` /
+`input` events, and a trusted `change` on blur. A page that ignores synthetic
+events still registers them. The field showing your text is not proof the
+page's own state took it, so read what the commands report:
+
+- `fill` warns when the field's form or dialog had a disabled Save/Submit
+  before the fill and still has it after (JSON `commitControl`), and when it
+  had to fall back to a synthetic write (`engine: input-synthetic`).
+- `click` refuses a `:disabled` control with an error, and warns on
+  `aria-disabled="true"`. A Save that stays disabled means the edit did not
+  register: fix the edit, do not force the click.
+- `click` reports `dispatch: pointer | keyboard | dom`. `dom` is
+  `element.click()` (`isTrusted: false`) and comes with a warning.
+- `keyboard type` reports `target` and `readBack`. It fails when the focused
+  field did not change and warns when nothing editable had focus.
+- For a Save/Submit, use `click @ref --observe`: it reports the requests the
+  click sent. None, and no DOM change, means nothing was saved.
+
+**Buttons that are really switches.** A button that wraps a checkbox, switch
+or radio shows as `button "简体中文" [toggles=checkbox(checked=true), ref=e1]`.
+Clicking it flips that control. In LinkedIn's "edit profile language" dialog
+such a button queues **deleting that language's profile**. Treat any
+`toggles=` ref as a setting and do not click it to navigate or pick a tab.
+
 ### When refs don't work or you don't want to snapshot
 
 Use semantic locators:

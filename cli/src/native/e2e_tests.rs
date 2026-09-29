@@ -40,6 +40,9 @@ fn native_test_fixture_html(name: &str) -> &'static str {
         "monaco_fill_probe" => include_str!("test_fixtures/monaco_fill_probe.html"),
         "ref_reuse_probe" => include_str!("test_fixtures/ref_reuse_probe.html"),
         "enter_submit_probe" => include_str!("test_fixtures/enter_submit_probe.html"),
+        "trusted_input_dialog_probe" => {
+            include_str!("test_fixtures/trusted_input_dialog_probe.html")
+        }
         _ => panic!("Unknown native test fixture: {}", name),
     }
 }
@@ -3367,6 +3370,260 @@ async fn e2e_hover_scroll_press() {
     .await;
     assert_success(&resp);
     assert_eq!(get_data(&resp)["pressed"], "Enter");
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Issue #358: in a dialog whose state is fed only by trusted input (LinkedIn's
+/// edit-intro pattern), `fill` showed the new text, printed success, and Save
+/// never enabled. Assert the page's own model sees fill, type --clear and the
+/// Save click; and that every way of NOT reaching it is reported instead of
+/// printed as `✓`.
+#[tokio::test]
+#[ignore]
+async fn e2e_trusted_input_dialog_fill_type_click_and_diagnostics() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "navigate",
+            "url": native_test_fixture_url("trusted_input_dialog_probe")
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    async fn eval(state: &mut DaemonState, script: &str) -> Value {
+        let resp = Box::pin(execute_command(
+            &json!({ "id": "e", "action": "evaluate", "script": script }),
+            state,
+        ))
+        .await;
+        assert_success(&resp);
+        get_data(&resp)["result"].clone()
+    }
+
+    // A disabled Save refuses the click instead of printing success.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "click", "selector": "#save" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(
+        resp["success"], false,
+        "clicking a disabled control: {resp}"
+    );
+    assert!(
+        resp["error"].as_str().unwrap_or("").contains("is disabled"),
+        "the refusal names the cause: {resp}"
+    );
+
+    // fill reaches the page's model through trusted input.
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "fill", "selector": "#headline", "value": "New headline" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["engine"], "input");
+    assert!(data.get("warning").is_none(), "clean fill warned: {data}");
+    assert_eq!(
+        eval(&mut state, "window.__state.headline").await,
+        "New headline"
+    );
+    assert_eq!(eval(&mut state, "window.__untrusted").await, 0);
+    assert_eq!(
+        eval(&mut state, "window.__changes").await,
+        1,
+        "blur fires a trusted change"
+    );
+    assert_eq!(
+        eval(&mut state, "document.getElementById('save').disabled").await,
+        false
+    );
+    assert_eq!(
+        eval(&mut state, "document.activeElement.id").await,
+        "headline",
+        "fill leaves focus on the field (#167)"
+    );
+
+    // Textarea, and fill "" clears through the same trusted path.
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "fill", "selector": "#bio", "value": "line one\nline two" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        eval(&mut state, "window.__state.bio").await,
+        "line one\nline two"
+    );
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "fill", "selector": "#bio", "value": "" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(eval(&mut state, "window.__state.bio").await, "");
+
+    // type --clear empties the field with trusted input too.
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "type", "selector": "#headline", "text": "Typed", "clear": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(eval(&mut state, "window.__state.headline").await, "Typed");
+    assert_eq!(eval(&mut state, "window.__untrusted").await, 0);
+
+    // The Save click is a trusted one and commits the page's model.
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "click", "selector": "#save" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["dispatch"], "pointer");
+    assert_eq!(
+        eval(&mut state, "window.__saved && window.__saved.headline").await,
+        "Typed"
+    );
+
+    // A value the trusted path cannot produce (maxlength) still lands, but
+    // the synthetic write is reported, not hidden.
+    let resp = execute_command(
+        &json!({ "id": "9", "action": "fill", "selector": "#short", "value": "abcdefgh" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["engine"], "input-synthetic", "{data}");
+    assert!(
+        data["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("isTrusted=false"),
+        "synthetic fallback must warn: {data}"
+    );
+
+    // A dialog that never reacts: the field holds the value, the Save stays
+    // disabled, and fill says so.
+    let resp = execute_command(
+        &json!({ "id": "10", "action": "fill", "selector": "#dead-field", "value": "x" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["commitControl"]["name"], "保存", "{data}");
+    assert_eq!(data["commitControl"]["disabledAfter"], true, "{data}");
+    assert!(
+        data["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("did not react"),
+        "an unmoved Save must be reported: {data}"
+    );
+
+    // aria-disabled is advisory: clicked, with a warning.
+    let resp = execute_command(
+        &json!({ "id": "11", "action": "click", "selector": "#soft-save" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp)["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("aria-disabled"),
+        "{resp}"
+    );
+
+    // keyboard type into a field that throws the edit away fails.
+    let resp = execute_command(
+        &json!({ "id": "12", "action": "focus", "selector": "#frozen" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "13", "action": "keyboard", "subaction": "type", "text": "zzz" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "unchanged field must fail: {resp}");
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("keyboard type did not take"),
+        "{resp}"
+    );
+
+    // ...and with nothing focused it warns rather than printing a clean ✓.
+    eval(
+        &mut state,
+        "document.activeElement && document.activeElement.blur(), 1",
+    )
+    .await;
+    let resp = execute_command(
+        &json!({ "id": "14", "action": "keyboard", "subaction": "type", "text": "zzz" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp)["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("nothing had keyboard focus"),
+        "{resp}"
+    );
+
+    // keyboard type into a live field reports what it holds.
+    let resp = execute_command(
+        &json!({ "id": "15", "action": "focus", "selector": "#headline" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "16", "action": "keyboard", "subaction": "type", "text": "!" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert!(data.get("warning").is_none(), "{data}");
+    assert_eq!(data["target"], "input#headline");
+
+    // The #358 "language button": snapshot says it toggles a checkbox.
+    let resp = execute_command(
+        &json!({ "id": "17", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let snap = get_data(&resp)["snapshot"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        snap.contains("toggles=checkbox(checked=true)"),
+        "the wrapping button must be marked as a toggle:\n{snap}"
+    );
+    assert_eq!(eval(&mut state, "window.__deleteQueued").await, false);
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);

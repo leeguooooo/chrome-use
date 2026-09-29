@@ -107,6 +107,13 @@ use `type @ref "text" --key-events`, then choose its visible candidate; `--enter
 can commit a candidate. Load `core/interacting` for uploads, drag, custom
 widgets, or an interaction the commands above do not cover.
 
+A field showing your text does not prove the page saved it. Heed ⚠
+warnings from `fill`, `click` and `keyboard type`: a Save still disabled after
+a fill, a `dispatch: dom` click, or a refused click on a disabled control all
+mean the edit did not register. A ref marked `toggles=checkbox(...)` is a
+switch, not a link. It can be destructive, so do not click it to navigate.
+Details: `core/interacting`.
+
 Use `eval` for a diagnostic question the verbs cannot answer, such as hidden
 form validity. Do not dump credential-bearing forms or bypass blockers just
 because an action failed. `eval` targets the main frame unless `--frame` is set.

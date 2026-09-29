@@ -146,6 +146,23 @@
         pages that rewrite input.
       </div>
 
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ The field shows the value, but the page never took it (#358)</div>
+        <code>fill</code> and <code>type --clear</code> enter text the way a user does: select the old value, then
+        write with trusted events (<code>isTrusted: true</code> beforeinput / input, and a trusted change on blur), so
+        pages that only honour real input register it. <code>fill</code> warns when the field's form or dialog had a
+        disabled Save / Submit before the fill and still has it after (JSON gains <code>commitControl</code>); when
+        the trusted write cannot produce the value it falls back to the native setter, reports
+        <code>engine: input-synthetic</code> and warns. <code>click</code> refuses a <code>:disabled</code> control and
+        reports <code>dispatch: dom</code> when it had to fall back to <code>element.click()</code>.
+        <code>keyboard type</code> reports the focused element and its read-back, and fails when a focused field did
+        not change. For a Save button, use <code>click @ref --observe</code> to see whether a request went out.
+        <br /><br />
+        Also: <code>button "简体中文" [toggles=checkbox(checked=true)]</code> in a snapshot is a switch, not a link. In
+        LinkedIn's "edit profile language" dialog, clicking it deletes that language's profile. Never use it to switch
+        tabs.
+      </div>
+
       <hr class="du-divider" />
 
       <!-- ============ Editing inside a field / pasting ============ -->

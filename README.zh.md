@@ -202,7 +202,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use open <url>` | 连接你的 Chrome 并导航 |
 | `chrome-use snapshot -i` | 读页面；每次交互的起点 |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | 按文本、按快照 ref、或按视口坐标点击 |
-| `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` 整体替换，`type` 追加 |
+| `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` 整体替换，`type` 追加，都用可信输入事件；页面没反应时（比如保存按钮一直禁用）给出 ⚠ 警告 |
 | `chrome-use screenshot ./page.png` | 保存截图（截图是用来看和附上的输出，不是 agent 读页面的方式） |
 | `chrome-use find "edit web service settings button"` | 按自然语言描述返回排序后的候选，不自动执行 |
 | `chrome-use actions @e15` · `do @e15 expand` | 这个元素此刻支持什么，并只做其中之一 |
@@ -214,6 +214,11 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use site github/issues epiral/bb-browser --json` | 运行站点适配器，从网站自己的接口拿干净的 JSON |
 | `chrome-use session list` · `session stop [name]` | 管理会话 worker |
 | `chrome-use status` | 中继、profile、扩展与会话健康总览 |
+
+输入框里显示了你的文字，不代表页面已经记下。`fill` 发现表单的保存/提交按钮在填写前后都处于禁用时会警告；
+`click` 拒绝点击禁用的控件，退回到不可信的 `element.click()` 时会报告 `dispatch: dom`；
+`snapshot` 会把内嵌勾选框的按钮标成 `[toggles=checkbox(checked=true)]`，因为点它会切换设置
+（在 LinkedIn 的档案语言弹窗里，这会删除该语言的档案）。
 
 新建、选择与接管标签默认在后台进行。后台标签不响应时，可加上 `--activate`
 （别名 `--front`）；这会切换可见标签，并让目标保持在前台。新标签初始化失败后，

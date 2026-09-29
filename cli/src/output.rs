@@ -2141,10 +2141,22 @@ in a child never matches; use `contains(normalize-space(.), '...')`,
 `find "<label>"`, `text=<label>`, or `snapshot -i` + @ref instead. An
 "Element not found" error keeps the selector and the resolver's diagnosis.
 
-Over the extension relay a left click is dispatched through the DOM. The
-clicked element (or its nearest focusable ancestor / a label's control)
-receives keyboard focus like a real click, so `click <input>` followed by
+A left click is a trusted pointer click at the element's position. When
+that cannot be placed (the element is covered, or has no box), the click
+falls back to `element.click()`, which is `isTrusted: false`; the response
+then says `dispatch: dom` with a ⚠ warning naming why, because a page that
+only honours real input ignores such a click. A DOM-dispatched click still
+moves keyboard focus like a real one, so `click <input>` followed by
 `press Meta+a` lands on that input.
+
+A disabled control (`:disabled`) is refused with an error: the browser
+delivers no click to it, and a Save that is still disabled usually means the
+page never registered the edit before it. An `aria-disabled="true"` target is
+clicked, with a warning.
+
+A button that wraps a checkbox, switch or radio shows in `snapshot` as
+`[toggles=checkbox(checked=true)]`: clicking it flips that control. Treat such
+a button as a setting, not a navigation or language link (issue #358).
 
 A bare-number argument is treated as a viewport coordinate, not a
 selector — `click 449 320` clicks the pixel point (no element needed).
@@ -2205,8 +2217,17 @@ errors quote both values (`read back "" after writing "千代田区"`); when eve
 non-ASCII character vanished while ASCII survived, the error says the page
 filtered non-Latin input (a Latin-only / masked field), so re-typing the
 same text will not help.
-For framework inputs (React/Vue/Angular) the value goes through the native
-setter so the form registers it (no more "pristine" Save no-ops).
+Text inputs and textareas are filled the way a user edits them: focus,
+select the current value, then a trusted insert (`isTrusted: true`
+beforeinput/input, and a trusted change on blur). Pages that ignore synthetic
+events (issue #358) register the edit, and React/Vue/Angular forms do too.
+When the trusted insert cannot produce the value (a maxlength or mask rewrote
+it) the value is written with the native setter instead, `engine` reads
+`input-synthetic`, and a ⚠ warning says the page may not have registered it.
+When the field sits in a form or dialog whose Save/Submit button was disabled
+before the fill and is still disabled after it (and no other required field
+is empty), fill warns that the page did not react to the edit and reports
+`commitControl` in the JSON.
 
 Options:
   --file <path>        Read the value from a UTF-8 file (large/multiline text,
@@ -2584,6 +2605,10 @@ Subcommands:
                        boundary (the call returns when Chrome dispatched, not
                        when the editor committed), and the length is preserved
                        so a char-count check misses it (#301).
+
+`keyboard type` reports the focused element (`target`) and what it holds
+afterwards (`readBack`). It fails when a text field had focus and did not
+change, and warns when nothing editable had focus.
 
 Note: For key combos (Enter, Control+a), use the 'press' command
 directly — it already operates on the current focus.

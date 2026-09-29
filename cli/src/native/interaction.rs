@@ -125,6 +125,77 @@ pub async fn click(
     click_count: i32,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(), String> {
+    click_reporting(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        button,
+        click_count,
+        iframe_sessions,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// How a click reached the page, so the caller can say when it was one a page
+/// may ignore (issue #358).
+pub struct ClickOutcome {
+    /// `pointer` (trusted `Input.dispatchMouseEvent`), `keyboard` (trusted
+    /// Enter/Space on the focused element) or `dom` (`element.click()`,
+    /// `isTrusted: false`).
+    pub dispatch: &'static str,
+    /// Set whenever the click may not have done what a user's click does.
+    pub warning: Option<String>,
+}
+
+impl ClickOutcome {
+    fn trusted(dispatch: &'static str, warning: Option<String>) -> Self {
+        Self { dispatch, warning }
+    }
+
+    fn dom(reason: &str, warning: Option<String>) -> Self {
+        let dom = format!(
+            "the click was dispatched through the DOM (element.click(), isTrusted=false) because \
+             {reason}; a page that only honours real input ignores it. If nothing changed, \
+             retry with `click --observe` to see whether a request went out"
+        );
+        Self {
+            dispatch: "dom",
+            warning: Some(match warning {
+                Some(w) => format!("{w}; {dom}"),
+                None => dom,
+            }),
+        }
+    }
+}
+
+/// The message for a click on a control the browser will not deliver a click
+/// to. A disabled `<button>` receives no click event at all, so "clicking" it
+/// used to report `✓ Done` while the page did nothing (issue #358: a dialog's
+/// Save button that stayed disabled because the page never registered the
+/// edit before it).
+pub(crate) fn disabled_click_error(selector_or_ref: &str) -> String {
+    format!(
+        "{selector_or_ref} is disabled, so clicking it does nothing: the browser delivers no \
+         click to a disabled control. The page has not enabled it yet. If an earlier fill or \
+         type was supposed to enable it, the page did not register that edit: check the \
+         field with `get value`, re-enter it with `fill` (trusted input) or `type --key-events`, \
+         and snapshot again before clicking"
+    )
+}
+
+/// `click` that also reports how the click was delivered. A disabled target
+/// is refused rather than clicked.
+pub async fn click_reporting(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    button: &str,
+    click_count: i32,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<ClickOutcome, String> {
     // AGENT_BROWSER_CLICK_MODE: "" (default) = coordinate click with a DOM
     // fallback; "coord" = strict coordinate only (no fallback); "dom" = always
     // dispatch through the DOM.
@@ -134,7 +205,8 @@ pub async fn click(
     // inside the viewport. Without this, an element below the fold (or revealed
     // after scroll/popup) yields off-viewport coordinates and the click lands on
     // whatever currently occupies that point. Best-effort: ignore failures.
-    scroll_into_view_if_needed(
+    // The same round trip reports whether the control is disabled.
+    let disabled = scroll_into_view_if_needed(
         client,
         session_id,
         ref_map,
@@ -142,16 +214,34 @@ pub async fn click(
         iframe_sessions,
     )
     .await;
+    let mut warning = None;
+    match disabled.as_deref() {
+        Some("disabled") => return Err(disabled_click_error(selector_or_ref)),
+        // aria-disabled is advisory: the browser still delivers the click and
+        // some pages answer it (a validation message), so warn, don't refuse.
+        Some("aria-disabled") => {
+            warning = Some(format!(
+                "{selector_or_ref} is marked aria-disabled=\"true\": the page says it is not \
+                 available yet, so the click probably did nothing. If an earlier fill or type \
+                 was supposed to enable it, the page did not register that edit"
+            ));
+        }
+        _ => {}
+    }
 
     if mode == "dom" {
-        return dom_click(
+        dom_click(
             client,
             session_id,
             ref_map,
             selector_or_ref,
             iframe_sessions,
         )
-        .await;
+        .await?;
+        return Ok(ClickOutcome::dom(
+            "AGENT_BROWSER_CLICK_MODE=dom is set",
+            warning,
+        ));
     }
 
     // An element INSIDE an iframe needs a TRUSTED activation: a DOM `.click()` is
@@ -166,14 +256,22 @@ pub async fn click(
     // focused button/link fires a trusted `click`. `coord` mode opts out.
     let in_iframe = ref_map.ref_is_in_iframe(selector_or_ref);
     if mode != "coord" && button == "left" && click_count == 1 && in_iframe {
-        return dom_activate(
+        let keyboard = dom_activate(
             client,
             session_id,
             ref_map,
             selector_or_ref,
             iframe_sessions,
         )
-        .await;
+        .await?;
+        return Ok(if keyboard {
+            ClickOutcome::trusted("keyboard", warning)
+        } else {
+            ClickOutcome::dom(
+                "the target is inside an iframe and has no keyboard-activatable role",
+                warning,
+            )
+        });
     }
     // Coordinate clicks dispatch trusted Input.dispatchMouseEvent events (isTrusted: true),
     // which security-sensitive buttons and forms require. If coordinate resolution fails
@@ -208,14 +306,18 @@ pub async fn click(
                     "[click] target occluded at its click point; dispatching through \
                      the DOM (set AGENT_BROWSER_CLICK_MODE=coord to disable)"
                 );
-                return dom_click(
+                dom_click(
                     client,
                     session_id,
                     ref_map,
                     selector_or_ref,
                     iframe_sessions,
                 )
-                .await;
+                .await?;
+                return Ok(ClickOutcome::dom(
+                    "something else covers its click point",
+                    warning,
+                ));
             }
             // Land on a jittered point inside the element rather than its exact
             // centre (Fast/Human). Zero size or Off → exact centre.
@@ -224,7 +326,8 @@ pub async fn click(
                 humanize::active_level(),
                 humanize::next_seed(),
             );
-            dispatch_click(client, &effective_session_id, tx, ty, button, click_count).await
+            dispatch_click(client, &effective_session_id, tx, ty, button, click_count).await?;
+            Ok(ClickOutcome::trusted("pointer", warning))
         }
         Err(e) => {
             // (B) The coordinate path failed — typically a persistent overlay
@@ -248,7 +351,14 @@ pub async fn click(
                 iframe_sessions,
             )
             .await
-            .map_err(|dom_err| format!("{e}\n(DOM-dispatch fallback also failed: {dom_err})"))
+            .map_err(|dom_err| format!("{e}\n(DOM-dispatch fallback also failed: {dom_err})"))?;
+            // The daemon's stderr is not the caller's: the reason has to travel
+            // in the response or nobody sees that the click was not a real one.
+            let first_line = e.lines().next().unwrap_or("").trim().to_string();
+            Ok(ClickOutcome::dom(
+                &format!("a pointer click could not be placed ({first_line})"),
+                warning,
+            ))
         }
     }
 }
@@ -299,7 +409,7 @@ async fn scroll_into_view_if_needed(
     ref_map: &RefMap,
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
-) {
+) -> Option<String> {
     let Ok((object_id, effective_session_id)) = resolve_element_object_id(
         client,
         session_id,
@@ -309,17 +419,13 @@ async fn scroll_into_view_if_needed(
     )
     .await
     else {
-        return;
+        return None;
     };
-    let js = "function() { try { \
-        if (typeof this.scrollIntoViewIfNeeded === 'function') { this.scrollIntoViewIfNeeded(true); } \
-        else { this.scrollIntoView({ block: 'center', inline: 'center' }); } \
-    } catch (e) {} }";
-    let _ = client
+    let reply = client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
-                function_declaration: js.to_string(),
+                function_declaration: SCROLL_AND_PROBE_DISABLED_JS.to_string(),
                 object_id: Some(object_id),
                 arguments: None,
                 return_by_value: Some(true),
@@ -330,7 +436,27 @@ async fn scroll_into_view_if_needed(
         .await;
     // Let the scroll settle so the following getBoxModel sees final coordinates.
     wait_for_paint_settled(client, &effective_session_id).await;
+    reply
+        .ok()?
+        .get("result")?
+        .get("value")?
+        .as_str()
+        .map(String::from)
 }
+
+/// Scroll the element into view, then say whether it can take a click:
+/// `"disabled"` for a form control the browser will not click (`:disabled`,
+/// which also covers a `<fieldset disabled>` ancestor), `"aria-disabled"`
+/// when it or an ancestor declares `aria-disabled="true"`, `""` otherwise.
+const SCROLL_AND_PROBE_DISABLED_JS: &str = "function() { try { \
+        if (typeof this.scrollIntoViewIfNeeded === 'function') { this.scrollIntoViewIfNeeded(true); } \
+        else { this.scrollIntoView({ block: 'center', inline: 'center' }); } \
+    } catch (e) {} \
+    try { \
+        if (this.matches && this.matches(':disabled')) return 'disabled'; \
+        if (this.closest && this.closest('[aria-disabled=\"true\"]')) return 'aria-disabled'; \
+    } catch (e) {} \
+    return ''; }";
 
 /// Dispatch a click through the DOM (`element.click()`) instead of via screen
 /// coordinates. Targets the intended element directly, so it works when a
@@ -479,7 +605,7 @@ async fn dom_activate(
     ref_map: &RefMap,
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let role = parse_ref(selector_or_ref)
         .and_then(|r| ref_map.get(&r).map(|e| e.role.clone()))
         .unwrap_or_default();
@@ -493,14 +619,15 @@ async fn dom_activate(
     };
     let Some(key) = key else {
         // Not keyboard-activatable — best effort via DOM .click() (untrusted).
-        return dom_click(
+        dom_click(
             client,
             session_id,
             ref_map,
             selector_or_ref,
             iframe_sessions,
         )
-        .await;
+        .await?;
+        return Ok(false);
     };
 
     let (object_id, effective_session_id) = resolve_element_object_id(
@@ -528,7 +655,7 @@ async fn dom_activate(
     // Trusted key on the page session — routed to the focused (in-frame) element.
     press_key(client, session_id, key).await?;
     wait_for_paint_settled(client, &effective_session_id).await;
-    Ok(())
+    Ok(true)
 }
 
 /// DOM-dispatch a double-click on the element in its own session (no coordinates)
@@ -761,6 +888,57 @@ pub async fn fill(
     value: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<String, String> {
+    fill_reporting(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        value,
+        iframe_sessions,
+    )
+    .await
+    .map(|outcome| outcome.engine)
+}
+
+/// What `fill` did, beyond "the field now holds the value".
+pub struct FillOutcome {
+    /// The path that wrote the value (`input`, `contenteditable`, `monaco`, ...).
+    pub engine: String,
+    /// Set when the value is in the field but was written in a way some pages
+    /// do not register (issue #358): the caller must surface it, not print `✓`.
+    pub warning: Option<String>,
+}
+
+/// Input types whose value a trusted `Input.insertText` can replace: they
+/// support `select()` and take typed text. Date/time/color/range pickers,
+/// checkboxes and file inputs have no text to select, so they keep the
+/// native-setter path.
+const TRUSTED_FILL_INPUT_TYPES: &str =
+    "['text', 'search', 'url', 'tel', 'email', 'password', 'number']";
+
+/// `fill` for plain `<input>`/`<textarea>` used to write the value with the
+/// prototype setter and dispatch synthetic `input`/`change` events. Those
+/// events carry `isTrusted: false`. React and Vue accept them, but a page that
+/// only honours real input (checks `event.isTrusted`, or listens for
+/// `beforeinput`, which the old path never fired) saw nothing: the field
+/// displayed the new text, the read-back matched, `fill` printed `✓`, and the
+/// page's own state (the dialog's Save button, the value it submits) never
+/// changed (issue #358, LinkedIn's edit-intro dialog).
+///
+/// So the text-like fields now go the way a user's edit goes: focus, select
+/// the current value, then CDP `Input.insertText`, which replaces the
+/// selection and fires trusted `beforeinput` + `input`; the blur that follows
+/// fires a trusted `change`. The synthetic path remains the fallback when the
+/// trusted insert does not produce the value (a `maxlength` shorter than the
+/// value, an input mask), and then the caller is told.
+pub async fn fill_reporting(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    value: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<FillOutcome, String> {
     let (object_id, effective_session_id) = resolve_element_object_id(
         client,
         session_id,
@@ -770,6 +948,185 @@ pub async fn fill(
     )
     .await?;
 
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: fill_function(value, true),
+                object_id: Some(object_id.clone()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+
+    if let Some(ex) = result.exception_details {
+        return Err(format!("fill failed: {}", ex.text));
+    }
+
+    let mut engine = result
+        .result
+        .value
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "input".to_string());
+
+    if engine == "input-trusted" {
+        return fill_input_trusted(client, &effective_session_id, &object_id, value).await;
+    }
+
+    finish_fill(
+        client,
+        &effective_session_id,
+        &object_id,
+        value,
+        &mut engine,
+    )
+    .await
+    .map(|()| FillOutcome {
+        engine,
+        warning: None,
+    })
+}
+
+/// The trusted half of [`fill_reporting`] for a text `<input>`/`<textarea>`
+/// that the page script has already focused and selected.
+async fn fill_input_trusted(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    value: &str,
+) -> Result<FillOutcome, String> {
+    let inserted = client
+        .send_command_typed::<_, Value>(
+            "Input.insertText",
+            &InsertTextParams {
+                text: value.to_string(),
+            },
+            Some(session_id),
+        )
+        .await;
+    // An empty insert does not delete a selection; Delete does, with the same
+    // trusted beforeinput/input a user's key produces.
+    let inserted = match inserted {
+        Ok(_) if value.is_empty() => press_key(client, session_id, "Delete").await,
+        other => other.map(|_| ()),
+    };
+    if inserted.is_ok() {
+        let _ = call_on(client, session_id, object_id, FILL_TRUSTED_TAIL_JS).await;
+        if verify_fill_value(client, session_id, object_id, value, "input")
+            .await
+            .is_ok()
+        {
+            return Ok(FillOutcome {
+                engine: "input".to_string(),
+                warning: None,
+            });
+        }
+    }
+    let trusted_read = read_value_of(client, session_id, object_id).await;
+
+    // The trusted insert did not leave the value in the field. Write it the
+    // old way so the field still ends up holding what was asked for, but say
+    // so: a page that ignores untrusted input will not have registered it.
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: fill_function(value, false),
+                object_id: Some(object_id.to_string()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+    if let Some(ex) = result.exception_details {
+        return Err(format!("fill failed: {}", ex.text));
+    }
+    let mut engine = "input".to_string();
+    finish_fill(client, session_id, object_id, value, &mut engine).await?;
+    let why = match (&inserted, trusted_read) {
+        (Err(e), _) => format!("the trusted insert failed ({e})"),
+        (Ok(()), Some(actual)) => format!(
+            "typing it the way a user does left {} in the field (a maxlength, mask or \
+             formatter rewrote it)",
+            quote_short(&actual)
+        ),
+        (Ok(()), None) => "typing it the way a user does did not produce it".to_string(),
+    };
+    Ok(FillOutcome {
+        engine: format!("{engine}-synthetic"),
+        warning: Some(format!(
+            "the field holds the value, but {why}, so it was written with the value setter and \
+             synthetic events (isTrusted=false). A page that only honours real input will not \
+             have registered it; check the page's own state (e.g. a Save button enabling) \
+             before relying on it"
+        )),
+    })
+}
+
+/// After a trusted insert: leave the field the way a user leaving it would.
+/// `blur()` fires a trusted `change` + `focusout` (the value changed since
+/// focus), which is what blur-triggered validation and lookups listen for;
+/// then focus goes back to the field when the blur left it on `<body>`, so a
+/// following `press Enter` still reaches it (#167).
+const FILL_TRUSTED_TAIL_JS: &str = r#"function() {
+    const el = this;
+    try { el.blur(); } catch (e) {}
+    try {
+        const doc = el.ownerDocument;
+        let ae = doc && doc.activeElement;
+        while (ae && ae.shadowRoot && ae.shadowRoot.activeElement) ae = ae.shadowRoot.activeElement;
+        if (!ae || ae === doc.body || ae === doc.documentElement) el.focus({ preventScroll: true });
+    } catch (e) {}
+    return true;
+}"#;
+
+async fn call_on(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    function_declaration: &str,
+) -> Result<EvaluateResult, String> {
+    client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: function_declaration.to_string(),
+                object_id: Some(object_id.to_string()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+}
+
+async fn read_value_of(client: &CdpClient, session_id: &str, object_id: &str) -> Option<String> {
+    let result = call_on(
+        client,
+        session_id,
+        object_id,
+        &read_editable_value_function(),
+    )
+    .await
+    .ok()?;
+    let data = result.result.value?;
+    if !data.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return None;
+    }
+    Some(data.get("value").and_then(Value::as_str)?.to_string())
+}
+
+/// The page-side half of `fill`. With `allow_trusted`, a text-like
+/// `<input>`/`<textarea>` is only focused and selected and `'input-trusted'`
+/// comes back, telling the caller to insert the text through CDP; without it,
+/// the value goes in through the prototype setter and synthetic events.
+fn fill_function(value: &str, allow_trusted: bool) -> String {
     // Emulate a real edit so framework-controlled inputs (React/Vue) and
     // site-side listeners actually see the change (issue #25): set the value
     // through the element's PROTOTYPE setter (which React's _valueTracker hooks),
@@ -780,7 +1137,7 @@ pub async fn fill(
     // (a raw `textContent =` corrupts PM's doc and skips React composers).
     // Returns the engine used so the caller can report it. `type <sel> <text>`
     // remains for sites that need per-keystroke events.
-    let fill_js = format!(
+    format!(
         r#"function() {{
             let el = this;
             const v = {val};
@@ -856,6 +1213,16 @@ pub async fn fill(
                 return 'contenteditable';
             }}
 
+            // A user's edit: select what is there so the caller's trusted
+            // Input.insertText replaces it (issue #358). Read-only and disabled
+            // fields take no typed input, so they keep the setter path below.
+            const kind = tag === 'TEXTAREA' ? 'textarea' : String(el.type || 'text').toLowerCase();
+            if ({allow_trusted} && (tag === 'TEXTAREA' || {trusted_types}.includes(kind))
+                && !el.readOnly && !el.disabled) {{
+                try {{ el.select(); }} catch (e) {{}}
+                return 'input-trusted';
+            }}
+
             const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
                                              : window.HTMLInputElement.prototype;
             const desc = Object.getOwnPropertyDescriptor(proto, 'value');
@@ -891,34 +1258,113 @@ pub async fn fill(
         }}"#,
         val = serde_json::to_string(value).unwrap_or_default(),
         monaco_candidates = MONACO_CANDIDATES_FUNCTION,
-    );
+        allow_trusted = allow_trusted,
+        trusted_types = TRUSTED_FILL_INPUT_TYPES,
+    )
+}
 
-    let result: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: fill_js,
-                object_id: Some(object_id.clone()),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(&effective_session_id),
-        )
-        .await?;
+/// The state of the control that would commit a field's form or dialog —
+/// its Save / Submit / 保存 button — as seen from that field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommitControl {
+    /// The button's accessible-ish name (text, `aria-label` or `value`).
+    pub name: String,
+    pub disabled: bool,
+    /// Other required fields in the same container that are still empty. A
+    /// Save that waits on those is disabled for a reason unrelated to the fill.
+    pub other_empty_required: u64,
+}
 
-    if let Some(ex) = result.exception_details {
-        return Err(format!("fill failed: {}", ex.text));
+/// Find the field's form or dialog and its commit button. Returns `null` when
+/// the field is in neither, or no button there looks like a commit.
+const COMMIT_CONTROL_JS: &str = r#"function() {
+    const field = this;
+    const box = field.closest && field.closest('form, dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+    if (!box) return null;
+    const label = b => ((b.getAttribute('aria-label') || b.textContent || b.value || '') + '').replace(/\s+/g, ' ').trim();
+    const commit = /^(save|submit|done|apply|update|confirm|post|send|publish|保存|提交|完成|确定|确认|应用|更新|发布|发送|送信|完了|登録)/i;
+    const visible = b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    const buttons = Array.from(box.querySelectorAll('button, input[type="submit"], [role="button"]')).filter(visible);
+    const pick = buttons.find(b => (b.type === 'submit' && b.tagName !== 'BUTTON') || commit.test(label(b)))
+        || buttons.find(b => b.getAttribute('type') === 'submit');
+    if (!pick) return null;
+    const disabled = !!((pick.matches && pick.matches(':disabled')) || pick.getAttribute('aria-disabled') === 'true');
+    let otherEmpty = 0;
+    for (const f of box.querySelectorAll('input, textarea, select, [contenteditable="true"]')) {
+        if (f === field || !visible(f)) continue;
+        const required = f.required || f.getAttribute('aria-required') === 'true';
+        const value = f.isContentEditable ? f.textContent : f.value;
+        if (required && !(value || '').trim()) otherEmpty++;
     }
+    return { name: label(pick).slice(0, 80), disabled, otherEmptyRequired: otherEmpty };
+}"#;
 
-    let mut engine = result
-        .result
-        .value
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_else(|| "input".to_string());
+/// Read [`CommitControl`] for the field `selector_or_ref` names. `None` when
+/// there is no such control or the probe fails — the diagnostic is
+/// best-effort and must never fail the fill it annotates.
+pub async fn commit_control_state(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Option<CommitControl> {
+    let (object_id, effective_session_id) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await
+    .ok()?;
+    let result = call_on(client, &effective_session_id, &object_id, COMMIT_CONTROL_JS)
+        .await
+        .ok()?;
+    let v = result.result.value?;
+    Some(CommitControl {
+        name: sanitize_descriptor(v.get("name")?.as_str()?),
+        disabled: v.get("disabled")?.as_bool()?,
+        other_empty_required: v.get("otherEmptyRequired")?.as_u64()?,
+    })
+}
 
-    if engine == "monaco-unsupported" {
-        return fill_monaco_via_clipboard(client, &effective_session_id, &object_id, value).await;
+/// The warning `fill` attaches when the field now holds the value but the
+/// form's commit button did not react: disabled before, still disabled after,
+/// with no other required field left empty to explain it. That is the
+/// signature of a page whose own state never saw the edit (issue #358).
+pub(crate) fn commit_control_warning(
+    before: Option<&CommitControl>,
+    after: Option<&CommitControl>,
+) -> Option<String> {
+    let (before, after) = (before?, after?);
+    if !(before.disabled && after.disabled) || after.other_empty_required > 0 {
+        return None;
+    }
+    Some(format!(
+        "the field holds the value, but {:?} in the same form/dialog was disabled before the fill \
+         and still is: the page did not react to the edit, so its own state may not hold the \
+         value and saving will do nothing. Try `type --key-events`, and check the button again \
+         with `snapshot` before clicking it",
+        after.name
+    ))
+}
+
+/// Everything `fill` does after the page script ran: the Monaco clipboard
+/// fallback, the trusted contenteditable insert, and the read-back.
+async fn finish_fill(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    value: &str,
+    engine: &mut String,
+) -> Result<(), String> {
+    let effective_session_id = session_id.to_string();
+    let object_id = object_id.to_string();
+    if engine.as_str() == "monaco-unsupported" {
+        *engine =
+            fill_monaco_via_clipboard(client, &effective_session_id, &object_id, value).await?;
+        return Ok(());
     }
 
     // Contenteditable rich editors (DraftJS / Lexical / ProseMirror): the JS above
@@ -927,7 +1373,7 @@ pub async fn fill(
     // state (execCommand's untrusted events don't). Input.insertText replaces the
     // selected (all) content; an empty value replaces the selection with nothing,
     // i.e. clears the field (verified: fill replaces, and fill "" clears).
-    if engine == "contenteditable" {
+    if engine.as_str() == "contenteditable" {
         // Trusted insert replaces the (all-)selected content. An empty value
         // replaces the selection with nothing, i.e. clears the field.
         let inserted = client
@@ -987,7 +1433,7 @@ pub async fn fill(
                         Some(&effective_session_id),
                     )
                     .await?;
-                engine = fb
+                *engine = fb
                     .result
                     .value
                     .and_then(|v| v.as_str().map(String::from))
@@ -1004,8 +1450,14 @@ pub async fn fill(
     //
     // So: one re-apply, without touching focus, and then the SAME verification.
     // Nothing is reported as filled that the field does not actually hold.
-    if let Err(first) =
-        verify_fill_value(client, &effective_session_id, &object_id, value, &engine).await
+    if let Err(first) = verify_fill_value(
+        client,
+        &effective_session_id,
+        &object_id,
+        value,
+        engine.as_str(),
+    )
+    .await
     {
         if !value.is_empty() && first.contains("read back an empty value") {
             let reapplied = reapply_value_without_focus_change(
@@ -1019,16 +1471,24 @@ pub async fn fill(
             if !reapplied {
                 return Err(first);
             }
-            verify_fill_value(client, &effective_session_id, &object_id, value, &engine).await?;
+            verify_fill_value(
+                client,
+                &effective_session_id,
+                &object_id,
+                value,
+                engine.as_str(),
+            )
+            .await?;
             // Say which path produced the value: a control that needed this is
             // one whose focus handler fights writes, and the caller may need to
             // know that before pressing Enter into it.
-            return Ok(format!("{engine}+refocus-reset"));
+            *engine = format!("{engine}+refocus-reset");
+            return Ok(());
         }
         return Err(first);
     }
 
-    Ok(engine)
+    Ok(())
 }
 
 /// Write the value once more with the native setter, firing `input`/`change`
@@ -1907,24 +2367,50 @@ pub async fn type_text(
         .await?;
 
     if clear {
-        client
-            .send_command_typed::<_, Value>(
-                "Runtime.callFunctionOn",
-                &CallFunctionOnParams {
-                    function_declaration: r#"function() {
-                        this.select && this.select();
-                        this.value = '';
-                        this.dispatchEvent(new Event('input', { bubbles: true }));
-                    }"#
-                    .to_string(),
-                    object_id: Some(object_id),
-                    arguments: None,
-                    return_by_value: Some(true),
-                    await_promise: Some(false),
-                },
-                Some(&effective_session_id),
+        // Clear the way a user does — select everything, then a trusted Delete
+        // — so a page that ignores synthetic input sees the field emptied
+        // (issue #358). Only when that leaves text behind (no selection API on
+        // this control) fall back to the value setter.
+        let selected = call_on(
+            client,
+            &effective_session_id,
+            &object_id,
+            r#"function() {
+                try {
+                    if (typeof this.select === 'function') { this.select(); return true; }
+                    if (this.isContentEditable) {
+                        const r = document.createRange();
+                        r.selectNodeContents(this);
+                        const s = window.getSelection();
+                        s.removeAllRanges();
+                        s.addRange(r);
+                        return true;
+                    }
+                } catch (e) {}
+                return false;
+            }"#,
+        )
+        .await?
+        .result
+        .value
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+        if selected {
+            press_key(client, session_id, "Delete").await?;
+        }
+        let left = read_value_of(client, &effective_session_id, &object_id).await;
+        if left.as_deref().is_some_and(|v| !v.is_empty()) {
+            call_on(
+                client,
+                &effective_session_id,
+                &object_id,
+                r#"function() {
+                    this.value = '';
+                    this.dispatchEvent(new Event('input', { bubbles: true }));
+                }"#,
             )
             .await?;
+        }
     }
 
     type_text_into_active_context(client, session_id, text, delay_ms, key_events).await
@@ -2707,6 +3193,105 @@ pub async fn active_element_descriptor(client: &CdpClient, session_id: &str) -> 
         return None;
     }
     result.result.value?.as_str().map(sanitize_descriptor)
+}
+
+/// The element keyboard input goes to, followed through shadow roots and
+/// same-origin iframes, with its editable value when it has one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FocusedField {
+    /// `tag#id[name="…"]`, sanitized.
+    pub descriptor: String,
+    /// `Some` when the focused element is a text field or contenteditable.
+    pub value: Option<String>,
+}
+
+const FOCUSED_FIELD_JS: &str = r#"(() => {
+    let doc = document;
+    let el = doc.activeElement;
+    for (let i = 0; i < 16 && el; i++) {
+        if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; }
+        if ((el.tagName === 'IFRAME' || el.tagName === 'FRAME')) {
+            let inner = null;
+            try { inner = el.contentDocument; } catch (e) {}
+            if (inner && inner.activeElement) { doc = inner; el = inner.activeElement; continue; }
+        }
+        break;
+    }
+    if (!el || el === doc.body || el === doc.documentElement) return { descriptor: 'none', value: null };
+    let d = el.tagName ? el.tagName.toLowerCase() : String(el);
+    if (el.id) d += '#' + el.id;
+    const n = el.getAttribute && el.getAttribute('name');
+    if (n) d += '[name="' + n + '"]';
+    const textInput = el.tagName === 'TEXTAREA'
+        || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image', 'range', 'color', 'hidden'].includes(String(el.type).toLowerCase()));
+    const value = textInput ? String(el.value) : (el.isContentEditable ? (el.innerText || el.textContent || '') : null);
+    return { descriptor: d, value };
+})()"#;
+
+/// What has keyboard focus right now. `None` when the probe fails.
+pub async fn focused_field(client: &CdpClient, session_id: &str) -> Option<FocusedField> {
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: FOCUSED_FIELD_JS.to_string(),
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    if result.exception_details.is_some() {
+        return None;
+    }
+    let v = result.result.value?;
+    Some(FocusedField {
+        descriptor: sanitize_descriptor(v.get("descriptor")?.as_str()?),
+        value: v.get("value").and_then(Value::as_str).map(String::from),
+    })
+}
+
+/// Judge a `keyboard type` against where focus was before and after it
+/// (issue #358: `keyboard type` into a dialog field changed nothing and
+/// printed `✓ Done`). `Err` when a text field had focus and its value is
+/// exactly what it was, `Ok(Some(warning))` when nothing editable had focus,
+/// `Ok(None)` when the text landed or there is nothing to judge (Enter/Tab
+/// in the text, whitespace only, a probe that failed).
+pub(crate) fn keyboard_type_verdict(
+    typed: &str,
+    before: Option<&FocusedField>,
+    after: Option<&FocusedField>,
+) -> Result<Option<String>, String> {
+    if typed.trim().is_empty() || typed.contains(['\n', '\r', '\t']) {
+        return Ok(None);
+    }
+    let (Some(before), Some(after)) = (before, after) else {
+        return Ok(None);
+    };
+    match (&before.value, &after.value) {
+        (Some(b), Some(a)) if before.descriptor == after.descriptor && a == b => Err(format!(
+            "keyboard type did not take: <{}> had focus and still holds {} after typing {}. The \
+             keystrokes were delivered but the field did not change (the page rejects this input, \
+             or focus is on a field that ignores it). Use `fill <ref> <text>` or \
+             `type <ref> <text> --key-events`, which target the field and verify it",
+            after.descriptor,
+            quote_short(a),
+            quote_short(typed)
+        )),
+        (None, _) => Ok(Some(if before.descriptor == "none" {
+            "nothing had keyboard focus, so the keystrokes went nowhere. Click the field first, \
+             or use `type <ref> <text>`, which focuses it"
+                .to_string()
+        } else {
+            format!(
+                "keyboard focus was on <{}>, which is not a text field, so no text was entered. \
+                 Click the field first, or use `type <ref> <text>`, which focuses it",
+                before.descriptor
+            )
+        })),
+        _ => Ok(None),
+    }
 }
 
 /// Strip control characters out of a descriptor built from page attributes.
@@ -4366,5 +4951,77 @@ mod tests {
         assert_eq!(cursor_state_from_reply(None, None), None);
         assert_eq!(cursor_state_from_reply(Some(false), None), None);
         assert_eq!(cursor_state_from_reply(None, Some("something-new")), None);
+    }
+}
+
+#[cfg(test)]
+mod trusted_input_diagnostics_tests {
+    //! Issue #358: the verdicts behind fill's commit-control warning and
+    //! `keyboard type`'s read-back.
+    use super::{commit_control_warning, keyboard_type_verdict, CommitControl, FocusedField};
+
+    fn save(disabled: bool, other_empty_required: u64) -> CommitControl {
+        CommitControl {
+            name: "Save".to_string(),
+            disabled,
+            other_empty_required,
+        }
+    }
+
+    fn field(descriptor: &str, value: Option<&str>) -> FocusedField {
+        FocusedField {
+            descriptor: descriptor.to_string(),
+            value: value.map(String::from),
+        }
+    }
+
+    #[test]
+    fn unmoved_disabled_save_warns() {
+        let w = commit_control_warning(Some(&save(true, 0)), Some(&save(true, 0)));
+        assert!(w.unwrap().contains("did not react"));
+    }
+
+    #[test]
+    fn save_that_enabled_or_waits_on_other_fields_is_quiet() {
+        assert!(commit_control_warning(Some(&save(true, 0)), Some(&save(false, 0))).is_none());
+        assert!(commit_control_warning(Some(&save(false, 0)), Some(&save(false, 0))).is_none());
+        // Another required field is still empty: that explains the disabled Save.
+        assert!(commit_control_warning(Some(&save(true, 1)), Some(&save(true, 1))).is_none());
+        assert!(commit_control_warning(None, Some(&save(true, 0))).is_none());
+    }
+
+    #[test]
+    fn keyboard_type_into_unchanged_field_fails() {
+        let f = field("input#q", Some("old"));
+        let err = keyboard_type_verdict("new", Some(&f), Some(&f)).unwrap_err();
+        assert!(err.contains("keyboard type did not take"), "{err}");
+    }
+
+    #[test]
+    fn keyboard_type_that_landed_is_quiet() {
+        let before = field("input#q", Some("old"));
+        let after = field("input#q", Some("oldnew"));
+        assert_eq!(
+            keyboard_type_verdict("new", Some(&before), Some(&after)),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn keyboard_type_without_a_text_field_warns() {
+        let none = field("none", None);
+        let w = keyboard_type_verdict("abc", Some(&none), Some(&none)).unwrap();
+        assert!(w.unwrap().contains("nothing had keyboard focus"));
+        let div = field("div#app", None);
+        let w = keyboard_type_verdict("abc", Some(&div), Some(&div)).unwrap();
+        assert!(w.unwrap().contains("not a text field"));
+    }
+
+    #[test]
+    fn enter_tab_and_whitespace_are_not_judged() {
+        let f = field("input#q", Some("x"));
+        assert_eq!(keyboard_type_verdict("a\n", Some(&f), Some(&f)), Ok(None));
+        assert_eq!(keyboard_type_verdict("\t", Some(&f), Some(&f)), Ok(None));
+        assert_eq!(keyboard_type_verdict("  ", Some(&f), Some(&f)), Ok(None));
     }
 }
