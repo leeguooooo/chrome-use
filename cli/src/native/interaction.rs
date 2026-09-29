@@ -1217,8 +1217,14 @@ fn fill_function(value: &str, allow_trusted: bool) -> String {
             // Input.insertText replaces it (issue #358). Read-only and disabled
             // fields take no typed input, so they keep the setter path below.
             const kind = tag === 'TEXTAREA' ? 'textarea' : String(el.type || 'text').toLowerCase();
+            // Input.insertText goes to whatever has focus, so only take this
+            // path when the focus call above actually left focus on the field;
+            // a focus handler that moves it (a combobox popping a search box)
+            // would otherwise receive the text.
+            let deep = el.ownerDocument && el.ownerDocument.activeElement;
+            while (deep && deep.shadowRoot && deep.shadowRoot.activeElement) deep = deep.shadowRoot.activeElement;
             if ({allow_trusted} && (tag === 'TEXTAREA' || {trusted_types}.includes(kind))
-                && !el.readOnly && !el.disabled) {{
+                && !el.readOnly && !el.disabled && deep === el) {{
                 try {{ el.select(); }} catch (e) {{}}
                 return 'input-trusted';
             }}
@@ -3222,6 +3228,12 @@ const FOCUSED_FIELD_JS: &str = r#"(() => {
     if (el.id) d += '#' + el.id;
     const n = el.getAttribute && el.getAttribute('name');
     if (n) d += '[name="' + n + '"]';
+    // A cross-origin frame, or an editor whose model is not its input
+    // transport's .value (Monaco, CodeMirror), hides the edited value: no
+    // verdict can be drawn from it.
+    const opaque = el.tagName === 'IFRAME' || el.tagName === 'FRAME'
+        || !!(el.closest && el.closest('.monaco-editor, .CodeMirror'));
+    if (opaque) return { descriptor: d, value: null, opaque: true };
     const textInput = el.tagName === 'TEXTAREA'
         || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image', 'range', 'color', 'hidden'].includes(String(el.type).toLowerCase()));
     const value = textInput ? String(el.value) : (el.isContentEditable ? (el.innerText || el.textContent || '') : null);
@@ -3246,6 +3258,9 @@ pub async fn focused_field(client: &CdpClient, session_id: &str) -> Option<Focus
         return None;
     }
     let v = result.result.value?;
+    if v.get("opaque").and_then(Value::as_bool).unwrap_or(false) {
+        return None;
+    }
     Some(FocusedField {
         descriptor: sanitize_descriptor(v.get("descriptor")?.as_str()?),
         value: v.get("value").and_then(Value::as_str).map(String::from),
