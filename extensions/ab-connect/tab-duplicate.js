@@ -47,6 +47,11 @@ async function completeBefore(operation, deadline, stage) {
   if (timeoutMs === 0) throw new Error(`duplicateTab: ${stage} timed out`)
   const result = await withTimeout(operation, timeoutMs)
   if (result !== TIMED_OUT) return result
+  // A timer can fire while `Date.now()` still reads short of the deadline it
+  // was set for. The next stage then saw a millisecond left, passed the check
+  // above and ran. Wait the difference out so a timed-out stage always leaves
+  // the deadline expired.
+  while (Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1))
   throw new Error(`duplicateTab: ${stage} timed out`)
 }
 
