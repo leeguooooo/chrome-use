@@ -190,6 +190,14 @@ To prepare a release:
 5. Add a matching entry to both `docs/changelog.html` and `docs/en/changelog.html`, at the top of their version lists
 6. Open a PR and merge to `main`
 
+When the release touches stealth, the relay, launch flags or anything injected
+into pages, run `scripts/stealth-bench.sh` locally first. It re-runs the public
+detectors that `docs/stealth.html` quotes (sannysoft, CreepJS, incolumitas,
+BrowserScan, a Cloudflare managed challenge) against real headed Chrome, in
+both `--launch` and relay mode, and exits non-zero on a regression. It needs a
+real browser, so neither CI nor the build box can run it. `--launch` regressed
+unnoticed for several releases before this existed.
+
 After the release PR merges and required checks pass, create and push the matching
 `v<version>` tag. `.github/workflows/release-binaries.yml` builds seven platform
 binaries and publishes their archives and checksums to GitHub Releases. It does
