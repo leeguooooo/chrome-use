@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.147
+## 1.5.148
 
 <!-- release:start -->
+### Bug Fixes
+
+- **`skills get core` works where the cache directory cannot be written.** A single-binary install unpacks its bundled guide to the cache directory on first use. In an agent sandbox that denies writes under the home directory that failed, and `skills get core` ended in "Skills directory not found". It now falls back to the temp directory; an extraction already there is replaced on every run, not reused. (#367)
+- **A `skills/` directory that belongs to another tool no longer hides the bundled guide.** The lookup took the first directory above the binary that had a `skills/` in it, so with the binary in `~/.local/bin` a `~/.local/skills` or `~/skills` made `skills get core` answer "Skill not found: core". The directory must now contain `skills/chrome-use/SKILL.md`. (#367)
+- The "Skills directory not found" error no longer tells a single-binary install to reinstall via npm. (#367)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.147
+
 ### Bug Fixes
 
 - **`--launch` passes Cloudflare's managed challenge again.** With the stealth patches on, the challenge spun forever; with them off it passed in about 16 seconds. Three causes: the patches faked Android-only APIs (`connection.downlinkMax` in the page and, through a wrapped `Worker` constructor, in workers; `ContactsManager`; `ContentIndex`) that desktop Chrome does not have, so the fingerprint read as a Mac UA with Android APIs; they were evaluated into Cloudflare's own challenge iframe while its scripts ran; and `navigator.languages` was forced to `en-US` in the page while workers and the `Accept-Language` header kept the system languages. The fake APIs are gone, the payload now skips anti-bot challenge frames (Cloudflare, hCaptcha, reCAPTCHA, DataDome, Arkose) and keeps only the native overrides there, and languages are no longer patched in JS. The challenge now passes in about 8 seconds. CreepJS "like headless" rises from 0% to 19%; a real Mac Chrome scores 31% on the same probes. (#361)
@@ -16,7 +29,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.146
 
