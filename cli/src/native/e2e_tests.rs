@@ -9464,14 +9464,17 @@ async fn e2e_nameless_ref_refusal_says_indistinguishable_not_missing() {
     let sort_ref = format!("@{}", &rest[..end]);
 
     // Two twins now, same role, same (absent) name, same value — and the
-    // original node replaced so the cached id is stale.
+    // original node replaced so the cached id is stale. Neither keeps the
+    // original's `id`: a replacement that did would be re-bound by it (#356),
+    // which is a recovery, not the ambiguity this test is about.
     let resp = execute_command(
         &json!({
             "id": "4",
             "action": "evaluate",
             "script": "(() => { const el = document.getElementById('sort'); \
                        const twin = el.cloneNode(true); twin.removeAttribute('id'); \
-                       el.replaceWith(el.cloneNode(true)); \
+                       const repl = el.cloneNode(true); repl.removeAttribute('id'); \
+                       el.replaceWith(repl); \
                        document.getElementById('host').prepend(twin); \
                        return true; })()"
         }),
