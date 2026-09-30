@@ -77,7 +77,7 @@ check_detectors() {
   [ "$out" = clean ] && pass "sannysoft" "no failed/warn rows" || fail "sannysoft" "${out:-did not load}"
 
   cu "$s" "$m" open https://abrahamjuliot.github.io/creepjs/ >/dev/null
-  out=$(poll "$s" "$m" '(()=>{const t=document.body.innerText;const h=t.match(/(\d+)% headless:/),st=t.match(/(\d+)% stealth:/);return h&&st?h[1]+" "+st[1]:""})()' 40)
+  out=$(poll "$s" "$m" '(()=>{const t=document.body.innerText;const h=t.match(/(\d+)% headless: [0-9a-f]{8}/),st=t.match(/(\d+)% stealth: [0-9a-f]{8}/);return h&&st?h[1]+" "+st[1]:""})()' 40)
   local headless=${out%% *} stealth=${out##* } max_stealth=0
   # The launch path's srcdoc-iframe proxy trips CreepJS hasIframeProxy (documented ~20%).
   [ "$m" = launch ] && [ "${AGENT_BROWSER_DISABLE_IFRAME_PROXY:-}" != 1 ] && max_stealth=20
@@ -91,8 +91,13 @@ check_detectors() {
 
   cu "$s" "$m" open https://www.browserscan.net/bot-detection >/dev/null
   sleep 10
-  out=$(cu "$s" "$m" get text | grep -cwE "Abnormal|Detected")
-  [ "$out" = 0 ] && pass "browserscan" "no abnormal rows" || fail "browserscan" "$out abnormal/detected rows"
+  local text normal bad
+  if text=$(cu "$s" "$m" get text) && normal=$(grep -cw Normal <<<"$text") && [ "$normal" -ge 10 ]; then
+    bad=$(grep -cwE "Abnormal|Detected" <<<"$text")
+    [ "$bad" = 0 ] && pass "browserscan" "$normal normal rows, none abnormal" || fail "browserscan" "$bad abnormal/detected rows"
+  else
+    fail "browserscan" "results did not load"
+  fi
 
   out=$(ev "$s" "$m" "$WORKER_LANGS")
   [[ "$out" == same* ]] && pass "worker languages" "$out" || fail "worker languages" "$out"
