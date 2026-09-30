@@ -70,10 +70,16 @@ tempfile = "3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Thin LTO with parallel codegen, not fat LTO with one unit. Fat LTO redoes
+# whole-program optimisation on every build, so a warm dependency cache saved
+# nothing on the last step and each release leg took 5+ minutes. Measured on an
+# M-series Mac, rebuilding after a change to the main crate: 413s fat, 107s
+# thin. The binary grows from 20.6 MB to 27.7 MB (8.8 MB to 10.9 MB gzipped);
+# command start-up is unchanged within noise (~5.5 ms).
 [profile.release]
 opt-level = 3
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 strip = true
 
 [profile.ci]

@@ -8,19 +8,22 @@ name: Release binaries
 # on a tag is readable by no other tag. So release runs never save: every one
 # of them used to compile all dependencies from nothing (16-30 minutes) and
 # leave 2 GB of cache behind that nothing could read. The same build matrix
-# now also runs on main — when the dependencies change, and twice a week so the
-# caches are not evicted — only to keep those caches warm. It signs, packages
-# and publishes nothing.
+# now also runs on main, daily and when this file changes, only to keep those
+# caches warm. It signs, packages and publishes nothing.
+#
+# Not on every `cli/Cargo.lock` change: a release bumps the version in it, so
+# each release started seven cache builds that took runners from the next one.
+# A dependency bump is picked up by the next daily run; until then a release
+# restores the older cache and compiles only what changed.
 on:
   push:
     tags:
       - 'v*'
     branches: [main]
     paths:
-      - 'cli/Cargo.lock'
       - '.github/workflows/release-binaries.yml'
   schedule:
-    - cron: '17 3 * * 1,4'
+    - cron: '17 19 * * *'
   workflow_dispatch:
     inputs:
       tag:

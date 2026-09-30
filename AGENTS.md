@@ -205,8 +205,8 @@ not publish to npm. The release body comes from the current version's
 `release:start` / `release:end` block in `CHANGELOG.md`; the tag and package version
 must match. Chrome Web Store extension distribution is a separate step.
 
-The same workflow also runs on `main` without publishing anything: when
-`cli/Cargo.lock` or the workflow changes, and twice a week. Those runs exist
+The same workflow also runs on `main` without publishing anything: daily, and
+when the workflow file changes. Those runs exist
 only to save the dependency caches, because a tag can restore a cache saved on
 `main` but not one saved on another tag. Release runs restore and never save.
 If a release build is suddenly slow, check that the last run on `main` is green.
