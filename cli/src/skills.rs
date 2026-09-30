@@ -59,30 +59,29 @@ const STUB_SKILL_DIR: &str = "skills";
 /// 3. Walk up from the executable to find a project root with skills/
 ///    (dev builds where binary is in target/debug/ or target/release/)
 fn find_package_root() -> Option<PathBuf> {
-    if let Ok(exe) = env::current_exe() {
-        let exe = exe.canonicalize().unwrap_or(exe);
-        if let Some(parent) = exe.parent() {
-            // npm install layout: bin/chrome-use-* -> ../
-            let candidate = parent.join("..");
-            if candidate.join("skills").is_dir() {
-                return Some(candidate.canonicalize().unwrap_or(candidate));
-            }
+    let exe = env::current_exe().ok()?;
+    let exe = exe.canonicalize().unwrap_or(exe);
+    package_root_above(exe.parent()?)
+}
 
-            // dev build layout: walk up from target/debug/ or target/release/
-            let mut dir = parent;
-            loop {
-                if dir.join("skills").is_dir() {
-                    return Some(dir.to_path_buf());
-                }
-                match dir.parent() {
-                    Some(p) => dir = p,
-                    None => break,
-                }
-            }
-        }
-    }
-
-    None
+/// Walk up from the executable's directory to the first ancestor that holds
+/// *our* `skills/`. The first step up covers the npm layout (`bin/` -> `../`),
+/// the rest cover dev builds in `target/debug/` or `target/release/`.
+///
+/// A bare `skills/` is not enough. A single-binary install lives in
+/// `~/.local/bin`, and `~/.local/skills` or `~/skills` belonging to some other
+/// tool would be taken for the package root — which skips the embedded copy
+/// and answers `Skill not found: core`.
+fn package_root_above(exe_dir: &Path) -> Option<PathBuf> {
+    exe_dir
+        .ancestors()
+        .find(|dir| {
+            dir.join(STUB_SKILL_DIR)
+                .join("chrome-use")
+                .join("SKILL.md")
+                .is_file()
+        })
+        .map(Path::to_path_buf)
 }
 
 /// Extract the binary-embedded skill content to a per-version cache dir on
@@ -91,9 +90,25 @@ fn find_package_root() -> Option<PathBuf> {
 /// install.sh) that have no on-disk skill directories. Version-stamped so an
 /// upgraded binary re-extracts fresh content.
 fn embedded_skills_root() -> Option<PathBuf> {
-    let base = dirs::cache_dir()?
-        .join("chrome-use")
-        .join(concat!("skills-", env!("CARGO_PKG_VERSION")));
+    let dir_name = concat!("skills-", env!("CARGO_PKG_VERSION"));
+    if let Some(root) = dirs::cache_dir()
+        .map(|cache| cache.join("chrome-use").join(dir_name))
+        .and_then(|base| extract_embedded(base, true))
+    {
+        return Some(root);
+    }
+    // The cache dir is not writable for everyone: an agent sandbox (Codex
+    // workspace-write, for one) denies writes under the home directory, and
+    // the first `skills get core` there used to end in "Skills directory not
+    // found". The temp dir is what such sandboxes leave writable. It can be
+    // shared between users, so an extraction already sitting there is never
+    // trusted — it is replaced on every run.
+    extract_embedded(env::temp_dir().join("chrome-use").join(dir_name), false)
+}
+
+/// Extract the embedded skill trees under `base`. With `reuse`, an earlier
+/// extraction whose marker matches this binary is served as-is.
+fn extract_embedded(base: PathBuf, reuse: bool) -> Option<PathBuf> {
     let marker = base.join(".extracted");
     // The version alone is not the cache key: a rebuild at the same version
     // (a dev build, a release candidate) with different skill content would
@@ -102,11 +117,14 @@ fn embedded_skills_root() -> Option<PathBuf> {
     // embedded content too, and re-extract when it differs.
     let fingerprint = embedded_fingerprint();
     let stale = match fs::read_to_string(&marker) {
-        Ok(existing) => existing.trim() != fingerprint,
+        Ok(existing) => !reuse || existing.trim() != fingerprint,
         Err(_) => true,
     };
     if stale {
         let _ = fs::remove_dir_all(&base);
+        if base.exists() {
+            return None;
+        }
         let _ = fs::create_dir_all(base.join("skills"));
         let _ = fs::create_dir_all(base.join("skill-data"));
         if EMBEDDED_SKILLS.extract(base.join("skills")).is_err()
@@ -731,13 +749,13 @@ pub fn run_skills(args: &[String], json_mode: bool) {
                 "{}",
                 serde_json::to_string(&json!({
                     "success": false,
-                    "error": "Skills directory not found. Set AGENT_BROWSER_SKILLS_DIR or reinstall via npm.",
+                    "error": "Skills directory not found: the bundled guide could not be unpacked to the cache or temp directory (not writable?). Point AGENT_BROWSER_SKILLS_DIR at a skill-data directory.",
                 }))
                 .unwrap_or_default()
             );
         } else {
             eprintln!(
-                "{} Skills directory not found. Set AGENT_BROWSER_SKILLS_DIR or reinstall via npm.",
+                "{} Skills directory not found: the bundled guide could not be unpacked to the cache or temp directory (not writable?). Point AGENT_BROWSER_SKILLS_DIR at a skill-data directory.",
                 color::error_indicator()
             );
         }
@@ -933,6 +951,40 @@ mod tests {
         // through instead of re-reading the env var here.
         let skills = discover_skills(&[stubs, data], true);
         assert!(skills.iter().all(|s| !s.hidden));
+    }
+
+    /// `~/.local/bin/chrome-use` next to someone else's `~/.local/skills` must
+    /// not read that directory as the package root.
+    #[test]
+    fn a_foreign_skills_directory_is_not_the_package_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        let foreign = tmp.path().join(STUB_SKILL_DIR);
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&foreign).unwrap();
+        create_test_skill(&foreign, "other-tool", "Not ours.");
+        assert_eq!(package_root_above(&bin), None);
+
+        create_test_skill(&foreign, "chrome-use", "Discovery stub.");
+        assert_eq!(package_root_above(&bin), Some(tmp.path().to_path_buf()));
+    }
+
+    /// The temp-dir fallback passes `reuse = false`: whatever is already there
+    /// is replaced, not served.
+    #[test]
+    fn an_untrusted_extraction_is_replaced_not_reused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("skills-x");
+        let core = base.join("skill-data").join("core").join("SKILL.md");
+        assert_eq!(extract_embedded(base.clone(), true), Some(base.clone()));
+        let original = fs::read_to_string(&core).unwrap();
+
+        fs::write(&core, "tampered").unwrap();
+        assert_eq!(extract_embedded(base.clone(), true), Some(base.clone()));
+        assert_eq!(fs::read_to_string(&core).unwrap(), "tampered");
+
+        assert_eq!(extract_embedded(base.clone(), false), Some(base));
+        assert_eq!(fs::read_to_string(&core).unwrap(), original);
     }
 
     /// The published stub is read by other harnesses too, and pi (plus anything
