@@ -205,6 +205,12 @@ not publish to npm. The release body comes from the current version's
 `release:start` / `release:end` block in `CHANGELOG.md`; the tag and package version
 must match. Chrome Web Store extension distribution is a separate step.
 
+The same workflow also runs on `main` without publishing anything: when
+`cli/Cargo.lock` or the workflow changes, and twice a week. Those runs exist
+only to save the dependency caches, because a tag can restore a cache saved on
+`main` but not one saved on another tag. Release runs restore and never save.
+If a release build is suddenly slow, check that the last run on `main` is green.
+
 `scripts/release.sh <version>` (`--dry-run` to only check) commits the bump from a clean, current `main` once the changelog entries are in, pushes only the tag, waits for the release build, then pushes `main` and syncs the `leeguooooo/plugins` marketplace.
 
 ### Writing the changelog

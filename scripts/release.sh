@@ -71,7 +71,9 @@ if grep -q "v$V</strong>（未发布）" docs/changelog.html || grep -q "v$V</st
   sed -i.bak "s|v$V</strong> (Unreleased)|v$V</strong> ($(LC_ALL=C date '+%B %-d, %Y'))|" docs/en/changelog.html && rm docs/en/changelog.html.bak
   git commit -qam "docs: record v$V publication date"
 fi
-git push -q origin main || die "binaries are out but main was not pushed; git pull --no-rebase && git push origin main, then gh workflow run auto-sync-versions.yml -R $MARKETPLACE"
+# main may have moved while the build ran. Merge, never rebase: the tag must stay an ancestor of main.
+git push -q origin main 2>/dev/null || { git pull -q --no-rebase --no-edit origin main && git push -q origin main; } \
+  || die "binaries are out but main was not pushed; git pull --no-rebase && git push origin main, then gh workflow run auto-sync-versions.yml -R $MARKETPLACE"
 
 # The marketplace reads the version from package.json on main; run its sync now instead of waiting for the hourly cron.
 PREV=$(gh run list -R "$MARKETPLACE" -w auto-sync-versions.yml -e workflow_dispatch -L 1 --json databaseId -q '.[0].databaseId')
