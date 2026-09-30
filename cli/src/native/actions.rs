@@ -4304,17 +4304,20 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         };
         let now = std::time::Instant::now();
         if let (true, Some(reason)) = (until_done, retry_reason.as_ref()) {
-            if now + backoff < deadline {
+            let wait = result
+                .get("retryAfterMs")
+                .and_then(|v| v.as_u64())
+                .map(Duration::from_millis)
+                .unwrap_or(backoff);
+            // Rerun only when the wait still leaves the next attempt time to
+            // do something; otherwise the adapter's own last result is the
+            // answer, not a timeout from an attempt that never had a chance.
+            if now + wait + SITE_RERUN_MIN_BUDGET < deadline {
                 progress.push(json!({
                     "atMs": elapsed,
                     "message": format!("rerunning ({reason}), attempt {}", attempt + 1),
                 }));
-                let wait = result
-                    .get("retryAfterMs")
-                    .and_then(|v| v.as_u64())
-                    .map(Duration::from_millis)
-                    .unwrap_or(backoff);
-                tokio::time::sleep(wait.min(deadline.saturating_duration_since(now))).await;
+                tokio::time::sleep(wait).await;
                 backoff = (backoff * 3 / 2).min(Duration::from_secs(15));
                 continue;
             }
@@ -4336,6 +4339,9 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         return Ok(out);
     }
 }
+
+/// Least time a `--until-done` rerun must have left to be worth starting.
+const SITE_RERUN_MIN_BUDGET: Duration = Duration::from_secs(3);
 
 /// Navigate to the adapter's domain unless the tab is already on it.
 async fn ensure_site_domain(domain: &str, state: &mut DaemonState) -> Result<(), String> {
