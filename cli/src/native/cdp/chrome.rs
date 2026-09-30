@@ -199,16 +199,7 @@ fn write_temp_profile_label(dir: &std::path::Path) {
     let _ = std::fs::write(dir.join("Local State"), local_state.to_string());
     let default_dir = dir.join("Default");
     if std::fs::create_dir_all(&default_dir).is_ok() {
-        let mut prefs = serde_json::json!({ "profile": { "name": label } });
-        // AGENT_BROWSER_LOCALE: set Chrome's own language list so the page,
-        // its workers and the Accept-Language header all agree. A CDP/JS
-        // override covers only the page, and the mismatch fails Cloudflare.
-        if let Some(langs) = std::env::var("AGENT_BROWSER_LOCALE")
-            .ok()
-            .and_then(|l| crate::native::stealth::accept_languages_pref(&l))
-        {
-            prefs["intl"] = serde_json::json!({ "accept_languages": langs });
-        }
+        let prefs = serde_json::json!({ "profile": { "name": label } });
         let _ = std::fs::write(default_dir.join("Preferences"), prefs.to_string());
     }
 }
@@ -307,6 +298,19 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
     // Opt out entirely with AGENT_BROWSER_BLOCK_WEBRTC=0.
     if let Some(policy) = webrtc_ip_handling_policy(options.proxy.is_some()) {
         args.push(format!("--force-webrtc-ip-handling-policy={}", policy));
+    }
+
+    // AGENT_BROWSER_LOCALE: Chrome's own language list, so the page, its
+    // workers and the Accept-Language header all agree, for temp and
+    // caller-provided profiles alike. A CDP/JS override reaches only the page,
+    // and that mismatch fails Cloudflare's managed challenge.
+    if !options.args.iter().any(|a| a.starts_with("--accept-lang")) {
+        if let Some(langs) = std::env::var("AGENT_BROWSER_LOCALE")
+            .ok()
+            .and_then(|l| crate::native::stealth::accept_lang_list(&l))
+        {
+            args.push(format!("--accept-lang={langs}"));
+        }
     }
 
     let (user_data_dir, temp_user_data_dir) = if let Some(ref profile) = options.profile {
@@ -1803,6 +1807,36 @@ mod tests {
             .args
             .iter()
             .any(|a| a == "--user-data-dir=/tmp/my-profile"));
+    }
+
+    #[test]
+    fn test_build_args_locale_sets_accept_lang_for_any_profile() {
+        let g = EnvGuard::new(&["AGENT_BROWSER_LOCALE"]);
+        g.set("AGENT_BROWSER_LOCALE", "ja-JP");
+        let opts = LaunchOptions {
+            profile: Some("/tmp/my-profile".to_string()),
+            ..Default::default()
+        };
+        let args = build_chrome_args(&opts).unwrap().args;
+        assert!(args.iter().any(|a| a == "--accept-lang=ja-JP,ja"));
+
+        // A caller-supplied --accept-lang wins; no duplicate switch.
+        let opts = LaunchOptions {
+            profile: Some("/tmp/my-profile".to_string()),
+            args: vec!["--accept-lang=fr".to_string()],
+            ..Default::default()
+        };
+        let args = build_chrome_args(&opts).unwrap().args;
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.starts_with("--accept-lang"))
+                .count(),
+            1
+        );
+
+        g.remove("AGENT_BROWSER_LOCALE");
+        let args = build_chrome_args(&LaunchOptions::default()).unwrap().args;
+        assert!(!args.iter().any(|a| a.starts_with("--accept-lang")));
     }
 
     #[test]

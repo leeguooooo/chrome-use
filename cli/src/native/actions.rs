@@ -4290,7 +4290,7 @@ async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
             std::env::var("AGENT_BROWSER_DISABLE_IFRAME_PROXY").as_deref() != Ok("1");
         json!([
             if std::env::var("AGENT_BROWSER_LOCALE").is_ok() {
-                "navigator.webdriver removed; languages set natively from AGENT_BROWSER_LOCALE (profile pref)"
+                "navigator.webdriver removed; languages set natively from AGENT_BROWSER_LOCALE (--accept-lang)"
             } else {
                 "navigator.webdriver removed; languages left as the system's (set AGENT_BROWSER_LOCALE to override)"
             },

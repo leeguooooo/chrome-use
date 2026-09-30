@@ -45,7 +45,7 @@ pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
     // Full launch mode: inject all patches. Languages are never patched in
     // JS: a main-world override disagrees with workers and the Accept-Language
     // header, a mismatch Cloudflare rejects. AGENT_BROWSER_LOCALE is applied
-    // natively via the temp profile's intl.accept_languages pref instead.
+    // natively via Chrome's --accept-lang switch instead.
     let locale = locale.unwrap_or("en-US");
     let config_line = format!(
         r#"const __abStealth = {{ locale: "{}", languages: [], allowWebGLContextFallback: false, hideCanvas: {}, canvasSeed: {}, disableIframeProxy: {} }};"#,
@@ -195,8 +195,8 @@ pub async fn apply_stealth(
     Ok(())
 }
 
-/// Chrome `intl.accept_languages` pref for a locale: `zh-CN` -> `zh-CN,zh`.
-pub fn accept_languages_pref(locale: &str) -> Option<String> {
+/// Chrome `--accept-lang` list for a locale: `zh-CN` -> `zh-CN,zh`.
+pub fn accept_lang_list(locale: &str) -> Option<String> {
     let locale = locale.trim();
     if locale.is_empty() {
         return None;
@@ -444,10 +444,10 @@ mod locale_tests {
         assert_eq!(accept_language("zh-CN"), "zh-CN,zh;q=0.9");
         assert_eq!(accept_language("en"), "en");
         assert_eq!(
-            super::accept_languages_pref("ja-JP").as_deref(),
+            super::accept_lang_list("ja-JP").as_deref(),
             Some("ja-JP,ja")
         );
-        assert_eq!(super::accept_languages_pref(" "), None);
+        assert_eq!(super::accept_lang_list(" "), None);
     }
 
     #[test]
