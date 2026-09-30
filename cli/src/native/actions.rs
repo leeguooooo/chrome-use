@@ -7,6 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::time::Duration;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::sync::{broadcast, oneshot, RwLock};
 
@@ -4217,6 +4218,127 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .ok_or("site: missing 'script'")?
         .to_string();
 
+    ensure_site_domain(&domain, state).await?;
+
+    // A command from an older CLI carries a plain awaited eval, no run key.
+    let Some(run_key) = cmd.get("runKey").and_then(|v| v.as_str()) else {
+        let eval_cmd = json!({ "script": script });
+        let out = handle_evaluate(&eval_cmd, state).await?;
+        return Ok(json!({
+            "result": out.get("result").cloned().unwrap_or(Value::Null),
+            "origin": out.get("origin").cloned().unwrap_or(Value::Null),
+            "domain": domain,
+        }));
+    };
+    let run_key = run_key.to_string();
+    let until_done = cmd
+        .get("untilDone")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let timeout_ms = cmd
+        .get("runTimeoutMs")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(crate::site::DEFAULT_RUN_TIMEOUT_MS);
+    let retry: Vec<String> = cmd
+        .get("retryStatuses")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let files = cmd.get("files").cloned().unwrap_or_else(|| json!({}));
+
+    let started = std::time::Instant::now();
+    let deadline = started + Duration::from_millis(timeout_ms);
+    let mut progress: Vec<Value> = Vec::new();
+    let mut attempt: u32 = 0;
+    let mut backoff = Duration::from_secs(2);
+    loop {
+        attempt += 1;
+        if attempt > 1 {
+            // A rerun after a navigation may have left the adapter's domain.
+            ensure_site_domain(&domain, state).await?;
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        // Leave the adapter a margin to report before the daemon gives up.
+        let budget = left.saturating_sub(Duration::from_millis(1500)).as_millis();
+        let start = script.replace(crate::site::BUDGET_PLACEHOLDER, &budget.to_string());
+        handle_evaluate(&json!({ "script": start }), state).await?;
+
+        let outcome =
+            poll_site_run(&run_key, &files, started, deadline, &mut progress, state).await?;
+        let elapsed = started.elapsed().as_millis() as u64;
+        let (result, retry_reason) = match outcome {
+            SiteRun::Done(result) => {
+                let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                let reason = retry
+                    .iter()
+                    .any(|r| r == status)
+                    .then(|| format!("status {status}"));
+                (result, reason)
+            }
+            SiteRun::Lost => (
+                json!({
+                    "status": "interrupted",
+                    "error": "the page navigated or reloaded while the adapter was running, \
+                              which ended the run",
+                    "hint": "Run the same command again to continue, or add --until-done \
+                             to rerun it automatically.",
+                }),
+                Some("page navigated".to_string()),
+            ),
+            SiteRun::TimedOut => {
+                let mut r = json!({
+                    "status": "timeout",
+                    "error": format!("the adapter was still running after {}s", timeout_ms / 1000),
+                    "hint": "Raise --timeout (e.g. --timeout 10m). The run was left \
+                             going in the page, so it may still finish there.",
+                });
+                if let Some(last) = progress.last() {
+                    r["lastProgress"] = last.clone();
+                }
+                (r, None)
+            }
+        };
+        let now = std::time::Instant::now();
+        if let (true, Some(reason)) = (until_done, retry_reason.as_ref()) {
+            if now + backoff < deadline {
+                progress.push(json!({
+                    "atMs": elapsed,
+                    "message": format!("rerunning ({reason}), attempt {}", attempt + 1),
+                }));
+                let wait = result
+                    .get("retryAfterMs")
+                    .and_then(|v| v.as_u64())
+                    .map(Duration::from_millis)
+                    .unwrap_or(backoff);
+                tokio::time::sleep(wait.min(deadline.saturating_duration_since(now))).await;
+                backoff = (backoff * 3 / 2).min(Duration::from_secs(15));
+                continue;
+            }
+        }
+        let origin = match state.browser.as_ref() {
+            Some(mgr) => mgr.get_url().await.unwrap_or_default(),
+            None => String::new(),
+        };
+        let mut out = json!({
+            "result": result,
+            "origin": origin,
+            "domain": domain,
+            "attempts": attempt,
+            "elapsedMs": elapsed,
+        });
+        if !progress.is_empty() {
+            out["progress"] = Value::Array(progress);
+        }
+        return Ok(out);
+    }
+}
+
+/// Navigate to the adapter's domain unless the tab is already on it.
+async fn ensure_site_domain(domain: &str, state: &mut DaemonState) -> Result<(), String> {
     let current = match state.browser.as_ref() {
         Some(mgr) => mgr.get_url().await.unwrap_or_default(),
         None => String::new(),
@@ -4230,14 +4352,115 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         let nav = json!({ "url": format!("https://{domain}/") });
         handle_navigate(&nav, state).await?;
     }
+    Ok(())
+}
 
-    let eval_cmd = json!({ "script": script });
-    let out = handle_evaluate(&eval_cmd, state).await?;
-    Ok(json!({
-        "result": out.get("result").cloned().unwrap_or(Value::Null),
-        "origin": out.get("origin").cloned().unwrap_or(Value::Null),
-        "domain": domain,
-    }))
+enum SiteRun {
+    Done(Value),
+    Lost,
+    TimedOut,
+}
+
+/// Poll a background adapter run until it settles, the page drops it, or the
+/// deadline passes. Serves the run's `setOn` upload requests along the way.
+async fn poll_site_run(
+    run_key: &str,
+    files: &Value,
+    started: std::time::Instant,
+    deadline: std::time::Instant,
+    progress: &mut Vec<Value>,
+    state: &mut DaemonState,
+) -> Result<SiteRun, String> {
+    let poll = crate::site::poll_script(run_key);
+    let mut interval = Duration::from_millis(250);
+    // A poll that lands mid-navigation fails ("context destroyed"); only a run
+    // that stays unreachable counts as lost.
+    let mut failures = 0;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Ok(SiteRun::TimedOut);
+        }
+        tokio::time::sleep(interval).await;
+        interval = (interval * 2).min(Duration::from_secs(1));
+        let snap = match handle_evaluate(&json!({ "script": poll }), state).await {
+            Ok(out) => out.get("result").cloned().unwrap_or(Value::Null),
+            Err(e) => {
+                failures += 1;
+                if failures >= 5 {
+                    return Err(format!(
+                        "site: lost contact with the page while polling: {e}"
+                    ));
+                }
+                continue;
+            }
+        };
+        let state_str = snap.get("state").and_then(|v| v.as_str()).unwrap_or("");
+        if state_str == "lost" {
+            failures += 1;
+            if failures >= 3 {
+                return Ok(SiteRun::Lost);
+            }
+            continue;
+        }
+        failures = 0;
+        for line in snap
+            .get("progress")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            progress.push(json!({
+                "atMs": started.elapsed().as_millis() as u64,
+                "message": line,
+            }));
+        }
+        for req in snap
+            .get("requests")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            serve_site_request(run_key, &req, files, state).await;
+        }
+        if state_str == "done" {
+            if let Some(err) = snap.get("error").and_then(|v| v.as_str()) {
+                // Same wording a thrown error had when the adapter was one eval.
+                return Err(format!("Evaluation error: {err}"));
+            }
+            return Ok(SiteRun::Done(
+                snap.get("result").cloned().unwrap_or(Value::Null),
+            ));
+        }
+    }
+}
+
+/// Answer one page-side request from a background adapter run.
+async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &mut DaemonState) {
+    let id = req.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+    let outcome: Result<Value, String> = match req.get("kind").and_then(|v| v.as_str()) {
+        Some("upload") => {
+            let arg = req.get("arg").and_then(|v| v.as_str()).unwrap_or("");
+            let selector = req.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+            match files
+                .get(arg)
+                .and_then(|f| f.get("path"))
+                .and_then(|v| v.as_str())
+            {
+                // Only a file the caller passed as a `"type": "file"` arg; the
+                // page chooses the selector, never the path.
+                Some(path) => {
+                    handle_upload(&json!({ "selector": selector, "files": [path] }), state).await
+                }
+                None => Err(format!("no file was passed for --{arg}")),
+            }
+        }
+        other => Err(format!("unknown request kind {other:?}")),
+    };
+    let settle = match &outcome {
+        Ok(v) => crate::site::settle_script(run_key, id, true, v),
+        Err(e) => crate::site::settle_script(run_key, id, false, &json!(e)),
+    };
+    let _ = handle_evaluate(&json!({ "script": settle }), state).await;
 }
 
 /// Local stealth self-check: reports the active mode, live fingerprint probes,

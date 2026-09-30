@@ -179,6 +179,47 @@
 
       <hr class="du-divider" />
 
+      <h2>长文本、本地文件、长时间运行</h2>
+      <p>
+        发文章、传视频这类<strong>写操作</strong>的适配器，也是一条命令跑完：正文从文件读，本地文件直接交给适配器，等上传和发布的时间不再受单次命令约 8 秒的限制。
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">发布类适配器</span>
+        </div>
+<pre><code><span class="du-cmt"># 长文本从文件或 stdin 读，不用再写 "$(cat post.md)"</span>
+<span class="du-prompt">$</span> chrome-use site csdn/article-publish <span class="du-flag">--title</span> <span class="du-str">"Hello"</span> <span class="du-flag">--markdown</span> @post.md
+<span class="du-prompt">$</span> cat post.md | chrome-use site csdn/article-publish <span class="du-flag">--title</span> <span class="du-str">"Hello"</span> <span class="du-flag">--markdown</span> @-
+
+<span class="du-cmt"># 适配器声明为 "type": "file" 的参数直接给本地路径（site info 里能看到）</span>
+<span class="du-prompt">$</span> chrome-use site douyin-creator/video-publish <span class="du-flag">--video</span> ./clip.mp4 <span class="du-flag">--title</span> <span class="du-str">"Hello"</span>
+
+<span class="du-cmt"># 一直跑到上传 / 发布真正完成</span>
+<span class="du-prompt">$</span> chrome-use site bilibili-creator/video-publish <span class="du-flag">--title</span> <span class="du-str">"Hello"</span> <span class="du-flag">--tags</span> a,b <span class="du-flag">--until-done</span> <span class="du-flag">--timeout</span> 10m
+
+<span class="du-cmt"># 写适配器：在 @meta.args 里声明文件参数，@meta 里可选 "timeout": 600（秒）</span>
+<span class="du-cmt">#   "video": {"required": true, "type": "file", "input": "input[type=file]"}</span>
+<span class="du-cmt"># 函数里：把文件放到页面的文件输入框、报告进度、读取本次可用时间</span>
+<span class="du-cmt">#   await args.video.setOn();   args.progress('uploading');   args.budgetMs</span></code></pre>
+      </div>
+
+      <ul>
+        <li><code>--key @path</code> 从文件读值，<code>--key @-</code> 从 stdin 读，<code>--key-file path</code> 是同一件事的显式写法。<code>@name</code> 不是文件时保持原样（<code>--user @jack</code>）；<code>@x.md</code>、<code>@dir/x</code> 这种看起来是路径却不存在的会报错，写错路径不会被当成正文发出去。要传以 <code>@</code> 开头的字面值，写 <code>--key \@text</code>。</li>
+        <li><code>"type": "file"</code> 的参数接收本地路径，由适配器自己调用 <code>args.video.setOn()</code> 放进页面的文件输入框，不用再单独跑 <code>upload</code>，也不用知道选择器。页面只能指定选择器，<strong>不能指定路径</strong>。</li>
+        <li>适配器在页面后台运行，由 chrome-use 轮询，不受扩展 relay 单条命令约 8 秒的限制。<code>--timeout &lt;300|90s|10m&gt;</code> 设定总时长，默认取适配器 <code>@meta.timeout</code>，没有则 120 秒。</li>
+        <li><code>--until-done</code>：适配器返回 <code>status: "incomplete"</code> / <code>"uploading"</code>，或者页面跳转中断了这次运行时，自动重跑，直到完成或超时（默认 600 秒）。不加它就把这个状态原样返回，由你再跑一次同样的命令。</li>
+        <li>适配器用 <code>args.progress(...)</code> 报告的进度会打印到 stderr，<code>--json</code> 里在 <code>progress</code> 字段，另有 <code>attempts</code> 和 <code>elapsedMs</code>。</li>
+      </ul>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">⚠️ 超时不等于失败</div>
+        返回 <code>status: "timeout"</code> 只说明时间到了适配器还在跑，页面里那次运行可能随后完成。重跑发布类命令之前，先看一眼页面实际状态，避免重复发布。
+      </div>
+
+      <hr class="du-divider" />
+
       <h2>自动触发 —— 看到就用它</h2>
       <p>
         你不用记住哪些站点有适配器。chrome-use 会自动保持适配器源同步（<strong>首次使用 + 每周</strong>），

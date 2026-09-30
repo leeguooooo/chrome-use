@@ -1886,25 +1886,72 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     usage: "site <name>/<command>",
                 })?
                 .to_string();
-            // Split remaining args: `--key value` → named, everything else → positional.
+            // Split remaining args: `--key value` → named, everything else →
+            // positional. `--until-done` takes no value (unless the adapter
+            // declares an arg of that name).
             let mut positional: Vec<String> = Vec::new();
             let mut named: Vec<(String, String)> = Vec::new();
+            let mut until_done = false;
             let mut it = rest[1..].iter();
             while let Some(a) = it.next() {
                 if let Some(key) = a.strip_prefix("--") {
+                    if key == "until-done" && crate::site::is_runner_flag(&adapter, key) {
+                        until_done = true;
+                        continue;
+                    }
                     let val = it.next().map(|s| s.to_string()).unwrap_or_default();
                     named.push((key.to_string(), val));
                 } else {
                     positional.push(a.to_string());
                 }
             }
-            let mapped = crate::site::map_args(&adapter, &positional, &named);
+            let mut read_stdin = || {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                    .map_err(|e| format!("site: read stdin: {e}"))?;
+                if buf.is_empty() {
+                    return Err("site: `@-` read an empty stdin".to_string());
+                }
+                Ok(buf)
+            };
+            let inv = crate::site::prepare_invocation(
+                &adapter,
+                &positional,
+                &named,
+                until_done,
+                &mut read_stdin,
+            )
+            .map_err(|message| ParseError::InvalidValue {
+                message,
+                usage: "site <name>/<command> [args]",
+            })?;
             // Inject the family's shared `_helper` (e.g. twitter/_helper's
             // findGraphQLQueryId) so adapters that call it don't ReferenceError (#99).
             let family = spec.split('/').next().unwrap_or("");
             let helper = crate::site::load_family_helper(family);
-            let script = crate::site::build_eval(&adapter, &mapped, helper.as_deref());
-            Ok(json!({ "id": id, "action": "site", "domain": domain, "script": script }))
+            let run_key = format!("__cu_site_{}", uuid::Uuid::new_v4().simple());
+            let script = crate::site::build_start(
+                &adapter,
+                &inv.args,
+                helper.as_deref(),
+                &run_key,
+                &inv.files,
+            );
+            let run_timeout_ms = inv.options.effective_timeout_ms(&adapter);
+            Ok(json!({
+                "id": id,
+                "action": "site",
+                "domain": domain,
+                "script": script,
+                "runKey": run_key,
+                "files": inv.files,
+                "untilDone": inv.options.until_done,
+                "retryStatuses": crate::site::retry_statuses(&adapter),
+                "runTimeoutMs": run_timeout_ms,
+                // The CLI's socket read waits timeout_ms + a margin, so a long run
+                // is not cut off client-side before the daemon answers.
+                "timeout_ms": run_timeout_ms + 10_000,
+            }))
         }
 
         // `adopt <url|targetId>`: the adoption happens at daemon connect (driven by

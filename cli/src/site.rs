@@ -325,8 +325,18 @@ pub fn load_family_helper(family: &str) -> Option<String> {
 /// (`linkedin.com/in/<username>`) and the tab is on a matching page, so
 /// `site linkedin/profile` run on someone's profile just works. An adapter's
 /// bare `Missing argument: x` error also gets a `hint` saying how to pass args.
+#[cfg(test)]
 pub fn build_eval(adapter: &Adapter, args: &Value, helper_src: Option<&str>) -> String {
     let args_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "({})({args_json})",
+        build_runner_fn(adapter, args, helper_src)
+    )
+}
+
+/// The `async (__args) => {...}` expression [`build_eval`] calls: URL-template
+/// inference, the adapter call, and the missing-arg hint.
+fn build_runner_fn(adapter: &Adapter, args: &Value, helper_src: Option<&str>) -> String {
     let invoke = match helper_src {
         Some(h) if !h.trim().is_empty() => format!(
             "(() => {{\n{h}\n;\nreturn ({func})(__args);\n}})()",
@@ -354,8 +364,313 @@ pub fn build_eval(adapter: &Adapter, args: &Value, helper_src: Option<&str>) -> 
          if (__r && typeof __r === 'object' && typeof __r.error === 'string' \
          && /^missing arg/i.test(__r.error) && !__r.hint) __r.hint = {hint_json};\n\
          return __r;\n\
-         }})({args_json})"
+         }})"
     )
+}
+
+/// Statuses that mean "run the same command again" under `--until-done`, the
+/// convention the resumable publish adapters already return.
+pub const DEFAULT_RETRY_STATUSES: &[&str] = &["incomplete", "uploading"];
+
+/// Start the adapter as a background run in the page and return at once.
+///
+/// One relay CDP command is capped at ~8s by the extension, so a publish flow
+/// that waits on an upload cannot be a single awaited `eval`. The run lives on
+/// a non-enumerable `window[run_key]`; the daemon polls it with
+/// [`poll_script`] (each poll is a quick read) until it settles or the
+/// command's timeout passes (#366).
+///
+/// Adapters see three extras on `args`, all non-enumerable so an adapter that
+/// serializes its args is unaffected:
+/// - `args.budgetMs`: time this run may take, for adapters that pace themselves.
+/// - `args.progress(msg)`: a progress line, reported with the result.
+/// - for each `"type": "file"` arg, `args.<name>` is `{path, name, size,
+///   setOn(selector?)}`. `await setOn(sel)` asks the daemon to put that local
+///   file on the file input `sel` (default: the arg's `"input"`), the same way
+///   `chrome-use upload` does (#364). The page never sees the file system: it
+///   can only name a selector for a file the caller passed.
+pub fn build_start(
+    adapter: &Adapter,
+    args: &Value,
+    helper_src: Option<&str>,
+    run_key: &str,
+    files: &Value,
+) -> String {
+    let runner = build_runner_fn(adapter, args, helper_src);
+    let args_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
+    let files_json = serde_json::to_string(files).unwrap_or_else(|_| "{}".to_string());
+    let key_json = serde_json::to_string(run_key).unwrap_or_default();
+    format!(
+        "(() => {{\n\
+         const K = {key_json};\n\
+         const run = {{ done: false, result: undefined, error: undefined, progress: [], requests: [], waiters: {{}}, seq: 0 }};\n\
+         Object.defineProperty(window, K, {{ value: run, configurable: true, enumerable: false, writable: true }});\n\
+         const rpc = (kind, payload) => new Promise((resolve, reject) => {{\n\
+         const id = ++run.seq; run.waiters[id] = {{ resolve, reject }};\n\
+         run.requests.push(Object.assign({{ id, kind }}, payload));\n\
+         }});\n\
+         const a = {args_json};\n\
+         const hide = (name, value) => Object.defineProperty(a, name, {{ value, configurable: true, enumerable: false, writable: true }});\n\
+         for (const [k, f] of Object.entries({files_json})) {{\n\
+         a[k] = {{ path: f.path, name: f.name, size: f.size,\n\
+         setOn: (selector) => {{\n\
+         const sel = selector || f.input;\n\
+         if (!sel) return Promise.reject(new Error('setOn: no selector, and @meta.args.' + k + ' declares no \"input\"'));\n\
+         return rpc('upload', {{ arg: k, selector: sel }});\n\
+         }} }};\n\
+         a[k].toString = () => f.path;\n\
+         }}\n\
+         hide('budgetMs', {BUDGET_PLACEHOLDER});\n\
+         hide('progress', (m) => {{ run.progress.push(String(m)); }});\n\
+         Promise.resolve().then(() => ({runner})(a)).then(\n\
+         (r) => {{ run.result = r; run.done = true; }},\n\
+         (e) => {{ run.error = String((e && e.stack) || e); run.done = true; }});\n\
+         return 'started';\n\
+         }})()"
+    )
+}
+
+/// Stands in for `args.budgetMs` in [`build_start`]'s script; the daemon puts
+/// the time left for each attempt there.
+pub const BUDGET_PLACEHOLDER: &str = "__CU_SITE_BUDGET_MS__";
+
+/// Read and drain a background run: `{state: running|done|lost, progress,
+/// requests, result?, error?}`. `lost` means the page navigated (or reloaded)
+/// and took the run with it. A finished run is removed from `window`.
+pub fn poll_script(run_key: &str) -> String {
+    let key_json = serde_json::to_string(run_key).unwrap_or_default();
+    format!(
+        "(() => {{\n\
+         const r = window[{key_json}];\n\
+         if (!r) return {{ state: 'lost' }};\n\
+         const out = {{ state: r.done ? 'done' : 'running', progress: r.progress.splice(0), requests: r.requests.splice(0) }};\n\
+         if (r.done) {{ out.result = r.result; out.error = r.error; delete window[{key_json}]; }}\n\
+         return out;\n\
+         }})()"
+    )
+}
+
+/// Resolve (or reject) the page-side promise of request `id`.
+pub fn settle_script(run_key: &str, id: u64, ok: bool, value: &Value) -> String {
+    let key_json = serde_json::to_string(run_key).unwrap_or_default();
+    let value_json = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+    let how = if ok {
+        format!("w.resolve({value_json})")
+    } else {
+        format!("w.reject(new Error({value_json}))")
+    };
+    format!(
+        "(() => {{ const r = window[{key_json}]; const w = r && r.waiters[{id}]; \
+         if (!w) return false; delete r.waiters[{id}]; {how}; return true; }})()"
+    )
+}
+
+/// Runner options for one `site` invocation, taken out of the adapter args.
+#[derive(Debug, Default, PartialEq)]
+pub struct RunOptions {
+    /// `--timeout <secs|Ns|Nm>`; falls back to `@meta.timeout` (seconds).
+    pub timeout_ms: Option<u64>,
+    /// `--until-done`: rerun on a retry status or a lost run until done.
+    pub until_done: bool,
+}
+
+/// Default time for a run when neither `--timeout` nor `@meta.timeout` says.
+pub const DEFAULT_RUN_TIMEOUT_MS: u64 = 120_000;
+/// Default overall time for `--until-done`.
+pub const DEFAULT_UNTIL_DONE_TIMEOUT_MS: u64 = 600_000;
+
+impl RunOptions {
+    /// The command's total time budget.
+    pub fn effective_timeout_ms(&self, adapter: &Adapter) -> u64 {
+        self.timeout_ms
+            .or_else(|| {
+                adapter
+                    .meta
+                    .get("timeout")
+                    .and_then(|v| v.as_f64())
+                    .filter(|t| *t > 0.0)
+                    .map(|t| (t * 1000.0) as u64)
+            })
+            .unwrap_or(if self.until_done {
+                DEFAULT_UNTIL_DONE_TIMEOUT_MS
+            } else {
+                DEFAULT_RUN_TIMEOUT_MS
+            })
+    }
+}
+
+/// `300`, `300s`, `5m`, `1h`, `1500ms` → milliseconds.
+pub fn parse_duration_ms(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (num, mult) = if let Some(n) = s.strip_suffix("ms") {
+        (n, 1.0)
+    } else if let Some(n) = s.strip_suffix('s') {
+        (n, 1000.0)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, 60_000.0)
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, 3_600_000.0)
+    } else {
+        (s, 1000.0)
+    };
+    let v: f64 = num.trim().parse().ok()?;
+    (v > 0.0 && v.is_finite()).then_some((v * mult) as u64)
+}
+
+fn declared_arg<'a>(adapter: &'a Adapter, key: &str) -> Option<&'a Value> {
+    adapter.meta.get("args").and_then(|a| a.get(key))
+}
+
+/// Whether `--name` is a runner flag here. An adapter that declares an arg of
+/// the same name keeps it.
+pub fn is_runner_flag(adapter: &Adapter, name: &str) -> bool {
+    matches!(name, "until-done" | "timeout") && declared_arg(adapter, name).is_none()
+}
+
+/// Resolve one arg value (#365):
+/// - `@-` reads stdin; `@path` reads the file when it exists
+/// - `@x` that names no file stays literal (`--user @jack`), unless it looks
+///   like a path (has a `/` or a file extension): a typo there must not post
+///   the literal string `@post.md` as an article body
+/// - `\@...` passes a literal leading `@`
+pub fn resolve_arg_value(
+    raw: &str,
+    read_stdin: &mut dyn FnMut() -> Result<String, String>,
+) -> Result<String, String> {
+    if let Some(lit) = raw.strip_prefix("\\@") {
+        return Ok(format!("@{lit}"));
+    }
+    let Some(path) = raw.strip_prefix('@') else {
+        return Ok(raw.to_string());
+    };
+    if path == "-" {
+        return read_stdin();
+    }
+    if path.is_empty() {
+        return Ok(raw.to_string());
+    }
+    let p = std::path::Path::new(path);
+    if p.is_file() {
+        return std::fs::read_to_string(p).map_err(|e| format!("site: read {path}: {e}"));
+    }
+    let looks_like_path = path.contains('/')
+        || path.contains('\\')
+        || p.extension().is_some_and(|e| e.len() <= 5 && !e.is_empty());
+    if looks_like_path {
+        return Err(format!(
+            "site: `{raw}` names no readable file. Fix the path, or write \\{raw} to pass the text literally."
+        ));
+    }
+    Ok(raw.to_string())
+}
+
+/// Everything a `site` command needs beyond the adapter source.
+#[derive(Debug)]
+pub struct Invocation {
+    pub args: Value,
+    /// `{arg: {path, name, size, input}}` for each `"type": "file"` arg given.
+    pub files: Value,
+    pub options: RunOptions,
+}
+
+/// Map CLI args onto the adapter: positionals in declaration order, `--key
+/// value`, `--key @file` / `@-` and `--key-file path` (#365), `"type": "file"`
+/// args checked and made absolute (#364), and the runner flags (#366).
+/// `named` excludes the value-less `--until-done`, which the caller has already
+/// recorded in `until_done`.
+pub fn prepare_invocation(
+    adapter: &Adapter,
+    positional: &[String],
+    named: &[(String, String)],
+    until_done: bool,
+    read_stdin: &mut dyn FnMut() -> Result<String, String>,
+) -> Result<Invocation, String> {
+    let mut options = RunOptions {
+        until_done,
+        ..Default::default()
+    };
+    let mut resolved: Vec<(String, String)> = Vec::new();
+    for (k, v) in named {
+        if k == "timeout" && is_runner_flag(adapter, k) {
+            options.timeout_ms = Some(parse_duration_ms(v).ok_or_else(|| {
+                format!("site: --timeout expects a duration like 300, 90s or 5m, got `{v}`")
+            })?);
+            continue;
+        }
+        if let Some(base) = k.strip_suffix("-file") {
+            if declared_arg(adapter, k).is_none() && declared_arg(adapter, base).is_some() {
+                let text = if v == "-" {
+                    read_stdin()?
+                } else {
+                    std::fs::read_to_string(v).map_err(|e| format!("site: --{k} {v}: {e}"))?
+                };
+                resolved.push((base.to_string(), text));
+                continue;
+            }
+        }
+        resolved.push((k.clone(), resolve_arg_value(v, read_stdin)?));
+    }
+    let mut pos: Vec<String> = Vec::new();
+    for v in positional {
+        pos.push(resolve_arg_value(v, read_stdin)?);
+    }
+    let mut args = map_args(adapter, &pos, &resolved);
+
+    let mut files = serde_json::Map::new();
+    if let (Some(decl), Some(obj)) = (
+        adapter.meta.get("args").and_then(|a| a.as_object()),
+        args.as_object_mut(),
+    ) {
+        for (k, spec) in decl {
+            if spec.get("type").and_then(|t| t.as_str()) != Some("file") {
+                continue;
+            }
+            let Some(given) = obj.get(k).and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
+            let path =
+                std::fs::canonicalize(&given).map_err(|e| format!("site: --{k} {given}: {e}"))?;
+            let meta = std::fs::metadata(&path).map_err(|e| format!("site: --{k} {given}: {e}"))?;
+            if !meta.is_file() {
+                return Err(format!("site: --{k} {given} is not a file"));
+            }
+            let abs = path.to_string_lossy().to_string();
+            files.insert(
+                k.clone(),
+                json!({
+                    "path": abs,
+                    "name": path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                    "size": meta.len(),
+                    "input": spec.get("input").and_then(|v| v.as_str()),
+                }),
+            );
+            obj.insert(k.clone(), Value::String(abs));
+        }
+    }
+    Ok(Invocation {
+        args,
+        files: Value::Object(files),
+        options,
+    })
+}
+
+/// Retry statuses for `--until-done`: `@meta.retryStatuses`, else the default.
+pub fn retry_statuses(adapter: &Adapter) -> Vec<String> {
+    adapter
+        .meta
+        .get("retryStatuses")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            DEFAULT_RETRY_STATUSES
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        })
 }
 
 /// A URL template an adapter documents in an arg's description, e.g.
@@ -897,6 +1212,230 @@ async function(args) { return { repo: args.repo }; }"#;
         let a = parse_adapter(SAMPLE, "github/issues").unwrap();
         assert_eq!(a.domain(), Some("github.com"));
         assert!(a.func_src.starts_with("async function(args)"));
+    }
+
+    const PUBLISH: &str = r#"/* @meta
+{
+  "name": "demo/publish",
+  "domain": "example.com",
+  "timeout": 300,
+  "args": {
+    "title": {"required": true},
+    "markdown": {"required": false},
+    "video": {"required": false, "type": "file", "input": "input[type=file]"}
+  }
+}
+*/
+async function(args) {
+  args.progress('starting with ' + args.budgetMs + 'ms');
+  const up = await args.video.setOn();
+  args.progress('uploaded');
+  return { status: 'submitted', title: args.title, file: args.video.name, size: args.video.size,
+           attached: up.attached, keys: Object.keys(args).join(',') };
+}"#;
+
+    fn no_stdin() -> Result<String, String> {
+        Err("stdin not expected".to_string())
+    }
+
+    #[test]
+    fn durations_parse() {
+        assert_eq!(parse_duration_ms("300"), Some(300_000));
+        assert_eq!(parse_duration_ms("90s"), Some(90_000));
+        assert_eq!(parse_duration_ms("5m"), Some(300_000));
+        assert_eq!(parse_duration_ms("1500ms"), Some(1500));
+        assert_eq!(parse_duration_ms("1h"), Some(3_600_000));
+        assert_eq!(parse_duration_ms("0"), None);
+        assert_eq!(parse_duration_ms("soon"), None);
+    }
+
+    #[test]
+    fn arg_values_read_files_and_stdin() {
+        let dir = std::env::temp_dir().join(format!("cu-site-args-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let post = dir.join("post.md");
+        std::fs::write(&post, "# Title\n\n\"quoted\" `code`\n").unwrap();
+        let at = format!("@{}", post.display());
+        assert_eq!(
+            resolve_arg_value(&at, &mut no_stdin).unwrap(),
+            "# Title\n\n\"quoted\" `code`\n"
+        );
+        // stdin
+        let mut stdin = || Ok("from stdin".to_string());
+        assert_eq!(resolve_arg_value("@-", &mut stdin).unwrap(), "from stdin");
+        // A handle is not a file: stays literal.
+        assert_eq!(resolve_arg_value("@jack", &mut no_stdin).unwrap(), "@jack");
+        // A typo'd path must not be posted as text.
+        let missing = format!("@{}", dir.join("nope.md").display());
+        assert!(resolve_arg_value(&missing, &mut no_stdin)
+            .unwrap_err()
+            .contains("names no readable file"));
+        assert!(resolve_arg_value("@nope.md", &mut no_stdin).is_err());
+        // Escape for a literal leading @.
+        assert_eq!(
+            resolve_arg_value("\\@nope.md", &mut no_stdin).unwrap(),
+            "@nope.md"
+        );
+        assert_eq!(resolve_arg_value("plain", &mut no_stdin).unwrap(), "plain");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invocation_maps_files_key_file_and_runner_flags() {
+        let dir = std::env::temp_dir().join(format!("cu-site-inv-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let video = dir.join("clip.mp4");
+        std::fs::write(&video, b"0123456789").unwrap();
+        let body = dir.join("body.md");
+        std::fs::write(&body, "long body").unwrap();
+        let a = parse_adapter(PUBLISH, "demo/publish").unwrap();
+
+        let inv = prepare_invocation(
+            &a,
+            &["Hello".into()],
+            &[
+                ("markdown-file".into(), body.display().to_string()),
+                ("video".into(), video.display().to_string()),
+                ("timeout".into(), "10m".into()),
+            ],
+            true,
+            &mut no_stdin,
+        )
+        .unwrap();
+        assert_eq!(inv.args["title"], "Hello");
+        assert_eq!(inv.args["markdown"], "long body");
+        assert!(inv.args.get("markdown-file").is_none());
+        assert!(inv.args.get("timeout").is_none());
+        assert_eq!(inv.files["video"]["name"], "clip.mp4");
+        assert_eq!(inv.files["video"]["size"], 10);
+        assert_eq!(inv.files["video"]["input"], "input[type=file]");
+        assert!(std::path::Path::new(inv.files["video"]["path"].as_str().unwrap()).is_absolute());
+        assert_eq!(inv.options.timeout_ms, Some(600_000));
+        assert!(inv.options.until_done);
+        assert_eq!(inv.options.effective_timeout_ms(&a), 600_000);
+
+        // @meta.timeout applies when --timeout is absent; then the defaults.
+        let inv = prepare_invocation(&a, &["Hello".into()], &[], false, &mut no_stdin).unwrap();
+        assert_eq!(inv.options.effective_timeout_ms(&a), 300_000);
+        let plain = parse_adapter(SAMPLE, "github/issues").unwrap();
+        assert_eq!(
+            RunOptions::default().effective_timeout_ms(&plain),
+            DEFAULT_RUN_TIMEOUT_MS
+        );
+        assert_eq!(
+            RunOptions {
+                until_done: true,
+                ..Default::default()
+            }
+            .effective_timeout_ms(&plain),
+            DEFAULT_UNTIL_DONE_TIMEOUT_MS
+        );
+
+        // A missing file arg is an error before anything reaches the page.
+        let err = prepare_invocation(
+            &a,
+            &["Hello".into()],
+            &[("video".into(), dir.join("gone.mp4").display().to_string())],
+            false,
+            &mut no_stdin,
+        )
+        .unwrap_err();
+        assert!(err.contains("--video"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adapter_declared_timeout_arg_is_not_a_runner_flag() {
+        let raw = r#"/* @meta {"name":"x/y","domain":"x.com","args":{"timeout":{"required":false},"until-done":{"required":false}}} */
+async function(args) { return args; }"#;
+        let a = parse_adapter(raw, "x/y").unwrap();
+        assert!(!is_runner_flag(&a, "timeout"));
+        assert!(!is_runner_flag(&a, "until-done"));
+        let inv = prepare_invocation(
+            &a,
+            &[],
+            &[("timeout".into(), "5".into())],
+            false,
+            &mut no_stdin,
+        )
+        .unwrap();
+        assert_eq!(inv.args["timeout"], "5");
+        assert_eq!(inv.options.timeout_ms, None);
+    }
+
+    #[test]
+    fn retry_statuses_default_and_override() {
+        let a = parse_adapter(SAMPLE, "github/issues").unwrap();
+        assert_eq!(retry_statuses(&a), vec!["incomplete", "uploading"]);
+        let raw = r#"/* @meta {"name":"x/y","domain":"x.com","retryStatuses":["processing"]} */
+async function(args) { return args; }"#;
+        assert_eq!(
+            retry_statuses(&parse_adapter(raw, "x/y").unwrap()),
+            vec!["processing"]
+        );
+    }
+
+    /// Drive the real start / poll / settle scripts under node, playing the
+    /// daemon: the run starts in the background, asks for an upload through
+    /// `setOn`, reports progress, and the result comes back through a poll.
+    #[test]
+    fn background_run_protocol_round_trips_under_node() {
+        let Some(node) = std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        }) else {
+            return;
+        };
+        let a = parse_adapter(PUBLISH, "demo/publish").unwrap();
+        let args = json!({ "title": "Hi", "video": "/abs/clip.mp4" });
+        let files = json!({ "video": { "path": "/abs/clip.mp4", "name": "clip.mp4", "size": 10, "input": "input[type=file]" } });
+        let start =
+            build_start(&a, &args, None, "__cu_site_t", &files).replace(BUDGET_PLACEHOLDER, "4200");
+        let poll = poll_script("__cu_site_t");
+        let settle = settle_script("__cu_site_t", 1, true, &json!({ "attached": 1 }));
+        let driver = format!(
+            "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/');\n\
+             const tick = () => new Promise(r => setTimeout(r, 5));\n\
+             (async () => {{\n\
+             const started = {start};\n\
+             await tick();\n\
+             const first = {poll};\n\
+             const settled = {settle};\n\
+             await tick();\n\
+             const last = {poll};\n\
+             const after = {poll};\n\
+             console.log(JSON.stringify({{ started, first, settled, last, after, enumerable: Object.keys(window).includes('__cu_site_t') }}));\n\
+             }})();"
+        );
+        let out = std::process::Command::new(node)
+            .arg("-e")
+            .arg(driver)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["started"], "started");
+        assert_eq!(v["enumerable"], false);
+        assert_eq!(v["first"]["state"], "running");
+        assert_eq!(v["first"]["progress"][0], "starting with 4200ms");
+        assert_eq!(v["first"]["requests"][0]["kind"], "upload");
+        assert_eq!(v["first"]["requests"][0]["arg"], "video");
+        assert_eq!(v["first"]["requests"][0]["selector"], "input[type=file]");
+        assert_eq!(v["settled"], true);
+        assert_eq!(v["last"]["state"], "done");
+        assert_eq!(v["last"]["progress"][0], "uploaded");
+        assert_eq!(v["last"]["result"]["status"], "submitted");
+        assert_eq!(v["last"]["result"]["file"], "clip.mp4");
+        assert_eq!(v["last"]["result"]["attached"], 1);
+        // budgetMs / progress are hidden from an adapter that enumerates args.
+        assert_eq!(v["last"]["result"]["keys"], "title,video");
+        // A settled run is removed; the next poll reports it gone.
+        assert_eq!(v["after"]["state"], "lost");
     }
 
     #[test]

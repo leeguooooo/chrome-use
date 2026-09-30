@@ -594,7 +594,9 @@ fn extended_tools() -> Vec<Value> {
             "inputSchema": build_schema(obj(&[
                 ("spec", json!({ "type": "string", "description": "Adapter spec \"<name>/<command>\", e.g. \"github/repo\"." })),
                 ("args", json!({ "type": "array", "items": { "type": "string" }, "description": "Positional arguments for the adapter command." })),
-                ("namedArgs", json!({ "type": "object", "additionalProperties": { "type": "string" }, "description": "Named arguments for the adapter command, passed as --key value pairs." })),
+                ("namedArgs", json!({ "type": "object", "additionalProperties": { "type": "string" }, "description": "Named arguments for the adapter command, passed as --key value pairs. A value \"@/abs/path\" is read from that file (long text such as an article body). An arg the adapter declares as type \"file\" takes a local path and is attached by the adapter itself." })),
+                ("untilDone", json!({ "type": "boolean", "description": "Rerun the adapter while it reports status incomplete/uploading, or when a page navigation ended the run, until it finishes or the timeout passes. Use for publish/upload adapters." })),
+                ("timeout", json!({ "type": "string", "description": "Total time for the run: \"300\", \"90s\", \"10m\". Default: the adapter's @meta timeout, else 120s (600s with untilDone)." })),
             ]), &["spec"]),
         }),
         json!({
@@ -1533,6 +1535,35 @@ fn call_site(arguments: &Value) -> Result<Value, ProtocolError> {
     for (k, v) in optional_string_map(arguments, "namedArgs")? {
         args.push(format!("--{}", k));
         args.push(v);
+    }
+    let until_done = optional_bool(arguments, "untilDone")?.unwrap_or(false);
+    if until_done {
+        args.push("--until-done".to_string());
+    }
+    let timeout = optional_string(arguments, "timeout")?;
+    if let Some(t) = &timeout {
+        args.push("--timeout".to_string());
+        args.push(t.clone());
+    }
+    // The subprocess must outlive the run it starts: without an explicit
+    // `timeoutMs`, wait for the run's own budget instead of the flat default.
+    if optional_u64(arguments, "timeoutMs")?.is_none() {
+        let options = crate::site::RunOptions {
+            timeout_ms: timeout.as_deref().and_then(crate::site::parse_duration_ms),
+            until_done,
+        };
+        let spec = required_string(arguments, "spec")?;
+        if let Ok(adapter) = crate::site::load_adapter(&spec) {
+            let run_ms = options.effective_timeout_ms(&adapter) + 30_000;
+            let mut with_timeout = arguments.clone();
+            if let Some(obj) = with_timeout.as_object_mut() {
+                obj.insert(
+                    "timeoutMs".to_string(),
+                    json!(run_ms.max(DEFAULT_TIMEOUT_MS)),
+                );
+                return run_tool(&with_timeout, args);
+            }
+        }
     }
     run_tool(arguments, args)
 }

@@ -9426,6 +9426,106 @@ async fn e2e_nameless_ref_recovers_by_the_value_it_was_showing() {
     server.abort();
 }
 
+/// A `site` adapter runs as a background run the daemon polls (#366), is
+/// handed a local file through `args.<file>.setOn()` (#364), and is rerun under
+/// `--until-done` while it reports a retry status.
+#[tokio::test]
+#[ignore]
+async fn e2e_site_background_run_uploads_a_file_and_reruns_until_done() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>site run</title>
+<input type="file" id="f">"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let dir = std::env::temp_dir().join(format!("cu-site-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let clip = dir.join("clip.bin");
+    std::fs::write(&clip, vec![7_u8; 4096]).unwrap();
+
+    let raw = r##"/* @meta
+{
+  "name": "demo/publish",
+  "domain": "127.0.0.1",
+  "args": {
+    "title": {"required": true},
+    "video": {"required": true, "type": "file", "input": "#f"}
+  }
+}
+*/
+async function(args) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const n = Number(sessionStorage.getItem('n') || 0) + 1;
+  sessionStorage.setItem('n', String(n));
+  args.progress('attempt ' + n);
+  if (n === 1) {
+    const up = await args.video.setOn();
+    sessionStorage.setItem('attached', String(up.attached));
+    await sleep(1200);
+    return { status: 'incomplete', retryAfterMs: 100 };
+  }
+  const file = document.querySelector('#f').files[0];
+  return { status: 'submitted', title: args.title, name: file && file.name, size: file && file.size,
+           attached: sessionStorage.getItem('attached'), budget: args.budgetMs > 0 };
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/publish").unwrap();
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(
+        &adapter,
+        &["Hello".to_string()],
+        &[("video".to_string(), clip.display().to_string())],
+        true,
+        &mut no_stdin,
+    )
+    .unwrap();
+    let script = crate::site::build_start(&adapter, &inv.args, None, "__cu_site_e2e", &inv.files);
+    let site_cmd = |id: &str, until_done: bool| {
+        json!({
+            "id": id,
+            "action": "site",
+            "domain": "127.0.0.1",
+            "script": script,
+            "runKey": "__cu_site_e2e",
+            "files": inv.files,
+            "untilDone": until_done,
+            "retryStatuses": crate::site::retry_statuses(&adapter),
+            "runTimeoutMs": 30_000,
+        })
+    };
+
+    // Without --until-done the first, incomplete result is returned as is.
+    let resp = execute_command(&site_cmd("3", false), &mut state).await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["result"]["status"], "incomplete");
+    assert_eq!(data["attempts"], 1);
+    assert_eq!(data["progress"][0]["message"], "attempt 1");
+
+    // With it, the run is repeated until the adapter reports it is done. The
+    // file attached on the first attempt is the one the caller passed.
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "sessionStorage.clear(); true" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(&site_cmd("5", true), &mut state).await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["result"]["status"], "submitted", "{data}");
+    assert_eq!(data["result"]["title"], "Hello");
+    assert_eq!(data["result"]["name"], "clip.bin");
+    assert_eq!(data["result"]["size"], 4096);
+    assert_eq!(data["result"]["attached"], "1");
+    assert_eq!(data["result"]["budget"], true);
+    assert_eq!(data["attempts"], 2);
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
 /// When the last signal cannot separate them either, the refusal stands — but
 /// it has to say that several elements are indistinguishable, not that the
 /// element is gone. The two have different fixes, and the old wording only

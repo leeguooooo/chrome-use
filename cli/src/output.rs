@@ -961,6 +961,32 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     eprintln!("eval @ {o}");
                 }
             }
+            // A long `site` run: what the adapter reported along the way, and
+            // how many reruns `--until-done` needed. Stderr, like the stamp.
+            for line in data
+                .get("progress")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                let at = line.get("atMs").and_then(|v| v.as_u64()).unwrap_or(0);
+                let msg = line.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                eprintln!(
+                    "{}",
+                    color::dim(&format!("  {:>5.1}s  {msg}", at as f64 / 1000.0))
+                );
+            }
+            if let Some(n) = data
+                .get("attempts")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 1)
+            {
+                let secs = data.get("elapsedMs").and_then(|v| v.as_u64()).unwrap_or(0) / 1000;
+                eprintln!(
+                    "{}",
+                    color::dim(&format!("  done after {n} attempts, {secs}s"))
+                );
+            }
             let formatted = serde_json::to_string_pretty(result).unwrap_or_default();
             print_with_boundaries(&formatted, origin, opts);
             return;
@@ -4664,6 +4690,7 @@ chrome-use site - Run a community site adapter over your logged-in session
 
 Usage:
   chrome-use site <name>/<command> [positional...] [--key value]
+                                       [--until-done] [--timeout <secs|Ns|Nm>]
   chrome-use site list                 List installed adapters (name/command)
   chrome-use site update               Fetch/refresh the adapter packs
   chrome-use site info <name>          Show one pack's adapters and their args
@@ -4676,6 +4703,29 @@ official leeguooooo/chrome-use-sites pack; `update` syncs both.
 The spec is always `name/command`. `site` alone, or a wrong spec, prints a
 one-line usage and points you at `site list`.
 
+Argument values:
+  --key @path          Read the value from a file (e.g. --markdown @post.md)
+  --key @-             Read the value from stdin
+  --key-file <path>    Same as --key @path (`-` = stdin)
+  --key \@text         A literal value that starts with @
+                       `@name` that is not a file stays literal (--user @jack);
+                       `@x.md` or `@dir/x` that does not exist is an error.
+  File args            An arg the adapter declares as "type": "file" takes a
+                       local path. The adapter puts it on the page's file input
+                       itself, so no separate `upload` step is needed:
+                       --video ./clip.mp4
+
+Long runs:
+  --timeout <dur>      Total time for the command: 300, 90s, 10m (default: the
+                       adapter's @meta "timeout", else 120s; 600s with --until-done)
+  --until-done         Rerun the adapter while it reports status "incomplete" /
+                       "uploading", or when a page navigation ended the run,
+                       until it finishes or the timeout passes
+
+An adapter runs in the background of the page and is polled, so it is not
+bound by the ~8s budget of a single relay command. Progress it reports with
+args.progress(...) is printed to stderr (and returned as `progress` in --json).
+
 Global Options:
   --json               Output as JSON (adapters usually return JSON already)
   --session <name>     Use specific session
@@ -4684,6 +4734,8 @@ Examples:
   chrome-use site list
   chrome-use site github/issues epiral/bb-browser --json
   chrome-use site hackernews/top --json
+  chrome-use site csdn/article-publish --title "Hello" --markdown @post.md
+  chrome-use site bilibili-creator/video-publish --title "Hello" --tags a,b --until-done
   chrome-use site update
 
 See also: `chrome-use skills get core` documents adapters with a decision
