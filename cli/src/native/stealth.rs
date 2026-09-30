@@ -42,18 +42,14 @@ pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
         return MINIMAL_STEALTH_SCRIPT.to_string();
     }
 
-    // Full launch mode: inject all patches
+    // Full launch mode: inject all patches. Languages are never patched in
+    // JS: a main-world override disagrees with workers and the Accept-Language
+    // header, a mismatch Cloudflare rejects. AGENT_BROWSER_LOCALE is applied
+    // natively via the temp profile's intl.accept_languages pref instead.
     let locale = locale.unwrap_or("en-US");
-    let base_lang = locale.split('-').next().unwrap_or(locale);
-    let languages: Vec<&str> = if base_lang == locale {
-        vec![locale]
-    } else {
-        vec![locale, base_lang]
-    };
     let config_line = format!(
-        r#"const __abStealth = {{ locale: "{}", languages: {}, allowWebGLContextFallback: false, hideCanvas: {}, canvasSeed: {}, disableIframeProxy: {} }};"#,
+        r#"const __abStealth = {{ locale: "{}", languages: [], allowWebGLContextFallback: false, hideCanvas: {}, canvasSeed: {}, disableIframeProxy: {} }};"#,
         locale,
-        serde_json::to_string(&languages).unwrap_or_else(|_| r#"["en-US","en"]"#.to_string()),
         hide_canvas_enabled(),
         canvas_noise_seed(),
         disable_iframe_proxy_enabled(),
@@ -62,14 +58,25 @@ pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
     // NB: this prefix MUST match the first line of stealth_scripts.js verbatim,
     // otherwise the fallback below prepends a SECOND `const __abStealth`
     // declaration and the whole script dies with a redeclaration SyntaxError.
-    if let Some(rest) = STEALTH_SCRIPTS_RAW.strip_prefix(
+    let body = if let Some(rest) = STEALTH_SCRIPTS_RAW.strip_prefix(
         r#"const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0, disableIframeProxy: false };"#,
     ) {
         format!("{}{}", config_line, rest)
     } else {
         format!("{}\n{}", config_line, STEALTH_SCRIPTS_RAW)
-    }
+    };
+    // The guard runs in the new document, where `location` is already the
+    // frame's real URL. Rust can't decide this at attach time: an OOPIF
+    // attaches before its navigation commits, with an empty URL.
+    format!("if (!{CHALLENGE_FRAME_GUARD_JS}) {{\n{body}\n}}")
 }
+
+/// True inside an anti-bot challenge frame (Cloudflare Turnstile / managed
+/// challenge, hCaptcha, reCAPTCHA, DataDome, Arkose). Those frames
+/// integrity-check their own runtime: with our patches evaluated into them,
+/// Cloudflare's managed challenge spins forever. They keep only the native
+/// overrides (e.g. Emulation.setAutomationOverride).
+const CHALLENGE_FRAME_GUARD_JS: &str = r#"(function(){try{var h=String(location.hostname||'').toLowerCase(),p=String(location.pathname||'');return /(^|\.)(challenges\.cloudflare\.com|hcaptcha\.com|recaptcha\.net|captcha-delivery\.com|arkoselabs\.com|funcaptcha\.com)$/.test(h)||((h==='www.google.com'||h==='google.com')&&p.indexOf('/recaptcha/')===0)||p.indexOf('/cdn-cgi/challenge-platform/')!==-1}catch(e){return false}})()"#;
 
 /// Whether canvas/audio fingerprint noise is opted into (FullLaunch only).
 /// OFF by default: injecting noise is a deliberate "lie" that can itself be a
@@ -156,7 +163,7 @@ pub async fn apply_stealth(
                         "Emulation.setUserAgentOverride",
                         Some(json!({
                             "userAgent": cleaned,
-                            "acceptLanguage": locale.unwrap_or("en-US"),
+                            "acceptLanguage": accept_language(locale.unwrap_or("en-US")),
                             "platform": platform_string(),
                             "userAgentMetadata": build_ua_metadata(&cleaned, locale),
                         })),
@@ -186,6 +193,27 @@ pub async fn apply_stealth(
     }
 
     Ok(())
+}
+
+/// Chrome `intl.accept_languages` pref for a locale: `zh-CN` -> `zh-CN,zh`.
+pub fn accept_languages_pref(locale: &str) -> Option<String> {
+    let locale = locale.trim();
+    if locale.is_empty() {
+        return None;
+    }
+    Some(match locale.split_once('-') {
+        Some((base, _)) if !base.is_empty() => format!("{locale},{base}"),
+        _ => locale.to_string(),
+    })
+}
+
+/// Accept-Language header value for a locale, shaped like the one Chrome
+/// itself sends: `zh-CN` -> `zh-CN,zh;q=0.9`, `en` -> `en`.
+fn accept_language(locale: &str) -> String {
+    match locale.split_once('-') {
+        Some((base, _)) if !base.is_empty() => format!("{locale},{base};q=0.9"),
+        _ => locale.to_string(),
+    }
 }
 
 /// Resolve the timezone to emulate for a fresh-launch session, if any.
@@ -346,6 +374,108 @@ fn build_ua_metadata(ua: &str, locale: Option<&str>) -> serde_json::Value {
         "bitness": "64",
         "wow64": false,
     })
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::{accept_language, build_stealth_script, StealthMode};
+
+    #[test]
+    fn challenge_frames_skip_js_patches() {
+        // Evaluate the generated guard under node with a stubbed `location`.
+        let Ok(node) = which_node() else { return };
+        let guard = super::CHALLENGE_FRAME_GUARD_JS;
+        for (url, expect) in [
+            (
+                "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if",
+                true,
+            ),
+            (
+                "https://newassets.hcaptcha.com/captcha/v1/x/static/hcaptcha.html",
+                true,
+            ),
+            ("https://www.google.com/recaptcha/api2/anchor?k=x", true),
+            (
+                "https://geo.captcha-delivery.com/captcha/?initialCid=x",
+                true,
+            ),
+            ("https://www.google.com/maps/embed", false),
+            ("https://js.stripe.com/v3/elements-inner", false),
+            ("https://notcloudflare.com.evil.test/", false),
+        ] {
+            let src = format!("var location=new URL({url:?});console.log({guard})");
+            let out = std::process::Command::new(&node)
+                .arg("-e")
+                .arg(src)
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout).trim(),
+                expect.to_string(),
+                "{url}"
+            );
+        }
+        // The whole payload must still parse once wrapped in the guard block.
+        let script = build_stealth_script(StealthMode::FullLaunch, None);
+        let out = std::process::Command::new(&node)
+            .arg("-e")
+            .arg(format!("new Function({:?})", script))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn which_node() -> Result<std::path::PathBuf, ()> {
+        std::env::var_os("PATH")
+            .and_then(|p| {
+                std::env::split_paths(&p)
+                    .map(|d| d.join("node"))
+                    .find(|n| n.is_file())
+            })
+            .ok_or(())
+    }
+
+    #[test]
+    fn accept_language_matches_chrome_shape() {
+        assert_eq!(accept_language("zh-CN"), "zh-CN,zh;q=0.9");
+        assert_eq!(accept_language("en"), "en");
+        assert_eq!(
+            super::accept_languages_pref("ja-JP").as_deref(),
+            Some("ja-JP,ja")
+        );
+        assert_eq!(super::accept_languages_pref(" "), None);
+    }
+
+    #[test]
+    fn languages_are_never_patched_in_js() {
+        for locale in [None, Some("ja-JP")] {
+            let script = build_stealth_script(StealthMode::FullLaunch, locale);
+            assert!(script.contains("languages: [], "));
+            assert!(!script.contains("__abRedefineNavProto('languages'"));
+        }
+    }
+
+    #[test]
+    fn android_only_apis_are_not_faked() {
+        let script = build_stealth_script(StealthMode::FullLaunch, None);
+        for needle in [
+            "downlinkMax",
+            "ContentIndex",
+            "ContactsManager",
+            "NativeWorker",
+        ] {
+            // The explanatory comment names them; no code may define them.
+            let code: String = script
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect();
+            assert!(!code.contains(needle), "{needle} is faked again");
+        }
+    }
 }
 
 #[cfg(test)]

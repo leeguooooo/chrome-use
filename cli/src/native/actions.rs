@@ -924,6 +924,8 @@ impl DaemonState {
                     .send_command_no_params("Network.enable", Some(iframe_sid.as_str()))
                     .await;
                 // Hide automation markers in this cross-origin iframe session too.
+                // (Anti-bot challenge frames skip the JS patches via the
+                // in-frame guard in stealth::build_stealth_script.)
                 apply_stealth_via_mgr(mgr, iframe_sid.as_str()).await;
             }
         }
@@ -4287,7 +4289,11 @@ async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
         let iframe_proxy =
             std::env::var("AGENT_BROWSER_DISABLE_IFRAME_PROXY").as_deref() != Ok("1");
         json!([
-            "navigator.webdriver removed; navigator.languages/locale normalized",
+            if std::env::var("AGENT_BROWSER_LOCALE").is_ok() {
+                "navigator.webdriver removed; languages set natively from AGENT_BROWSER_LOCALE (profile pref)"
+            } else {
+                "navigator.webdriver removed; languages left as the system's (set AGENT_BROWSER_LOCALE to override)"
+            },
             "window.chrome / chrome.runtime shimmed; navigator.platform fixed",
             "WebGL vendor/renderer, plugins, permissions normalized",
             format!(
@@ -7304,11 +7310,13 @@ async fn handle_cookies_clear(state: &DaemonState) -> Result<Value, String> {
 // Detect whether the active page is *currently* a Cloudflare challenge
 // (the full-page "Just a moment…" / "正在进行安全验证" interstitial), so an agent
 // knows whether it must solve or can proceed. Runs in the top frame main world.
+// An embedded Turnstile widget (hidden `cf-chl-widget-*_response` input on an
+// ordinary login/signup page) is not an interstitial; it only sets `turnstile`.
 const CF_CHALLENGE_JS: &str = r#"(function(){
   var t = document.title || '';
   var challenged =
     /just a moment|attention required|checking (your|if)|verify you are human|正在进行安全验证|安全验证|请稍候|请完成|人机验证/i.test(t) ||
-    !!document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running, [id^="cf-chl"], script[src*="/cdn-cgi/challenge-platform/"]');
+    !!document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running, [id^="cf-chl"]:not([id^="cf-chl-widget"]), script[src*="/cdn-cgi/challenge-platform/"]');
   var turnstile = !!document.querySelector('.cf-turnstile, [data-sitekey]');
   return JSON.stringify({ title: t, challenged: challenged, turnstile: turnstile, readyState: document.readyState });
 })()"#;

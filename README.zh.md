@@ -269,7 +269,7 @@ chrome-use jev run --goal "查苏黎世到伦敦的航班" --url https://www.goo
 | [bot.incolumitas.com](https://bot.incolumitas.com/) | 全部 OK：`overflowTest`、`overrideTest`、`puppeteerExtraStealthUsed`、worker 一致性 |
 | [bot.sannysoft.com](https://bot.sannysoft.com) | 全绿 |
 | [BrowserScan](https://www.browserscan.net/bot-detection) | Webdriver · User-Agent · CDP 全部干净 |
-| [Cloudflare Turnstile](https://nowsecure.nl) | 通过 |
+| [Cloudflare managed challenge](https://www.scrapingcourse.com/cloudflare-challenge) | 通过，无需交互 |
 
 CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不打补丁**，根本没有可供说谎检测器抓的 override。（读 `navigator.languages` 顺序或 IP 地理位置的面板可能给个软性的「navigator」/「location」标记。那反映的是*你真实 Chrome* 的语言列表和网络，不是自动化破绽。）
 

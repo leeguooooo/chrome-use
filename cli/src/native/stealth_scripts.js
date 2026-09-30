@@ -409,13 +409,6 @@ const __abRedefineNavProto = (name, getterImpl) => {
   }
 })();
 (function(){
-  const config = (typeof __abStealth === 'object' && __abStealth) ? __abStealth : null;
-  if (!config || !Array.isArray(config.languages) || config.languages.length === 0) return;
-  const locale = typeof config.locale === 'string' ? config.locale : config.languages[0];
-  __abRedefineNavProto('language', () => locale);
-  __abRedefineNavProto('languages', () => config.languages.slice());
-})();
-(function(){
   const ua = String(navigator.userAgent || '');
   if (!/Chrome\//.test(ua) || /Firefox\//.test(ua)) return;
   const target = 'Google Inc.';
@@ -923,139 +916,11 @@ const __abRedefineNavProto = (name, getterImpl) => {
     try { Element.prototype.setAttribute = patchedSetAttribute; } catch {}
   }
 })();
-(function(){
-  if (!navigator.connection) return;
-  const conn = navigator.connection;
-  if (typeof conn.downlinkMax === 'number') return;
-  const defineDownlinkMax = (target) => {
-    if (!target) return false;
-    try {
-      Object.defineProperty(target, 'downlinkMax', {
-        get: () => 10,
-        configurable: true,
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  try {
-    const proto = Object.getPrototypeOf(conn);
-    if (defineDownlinkMax(proto)) {
-      try { delete conn.downlinkMax; } catch {}
-      return;
-    }
-  } catch {}
-  defineDownlinkMax(conn);
-})();
-(function(){
-  if (typeof Worker !== 'function') return;
-  const isCloudflareChallengeRuntime = (() => {
-    try {
-      const host = String(location.hostname || '').toLowerCase();
-      const path = String(location.pathname || '');
-      if (host === 'challenges.cloudflare.com') return true;
-      return /\/cdn-cgi\/challenge-platform\//.test(path);
-    } catch {
-      return false;
-    }
-  })();
-  // Cloudflare challenge workers are sensitive to constructor wrapping.
-  // Keep native Worker behavior in this runtime to avoid importScripts(blob) failures.
-  if (isCloudflareChallengeRuntime) return;
-  const NativeWorker = Worker;
-  const workerPrelude = `
-(() => {
-  try {
-    if (!navigator || !navigator.connection) return;
-    const conn = navigator.connection;
-    if (typeof conn.downlinkMax === 'number') return;
-    const defineDownlinkMax = (target) => {
-      if (!target) return false;
-      try {
-        Object.defineProperty(target, 'downlinkMax', {
-          get: () => 10,
-          configurable: true,
-        });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    try {
-      const proto = Object.getPrototypeOf(conn);
-      if (defineDownlinkMax(proto)) {
-        try { delete conn.downlinkMax; } catch {}
-        return;
-      }
-    } catch {}
-    defineDownlinkMax(conn);
-  } catch {}
-})();
-`;
-  const buildPatchedScript = (url, options) => {
-    const scriptUrl = String(url);
-    const isModule = options && options.type === 'module';
-    const loader = isModule
-      ? `import ${JSON.stringify(scriptUrl)};`
-      : `importScripts(${JSON.stringify(scriptUrl)});`;
-    return `${workerPrelude}\n${loader}`;
-  };
-  const resolveWorkerUrl = (value) => {
-    try {
-      return new URL(String(value), location.href);
-    } catch {
-      return null;
-    }
-  };
-  const shouldPatchWorker = (value) => {
-    const resolved = resolveWorkerUrl(value);
-    if (!resolved) return false;
-    if (resolved.protocol === 'blob:') return resolved.origin === location.origin;
-    if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
-      return resolved.origin === location.origin;
-    }
-    if (resolved.protocol === 'file:') return location.protocol === 'file:';
-    return false;
-  };
-  const WrappedWorker = function(scriptURL, options) {
-    if (!shouldPatchWorker(scriptURL)) {
-      return new NativeWorker(scriptURL, options);
-    }
-    try {
-      const source = buildPatchedScript(scriptURL, options);
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const patchedUrl = URL.createObjectURL(blob);
-      const worker = new NativeWorker(patchedUrl, options);
-      try {
-        setTimeout(() => URL.revokeObjectURL(patchedUrl), 0);
-      } catch {}
-      return worker;
-    } catch {
-      return new NativeWorker(scriptURL, options);
-    }
-  };
-  WrappedWorker.prototype = NativeWorker.prototype;
-  try {
-    Object.setPrototypeOf(WrappedWorker, NativeWorker);
-  } catch {}
-  try {
-    Object.defineProperty(WrappedWorker, 'name', { value: 'Worker', configurable: true });
-  } catch {}
-  try {
-    Object.defineProperty(WrappedWorker, 'toString', {
-      value: () => NativeWorker.toString(),
-      configurable: true,
-    });
-  } catch {}
-  try {
-    Object.defineProperty(window, 'Worker', {
-      value: WrappedWorker,
-      configurable: true,
-      writable: true,
-    });
-  } catch {}
-})();
+// Deliberately NOT faked: navigator.connection.downlinkMax, ContactsManager /
+// navigator.contacts, ContentIndex. They are Android-only; desktop Chrome
+// (including the user's real one) lacks them. Faking them only lowered
+// CreepJS's "like headless" score while producing a desktop-UA + Android-API
+// fingerprint that Cloudflare's managed challenge rejects outright.
 (function(){
   if (typeof navigator.share !== 'function') {
     try {
@@ -1072,84 +937,6 @@ const __abRedefineNavProto = (name, getterImpl) => {
         configurable: true,
       });
     } catch {}
-  }
-})();
-(function(){
-  const ContactsCtor = typeof ContactsManager === 'function'
-    ? ContactsManager
-    : function ContactsManager() {};
-  try {
-    Object.defineProperty(window, 'ContactsManager', {
-      value: ContactsCtor,
-      configurable: true,
-    });
-  } catch {}
-  const manager = Object.create(ContactsCtor.prototype || Object.prototype);
-  if (typeof manager.select !== 'function') {
-    manager.select = async () => [];
-  }
-  if (typeof manager.getProperties !== 'function') {
-    manager.getProperties = () => ['name', 'email', 'tel', 'address', 'icon'];
-  }
-  const defineContacts = (target) => {
-    if (!target) return false;
-    try {
-      Object.defineProperty(target, 'contacts', {
-        get: () => manager,
-        configurable: true,
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  // Prototype-first (like the vendor patch): real Chrome exposes navigator
-  // members on the prototype, not as instance own properties. Define on the
-  // prototype and remove any instance shadow so Object.getOwnPropertyNames(navigator)
-  // stays empty; fall back to the instance only if the prototype is locked.
-  if (defineContacts(Object.getPrototypeOf(navigator))) {
-    try { delete navigator.contacts; } catch {}
-    return;
-  }
-  defineContacts(navigator);
-})();
-(function(){
-  const ContentIndexCtor = typeof ContentIndex === 'function'
-    ? ContentIndex
-    : function ContentIndex() {};
-  try {
-    Object.defineProperty(window, 'ContentIndex', {
-      value: ContentIndexCtor,
-      configurable: true,
-    });
-  } catch {}
-  const index = Object.create(ContentIndexCtor.prototype || Object.prototype);
-  if (typeof index.add !== 'function') {
-    index.add = async () => undefined;
-  }
-  if (typeof index.delete !== 'function') {
-    index.delete = async () => undefined;
-  }
-  if (typeof index.getAll !== 'function') {
-    index.getAll = async () => [];
-  }
-  if (typeof ServiceWorkerRegistration === 'undefined') return;
-  const defineIndex = (key) => {
-    try {
-      Object.defineProperty(ServiceWorkerRegistration.prototype, key, {
-        get: () => index,
-        configurable: true,
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  if (!('contentIndex' in ServiceWorkerRegistration.prototype)) {
-    defineIndex('contentIndex');
-  }
-  if (!('index' in ServiceWorkerRegistration.prototype)) {
-    defineIndex('index');
   }
 })();
 (function(){

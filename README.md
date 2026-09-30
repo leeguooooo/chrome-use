@@ -289,7 +289,7 @@ When connected to your real Chrome, we inject **zero** JavaScript patches. Your 
 | [bot.incolumitas.com](https://bot.incolumitas.com/) | all checks OK: `overflowTest`, `overrideTest`, `puppeteerExtraStealthUsed`, worker consistency |
 | [bot.sannysoft.com](https://bot.sannysoft.com) | all green |
 | [BrowserScan](https://www.browserscan.net/bot-detection) | Webdriver · User-Agent · CDP all clean |
-| [Cloudflare Turnstile](https://nowsecure.nl) | passed |
+| [Cloudflare managed challenge](https://www.scrapingcourse.com/cloudflare-challenge) | passed, no interaction |
 
 `0% stealth` on CreepJS is the key number: because the connect path patches **nothing**, there is no override for a lie-detector to catch. (Dashboards that read `navigator.languages` order or IP geolocation may show a soft "navigator"/"location" flag. That tracks *your real Chrome's* language list and network, not an automation tell.)
 

@@ -199,7 +199,16 @@ fn write_temp_profile_label(dir: &std::path::Path) {
     let _ = std::fs::write(dir.join("Local State"), local_state.to_string());
     let default_dir = dir.join("Default");
     if std::fs::create_dir_all(&default_dir).is_ok() {
-        let prefs = serde_json::json!({ "profile": { "name": label } });
+        let mut prefs = serde_json::json!({ "profile": { "name": label } });
+        // AGENT_BROWSER_LOCALE: set Chrome's own language list so the page,
+        // its workers and the Accept-Language header all agree. A CDP/JS
+        // override covers only the page, and the mismatch fails Cloudflare.
+        if let Some(langs) = std::env::var("AGENT_BROWSER_LOCALE")
+            .ok()
+            .and_then(|l| crate::native::stealth::accept_languages_pref(&l))
+        {
+            prefs["intl"] = serde_json::json!({ "accept_languages": langs });
+        }
         let _ = std::fs::write(default_dir.join("Preferences"), prefs.to_string());
     }
 }
