@@ -4,6 +4,9 @@ use serde_json::Value;
 /// Abstract backend for browser automation. CDP (Chromium) and WebDriver
 /// (Safari/iOS) share this interface so actions.rs can remain backend-agnostic
 /// in the future.
+// async_trait marks each boxed future `#[must_use]`, and Clippy 1.99's
+// `double_must_use` flags that as redundant in the generated code.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait BrowserBackend: Send + Sync {
     async fn navigate(&self, url: &str) -> Result<(), String>;
