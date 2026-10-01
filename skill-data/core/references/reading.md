@@ -12,7 +12,20 @@ chrome-use snapshot -i --dom           # list actionable elements from a DOM wal
                                           # (open + closed shadow roots); automatic
                                           # when the AX tree yields no refs at all
 chrome-use snapshot -i --json          # machine-readable output
+chrome-use snapshot -i --reveal-values # print card / password / code values
 ```
+
+**Sensitive values are masked.** A field holding a card number, CVC, expiry,
+password or one-time code shows `<filled 19 chars>` instead of its value (decided
+by `autocomplete`, `type=password`, `name`/`id`, or the field's label), in
+`snapshot` and in `get value`. Pass `--reveal-values` only when the value itself
+is what you need to check; it then lands in the transcript.
+
+**A select on its placeholder has no value.** `combobox "Prefecture": (nothing
+selected; shows "Select")` means the select still sits on a disabled or
+"Select…" option. A field the page has flagged carries `invalid`, and validation
+messages inside cross-origin frames (Stripe, payment widgets) are listed as
+`alert` lines like the page's own.
 
 **Huge / truncated snapshot on a "desktop-shell" web app?** Synology DSM, NAS /
 router admin panels, ExtJS apps render many independent app windows into one

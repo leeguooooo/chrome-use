@@ -351,7 +351,14 @@ pub async fn click_reporting(
                 iframe_sessions,
             )
             .await
-            .map_err(|dom_err| format!("{e}\n(DOM-dispatch fallback also failed: {dom_err})"))?;
+            .map_err(|dom_err| {
+                // The same cause (an unknown ref) fails both paths; say it once.
+                if dom_err == e {
+                    e.clone()
+                } else {
+                    format!("{e}\n(DOM-dispatch fallback also failed: {dom_err})")
+                }
+            })?;
             // The daemon's stderr is not the caller's: the reason has to travel
             // in the response or nobody sees that the click was not a real one.
             let first_line = e.lines().next().unwrap_or("").trim().to_string();
@@ -1015,13 +1022,10 @@ async fn fill_input_trusted(
     };
     if inserted.is_ok() {
         let _ = call_on(client, session_id, object_id, FILL_TRUSTED_TAIL_JS).await;
-        if verify_fill_value(client, session_id, object_id, value, "input")
-            .await
-            .is_ok()
-        {
+        if let Ok(actual) = verify_fill_value(client, session_id, object_id, value, "input").await {
             return Ok(FillOutcome {
                 engine: "input".to_string(),
-                warning: None,
+                warning: reformatted_warning(value, &actual),
             });
         }
     }
@@ -2025,7 +2029,7 @@ async fn verify_fill_value(
     object_id: &str,
     expected: &str,
     engine: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     // Let framework-controlled inputs and editor models finish their synchronous
     // update plus the next paint before reading the authoritative value back.
     wait_for_paint_settled(client, session_id).await;
@@ -2068,13 +2072,60 @@ async fn verify_fill_value(
     // HTML text controls normalize CRLF to LF. Compare that standardized form
     // while preserving every other byte, including leading spaces in YAML.
     if !fill_values_match(expected, actual, engine) {
-        return Err(format!(
-            "fill verification failed for {engine}: {}",
+        // Card numbers, CVCs and passwords stay out of the error text (#372).
+        let detail = if Box::pin(super::sensitive::is_sensitive_object(
+            client, session_id, object_id,
+        ))
+        .await
+        {
+            format!(
+                "the field holds {} chars after writing {} (values hidden: card / password field)",
+                actual.chars().count(),
+                expected.chars().count()
+            )
+        } else {
             fill_mismatch_detail(expected, actual)
-        ));
+        };
+        return Err(format!("fill verification failed for {engine}: {detail}"));
     }
 
-    Ok(())
+    Ok(actual.to_string())
+}
+
+/// Whether `actual` is `expected` as a formatting input shows it: the same
+/// characters once spaces and the usual separators are dropped. Stripe turns
+/// an expiry `1234` into `12 / 34` and a card number into groups of four
+/// (#374); the value took, the field only displays it differently.
+///
+/// Single-line inputs only, and only when the page ADDED separators: a field
+/// that lost characters (YAML indentation, a newline in an editor) is still a
+/// failed fill.
+fn same_after_formatting(expected: &str, actual: &str, engine: &str) -> bool {
+    if !engine.starts_with("input")
+        || expected.contains('\n')
+        || actual.chars().count() < expected.chars().count()
+    {
+        return false;
+    }
+    let strip = |s: &str| -> String {
+        s.chars()
+            .filter(|c| !c.is_whitespace() && !matches!(c, '/' | '-' | '.' | '(' | ')'))
+            .collect()
+    };
+    let e = strip(expected);
+    !e.is_empty() && e == strip(actual)
+}
+
+/// A note for a fill the page reformatted, without echoing either value.
+fn reformatted_warning(expected: &str, actual: &str) -> Option<String> {
+    (expected.replace("\r\n", "\n") != actual.replace("\r\n", "\n")).then(|| {
+        format!(
+            "the page reformatted the value ({} chars written, the field shows {}); \
+             compared ignoring spaces and separators",
+            expected.chars().count(),
+            actual.chars().count()
+        )
+    })
 }
 
 /// Describe a fill/type read-back mismatch so truncation is VISIBLE: what was
@@ -2333,6 +2384,7 @@ fn fill_values_match(expected: &str, actual: &str, engine: &str) -> bool {
             .eq(normalized_expected.split_whitespace())
     } else {
         normalized_actual == normalized_expected
+            || same_after_formatting(&normalized_expected, &normalized_actual, engine)
     }
 }
 
@@ -4820,6 +4872,23 @@ mod tests {
             "monaco"
         ));
         assert!(!fill_values_match("  yaml", " yaml", "input"));
+    }
+
+    #[test]
+    fn test_fill_verification_accepts_a_page_that_only_added_separators() {
+        // Stripe Elements (#374): the value took, the field displays it grouped.
+        assert!(fill_values_match("1234", "12 / 34", "input"));
+        assert!(fill_values_match(
+            "4242424242424242",
+            "4242 4242 4242 4242",
+            "input"
+        ));
+        assert!(fill_values_match("5551234567", "(555) 123-4567", "input"));
+        // A different value, a dropped character, or an editor: still a failure.
+        assert!(!fill_values_match("1234", "12 / 35", "input"));
+        assert!(!fill_values_match("12345", "12 / 34", "input"));
+        assert!(!fill_values_match("1234", "12 / 34", "monaco"));
+        assert!(!fill_values_match("a b", "ab", "input"));
     }
 
     /// Verify that `char_to_key_info` returns the correct (key, code,

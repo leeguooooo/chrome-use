@@ -619,6 +619,39 @@ fn default_session_name() -> String {
     }
 }
 
+/// Appended to a "session has NO snapshot refs" error (#376): which session
+/// this command ran in, why that one, and which other sessions are live. A
+/// helper process started with a trimmed environment (Python's
+/// `subprocess.run(env=...)`) loses the agent id the session name is keyed on
+/// and lands on another session, and the error has to say so.
+pub fn no_refs_session_hint(flags: &Flags) -> String {
+    let why = if flags.session_explicit {
+        "set by --session / AGENT_BROWSER_SESSION".to_string()
+    } else {
+        match describe_default_session().1 {
+            Some(var) => format!("derived from ${var} and the working directory"),
+            None => "the shared `default`: this process has no agent or terminal id in its \
+                     environment (a subprocess started with a trimmed env loses it)"
+                .to_string(),
+        }
+    };
+    let mut others: Vec<String> = live_session_names()
+        .into_iter()
+        .filter(|n| n != &flags.session)
+        .collect();
+    others.sort();
+    others.dedup();
+    let mut hint = format!("\nThis command ran in session `{}` ({why}).", flags.session);
+    if !others.is_empty() {
+        hint.push_str(&format!(
+            " Other live sessions: {}. If the snapshot was taken in one of them, add \
+             `--session <name>` (or export AGENT_BROWSER_SESSION in the helper process).",
+            others.join(", ")
+        ));
+    }
+    hint
+}
+
 /// Session names that currently have a daemon socket / pid file, i.e. the
 /// sessions an agent could already be driving.
 fn live_session_names() -> Vec<String> {

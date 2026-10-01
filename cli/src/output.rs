@@ -3092,6 +3092,8 @@ Designed for AI agents to understand page structure.
 Options:
   -i, --interactive    Controls, local context, and status receipts
   -u, --urls           Include href URLs for link elements
+  --reveal-values      Print card / password / one-time-code values instead of
+                       <filled N chars> (they then land in the transcript)
   -c, --compact        Remove empty structural elements
   -d, --depth <n>      Limit tree depth
   -s, --selector <sel> Scope snapshot to CSS selector
@@ -3229,7 +3231,8 @@ Subcommands:
   text --main                Main-content text only (skip nav/header/sidebar)
   text --pierce              Read through CLOSED shadow DOM (injected panels)
   html <selector>            Get inner HTML of element
-  value <selector>           Get value of input element
+  value <selector>           Get value of input element (card / password /
+                             one-time-code fields masked; --reveal-values)
   attr <selector> <name>     Get attribute value
   title                      Get page title
   url                        Get current URL
@@ -5431,6 +5434,29 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         if let Some(frames) = obs.get("newFrames").and_then(|v| v.as_array()) {
             for f in frames.iter().filter_map(|v| v.as_str()) {
                 eprintln!("  {}", color::dim(f));
+            }
+        }
+    }
+    if let Some(h) = obs.get("humanCheck") {
+        eprintln!(
+            "{} blocked_by_human_check: {} ({})",
+            color::warning_indicator(),
+            h.get("vendor").and_then(|v| v.as_str()).unwrap_or("?"),
+            h.get("url").and_then(|v| v.as_str()).unwrap_or("")
+        );
+        if let Some(hint) = h.get("hint").and_then(|v| v.as_str()) {
+            eprintln!("  {}", color::dim(hint));
+        }
+    }
+    if let Some(res) = obs.get("resources").and_then(|v| v.as_array()) {
+        if !res.is_empty() {
+            let total = obs
+                .get("resourcesTotal")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(res.len() as u64);
+            println!("{} {}", color::dim("observed resources:"), total);
+            for r in res.iter().filter_map(|v| v.as_str()) {
+                println!("  {}", color::dim(r));
             }
         }
     }

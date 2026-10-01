@@ -447,6 +447,17 @@
 
       <hr class="du-divider" />
 
+      <h2>密码管理器的内联菜单锁住标签页</h2>
+      <p>
+        聚焦登录框或卡号框时，Bitwarden、1Password 这类密码管理器会在旁边弹出内联填充菜单。这个菜单是它们自己扩展的 frame，只要它还在，Chrome 就拒绝这个标签页上的所有调试器命令（<code>debugger_access_denied</code>）。报错会点名本机 Chrome 里装了哪个密码管理器。
+      </p>
+
+      <p>
+        标签页被隐藏再显示一次，菜单就会关掉。对 session 自己开的、正在前台的标签页，chrome-use 会自己这样做（短暂显示一个空白页），然后在安全的前提下自动重试（读取、<code>fill</code>、<code>select</code> 等）；点击、按键这类可能已执行一半的命令不会重试，报错里会说明。后台标签页不会被自动切到前台：报错里会给出一条可以直接执行的 <code>extension call tabs.update</code> 命令（<code>tab select --activate</code> 此时用不了，它要先连上调试器）。想避免它：这类字段用 <code>fill</code> 而不是 <code>type --key-events</code>，在密码管理器里对该网站关闭内联菜单，或者改用 <code>--launch</code> 的独立 profile。
+      </p>
+
+      <hr class="du-divider" />
+
       <h2>相关页面</h2>
       <div class="du-cards cols-2">
         <a class="du-card" href="/sessions.html">

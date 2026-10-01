@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::signal;
 use tokio::sync::{mpsc, Notify, RwLock};
 
-use super::actions::{execute_command, DaemonState};
+use super::actions::{execute_command_recovering, DaemonState};
 use super::cdp::client::CdpClient;
 use super::state;
 use super::stream::StreamServer;
@@ -542,7 +542,7 @@ async fn handle_connection<S>(
 
                 let response = {
                     let mut s = state.lock().await;
-                    execute_command(&cmd, &mut s).await
+                    execute_command_recovering(&cmd, &mut s).await
                 };
 
                 let mut resp = serde_json::to_string(&response).unwrap_or_default();

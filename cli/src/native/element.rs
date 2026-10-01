@@ -2795,6 +2795,36 @@ pub async fn get_element_inner_html(
         .unwrap_or_default())
 }
 
+/// Whether the element is a card / password / one-time-code field, whose value
+/// `get value` masks unless `--reveal-values` (#372).
+pub async fn is_element_sensitive(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> bool {
+    if let Some(entry) = parse_ref(selector_or_ref).and_then(|r| ref_map.get(&r)) {
+        if super::sensitive::sensitive_by_name(&entry.name) {
+            return true;
+        }
+    }
+    match resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await
+    {
+        Ok((object_id, effective)) => {
+            super::sensitive::is_sensitive_object(client, &effective, &object_id).await
+        }
+        Err(_) => false,
+    }
+}
+
 pub async fn get_element_input_value(
     client: &CdpClient,
     session_id: &str,

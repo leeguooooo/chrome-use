@@ -1804,8 +1804,13 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         let req_mark = state.tracked_requests.len();
         let mgr = state.browser.as_ref().unwrap();
         let url = mgr.get_url().await;
+        let resource_mark = Box::pin(mgr.evaluate(super::observation::RESOURCE_MARK_JS, None))
+            .await
+            .ok()
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let snap = observe_snapshot(state).await;
-        Some((url, snap, req_mark))
+        Some((url, snap, (req_mark, resource_mark)))
     } else {
         None
     };
@@ -2114,6 +2119,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             // is blocked no page events arrive, so the cache still names the page
             // where the block began even after the tab has moved on (#357).
             if super::browser::is_debugger_access_denied(&e) {
+                msg.push_str(&super::browser::foreign_frame_hint());
                 let summary = match state.browser.as_mut() {
                     Some(mgr) => mgr.live_pinned_tab_summary().await,
                     None => None,
@@ -2129,7 +2135,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // `--observe`: after a successful mutating action, settle briefly, re-snapshot,
     // and attach ONLY the delta vs the baseline (added/removed lines, url change,
     // requests fired). Collapses act→wait→snapshot→diff into one reply.
-    if let (true, Some((url0, snap0, req_mark))) = (ok, observe_baseline) {
+    if let (true, Some((url0, snap0, (req_mark, resource_mark)))) = (ok, observe_baseline) {
         // Wait on signals, not on a number (#228). The 250ms this replaces was
         // wrong in both directions: too short on a slow page, where the delta
         // described a tree that no longer existed by the time the agent read
@@ -2164,6 +2170,27 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             .cloned()
             .collect();
         let mut observed = super::observation::changes(&snap0, &snap1, &url0, &url1);
+        // What the page fetched during the action, from resource timing: it
+        // works with the Network domain off, where `requests` stays empty (#378).
+        let resources: Vec<Value> = match state.browser.as_ref() {
+            Some(mgr) => {
+                Box::pin(mgr.evaluate(&super::observation::resources_since_js(resource_mark), None))
+                    .await
+                    .ok()
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
+        let (resource_lines, resources_total) = super::observation::resource_lines(&resources, 10);
+        if resources_total > 0 {
+            observed.insert("resources".into(), json!(resource_lines));
+            observed.insert("resourcesTotal".into(), json!(resources_total));
+        }
+        let changed_now = observed.get("changed").and_then(|v| v.as_bool()) == Some(true);
+        if let Some(verdict) = super::observation::human_check_verdict(changed_now, &resources) {
+            observed.insert("humanCheck".into(), verdict);
+        }
         let mut settled = settled;
         settled.mark_changed(observed.get("changed").and_then(|v| v.as_bool()) == Some(true));
         observed.insert("settle".into(), settled.to_json());
@@ -2190,7 +2217,9 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         // (#274). Probe the target only when there was nothing to report —
         // on the path where the action visibly did something this costs
         // nothing, which is the constraint the request came with.
-        if observed.get("changed").and_then(|v| v.as_bool()) == Some(false) {
+        if observed.get("changed").and_then(|v| v.as_bool()) == Some(false)
+            && !observed.contains_key("humanCheck")
+        {
             if let Some(sel) = cmd
                 .get("selector")
                 .and_then(|v| v.as_str())
@@ -2245,6 +2274,24 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
             if let Some(d) = data.as_object_mut() {
                 d.insert("observed".into(), Value::Object(observed));
+            }
+            // A page waiting for a person must not read as "the click did
+            // nothing", or the caller clicks again (#377).
+            let human_check = obj
+                .get("data")
+                .and_then(|d| d.pointer("/observed/humanCheck"))
+                .cloned();
+            if let Some(h) = human_check {
+                obj.insert(
+                    "warning".to_string(),
+                    json!(format!(
+                        "blocked_by_human_check: {} is waiting for a person. Hand off with \
+                         `session handoff`; do not repeat the action.",
+                        h.get("vendor")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("a human check")
+                    )),
+                );
             }
             // A delta captured off a page that never went quiet is a guess. Say
             // so rather than letting it read like the settled result.
@@ -5051,10 +5098,19 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
             .and_then(|v| v.as_u64())
             .map(|d| d as usize),
         urls: cmd.get("urls").and_then(|v| v.as_bool()).unwrap_or(false),
+        reveal_values: cmd
+            .get("revealValues")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     };
 
+    // A snapshot that fails (a blocked tab, a renderer mid-navigation) must not
+    // take the previous refs with it: the next `click @e5` would then report a
+    // session with no refs at all, which reads as being in the wrong session
+    // (#376). Keep the old map until the new one is complete.
+    let previous_refs = state.ref_map.clone();
     state.ref_map.begin_snapshot();
-    let tree = snapshot::take_snapshot(
+    let tree = match snapshot::take_snapshot(
         &mgr.client,
         &session_id,
         &options,
@@ -5062,7 +5118,14 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         state.active_frame_id.as_deref(),
         &state.iframe_sessions,
     )
-    .await?;
+    .await
+    {
+        Ok(tree) => tree,
+        Err(e) => {
+            state.ref_map = previous_refs;
+            return Err(e);
+        }
+    };
 
     // DOM-walk fallback (issue #206). On some web-component SPAs the AX tree
     // comes back as a few bare `generic` nodes with nothing to ref — even
@@ -10654,6 +10717,96 @@ async fn handle_innerhtml(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     Ok(json!({ "html": html }))
 }
 
+/// Run a command, and once more if another extension's frame blocked the tab
+/// (#373). A password manager's inline menu makes Chrome refuse every debugger
+/// command on the tab; `cycle_pinned_tab_visibility` closes it with no debugger
+/// command. The command is repeated only when repeating it is harmless.
+///
+/// Deliberately outside [`execute_command`]: an extra await inside its giant
+/// state machine was enough to overflow a 2 MiB test-thread stack in debug
+/// builds. Here the two runs are sequential, never nested.
+pub async fn execute_command_recovering(cmd: &Value, state: &mut DaemonState) -> Value {
+    let first = execute_command(cmd, state).await;
+    let denied = first.get("success").and_then(|v| v.as_bool()) == Some(false)
+        && first
+            .get("error")
+            .and_then(|v| v.as_str())
+            .is_some_and(super::browser::is_debugger_access_denied);
+    if !denied {
+        return first;
+    }
+    let recovery = match state.browser.as_mut() {
+        Some(mgr) if mgr.on_relay() => Box::pin(mgr.cycle_pinned_tab_visibility()).await,
+        _ => Err("not on the extension relay".to_string()),
+    };
+    if let Err(reason) = recovery {
+        let mut out = first;
+        if let Some(Value::String(e)) = out.get_mut("error") {
+            e.push_str(&format!("\n(No automatic recovery: {reason}.)"));
+        }
+        return out;
+    }
+    let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    if !safe_to_repeat(action) {
+        let mut out = first;
+        if let Some(Value::String(e)) = out.get_mut("error") {
+            e.push_str(
+                "\nchrome-use briefly switched tabs, which closes such a menu, but did not repeat \
+                 this command: it may already have run in part. Check the page, then run it again.",
+            );
+        }
+        return out;
+    }
+    let mut second = Box::pin(execute_command(cmd, state)).await;
+    if second.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        if let Some(obj) = second.as_object_mut() {
+            obj.entry("warning").or_insert_with(|| {
+                json!(
+                    "another extension's frame (a password manager's inline menu) blocked this \
+                     tab; chrome-use briefly switched tabs to close it, then ran the command again"
+                )
+            });
+        }
+    }
+    second
+}
+
+/// Commands that leave the page as they found it, or set it to the same end
+/// state when run twice, so a repeat after a recovered access block (#373)
+/// cannot double an effect. Clicks, keys and scripts are not among them.
+fn safe_to_repeat(action: &str) -> bool {
+    matches!(
+        action,
+        "snapshot"
+            | "url"
+            | "title"
+            | "content"
+            | "read"
+            | "screenshot"
+            | "frames"
+            | "inputvalue"
+            | "gettext"
+            | "innertext"
+            | "innerhtml"
+            | "getattribute"
+            | "isvisible"
+            | "isenabled"
+            | "ischecked"
+            | "count"
+            | "boundingbox"
+            | "styles"
+            | "wait"
+            | "fill"
+            | "select"
+            | "check"
+            | "uncheck"
+            | "find"
+            | "extract"
+            | "stealth_status"
+            | "cf_status"
+    )
+}
+
 async fn handle_inputvalue(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
@@ -10670,6 +10823,27 @@ async fn handle_inputvalue(cmd: &Value, state: &mut DaemonState) -> Result<Value
         &state.iframe_sessions,
     )
     .await?;
+    let reveal = cmd
+        .get("revealValues")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !reveal
+        && !value.is_empty()
+        && Box::pin(super::element::is_element_sensitive(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            selector,
+            &state.iframe_sessions,
+        ))
+        .await
+    {
+        return Ok(json!({
+            "value": super::sensitive::masked(&value),
+            "masked": true,
+            "hint": "card / password / one-time-code field: pass --reveal-values to print it",
+        }));
+    }
     Ok(json!({ "value": value }))
 }
 

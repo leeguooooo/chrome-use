@@ -3070,6 +3070,11 @@ fn main() {
                     }
                 }
             }
+            if let Some(err) = resp.error.as_mut() {
+                if err.contains("has NO snapshot refs") {
+                    err.push_str(&flags::no_refs_session_hint(&flags));
+                }
+            }
             let success = resp.success;
             // A gated action reports `success: true` while it is still only
             // *pending* — the page has not been opened. `--remember` must not

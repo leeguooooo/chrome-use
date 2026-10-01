@@ -59,10 +59,19 @@ clearance.
 Full detail: `chrome-use skills get real-chrome`
 
 
-Chrome can refuse debugger access to an ordinary web tab containing another
-extension's protected iframe. `debugger_access_denied` is non-retryable; use
-`tab inspect <ref>` for browser metadata or a separate test profile. Reattaching
-does not remove this restriction.
+Chrome refuses debugger access to a web tab while another extension's frame is
+in it, most often a password manager's inline autofill menu (Bitwarden,
+1Password, ...) that opens next to a focused login or card field. The error
+names the password managers installed in this Chrome. The menu closes when the
+tab is hidden and shown again. For a tab the session created that is in front,
+chrome-use does that itself (a blank tab for a moment) and repeats the command if
+repeating it is harmless (a read, `fill`, `select`); a click or key press is not
+repeated and the error says so. A background tab is never brought to the front
+on its own: the error gives the exact `extension call tabs.update` command that
+does it (`tab select --activate` cannot, it needs the debugger first).
+Reattaching does not help. To avoid it, fill those fields with `fill` rather than
+`type --key-events`, turn the extension's inline menu off for the site, or use a
+`--launch` profile.
 
 Relay navigation makes up to three bounded access checks while waiting for a
 lifecycle event. A confirmed debugger access denial ends the wait early; a

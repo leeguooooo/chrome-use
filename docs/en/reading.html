@@ -336,6 +336,17 @@ URL: https://example.com/login
 
       <hr class="du-divider" />
 
+      <h2>Masked values, placeholder selects, errors inside iframes</h2>
+      <p>
+        A field holding a card number, CVC, expiry, password or one-time code shows <code>&lt;filled 19 chars&gt;</code> in <code>snapshot</code> and <code>get value</code> instead of its value (decided by <code>autocomplete</code>, <code>type=password</code>, <code>name</code>/<code>id</code> or the label). Pass <code>--reveal-values</code> only when you need to check the value itself; it then lands in the transcript.
+      </p>
+
+      <p>
+        A select still sitting on a disabled or "Select…" option shows <code>(nothing selected; shows "Select")</code> instead of looking chosen. A field the page has flagged carries <code>invalid</code>, and validation messages inside cross-origin frames (Stripe and other payment widgets) are listed as <code>alert</code> lines like the page's own.
+      </p>
+
+      <hr class="du-divider" />
+
       <h2>Next steps</h2>
       <p>Once you understand the page, take those refs and text and do something with them.</p>
       <div class="du-cards cols-3">

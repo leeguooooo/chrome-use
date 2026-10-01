@@ -481,6 +481,17 @@
 
       <hr class="du-divider" />
 
+      <h2>A password manager's inline menu locks the tab</h2>
+      <p>
+        Focusing a login or card field makes password managers such as Bitwarden or 1Password open an inline autofill menu next to it. That menu is a frame of their own extension, and while it is open Chrome refuses every debugger command on the tab (<code>debugger_access_denied</code>). The error names the password managers installed in this Chrome.
+      </p>
+
+      <p>
+        The menu closes when the tab is hidden and shown again. For a tab the session created that is in front, chrome-use does that itself (a blank tab for a moment), then repeats the command when repeating is harmless (a read, <code>fill</code>, <code>select</code>); a click or key press is not repeated, and the error says so. A background tab is never brought to the front on its own: the error gives the exact <code>extension call tabs.update</code> command that does it (<code>tab select --activate</code> cannot, it needs the debugger first). To avoid it, fill such fields with <code>fill</code> rather than <code>type --key-events</code>, turn the inline menu off for the site in the password manager, or use a <code>--launch</code> profile.
+      </p>
+
+      <hr class="du-divider" />
+
       <h2>Related pages</h2>
       <div class="du-cards cols-2">
         <a class="du-card" href="/en/sessions.html">

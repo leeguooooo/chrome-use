@@ -320,6 +320,17 @@
       <hr class="du-divider" />
 
       <!-- ============ NEXT ============ -->
+      <h2>Resources and human-check blocks in observe</h2>
+      <p>
+        <code>--observe</code> results carry <code>resources</code>: what the page fetched during the action, from resource timing (so it works with the Network domain off), scripts and fetches first, up to 10, with <code>resourcesTotal</code>.
+      </p>
+
+      <p>
+        When an action changed nothing but loaded a known human-check script (OpenAI Sentinel, hCaptcha, Cloudflare Turnstile, reCAPTCHA, Arkose, DataDome, HUMAN, GeeTest), <code>observed.humanCheck</code> names the vendor and the result carries a <code>blocked_by_human_check</code> warning. The page is waiting for a person: do not repeat the click and do not try to get around it. Hand off with <code>session handoff</code> and resume after the user has completed it.
+      </p>
+
+      <hr class="du-divider" />
+
       <h2>Next</h2>
       <div class="du-cards cols-2">
         <a class="du-card" href="/en/interacting.html">

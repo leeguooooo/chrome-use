@@ -1731,6 +1731,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "-u" | "--urls" => {
                         obj.insert("urls".to_string(), json!(true));
                     }
+                    "--reveal-values" => {
+                        obj.insert("revealValues".to_string(), json!(true));
+                    }
                     "--dom" => {
                         obj.insert("dom".to_string(), json!(true));
                     }
@@ -3829,7 +3832,8 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
                 context: "get value".to_string(),
                 usage: "get value <selector>",
             })?;
-            Ok(json!({ "id": id, "action": "inputvalue", "selector": sel }))
+            let reveal = rest.contains(&"--reveal-values");
+            Ok(json!({ "id": id, "action": "inputvalue", "selector": sel, "revealValues": reveal }))
         }
         Some("attr") => {
             let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {

@@ -75,6 +75,69 @@ pub(super) fn summarize_requests<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::{human_check_vendor, human_check_verdict, resource_lines};
+
+    #[test]
+    fn human_check_vendors_are_recognized_by_url() {
+        assert_eq!(
+            human_check_vendor("https://platform.openai.com/sentinel/abc123/sdk.js"),
+            Some("OpenAI Sentinel")
+        );
+        assert_eq!(
+            human_check_vendor("https://js.hcaptcha.com/1/api.js"),
+            Some("hCaptcha")
+        );
+        assert_eq!(
+            human_check_vendor("https://challenges.cloudflare.com/turnstile/v0/api.js"),
+            Some("Cloudflare Turnstile")
+        );
+        assert_eq!(
+            human_check_vendor("https://www.google.com/recaptcha/api.js"),
+            Some("reCAPTCHA")
+        );
+        assert_eq!(
+            human_check_vendor("https://www.google.com/search?q=recaptcha"),
+            None
+        );
+        assert_eq!(human_check_vendor("https://cdn.example.com/app.js"), None);
+        assert_eq!(
+            human_check_vendor("https://notsentinel.example.com/x.js"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_no_change_click_that_loaded_a_human_check_is_blocked() {
+        let entries = vec![
+            serde_json::json!({"url": "https://platform.openai.com/sentinel/abc/sdk.js", "type": "script"}),
+        ];
+        let v = human_check_verdict(false, &entries).unwrap();
+        assert_eq!(v["verdict"], "blocked_by_human_check");
+        assert_eq!(v["vendor"], "OpenAI Sentinel");
+        // A click that visibly did something is not blocked.
+        assert!(human_check_verdict(true, &entries).is_none());
+        // Nothing human-check related: no verdict.
+        let plain =
+            vec![serde_json::json!({"url": "https://cdn.example.com/a.js", "type": "script"})];
+        assert!(human_check_verdict(false, &plain).is_none());
+    }
+
+    #[test]
+    fn resource_lines_put_scripts_first_and_cap() {
+        let entries: Vec<serde_json::Value> = (0..15)
+            .map(
+                |i| serde_json::json!({"url": format!("https://x.test/img{i}.png"), "type": "img"}),
+            )
+            .chain(std::iter::once(
+                serde_json::json!({"url": "https://x.test/app.js", "type": "script"}),
+            ))
+            .collect();
+        let (lines, total) = resource_lines(&entries, 10);
+        assert_eq!(total, 16);
+        assert_eq!(lines.len(), 10);
+        assert_eq!(lines[0], "script https://x.test/app.js");
+    }
+
     use super::*;
 
     #[test]
@@ -119,6 +182,106 @@ mod tests {
         assert_eq!(empty.total, 0);
         assert!(empty.lines.is_empty());
     }
+}
+
+/// How many resource-timing entries the page has: the mark the post-action
+/// read counts from (#378). Read from `performance`, so it works with the
+/// Network domain off (the stealth default) and on the relay.
+pub(super) const RESOURCE_MARK_JS: &str =
+    "(() => { try { return performance.getEntriesByType('resource').length } catch (e) { return 0 } })()";
+
+/// Resources the page fetched since `mark`: `[{url, type, bytes}]`. A count
+/// below the mark means the document was replaced, so everything is new.
+pub(super) fn resources_since_js(mark: u64) -> String {
+    format!(
+        "(() => {{ try {{ const all = performance.getEntriesByType('resource'); \
+         const from = all.length >= {mark} ? {mark} : 0; \
+         return all.slice(from).map(e => ({{ url: e.name, type: e.initiatorType, bytes: e.transferSize || 0 }})); \
+         }} catch (e) {{ return [] }} }})()"
+    )
+}
+
+/// Resource lines for the observation, script and fetch first, capped.
+pub(super) fn resource_lines(entries: &[serde_json::Value], cap: usize) -> (Vec<String>, usize) {
+    let rank = |t: &str| match t {
+        "script" => 0,
+        "fetch" | "xmlhttprequest" | "beacon" => 1,
+        "iframe" | "frame" => 2,
+        _ => 3,
+    };
+    let mut rows: Vec<(usize, String)> = entries
+        .iter()
+        .filter_map(|e| {
+            let url = e.get("url")?.as_str()?;
+            let kind = e.get("type").and_then(|v| v.as_str()).unwrap_or("other");
+            Some((rank(kind), format!("{kind} {}", shorten(url, 120))))
+        })
+        .collect();
+    rows.sort_by_key(|(r, _)| *r);
+    let total = rows.len();
+    (rows.into_iter().take(cap).map(|(_, l)| l).collect(), total)
+}
+
+/// Known human-check / anti-automation vendors, by a URL they load (#377).
+/// Only recognized and reported, never worked around.
+pub(super) fn human_check_vendor(url: &str) -> Option<&'static str> {
+    let u = url.to_ascii_lowercase();
+    let host = u
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("");
+    let path = u
+        .split("://")
+        .nth(1)
+        .and_then(|r| r.find('/').map(|i| &r[i..]))
+        .unwrap_or("");
+    let on = |d: &str| host == d || host.ends_with(&format!(".{d}"));
+    if path.starts_with("/sentinel/") || on("sentinel.openai.com") {
+        Some("OpenAI Sentinel")
+    } else if on("hcaptcha.com") {
+        Some("hCaptcha")
+    } else if on("challenges.cloudflare.com") {
+        Some("Cloudflare Turnstile")
+    } else if on("recaptcha.net")
+        || ((on("google.com") || on("gstatic.com")) && path.contains("/recaptcha/"))
+    {
+        Some("reCAPTCHA")
+    } else if on("arkoselabs.com") || on("funcaptcha.com") {
+        Some("Arkose")
+    } else if on("captcha-delivery.com") {
+        Some("DataDome")
+    } else if on("px-cdn.net") || on("px-cloud.net") || on("perimeterx.net") {
+        Some("HUMAN (PerimeterX)")
+    } else if on("geetest.com") {
+        Some("GeeTest")
+    } else {
+        None
+    }
+}
+
+/// When an action changed nothing on the page but a human-check script loaded
+/// during it, the page is waiting for a person (#377). The verdict names the
+/// vendor and says to hand off; it never suggests getting around it.
+pub(super) fn human_check_verdict(
+    changed: bool,
+    entries: &[serde_json::Value],
+) -> Option<serde_json::Value> {
+    if changed {
+        return None;
+    }
+    let (vendor, url) = entries.iter().find_map(|e| {
+        let url = e.get("url")?.as_str()?;
+        human_check_vendor(url).map(|v| (v, url))
+    })?;
+    Some(serde_json::json!({
+        "verdict": "blocked_by_human_check",
+        "vendor": vendor,
+        "url": shorten(url, 120),
+        "hint": "the action loaded this human-check script and the page did not change: it is \
+                 waiting for a person. Do not repeat the click. Hand off with `session handoff` \
+                 and resume after the user has completed it.",
+    }))
 }
 
 pub(super) fn capture_error(stage: &str, error: &str) -> serde_json::Value {

@@ -332,6 +332,17 @@ URL: https://example.com/login
 
       <hr class="du-divider" />
 
+      <h2>敏感值打码、占位下拉框、iframe 里的校验错误</h2>
+      <p>
+        卡号、CVC、有效期、密码、一次性验证码这类字段，<code>snapshot</code> 和 <code>get value</code> 默认显示 <code>&lt;filled 19 chars&gt;</code>，不输出明文（依据 <code>autocomplete</code>、<code>type=password</code>、<code>name</code>/<code>id</code> 或标签判断）。确实需要核对值时加 <code>--reveal-values</code>，值会因此进入对话记录。
+      </p>
+
+      <p>
+        下拉框还停在禁用的或「Select / 请选择」这类占位项上时，显示为 <code>(nothing selected; shows "Select")</code>，不再像是已经选了值。页面标记为不合格的字段带 <code>invalid</code>；跨域 iframe（Stripe 等支付组件）里的校验提示也会和主页面的一样，作为 <code>alert</code> 行列出来。
+      </p>
+
+      <hr class="du-divider" />
+
       <h2>下一步</h2>
       <p>读懂页面之后，拿着这些 ref 与文本去做点什么。</p>
       <div class="du-cards cols-3">

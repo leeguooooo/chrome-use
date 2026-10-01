@@ -306,6 +306,17 @@
       <hr class="du-divider" />
 
       <!-- ============ NEXT ============ -->
+      <h2>observe 里的资源摘要和人机校验拦截</h2>
+      <p>
+        <code>--observe</code> 的结果里有 <code>resources</code>：动作期间页面新加载的资源（取自 resource timing，Network 域关闭时也有），脚本和请求排在前面，最多 10 条，另有 <code>resourcesTotal</code>。
+      </p>
+
+      <p>
+        如果动作之后页面没有任何变化，但期间加载了已知的人机校验脚本（OpenAI Sentinel、hCaptcha、Cloudflare Turnstile、reCAPTCHA、Arkose、DataDome、HUMAN、GeeTest），<code>observed.humanCheck</code> 会写明是哪家，结果带 <code>blocked_by_human_check</code> 警告。这说明页面在等真人操作：不要重复点击，也不要想办法绕过，用 <code>session handoff</code> 交给用户，等用户完成后再继续。
+      </p>
+
+      <hr class="du-divider" />
+
       <h2>下一步</h2>
       <div class="du-cards cols-2">
         <a class="du-card" href="/interacting.html">

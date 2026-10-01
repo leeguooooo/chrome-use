@@ -147,6 +147,10 @@ page's own state took it, so read what the commands report:
 - `fill` warns when the field's form or dialog had a disabled Save/Submit
   before the fill and still has it after (JSON `commitControl`), and when it
   had to fall back to a synthetic write (`engine: input-synthetic`).
+- `fill` accepts a field that only reformatted the value (Stripe turns `1234`
+  into `12 / 34`, a card number into groups of four) and says so with a ⚠ note;
+  a value that differs in any other way is still an error, and a card or
+  password value is never echoed in it.
 - `click` refuses a `:disabled` control with an error, and warns on
   `aria-disabled="true"`. A Save that stays disabled means the edit did not
   register: fix the edit, do not force the click.

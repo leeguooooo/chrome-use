@@ -41,6 +41,7 @@ pub mod recording;
 pub mod relay;
 #[allow(dead_code)]
 pub mod screenshot;
+pub mod sensitive;
 
 pub mod script;
 

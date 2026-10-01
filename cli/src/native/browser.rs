@@ -606,6 +606,108 @@ pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
             && lower.contains("different extension"))
 }
 
+/// Password managers whose inline autofill menu is a frame of their own
+/// extension, mounted next to a focused login or card field. While that frame
+/// is in a tab, Chrome refuses every debugger command on the tab (#373).
+const INLINE_MENU_EXTENSIONS: &[(&str, &str)] = &[
+    ("nngceckbapebfimnlniiiahkandclblb", "Bitwarden"),
+    ("aeblfdkhhhdcdjpifhhbdiojplfjncoa", "1Password"),
+    ("hdokiejnpimakedhajhdlcegeplioahd", "LastPass"),
+    ("fdjamakpfbbddfjaooikfcpapjohcfmg", "Dashlane"),
+    ("fooolghllnmhmmndgjiamiiodkpenpbb", "NordPass"),
+    ("ghmbeldphafepmbegfdlkpapadhbakde", "Proton Pass"),
+    ("bfogiafebfohielmmehodmfbbebbbpei", "Keeper"),
+    ("pnlccmojcmeohlpggmfnbbiapkmbliob", "RoboForm"),
+    ("kmcfomidfpdkfieipokbalgegidffkal", "Enpass"),
+    ("pejdijmoenmkgeppbflobdenhhabjlaj", "iCloud Passwords"),
+];
+
+/// Chrome-family user-data directories on this machine.
+fn chrome_user_data_dirs() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    #[cfg(target_os = "macos")]
+    if let Some(base) = dirs::data_dir() {
+        for d in [
+            "Google/Chrome",
+            "Google/Chrome Beta",
+            "Chromium",
+            "Microsoft Edge",
+            "BraveSoftware/Brave-Browser",
+        ] {
+            roots.push(base.join(d));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(base) = dirs::config_dir() {
+        for d in [
+            "google-chrome",
+            "google-chrome-beta",
+            "chromium",
+            "microsoft-edge",
+            "BraveSoftware/Brave-Browser",
+        ] {
+            roots.push(base.join(d));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(base) = dirs::data_local_dir() {
+        for d in [
+            "Google/Chrome/User Data",
+            "Chromium/User Data",
+            "Microsoft/Edge/User Data",
+            "BraveSoftware/Brave-Browser/User Data",
+        ] {
+            roots.push(base.join(d));
+        }
+    }
+    roots
+}
+
+/// Inline-menu password managers installed in any local Chrome profile, by
+/// name. Read from the profiles' `Extensions/<id>` directories: the relay
+/// cannot see another extension's frame (webNavigation omits it), so this is
+/// the closest it gets to naming the culprit.
+pub(crate) fn installed_inline_menu_extensions() -> Vec<&'static str> {
+    let mut found: Vec<&'static str> = Vec::new();
+    for root in chrome_user_data_dirs() {
+        let Ok(profiles) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for profile in profiles.flatten() {
+            let ext = profile.path().join("Extensions");
+            for (id, name) in INLINE_MENU_EXTENSIONS {
+                if ext.join(id).is_dir() && !found.contains(name) {
+                    found.push(name);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// What to tell the reader about a tab blocked by another extension's frame.
+pub(crate) fn foreign_frame_hint() -> String {
+    let installed = installed_inline_menu_extensions();
+    let culprit = if installed.is_empty() {
+        "another extension's frame (a password manager's inline autofill menu is the usual one)"
+            .to_string()
+    } else {
+        format!(
+            "most likely {}'s inline autofill menu (installed in this Chrome), which opens next to a \
+             focused login or card field",
+            installed.join(" / ")
+        )
+    };
+    format!(
+        "\nCause: {culprit}. While that frame is in the tab Chrome refuses every debugger command \
+         on it; the tab works again once it closes. It closes when the tab is hidden and shown again: \
+         for a tab in front chrome-use does that itself; a background tab has to be \
+         brought to the front (the command is below). Fill such fields with \
+         `fill` (one write) rather than `type --key-events`, and to stop it happening, turn off that \
+         extension's inline menu for this site or drive a `--launch` profile without it."
+    )
+}
+
 /// Race normal lifecycle waiting against a small number of access checks. A
 /// successful check never substitutes for a load event; only a definitive
 /// Chrome access denial can end the wait early. Fast pages finish before the
@@ -2698,6 +2800,82 @@ impl BrowserManager {
     /// the user logs in and the tab moves on, the note kept naming the old page
     /// (#357). `chrome.tabs` metadata needs no debugger access, so ask it and
     /// refresh the cache. Falls back to the cached url when it cannot ask.
+    /// Close another extension's frame by switching the pinned tab out of and
+    /// back into view (#373). A password manager's inline menu blocks every
+    /// debugger command while it is open, and closes when its page changes
+    /// visibility; `chrome.tabs` can do that with no debugger command, the only
+    /// kind still refused. Only for a tab this session created that is already
+    /// in front: a blank tab is shown for a moment and the tab comes back, so
+    /// the user's view ends where it was. A background tab is left alone (the
+    /// agent never force-fronts a tab); the error points at
+    /// `tab select --activate`. The page and what was typed stay as they were.
+    pub async fn cycle_pinned_tab_visibility(&mut self) -> Result<(), String> {
+        if !self.on_relay() {
+            return Err("not on the extension relay".to_string());
+        }
+        let pinned = self.active_target_id.clone().ok_or("no pinned tab")?;
+        if !self.created_targets.contains(&pinned) {
+            return Err("the pinned tab was not created by this session".to_string());
+        }
+        let page = self
+            .pages
+            .iter()
+            .find(|p| p.target_id == pinned)
+            .ok_or("pinned tab not tracked")?;
+        let live: Value = self
+            .client
+            .send_command_typed(
+                "ABExt.inspectTab",
+                &json!({ "sessionId": page.session_id, "targetId": page.target_id }),
+                None,
+            )
+            .await?;
+        let chrome_tab = live
+            .get("chromeTabId")
+            .and_then(|v| v.as_i64())
+            .ok_or("no Chrome tab id")?;
+        let activate = |tab: i64| json!({ "namespace": "tabs", "method": "update", "args": [tab, { "active": true }] });
+        if live.get("active").and_then(|v| v.as_bool()) == Some(true) {
+            let created: Value = self
+                .client
+                .send_command(
+                    "Target.createTarget",
+                    Some(json!({ "url": "about:blank", "background": false })),
+                    None,
+                )
+                .await?;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let back = self
+                .client
+                .send_command("ABExt.call", Some(activate(chrome_tab)), None)
+                .await;
+            if let Some(temp) = created.get("targetId").and_then(|v| v.as_str()) {
+                let _ = self
+                    .client
+                    .send_command(
+                        "Target.closeTarget",
+                        Some(json!({ "targetId": temp })),
+                        None,
+                    )
+                    .await;
+            }
+            back?;
+        } else {
+            // The agent never brings a tab to the front on its own, and the tab
+            // the user is looking at is not this relay's to switch back to.
+            // `tab select --activate` cannot help here: it needs the debugger
+            // first. chrome.tabs does not.
+            return Err(format!(
+                "the tab is in the background, and chrome-use does not bring tabs to the front \
+                 on its own. To do it, run `chrome-use extension call tabs.update \
+                 '[{chrome_tab},{{\"active\":true}}]'`: the tab comes to the front, the menu \
+                 closes, and the next command works"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        Ok(())
+    }
+
     pub async fn live_pinned_tab_summary(&mut self) -> Option<(String, String)> {
         let pinned = self.active_target_id.clone()?;
         let index = self.pages.iter().position(|p| p.target_id == pinned)?;

@@ -92,6 +92,9 @@ pub struct SnapshotOptions {
     pub compact: bool,
     pub depth: Option<usize>,
     pub urls: bool,
+    /// Print the values of sensitive fields (card data, passwords, one-time
+    /// codes) instead of `<filled N chars>` (#372).
+    pub reveal_values: bool,
 }
 
 struct TreeNode {
@@ -123,6 +126,14 @@ struct TreeNode {
     // rendered as a `modal` attr so drawer controls are distinguishable from the
     // still-present background page controls that `snapshot -i` also lists.
     in_top_layer: bool,
+    /// Card data, a password or a one-time code: its value is rendered masked
+    /// unless `reveal_values` (#372). `value_text` itself keeps the real value,
+    /// because ref identity compares against it.
+    sensitive: bool,
+    /// `aria-invalid` (or native constraint failure) as Chrome reports it: the
+    /// page has flagged this field, which is what a rejected submit looks like
+    /// before any message appears (#375).
+    invalid: bool,
 }
 
 impl TreeNode {
@@ -148,6 +159,8 @@ impl TreeNode {
             cursor_info: None,
             url: None,
             in_top_layer: false,
+            sensitive: false,
+            invalid: false,
         }
     }
 
@@ -622,13 +635,16 @@ async fn take_snapshot_at_depth(
     // when a form fails. Only at depth 0 (main frame): the scan runs on the main
     // session, so running it during iframe recursion would re-surface the same
     // main-frame errors at every nested level.
-    let error_elements: Vec<ErrorElement> = if options.interactive && depth == 0 {
-        find_error_elements(client, session_id)
-            .await
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    // An out-of-process iframe (Stripe's fields) is scanned on its own
+    // session; its messages were invisible before (#375).
+    let error_elements: Vec<ErrorElement> =
+        if options.interactive && (depth == 0 || effective_session_id != session_id) {
+            find_error_elements(client, effective_session_id)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
     promote_hidden_inputs(&mut tree_nodes, &cursor_elements);
     for node in tree_nodes.iter_mut() {
@@ -836,6 +852,18 @@ async fn take_snapshot_at_depth(
                 }
             }
         }
+    }
+
+    // Mark fields whose value must not be printed (#372). On the session the
+    // AX tree came from, so the backend ids resolve inside an OOPIF (Stripe's
+    // card fields live in one).
+    if !options.reveal_values {
+        Box::pin(mark_sensitive_values(
+            client,
+            effective_session_id,
+            &mut tree_nodes,
+        ))
+        .await;
     }
 
     let mut output = String::new();
@@ -1907,6 +1935,16 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
 
         let (level, checked, expanded, selected, disabled, required) =
             extract_properties(&node.properties);
+        let invalid = node.properties.as_ref().is_some_and(|props| {
+            props.iter().any(|p| {
+                p.name == "invalid"
+                    && p.value.value.as_ref().is_some_and(|v| match v {
+                        Value::String(s) => s != "false",
+                        Value::Bool(b) => *b,
+                        _ => false,
+                    })
+            })
+        });
 
         if (node.ignored.unwrap_or(false) && role != "RootWebArea") || role == "InlineTextBox" {
             tree_nodes.push(TreeNode::empty());
@@ -1934,6 +1972,8 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
             cursor_info: None,
             url: None,
             in_top_layer: false,
+            sensitive: false,
+            invalid,
         });
         id_to_idx.insert(node.node_id.clone(), i);
     }
@@ -2304,6 +2344,78 @@ fn nested_toggle(nodes: &[TreeNode], idx: usize) -> Option<String> {
     None
 }
 
+/// The text a select shows when it still sits on its placeholder option: an
+/// option that is disabled, or that reads like "Select" / "请选择" / "-- … --".
+/// Chrome reports that option's text as the select's value, which looked like
+/// a choice had been made (Stripe's Prefecture, #375).
+fn placeholder_selection(nodes: &[TreeNode], idx: usize) -> Option<String> {
+    let node = &nodes[idx];
+    if !matches!(node.role.as_str(), "combobox" | "listbox" | "PopUpButton") {
+        return None;
+    }
+    let value = node.value_text.as_deref()?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    // Options sit directly under the select, or one popup level down.
+    let mut options: Vec<&TreeNode> = Vec::new();
+    for &c in &node.children {
+        let child = &nodes[c];
+        if matches!(child.role.as_str(), "option" | "MenuListOption") {
+            options.push(child);
+        } else {
+            for &g in &child.children {
+                if matches!(nodes[g].role.as_str(), "option" | "MenuListOption") {
+                    options.push(&nodes[g]);
+                }
+            }
+        }
+    }
+    let shown = options.iter().find(|o| o.name.trim() == value);
+    let disabled = shown.is_some_and(|o| o.disabled == Some(true));
+    let first = options.first().is_some_and(|o| o.name.trim() == value);
+    (disabled || (first && looks_like_placeholder(value))).then(|| value.to_string())
+}
+
+fn looks_like_placeholder(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    let core =
+        t.trim_matches(|c: char| c == '-' || c == '—' || c == '.' || c == '…' || c.is_whitespace());
+    matches!(
+        core,
+        "select"
+            | "choose"
+            | "please select"
+            | "select one"
+            | "select an option"
+            | "none"
+            | "请选择"
+            | "选择"
+            | "選択してください"
+            | "選択"
+    ) || (core.starts_with("select ") && core.len() < 32)
+        || (core.starts_with("choose ") && core.len() < 32)
+        || core.starts_with("请选择")
+        || (t.starts_with("--") && t.ends_with("--"))
+}
+
+/// Flag value-bearing fields whose value is card data, a password or a one-time
+/// code, so [`render_tree`] masks it.
+async fn mark_sensitive_values(client: &CdpClient, session_id: &str, nodes: &mut [TreeNode]) {
+    for node in nodes.iter_mut() {
+        let has_value = node.value_text.as_deref().is_some_and(|v| !v.is_empty());
+        if !has_value {
+            continue;
+        }
+        node.sensitive = match node.backend_node_id {
+            Some(bid) => {
+                super::sensitive::is_sensitive_node(client, session_id, bid, &node.ax_name).await
+            }
+            None => super::sensitive::sensitive_by_name(&node.ax_name),
+        };
+    }
+}
+
 fn render_tree(
     nodes: &[TreeNode],
     idx: usize,
@@ -2420,6 +2532,9 @@ fn render_tree(
             attrs.push("required".to_string());
         }
     }
+    if node.invalid {
+        attrs.push("invalid".to_string());
+    }
 
     if let Some(ref ref_id) = node.ref_id {
         attrs.push(format!("ref={}", ref_id));
@@ -2459,9 +2574,16 @@ fn render_tree(
     }
 
     // Value
-    if let Some(ref val) = node.value_text {
+    if let Some(placeholder) = placeholder_selection(nodes, idx) {
+        // A select still on its "Select…" option holds no value (#375).
+        line.push_str(&format!(": (nothing selected; shows {placeholder:?})"));
+    } else if let Some(ref val) = node.value_text {
         if !val.is_empty() && val != &node.name {
-            line.push_str(&format!(": {}", val));
+            if node.sensitive && !options.reveal_values {
+                line.push_str(&format!(": {}", super::sensitive::masked(val)));
+            } else {
+                line.push_str(&format!(": {}", val));
+            }
         }
     }
 
@@ -3104,6 +3226,51 @@ mod tests {
     // -----------------------------------------------------------------------
     // promote_hidden_inputs
     // -----------------------------------------------------------------------
+
+    /// A select with the given value whose options are (name, disabled).
+    fn select_tree(value: &str, opts: &[(&str, bool)]) -> Vec<TreeNode> {
+        let mut nodes = vec![make_node("combobox", "Prefecture", Some(1))];
+        nodes[0].value_text = Some(value.to_string());
+        for (i, (name, disabled)) in opts.iter().enumerate() {
+            let mut o = make_node("option", name, Some(10 + i as i64));
+            o.disabled = Some(*disabled);
+            o.parent_idx = Some(0);
+            nodes.push(o);
+            nodes[0].children.push(i + 1);
+        }
+        nodes
+    }
+
+    #[test]
+    fn a_select_on_its_placeholder_has_no_value() {
+        // Stripe's Prefecture: disabled "Select" first.
+        let nodes = select_tree("Select", &[("Select", true), ("東京都 — Tokyo", false)]);
+        assert_eq!(placeholder_selection(&nodes, 0).as_deref(), Some("Select"));
+        // A placeholder that is not disabled but reads like one, in first place.
+        let nodes = select_tree("-- 请选择 --", &[("-- 请选择 --", false), ("北京", false)]);
+        assert!(placeholder_selection(&nodes, 0).is_some());
+        let nodes = select_tree(
+            "Choose a country",
+            &[("Choose a country", false), ("Japan", false)],
+        );
+        assert!(placeholder_selection(&nodes, 0).is_some());
+    }
+
+    #[test]
+    fn a_real_choice_is_a_value() {
+        let nodes = select_tree(
+            "東京都 — Tokyo",
+            &[("Select", true), ("東京都 — Tokyo", false)],
+        );
+        assert_eq!(placeholder_selection(&nodes, 0), None);
+        // "Select" as a real, enabled, non-first option is a choice.
+        let nodes = select_tree("Select", &[("Basic", false), ("Select", false)]);
+        assert_eq!(placeholder_selection(&nodes, 0), None);
+        // Not a select at all.
+        let mut nodes = select_tree("Select", &[("Select", true)]);
+        nodes[0].role = "textbox".to_string();
+        assert_eq!(placeholder_selection(&nodes, 0), None);
+    }
 
     fn make_node(role: &str, name: &str, backend_node_id: Option<i64>) -> TreeNode {
         let mut node = TreeNode::empty();
