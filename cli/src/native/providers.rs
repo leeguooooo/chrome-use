@@ -273,6 +273,17 @@ async fn connect_browser_use() -> Result<(String, Option<ProviderSession>), Stri
     Ok((ws_url, None))
 }
 
+/// Kernel expects `profile` as an object (`{"name": ..., "save_changes": ...}`), not a string.
+fn kernel_profile_from_env() -> Option<Value> {
+    let name = env::var("KERNEL_PROFILE_NAME")
+        .ok()
+        .filter(|v| !v.is_empty())?;
+    let save_changes = env::var("KERNEL_PROFILE_SAVE_CHANGES")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    Some(json!({ "name": name, "save_changes": save_changes }))
+}
+
 async fn connect_kernel() -> Result<(String, Option<ProviderSession>), String> {
     let api_key = env::var("KERNEL_API_KEY").ok();
     let endpoint =
@@ -297,12 +308,10 @@ async fn connect_kernel() -> Result<(String, Option<ProviderSession>), String> {
         "timeout_seconds": timeout_seconds,
     });
 
-    if let Ok(profile) = env::var("KERNEL_PROFILE_NAME") {
-        if !profile.is_empty() {
-            body.as_object_mut()
-                .unwrap()
-                .insert("profile".to_string(), json!(profile));
-        }
+    if let Some(profile) = kernel_profile_from_env() {
+        body.as_object_mut()
+            .unwrap()
+            .insert("profile".to_string(), profile);
     }
 
     let client = reqwest::Client::new();
@@ -750,6 +759,9 @@ async fn close_agentcore_session(session_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::EnvGuard;
+    use std::io::{Read, Write};
+    use std::time::Duration;
 
     #[test]
     fn test_connect_provider_unknown() {
@@ -757,6 +769,113 @@ mod tests {
         let result = rt.block_on(connect_provider("unknown-provider"));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Unknown provider"));
+    }
+
+    fn kernel_env() -> EnvGuard<'static> {
+        let vars = [
+            "KERNEL_API_KEY",
+            "KERNEL_ENDPOINT",
+            "KERNEL_PROFILE_NAME",
+            "KERNEL_PROFILE_SAVE_CHANGES",
+        ];
+        let guard = EnvGuard::new(&vars);
+        for name in vars {
+            guard.remove(name);
+        }
+        guard
+    }
+
+    #[test]
+    fn test_kernel_profile_from_env() {
+        let guard = kernel_env();
+        assert_eq!(kernel_profile_from_env(), None);
+
+        guard.set("KERNEL_PROFILE_NAME", "");
+        assert_eq!(kernel_profile_from_env(), None);
+
+        guard.set("KERNEL_PROFILE_NAME", "my-profile");
+        assert_eq!(
+            kernel_profile_from_env(),
+            Some(json!({ "name": "my-profile", "save_changes": false }))
+        );
+
+        guard.set("KERNEL_PROFILE_SAVE_CHANGES", "true");
+        assert_eq!(
+            kernel_profile_from_env(),
+            Some(json!({ "name": "my-profile", "save_changes": true }))
+        );
+    }
+
+    /// A one-request HTTP server answering `status` with `body`; the join
+    /// handle returns the raw request it received. From upstream's provider
+    /// tests (it serves the Kernel test here).
+    fn browser_use_server(
+        status: u16,
+        body: &str,
+        stall: bool,
+    ) -> (String, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let body = body.to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = String::new();
+            let mut reader = std::io::BufReader::new(&stream);
+            loop {
+                let mut line = String::new();
+                std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let length = request
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut bytes = vec![0; length];
+            reader.read_exact(&mut bytes).unwrap();
+            request.push_str(std::str::from_utf8(&bytes).unwrap());
+            let response = format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", if stall { body.len() + 10 } else { body.len() });
+            let _ = stream.write_all(response.as_bytes());
+            if stall {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            request
+        });
+        (base, server)
+    }
+
+
+    #[tokio::test]
+    async fn test_kernel_sends_profile_as_object() {
+        let guard = kernel_env();
+        guard.set("KERNEL_PROFILE_NAME", "my-profile");
+        let (base, server) = browser_use_server(
+            200,
+            r#"{"session_id":"s1","cdp_ws_url":"wss://example.com/cdp"}"#,
+            false,
+        );
+        guard.set("KERNEL_ENDPOINT", &base);
+
+        let (ws_url, session) = connect_kernel().await.unwrap();
+        assert_eq!(ws_url, "wss://example.com/cdp");
+        assert_eq!(session.unwrap().session_id, "s1");
+
+        let request = server.join().unwrap();
+        let (_, body) = request.split_once("\r\n\r\n").unwrap();
+        let body: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            body["profile"],
+            json!({ "name": "my-profile", "save_changes": false })
+        );
     }
 
     #[test]
