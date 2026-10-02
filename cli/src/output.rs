@@ -248,6 +248,46 @@ fn truncate_middle(s: &str, max: usize) -> String {
     format!("{head}…{tail} [{n} chars]")
 }
 
+/// An eval result as text: a string prints as itself, not as a JSON-quoted
+/// literal with `\n` escapes (agents read `innerText` that way, and a
+/// `JSON.stringify(...)` result came back encoded twice). A string that is
+/// itself a JSON object or array prints as that JSON, so one parse gets the
+/// value. Everything else is pretty JSON. `--json` keeps the exact value.
+fn eval_result_text(result: &serde_json::Value) -> String {
+    if let Some(text) = result.as_str() {
+        let trimmed = text.trim_start();
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            if let Ok(inner) = serde_json::from_str::<serde_json::Value>(text) {
+                if inner.is_object() || inner.is_array() {
+                    return serde_json::to_string_pretty(&inner).unwrap_or_default();
+                }
+            }
+        }
+        return text.to_string();
+    }
+    serde_json::to_string_pretty(result).unwrap_or_default()
+}
+
+/// Whether stderr goes to /dev/null, so an error printed only there would
+/// never reach the caller.
+fn stderr_is_discarded() -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (
+            std::fs::metadata("/dev/fd/2"),
+            std::fs::metadata("/dev/null"),
+        ) {
+            (Ok(err), Ok(null)) => err.dev() == null.dev() && err.ino() == null.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
     print_response_body(resp, action, opts);
     // Every successful text response gets its observation, including branches
@@ -293,11 +333,13 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
     }
 
     if !resp.success {
-        eprintln!(
-            "{} {}",
-            color::error_indicator(),
-            resp.error.as_deref().unwrap_or("Unknown error")
-        );
+        let error = resp.error.as_deref().unwrap_or("Unknown error");
+        eprintln!("{} {}", color::error_indicator(), error);
+        // `cmd 2>/dev/null | tail -1` is how agents call us a quarter of the
+        // time; with the error on stderr only they saw nothing but exit 1.
+        if stderr_is_discarded() {
+            println!("{} {}", color::error_indicator(), error);
+        }
         // Still print dialog warning after errors, since a pending dialog
         // is the most common cause of commands timing out
         if let Some(ref warning) = resp.warning {
@@ -953,6 +995,16 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             println!("{}", checked);
             return;
         }
+        if action == Some("addinitscript") {
+            if let Some(handle) = data.get("identifier").and_then(|v| v.as_str()) {
+                println!(
+                    "{} {handle} (runs in pages loaded from now on; `reload` to apply it here, \
+                     `removeinitscript {handle}` to stop it)",
+                    color::success_indicator()
+                );
+                return;
+            }
+        }
         // Eval result
         if let Some(result) = data.get("result") {
             // Surface which page the eval actually ran on — to stderr, so it
@@ -991,7 +1043,7 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     color::dim(&format!("  done after {n} attempts, {secs}s"))
                 );
             }
-            let formatted = serde_json::to_string_pretty(result).unwrap_or_default();
+            let formatted = eval_result_text(result);
             print_with_boundaries(&formatted, origin, opts);
             return;
         }
@@ -3550,7 +3602,27 @@ Examples:
         }
 
         // === Tabs ===
-        "tab" => {
+        "addinitscript" | "removeinitscript" => {
+            r##"
+chrome-use addinitscript - Run a script in every page before its own scripts
+
+Usage: chrome-use addinitscript <js>
+       chrome-use addinitscript --file <path>
+       chrome-use removeinitscript <identifier>
+
+The script runs at document start in every page and frame the session opens
+from now on, including new tabs. It does not run in the page already loaded:
+`reload` to apply it there. addinitscript prints a handle (init-script-N);
+pass it to removeinitscript to stop it. `--init-script <path>` at launch does
+the same for the first page.
+
+Examples:
+  chrome-use addinitscript "window.__seen = []"
+  chrome-use addinitscript --file ./capture-fetch.js && chrome-use reload
+  chrome-use removeinitscript init-script-1
+"##
+        }
+        "tab" | "tabs" => {
             r##"
 chrome-use tab - Manage browser tabs
 
@@ -4776,7 +4848,39 @@ table and a full "Site adapters" section.
 }
 
 pub fn print_help() {
-    println!(
+    println!("{}", help_text());
+}
+
+/// Lines of the full help that mention `command`, for `<command> --help` when
+/// the command has no help page of its own. Agents asked `extension --help`,
+/// `tabs --help` and the like and got all 568 lines back.
+pub fn print_help_excerpt(command: &str) {
+    let text = help_text();
+    let needle = format!(" {command}");
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains(&needle) || l.trim_start().starts_with(command))
+        .take(30)
+        .collect();
+    if lines.is_empty() {
+        println!(
+            "No help page for `{command}`, and the full help does not mention it. \
+             `chrome-use --help` lists every command."
+        );
+        return;
+    }
+    println!("chrome-use {command}: the lines of `chrome-use --help` that mention it\n");
+    for l in lines {
+        println!("{l}");
+    }
+    println!("\nFull list: `chrome-use --help`.");
+}
+
+// `format!` with no arguments still unescapes the `{{`/`}}` in the text, as
+// the `println!` this replaced did.
+#[allow(clippy::useless_format)]
+pub fn help_text() -> String {
+    format!(
         r#"
 chrome-use - fast browser automation CLI for AI agents
 
@@ -5345,7 +5449,7 @@ iOS Simulator (requires Xcode and Appium):
 Hit a bug or rough edge? A 30-second issue genuinely sharpens this tool:
   https://github.com/leeguooooo/chrome-use/issues
 "#
-    );
+    )
 }
 
 /// A page that blocked the agent: a human check, or a sign-in rejection (#387).
@@ -5613,7 +5717,7 @@ pub fn print_version() {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_a11y_text, format_storage_text, print_command_help};
+    use super::{eval_result_text, format_a11y_text, format_storage_text, print_command_help};
     use serde_json::json;
 
     #[test]
@@ -5829,5 +5933,17 @@ mod tests {
         let rendered = format_a11y_text(&data);
         assert!(rendered.contains("  - #shadow-host >>> img"));
         assert!(rendered.contains("  - iframe -> #nested-image"));
+    }
+
+    #[test]
+    fn eval_strings_print_as_text_and_json_strings_parse_once() {
+        assert_eq!(eval_result_text(&json!("a\nb")), "a\nb");
+        assert_eq!(eval_result_text(&json!("{\"a\":1}")), "{\n  \"a\": 1\n}");
+        assert_eq!(eval_result_text(&json!("{not json")), "{not json");
+        assert_eq!(eval_result_text(&json!(3)), "3");
+        assert_eq!(
+            eval_result_text(&json!({"a": [1]})),
+            "{\n  \"a\": [\n    1\n  ]\n}"
+        );
     }
 }

@@ -34,6 +34,32 @@ If an adapter is advertised as `siteAdapters` in JSON or on stderr, inspect
 its arguments with `site info <name>/<cmd>` and prefer it for matching reads.
 Adapters execute as the logged-in user; use only operations within the task.
 
+## Before you write `eval`
+
+In real sessions most `eval` calls re-implemented a command that already
+exists, and lost its verification and hints. Use the command:
+
+| About to eval | Use instead |
+|---|---|
+| `document.body.innerText`, `el.innerText` | `get text <sel>`, or `read` for the main content |
+| `[...].find(b => b.textContent === '查询').click()` | `click "text=查询"` or `find text "查询" click` |
+| `getBoundingClientRect()` | `get box <sel or @ref>` |
+| patching `fetch`/XHR to see an API response | `network requests --filter api`, then `network request <id>` (includes the body) |
+| `sleep N` or a polling loop | `wait --text "…"`, `wait <sel>`, `wait --url <pattern>`, `wait --fn "<expr>"` |
+| setting `.value` through a native setter | `fill @eN "…"`: it reads the value back and says when it did not stick |
+| injecting a script before the page runs | `addinitscript <js>`, then `reload` |
+
+Keep `eval` for what no command does: page globals, framework stores, canvas.
+
+## Reading output
+
+- Output is short on purpose; `| tail -1` is not needed and cuts warnings.
+  An error's last line says what to do next. Do not discard stderr.
+- `eval` prints a string as text; a `JSON.stringify(...)` result prints as
+  JSON you parse once. `--json` gives the exact structured response.
+- Use one session name per task. After "session unresponsive", make the one
+  move it names and keep that name; a new name per error leaves daemons behind.
+
 ## The action loop
 
 ```bash

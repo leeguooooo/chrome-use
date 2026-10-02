@@ -1421,7 +1421,13 @@ fn main() {
     // temporary EMPTY profile (no cookies / no login). For logged-in sites the
     // user almost always wants --profile auto (their real Chrome profile).
     // Skipped under CI (force_launch is implicit there and login isn't expected).
-    if flags.force_launch && flags.profile.is_none() && env::var("CI").is_err() {
+    // Only when this call is the one that launches: repeated on every command
+    // of a running session it was the noise that taught agents `2>/dev/null`.
+    if flags.force_launch
+        && flags.profile.is_none()
+        && env::var("CI").is_err()
+        && !connection::daemon_ready(&flags.session)
+    {
         eprintln!(
             "⚠ --launch opens a fresh, isolated test profile (no cookies, no login, no \
              extensions). The window is labelled `chrome-use (<session>)` in Chrome's \
@@ -1441,6 +1447,8 @@ fn main() {
             if print_command_help(cmd) {
                 return;
             }
+            output::print_help_excerpt(cmd);
+            return;
         }
         print_help();
         return;
@@ -3079,7 +3087,12 @@ fn main() {
             }
             if let Some(err) = resp.error.as_mut() {
                 if err.contains("has NO snapshot refs") {
-                    err.push_str(&flags::no_refs_session_hint(&flags));
+                    // Keep what to do last: agents read errors through `tail -1`.
+                    let hint = flags::no_refs_session_hint(&flags);
+                    match err.find(" Otherwise run") {
+                        Some(i) => err.insert_str(i, &hint.replacen('\n', " ", 1)),
+                        None => err.push_str(&hint),
+                    }
                 }
             }
             let success = resp.success;

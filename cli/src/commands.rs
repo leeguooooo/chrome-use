@@ -36,6 +36,8 @@ pub enum ParseError {
 const KNOWN_COMMANDS: &[&str] = &[
     "open",
     "navigate",
+    "addinitscript",
+    "removeinitscript",
     "read",
     "expect",
     "extract",
@@ -139,6 +141,21 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+/// Commands agents reach for that do not exist, mapped to the one that does
+/// what they meant. Seen in real sessions; edit distance alone suggested
+/// `is` for `js`.
+fn guessed_command(input: &str) -> Option<&'static str> {
+    Some(match input.to_lowercase().as_str() {
+        "js" | "javascript" | "exec" | "execute" | "evaluate" | "run" => "eval '<js>'",
+        "requests" | "request" | "xhr" | "har" => "network requests",
+        "logs" | "log" | "console-logs" => "console",
+        "help" => "--help (or <command> --help)",
+        "links" => "snapshot -i -f link   (links are listed as `link \"…\" [ref=eN]`)",
+        "innertext" | "page-text" => "get text body   (or `read` for the main content)",
+        _ => return None,
+    })
+}
+
 /// Closest known command within a small edit distance, or a prefix/substring
 /// match — `None` if nothing is close enough to suggest confidently.
 fn nearest_command(input: &str) -> Option<String> {
@@ -163,6 +180,13 @@ fn nearest_command(input: &str) -> Option<String> {
 impl ParseError {
     pub fn format(&self) -> String {
         match self {
+            ParseError::UnknownCommand { command } if guessed_command(command).is_some() => {
+                format!(
+                    "Unknown command: {}\nUse: chrome-use {}",
+                    command,
+                    guessed_command(command).unwrap_or_default()
+                )
+            }
             ParseError::UnknownCommand { command } => match nearest_command(command) {
                 Some(suggestion) => format!(
                     "Unknown command: {}\nDid you mean: chrome-use {}?",
@@ -3452,6 +3476,33 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 usage: "pushstate <url>",
             })?;
             Ok(json!({ "id": id, "action": "pushstate", "url": url }))
+        }
+
+        // === Add init script ===
+        // The daemon had this action and `removeinitscript` had a CLI form,
+        // but adding one was only reachable through `--init-script` at launch.
+        "addinitscript" => {
+            let usage = "addinitscript <js> | addinitscript --file <path>";
+            let script = match rest.first().copied() {
+                Some("--file") => {
+                    let path = rest.get(1).ok_or(ParseError::InvalidValue {
+                        message: "addinitscript --file requires a path".to_string(),
+                        usage,
+                    })?;
+                    std::fs::read_to_string(path).map_err(|e| ParseError::InvalidValue {
+                        message: format!("addinitscript --file: cannot read {path}: {e}"),
+                        usage,
+                    })?
+                }
+                Some(_) => rest.join(" "),
+                None => {
+                    return Err(ParseError::MissingArguments {
+                        context: "addinitscript".to_string(),
+                        usage,
+                    })
+                }
+            };
+            Ok(json!({ "id": id, "action": "addinitscript", "script": script }))
         }
 
         // === Remove init script ===
@@ -9151,5 +9202,26 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err:?}").contains("is not set"));
+    }
+
+    #[test]
+    fn commands_agents_guess_point_to_the_real_one() {
+        let msg = ParseError::UnknownCommand {
+            command: "js".into(),
+        }
+        .format();
+        assert!(msg.contains("chrome-use eval"), "{msg}");
+        let msg = ParseError::UnknownCommand {
+            command: "requests".into(),
+        }
+        .format();
+        assert!(msg.contains("network requests"), "{msg}");
+    }
+
+    #[test]
+    fn addinitscript_has_a_cli_form() {
+        let cmd = parse_command(&args("addinitscript window.__x = 1"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "addinitscript");
+        assert_eq!(cmd["script"], "window.__x = 1");
     }
 }

@@ -1438,12 +1438,17 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                     // command. State that, and give the caller a move that
                     // works right now. Why it is busy is not established, so
                     // this does not guess at one.
+                    // "Use a different --session name" sent agents through a
+                    // new name per error (98 in one transcript, each leaving a
+                    // daemon behind). Name one successor and say to keep it.
                     return Err(format!(
                         "session unresponsive: the stuck '{session}' daemon was stopped \
-                         automatically. Rerunning right now can return this same message for a \
-                         while; the name has been observed to free up on its own, so it is not \
-                         permanently taken. To proceed immediately, use a different --session \
-                         name, or `adopt` the tab into a fresh session."
+                         automatically. '{session}' frees up on its own after a while; until \
+                         then rerunning it can return this same message. To continue now, move \
+                         your tab to one new session and keep using that name: \
+                         `chrome-use --session {session}-2 adopt <url of your tab>`, then \
+                         `--session {session}-2` from here on. Do not start a new name for every \
+                         error: each one leaves a daemon behind (`session list`)."
                     ));
                 }
                 // Non-transient error, fail immediately
