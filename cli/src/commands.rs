@@ -742,6 +742,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         ),
                         usage: "fill <selector> --from-env <VAR>",
                     })?;
+                    // A daemon this command starts inherits the environment;
+                    // drop the secret before that can happen.
+                    std::env::remove_var(var);
                     return Ok(json!({ "id": id, "action": "fill", "selector": sel,
                                        "value": value, "secret": true }));
                 }
@@ -9140,7 +9143,8 @@ mod tests {
         .unwrap();
         assert_eq!(cmd["value"], "s3cret value");
         assert_eq!(cmd["secret"], true);
-        std::env::remove_var("CU_TEST_FILL_PW");
+        // Read once, then gone: a daemon started by this command cannot inherit it.
+        assert!(std::env::var("CU_TEST_FILL_PW").is_err());
         let err = parse_command(
             &args("fill @e3 --from-env CU_TEST_FILL_PW"),
             &default_flags(),

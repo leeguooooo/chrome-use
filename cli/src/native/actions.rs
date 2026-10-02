@@ -1993,17 +1993,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "canvas_capture" => handle_canvas_capture(cmd, state).await,
             "click" => handle_click(cmd, state).await,
             "dblclick" => handle_dblclick(cmd, state).await,
-            "fill" => {
-                // A value from `--from-env` (a password manager's `run`) is a
-                // secret wherever it lands: whatever the field looks like, it
-                // never appears in a result or error (fill --from-env).
-                let secret = cmd.get("secret").and_then(Value::as_bool) == Some(true);
-                let out = handle_fill(cmd, state).await;
-                match (secret, cmd.get("value").and_then(Value::as_str)) {
-                    (true, Some(v)) if !v.is_empty() => scrub_secret(out, v),
-                    _ => out,
-                }
-            }
+            "fill" => handle_fill(cmd, state).await,
             "type" => handle_type(cmd, state).await,
             "press" => handle_press(cmd, state).await,
             "pick" => handle_pick(cmd, state).await,
@@ -2333,8 +2323,12 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         if let Some(verdict) = super::observation::human_check_verdict(changed_now, &resources) {
             observed.insert("humanCheck".into(), verdict);
         }
-        if let Some(verdict) = super::observation::signin_rejection(url1.as_deref().unwrap_or("")) {
-            observed.insert("humanCheck".into(), verdict);
+        if !observed.contains_key("humanCheck") {
+            if let Some(verdict) =
+                super::observation::signin_rejection(url1.as_deref().unwrap_or(""))
+            {
+                observed.insert("humanCheck".into(), verdict);
+            }
         }
         let mut settled = settled;
         settled.mark_changed(observed.get("changed").and_then(|v| v.as_bool()) == Some(true));
@@ -6532,25 +6526,6 @@ async fn handle_dblclick(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     )
     .await?;
     Ok(json!({ "clicked": selector }))
-}
-
-/// Replace every occurrence of `secret` in a fill's result or error with its
-/// masked form.
-fn scrub_secret(out: Result<Value, String>, secret: &str) -> Result<Value, String> {
-    let mask = super::sensitive::masked(secret);
-    match out {
-        Ok(v) => {
-            let text = v.to_string();
-            if text.contains(secret) {
-                let escaped = serde_json::to_string(secret).unwrap_or_default();
-                let inner = escaped.trim_matches('"');
-                Ok(serde_json::from_str(&text.replace(inner, &mask)).unwrap_or(v))
-            } else {
-                Ok(v)
-            }
-        }
-        Err(e) => Err(e.replace(secret, &mask)),
-    }
 }
 
 async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -11196,17 +11171,38 @@ async fn handle_innerhtml(cmd: &Value, state: &mut DaemonState) -> Result<Value,
 /// state machine was enough to overflow a 2 MiB test-thread stack in debug
 /// builds. Here the two runs are sequential, never nested.
 pub async fn execute_command_recovering(cmd: &Value, state: &mut DaemonState) -> Value {
+    // `fill --from-env`: the whole command, `--observe` included, runs with
+    // every field treated as sensitive, and the response is scrubbed of the
+    // value as a last line of defence.
+    let secret = cmd
+        .get("secret")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        .then(|| cmd.get("value").and_then(Value::as_str))
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let Some(secret) = secret else {
+        return Box::pin(execute_command_recovering_inner(cmd, state)).await;
+    };
+    let mut out = super::sensitive::SECRET_COMMAND
+        .scope(true, Box::pin(execute_command_recovering_inner(cmd, state)))
+        .await;
+    super::sensitive::scrub_value(&mut out, &secret);
+    out
+}
+
+async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let first = execute_command(cmd, state).await;
-    let denied = first.get("success").and_then(|v| v.as_bool()) == Some(false)
-        && first
-            .get("error")
-            .and_then(|v| v.as_str())
-            .is_some_and(super::browser::is_debugger_access_denied);
-    if !denied {
+    if !is_denied(&first) {
         return first;
     }
+    let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    // Take focus out of the field only when the command will be repeated: a
+    // `press Enter` the agent re-runs must still reach the field.
+    let blur = safe_to_repeat(action);
     let recovery = match state.browser.as_mut() {
-        Some(mgr) if mgr.on_relay() => Box::pin(mgr.cycle_pinned_tab_visibility()).await,
+        Some(mgr) if mgr.on_relay() => Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await,
         _ => Err("not on the extension relay".to_string()),
     };
     if let Err(reason) = recovery {
@@ -11216,7 +11212,6 @@ pub async fn execute_command_recovering(cmd: &Value, state: &mut DaemonState) ->
         }
         return out;
     }
-    let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
     if !safe_to_repeat(action) {
         let mut out = first;
         if let Some(Value::String(e)) = out.get_mut("error") {
@@ -11267,7 +11262,7 @@ async fn verify_fill_after_menu(cmd: &Value, state: &mut DaemonState) -> Option<
     let selector = cmd.get("selector").and_then(|v| v.as_str())?.to_string();
     let wanted = cmd.get("value").and_then(|v| v.as_str())?.to_string();
     let mgr = state.browser.as_mut()?;
-    Box::pin(mgr.cycle_pinned_tab_visibility()).await.ok()?;
+    Box::pin(mgr.cycle_pinned_tab_visibility(true)).await.ok()?;
     let read = Box::pin(execute_command(
         &json!({ "id": cmd.get("id").cloned().unwrap_or(Value::Null),
                  "action": "inputvalue", "selector": selector, "revealValues": true }),
@@ -18844,23 +18839,5 @@ mod tests {
                 "`{action}` mutates the page but does not observe"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod scrub_secret_tests {
-    use super::*;
-
-    #[test]
-    fn a_secret_never_survives_in_a_fill_result_or_error() {
-        let out = scrub_secret(
-            Err("fill verification failed: read back \"ab\" after writing \"hunter2\"".into()),
-            "hunter2",
-        );
-        let e = out.unwrap_err();
-        assert!(!e.contains("hunter2"), "{e}");
-        assert!(e.contains("<filled 7 chars>"), "{e}");
-        let ok = scrub_secret(Ok(json!({"note": "formatted as hunter2"})), "hunter2").unwrap();
-        assert!(!ok.to_string().contains("hunter2"), "{ok}");
     }
 }

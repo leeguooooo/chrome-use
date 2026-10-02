@@ -651,6 +651,32 @@ pub fn read_session_version(session: &str) -> Option<String> {
 ///
 /// If the socket directory doesn't exist, returns an empty inventory with
 /// no side effects.
+/// Names of sessions whose daemon is alive, read only: unlike
+/// [`walk_daemons`] it never removes another session's files, so a daemon can
+/// call it (from a blocking task) without disturbing a session that is
+/// starting up.
+pub fn live_session_names() -> Vec<String> {
+    let Ok(entries) = fs::read_dir(get_socket_dir()) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let session = name.strip_suffix(".pid").filter(|s| !s.is_empty())?;
+            if session == "dashboard" {
+                return None;
+            }
+            let pid = fs::read_to_string(entry.path())
+                .ok()?
+                .trim()
+                .parse::<u32>()
+                .ok()?;
+            is_pid_alive(pid).then(|| session.to_string())
+        })
+        .collect()
+}
+
 pub fn walk_daemons() -> DaemonInventory {
     let socket_dir = get_socket_dir();
     let mut inventory = DaemonInventory::default();

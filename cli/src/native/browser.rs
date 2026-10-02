@@ -2876,7 +2876,7 @@ impl BrowserManager {
     /// the user's view ends where it was. A background tab is left alone (the
     /// agent never force-fronts a tab); the error points at
     /// `tab select --activate`. The page and what was typed stay as they were.
-    pub async fn cycle_pinned_tab_visibility(&mut self) -> Result<(), String> {
+    pub async fn cycle_pinned_tab_visibility(&mut self, blur_focused: bool) -> Result<(), String> {
         if !self.on_relay() {
             return Err("not on the extension relay".to_string());
         }
@@ -2927,17 +2927,19 @@ impl BrowserManager {
             // to: Bitwarden reopens its menu on a focused login field as soon
             // as the tab is shown, so the repeat hit the same block (#373).
             // The value typed so far stays.
-            let _ = self
-                .client
-                .send_command(
-                    "Runtime.evaluate",
-                    Some(json!({
-                        "expression": "(() => { const a = document.activeElement; \
-                            if (a && a !== document.body && a.blur) a.blur(); })()",
-                    })),
-                    Some(&session_id),
-                )
-                .await;
+            if blur_focused {
+                let _ = self
+                    .client
+                    .send_command(
+                        "Runtime.evaluate",
+                        Some(json!({
+                            "expression": "(() => { const a = document.activeElement; \
+                                if (a && a !== document.body && a.blur) a.blur(); })()",
+                        })),
+                        Some(&session_id),
+                    )
+                    .await;
+            }
             let back = self
                 .client
                 .send_command("ABExt.call", Some(activate(chrome_tab)), None)
@@ -3609,7 +3611,15 @@ impl BrowserManager {
 
         let initialize = async {
             if activate {
-                let _ = self.activate_active_tab().await?;
+                // No result to carry a warning here; activate without the check.
+                let target_id = self.active_target_id()?.to_string();
+                self.client
+                    .send_command(
+                        "Target.activateTarget",
+                        Some(json!({ "targetId": target_id })),
+                        None,
+                    )
+                    .await?;
             }
             self.enable_domains(&attach.session_id).await
         };
@@ -4147,13 +4157,15 @@ impl BrowserManager {
             .get("targetId")?
             .as_str()?
             .to_string();
-        let own = DAEMON_SESSION.get().map(String::as_str);
-        let owner = crate::connection::walk_daemons()
-            .sessions
-            .into_iter()
-            .map(|s| s.name)
-            .filter(|name| Some(name.as_str()) != own)
-            .find(|name| crate::connection::created_target_ids(name).contains(&front_target))?;
+        let own = DAEMON_SESSION.get().cloned();
+        let owner = tokio::task::spawn_blocking(move || {
+            crate::connection::live_session_names()
+                .into_iter()
+                .filter(|name| Some(name) != own.as_ref())
+                .find(|name| crate::connection::created_target_ids(name).contains(&front_target))
+        })
+        .await
+        .ok()??;
         let title = front.get("title").and_then(Value::as_str).unwrap_or("");
         Some(foreground_conflict_warning(&owner, title))
     }
@@ -4259,9 +4271,15 @@ impl BrowserManager {
         {
             Ok(id) => id,
             // No file input in the DOM: a button that creates one on click and
-            // opens the native chooser at once (#386). Catch the chooser.
-            Err(no_input) => self
-                .file_input_from_chooser(
+            // opens the native chooser at once (#386). Catch the chooser, but
+            // only behind something that looks like an upload control: a
+            // wrong ref to a link or a submit button must not be clicked.
+            Err(no_input)
+                if self
+                    .is_chooser_trigger(&object_id, &effective_session_id)
+                    .await =>
+            {
+                self.file_input_from_chooser(
                     session_id,
                     &effective_session_id,
                     selector,
@@ -4270,7 +4288,9 @@ impl BrowserManager {
                     iframe_sessions,
                 )
                 .await
-                .map_err(|e| format!("{no_input}. Clicking it to catch a file chooser: {e}"))?,
+                .map_err(|e| format!("{no_input}. Clicking it to catch a file chooser: {e}"))?
+            }
+            Err(no_input) => return Err(no_input),
         };
 
         let describe: Value = self
@@ -4358,6 +4378,38 @@ impl BrowserManager {
                 )),
             }),
         }
+    }
+
+    /// Whether an element with no file input could be a control that opens a
+    /// file chooser: a button (not one that submits a form), a `role=button`,
+    /// a `<label>`, or a focusable widget. Links, submit buttons and plain
+    /// content are not, so `upload` never clicks them.
+    async fn is_chooser_trigger(&self, object_id: &str, session_id: &str) -> bool {
+        let func = r#"function() {
+            const el = this;
+            if (!el || !el.tagName) return false;
+            const tag = el.tagName;
+            if (tag === 'A' && el.hasAttribute('href')) return false;
+            if (tag === 'INPUT') return false;
+            if (tag === 'BUTTON') return !(el.type === 'submit' && el.form);
+            const role = (el.getAttribute('role') || '').toLowerCase();
+            return role === 'button' || tag === 'LABEL' || el.hasAttribute('tabindex');
+        }"#;
+        let result: Result<EvaluateResult, String> = self
+            .client
+            .send_command_typed(
+                "Runtime.callFunctionOn",
+                &CallFunctionOnParams {
+                    function_declaration: func.to_string(),
+                    object_id: Some(object_id.to_string()),
+                    arguments: None,
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(session_id),
+            )
+            .await;
+        matches!(result, Ok(r) if r.result.value == Some(Value::Bool(true)))
     }
 
     /// Click `selector` with file-chooser interception on, and return the

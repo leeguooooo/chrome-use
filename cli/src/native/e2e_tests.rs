@@ -7571,7 +7571,6 @@ async fn e2e_upload_via_trigger_button() {
     assert_success(&resp);
 }
 
-// Upload: a selector/ref that resolves to NO file input must fail cleanly and
 /// A drop zone with no `<input type=file>` in the DOM: its button creates one
 /// on click and opens the native chooser at once (platform.openai.com/plugins,
 /// #386). `upload` clicks it with chooser interception on and fills the input
@@ -7619,6 +7618,80 @@ async fn e2e_upload_through_a_file_chooser_opened_by_a_button() {
     server.abort();
 }
 
+/// `upload` only tries a file chooser behind an upload-like control: a wrong
+/// ref to a submit button or a link fails without clicking it.
+#[tokio::test]
+#[ignore]
+async fn e2e_upload_never_clicks_a_submit_button_or_link() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>form</title>
+<form id="f" action="javascript:void 0"><button type="submit" id="s">Submit</button></form>
+<a id="l" href="#moved">Elsewhere</a>
+<script>f.addEventListener('submit', () => { window.__submitted = true; });</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let tmp = std::env::temp_dir().join(format!("ab-noclick-{}.txt", std::process::id()));
+    std::fs::write(&tmp, "x").unwrap();
+    for sel in ["#s", "#l"] {
+        let resp = Box::pin(execute_command(
+            &json!({ "id": "1", "action": "upload", "selector": sel, "files": [tmp.to_string_lossy()] }),
+            &mut state,
+        ))
+        .await;
+        assert_eq!(resp["success"], false, "{sel}: {resp}");
+    }
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "2", "action": "evaluate", "script": "[!!window.__submitted, location.hash]" }),
+        &mut state,
+    ))
+    .await;
+    assert_eq!(get_data(&resp)["result"], json!([false, ""]));
+    let _ = Box::pin(execute_command(
+        &json!({ "id": "9", "action": "close" }),
+        &mut state,
+    ))
+    .await;
+    let _ = std::fs::remove_file(&tmp);
+    server.abort();
+}
+
+/// A `fill --from-env` value never appears in the response, `--observe`
+/// included, even on a field that does not look like a password.
+#[tokio::test]
+#[ignore]
+async fn e2e_fill_secret_never_appears_in_the_observation() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>plain</title>
+<label>Name <input id="n"></label>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let secret = "not-a-real-pass\"word\\x";
+    let resp = Box::pin(super::actions::execute_command_recovering(
+        &json!({ "id": "1", "action": "fill", "selector": "#n", "value": secret,
+                 "secret": true, "observe": true }),
+        &mut state,
+    ))
+    .await;
+    assert_success(&resp);
+    let text = resp.to_string();
+    assert!(!text.contains("not-a-real-pass"), "{text}");
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "2", "action": "evaluate", "script": "document.getElementById('n').value" }),
+        &mut state,
+    ))
+    .await;
+    assert_eq!(get_data(&resp)["result"], json!(secret));
+    let _ = Box::pin(execute_command(
+        &json!({ "id": "9", "action": "close" }),
+        &mut state,
+    ))
+    .await;
+    server.abort();
+}
+
+// Upload: a selector/ref that resolves to NO file input must fail cleanly and
 // leave the tab exactly where it was — never navigate to about:blank (the old
 // drop-dispatch side effect).
 #[tokio::test]
