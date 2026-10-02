@@ -991,10 +991,7 @@ pub async fn fill_reporting(
         &mut engine,
     )
     .await
-    .map(|()| FillOutcome {
-        engine,
-        warning: None,
-    })
+    .map(|warning| FillOutcome { engine, warning })
 }
 
 /// The trusted half of [`fill_reporting`] for a text `<input>`/`<textarea>`
@@ -1051,23 +1048,35 @@ async fn fill_input_trusted(
         return Err(format!("fill failed: {}", ex.text));
     }
     let mut engine = "input".to_string();
-    finish_fill(client, session_id, object_id, value, &mut engine).await?;
+    let formatted = finish_fill(client, session_id, object_id, value, &mut engine).await?;
+    // Never echo a card number or password in the explanation (#372).
+    let sensitive = Box::pin(super::sensitive::is_sensitive_object(
+        client, session_id, object_id,
+    ))
+    .await;
     let why = match (&inserted, trusted_read) {
         (Err(e), _) => format!("the trusted insert failed ({e})"),
         (Ok(()), Some(actual)) => format!(
             "typing it the way a user does left {} in the field (a maxlength, mask or \
              formatter rewrote it)",
-            quote_short(&actual)
+            if sensitive {
+                super::sensitive::masked(&actual)
+            } else {
+                quote_short(&actual)
+            }
         ),
         (Ok(()), None) => "typing it the way a user does did not produce it".to_string(),
     };
     Ok(FillOutcome {
         engine: format!("{engine}-synthetic"),
-        warning: Some(format!(
+        warning: Some(join_warnings(
+            format!(
             "the field holds the value, but {why}, so it was written with the value setter and \
              synthetic events (isTrusted=false). A page that only honours real input will not \
              have registered it; check the page's own state (e.g. a Save button enabling) \
              before relying on it"
+            ),
+            formatted,
         )),
     })
 }
@@ -1368,13 +1377,13 @@ async fn finish_fill(
     object_id: &str,
     value: &str,
     engine: &mut String,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let effective_session_id = session_id.to_string();
     let object_id = object_id.to_string();
     if engine.as_str() == "monaco-unsupported" {
         *engine =
             fill_monaco_via_clipboard(client, &effective_session_id, &object_id, value).await?;
-        return Ok(());
+        return Ok(None);
     }
 
     // Contenteditable rich editors (DraftJS / Lexical / ProseMirror): the JS above
@@ -1460,7 +1469,7 @@ async fn finish_fill(
     //
     // So: one re-apply, without touching focus, and then the SAME verification.
     // Nothing is reported as filled that the field does not actually hold.
-    if let Err(first) = verify_fill_value(
+    match verify_fill_value(
         client,
         &effective_session_id,
         &object_id,
@@ -1469,36 +1478,37 @@ async fn finish_fill(
     )
     .await
     {
-        if !value.is_empty() && first.contains("read back an empty value") {
-            let reapplied = reapply_value_without_focus_change(
-                client,
-                &effective_session_id,
-                &object_id,
-                value,
-            )
-            .await
-            .is_ok();
-            if !reapplied {
-                return Err(first);
+        Ok(actual) => Ok(reformatted_warning(value, &actual)),
+        Err(first) => {
+            if !value.is_empty() && first.contains("read back an empty value") {
+                let reapplied = reapply_value_without_focus_change(
+                    client,
+                    &effective_session_id,
+                    &object_id,
+                    value,
+                )
+                .await
+                .is_ok();
+                if !reapplied {
+                    return Err(first);
+                }
+                let actual = verify_fill_value(
+                    client,
+                    &effective_session_id,
+                    &object_id,
+                    value,
+                    engine.as_str(),
+                )
+                .await?;
+                // Say which path produced the value: a control that needed this is
+                // one whose focus handler fights writes, and the caller may need to
+                // know that before pressing Enter into it.
+                *engine = format!("{engine}+refocus-reset");
+                return Ok(reformatted_warning(value, &actual));
             }
-            verify_fill_value(
-                client,
-                &effective_session_id,
-                &object_id,
-                value,
-                engine.as_str(),
-            )
-            .await?;
-            // Say which path produced the value: a control that needed this is
-            // one whose focus handler fights writes, and the caller may need to
-            // know that before pressing Enter into it.
-            *engine = format!("{engine}+refocus-reset");
-            return Ok(());
+            Err(first)
         }
-        return Err(first);
     }
-
-    Ok(())
 }
 
 /// Write the value once more with the native setter, firing `input`/`change`
@@ -2073,7 +2083,11 @@ async fn verify_fill_value(
     // while preserving every other byte, including leading spaces in YAML.
     if !fill_values_match(expected, actual, engine) {
         // Card numbers, CVCs and passwords stay out of the error text (#372).
-        let detail = if Box::pin(super::sensitive::is_sensitive_object(
+        let detail = if actual.is_empty() && !expected.is_empty() {
+            // Keep this marker: `finish_fill` keys its refocus-reset recovery
+            // on it. It carries no value.
+            "read back an empty value after writing (value hidden)".to_string()
+        } else if Box::pin(super::sensitive::is_sensitive_object(
             client, session_id, object_id,
         ))
         .await
@@ -2101,19 +2115,30 @@ async fn verify_fill_value(
 /// that lost characters (YAML indentation, a newline in an editor) is still a
 /// failed fill.
 fn same_after_formatting(expected: &str, actual: &str, engine: &str) -> bool {
-    if !engine.starts_with("input")
-        || expected.contains('\n')
-        || actual.chars().count() < expected.chars().count()
-    {
+    if !engine.starts_with("input") || expected.contains('\n') || expected.is_empty() {
         return false;
     }
-    let strip = |s: &str| -> String {
-        s.chars()
-            .filter(|c| !c.is_whitespace() && !matches!(c, '/' | '-' | '.' | '(' | ')'))
-            .collect()
-    };
-    let e = strip(expected);
-    !e.is_empty() && e == strip(actual)
+    let is_sep = |c: char| c.is_whitespace() || matches!(c, '/' | '-' | '.' | '(' | ')');
+    // Every requested character must still be there, in order; the only
+    // extra characters allowed are separators the page inserted. A dropped
+    // sign or decimal point cannot be made up for by an added space.
+    let mut want = expected.chars().peekable();
+    for c in actual.chars() {
+        if want.peek() == Some(&c) {
+            want.next();
+        } else if !is_sep(c) {
+            return false;
+        }
+    }
+    want.peek().is_none()
+}
+
+/// The synthetic-write note plus a reformatting note, when there is one.
+fn join_warnings(main: String, extra: Option<String>) -> String {
+    match extra {
+        Some(e) => format!("{main}. Also: {e}"),
+        None => main,
+    }
 }
 
 /// A note for a fill the page reformatted, without echoing either value.
@@ -4889,6 +4914,11 @@ mod tests {
         assert!(!fill_values_match("12345", "12 / 34", "input"));
         assert!(!fill_values_match("1234", "12 / 34", "monaco"));
         assert!(!fill_values_match("a b", "ab", "input"));
+        // A removed sign or decimal point, or a replaced space, is a change.
+        assert!(!fill_values_match("-12", "12 ", "input"));
+        assert!(!fill_values_match("1.5", "1 5", "input"));
+        assert!(!fill_values_match("12 34", "12-34", "input"));
+        assert!(fill_values_match("12/34", "12 / 34", "input"));
     }
 
     /// Verify that `char_to_key_info` returns the correct (key, code,

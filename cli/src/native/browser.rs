@@ -2844,20 +2844,35 @@ impl BrowserManager {
                     None,
                 )
                 .await?;
+            // Owned from the start, so `close` cleans it up if closing it here
+            // fails; released only once Chrome confirms it is gone.
+            let temp = created
+                .get("targetId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            if let Some(temp) = &temp {
+                self.remember_created_target(temp);
+            }
             tokio::time::sleep(Duration::from_millis(300)).await;
             let back = self
                 .client
                 .send_command("ABExt.call", Some(activate(chrome_tab)), None)
                 .await;
-            if let Some(temp) = created.get("targetId").and_then(|v| v.as_str()) {
-                let _ = self
+            if let Some(temp) = temp {
+                let closed = self
                     .client
                     .send_command(
                         "Target.closeTarget",
                         Some(json!({ "targetId": temp })),
                         None,
                     )
-                    .await;
+                    .await
+                    .ok()
+                    .and_then(|v| v.get("success").and_then(|s| s.as_bool()))
+                    .unwrap_or(false);
+                if closed {
+                    let _ = self.forget_created_target(&temp);
+                }
             }
             back?;
         } else {

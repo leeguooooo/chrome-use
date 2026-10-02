@@ -635,8 +635,12 @@ pub fn no_refs_session_hint(flags: &Flags) -> String {
                 .to_string(),
         }
     };
-    let mut others: Vec<String> = live_session_names()
+    // The daemon inventory, as `session list` reads it: `dashboard.pid` and
+    // other non-session files are not sessions to point anyone at.
+    let mut others: Vec<String> = crate::connection::walk_daemons()
+        .sessions
         .into_iter()
+        .map(|s| s.name)
         .filter(|n| n != &flags.session)
         .collect();
     others.sort();

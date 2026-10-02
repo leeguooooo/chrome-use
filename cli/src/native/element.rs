@@ -2809,7 +2809,8 @@ pub async fn is_element_sensitive(
             return true;
         }
     }
-    match resolve_element_object_id(
+    // Deny by default: if the element cannot be resolved or read, mask.
+    let Ok((object_id, effective)) = resolve_element_object_id(
         client,
         session_id,
         ref_map,
@@ -2817,11 +2818,34 @@ pub async fn is_element_sensitive(
         iframe_sessions,
     )
     .await
-    {
-        Ok((object_id, effective)) => {
-            super::sensitive::is_sensitive_object(client, &effective, &object_id).await
-        }
-        Err(_) => false,
+    else {
+        return true;
+    };
+    let result: Result<EvaluateResult, String> = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: super::sensitive::EDITABLE_ATTRIBUTES_JS.to_string(),
+                object_id: Some(object_id),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective),
+        )
+        .await;
+    let attrs: Option<Vec<String>> = result.ok().and_then(|r| {
+        r.result.value.and_then(|v| {
+            v.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+        })
+    });
+    match attrs {
+        Some(attrs) => super::sensitive::sensitive_by_attributes(&attrs),
+        None => true,
     }
 }
 

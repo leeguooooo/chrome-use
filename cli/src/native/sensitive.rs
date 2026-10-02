@@ -148,8 +148,10 @@ async fn describe_is_sensitive(client: &CdpClient, session_id: &str, target: Val
     let described: Result<Value, String> = client
         .send_command("DOM.describeNode", Some(target), Some(session_id))
         .await;
+    // Deny by default: a node that cannot be inspected (it re-rendered away
+    // between the AX read and now) might be the card field, so it is masked.
     let Ok(described) = described else {
-        return false;
+        return true;
     };
     let attrs: Vec<String> = described
         .pointer("/node/attributes")
@@ -162,6 +164,28 @@ async fn describe_is_sensitive(client: &CdpClient, session_id: &str, target: Val
         .unwrap_or_default();
     sensitive_by_attributes(&attrs)
 }
+
+/// JS run on the element `get value` was given. It picks the same editable
+/// element `READ_EDITABLE_VALUE_TEMPLATE` reads (the element itself, or the
+/// first input/textarea/select/contenteditable inside it) and returns its
+/// attributes as a flat `[name, value, ...]` list, so a password inside a
+/// wrapper is judged by the password field, not by the wrapper (#372).
+pub const EDITABLE_ATTRIBUTES_JS: &str = r#"function() {
+    let el = this;
+    const editable = n => n && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA'
+        || n.tagName === 'SELECT' || n.isContentEditable);
+    if (!editable(el) && el.querySelector) {
+        const inner = el.querySelector('input, textarea, select, [contenteditable]');
+        if (inner) el = inner;
+    }
+    const out = [];
+    for (const k of ['type', 'autocomplete', 'name', 'id', 'aria-label', 'placeholder', 'title',
+                     'data-elements-stable-field-name']) {
+        const v = el.getAttribute && el.getAttribute(k);
+        if (v != null) out.push(k, String(v));
+    }
+    return out;
+}"#;
 
 #[cfg(test)]
 mod tests {

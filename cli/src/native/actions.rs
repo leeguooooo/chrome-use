@@ -1807,8 +1807,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         let resource_mark = Box::pin(mgr.evaluate(super::observation::RESOURCE_MARK_JS, None))
             .await
             .ok()
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+            .map(|v| super::observation::ResourceMark::from_value(&v))
+            .unwrap_or_default();
         let snap = observe_snapshot(state).await;
         Some((url, snap, (req_mark, resource_mark)))
     } else {
@@ -5204,13 +5204,14 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     // Options fingerprint: diffing an `-i` tree against a full one, or two
     // different `--selector` scopes, compares unrelated documents.
     let opts_key = format!(
-        "i={} c={} d={:?} s={:?} u={} dom={}",
+        "i={} c={} d={:?} s={:?} u={} dom={} rv={}",
         options.interactive,
         options.compact,
         options.depth,
         options.selector,
         options.urls,
-        dom_forced
+        dom_forced,
+        options.reveal_values
     );
     let mut diff_note: Option<&'static str> = None;
     let full_tree = tree.clone();

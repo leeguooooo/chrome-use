@@ -104,6 +104,14 @@ mod tests {
             human_check_vendor("https://notsentinel.example.com/x.js"),
             None
         );
+        assert_eq!(
+            human_check_vendor("https://example.com/sentinel/app.js"),
+            None
+        );
+        assert_eq!(
+            human_check_vendor("https://chatgpt.com/sentinel/abc/sdk.js"),
+            Some("OpenAI Sentinel")
+        );
     }
 
     #[test]
@@ -120,6 +128,51 @@ mod tests {
         let plain =
             vec![serde_json::json!({"url": "https://cdn.example.com/a.js", "type": "script"})];
         assert!(human_check_verdict(false, &plain).is_none());
+    }
+
+    /// Run the resources-since script under node against a stubbed
+    /// `performance` holding `n` entries for document `origin`.
+    fn run_since(mark: super::ResourceMark, origin: f64, n: usize) -> Option<usize> {
+        let node = std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        })?;
+        let js = format!(
+            "globalThis.performance = {{ timeOrigin: {origin}, getEntriesByType: () => \
+             Array.from({{length: {n}}}, (_, i) => ({{ name: 'https://x.test/' + i, \
+             initiatorType: 'script', transferSize: 1 }})) }}; \
+             console.log({}.length)",
+            super::resources_since_js(mark)
+        );
+        let out = std::process::Command::new(node)
+            .arg("-e")
+            .arg(js)
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    }
+
+    #[test]
+    fn a_new_document_counts_from_zero_whatever_its_length() {
+        let mark = super::ResourceMark {
+            origin: 1000.5,
+            count: 5,
+        };
+        let Some(same_doc) = run_since(mark, 1000.5, 8) else {
+            return;
+        };
+        assert_eq!(same_doc, 3, "same document: only the 3 new entries");
+        assert_eq!(
+            run_since(mark, 2000.25, 5),
+            Some(5),
+            "new document, equal count"
+        );
+        assert_eq!(
+            run_since(mark, 2000.25, 9),
+            Some(9),
+            "new document, more entries"
+        );
     }
 
     #[test]
@@ -187,15 +240,34 @@ mod tests {
 /// How many resource-timing entries the page has: the mark the post-action
 /// read counts from (#378). Read from `performance`, so it works with the
 /// Network domain off (the stealth default) and on the relay.
-pub(super) const RESOURCE_MARK_JS: &str =
-    "(() => { try { return performance.getEntriesByType('resource').length } catch (e) { return 0 } })()";
+pub(super) const RESOURCE_MARK_JS: &str = "(() => { try { return { origin: performance.timeOrigin, count: performance.getEntriesByType('resource').length } } catch (e) { return { origin: 0, count: 0 } } })()";
 
-/// Resources the page fetched since `mark`: `[{url, type, bytes}]`. A count
-/// below the mark means the document was replaced, so everything is new.
-pub(super) fn resources_since_js(mark: u64) -> String {
+/// The mark: which document (`performance.timeOrigin`) and how many entries
+/// it had. Resource timing is per document, so a navigation starts a new
+/// buffer whose length says nothing about the old one.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct ResourceMark {
+    pub origin: f64,
+    pub count: u64,
+}
+
+impl ResourceMark {
+    pub fn from_value(v: &serde_json::Value) -> Self {
+        Self {
+            origin: v.get("origin").and_then(|o| o.as_f64()).unwrap_or(0.0),
+            count: v.get("count").and_then(|c| c.as_u64()).unwrap_or(0),
+        }
+    }
+}
+
+/// Resources the page fetched since `mark`: `[{url, type, bytes}]`. Another
+/// document (a different `timeOrigin`) means everything in it is new, whatever
+/// its entry count.
+pub(super) fn resources_since_js(mark: ResourceMark) -> String {
+    let ResourceMark { origin, count } = mark;
     format!(
         "(() => {{ try {{ const all = performance.getEntriesByType('resource'); \
-         const from = all.length >= {mark} ? {mark} : 0; \
+         const same = performance.timeOrigin === {origin}; const from = same && all.length >= {count} ? {count} : 0; \
          return all.slice(from).map(e => ({{ url: e.name, type: e.initiatorType, bytes: e.transferSize || 0 }})); \
          }} catch (e) {{ return [] }} }})()"
     )
@@ -237,7 +309,10 @@ pub(super) fn human_check_vendor(url: &str) -> Option<&'static str> {
         .and_then(|r| r.find('/').map(|i| &r[i..]))
         .unwrap_or("");
     let on = |d: &str| host == d || host.ends_with(&format!(".{d}"));
-    if path.starts_with("/sentinel/") || on("sentinel.openai.com") {
+    // OpenAI serves Sentinel under /sentinel/ on its own hosts only; the same
+    // path elsewhere is somebody else's script.
+    let openai = on("openai.com") || on("chatgpt.com") || on("oaistatic.com");
+    if (openai && path.starts_with("/sentinel/")) || on("sentinel.openai.com") {
         Some("OpenAI Sentinel")
     } else if on("hcaptcha.com") {
         Some("hCaptcha")
