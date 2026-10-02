@@ -16427,6 +16427,20 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     let mut otp_state = if otp.is_some() { "not asked" } else { "none" };
 
     let outcome: Result<(), String> = async {
+        if auto {
+            // Wait (full timeout) until the page shows any field this login
+            // could fill; after that, each step only checks briefly whether
+            // its field is there (a code-only 2FA page gets just the code).
+            let any: Vec<&str> = AUTH_USER_SELECTORS
+                .iter()
+                .chain(&["input[type=password]"])
+                .chain(if otp.is_some() { AUTH_OTP_SELECTORS } else { &[] })
+                .copied()
+                .collect();
+            mark_usable_auth_element(&mgr.client, &session_id, &any, &format!("bwuprobe-{marker}"), timeout_ms, true, pin)
+                .await
+                .map_err(|e| format!("auth login --bwu: no login field appeared on this page ({e})"))?;
+        }
         for (i, step) in steps.iter().enumerate() {
             let tag = format!("bwu{i}-{marker}");
             let (value, selectors, strict): (Option<&String>, Vec<&str>, bool) = match step.as_str() {
@@ -16469,6 +16483,23 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             };
             let found = if auto && step == "username" {
                 // A page that remembers the account shows only the password.
+                // The broad text-input guess only next to a password field,
+                // so a one-time-code field is never taken for the username.
+                match mark_usable_auth_element(&mgr.client, &session_id, AUTH_USER_SELECTORS, &tag, AUTH_BWU_PROBE_MS, strict, pin).await {
+                    Ok(sel) => Some(sel),
+                    Err(e) if e.starts_with("the page moved") => return Err(e),
+                    Err(_) => {
+                        let probe = format!("bwupw-{marker}");
+                        if mark_usable_auth_element(&mgr.client, &session_id, &["input[type=password]"], &probe, 0, true, pin).await.is_ok() {
+                            mark_usable_auth_element(&mgr.client, &session_id, AUTH_USER_FALLBACK_SELECTORS, &tag, 0, strict, pin)
+                                .await
+                                .ok()
+                        } else {
+                            None
+                        }
+                    }
+                }
+            } else if auto && step == "password" && pending.is_empty() {
                 mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, AUTH_BWU_PROBE_MS, strict, pin)
                     .await
                     .ok()
@@ -16514,20 +16545,46 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             }
         }
 
-        // Default flow: a code field after the password page gets the code.
-        if auto && submitted && !no_submit && otp_state == "not asked" {
+        // Default flow: a code field gets the code, either after submitting
+        // the password or on a page that asks only for the code.
+        let code_only = filled.is_empty() && !submitted;
+        if auto && otp_state == "not asked" && (submitted || code_only) {
             if let Some(code) = otp.as_ref() {
                 let tag = format!("bwuotp-{marker}");
-                if let Ok(sel) = mark_usable_auth_element(
-                    &mgr.client, &session_id, AUTH_OTP_SELECTORS, &tag, AUTH_BWU_OTP_WAIT_MS, true, pin,
-                )
-                .await
+                let wait = if code_only { AUTH_BWU_PROBE_MS } else { AUTH_BWU_OTP_WAIT_MS };
+                if let Ok(sel) =
+                    mark_usable_auth_element(&mgr.client, &session_id, AUTH_OTP_SELECTORS, &tag, wait, true, pin).await
                 {
-                    interaction::fill(&mgr.client, &session_id, &state.ref_map, &sel, code, &state.iframe_sessions).await?;
-                    verify_auth_fields(&mgr.client, &session_id, &origin, &[(tag, code.encode_utf16().count())]).await?;
-                    interaction::press_key(&mgr.client, &session_id, "Enter").await?;
+                    // Many sites submit by themselves once the last digit is
+                    // in (GitHub does): the page is gone before the fill's
+                    // read-back. That is the code being accepted, not an error.
+                    let before = mgr.get_url().await.unwrap_or_default();
+                    let left = match interaction::fill(&mgr.client, &session_id, &state.ref_map, &sel, code, &state.iframe_sessions).await {
+                        Ok(_) => false,
+                        Err(e) => {
+                            // Whatever the error says (a lost context, the
+                            // marked field missing on the next page), a new
+                            // URL means the site took the code and moved on.
+                            let now = mgr.get_url().await.unwrap_or_default();
+                            if page_went_away(&e) || (!now.is_empty() && now != before) {
+                                true
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                    };
                     filled.push("totp".to_string());
                     otp_state = "filled";
+                    if left {
+                        submitted = true;
+                    } else if !no_submit {
+                        match verify_auth_fields(&mgr.client, &session_id, &origin, &[(tag, code.encode_utf16().count())]).await {
+                            Ok(()) => interaction::press_key(&mgr.client, &session_id, "Enter").await?,
+                            Err(e) if page_went_away(&e) || e.contains("the page moved") => {}
+                            Err(e) => return Err(e),
+                        }
+                        submitted = true;
+                    }
                 }
             }
         }
@@ -16556,6 +16613,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         tokio::time::sleep(Duration::from_millis(1_500)).await;
     }
     let url = mgr.get_url().await.unwrap_or_default();
+    // Leaving the login page is the best sign the login went through; the
+    // caller still checks with `snapshot`.
     Ok(json!({
         "item": item,
         "filled": filled,
@@ -16563,6 +16622,13 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         "otp": otp_state,
         "url": url,
     }))
+}
+
+/// A CDP error meaning the page navigated away under the command.
+fn page_went_away(e: &str) -> bool {
+    e.contains("Cannot find context with specified id")
+        || e.contains("Execution context was destroyed")
+        || e.contains("Inspected target navigated or closed")
 }
 
 /// Before Enter: every field filled since the last Enter is still the element

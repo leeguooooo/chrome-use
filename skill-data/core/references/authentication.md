@@ -101,7 +101,9 @@ chrome-use auth login --bwu --no-submit     # fill only, press nothing
   adopted) and stops if the page moves to another origin. Default steps:
   username, password, Enter. A password field that appears only after the
   username was sent (one field per page) is waited for. A one-time-code field
-  that appears after submitting gets the item's TOTP.
+  that appears after submitting gets the item's TOTP, and so does a page that
+  asks only for the code (run it again there, e.g. after choosing "use your
+  authenticator app"). A site that submits the code by itself is fine.
 - **Unusual logins.** Give the vault item a custom field `_autotype` with steps
   separated by `:`. Use `username`, `password`, `totp`, `tab`, `enter`,
   `delay` (1 s), or another custom field's name, which is typed into the
