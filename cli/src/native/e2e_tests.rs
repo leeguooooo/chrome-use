@@ -7572,6 +7572,53 @@ async fn e2e_upload_via_trigger_button() {
 }
 
 // Upload: a selector/ref that resolves to NO file input must fail cleanly and
+/// A drop zone with no `<input type=file>` in the DOM: its button creates one
+/// on click and opens the native chooser at once (platform.openai.com/plugins,
+/// #386). `upload` clicks it with chooser interception on and fills the input
+/// the chooser reports; no native dialog opens.
+#[tokio::test]
+#[ignore]
+async fn e2e_upload_through_a_file_chooser_opened_by_a_button() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>dropzone</title>
+<button id="b">Upload new or existing plugin</button><p id="out"></p>
+<script>
+  b.addEventListener('click', () => {
+    const i = document.createElement('input');
+    i.type = 'file';
+    i.addEventListener('change', () => { out.textContent = [...i.files].map(f => f.name + ':' + f.size).join(','); });
+    i.click();
+  });
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let tmp = std::env::temp_dir().join(format!("ab-chooser-{}.txt", std::process::id()));
+    std::fs::write(&tmp, "hello").unwrap();
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "1", "action": "upload", "selector": "#b", "files": [tmp.to_string_lossy()] }),
+        &mut state,
+    ))
+    .await;
+    assert_success(&resp);
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "2", "action": "evaluate", "script": "out.textContent" }),
+        &mut state,
+    ))
+    .await;
+    let name = tmp.file_name().unwrap().to_string_lossy().to_string();
+    assert_eq!(get_data(&resp)["result"], json!(format!("{name}:5")));
+
+    let _ = Box::pin(execute_command(
+        &json!({ "id": "9", "action": "close" }),
+        &mut state,
+    ))
+    .await;
+    let _ = std::fs::remove_file(&tmp);
+    server.abort();
+}
+
 // leave the tab exactly where it was — never navigate to about:blank (the old
 // drop-dispatch side effect).
 #[tokio::test]

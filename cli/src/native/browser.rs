@@ -4232,9 +4232,25 @@ impl BrowserManager {
         // `<el-button>` next to it. Resolve to the real `<input type=file>` so we
         // set files on the node the framework actually listens on, and so hidden
         // inputs are reachable (a11y/visibility-based locators miss them).
-        let input_object_id = self
+        let input_object_id = match self
             .resolve_file_input_object_id(&object_id, &effective_session_id, selector)
-            .await?;
+            .await
+        {
+            Ok(id) => id,
+            // No file input in the DOM: a button that creates one on click and
+            // opens the native chooser at once (#386). Catch the chooser.
+            Err(no_input) => self
+                .file_input_from_chooser(
+                    session_id,
+                    &effective_session_id,
+                    selector,
+                    files.len(),
+                    ref_map,
+                    iframe_sessions,
+                )
+                .await
+                .map_err(|e| format!("{no_input}. Clicking it to catch a file chooser: {e}"))?,
+        };
 
         let describe: Value = self
             .client
@@ -4321,6 +4337,90 @@ impl BrowserManager {
                 )),
             }),
         }
+    }
+
+    /// Click `selector` with file-chooser interception on, and return the
+    /// `<input type=file>` behind the chooser it opened (#386). Interception is
+    /// enabled before the click and checked, so a native dialog never opens on
+    /// the user's screen; it is switched off again whatever happens.
+    async fn file_input_from_chooser(
+        &self,
+        session_id: &str,
+        effective_session_id: &str,
+        selector: &str,
+        file_count: usize,
+        ref_map: &RefMap,
+        iframe_sessions: &HashMap<String, String>,
+    ) -> Result<String, String> {
+        let intercept = |enabled: bool| {
+            self.client.send_command(
+                "Page.setInterceptFileChooserDialog",
+                Some(json!({ "enabled": enabled })),
+                Some(effective_session_id),
+            )
+        };
+        intercept(true)
+            .await
+            .map_err(|e| format!("this connection cannot intercept the file chooser ({e})"))?;
+        let mut rx = self.client.subscribe();
+        let clicked = super::interaction::click(
+            &self.client,
+            session_id,
+            ref_map,
+            selector,
+            "left",
+            1,
+            iframe_sessions,
+        )
+        .await;
+        let opened = match clicked {
+            Err(e) => Err(format!("the click failed: {e}")),
+            Ok(()) => {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    match tokio::time::timeout_at(deadline, rx.recv()).await {
+                        Ok(Ok(ev))
+                            if ev.method == "Page.fileChooserOpened"
+                                && ev.session_id.as_deref() == Some(effective_session_id) =>
+                        {
+                            break Ok(ev.params);
+                        }
+                        Ok(Ok(_)) => continue,
+                        Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                        Ok(Err(_)) => break Err("the connection closed".to_string()),
+                        Err(_) => {
+                            break Err("no file chooser opened within 5s; pass the \
+                                       `<input type=file>` or the control that opens it"
+                                .to_string())
+                        }
+                    }
+                }
+            }
+        };
+        let _ = intercept(false).await;
+        let params = opened?;
+        if params.get("mode").and_then(Value::as_str) == Some("selectSingle") && file_count > 1 {
+            return Err(format!(
+                "the chooser accepts one file, but {file_count} were given"
+            ));
+        }
+        let backend_node_id = params
+            .get("backendNodeId")
+            .and_then(Value::as_i64)
+            .ok_or("the file chooser did not name its input element")?;
+        let resolved: Value = self
+            .client
+            .send_command(
+                "DOM.resolveNode",
+                Some(json!({ "backendNodeId": backend_node_id })),
+                Some(effective_session_id),
+            )
+            .await?;
+        resolved
+            .pointer("/object/objectId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| "could not resolve the chooser's input element".to_string())
     }
 
     /// Given an arbitrary resolved element, return the object id of the
