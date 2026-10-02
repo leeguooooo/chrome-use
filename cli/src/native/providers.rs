@@ -853,7 +853,6 @@ mod tests {
         (base, server)
     }
 
-
     #[tokio::test]
     async fn test_kernel_sends_profile_as_object() {
         let guard = kernel_env();

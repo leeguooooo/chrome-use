@@ -181,7 +181,8 @@ fn is_loopback_host(host: &str) -> bool {
     h == "localhost"
         || h.ends_with(".localhost")
         || h == "::1"
-        || h.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
+        || h.parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The request's Host, without port, is loopback or explicitly allowed via
@@ -932,15 +933,26 @@ mod tests {
         assert!(is_same_origin_ws_request(rebinding));
         assert!(!host_allowed(rebinding, ""));
         // Loopback names pass; an explicit reverse-proxy host passes only when listed.
-        for host in ["localhost:4848", "127.0.0.1:4848", "[::1]:4848", "dashboard.chrome-use.localhost"] {
+        for host in [
+            "localhost:4848",
+            "127.0.0.1:4848",
+            "[::1]:4848",
+            "dashboard.chrome-use.localhost",
+        ] {
             let req = format!("GET / HTTP/1.1\r\nHost: {host}\r\n\r\n");
             assert!(host_allowed(&req, ""), "{host}");
         }
         let coder = "GET / HTTP/1.1\r\nHost: workspace.coder.com\r\n\r\n";
         assert!(!host_allowed(coder, ""));
         assert!(host_allowed(coder, "workspace.coder.com, other.example"));
-        assert!(!host_allowed("GET / HTTP/1.1\r\n\r\n", "workspace.coder.com"));
-        assert!(!host_allowed("GET / HTTP/1.1\r\nHost: 127.0.0.1.evil.example\r\n\r\n", ""));
+        assert!(!host_allowed(
+            "GET / HTTP/1.1\r\n\r\n",
+            "workspace.coder.com"
+        ));
+        assert!(!host_allowed(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1.evil.example\r\n\r\n",
+            ""
+        ));
     }
 
     #[test]
