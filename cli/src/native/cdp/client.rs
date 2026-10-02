@@ -18,6 +18,21 @@ type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<CdpMessage>>>>;
 /// through intermediate proxies (reverse proxies, load balancers, service meshes).
 const WS_KEEPALIVE_INTERVAL_SECS: u64 = 30;
 
+fn normalize_websocket_root_path(url: &str) -> String {
+    let Some(scheme_end) = url.find("://").map(|index| index + 3) else {
+        return url.to_string();
+    };
+    let authority = &url[scheme_end..];
+    let Some(query_offset) = authority.find('?') else {
+        return url.to_string();
+    };
+    if authority[..query_offset].contains('/') {
+        return url.to_string();
+    }
+    let query_index = scheme_end + query_offset;
+    format!("{}/{}", &url[..query_index], &url[query_index..])
+}
+
 /// Raw incoming CDP message (text) broadcast to all subscribers.
 /// Used by the inspect proxy to forward responses and events to DevTools.
 #[derive(Debug, Clone)]
@@ -94,7 +109,9 @@ impl CdpClient {
         url: &str,
         headers: Option<Vec<(String, String)>>,
     ) -> Result<Self, String> {
-        let mut request = url
+        let normalized_url = normalize_websocket_root_path(url);
+        let mut request = normalized_url
+            .as_str()
             .into_client_request()
             .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
 
@@ -494,5 +511,77 @@ mod timeout_tests {
                 "daemon budget {daemon}ms must outlast extension {extension}ms for {len} bytes"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    #[test]
+    fn normalizes_only_root_websocket_queries() {
+        assert_eq!(
+            normalize_websocket_root_path("wss://browser.example?token=a%2Fb"),
+            "wss://browser.example/?token=a%2Fb"
+        );
+        assert_eq!(
+            normalize_websocket_root_path("ws://[::1]:9222?token=test"),
+            "ws://[::1]:9222/?token=test"
+        );
+        assert_eq!(
+            normalize_websocket_root_path("wss://user:pass@browser.example?token=test"),
+            "wss://user:pass@browser.example/?token=test"
+        );
+        assert_eq!(
+            normalize_websocket_root_path("wss://browser.example?"),
+            "wss://browser.example/?"
+        );
+        assert_eq!(
+            normalize_websocket_root_path("wss://browser.example/?token=a%2Fb"),
+            "wss://browser.example/?token=a%2Fb"
+        );
+        assert_eq!(
+            normalize_websocket_root_path("wss://browser.example/cdp?token=a%2Fb"),
+            "wss://browser.example/cdp?token=a%2Fb"
+        );
+    }
+
+    #[tokio::test]
+    async fn root_websocket_url_with_query_sends_slash_request_target() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (path_tx, path_rx) = oneshot::channel();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut path_tx = Some(path_tx);
+            let _ = tokio_tungstenite::accept_hdr_async(
+                stream,
+                move |
+                    request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                    response: tokio_tungstenite::tungstenite::handshake::server::Response,
+                | {
+                    if let Some(tx) = path_tx.take() {
+                        let path = request
+                            .uri()
+                            .path_and_query()
+                            .map(|value| value.as_str().to_string())
+                            .unwrap_or_default();
+                        let _ = tx.send(path);
+                    }
+                    Ok(response)
+                },
+            )
+            .await
+            .unwrap();
+        });
+
+        let url = format!("ws://127.0.0.1:{}?token=a%2Fb&scope=browser%20test", port);
+        let _client = CdpClient::connect(&url).await.unwrap();
+
+        assert_eq!(path_rx.await.unwrap(), "/?token=a%2Fb&scope=browser%20test");
+        server.await.unwrap();
     }
 }
