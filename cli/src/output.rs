@@ -248,24 +248,36 @@ fn truncate_middle(s: &str, max: usize) -> String {
     format!("{head}…{tail} [{n} chars]")
 }
 
-/// An eval result as text: a string prints as itself, not as a JSON-quoted
-/// literal with `\n` escapes (agents read `innerText` that way, and a
-/// `JSON.stringify(...)` result came back encoded twice). A string that is
-/// itself a JSON object or array prints as that JSON, so one parse gets the
-/// value. Everything else is pretty JSON. `--json` keeps the exact value.
+/// An eval result as text. A string prints as itself, byte for byte, not as
+/// a JSON-quoted literal with `\n` escapes: agents read `innerText` that way,
+/// and a `JSON.stringify(...)` result came back encoded twice. It is never
+/// re-parsed, so key order and large numbers survive. A string that would
+/// read as something else (empty, or a bare number/true/false/null) keeps its
+/// quotes. Everything else is pretty JSON; `--json` keeps the exact value.
 fn eval_result_text(result: &serde_json::Value) -> String {
     if let Some(text) = result.as_str() {
-        let trimmed = text.trim_start();
-        if trimmed.starts_with('{') || trimmed.starts_with('[') {
-            if let Ok(inner) = serde_json::from_str::<serde_json::Value>(text) {
-                if inner.is_object() || inner.is_array() {
-                    return serde_json::to_string_pretty(&inner).unwrap_or_default();
-                }
-            }
+        let ambiguous = text.is_empty()
+            || matches!(
+                serde_json::from_str::<serde_json::Value>(text),
+                Ok(serde_json::Value::Number(_)
+                    | serde_json::Value::Bool(_)
+                    | serde_json::Value::Null)
+            );
+        if !ambiguous {
+            return text.to_string();
         }
-        return text.to_string();
     }
     serde_json::to_string_pretty(result).unwrap_or_default()
+}
+
+/// Print an error line for the caller. It goes to stderr; when stderr goes
+/// to /dev/null (`cmd 2>/dev/null | tail -1`, a quarter of agent calls) it
+/// goes to stdout as well, or the caller sees only the exit code.
+pub fn print_error_line(line: &str) {
+    eprintln!("{line}");
+    if stderr_is_discarded() {
+        println!("{line}");
+    }
 }
 
 /// Whether stderr goes to /dev/null, so an error printed only there would
@@ -334,16 +346,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
 
     if !resp.success {
         let error = resp.error.as_deref().unwrap_or("Unknown error");
-        eprintln!("{} {}", color::error_indicator(), error);
-        // `cmd 2>/dev/null | tail -1` is how agents call us a quarter of the
-        // time; with the error on stderr only they saw nothing but exit 1.
-        if stderr_is_discarded() {
-            println!("{} {}", color::error_indicator(), error);
-        }
+        print_error_line(&format!("{} {}", color::error_indicator(), error));
         // Still print dialog warning after errors, since a pending dialog
         // is the most common cause of commands timing out
         if let Some(ref warning) = resp.warning {
-            eprintln!("{} {}", color::warning_indicator(), warning);
+            print_error_line(&format!("{} {}", color::warning_indicator(), warning));
         }
         return;
     }
@@ -4856,12 +4863,18 @@ pub fn print_help() {
 /// `tabs --help` and the like and got all 568 lines back.
 pub fn print_help_excerpt(command: &str) {
     let text = help_text();
-    let needle = format!(" {command}");
-    let lines: Vec<&str> = text
-        .lines()
-        .filter(|l| l.contains(&needle) || l.trim_start().starts_with(command))
-        .take(30)
-        .collect();
+    let mentions = |line: &str| {
+        line.match_indices(command).any(|(i, _)| {
+            let before = line[..i].chars().next_back();
+            let after = line[i + command.len()..].chars().next();
+            let edge =
+                |c: Option<char>| c.is_none_or(|c| !(c.is_alphanumeric() || c == '-' || c == '_'));
+            edge(before) && edge(after)
+        })
+    };
+    let all: Vec<&str> = text.lines().filter(|l| mentions(l)).collect();
+    let shown = all.len().min(30);
+    let lines = &all[..shown];
     if lines.is_empty() {
         println!(
             "No help page for `{command}`, and the full help does not mention it. \
@@ -4872,6 +4885,9 @@ pub fn print_help_excerpt(command: &str) {
     println!("chrome-use {command}: the lines of `chrome-use --help` that mention it\n");
     for l in lines {
         println!("{l}");
+    }
+    if all.len() > shown {
+        println!("… {} more lines mention it.", all.len() - shown);
     }
     println!("\nFull list: `chrome-use --help`.");
 }
@@ -5938,9 +5954,15 @@ mod tests {
     #[test]
     fn eval_strings_print_as_text_and_json_strings_parse_once() {
         assert_eq!(eval_result_text(&json!("a\nb")), "a\nb");
-        assert_eq!(eval_result_text(&json!("{\"a\":1}")), "{\n  \"a\": 1\n}");
+        // Never re-parsed: key order and big numbers stay as the page wrote them.
+        let s = "{\"z\":1,\"a\":2,\"id\":123456789012345678901234}";
+        assert_eq!(eval_result_text(&json!(s)), s);
         assert_eq!(eval_result_text(&json!("{not json")), "{not json");
         assert_eq!(eval_result_text(&json!(3)), "3");
+        // Strings that would read as another type keep their quotes.
+        assert_eq!(eval_result_text(&json!("")), "\"\"");
+        assert_eq!(eval_result_text(&json!("42")), "\"42\"");
+        assert_eq!(eval_result_text(&json!("null")), "\"null\"");
         assert_eq!(
             eval_result_text(&json!({"a": [1]})),
             "{\n  \"a\": [\n    1\n  ]\n}"

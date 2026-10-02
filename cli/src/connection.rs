@@ -655,6 +655,18 @@ pub fn read_session_version(session: &str) -> Option<String> {
 /// [`walk_daemons`] it never removes another session's files, so a daemon can
 /// call it (from a blocking task) without disturbing a session that is
 /// starting up.
+/// The one session name to move to when `session` is stuck: `foo` → `foo-2`,
+/// `foo-2` → `foo-3`, so following the advice twice does not chain suffixes.
+pub fn successor_session(session: &str) -> String {
+    match session.rsplit_once('-') {
+        Some((base, n)) if !base.is_empty() => match n.parse::<u32>() {
+            Ok(n) => format!("{base}-{}", n + 1),
+            Err(_) => format!("{session}-2"),
+        },
+        _ => format!("{session}-2"),
+    }
+}
+
 pub fn live_session_names() -> Vec<String> {
     let Ok(entries) = fs::read_dir(get_socket_dir()) else {
         return Vec::new();
@@ -1441,14 +1453,16 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                     // "Use a different --session name" sent agents through a
                     // new name per error (98 in one transcript, each leaving a
                     // daemon behind). Name one successor and say to keep it.
+                    let next = successor_session(session);
                     return Err(format!(
                         "session unresponsive: the stuck '{session}' daemon was stopped \
                          automatically. '{session}' frees up on its own after a while; until \
-                         then rerunning it can return this same message. To continue now, move \
-                         your tab to one new session and keep using that name: \
-                         `chrome-use --session {session}-2 adopt <url of your tab>`, then \
-                         `--session {session}-2` from here on. Do not start a new name for every \
-                         error: each one leaves a daemon behind (`session list`)."
+                         then rerunning it can return this same message. Do not start a new \
+                         name for every error: each one leaves a daemon behind (`session list`). \
+                         To continue now, rerun the same command with `--session {next}` and \
+                         its other flags unchanged, and keep `{next}` from here on (on the \
+                         extension relay, `--session {next} adopt <url>` brings your open tab \
+                         along)."
                     ));
                 }
                 // Non-transient error, fail immediately
@@ -2347,5 +2361,12 @@ mod tests {
         );
         // …and the name can still be what overflows it.
         assert!(socket_path_length_error(&PathBuf::from("/tmp/cu"), &"x".repeat(120)).is_some());
+    }
+
+    #[test]
+    fn a_stuck_session_moves_to_one_successor_name() {
+        assert_eq!(successor_session("qa"), "qa-2");
+        assert_eq!(successor_session("qa-2"), "qa-3");
+        assert_eq!(successor_session("pr-search"), "pr-search-2");
     }
 }

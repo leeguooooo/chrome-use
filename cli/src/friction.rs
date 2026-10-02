@@ -27,26 +27,25 @@ const MAX_LINES: usize = 4000;
 /// Kept small + substring-matched so similar failures bucket together.
 pub fn categorize(error: &str) -> &'static str {
     let l = error.to_lowercase();
-    // Before `relay`/`not found`: these name a specific, fixable cause.
-    if l.contains("debugger_access_denied")
-        || l.contains("cannot access a chrome-extension://")
-        || l.contains("cannot attach to this target")
-    {
-        "blocked_by_extension_frame"
-    } else if l.starts_with("missing '")
-        || l.contains("not yet implemented")
-        || l.contains("is not an action")
-        || l.starts_with("usage:")
-        || l.contains("unknown command")
-        || l.contains("element not found: @\n")
-        || l.trim_end() == "element not found: @"
-    {
-        "usage"
-    } else if l.contains("not in the allowed domains") || l.contains("no pending confirmation") {
-        "policy"
-    } else if l.contains("failed to fetch") {
-        "page_fetch_failed"
-    } else if l.contains("its tab is gone")
+    // Friction-only buckets first; then the same taxonomy `--json` reports as
+    // `code`, so the two never disagree; the older buckets below only split
+    // what that taxonomy calls `command_failed`.
+    if l.contains("not in the allowed domains") || l.contains("no pending confirmation") {
+        return "policy";
+    }
+    if l.contains("failed to fetch") {
+        return "page_fetch_failed";
+    }
+    if l.trim_end() == "element not found: @" || l.starts_with("element not found: @\n") {
+        return "usage";
+    }
+    match crate::error_envelope::classify_error(error).code {
+        "debugger_access_denied" => return "blocked_by_extension_frame",
+        "invalid_request" => return "usage",
+        "command_failed" => {}
+        code => return code,
+    }
+    if l.contains("its tab is gone")
         || l.contains("stale sessionid")
         || l.contains("no attached tab")
     {

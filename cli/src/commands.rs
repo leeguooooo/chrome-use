@@ -141,15 +141,20 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+/// Whether `name` is a command the parser knows.
+pub fn is_known_command(name: &str) -> bool {
+    KNOWN_COMMANDS.contains(&name)
+}
+
 /// Commands agents reach for that do not exist, mapped to the one that does
 /// what they meant. Seen in real sessions; edit distance alone suggested
 /// `is` for `js`.
 fn guessed_command(input: &str) -> Option<&'static str> {
     Some(match input.to_lowercase().as_str() {
         "js" | "javascript" | "exec" | "execute" | "evaluate" | "run" => "eval '<js>'",
-        "requests" | "request" | "xhr" | "har" => "network requests",
+        "requests" | "request" | "xhr" => "network requests",
+        "har" => "network har start   (then `network har stop <path>`)",
         "logs" | "log" | "console-logs" => "console",
-        "help" => "--help (or <command> --help)",
         "links" => "snapshot -i -f link   (links are listed as `link \"…\" [ref=eN]`)",
         "innertext" | "page-text" => "get text body   (or `read` for the main content)",
         _ => return None,
@@ -180,19 +185,13 @@ fn nearest_command(input: &str) -> Option<String> {
 impl ParseError {
     pub fn format(&self) -> String {
         match self {
-            ParseError::UnknownCommand { command } if guessed_command(command).is_some() => {
-                format!(
-                    "Unknown command: {}\nUse: chrome-use {}",
-                    command,
-                    guessed_command(command).unwrap_or_default()
-                )
-            }
-            ParseError::UnknownCommand { command } => match nearest_command(command) {
-                Some(suggestion) => format!(
-                    "Unknown command: {}\nDid you mean: chrome-use {}?",
-                    command, suggestion
-                ),
-                None => format!("Unknown command: {}", command),
+            ParseError::UnknownCommand { command } => match guessed_command(command)
+                .map(|g| format!("Use: chrome-use {g}"))
+                .or_else(|| {
+                    nearest_command(command).map(|c| format!("Did you mean: chrome-use {c}?"))
+                }) {
+                Some(next) => format!("Unknown command: {command}\n{next}"),
+                None => format!("Unknown command: {command}"),
             },
             ParseError::UnknownSubcommand {
                 subcommand,

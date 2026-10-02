@@ -1439,6 +1439,18 @@ fn main() {
         );
     }
 
+    // `chrome-use help [command]` is what agents type for help.
+    if clean.first().map(String::as_str) == Some("help") {
+        clean.remove(0);
+        if let Some(cmd) = clean.first() {
+            if !print_command_help(cmd) {
+                output::print_help_excerpt(cmd);
+            }
+        } else {
+            print_help();
+        }
+        return;
+    }
     let has_help = args.iter().any(|a| a == "--help" || a == "-h");
     let has_version = args.iter().any(|a| a == "--version" || a == "-V");
 
@@ -1447,8 +1459,10 @@ fn main() {
             if print_command_help(cmd) {
                 return;
             }
-            output::print_help_excerpt(cmd);
-            return;
+            if commands::is_known_command(cmd) {
+                output::print_help_excerpt(cmd);
+                return;
+            }
         }
         print_help();
         return;
@@ -2271,7 +2285,7 @@ fn main() {
                 };
                 print_json_error_with_type(e.format(), error_type);
             } else {
-                eprintln!("{}", color::red(&e.format()));
+                output::print_error_line(&color::red(&e.format()));
             }
             exit(1);
         }
@@ -2364,7 +2378,7 @@ fn main() {
             if flags.json {
                 print_json_error(e);
             } else {
-                eprintln!("{} {}", color::error_indicator(), e);
+                output::print_error_line(&format!("{} {}", color::error_indicator(), e));
             }
             exit(1);
         }
@@ -3226,7 +3240,7 @@ fn main() {
             if flags.json {
                 print_json_error(e);
             } else {
-                eprintln!("{} {}", color::error_indicator(), e);
+                output::print_error_line(&format!("{} {}", color::error_indicator(), e));
             }
             exit(1);
         }
@@ -3356,7 +3370,7 @@ fn dispatch_script(flags: &Flags, cmd: serde_json::Value) {
             if flags.json {
                 print_json_error(e);
             } else {
-                eprintln!("{} {}", color::error_indicator(), e);
+                output::print_error_line(&format!("{} {}", color::error_indicator(), e));
             }
             exit(1);
         }
