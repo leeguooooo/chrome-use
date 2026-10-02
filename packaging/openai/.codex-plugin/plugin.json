@@ -1,0 +1,55 @@
+{
+  "name": "chrome-use",
+  "version": "1.0.0",
+  "description": "Operate web pages in your own Chrome on your connected computer: read pages as structured text, click, fill forms, upload, screenshot and test web apps with your existing sign-ins.",
+  "author": {
+    "name": "Guo Li",
+    "email": "leeguooooo@gmail.com",
+    "url": "https://github.com/leeguooooo"
+  },
+  "homepage": "https://github.com/leeguooooo/chrome-use",
+  "repository": "https://github.com/leeguooooo/chrome-use",
+  "license": "Apache-2.0",
+  "keywords": [
+    "browser",
+    "chrome",
+    "automation",
+    "forms",
+    "testing",
+    "web"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "chrome-use",
+    "shortDescription": "Work in your own Chrome",
+    "longDescription": "chrome-use lets the assistant work in the Chrome browser on your own computer, on the sites you are already signed in to. It reads each page through Chrome's accessibility tree, so it sees buttons, fields and links by name, and acts on them precisely: open a page, read it, click, fill and check a form, upload a file, take a screenshot, or walk through a web app to test it.\n\nUse it for tasks that need your browser rather than a fresh one: checking a dashboard behind your login, updating a setting, filling a long form from information you provide, or verifying how your own web app behaves.\n\nSafety: before submitting a form, sending a message, buying something or changing account settings, the assistant shows you what will happen and waits for your approval. Card numbers, security codes, passwords and one-time codes are masked in what the assistant reads. When a site asks you to prove you are human, chrome-use reports it, and the assistant hands that step (or a refused sign-in) to you instead of trying to get past it.\n\nRequirements and limits: install the open-source chrome-use CLI on your computer (instructions at github.com/leeguooooo/chrome-use) and keep Chrome running; your assistant uses it on a connected computer. It only reaches sites you can reach yourself. chrome-use has no server of its own and sends no telemetry; see the privacy policy for the few requests it makes besides your browsing.",
+    "developerName": "Guo Li",
+    "category": "Productivity",
+    "capabilities": [
+      "Read web pages",
+      "Click and navigate",
+      "Fill forms",
+      "Upload files",
+      "Take screenshots",
+      "Test web apps"
+    ],
+    "websiteURL": "https://github.com/leeguooooo/chrome-use",
+    "supportURL": "https://github.com/leeguooooo/chrome-use/issues",
+    "privacyPolicyURL": "https://github.com/leeguooooo/chrome-use/blob/main/PRIVACY.md",
+    "defaultPrompt": [
+      "Open my analytics dashboard and summarize this week's numbers.",
+      "Fill in this signup form with the details I give you, then show me before submitting.",
+      "Test the checkout flow on my staging site and report anything broken."
+    ],
+    "brandColor": "#3A2E8C",
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png"
+  },
+  "extensions": {
+    "com.openai": {
+      "publication": {
+        "release_notes": "First directory release: skill for working in your own Chrome through the chrome-use CLI, with approval before submits and masking of sensitive fields."
+      }
+    }
+  }
+}
