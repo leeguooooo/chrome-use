@@ -51,6 +51,7 @@ import {
 import { shouldCheckForUpdate, canApplyUpdateNow } from './update-check.js';
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
+import { followReplacement, reviveDiscardedTab } from './tab-replacement.js';
 
 const HOST_NAME = 'com.agent_browser.connect';
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
@@ -274,6 +275,14 @@ if (chrome.windows && chrome.windows.onFocusChanged) {
 // chrome.storage.local so a service-worker restart re-attaches exactly these and
 // not the whole window. (Issue: banner occludes the user's foreground tab.)
 const ownedTabs = new Set();
+
+// removed tabId -> the tabId Chrome put in its place (a discard, a prerender
+// swap). Followed by recoverSessionTab so a `cb-tab-<old>` session finds its
+// tab again instead of reporting it gone.
+const replacedTabs = new Map();
+// Owned tabs whose onRemoved fired in the last few seconds: onReplaced may
+// arrive after it, and must still carry the ownership over.
+const recentlyRemovedOwned = new Set();
 let ownedLoaded = false;
 let loadOwnedPromise = null;
 
@@ -723,6 +732,32 @@ async function recoverSessionTab(sessionId) {
       // ~0.8s before the tab is attachable again. #342 shortened this to
       // 0.36s without a reproduction; restored.
       await new Promise((r) => setTimeout(r, 120 + i * 150));
+    }
+  }
+  // 1b) Chrome replaced the tab (discarded by Memory Saver, or a prerender
+  //    swap): it lives on under a new id. A discarded tab is reloaded in the
+  //    background first (never activated), then attached and aliased.
+  if (tabId != null) {
+    const replacement = followReplacement(replacedTabs, tabId);
+    if (replacement !== tabId) {
+      let tab = await chrome.tabs.get(replacement).catch(() => null);
+      if (eligible(tab) && tab.discarded) {
+        await reviveDiscardedTab(chrome.tabs, replacement).catch(() => false);
+        tab = await chrome.tabs.get(replacement).catch(() => null);
+      }
+      if (eligible(tab)) {
+        try {
+          await attachTab(replacement);
+          if (tabs.has(replacement)) {
+            sessionToTab.set(sessionId, replacement); // alias dead session -> live tab
+            return replacement;
+          }
+        } catch (e) {
+          if (isRelayTimeoutError(e)) throw e;
+          if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e);
+          // fall through to the stable-targetId path below
+        }
+      }
     }
   }
   // 2) The Chrome tabId is gone, but the CDP targetId is STABLE across the nav.
@@ -1713,6 +1748,22 @@ chrome.tabs.onUpdated.addListener(
       }
     })
 );
+chrome.tabs.onReplaced.addListener(
+  (addedTabId, removedTabId) =>
+    void whenReady(async () => {
+      replacedTabs.set(removedTabId, addedTabId);
+      await loadOwnedTabs();
+      // Ownership follows the tab, so the session may still drive (and close)
+      // it under its new id.
+      if (ownedTabs.has(removedTabId) || recentlyRemovedOwned.has(removedTabId)) {
+        recentlyRemovedOwned.delete(removedTabId);
+        await unmarkOwned(removedTabId);
+        await markOwned(addedTabId);
+      }
+      transferReloadState(reloadStates, removedTabId, addedTabId);
+    })
+);
+
 chrome.tabs.onRemoved.addListener(
   (tabId) =>
     void whenReady(() => {
@@ -1731,6 +1782,10 @@ chrome.tabs.onRemoved.addListener(
             sessionTargets.delete(removedSessionId);
           }
         }, RELOAD_LOOP_WINDOW_MS);
+      }
+      if (ownedTabs.has(tabId)) {
+        recentlyRemovedOwned.add(tabId);
+        setTimeout(() => recentlyRemovedOwned.delete(tabId), 5000);
       }
       unmarkOwned(tabId);
       detachTab(tabId, true);
