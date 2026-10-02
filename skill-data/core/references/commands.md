@@ -424,6 +424,11 @@ and endpoint on subsequent commands. The top-level `adopt` command still selects
 the extension relay; use `tab adopt` for direct CDP. Adoption
 attaches an existing tab in the current daemon and never navigates it.
 
+`tab new` (and `click --new-tab`, `open --new-tab`) replays the session's setup
+onto the new tab before its first document loads: user agent, `set headers`,
+`set credentials`, init scripts, routes, origin-scoped `--headers`, media,
+timezone, locale, geolocation, and offline mode.
+
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization
 or the liveness probe, and leaves it in the foreground. It changes the visible
@@ -728,8 +733,8 @@ path entries preserve iframe boundaries. Review `incomplete` rules manually.
 
 ```bash
 chrome-use open --init-script <path>             # Register before first navigation (repeatable)
-chrome-use addinitscript <js>                    # Register at runtime (returns identifier)
-chrome-use removeinitscript <identifier>         # Remove a previously registered init script
+chrome-use addinitscript <js>                    # Register at runtime; also runs in tabs opened later (returns identifier)
+chrome-use removeinitscript <identifier>         # Remove it from every tab in the session
 ```
 
 ## cURL cookie import

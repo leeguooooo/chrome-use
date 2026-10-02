@@ -8629,6 +8629,551 @@ async fn e2e_removeinitscript_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
+// New tabs inherit the session's setup (after upstream agent-browser #1777)
+// ---------------------------------------------------------------------------
+
+/// Boxed `execute_command`. These tests issue many commands, and a debug test
+/// thread's stack is too tight for that many inline command futures.
+async fn run_cmd(state: &mut DaemonState, cmd: Value) -> Value {
+    Box::pin(execute_command(&cmd, state)).await
+}
+
+async fn launch_headless(state: &mut DaemonState, extra: Value) {
+    let mut cmd = json!({ "id": "launch", "action": "launch", "headless": true });
+    if let (Some(cmd), Some(extra)) = (cmd.as_object_mut(), extra.as_object()) {
+        cmd.extend(extra.clone());
+    }
+    assert_success(&run_cmd(state, cmd).await);
+}
+
+async fn eval_in(state: &mut DaemonState, script: &str) -> Value {
+    let resp = run_cmd(
+        state,
+        json!({ "id": "eval", "action": "evaluate", "script": script }),
+    )
+    .await;
+    assert_success(&resp);
+    get_data(&resp)["result"].clone()
+}
+
+async fn close_state(state: &mut DaemonState) {
+    let resp = run_cmd(state, json!({ "id": "99", "action": "close" })).await;
+    assert_success(&resp);
+}
+
+/// `tab new <url>` must replay the session's setup onto the new tab before
+/// its first document: an init script registered on the primary page has to
+/// run on the initial load, not only after a later navigation.
+#[tokio::test]
+#[ignore]
+async fn e2e_tab_new_inherits_init_script_on_first_load() {
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({})).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "2", "action": "addinitscript", "script": "window.__abTab = 'seeded';" }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({
+            "id": "3", "action": "tab_new",
+            "url": "data:text/html,<script>document.title = String(window.__abTab)</script>",
+        }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["tabId"], "t2");
+
+    assert_eq!(
+        eval_in(&mut state, "document.title").await,
+        "seeded",
+        "init script should run on the new tab's first document"
+    );
+
+    close_state(&mut state).await;
+}
+
+/// Replayed init scripts receive target-specific CDP identifiers. Removing a
+/// script by the handle `addinitscript` returned must remove it from every tab
+/// where Chrome registered it, including the one created after it was added.
+#[tokio::test]
+#[ignore]
+async fn e2e_tab_new_removes_replayed_init_script_by_original_identifier() {
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({})).await;
+
+    let first = run_cmd(
+        &mut state,
+        json!({ "id": "2", "action": "addinitscript", "script": "window.__abFirstInit = true;" }),
+    )
+    .await;
+    assert_success(&first);
+    let first_id = get_data(&first)["identifier"]
+        .as_str()
+        .expect("first init script should return an identifier")
+        .to_string();
+
+    let second = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "addinitscript", "script": "window.__abSecondInit = true;" }),
+    )
+    .await;
+    assert_success(&second);
+    let second_id = get_data(&second)["identifier"]
+        .as_str()
+        .expect("second init script should return an identifier")
+        .to_string();
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "removeinitscript", "identifier": first_id }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "5", "action": "tab_new", "url": "data:text/html,<title>new tab</title>" }),
+    )
+    .await;
+    assert_success(&resp);
+    // The removed script must not have been replayed; the kept one must.
+    assert_eq!(
+        eval_in(
+            &mut state,
+            "[window.__abFirstInit === true, window.__abSecondInit === true]"
+        )
+        .await,
+        json!([false, true])
+    );
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "6", "action": "removeinitscript", "identifier": second_id }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "7", "action": "navigate", "url": "data:text/html,<title>after removal</title>" }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        eval_in(&mut state, "window.__abSecondInit === true").await,
+        false
+    );
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "8", "action": "tab_switch", "tabId": "t1" }),
+    )
+    .await;
+    assert_success(&resp);
+    let resp = run_cmd(
+        &mut state,
+        json!({
+            "id": "9", "action": "navigate",
+            "url": "data:text/html,<title>original after removal</title>",
+        }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        eval_in(&mut state, "window.__abSecondInit === true").await,
+        false,
+        "removing a replayed script should also remove its original registration"
+    );
+
+    close_state(&mut state).await;
+}
+
+/// CDP allocates init-script identifiers independently in each target. Two
+/// pre-existing tabs can therefore both return `1` for different scripts, but
+/// the daemon must expose distinct handles and remove only the requested one.
+#[tokio::test]
+#[ignore]
+async fn e2e_tab_init_script_handles_are_unique_across_preexisting_tabs() {
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({})).await;
+
+    assert_success(&run_cmd(&mut state, json!({ "id": "2", "action": "tab_new" })).await);
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({ "id": "3", "action": "tab_switch", "tabId": "t1" }),
+        )
+        .await,
+    );
+
+    let first = run_cmd(
+        &mut state,
+        json!({
+            "id": "4", "action": "addinitscript",
+            "script": "window.__abFirstExistingTab = true;",
+        }),
+    )
+    .await;
+    assert_success(&first);
+    let first_id = get_data(&first)["identifier"]
+        .as_str()
+        .expect("first init script should return an identifier")
+        .to_string();
+
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({ "id": "5", "action": "tab_switch", "tabId": "t2" }),
+        )
+        .await,
+    );
+
+    let second = run_cmd(
+        &mut state,
+        json!({
+            "id": "6", "action": "addinitscript",
+            "script": "window.__abSecondExistingTab = true;",
+        }),
+    )
+    .await;
+    assert_success(&second);
+    let second_id = get_data(&second)["identifier"]
+        .as_str()
+        .expect("second init script should return an identifier")
+        .to_string();
+
+    assert_ne!(first_id, second_id, "user-facing handles must be unique");
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "7", "action": "removeinitscript", "identifier": second_id }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "8", "action": "tab_new", "url": "data:text/html,<title>future tab</title>" }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        eval_in(
+            &mut state,
+            "[window.__abFirstExistingTab === true, window.__abSecondExistingTab === true]"
+        )
+        .await,
+        json!([true, false])
+    );
+
+    close_state(&mut state).await;
+}
+
+/// The launch `--user-agent` (Emulation.setUserAgentOverride) and global
+/// `set headers` (Network.setExtraHTTPHeaders) are per CDP session. A new tab
+/// opened with a URL must send both on its very first document request.
+#[tokio::test]
+#[ignore]
+async fn e2e_tab_new_inherits_user_agent_and_headers() {
+    let (base_url, _server) = start_echo_server().await;
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({ "userAgent": "ab-tab-new-test/1.0" })).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "2", "action": "headers", "headers": { "X-Global": "global" } }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "tab_new", "url": format!("{}/tab", base_url) }),
+    )
+    .await;
+    assert_success(&resp);
+    // The URL was loaded after creating the tab blank; the response must
+    // still describe the loaded page, not about:blank.
+    assert_eq!(get_data(&resp)["url"], format!("{}/tab", base_url));
+
+    let headers =
+        eval_in(&mut state, "JSON.parse(document.body.innerText)").await["headers"].clone();
+    assert_eq!(
+        headers["X-Global"], "global",
+        "global `headers` should apply to the new tab's first document request, got {headers}"
+    );
+    assert_eq!(
+        headers["User-Agent"], "ab-tab-new-test/1.0",
+        "new tab's first document request should carry the launch user agent, got {headers}"
+    );
+    assert_eq!(
+        eval_in(&mut state, "navigator.userAgent").await,
+        "ab-tab-new-test/1.0"
+    );
+
+    close_state(&mut state).await;
+}
+
+/// `set credentials` uses target-scoped extra headers, so a new tab must send
+/// the resulting Authorization header on its first document request.
+#[tokio::test]
+#[ignore]
+async fn e2e_tab_new_inherits_http_credentials_on_first_load() {
+    let (base_url, _server) = start_echo_server().await;
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({})).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({
+            "id": "2", "action": "credentials",
+            "username": "tab-user", "password": "tab-password",
+        }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "tab_new", "url": format!("{}/credentials", base_url) }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let expected = format!("Basic {}", STANDARD.encode("tab-user:tab-password"));
+    assert_eq!(
+        eval_in(&mut state, "JSON.parse(document.body.innerText)").await["headers"]
+            ["Authorization"],
+        expected,
+        "HTTP credentials should apply to the new tab's first document request"
+    );
+
+    close_state(&mut state).await;
+}
+
+/// `click --new-tab` creates a tab through a separate handler from `tab new`,
+/// but it must apply the same session setup before the first request.
+#[tokio::test]
+#[ignore]
+async fn e2e_click_new_tab_inherits_user_agent_and_headers() {
+    let (base_url, _server) = start_echo_server().await;
+    let mut state = DaemonState::new();
+    launch_headless(
+        &mut state,
+        json!({ "userAgent": "ab-click-new-tab-test/1.0" }),
+    )
+    .await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "2", "action": "headers", "headers": { "X-Global": "global" } }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({
+            "id": "3", "action": "navigate",
+            "url": format!("data:text/html,<a id='next' href='{}/click'>next</a>", base_url),
+        }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "click", "selector": "#next", "newTab": true }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["tabId"], "t2");
+
+    let headers =
+        eval_in(&mut state, "JSON.parse(document.body.innerText)").await["headers"].clone();
+    assert_eq!(headers["X-Global"], "global");
+    assert_eq!(headers["User-Agent"], "ab-click-new-tab-test/1.0");
+
+    close_state(&mut state).await;
+}
+
+/// Clearing headers and offline mode restores the default setup, so future
+/// tabs keep the direct `createTarget(url)` path.
+#[tokio::test]
+#[ignore]
+async fn e2e_cleared_session_setup_is_not_pending() {
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({})).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "2", "action": "offline", "offline": false }),
+    )
+    .await;
+    assert_success(&resp);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "headers", "headers": {} }),
+    )
+    .await;
+    assert_success(&resp);
+
+    assert!(state.session_setup.offline.is_none());
+    assert!(state.session_setup.extra_headers.is_none());
+    assert!(state.session_setup.init_scripts.is_empty());
+
+    close_state(&mut state).await;
+}
+
+/// Not in upstream's set: `route` only enables Fetch on the tab it was issued
+/// on, and the emulation overrides (`set media`, `timezone`, `locale`) are per
+/// session too. A new tab must see all of them on its first document, and
+/// `open --new-tab` must get the same treatment as `tab new`.
+#[tokio::test]
+#[ignore]
+async fn e2e_tab_new_inherits_routes_and_emulation_on_first_load() {
+    let (base_url, _server) = start_echo_server().await;
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({})).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({
+            "id": "2", "action": "route", "url": format!("{}/routed*", base_url),
+            "response": {
+                "status": 200, "contentType": "text/html",
+                "body": "<script>document.title = [\
+                    matchMedia('(prefers-color-scheme: dark)').matches, \
+                    Intl.DateTimeFormat().resolvedOptions().timeZone, \
+                    Intl.DateTimeFormat().resolvedOptions().locale].join('|')</script>routed",
+            },
+        }),
+    )
+    .await;
+    assert_success(&resp);
+    for cmd in [
+        json!({ "id": "3", "action": "set_media", "colorScheme": "dark" }),
+        json!({ "id": "4", "action": "timezone", "timezoneId": "Asia/Tokyo" }),
+        json!({ "id": "5", "action": "locale", "locale": "fr-FR" }),
+    ] {
+        assert_success(&run_cmd(&mut state, cmd).await);
+    }
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "6", "action": "tab_new", "url": format!("{}/routed", base_url) }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        eval_in(&mut state, "document.body.innerText").await,
+        "routed",
+        "the route should fulfil the new tab's first document request"
+    );
+    assert_eq!(
+        eval_in(&mut state, "document.title").await,
+        "true|Asia/Tokyo|fr-FR",
+        "emulation overrides should be in place before the first document runs"
+    );
+
+    let resp = run_cmd(
+        &mut state,
+        json!({
+            "id": "7", "action": "navigate", "newTab": true,
+            "url": format!("{}/routed-again", base_url),
+        }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["tabId"], "t3");
+    assert_eq!(
+        eval_in(&mut state, "document.title").await,
+        "true|Asia/Tokyo|fr-FR",
+        "`open --new-tab` should inherit the same setup"
+    );
+
+    close_state(&mut state).await;
+}
+
+/// Not in upstream's set: a popup the page opens is attached after its first
+/// document has loaded, so the setup cannot cover that one — but it must
+/// cover the popup from then on rather than leaving it on the real user agent
+/// and without the session's init scripts.
+#[tokio::test]
+#[ignore]
+async fn e2e_page_opened_popup_inherits_session_setup() {
+    let (base_url, _server) = start_echo_server().await;
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({})).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "2", "action": "useragent", "userAgent": "ab-popup-test/1.0" }),
+    )
+    .await;
+    assert_success(&resp);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "addinitscript", "script": "window.__abPopup = 'seeded';" }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({
+            "id": "4", "action": "navigate",
+            "url": format!(
+                "data:text/html,<a id='pop' target='_blank' href='{}/popup'>pop</a>",
+                base_url
+            ),
+        }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "5", "action": "click", "selector": "#pop", "follow": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let opened = &get_data(&resp)["openedTab"];
+    assert!(
+        opened.is_object(),
+        "the click should report the popup: {resp}"
+    );
+    assert!(opened.get("setupError").is_none(), "{resp}");
+    assert_eq!(get_data(&resp)["followed"], true);
+
+    // Emulation overrides apply to the live document straight away.
+    assert_eq!(
+        eval_in(&mut state, "navigator.userAgent").await,
+        "ab-popup-test/1.0"
+    );
+
+    // The popup's next document carries the UA header and the init script.
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "6", "action": "navigate", "url": format!("{}/popup-next", base_url) }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        eval_in(&mut state, "JSON.parse(document.body.innerText)").await["headers"]["User-Agent"],
+        "ab-popup-test/1.0"
+    );
+    assert_eq!(eval_in(&mut state, "window.__abPopup").await, "seeded");
+
+    close_state(&mut state).await;
+}
+
+// ---------------------------------------------------------------------------
 // Issue #162 — a @ref must never activate a node that stopped being the element
 // it named. The reporter's `click @e273 --observe` printed `Done` while opening
 // an unrelated overflow menu, because the identity probe treats "could not

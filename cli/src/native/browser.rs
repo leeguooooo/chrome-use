@@ -1921,6 +1921,13 @@ impl BrowserManager {
         )
     }
 
+    /// Whether [`Self::navigate`] would open a fresh owned tab instead of
+    /// navigating the active one (a connected browser whose active tab this
+    /// session neither created nor adopted).
+    pub fn navigate_opens_own_tab(&self) -> bool {
+        self.browser_process.is_none() && !self.active_is_drivable()
+    }
+
     /// Targets this session owns for command resolution: tabs it created PLUS
     /// tabs it explicitly adopted. (Adopted tabs are owned-for-driving but, unlike
     /// created ones, never auto-closed — see `adopted_targets`.)
@@ -2115,7 +2122,7 @@ impl BrowserManager {
         // created, open our own tab in this session's group and navigate THAT, so
         // the user's (and other sessions') tabs are never hijacked. This applies
         // to raw CDP too; only a browser process we launched is unrestricted.
-        if self.browser_process.is_none() && !self.active_is_drivable() {
+        if self.navigate_opens_own_tab() {
             self.tab_new(None, None).await?;
         }
         let mut session_id = self.active_session_id()?.to_string();
