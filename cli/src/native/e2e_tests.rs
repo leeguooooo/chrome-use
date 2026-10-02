@@ -29,6 +29,41 @@ fn get_data(resp: &Value) -> &Value {
     resp.get("data").expect("Missing 'data' in response")
 }
 
+async fn select_values(
+    state: &mut DaemonState,
+    id: &str,
+    selector: &str,
+    values: &[&str],
+) -> Value {
+    // Boxed: these tests call it many times, and an inline execute_command
+    // future per call site overflows a debug test-thread stack.
+    Box::pin(execute_command(
+        &json!({ "id": id, "action": "select", "selector": selector, "values": values }),
+        state,
+    ))
+    .await
+}
+
+async fn assert_evaluate(state: &mut DaemonState, id: &str, script: &str, expected: Value) {
+    let resp = Box::pin(execute_command(
+        &json!({ "id": id, "action": "evaluate", "script": script }),
+        state,
+    ))
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], expected);
+}
+
+fn assert_error_code(resp: &Value, code: &str) {
+    assert_eq!(
+        resp.get("success").and_then(Value::as_bool),
+        Some(false),
+        "Expected failure but got: {}",
+        serde_json::to_string_pretty(resp).unwrap_or_default()
+    );
+    assert_eq!(resp.get("code").and_then(Value::as_str), Some(code));
+}
+
 fn native_test_fixture_html(name: &str) -> &'static str {
     match name {
         "drag_probe" => include_str!("test_fixtures/drag_probe.html"),
@@ -1789,6 +1824,275 @@ async fn e2e_form_interaction() {
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
 }
+
+#[tokio::test]
+#[ignore]
+async fn e2e_select_option_label_override_names() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": "data:text/html,<html><body></body></html>" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let script = r#"(() => {
+        const select = document.createElement('select');
+        select.id = 'label-overrides';
+        for (const [value, label, text] of [
+            ['initial', 'Initial', 'Initial'],
+            ['target', 'Capital\u00A0Federal', 'Target source'],
+            ['decoy', 'Other Province', 'Capital\u00A0\u00A0Federal'],
+            ['hidden', 'Visible Province', 'Hidden\u00A0Only'],
+            ['plain', null, 'Plain\u00A0Text']
+        ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            if (label !== null) option.label = label;
+            option.textContent = text;
+            select.appendChild(option);
+        }
+        select.value = 'initial';
+        select.dataset.changes = '0';
+        select.addEventListener('change', () => select.dataset.changes++);
+        document.body.appendChild(select);
+        const multi = select.cloneNode(true);
+        multi.id = 'label-overrides-multi';
+        multi.multiple = true;
+        multi.value = 'initial';
+        multi.addEventListener('change', () => multi.dataset.changes++);
+        document.body.appendChild(multi);
+    })()"#;
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "evaluate", "script": script }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let snapshot = execute_command(&json!({ "id": "4", "action": "snapshot" }), &mut state).await;
+    let mut results = Vec::new();
+    for (selector, values, expected_values, changes, success) in [
+        (
+            "#label-overrides",
+            vec!["Capital Federal"],
+            vec!["target"],
+            "1",
+            true,
+        ),
+        (
+            "#label-overrides",
+            vec!["Hidden Only"],
+            vec!["target"],
+            "1",
+            false,
+        ),
+        ("#label-overrides", vec!["decoy"], vec!["decoy"], "2", true),
+        (
+            "#label-overrides",
+            vec!["Capital\u{00A0}Federal"],
+            vec!["target"],
+            "3",
+            true,
+        ),
+        (
+            "#label-overrides",
+            vec!["Hidden\u{00A0}Only"],
+            vec!["hidden"],
+            "4",
+            true,
+        ),
+        (
+            "#label-overrides",
+            vec!["Plain Text"],
+            vec!["plain"],
+            "5",
+            true,
+        ),
+        (
+            "#label-overrides-multi",
+            vec!["target", "Hidden Only"],
+            vec!["initial"],
+            "0",
+            false,
+        ),
+    ] {
+        let selection = select_values(&mut state, "select", selector, &values).await;
+        let script = format!(
+            "(() => {{ const select = document.querySelector('{}'); return {{ values: [...select.selectedOptions].map(option => option.value), changes: select.dataset.changes }}; }})()",
+            selector
+        );
+        let actual = execute_command(
+            &json!({ "id": "state", "action": "evaluate", "script": script }),
+            &mut state,
+        )
+        .await;
+        results.push((selection, actual, expected_values, changes, success));
+    }
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+    assert_success(&snapshot);
+    let snapshot = get_data(&snapshot)["snapshot"].as_str().unwrap();
+    assert!(snapshot.contains("option \"Capital Federal\""));
+    assert!(snapshot.contains("option \"Other Province\""));
+    assert!(!snapshot.contains("option \"Hidden Only\""));
+    for (selection, actual, expected_values, changes, success) in results {
+        assert_eq!(selection["success"], success, "{selection}");
+        if !success {
+            assert!(selection["error"]
+                .as_str()
+                .unwrap()
+                .contains("No option matched"));
+        }
+        assert_success(&actual);
+        assert_eq!(
+            get_data(&actual)["result"],
+            json!({ "values": expected_values, "changes": changes })
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_select_option_normalized_names() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": "data:text/html,<html><body></body></html>" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let script = r#"(() => {
+        const add = (select, value, label, selected = false) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            option.selected = selected;
+            select.appendChild(option);
+        };
+        const province = document.createElement('select');
+        province.id = 'province';
+        add(province, '', 'Provincia');
+        add(province, 'B', 'Buenos\u00A0Aires', true);
+        add(province, 'C', 'Capital\u00A0Federal');
+        add(province, 'Z', 'Zero\u200BWidth');
+        province.dataset.changes = '0';
+        province.addEventListener('change', () => province.dataset.changes++);
+        document.body.appendChild(province);
+
+        const collision = document.createElement('select');
+        collision.id = 'collision';
+        add(collision, 'ascii', 'Alpha Beta', true);
+        add(collision, 'nbsp', 'Alpha\u00A0Beta');
+        document.body.appendChild(collision);
+
+        const cases = document.createElement('select');
+        cases.id = 'cases';
+        add(cases, 'US', 'Upper');
+        add(cases, 'us', 'Lower');
+        document.body.appendChild(cases);
+
+        const multi = document.createElement('select');
+        multi.id = 'multi';
+        multi.multiple = true;
+        add(multi, 'a', 'One\u00A0A');
+        add(multi, 'b', 'Two B');
+        document.body.appendChild(multi);
+    })()"#;
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "evaluate", "script": script }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(&json!({ "id": "4", "action": "snapshot" }), &mut state).await;
+    assert_success(&resp);
+    let snapshot = get_data(&resp)["snapshot"].as_str().unwrap();
+    assert!(snapshot.contains("option \"Capital Federal\""));
+    assert!(!snapshot.contains("CapitalFederal"));
+    assert!(snapshot.contains("option \"ZeroWidth\""));
+
+    let resp = select_values(&mut state, "5", "#province", &["Capital Federal"]).await;
+    assert_success(&resp);
+    assert_evaluate(
+        &mut state,
+        "6",
+        "({ value: province.value, changes: province.dataset.changes })",
+        json!({ "value": "C", "changes": "1" }),
+    )
+    .await;
+
+    let resp = select_values(&mut state, "7", "#province", &["missing"]).await;
+    assert_eq!(resp["success"], false);
+    assert_evaluate(
+        &mut state,
+        "8",
+        "({ value: province.value, changes: province.dataset.changes })",
+        json!({ "value": "C", "changes": "1" }),
+    )
+    .await;
+
+    let resp = select_values(&mut state, "9", "#collision", &["Alpha Beta"]).await;
+    assert_success(&resp);
+    assert_evaluate(&mut state, "10", "collision.value", json!("ascii")).await;
+
+    let resp = select_values(&mut state, "11", "#collision", &["Alpha  Beta"]).await;
+    assert_eq!(resp["success"], false);
+    assert!(resp["error"]
+        .as_str()
+        .unwrap()
+        .contains("Multiple options matched"));
+    assert_evaluate(&mut state, "12", "collision.value", json!("ascii")).await;
+
+    let resp = select_values(&mut state, "13", "#cases", &["us"]).await;
+    assert_success(&resp);
+    assert_evaluate(&mut state, "14", "cases.value", json!("us")).await;
+
+    let resp = select_values(&mut state, "15", "#multi", &["One A", "b"]).await;
+    assert_success(&resp);
+    assert_evaluate(
+        &mut state,
+        "16",
+        "[...multi.selectedOptions].map(option => option.value)",
+        json!(["a", "b"]),
+    )
+    .await;
+
+    let resp = select_values(&mut state, "17", "#multi", &["a", "missing"]).await;
+    assert_eq!(resp["success"], false);
+    assert_evaluate(
+        &mut state,
+        "18",
+        "[...multi.selectedOptions].map(option => option.value)",
+        json!(["a", "b"]),
+    )
+    .await;
+
+    let resp = select_values(&mut state, "19", "#province", &["ZeroWidth"]).await;
+    assert_success(&resp);
+    assert_evaluate(&mut state, "20", "province.value", json!("Z")).await;
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+// ---------------------------------------------------------------------------
+// Navigation: back, forward, reload
+// ---------------------------------------------------------------------------
 
 /// Controlled selects need the platform setter plus both input/change events.
 /// The instance setter below models a framework value tracker: `select.value =`

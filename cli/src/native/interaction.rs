@@ -2885,14 +2885,42 @@ pub async fn select_option(
     // through to the same portal-aware open→poll→click routine `pick` uses, so
     // `select @ref "Pageview"` actually lands on react-select and friends.
     let js = r#"async function(vals) {
-            const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+            // Zero-width characters out, any whitespace run (NBSP included)
+            // to one space: a label that reads "Tokyo" must match "Tokyo"
+            // (after upstream vercel-labs/agent-browser #1736).
+            const norm = s => String(s ?? '')
+                .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
             const el = this;
 
             if (el.tagName === 'SELECT') {
                 const options = Array.from(el.options);
-                const matches = options.filter(opt =>
-                    vals.includes(opt.value) || vals.includes(norm(opt.textContent))
-                );
+                const matches = [];
+                for (const v of vals) {
+                    let found = options.filter(opt =>
+                        v === opt.value || v === opt.label.trim() || v === opt.textContent.trim()
+                    );
+                    if (found.length === 0) {
+                        const nv = norm(v);
+                        // The label is what the option shows (it defaults to
+                        // the text; a `label` attribute overrides it).
+                        found = options.filter(opt => norm(opt.label) === nv);
+                        // Two options that only differ in whitespace: picking
+                        // either would be a guess.
+                        if (found.length > 1) {
+                            return { ok: false, kind: 'select', ambiguous: v,
+                                     available: options.map(o => ({ value: o.value, label: norm(o.label) })) };
+                        }
+                    }
+                    // Every requested value has to match: selecting the ones
+                    // that did and reporting success hides the missing one.
+                    if (found.length === 0) {
+                        return { ok: false, kind: 'select', missing: v,
+                                 available: options.map(o => ({ value: o.value, label: norm(o.label) })) };
+                    }
+                    for (const opt of found) if (!matches.includes(opt)) matches.push(opt);
+                }
                 if (matches.length === 0) {
                     return { ok: false, kind: 'select', available: options.map(o => ({ value: o.value, label: norm(o.textContent) })) };
                 }
@@ -3004,15 +3032,16 @@ pub async fn select_option(
                     .join(", ")
             })
             .unwrap_or_default();
-        let kind = result
-            .and_then(|v| v.get("kind"))
+        if let Some(v) = result
+            .and_then(|v| v.get("ambiguous"))
             .and_then(|v| v.as_str())
-            .unwrap_or("select");
-        let what = if kind == "custom" {
-            "no option matched"
-        } else {
-            "no <option> matched"
-        };
+        {
+            return Err(format!(
+                "Multiple options matched {v:?} after whitespace normalization; pass the \
+                 option's value instead. available options: {avail}"
+            ));
+        }
+        let what = "No option matched";
         return Err(format!(
             "{} {:?}. available options: {}",
             what, values, avail

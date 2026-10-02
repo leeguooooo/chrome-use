@@ -82,8 +82,15 @@ const INVISIBLE_CHARS: &[char] = &[
     '\u{200C}', // Zero Width Non-Joiner
     '\u{200D}', // Zero Width Joiner
     '\u{2060}', // Word Joiner
-    '\u{00A0}', // Non-Breaking Space (&nbsp;)
 ];
+
+/// Display form of an accessible name: zero-width characters removed, and a
+/// non-breaking space shown as the space it renders as. Deleting NBSP glued
+/// words together ("Capital&nbsp;Federal" read "CapitalFederal", so a
+/// `select` by the visible label looked like it could not match).
+fn display_text(s: &str) -> String {
+    s.replace('\u{00A0}', " ").replace(INVISIBLE_CHARS, "")
+}
 
 #[derive(Default)]
 pub struct SnapshotOptions {
@@ -377,7 +384,7 @@ fn select_error_texts(
 /// The message is informational — the agent reads it, it doesn't click it.
 fn render_error_line(text: &str) -> String {
     let display = serde_json::to_string(text).unwrap_or_else(|_| format!("\"{}\"", text));
-    format!("- alert {}", display.replace(INVISIBLE_CHARS, ""))
+    format!("- alert {}", display_text(&display))
 }
 
 struct RoleNameTracker {
@@ -2428,7 +2435,7 @@ fn render_tree(
     // Reduce unnecessary indentation and rendering
     if node.role.is_empty()
         || (node.role == "generic" && !node.has_ref && node.children.len() <= 1)
-        || (node.role == "StaticText" && node.name.replace(INVISIBLE_CHARS, "").is_empty())
+        || (node.role == "StaticText" && display_text(&node.name).trim().is_empty())
     {
         // Ignored node -- still render children
         for &child in &node.children {
@@ -2497,7 +2504,7 @@ fn render_tree(
     };
     if !unescaped_display_name.is_empty() {
         if let Ok(display_name) = serde_json::to_string(&unescaped_display_name) {
-            line.push_str(&format!(" {}", display_name.replace(INVISIBLE_CHARS, "")));
+            line.push_str(&format!(" {}", display_text(&display_name)));
         }
     }
 
