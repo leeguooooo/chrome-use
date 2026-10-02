@@ -3076,6 +3076,7 @@ async fn session_setup_pending(state: &DaemonState) -> bool {
     !state.session_setup.is_empty()
         || !state.routes.read().await.is_empty()
         || !state.origin_headers.read().await.is_empty()
+        || state.proxy_credentials.read().await.is_some()
 }
 
 /// Replay the session-scoped setup the user configured on the active page
@@ -3214,7 +3215,8 @@ async fn apply_session_setup(state: &mut DaemonState, session_id: &str) -> Resul
     // enable it on the tab they were issued on.
     let has_routes = !state.routes.read().await.is_empty();
     let has_origin_headers = !state.origin_headers.read().await.is_empty();
-    if has_routes || has_origin_headers {
+    let has_proxy_creds = state.proxy_credentials.read().await.is_some();
+    if has_routes || has_origin_headers || has_proxy_creds {
         let patterns = build_fetch_patterns(state).await;
         let params = build_fetch_enable_params(state, patterns).await;
         client
@@ -4001,31 +4003,14 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     let label = cmd.get("label").and_then(|v| v.as_str());
 
     if new_tab {
-        let (new_tab_info, sid) = {
-            let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-            let info = mgr.tab_new(None, label).await?;
-            let sid = mgr.active_session_id().ok().map(|s| s.to_string());
-            (info, sid)
-        };
-        if let Some(sid) = sid {
-            apply_stealth_to_session(state, &sid).await;
-            let has_origin_headers = !state.origin_headers.read().await.is_empty();
-            let has_proxy_creds = state.proxy_credentials.read().await.is_some();
-            if has_origin_headers || has_proxy_creds {
-                let mut params = json!({ "patterns": [{ "urlPattern": "*" }] });
-                if has_proxy_creds {
-                    params["handleAuthRequests"] = json!(true);
-                }
-                let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-                let _ = mgr
-                    .client
-                    .send_command("Fetch.enable", Some(params), Some(&sid))
-                    .await;
-            }
-            // After the Fetch.enable above: its catch-all pattern would
-            // otherwise replace the response-stage patterns `route` needs.
-            apply_session_setup(state, &sid).await?;
+        // The same path as `tab new`: its own ref context, stealth, the
+        // session's setup (with a retry marker if that fails), and only then
+        // the first request.
+        let mut opts = json!({});
+        if let Some(l) = label {
+            opts["label"] = json!(l);
         }
+        let new_tab_info = handle_tab_new(&opts, state).await?;
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
         let mut result = mgr.navigate(url, wait_until).await?;
         if let Some(tid) = new_tab_info.get("tabId") {
@@ -15706,27 +15691,37 @@ async fn handle_http_credentials(cmd: &Value, state: &mut DaemonState) -> Result
 /// The login then fills and checks the element it chose, never "whatever
 /// `querySelector` returns now". (After upstream vercel-labs/agent-browser
 /// #2014.)
+///
+/// `strict` also skips transparent fields: right for the built-in guesses,
+/// wrong for a selector the user named (a styled opacity:0 input). A readonly
+/// field still counts, since sites unlock a password field on focus.
+/// With `origin`, a page that left that origin fails at once instead of having
+/// its fields filled.
 async fn mark_usable_auth_element(
     client: &super::cdp::client::CdpClient,
     session_id: &str,
     selectors: &[&str],
     tag: &str,
     timeout_ms: u64,
+    strict: bool,
+    origin: Option<&str>,
 ) -> Result<String, String> {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
     let sels = serde_json::to_string(selectors).unwrap_or_default();
     let tag_json = serde_json::to_string(tag).unwrap_or_default();
+    let origin_json = serde_json::to_string(&origin).unwrap_or_default();
     let expression = format!(
         r#"(() => {{
+            const origin = {origin_json};
+            if (origin !== null && location.origin !== origin) return location.origin;
             const usable = (el) => {{
                 const r = el.getBoundingClientRect();
                 const s = window.getComputedStyle(el);
                 const opacity = parseFloat(s.opacity || '1');
-                if (!(r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'
-                      && (!Number.isFinite(opacity) || opacity > 0))) return false;
+                if (!(r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none')) return false;
+                if ({strict} && Number.isFinite(opacity) && opacity <= 0) return false;
                 if (el.matches(':disabled')) return false;
                 if (el instanceof HTMLInputElement && el.type === 'hidden') return false;
-                if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly) return false;
                 return true;
             }};
             for (const sel of {sels}) {{
@@ -15759,8 +15754,15 @@ async fn mark_usable_auth_element(
                 Some(session_id),
             )
             .await?;
-        if result.result.value.as_ref().and_then(|v| v.as_bool()) == Some(true) {
-            return Ok(format!("[data-cu-auth=\"{tag}\"]"));
+        match result.result.value.as_ref() {
+            Some(Value::Bool(true)) => return Ok(format!("[data-cu-auth=\"{tag}\"]")),
+            Some(Value::String(now)) => {
+                return Err(format!(
+                    "the page moved to {now} before the credentials were entered. Nothing was \
+                     typed there."
+                ))
+            }
+            _ => {}
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(format!("Wait timed out after {}ms", timeout_ms));
@@ -15825,14 +15827,37 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
         .get("noNavigate")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let mut pinned_origin: Option<String> = None;
     if no_navigate {
+        // A connected browser's active tab may be the user's own: never type
+        // into a tab this session did not open or adopt.
+        if mgr.navigate_opens_own_tab() {
+            return Err(
+                "auth login --no-navigate: the active tab is not one this session \
+                 opened or adopted, so nothing was filled. Run `tab adopt` on it first, or \
+                 drop --no-navigate."
+                    .to_string(),
+            );
+        }
         let current = mgr.get_url().await.unwrap_or_default();
-        let want = url::Url::parse(&url)
-            .map(|u| u.origin().ascii_serialization())
-            .map_err(|e| format!("auth login: credential URL {url:?} is invalid: {e}"))?;
+        let want_origin = url::Url::parse(&url)
+            .map_err(|e| format!("auth login: credential URL {url:?} is invalid: {e}"))?
+            .origin();
+        // Opaque origins (file:, data:, about:) all serialize to "null", so
+        // two different ones would compare equal.
+        if !want_origin.is_tuple() {
+            return Err(format!(
+                "auth login --no-navigate needs an http(s) credential URL; {url:?} has no \
+                 origin to check the tab against. Drop --no-navigate."
+            ));
+        }
+        let want = want_origin.ascii_serialization();
         let have = url::Url::parse(&current)
-            .map(|u| u.origin().ascii_serialization())
-            .unwrap_or_default();
+            .ok()
+            .map(|u| u.origin())
+            .filter(|o| o.is_tuple())
+            .map(|o| o.ascii_serialization())
+            .unwrap_or_else(|| "a page without an origin".to_string());
         if have != want {
             return Err(format!(
                 "auth login --no-navigate: the tab is on {have}, but this credential is for \
@@ -15840,6 +15865,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
                  --no-navigate."
             ));
         }
+        pinned_origin = Some(want);
     } else {
         mgr.navigate(&url, AUTH_LOGIN_WAIT_UNTIL).await?;
     }
@@ -15894,206 +15920,255 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     let user_tag = format!("user-{marker}");
     let pass_tag = format!("pass-{marker}");
     let submit_tag = format!("submit-{marker}");
-
-    // Find and fill username
-    let user_sel = if let Some(s) = username_sel {
-        mark_usable_auth_element(&mgr.client, &session_id, &[&s], &user_tag, auth_timeout_ms)
-            .await
-            .map_err(|_| format!("Timed out waiting for username selector '{}'", s))?
-    } else {
-        let preferred_window_ms = auth_timeout_ms.min(AUTH_LOGIN_PREFERRED_SELECTOR_WINDOW_MS);
-        let fallback_window_ms = auth_timeout_ms.saturating_sub(preferred_window_ms);
-
-        match mark_usable_auth_element(
-            &mgr.client,
-            &session_id,
-            &preferred_user_selectors,
-            &user_tag,
-            preferred_window_ms,
-        )
-        .await
-        {
-            Ok(selector) => selector,
-            Err(_) => {
-                if fallback_window_ms == 0 {
-                    return Err(format!(
-                        "Timed out waiting for username field (preferred selectors for {}ms: {})",
-                        preferred_window_ms,
-                        preferred_user_selectors.join(", ")
-                    ));
-                }
-
-                mark_usable_auth_element(
-                    &mgr.client,
-                    &session_id,
-                    &fallback_user_selectors,
-                    &user_tag,
-                    fallback_window_ms,
-                )
-                .await
-                .map_err(|_| {
-                    format!(
-                        "Timed out waiting for username field (preferred selectors for {}ms: {}; fallback selectors for {}ms: {})",
-                        preferred_window_ms,
-                        preferred_user_selectors.join(", "),
-                        fallback_window_ms,
-                        fallback_user_selectors.join(", ")
-                    )
-                })?
-            }
+    let origin = pinned_origin.as_deref();
+    // Keep "the page left the origin" over the generic timeout message.
+    let timed_out = |e: String, msg: String| {
+        if e.starts_with("the page moved") {
+            format!("auth login stopped: {e}")
+        } else {
+            msg
         }
     };
-    interaction::fill(
-        &mgr.client,
-        &session_id,
-        &state.ref_map,
-        &user_sel,
-        &username,
-        &state.iframe_sessions,
-    )
-    .await?;
 
-    // Find and fill password
-    let pass_wanted = password_sel.unwrap_or_else(|| "input[type=password]".to_string());
-    let pass_sel = mark_usable_auth_element(
-        &mgr.client,
-        &session_id,
-        &[&pass_wanted],
-        &pass_tag,
-        auth_timeout_ms,
-    )
-    .await
-    .map_err(|_| format!("Timed out waiting for password selector '{}'", pass_wanted))?;
-    interaction::fill(
-        &mgr.client,
-        &session_id,
-        &state.ref_map,
-        &pass_sel,
-        &password,
-        &state.iframe_sessions,
-    )
-    .await?;
-
-    // Find the submit control
-    let sub_sel = if let Some(s) = submit_sel {
-        mark_usable_auth_element(
-            &mgr.client,
-            &session_id,
-            &[&s],
-            &submit_tag,
-            auth_timeout_ms,
-        )
-        .await
-        .map_err(|_| format!("Timed out waiting for submit selector '{}'", s))?
-    } else {
-        mark_usable_auth_element(
-            &mgr.client,
-            &session_id,
-            &auto_submit_selectors,
-            &submit_tag,
-            auth_timeout_ms,
-        )
-        .await
-        .map_err(|_| {
-            format!(
-                "Timed out waiting for submit button (tried selectors: {})",
-                auto_submit_selectors.join(", ")
+    let outcome: Result<(), String> = async {
+        // Find and fill username
+        let user_sel = if let Some(s) = username_sel {
+            mark_usable_auth_element(
+                &mgr.client,
+                &session_id,
+                &[&s],
+                &user_tag,
+                auth_timeout_ms,
+                false,
+                origin,
             )
-        })?
-    };
+            .await
+            .map_err(|e| timed_out(e, format!("Timed out waiting for username selector '{s}'")))?
+        } else {
+            let preferred_window_ms =
+                auth_timeout_ms.min(AUTH_LOGIN_PREFERRED_SELECTOR_WINDOW_MS);
+            let fallback_window_ms = auth_timeout_ms.saturating_sub(preferred_window_ms);
 
-    // Before submitting: the credentials must still sit in the fields chosen
-    // above. A page that swapped a field out after the fill, or moved focus to
-    // another input during it, gets nothing submitted (and the error never
-    // carries the values).
-    let check = format!(
-        r#"(() => {{
-            const user = document.querySelector({user});
-            const pass = document.querySelector({pass});
-            const mine = (el, tag) => el && el.isConnected && el[Symbol.for('cu-auth')] === tag;
-            if (!mine(user, {user_tag})) return 'the username field was replaced after it was filled';
-            if (!mine(pass, {pass_tag})) return 'the password field was replaced after it was filled';
-            if (user.value !== {username}) return 'the username field no longer holds the username';
-            if ((pass.value || '').length !== {pass_len}) return 'the password field no longer holds the password';
-            const a = document.activeElement;
-            if (a && a !== user && a !== pass && a !== document.body
-                && (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a.isContentEditable)) {{
-                return 'focus moved to another input while the credentials were entered';
-            }}
-            return '';
-        }})()"#,
-        user = serde_json::to_string(&user_sel).unwrap_or_default(),
-        pass = serde_json::to_string(&pass_sel).unwrap_or_default(),
-        username = serde_json::to_string(&username).unwrap_or_default(),
-        pass_len = password.chars().count(),
-        user_tag = serde_json::to_string(&user_tag).unwrap_or_default(),
-        pass_tag = serde_json::to_string(&pass_tag).unwrap_or_default(),
-    );
-    let verdict: super::cdp::types::EvaluateResult = mgr
-        .client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &super::cdp::types::EvaluateParams {
-                expression: check,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(&session_id),
+            match mark_usable_auth_element(
+                &mgr.client,
+                &session_id,
+                &preferred_user_selectors,
+                &user_tag,
+                preferred_window_ms,
+                true,
+                origin,
+            )
+            .await
+            {
+                Ok(selector) => selector,
+                Err(e) if e.starts_with("the page moved") => {
+                    return Err(format!("auth login stopped: {e}"))
+                }
+                Err(_) => {
+                    if fallback_window_ms == 0 {
+                        return Err(format!(
+                            "Timed out waiting for username field (preferred selectors for {}ms: {})",
+                            preferred_window_ms,
+                            preferred_user_selectors.join(", ")
+                        ));
+                    }
+
+                    mark_usable_auth_element(
+                        &mgr.client,
+                        &session_id,
+                        &fallback_user_selectors,
+                        &user_tag,
+                        fallback_window_ms,
+                        true,
+                        origin,
+                    )
+                    .await
+                    .map_err(|e| {
+                        timed_out(e, format!(
+                            "Timed out waiting for username field (preferred selectors for {}ms: {}; fallback selectors for {}ms: {})",
+                            preferred_window_ms,
+                            preferred_user_selectors.join(", "),
+                            fallback_window_ms,
+                            fallback_user_selectors.join(", ")
+                        ))
+                    })?
+                }
+            }
+        };
+        interaction::fill(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            &user_sel,
+            &username,
+            &state.iframe_sessions,
         )
         .await?;
-    if let Some(problem) = verdict
-        .result
-        .value
-        .as_ref()
-        .and_then(|v| v.as_str())
-        .filter(|p| !p.is_empty())
-    {
-        return Err(format!(
-            "auth login stopped before submitting: {problem}. Nothing was submitted; check the \
-             page, then run auth login again."
-        ));
-    }
 
-    interaction::click(
-        &mgr.client,
-        &session_id,
-        &state.ref_map,
-        &sub_sel,
-        "left",
-        1,
-        &state.iframe_sessions,
-    )
-    .await?;
+        // Find and fill password
+        let custom_pass = password_sel.is_some();
+        let pass_wanted = password_sel.unwrap_or_else(|| "input[type=password]".to_string());
+        let pass_sel = mark_usable_auth_element(
+            &mgr.client,
+            &session_id,
+            &[&pass_wanted],
+            &pass_tag,
+            auth_timeout_ms,
+            !custom_pass,
+            origin,
+        )
+        .await
+        .map_err(|e| {
+            timed_out(e, format!("Timed out waiting for password selector '{pass_wanted}'"))
+        })?;
+        interaction::fill(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            &pass_sel,
+            &password,
+            &state.iframe_sessions,
+        )
+        .await?;
 
-    // Wait for navigation after submit (with fallback timeout)
-    let mut rx = mgr.client.subscribe();
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
-    let mut navigated = false;
+        // Find the submit control
+        let sub_sel = if let Some(s) = submit_sel {
+            mark_usable_auth_element(
+                &mgr.client,
+                &session_id,
+                &[&s],
+                &submit_tag,
+                auth_timeout_ms,
+                false,
+                origin,
+            )
+            .await
+            .map_err(|e| timed_out(e, format!("Timed out waiting for submit selector '{s}'")))?
+        } else {
+            mark_usable_auth_element(
+                &mgr.client,
+                &session_id,
+                &auto_submit_selectors,
+                &submit_tag,
+                auth_timeout_ms,
+                true,
+                origin,
+            )
+            .await
+            .map_err(|e| {
+                timed_out(
+                    e,
+                    format!(
+                        "Timed out waiting for submit button (tried selectors: {})",
+                        auto_submit_selectors.join(", ")
+                    ),
+                )
+            })?
+        };
 
-    loop {
-        let result = tokio::time::timeout_at(deadline, rx.recv()).await;
-        match result {
-            Ok(Ok(event)) => {
-                if event.session_id.as_deref() == Some(&session_id) {
-                    match event.method.as_str() {
-                        "Page.frameNavigated" | "Page.loadEventFired" => {
-                            navigated = true;
-                            break;
+        // Before submitting: the credentials must still sit in the fields
+        // chosen above, on the origin the login started on. A page that
+        // swapped a field out after the fill, moved focus to another input
+        // during it, or navigated away gets nothing submitted (and the error
+        // never carries the values). The username is compared loosely (case,
+        // spaces, mask punctuation), since fields normalize what is typed.
+        let check = format!(
+            r#"(() => {{
+                const origin = {origin};
+                if (origin !== null && location.origin !== origin) return 'the page moved to ' + location.origin;
+                const user = document.querySelector({user});
+                const pass = document.querySelector({pass});
+                const mine = (el, tag) => el && el.isConnected && el[Symbol.for('cu-auth')] === tag;
+                const norm = (v) => String(v || '').toLowerCase().replace(/[^\p{{L}}\p{{N}}@]/gu, '');
+                if (!mine(user, {user_tag})) return 'the username field was replaced after it was filled';
+                if (!mine(pass, {pass_tag})) return 'the password field was replaced after it was filled';
+                if (norm(user.value) !== norm({username})) return 'the username field no longer holds the username';
+                if ((pass.value || '').length !== {pass_len}) return 'the password field no longer holds the password';
+                const a = document.activeElement;
+                if (a && a !== user && a !== pass && a !== document.body
+                    && (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a.isContentEditable)) {{
+                    return 'focus moved to another input while the credentials were entered';
+                }}
+                return '';
+            }})()"#,
+            origin = serde_json::to_string(&origin).unwrap_or_default(),
+            user = serde_json::to_string(&user_sel).unwrap_or_default(),
+            pass = serde_json::to_string(&pass_sel).unwrap_or_default(),
+            username = serde_json::to_string(&username).unwrap_or_default(),
+            // JS string length counts UTF-16 code units.
+            pass_len = password.encode_utf16().count(),
+            user_tag = serde_json::to_string(&user_tag).unwrap_or_default(),
+            pass_tag = serde_json::to_string(&pass_tag).unwrap_or_default(),
+        );
+        let verdict: super::cdp::types::EvaluateResult = mgr
+            .client
+            .send_command_typed(
+                "Runtime.evaluate",
+                &super::cdp::types::EvaluateParams {
+                    expression: check,
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(&session_id),
+            )
+            .await?;
+        if let Some(problem) = verdict
+            .result
+            .value
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .filter(|p| !p.is_empty())
+        {
+            return Err(format!(
+                "auth login stopped before submitting: {problem}. Nothing was submitted; check \
+                 the page, then run auth login again."
+            ));
+        }
+
+        interaction::click(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            &sub_sel,
+            "left",
+            1,
+            &state.iframe_sessions,
+        )
+        .await?;
+
+        // Wait for navigation after submit (with fallback timeout)
+        let mut rx = mgr.client.subscribe();
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+        let mut navigated = false;
+
+        loop {
+            let result = tokio::time::timeout_at(deadline, rx.recv()).await;
+            match result {
+                Ok(Ok(event)) => {
+                    if event.session_id.as_deref() == Some(&session_id) {
+                        match event.method.as_str() {
+                            "Page.frameNavigated" | "Page.loadEventFired" => {
+                                navigated = true;
+                                break;
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
+                Ok(Err(_)) => break,
+                Err(_) => break,
             }
-            Ok(Err(_)) => break,
-            Err(_) => break,
         }
-    }
 
-    if !navigated {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        if !navigated {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        }
+        Ok(())
     }
+    .await;
 
-    // Leave the page as found: drop this login's markers (if it is still there).
+    // Leave the page as found, whether or not the login went through: drop
+    // this login's markers (if the page is still there).
     let cleanup = format!(
         "(() => {{ for (const el of document.querySelectorAll('[data-cu-auth$=\"-{marker}\"]')) {{ \
          el.removeAttribute('data-cu-auth'); delete el[Symbol.for('cu-auth')]; }} }})()"
@@ -16107,6 +16182,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
         )
         .await;
 
+    outcome?;
     Ok(json!({ "loggedIn": true, "name": name }))
 }
 

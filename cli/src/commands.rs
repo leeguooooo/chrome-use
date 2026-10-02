@@ -2150,10 +2150,15 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     Ok(cmd)
                 }
                 Some("login") => {
-                    let name = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
-                        context: "auth login".to_string(),
-                        usage: "chrome-use auth login <name> [--no-navigate]",
-                    })?;
+                    // The flag may come before or after the name.
+                    let name = rest
+                        .iter()
+                        .skip(1)
+                        .find(|a| !a.starts_with("--"))
+                        .ok_or_else(|| ParseError::MissingArguments {
+                            context: "auth login".to_string(),
+                            usage: "chrome-use auth login <name> [--no-navigate]",
+                        })?;
                     let no_navigate = rest.contains(&"--no-navigate");
                     Ok(
                         json!({ "id": id, "action": "auth_login", "name": name, "noNavigate": no_navigate }),
@@ -9088,5 +9093,19 @@ mod tests {
         .expect("selector + text");
         assert_eq!(cmd["selector"], "#q");
         assert_eq!(cmd["text"], "hello");
+    }
+
+    #[test]
+    fn auth_login_no_navigate_may_come_before_the_name() {
+        for line in [
+            "auth login github --no-navigate",
+            "auth login --no-navigate github",
+        ] {
+            let cmd = parse_command(&args(line), &default_flags()).unwrap();
+            assert_eq!(cmd["name"], "github", "{line}");
+            assert_eq!(cmd["noNavigate"], true, "{line}");
+        }
+        let cmd = parse_command(&args("auth login github"), &default_flags()).unwrap();
+        assert_eq!(cmd["noNavigate"], false);
     }
 }

@@ -6386,7 +6386,7 @@ async fn e2e_auth_login_picks_usable_fields_and_guards_the_submit() {
 <form id="f">
   <input type="email" id="ghost" style="display:none">
   <input type="email" id="email" autocomplete="username">
-  <input type="password" id="pass">
+  <input type="password" id="pass" readonly onfocus="this.removeAttribute('readonly')">
   <button type="submit">Sign in</button>
 </form>
 <script>
@@ -6421,7 +6421,8 @@ async fn e2e_auth_login_picks_usable_fields_and_guards_the_submit() {
         let resp = Box::pin(execute_command(
             &json!({ "id": "s", "action": "auth_save", "name": n,
                      "url": format!("http://127.0.0.1:{p}/login"),
-                     "username": "user@example.com", "password": "super-secret" }),
+                     // The emoji is two UTF-16 units in the page.
+                     "username": "user@example.com", "password": "super-secret\u{1F600}" }),
             &mut state,
         ))
         .await;
@@ -6444,8 +6445,9 @@ async fn e2e_auth_login_picks_usable_fields_and_guards_the_submit() {
     let r = &get_data(&resp)["result"];
     assert_eq!(r["ghost"], "");
     assert_eq!(r["email"], "user@example.com");
-    assert_eq!(r["pass"], 12);
+    assert_eq!(r["pass"], 14);
     assert_eq!(r["submitted"], true);
+    assert_eq!(r["marked"], 0, "markers are removed after the login");
 
     // 2. --no-navigate refuses a page on another origin.
     let resp = Box::pin(execute_command(
@@ -6496,8 +6498,16 @@ async fn e2e_auth_login_picks_usable_fields_and_guards_the_submit() {
     let err = resp["error"].as_str().unwrap();
     assert!(err.contains("stopped before submitting"), "{err}");
     assert!(!err.contains("super-secret"), "{err}");
-    let resp = Box::pin(execute_command(&eval("!!window.__submitted"), &mut state)).await;
-    assert_eq!(get_data(&resp)["result"], false);
+    let resp = Box::pin(execute_command(
+        &eval("[!!window.__submitted, document.querySelectorAll('[data-cu-auth]').length]"),
+        &mut state,
+    ))
+    .await;
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!([false, 0]),
+        "nothing submitted, and the markers are gone after a stopped login too"
+    );
 
     for n in [name, swap_name] {
         let _ = Box::pin(execute_command(

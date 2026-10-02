@@ -3696,9 +3696,16 @@ Save Options:
   --password-selector <s>  Custom CSS selector for password field
   --submit-selector <s>    Custom CSS selector for submit button
 
+Login Options:
+  --no-navigate            Fill the login page the tab is already on instead of
+                           opening the saved URL. Only on the credential's own
+                           origin, and only in a tab this session opened or adopted.
+
 Login behavior:
   auth login waits for form selectors to appear before filling/clicking.
   Selector wait timeout follows the default action timeout.
+  It fills the first visible, enabled field and checks the values are still in
+  place before it submits; otherwise it stops without submitting.
 
 Global Options:
   --json                   Output as JSON
@@ -3708,6 +3715,7 @@ Examples:
   echo "pass" | chrome-use auth save github --url https://github.com/login --username user --password-stdin
   chrome-use auth save github --url https://github.com/login --username user --password pass
   chrome-use auth login github
+  chrome-use auth login github --no-navigate
   chrome-use auth list
   chrome-use auth show github
   chrome-use auth delete github
@@ -5025,7 +5033,7 @@ Site adapters:  turn a website into a structured-data CLI (runs as you, in your 
 
 Auth Vault:
   auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
-  auth login <name>          Login using saved credentials (waits for form fields)
+  auth login <name> [opts]   Login using saved credentials (--no-navigate: fill the open page)
   auth list                  List saved auth profiles
   auth show <name>           Show auth profile metadata
   auth delete <name>         Delete auth profile

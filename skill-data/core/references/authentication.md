@@ -335,6 +335,7 @@ chrome-use auth save my-app --url https://app.example.com/login \
 # (type password, Ctrl+D)
 
 chrome-use auth login my-app    # fills + clicks, waits for form
+chrome-use auth login my-app --no-navigate  # fill the login page already open (same origin only)
 ```
 
 **Log in autonomously first — this is the default and the goal.** chrome-use is
