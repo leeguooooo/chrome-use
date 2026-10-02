@@ -763,6 +763,7 @@ AGENT_BROWSER_ENABLE="react-devtools"        # Comma-separated built-in init scr
 AGENT_BROWSER_HIDE_SCROLLBARS="false"        # Keep native scrollbars visible in headless Chromium screenshots
 AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
+AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS="ws.example.com"  # Extra hostnames the dashboard accepts (reverse proxy); only loopback names otherwise
 AGENT_BROWSER_HOME="/path/to/chrome-use"  # Custom install location
 AGENT_BROWSER_CLICK_MODE="dom"               # Click strategy: "" (default: scroll-in + coordinate
                                              #   click, DOM-dispatch fallback), "coord" (strict
