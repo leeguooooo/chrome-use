@@ -329,16 +329,7 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         }
         // `open` that landed on a page refusing this browser's sign-in (#387).
         if let Some(h) = data.get("humanCheck") {
-            eprintln!(
-                "{} {}: {} ({})",
-                color::warning_indicator(),
-                h.get("verdict").and_then(|v| v.as_str()).unwrap_or("?"),
-                h.get("vendor").and_then(|v| v.as_str()).unwrap_or("?"),
-                h.get("url").and_then(|v| v.as_str()).unwrap_or("")
-            );
-            if let Some(hint) = h.get("hint").and_then(|v| v.as_str()) {
-                eprintln!("  {}", color::dim(hint));
-            }
+            print_human_check(h);
         }
         // A click that opened a new tab: surface it so the agent doesn't read the
         // unchanged old page as a failed click (issue #24-A).
@@ -5357,6 +5348,22 @@ Hit a bug or rough edge? A 30-second issue genuinely sharpens this tool:
     );
 }
 
+/// A page that blocked the agent: a human check, or a sign-in rejection (#387).
+fn print_human_check(h: &serde_json::Value) {
+    eprintln!(
+        "{} {}: {} ({})",
+        color::warning_indicator(),
+        h.get("verdict")
+            .and_then(|v| v.as_str())
+            .unwrap_or("blocked_by_human_check"),
+        h.get("vendor").and_then(|v| v.as_str()).unwrap_or("?"),
+        h.get("url").and_then(|v| v.as_str()).unwrap_or("")
+    );
+    if let Some(hint) = h.get("hint").and_then(|v| v.as_str()) {
+        eprintln!("  {}", color::dim(hint));
+    }
+}
+
 /// Render a `--observe` payload in text mode.
 ///
 /// The daemon returns `changed` plus, when something moved, a unified `delta`
@@ -5470,18 +5477,7 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         }
     }
     if let Some(h) = obs.get("humanCheck") {
-        eprintln!(
-            "{} {}: {} ({})",
-            color::warning_indicator(),
-            h.get("verdict")
-                .and_then(|v| v.as_str())
-                .unwrap_or("blocked_by_human_check"),
-            h.get("vendor").and_then(|v| v.as_str()).unwrap_or("?"),
-            h.get("url").and_then(|v| v.as_str()).unwrap_or("")
-        );
-        if let Some(hint) = h.get("hint").and_then(|v| v.as_str()) {
-            eprintln!("  {}", color::dim(hint));
-        }
+        print_human_check(h);
     }
     if let Some(res) = obs.get("resources").and_then(|v| v.as_array()) {
         if !res.is_empty() {

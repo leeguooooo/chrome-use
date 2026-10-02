@@ -11273,14 +11273,22 @@ async fn verify_fill_after_menu(cmd: &Value, state: &mut DaemonState) -> Option<
     if actual != wanted {
         return None;
     }
+    let mut warning = "a password manager's inline menu reopened on this field and blocked \
+                       the fill's follow-up; chrome-use closed it and confirmed the field holds \
+                       the value. Focus has left the field, so `press Enter` needs `--selector` \
+                       to reach it."
+        .to_string();
+    if cmd.get("observe").and_then(Value::as_bool) == Some(true) {
+        warning.push_str(
+            " No --observe change list: the block cut the observation short; run `snapshot -i` \
+             to see the page.",
+        );
+    }
     Some(json!({
         "id": cmd.get("id").cloned().unwrap_or(Value::Null),
         "success": true,
-        "data": { "filled": selector },
-        "warning": "a password manager's inline menu reopened on this field and blocked the \
-                    fill's follow-up; chrome-use closed it and confirmed the field holds the \
-                    value. Focus has left the field, so `press Enter` needs `--selector` to \
-                    reach it.",
+        "data": { "filled": selector, "verifiedAfterBlock": true },
+        "warning": warning,
     }))
 }
 
