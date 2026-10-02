@@ -2115,7 +2115,13 @@ async fn verify_fill_value(
 /// that lost characters (YAML indentation, a newline in an editor) is still a
 /// failed fill.
 fn same_after_formatting(expected: &str, actual: &str, engine: &str) -> bool {
-    if !engine.starts_with("input") || expected.contains('\n') || expected.is_empty() {
+    // Single-line only, on both sides: a newline the page inserted is a
+    // change to the content, not formatting.
+    if !engine.starts_with("input")
+        || expected.contains(['\n', '\r'])
+        || actual.contains(['\n', '\r'])
+        || expected.is_empty()
+    {
         return false;
     }
     let is_sep = |c: char| c.is_whitespace() || matches!(c, '/' | '-' | '.' | '(' | ')');
@@ -4919,6 +4925,7 @@ mod tests {
         assert!(!fill_values_match("1.5", "1 5", "input"));
         assert!(!fill_values_match("12 34", "12-34", "input"));
         assert!(fill_values_match("12/34", "12 / 34", "input"));
+        assert!(!fill_values_match("1234", "12\n34", "input"));
     }
 
     /// Verify that `char_to_key_info` returns the correct (key, code,

@@ -140,8 +140,37 @@ pub async fn is_sensitive_node(
 }
 
 /// [`is_sensitive_node`] for an element already resolved to a remote object.
+/// Judges the element a read or fill actually touches (the input inside a
+/// wrapper, via [`EDITABLE_ATTRIBUTES_JS`]), and masks when that cannot be
+/// read (deny by default).
 pub async fn is_sensitive_object(client: &CdpClient, session_id: &str, object_id: &str) -> bool {
-    describe_is_sensitive(client, session_id, json!({ "objectId": object_id })).await
+    let result: Result<Value, String> = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "functionDeclaration": EDITABLE_ATTRIBUTES_JS,
+                "objectId": object_id,
+                "returnByValue": true,
+            })),
+            Some(session_id),
+        )
+        .await;
+    let attrs: Option<Vec<String>> = result.ok().and_then(|r| {
+        if r.get("exceptionDetails").is_some() {
+            return None;
+        }
+        r.pointer("/result/value")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+    });
+    match attrs {
+        Some(attrs) => sensitive_by_attributes(&attrs),
+        None => true,
+    }
 }
 
 async fn describe_is_sensitive(client: &CdpClient, session_id: &str, target: Value) -> bool {
