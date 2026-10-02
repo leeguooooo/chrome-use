@@ -2364,20 +2364,20 @@ fn placeholder_selection(nodes: &[TreeNode], idx: usize) -> Option<String> {
     if value.is_empty() {
         return None;
     }
-    // Options sit directly under the select, or one popup level down.
-    let mut options: Vec<&TreeNode> = Vec::new();
-    for &c in &node.children {
-        let child = &nodes[c];
-        if matches!(child.role.as_str(), "option" | "MenuListOption") {
-            options.push(child);
-        } else {
-            for &g in &child.children {
-                if matches!(nodes[g].role.as_str(), "option" | "MenuListOption") {
-                    options.push(&nodes[g]);
-                }
+    // Options sit directly under the select, or a few levels down: a native
+    // <select> nests them as combobox > MenuListPopup > (ignored node) > option.
+    fn collect<'a>(nodes: &'a [TreeNode], idx: usize, depth: u8, out: &mut Vec<&'a TreeNode>) {
+        for &c in &nodes[idx].children {
+            let child = &nodes[c];
+            if matches!(child.role.as_str(), "option" | "MenuListOption") {
+                out.push(child);
+            } else if depth > 0 {
+                collect(nodes, c, depth - 1, out);
             }
         }
     }
+    let mut options: Vec<&TreeNode> = Vec::new();
+    collect(nodes, idx, 3, &mut options);
     let shown = options.iter().find(|o| o.name.trim() == value);
     let disabled = shown.is_some_and(|o| o.disabled == Some(true));
     let first = options.first().is_some_and(|o| o.name.trim() == value);
@@ -3261,6 +3261,26 @@ mod tests {
             &[("Choose a country", false), ("Japan", false)],
         );
         assert!(placeholder_selection(&nodes, 0).is_some());
+    }
+
+    #[test]
+    fn a_native_select_nests_its_options_under_an_ignored_node() {
+        // Chrome: combobox > MenuListPopup > (ignored) > option.
+        let mut nodes = vec![
+            make_node("combobox", "Country", Some(1)),
+            make_node("MenuListPopup", "", None),
+            make_node("none", "", None),
+        ];
+        nodes[0].value_text = Some("Select…".to_string());
+        nodes[0].children.push(1);
+        nodes[1].children.push(2);
+        for (i, (name, disabled)) in [("Select…", true), ("Japan", false)].iter().enumerate() {
+            let mut o = make_node("option", name, Some(10 + i as i64));
+            o.disabled = Some(*disabled);
+            nodes.push(o);
+            nodes[2].children.push(3 + i);
+        }
+        assert_eq!(placeholder_selection(&nodes, 0).as_deref(), Some("Select…"));
     }
 
     #[test]
