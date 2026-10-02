@@ -33,6 +33,28 @@ fn normalize_websocket_root_path(url: &str) -> String {
     format!("{}/{}", &url[..query_index], &url[query_index..])
 }
 
+/// The command id of a message that failed typed parsing, when it is a
+/// reply to one of our commands (a positive integer `id`).
+fn malformed_reply_id(raw: &str) -> Option<u64> {
+    serde_json::from_str::<Value>(raw).ok()?.get("id")?.as_u64()
+}
+
+/// The error a command receives when its reply could not be parsed.
+fn malformed_reply(id: u64, error: &serde_json::Error) -> CdpMessage {
+    CdpMessage {
+        id: Some(id),
+        result: None,
+        error: Some(super::types::CdpError {
+            code: None,
+            message: format!("malformed CDP reply: {error}"),
+            data: None,
+        }),
+        method: None,
+        params: None,
+        session_id: None,
+    }
+}
+
 /// Raw incoming CDP message (text) broadcast to all subscribers.
 /// Used by the inspect proxy to forward responses and events to DevTools.
 #[derive(Debug, Clone)]
@@ -199,9 +221,20 @@ impl CdpClient {
 
                 let parsed: CdpMessage = match serde_json::from_str(&msg) {
                     Ok(m) => m,
-                    // Expected for inspect proxy messages with negative IDs
-                    // (CdpMessage.id is u64); handled via raw broadcast above.
-                    Err(_) => continue,
+                    Err(e) => {
+                        // A reply to one of our commands that does not fit the
+                        // typed shape (an `error.data` object, say) used to be
+                        // dropped, leaving that command to wait out its whole
+                        // timeout. Fail it now with what went wrong. Anything
+                        // else (inspect-proxy messages with negative ids) is
+                        // handled by the raw broadcast above.
+                        if let Some(id) = malformed_reply_id(&msg) {
+                            if let Some(tx) = pending_clone.lock().await.remove(&id) {
+                                let _ = tx.send(malformed_reply(id, &e));
+                            }
+                        }
+                        continue;
+                    }
                 };
 
                 if let Some(id) = parsed.id {
@@ -585,5 +618,64 @@ mod tests {
 
         assert_eq!(path_rx.await.unwrap(), "/?token=a%2Fb&scope=browser%20test");
         server.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod malformed_reply_tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    #[test]
+    fn only_positive_integer_ids_are_replies() {
+        assert_eq!(
+            malformed_reply_id(r#"{"id":7,"error":{"message":1}}"#),
+            Some(7)
+        );
+        assert_eq!(malformed_reply_id(r#"{"id":-3,"result":{}}"#), None);
+        assert_eq!(malformed_reply_id(r#"{"method":"X"}"#), None);
+        assert_eq!(malformed_reply_id("not json"), None);
+    }
+
+    #[test]
+    fn an_error_with_object_data_still_parses() {
+        let m: CdpMessage = serde_json::from_str(
+            r#"{"id":1,"error":{"code":-32000,"message":"boom","data":{"detail":"x"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.error.unwrap().message, "boom");
+    }
+
+    /// A reply our types cannot parse fails its command at once instead of
+    /// leaving it to the command timeout (after upstream #1739).
+    #[tokio::test]
+    async fn a_malformed_reply_fails_its_command_at_once() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Text(text) = msg {
+                    let id = serde_json::from_str::<Value>(&text).unwrap()["id"]
+                        .as_u64()
+                        .unwrap();
+                    // `message` must be a string: this cannot be parsed.
+                    let reply = format!(r#"{{"id":{id},"error":{{"message":42}}}}"#);
+                    ws.send(Message::Text(reply.into())).await.unwrap();
+                }
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let err = client
+            .send_command("Runtime.evaluate", None, None)
+            .await
+            .unwrap_err();
+        assert!(err.contains("malformed CDP reply"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        server.abort();
     }
 }

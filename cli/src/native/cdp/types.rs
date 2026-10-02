@@ -76,7 +76,9 @@ pub struct CdpMessage {
 pub struct CdpError {
     pub code: Option<i64>,
     pub message: String,
-    pub data: Option<String>,
+    /// Usually a string, but some backends send an object here; any JSON is
+    /// accepted so the error still reaches the command that caused it.
+    pub data: Option<serde_json::Value>,
 }
 
 impl std::fmt::Display for CdpError {
