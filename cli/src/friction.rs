@@ -27,7 +27,26 @@ const MAX_LINES: usize = 4000;
 /// Kept small + substring-matched so similar failures bucket together.
 pub fn categorize(error: &str) -> &'static str {
     let l = error.to_lowercase();
-    if l.contains("its tab is gone")
+    // Before `relay`/`not found`: these name a specific, fixable cause.
+    if l.contains("debugger_access_denied")
+        || l.contains("cannot access a chrome-extension://")
+        || l.contains("cannot attach to this target")
+    {
+        "blocked_by_extension_frame"
+    } else if l.starts_with("missing '")
+        || l.contains("not yet implemented")
+        || l.contains("is not an action")
+        || l.starts_with("usage:")
+        || l.contains("unknown command")
+        || l.contains("element not found: @\n")
+        || l.trim_end() == "element not found: @"
+    {
+        "usage"
+    } else if l.contains("not in the allowed domains") || l.contains("no pending confirmation") {
+        "policy"
+    } else if l.contains("failed to fetch") {
+        "page_fetch_failed"
+    } else if l.contains("its tab is gone")
         || l.contains("stale sessionid")
         || l.contains("no attached tab")
     {
@@ -63,7 +82,10 @@ fn host_of(url: &str) -> Option<String> {
 /// Append one friction record. Best-effort + cheap; never fails a command.
 /// `now_unix` is passed in (callers stamp it) to keep this pure-ish and testable.
 pub fn record(action: &str, error: &str, origin: &str, now_unix: u64) {
-    if std::env::var("AGENT_BROWSER_NO_FRICTION_LOG").is_ok() {
+    // Tests drive real commands into deliberate failures; written to the
+    // user's log, they crowded out real usage (4000 lines, most of them
+    // `nonexistent_action_xyz` and fixture pages).
+    if cfg!(test) || std::env::var("AGENT_BROWSER_NO_FRICTION_LOG").is_ok() {
         return;
     }
     let rec = json!({
@@ -409,5 +431,23 @@ mod tests {
         assert_eq!(agg["byCommand"][0]["name"], "click");
         assert_eq!(agg["byCommand"][0]["count"], 2);
         assert_eq!(agg["byCategory"][0]["name"], "element_not_found");
+    }
+
+    #[test]
+    fn real_failures_get_their_own_category() {
+        for (err, cat) in [
+            (
+                "CDP error (Page.getFrameTree): Cannot access a chrome-extension:// URL of different extension",
+                "blocked_by_extension_frame",
+            ),
+            ("CDP error (DOM.enable): debugger_access_denied: Chrome blocked", "blocked_by_extension_frame"),
+            ("Missing 'text' parameter", "usage"),
+            ("Element not found: @", "usage"),
+            ("Domain 'x.com' is not in the allowed domains list", "policy"),
+            ("Evaluation error: TypeError: Failed to fetch", "page_fetch_failed"),
+            ("stale sessionId cb-tab-1 for Runtime.evaluate", "stale_target"),
+        ] {
+            assert_eq!(categorize(err), cat, "{err}");
+        }
     }
 }
