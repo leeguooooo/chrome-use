@@ -9741,7 +9741,6 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     // requested tab's title and url while the session went on driving the page
     // it was stuck on, so the documented recovery for a lost tab silently did
     // nothing and the next command failed identically.
-    let mut result = result;
     let expected = result
         .get("url")
         .and_then(|v| v.as_str())
@@ -11200,6 +11199,16 @@ pub async fn execute_command_recovering(cmd: &Value, state: &mut DaemonState) ->
         return out;
     }
     let mut second = Box::pin(execute_command(cmd, state)).await;
+    // `fill` focuses the field, and a password manager reopens its menu on a
+    // focused login field, so the repeat can be blocked again, usually after
+    // the text went in, on the read-back. Close the menu once more (the
+    // recovery also takes focus out of the field) and check the value
+    // directly (#373).
+    if action == "fill" && is_denied(&second) {
+        if let Some(verified) = Box::pin(verify_fill_after_menu(cmd, state)).await {
+            return verified;
+        }
+    }
     if second.get("success").and_then(|v| v.as_bool()) == Some(true) {
         if let Some(obj) = second.as_object_mut() {
             obj.entry("warning").or_insert_with(|| {
@@ -11211,6 +11220,44 @@ pub async fn execute_command_recovering(cmd: &Value, state: &mut DaemonState) ->
         }
     }
     second
+}
+
+fn is_denied(resp: &Value) -> bool {
+    resp.get("success").and_then(|v| v.as_bool()) == Some(false)
+        && resp
+            .get("error")
+            .and_then(|v| v.as_str())
+            .is_some_and(super::browser::is_debugger_access_denied)
+}
+
+/// After a `fill` blocked twice by a password manager's menu: close the menu,
+/// then read the field. If it holds the requested value, the fill worked and
+/// only its follow-up was blocked. The value is compared here and never
+/// echoed.
+async fn verify_fill_after_menu(cmd: &Value, state: &mut DaemonState) -> Option<Value> {
+    let selector = cmd.get("selector").and_then(|v| v.as_str())?.to_string();
+    let wanted = cmd.get("value").and_then(|v| v.as_str())?.to_string();
+    let mgr = state.browser.as_mut()?;
+    Box::pin(mgr.cycle_pinned_tab_visibility()).await.ok()?;
+    let read = Box::pin(execute_command(
+        &json!({ "id": cmd.get("id").cloned().unwrap_or(Value::Null),
+                 "action": "inputvalue", "selector": selector, "revealValues": true }),
+        state,
+    ))
+    .await;
+    let actual = read.pointer("/data/value").and_then(|v| v.as_str())?;
+    if actual != wanted {
+        return None;
+    }
+    Some(json!({
+        "id": cmd.get("id").cloned().unwrap_or(Value::Null),
+        "success": true,
+        "data": { "filled": selector },
+        "warning": "a password manager's inline menu reopened on this field and blocked the \
+                    fill's follow-up; chrome-use closed it and confirmed the field holds the \
+                    value. Focus has left the field, so `press Enter` needs `--selector` to \
+                    reach it.",
+    }))
 }
 
 /// Commands that leave the page as they found it, or set it to the same end

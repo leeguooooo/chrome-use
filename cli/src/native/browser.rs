@@ -2889,6 +2889,7 @@ impl BrowserManager {
             .iter()
             .find(|p| p.target_id == pinned)
             .ok_or("pinned tab not tracked")?;
+        let session_id = page.session_id.clone();
         let live: Value = self
             .client
             .send_command_typed(
@@ -2921,6 +2922,22 @@ impl BrowserManager {
                 self.remember_created_target(temp);
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
+            // While the tab is hidden the menu's frame is gone and debugger
+            // commands work again. Take focus out of the field it was attached
+            // to: Bitwarden reopens its menu on a focused login field as soon
+            // as the tab is shown, so the repeat hit the same block (#373).
+            // The value typed so far stays.
+            let _ = self
+                .client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(json!({
+                        "expression": "(() => { const a = document.activeElement; \
+                            if (a && a !== document.body && a.blur) a.blur(); })()",
+                    })),
+                    Some(&session_id),
+                )
+                .await;
             let back = self
                 .client
                 .send_command("ABExt.call", Some(activate(chrome_tab)), None)
@@ -2942,6 +2959,10 @@ impl BrowserManager {
                 }
             }
             back?;
+            // Bitwarden re-inserts its overlay frame for a moment when the tab is
+            // shown again, even with no field focused; a command sent at once hits
+            // it. Let that settle before the caller repeats anything (#373).
+            tokio::time::sleep(Duration::from_millis(700)).await;
         } else {
             // The agent never brings a tab to the front on its own, and the tab
             // the user is looking at is not this relay's to switch back to.
