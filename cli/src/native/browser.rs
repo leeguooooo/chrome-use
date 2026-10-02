@@ -1186,6 +1186,20 @@ fn connection_alive_from_probe(probe: LivenessProbe, is_external_attach: bool) -
     }
 }
 
+/// The warning for an activation that hid another session's tab (#385).
+pub(crate) fn foreground_conflict_warning(owner: &str, title: &str) -> String {
+    let what = if title.is_empty() {
+        "its tab".to_string()
+    } else {
+        format!("its tab \"{title}\"")
+    };
+    format!(
+        "bringing this tab forward hid session '{owner}''s tab in the same window ({what}). \
+         A hidden page can ignore clicks, so that session may now see actions do nothing. \
+         Use a separate window per session where you need --activate."
+    )
+}
+
 impl BrowserManager {
     pub async fn launch(options: LaunchOptions, engine: Option<&str>) -> Result<Self, String> {
         let engine = engine.unwrap_or("chrome");
@@ -3574,7 +3588,7 @@ impl BrowserManager {
 
         let initialize = async {
             if activate {
-                self.activate_active_tab().await?;
+                let _ = self.activate_active_tab().await?;
             }
             self.enable_domains(&attach.session_id).await
         };
@@ -4042,13 +4056,16 @@ impl BrowserManager {
     }
 
     /// Explicit recovery uses the browser connection before renderer probing.
-    pub async fn activate_active_tab(&self) -> Result<(), String> {
-        let target_id = self.active_target_id()?;
-        self.activate_target(target_id).await
+    /// Returns a warning when the activation hid another session's tab.
+    pub async fn activate_active_tab(&self) -> Result<Option<String>, String> {
+        let target_id = self.active_target_id()?.to_string();
+        self.activate_target(&target_id).await
     }
 
     /// Browser-level activation must not wait for a blocked renderer session.
-    async fn activate_target(&self, target_id: &str) -> Result<(), String> {
+    /// Returns a warning when the activation hid another session's tab.
+    async fn activate_target(&self, target_id: &str) -> Result<Option<String>, String> {
+        let conflict = self.foreground_conflict(target_id).await;
         self.client
             .send_command(
                 "Target.activateTarget",
@@ -4056,7 +4073,68 @@ impl BrowserManager {
                 None,
             )
             .await?;
-        Ok(())
+        Ok(conflict)
+    }
+
+    /// On the relay, when bringing `target_id` forward would hide a tab another
+    /// live session created in the same window, say which. A hidden page can
+    /// ignore input (#385), so two sessions sharing a window keep breaking each
+    /// other's clicks without either seeing why. Best effort: any failure to
+    /// find out returns `None`.
+    async fn foreground_conflict(&self, target_id: &str) -> Option<String> {
+        if !self.on_relay() {
+            return None;
+        }
+        let ours: Value = self
+            .client
+            .send_command(
+                "ABExt.inspectTab",
+                Some(json!({ "targetId": target_id })),
+                None,
+            )
+            .await
+            .ok()?;
+        if ours.get("active").and_then(Value::as_bool) == Some(true) {
+            return None;
+        }
+        let window_id = ours.get("windowId")?.as_i64()?;
+        let active: Value = self
+            .client
+            .send_command(
+                "ABExt.call",
+                Some(json!({
+                    "namespace": "tabs",
+                    "method": "query",
+                    "args": [{ "active": true, "windowId": window_id }],
+                })),
+                None,
+            )
+            .await
+            .ok()?;
+        let front = active.get("result")?.as_array()?.first()?.clone();
+        let front_tab = front.get("id")?.as_i64()?;
+        let attached: Value = self
+            .client
+            .send_command("ABExt.attachedTargets", None, None)
+            .await
+            .ok()?;
+        let front_target = attached
+            .get("targets")?
+            .as_array()?
+            .iter()
+            .find(|t| t.get("tabId").and_then(Value::as_i64) == Some(front_tab))?
+            .get("targetId")?
+            .as_str()?
+            .to_string();
+        let own = DAEMON_SESSION.get().map(String::as_str);
+        let owner = crate::connection::walk_daemons()
+            .sessions
+            .into_iter()
+            .map(|s| s.name)
+            .filter(|name| Some(name.as_str()) != own)
+            .find(|name| crate::connection::created_target_ids(name).contains(&front_target))?;
+        let title = front.get("title").and_then(Value::as_str).unwrap_or("");
+        Some(foreground_conflict_warning(&owner, title))
     }
 
     pub async fn set_timezone(&self, timezone_id: &str) -> Result<(), String> {
@@ -4580,10 +4658,16 @@ impl BrowserManager {
         ) {
             return Err(refuse_unowned_tab_message(target.tab_id, &target.target_id));
         }
+        let mut warning = None;
         if activate {
-            self.activate_target(&target.target_id).await?;
+            let target_id = target.target_id.clone();
+            warning = self.activate_target(&target_id).await?;
         }
-        self.tab_switch(index).await
+        let mut switched = self.tab_switch(index).await?;
+        if let (Some(w), Some(obj)) = (warning, switched.as_object_mut()) {
+            obj.insert("warning".to_string(), json!(w));
+        }
+        Ok(switched)
     }
 
     /// Return browser-level tab metadata without evaluating page JavaScript.
@@ -5001,6 +5085,16 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn foreground_conflict_warning_names_the_session_and_tab() {
+        let w = foreground_conflict_warning("plugins-77", "Log in - OpenAI");
+        assert!(w.contains("'plugins-77'"), "{w}");
+        assert!(w.contains("Log in - OpenAI"), "{w}");
+        assert!(w.contains("separate window"), "{w}");
+        assert!(foreground_conflict_warning("x", "").contains("its tab"));
+    }
+
     use super::url_matches_adopt_spec;
 
     #[test]

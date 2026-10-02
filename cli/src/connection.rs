@@ -454,6 +454,16 @@ fn endpoint_sha256(endpoint: &str) -> String {
     format!("{:x}", Sha256::digest(endpoint.as_bytes()))
 }
 
+/// The target IDs a session has recorded as created, whatever endpoint it was
+/// on. Only for telling the user whose tab something is; never for permission.
+pub fn created_target_ids(session: &str) -> HashSet<String> {
+    fs::read_to_string(get_created_targets_path(session))
+        .ok()
+        .and_then(|value| serde_json::from_str::<CreatedTargetRegistry>(&value).ok())
+        .map(|registry| registry.target_ids.into_iter().collect())
+        .unwrap_or_default()
+}
+
 /// Read the target IDs this named session created in an earlier daemon lifetime.
 /// Missing, malformed, or endpoint-mismatched state fails closed: no tab receives
 /// deletion rights.

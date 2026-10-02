@@ -294,6 +294,28 @@ pub(super) fn resource_lines(entries: &[serde_json::Value], cap: usize) -> (Vec<
     (rows.into_iter().take(cap).map(|(_, l)| l).collect(), total)
 }
 
+/// A sign-in page that refused this browser outright (#387): Google's "This
+/// browser or app may not be secure". Recognized by URL only and reported so
+/// the agent hands the sign-in to the user; never worked around.
+pub(crate) fn signin_rejection(url: &str) -> Option<serde_json::Value> {
+    let parsed = url::Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let path = parsed.path().to_ascii_lowercase();
+    let vendor = if host == "accounts.google.com" && path.contains("/signin/rejected") {
+        "Google"
+    } else {
+        return None;
+    };
+    Some(serde_json::json!({
+        "verdict": "blocked_by_signin_rejection",
+        "vendor": vendor,
+        "url": shorten(url, 120),
+        "hint": "the sign-in page refused this browser (\"this browser or app may not be \
+                 secure\"). Do not retry or look for a way around it: the user signs in in \
+                 their own Chrome (relay mode), or hand off with `session handoff`.",
+    }))
+}
+
 /// Known human-check / anti-automation vendors, by a URL they load (#377).
 /// Only recognized and reported, never worked around.
 pub(super) fn human_check_vendor(url: &str) -> Option<&'static str> {
@@ -603,5 +625,17 @@ mod capture_tests {
             .unwrap()
             .contains("Do not replay"));
         assert_eq!(response["data"]["clicked"], "Save");
+    }
+
+    #[test]
+    fn google_signin_rejection_is_recognized() {
+        let v = signin_rejection(
+            "https://accounts.google.com/v3/signin/rejected?continue=x&flowName=GlifWebSignIn",
+        )
+        .unwrap();
+        assert_eq!(v["verdict"], "blocked_by_signin_rejection");
+        assert_eq!(v["vendor"], "Google");
+        assert!(signin_rejection("https://accounts.google.com/v3/signin/identifier").is_none());
+        assert!(signin_rejection("https://evil.example/signin/rejected").is_none());
     }
 }

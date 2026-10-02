@@ -2451,7 +2451,8 @@ pub async fn diagnose_unchanged(
                 covering = (at.tagName || '').toLowerCase() + id + cls;
             }
         }
-        return JSON.stringify({ disabled, rendered, inViewport, covering });
+        const hidden = document.visibilityState === 'hidden';
+        return JSON.stringify({ disabled, rendered, inViewport, covering, hidden });
     }"#;
 
     let result: EvaluateResult = client
@@ -2491,13 +2492,19 @@ pub async fn diagnose_unchanged(
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
 
-    let note = unchanged_note(disabled, rendered, in_viewport, covering);
+    let hidden = probe
+        .get("hidden")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let note = unchanged_note(disabled, rendered, in_viewport, covering, hidden);
     Some(json!({
         "target": "present",
         "disabled": disabled,
         "rendered": rendered,
         "inViewport": in_viewport,
         "coveredBy": covering,
+        "pageHidden": hidden,
         "note": note,
     }))
 }
@@ -2510,6 +2517,7 @@ pub fn unchanged_note(
     rendered: bool,
     in_viewport: bool,
     covering: Option<&str>,
+    hidden: bool,
 ) -> String {
     if disabled {
         return "the target is disabled, so the action could not have taken effect. Enable it                 (usually by filling whatever it depends on) and repeat."
@@ -2523,6 +2531,15 @@ pub fn unchanged_note(
         return format!(
             "the target is covered by <{what}> at its centre, so the action most likely went to              that instead. Dismiss the overlay (a cookie banner, a modal backdrop) and repeat."
         );
+    }
+    if hidden {
+        return "the page is in a background tab (document.visibilityState is `hidden`). \
+                Some pages, sign-in buttons and Discourse forums among them, ignore input \
+                while hidden. Bring it forward with `tab select <this tab> --activate` (this \
+                changes the tab the user sees) and repeat, or hand the step to the user. In a \
+                window shared with another session, activating a tab there hides that \
+                session's tab."
+            .to_string();
     }
     if !in_viewport {
         return "the target is outside the viewport. The action was still dispatched to it, but                 a page that acts on visibility may have ignored it — `scroll` it into view and                 repeat if nothing happened."
@@ -3061,22 +3078,30 @@ mod tests {
     /// the thing this diagnosis exists to stop (#274).
     #[test]
     fn every_unchanged_state_says_something_different() {
-        let disabled = unchanged_note(true, true, true, None);
+        let disabled = unchanged_note(true, true, true, None, false);
         assert!(disabled.contains("disabled"), "{disabled}");
 
-        let unrendered = unchanged_note(false, false, false, None);
+        let unrendered = unchanged_note(false, false, false, None, false);
         assert!(unrendered.contains("no box"), "{unrendered}");
 
-        let covered = unchanged_note(false, true, true, Some("div#cookie-banner"));
+        let covered = unchanged_note(false, true, true, Some("div#cookie-banner"), false);
         assert!(covered.contains("div#cookie-banner"), "{covered}");
         assert!(covered.contains("covered"), "{covered}");
 
-        let offscreen = unchanged_note(false, true, false, None);
+        let offscreen = unchanged_note(false, true, false, None, false);
         assert!(offscreen.contains("outside the viewport"), "{offscreen}");
+
+        // A background tab: some pages ignore input while hidden (#385).
+        let hidden = unchanged_note(false, true, true, None, true);
+        assert!(hidden.contains("background tab"), "{hidden}");
+        assert!(hidden.contains("--activate"), "{hidden}");
+        // ...but a disabled or covered target is still the better answer.
+        let covered_hidden = unchanged_note(false, true, true, Some("div.modal"), true);
+        assert!(covered_hidden.contains("div.modal"), "{covered_hidden}");
 
         // The case that matters most: everything is fine, so an empty delta is
         // NOT evidence of failure.
-        let fine = unchanged_note(false, true, true, None);
+        let fine = unchanged_note(false, true, true, None, false);
         assert!(fine.contains("legitimately changed nothing"), "{fine}");
         assert!(
             fine.contains("Do NOT treat an empty delta as failure"),
@@ -3089,7 +3114,7 @@ mod tests {
     /// would send them at the wrong thing.
     #[test]
     fn the_most_decisive_reason_wins() {
-        let both = unchanged_note(true, true, true, Some("div.modal"));
+        let both = unchanged_note(true, true, true, Some("div.modal"), false);
         assert!(both.contains("disabled"), "{both}");
         assert!(!both.contains("div.modal"), "{both}");
     }

@@ -327,6 +327,19 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 );
             }
         }
+        // `open` that landed on a page refusing this browser's sign-in (#387).
+        if let Some(h) = data.get("humanCheck") {
+            eprintln!(
+                "{} {}: {} ({})",
+                color::warning_indicator(),
+                h.get("verdict").and_then(|v| v.as_str()).unwrap_or("?"),
+                h.get("vendor").and_then(|v| v.as_str()).unwrap_or("?"),
+                h.get("url").and_then(|v| v.as_str()).unwrap_or("")
+            );
+            if let Some(hint) = h.get("hint").and_then(|v| v.as_str()) {
+                eprintln!("  {}", color::dim(hint));
+            }
+        }
         // A click that opened a new tab: surface it so the agent doesn't read the
         // unchanged old page as a failed click (issue #24-A).
         if let Some(opened) = data.get("openedTab") {
@@ -5453,8 +5466,11 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
     }
     if let Some(h) = obs.get("humanCheck") {
         eprintln!(
-            "{} blocked_by_human_check: {} ({})",
+            "{} {}: {} ({})",
             color::warning_indicator(),
+            h.get("verdict")
+                .and_then(|v| v.as_str())
+                .unwrap_or("blocked_by_human_check"),
             h.get("vendor").and_then(|v| v.as_str()).unwrap_or("?"),
             h.get("url").and_then(|v| v.as_str()).unwrap_or("")
         );

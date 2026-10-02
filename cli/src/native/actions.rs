@@ -2323,6 +2323,9 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         if let Some(verdict) = super::observation::human_check_verdict(changed_now, &resources) {
             observed.insert("humanCheck".into(), verdict);
         }
+        if let Some(verdict) = super::observation::signin_rejection(url1.as_deref().unwrap_or("")) {
+            observed.insert("humanCheck".into(), verdict);
+        }
         let mut settled = settled;
         settled.mark_changed(observed.get("changed").and_then(|v| v.as_bool()) == Some(true));
         observed.insert("settle".into(), settled.to_json());
@@ -4195,7 +4198,14 @@ fn with_site_hint(mut result: Value, fallback_url: &str) -> Value {
     let url = result
         .get("url")
         .and_then(|v| v.as_str())
-        .unwrap_or(fallback_url);
+        .unwrap_or(fallback_url)
+        .to_string();
+    let url = url.as_str();
+    if let Some(verdict) = super::observation::signin_rejection(url) {
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("humanCheck".to_string(), verdict);
+        }
+    }
     let host = url::Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(String::from));
@@ -9544,7 +9554,7 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
             );
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("verified".to_string(), json!("unconfirmed"));
-                obj.insert("warning".to_string(), json!(warning));
+                append_warning(obj, &warning);
             }
             state.last_unconfirmed_tab_switch = Some((
                 "tab select",
@@ -9693,6 +9703,15 @@ pub(crate) fn already_tried_note(
     ))
 }
 
+/// Add a warning to a result without dropping one already there.
+fn append_warning(obj: &mut serde_json::Map<String, Value>, text: &str) {
+    let merged = match obj.get("warning").and_then(Value::as_str) {
+        Some(existing) if !existing.is_empty() => format!("{existing}\n{text}"),
+        _ => text.to_string(),
+    };
+    obj.insert("warning".to_string(), json!(merged));
+}
+
 async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let spec = cmd
         .get("spec")
@@ -9702,18 +9721,21 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         Some(mgr) => mgr.tab_adopt(spec).await,
         None => Err("Browser not launched".to_string()),
     };
-    let result = finish_tab_adopt(result, state)?;
+    let mut result = finish_tab_adopt(result, state)?;
     if cmd
         .get("activate")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        state
+        let warning = state
             .browser
             .as_ref()
             .ok_or("Browser not launched")?
             .activate_active_tab()
             .await?;
+        if let (Some(w), Some(obj)) = (warning, result.as_object_mut()) {
+            append_warning(obj, &w);
+        }
     }
     // Same identity check as `tab select` (issue #223): adopt reported the
     // requested tab's title and url while the session went on driving the page
@@ -9758,7 +9780,7 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
                 );
                 if let Some(obj) = result.as_object_mut() {
                     obj.insert("verified".to_string(), json!("unconfirmed"));
-                    obj.insert("warning".to_string(), json!(warning));
+                    append_warning(obj, &warning);
                 }
                 state.last_unconfirmed_tab_switch =
                     Some(("tab adopt", spec.to_string(), std::time::Instant::now()));
