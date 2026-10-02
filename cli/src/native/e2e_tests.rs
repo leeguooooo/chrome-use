@@ -6376,6 +6376,145 @@ async fn e2e_auth_login_waits_for_delayed_spa_form_render() {
     assert_success(&close);
 }
 
+/// auth login fills the usable fields and checks them before submitting
+/// (after upstream #2014), and `--no-navigate` fills the page the tab is on,
+/// only on the credential's origin (after upstream #1771).
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_picks_usable_fields_and_guards_the_submit() {
+    let login_page = r##"<!doctype html><meta charset="utf-8"><title>login</title>
+<form id="f">
+  <input type="email" id="ghost" style="display:none">
+  <input type="email" id="email" autocomplete="username">
+  <input type="password" id="pass">
+  <button type="submit">Sign in</button>
+</form>
+<script>
+  document.getElementById('f').addEventListener('submit', (e) => { e.preventDefault(); window.__submitted = true; });
+</script>"##
+        .to_string();
+    let swapping_page = r##"<!doctype html><meta charset="utf-8"><title>login</title>
+<form id="f">
+  <input type="email" id="email">
+  <input type="password" id="pass">
+  <button type="submit">Sign in</button>
+</form>
+<script>
+  // A page that swaps the password field out once something is typed in it.
+  const p = document.getElementById('pass');
+  p.addEventListener('input', () => { if (p.isConnected) p.replaceWith(p.cloneNode()); });
+  document.getElementById('f').addEventListener('submit', (e) => { e.preventDefault(); window.__submitted = true; });
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(login_page).await;
+    let (swap_port, swap_server) = spawn_html_server(swapping_page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let name = format!("e2e-auth-guard-{stamp}");
+    let swap_name = format!("e2e-auth-swap-{stamp}");
+    for (n, p) in [(&name, port), (&swap_name, swap_port)] {
+        let resp = Box::pin(execute_command(
+            &json!({ "id": "s", "action": "auth_save", "name": n,
+                     "url": format!("http://127.0.0.1:{p}/login"),
+                     "username": "user@example.com", "password": "super-secret" }),
+            &mut state,
+        ))
+        .await;
+        assert_success(&resp);
+    }
+    let eval = |script: &str| json!({ "id": "e", "action": "evaluate", "script": script });
+
+    // 1. The hidden duplicate is skipped; the visible field gets the username.
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "1", "action": "auth_login", "name": name }),
+        &mut state,
+    ))
+    .await;
+    assert_success(&resp);
+    let resp = Box::pin(execute_command(
+        &eval("({ ghost: ghost.value, email: email.value, pass: pass.value.length, submitted: !!window.__submitted, marked: document.querySelectorAll('[data-cu-auth]').length })"),
+        &mut state,
+    ))
+    .await;
+    let r = &get_data(&resp)["result"];
+    assert_eq!(r["ghost"], "");
+    assert_eq!(r["email"], "user@example.com");
+    assert_eq!(r["pass"], 12);
+    assert_eq!(r["submitted"], true);
+
+    // 2. --no-navigate refuses a page on another origin.
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": format!("http://127.0.0.1:{swap_port}/x") }),
+        &mut state,
+    ))
+    .await;
+    assert_success(&resp);
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "3", "action": "auth_login", "name": name, "noNavigate": true }),
+        &mut state,
+    ))
+    .await;
+    assert_eq!(resp["success"], false);
+    assert!(
+        resp["error"].as_str().unwrap().contains("Refusing"),
+        "{resp}"
+    );
+
+    // 3. --no-navigate on the right origin fills the page in place.
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "4", "action": "navigate", "url": format!("http://127.0.0.1:{port}/login") }),
+        &mut state,
+    ))
+    .await;
+    assert_success(&resp);
+    let _ = Box::pin(execute_command(&eval("window.__kept = 1"), &mut state)).await;
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "5", "action": "auth_login", "name": name, "noNavigate": true }),
+        &mut state,
+    ))
+    .await;
+    assert_success(&resp);
+    let resp = Box::pin(execute_command(
+        &eval("[window.__kept, email.value]"),
+        &mut state,
+    ))
+    .await;
+    assert_eq!(get_data(&resp)["result"], json!([1, "user@example.com"]));
+
+    // 4. A password field swapped out during the fill: nothing is submitted.
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "6", "action": "auth_login", "name": swap_name }),
+        &mut state,
+    ))
+    .await;
+    assert_eq!(resp["success"], false, "{resp}");
+    let err = resp["error"].as_str().unwrap();
+    assert!(err.contains("stopped before submitting"), "{err}");
+    assert!(!err.contains("super-secret"), "{err}");
+    let resp = Box::pin(execute_command(&eval("!!window.__submitted"), &mut state)).await;
+    assert_eq!(get_data(&resp)["result"], false);
+
+    for n in [name, swap_name] {
+        let _ = Box::pin(execute_command(
+            &json!({ "id": "d", "action": "auth_delete", "name": n }),
+            &mut state,
+        ))
+        .await;
+    }
+    let _ = Box::pin(execute_command(
+        &json!({ "id": "99", "action": "close" }),
+        &mut state,
+    ))
+    .await;
+    server.abort();
+    swap_server.abort();
+}
+
 // ---------------------------------------------------------------------------
 // Origin-scoped --headers tests
 // ---------------------------------------------------------------------------

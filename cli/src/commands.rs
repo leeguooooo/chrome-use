@@ -2152,9 +2152,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 Some("login") => {
                     let name = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                         context: "auth login".to_string(),
-                        usage: "chrome-use auth login <name>",
+                        usage: "chrome-use auth login <name> [--no-navigate]",
                     })?;
-                    Ok(json!({ "id": id, "action": "auth_login", "name": name }))
+                    let no_navigate = rest.contains(&"--no-navigate");
+                    Ok(
+                        json!({ "id": id, "action": "auth_login", "name": name, "noNavigate": no_navigate }),
+                    )
                 }
                 Some("list") => Ok(json!({ "id": id, "action": "auth_list" })),
                 Some("delete") | Some("remove") => {

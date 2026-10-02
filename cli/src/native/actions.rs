@@ -15222,73 +15222,71 @@ async fn handle_http_credentials(cmd: &Value, state: &DaemonState) -> Result<Val
 // Auth handlers
 // ---------------------------------------------------------------------------
 
-/// Wait for any selector in `selectors` to appear and return the first match.
-///
-/// This is used by `auth_login` auto-detection so SPA login forms can render
-/// after initial navigation without requiring global network-idle.
-async fn wait_for_any_selector(
+/// Wait for the first USABLE element any of `selectors` matches (visible,
+/// enabled, editable; a hidden duplicate earlier in the DOM is skipped), mark
+/// it `data-cu-auth="<tag>"`, and return a selector for exactly that element.
+/// The login then fills and checks the element it chose, never "whatever
+/// `querySelector` returns now". (After upstream vercel-labs/agent-browser
+/// #2014.)
+async fn mark_usable_auth_element(
     client: &super::cdp::client::CdpClient,
     session_id: &str,
     selectors: &[&str],
+    tag: &str,
     timeout_ms: u64,
 ) -> Result<String, String> {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
-
-    loop {
-        for selector in selectors {
-            let expression = format!(
-                r#"(() => {{
-                    const el = document.querySelector({sel});
-                    if (!el) return false;
-
-                    const r = el.getBoundingClientRect();
-                    const s = window.getComputedStyle(el);
-                    const opacity = parseFloat(s.opacity || '1');
-                    const isVisible =
-                        r.width > 0 &&
-                        r.height > 0 &&
-                        s.visibility !== 'hidden' &&
-                        s.display !== 'none' &&
-                        (!Number.isFinite(opacity) || opacity > 0);
-
-                    if (!isVisible) return false;
-                    if (el.matches(':disabled')) return false;
-
-                    if (el instanceof HTMLInputElement && el.type === 'hidden') return false;
-                    if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly) return false;
-
+    let sels = serde_json::to_string(selectors).unwrap_or_default();
+    let tag_json = serde_json::to_string(tag).unwrap_or_default();
+    let expression = format!(
+        r#"(() => {{
+            const usable = (el) => {{
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                const opacity = parseFloat(s.opacity || '1');
+                if (!(r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'
+                      && (!Number.isFinite(opacity) || opacity > 0))) return false;
+                if (el.matches(':disabled')) return false;
+                if (el instanceof HTMLInputElement && el.type === 'hidden') return false;
+                if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly) return false;
+                return true;
+            }};
+            for (const sel of {sels}) {{
+                let found;
+                try {{ found = document.querySelectorAll(sel); }} catch (e) {{ continue; }}
+                for (const el of found) {{
+                    if (!usable(el)) continue;
+                    for (const old of document.querySelectorAll('[data-cu-auth=' + JSON.stringify({tag_json}) + ']')) {{
+                        if (old !== el) old.removeAttribute('data-cu-auth');
+                    }}
+                    el.setAttribute('data-cu-auth', {tag_json});
+                    // An expando cloneNode() does not copy: a field the page
+                    // swapped for a copy keeps the attribute but not this.
+                    el[Symbol.for('cu-auth')] = {tag_json};
                     return true;
-                }})()"#,
-                sel = serde_json::to_string(selector).unwrap_or_default()
-            );
-
-            let result: super::cdp::types::EvaluateResult = client
-                .send_command_typed(
-                    "Runtime.evaluate",
-                    &super::cdp::types::EvaluateParams {
-                        expression,
-                        return_by_value: Some(true),
-                        await_promise: Some(true),
-                    },
-                    Some(session_id),
-                )
-                .await?;
-
-            if result
-                .result
-                .value
-                .as_ref()
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                return Ok((*selector).to_string());
-            }
+                }}
+            }}
+            return false;
+        }})()"#
+    );
+    loop {
+        let result: super::cdp::types::EvaluateResult = client
+            .send_command_typed(
+                "Runtime.evaluate",
+                &super::cdp::types::EvaluateParams {
+                    expression: expression.clone(),
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(session_id),
+            )
+            .await?;
+        if result.result.value.as_ref().and_then(|v| v.as_bool()) == Some(true) {
+            return Ok(format!("[data-cu-auth=\"{tag}\"]"));
         }
-
         if tokio::time::Instant::now() >= deadline {
             return Err(format!("Wait timed out after {}ms", timeout_ms));
         }
-
         tokio::time::sleep(tokio::time::Duration::from_millis(
             AUTH_LOGIN_SELECTOR_POLL_INTERVAL_MS,
         ))
@@ -15341,10 +15339,38 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     let password = cred.password;
 
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-    mgr.navigate(&url, AUTH_LOGIN_WAIT_UNTIL).await?;
+    // `--no-navigate` fills the login page the tab is already on (a page the
+    // agent prepared: a chosen account, a dismissed banner). Only on the
+    // credential's own origin: a password is never typed into another site.
+    // (After upstream vercel-labs/agent-browser #1771.)
+    let no_navigate = cmd
+        .get("noNavigate")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if no_navigate {
+        let current = mgr.get_url().await.unwrap_or_default();
+        let want = url::Url::parse(&url)
+            .map(|u| u.origin().ascii_serialization())
+            .map_err(|e| format!("auth login: credential URL {url:?} is invalid: {e}"))?;
+        let have = url::Url::parse(&current)
+            .map(|u| u.origin().ascii_serialization())
+            .unwrap_or_default();
+        if have != want {
+            return Err(format!(
+                "auth login --no-navigate: the tab is on {have}, but this credential is for \
+                 {want}. Refusing to fill it here; open the login page first, or drop \
+                 --no-navigate."
+            ));
+        }
+    } else {
+        mgr.navigate(&url, AUTH_LOGIN_WAIT_UNTIL).await?;
+    }
 
     let session_id = mgr.active_session_id()?.to_string();
     let auth_timeout_ms = mgr.default_timeout_ms();
+    // One marker per login, so the fields chosen here are the ones filled and
+    // checked, even when the page re-renders or holds hidden duplicates.
+    let marker = uuid::Uuid::new_v4().simple().to_string();
 
     let preferred_user_selectors = [
         "input[type=email]",
@@ -15387,20 +15413,24 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
         .map(String::from)
         .or(cred.submit_selector);
 
+    let user_tag = format!("user-{marker}");
+    let pass_tag = format!("pass-{marker}");
+    let submit_tag = format!("submit-{marker}");
+
     // Find and fill username
     let user_sel = if let Some(s) = username_sel {
-        wait_for_selector(&mgr.client, &session_id, &s, "visible", auth_timeout_ms)
+        mark_usable_auth_element(&mgr.client, &session_id, &[&s], &user_tag, auth_timeout_ms)
             .await
-            .map_err(|_| format!("Timed out waiting for username selector '{}'", s))?;
-        s
+            .map_err(|_| format!("Timed out waiting for username selector '{}'", s))?
     } else {
         let preferred_window_ms = auth_timeout_ms.min(AUTH_LOGIN_PREFERRED_SELECTOR_WINDOW_MS);
         let fallback_window_ms = auth_timeout_ms.saturating_sub(preferred_window_ms);
 
-        match wait_for_any_selector(
+        match mark_usable_auth_element(
             &mgr.client,
             &session_id,
             &preferred_user_selectors,
+            &user_tag,
             preferred_window_ms,
         )
         .await
@@ -15415,10 +15445,11 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
                     ));
                 }
 
-                wait_for_any_selector(
+                mark_usable_auth_element(
                     &mgr.client,
                     &session_id,
                     &fallback_user_selectors,
+                    &user_tag,
                     fallback_window_ms,
                 )
                 .await
@@ -15445,16 +15476,16 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     .await?;
 
     // Find and fill password
-    let pass_sel = password_sel.unwrap_or_else(|| "input[type=password]".to_string());
-    wait_for_selector(
+    let pass_wanted = password_sel.unwrap_or_else(|| "input[type=password]".to_string());
+    let pass_sel = mark_usable_auth_element(
         &mgr.client,
         &session_id,
-        &pass_sel,
-        "visible",
+        &[&pass_wanted],
+        &pass_tag,
         auth_timeout_ms,
     )
     .await
-    .map_err(|_| format!("Timed out waiting for password selector '{}'", pass_sel))?;
+    .map_err(|_| format!("Timed out waiting for password selector '{}'", pass_wanted))?;
     interaction::fill(
         &mgr.client,
         &session_id,
@@ -15465,17 +15496,23 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     )
     .await?;
 
-    // Find and click submit
+    // Find the submit control
     let sub_sel = if let Some(s) = submit_sel {
-        wait_for_selector(&mgr.client, &session_id, &s, "visible", auth_timeout_ms)
-            .await
-            .map_err(|_| format!("Timed out waiting for submit selector '{}'", s))?;
-        s
+        mark_usable_auth_element(
+            &mgr.client,
+            &session_id,
+            &[&s],
+            &submit_tag,
+            auth_timeout_ms,
+        )
+        .await
+        .map_err(|_| format!("Timed out waiting for submit selector '{}'", s))?
     } else {
-        wait_for_any_selector(
+        mark_usable_auth_element(
             &mgr.client,
             &session_id,
             &auto_submit_selectors,
+            &submit_tag,
             auth_timeout_ms,
         )
         .await
@@ -15486,6 +15523,59 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             )
         })?
     };
+
+    // Before submitting: the credentials must still sit in the fields chosen
+    // above. A page that swapped a field out after the fill, or moved focus to
+    // another input during it, gets nothing submitted (and the error never
+    // carries the values).
+    let check = format!(
+        r#"(() => {{
+            const user = document.querySelector({user});
+            const pass = document.querySelector({pass});
+            const mine = (el, tag) => el && el.isConnected && el[Symbol.for('cu-auth')] === tag;
+            if (!mine(user, {user_tag})) return 'the username field was replaced after it was filled';
+            if (!mine(pass, {pass_tag})) return 'the password field was replaced after it was filled';
+            if (user.value !== {username}) return 'the username field no longer holds the username';
+            if ((pass.value || '').length !== {pass_len}) return 'the password field no longer holds the password';
+            const a = document.activeElement;
+            if (a && a !== user && a !== pass && a !== document.body
+                && (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a.isContentEditable)) {{
+                return 'focus moved to another input while the credentials were entered';
+            }}
+            return '';
+        }})()"#,
+        user = serde_json::to_string(&user_sel).unwrap_or_default(),
+        pass = serde_json::to_string(&pass_sel).unwrap_or_default(),
+        username = serde_json::to_string(&username).unwrap_or_default(),
+        pass_len = password.chars().count(),
+        user_tag = serde_json::to_string(&user_tag).unwrap_or_default(),
+        pass_tag = serde_json::to_string(&pass_tag).unwrap_or_default(),
+    );
+    let verdict: super::cdp::types::EvaluateResult = mgr
+        .client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &super::cdp::types::EvaluateParams {
+                expression: check,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&session_id),
+        )
+        .await?;
+    if let Some(problem) = verdict
+        .result
+        .value
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .filter(|p| !p.is_empty())
+    {
+        return Err(format!(
+            "auth login stopped before submitting: {problem}. Nothing was submitted; check the \
+             page, then run auth login again."
+        ));
+    }
+
     interaction::click(
         &mgr.client,
         &session_id,
@@ -15524,6 +15614,20 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     if !navigated {
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     }
+
+    // Leave the page as found: drop this login's markers (if it is still there).
+    let cleanup = format!(
+        "(() => {{ for (const el of document.querySelectorAll('[data-cu-auth$=\"-{marker}\"]')) {{ \
+         el.removeAttribute('data-cu-auth'); delete el[Symbol.for('cu-auth')]; }} }})()"
+    );
+    let _ = mgr
+        .client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": cleanup })),
+            Some(&session_id),
+        )
+        .await;
 
     Ok(json!({ "loggedIn": true, "name": name }))
 }
