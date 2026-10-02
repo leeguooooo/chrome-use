@@ -2,5 +2,7 @@
 # dispatcher (`execute_command`, one large async state machine) sits close to
 # that: unrelated changes kept tipping a long e2e test into a stack overflow.
 # 8 MiB matches a main thread; release builds use a fraction of it.
+# At the repository root so it applies both to `cargo ... --manifest-path
+# cli/Cargo.toml` (CI) and to cargo run from cli/.
 [env]
 RUST_MIN_STACK = "8388608"

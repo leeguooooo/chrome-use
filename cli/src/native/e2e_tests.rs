@@ -1825,6 +1825,40 @@ async fn e2e_form_interaction() {
     assert_success(&resp);
 }
 
+/// An exact value wins over another option's label (review of #1736 port).
+#[tokio::test]
+#[ignore]
+async fn e2e_select_exact_value_beats_another_options_label() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>select</title>
+<select id="s"><option value="decoy" label="target">Other</option><option value="target" label="Desired">Desired</option></select>
+<select id="m" multiple><option value="decoy" label="target">Other</option><option value="target" label="Desired">Desired</option></select>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    for sel in ["#s", "#m"] {
+        let resp = select_values(&mut state, "1", sel, &["target"]).await;
+        assert_success(&resp);
+        assert_evaluate(
+            &mut state,
+            "2",
+            &format!("[...document.querySelector('{sel}').selectedOptions].map(o => o.value)"),
+            json!(["target"]),
+        )
+        .await;
+    }
+    // By label it is still reachable.
+    let resp = select_values(&mut state, "3", "#s", &["Desired"]).await;
+    assert_success(&resp);
+    assert_evaluate(&mut state, "4", "s.value", json!("target")).await;
+    let _ = Box::pin(execute_command(
+        &json!({ "id": "99", "action": "close" }),
+        &mut state,
+    ))
+    .await;
+    server.abort();
+}
+
 #[tokio::test]
 #[ignore]
 async fn e2e_select_option_label_override_names() {

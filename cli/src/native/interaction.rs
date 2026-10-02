@@ -2898,9 +2898,14 @@ pub async fn select_option(
                 const options = Array.from(el.options);
                 const matches = [];
                 for (const v of vals) {
-                    let found = options.filter(opt =>
-                        v === opt.value || v === opt.label.trim() || v === opt.textContent.trim()
-                    );
+                    // An exact value wins: the native setter selects by value,
+                    // and one option's label may equal another's value.
+                    let found = options.filter(opt => v === opt.value);
+                    if (found.length === 0) {
+                        found = options.filter(opt =>
+                            v === opt.label.trim() || v === opt.textContent.trim()
+                        );
+                    }
                     if (found.length === 0) {
                         const nv = norm(v);
                         // The label is what the option shows (it defaults to

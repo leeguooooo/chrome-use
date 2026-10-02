@@ -483,10 +483,33 @@ pub async fn run_dashboard_server(port: u16) {
     }
 }
 
+/// Peek until the request's header block is complete (`\r\n\r\n`), the
+/// buffer is full, or a short deadline passes. One `peek` returns whatever
+/// bytes have arrived, which may be just the request line; the Host and
+/// Origin checks need the whole header block. Nothing is consumed, so routing
+/// and the WebSocket handshake still see every byte.
+async fn peek_request_headers(stream: &tokio::net::TcpStream, buf: &mut [u8]) -> usize {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let n = match stream.peek(buf).await {
+            Ok(n) => n,
+            Err(_) => return 0,
+        };
+        if n == 0
+            || n == buf.len()
+            || buf[..n].windows(4).any(|w| w == b"\r\n\r\n")
+            || tokio::time::Instant::now() >= deadline
+        {
+            return n;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 async fn handle_dashboard_connection(mut stream: tokio::net::TcpStream) {
     let mut buf = vec![0u8; 8192];
-    let peeked_len = match stream.peek(&mut buf).await {
-        Ok(n) if n > 0 => n,
+    let peeked_len = match peek_request_headers(&stream, &mut buf).await {
+        n if n > 0 => n,
         _ => return,
     };
     let peeked_request = String::from_utf8_lossy(&buf[..peeked_len]);
@@ -924,6 +947,39 @@ mod tests {
     fn test_cross_origin_ws_request_rejected() {
         let req = "GET /api/session/9222/stream HTTP/1.1\r\nHost: localhost:4848\r\nOrigin: https://evil.com\r\nUpgrade: websocket\r\n\r\n";
         assert!(!is_same_origin_ws_request(req));
+    }
+
+    /// The Host header arriving in a second packet is still read (review of
+    /// the DNS-rebinding fix): the request is not refused as Host-less.
+    #[tokio::test]
+    async fn a_host_header_in_a_later_packet_is_still_seen() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_dashboard_connection(stream).await;
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client
+            .write_all(b"GET /api/sessions HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        client
+            .write_all(b"Host: localhost:4848\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_end(&mut response),
+        )
+        .await;
+        let head = String::from_utf8_lossy(&response);
+        assert!(!head.starts_with("HTTP/1.1 403"), "{head}");
+        server.abort();
     }
 
     #[test]

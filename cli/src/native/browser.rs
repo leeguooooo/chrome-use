@@ -2550,10 +2550,19 @@ impl BrowserManager {
         // when the document is already there. The probe is bounded: a frozen
         // relay tab may not answer, and then we wait for the event as before.
         // (After upstream vercel-labs/agent-browser #1554.)
+        // Navigation timing records when each event FINISHED: readyState
+        // turns 'interactive' before deferred scripts run and DOMContentLoaded
+        // fires, so it cannot stand in for the event. Without an entry
+        // (about:blank), 'complete' means both events are done.
         let already_reached = match wait_until {
-            WaitUntil::Load => Some("document.readyState === 'complete'"),
-            // readyState leaves 'loading' when DOMContentLoaded fires.
-            WaitUntil::DomContentLoaded => Some("document.readyState !== 'loading'"),
+            WaitUntil::Load => Some(
+                "(() => { const n = performance.getEntriesByType('navigation')[0]; \
+                 return n ? n.loadEventEnd > 0 : document.readyState === 'complete'; })()",
+            ),
+            WaitUntil::DomContentLoaded => Some(
+                "(() => { const n = performance.getEntriesByType('navigation')[0]; \
+                 return n ? n.domContentLoadedEventEnd > 0 : document.readyState === 'complete'; })()",
+            ),
             WaitUntil::NetworkIdle | WaitUntil::None => None,
         };
         if let Some(expression) = already_reached {
