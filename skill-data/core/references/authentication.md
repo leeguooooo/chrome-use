@@ -77,6 +77,41 @@ cookie, the sibling tool [`bitwarden-use`](https://github.com/leeguooooo/bitward
 (`bwu`) reads them out of a Bitwarden/Vaultwarden vault, so an agent can log in
 with credentials, not just OAuth.
 
+### One command: `auth login --bwu` (bwu 0.7.0+)
+
+On a login page, this logs in with the vault account for that site:
+
+```bash
+chrome-use open https://github.com/login
+chrome-use auth login --bwu                 # the only vault login for this site
+chrome-use auth login --bwu --item <id>     # one of several; the error lists them
+chrome-use auth login --bwu --no-submit     # fill only, press nothing
+```
+
+- **Picking the account.** It asks `bwu login --domain <page> --list`, which
+  sees masked entries only. One match is used. Several are listed most recently
+  used first, each with an `--item` to pass back. Use the first unless the user
+  asked for a particular account, and ask when that is unclear. It never picks
+  one by itself.
+- **Values never pass through you.** chrome-use runs itself again under
+  `bwu run`, which asks the user once (Touch ID, unless the item is in a
+  `reveal_folders` folder), logs the read, and hands the values to that child
+  process only. The response names which steps were filled, never the values.
+- **The page.** It fills the tab it is on (a tab this session opened or
+  adopted) and stops if the page moves to another origin. Default steps:
+  username, password, Enter. A password field that appears only after the
+  username was sent (one field per page) is waited for. A one-time-code field
+  that appears after submitting gets the item's TOTP.
+- **Unusual logins.** Give the vault item a custom field `_autotype` with steps
+  separated by `:`. Use `username`, `password`, `totp`, `tab`, `enter`,
+  `delay` (1 s), or another custom field's name, which is typed into the
+  focused field. Example: `username:enter:delay:password:enter`. It is the same
+  syntax as rofi-rbw's.
+- Result: `{"item", "filled": [...], "submitted", "otp": "filled" | "not asked" | "none", "url"}`.
+  Run `snapshot` afterwards to see whether the site accepted the login.
+
+### Single fields
+
 ```bash
 # install once
 curl -fsSL https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh

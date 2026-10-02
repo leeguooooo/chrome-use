@@ -1,4 +1,5 @@
 mod account;
+mod bwu_login;
 mod chat;
 mod choosebrowser;
 mod color;
@@ -3037,6 +3038,12 @@ fn main() {
     if cmd.get("action").and_then(|v| v.as_str()) == Some("script") {
         run_script(&flags, cmd.clone());
         return;
+    }
+
+    // `auth login --bwu` (outside `bwu run`): pick the vault account for the
+    // current page, then run this command again under `bwu run`.
+    if cmd.get("action").and_then(|v| v.as_str()) == Some("auth_login_bwu_probe") {
+        exit(bwu_login::run(&flags, &cmd));
     }
 
     let output_opts = OutputOptions::from_flags(&flags);

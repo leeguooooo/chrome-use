@@ -63,6 +63,28 @@ const AUTH_LOGIN_SELECTOR_POLL_INTERVAL_MS: u64 = 100;
 /// fallback selectors are allowed.
 const AUTH_LOGIN_PREFERRED_SELECTOR_WINDOW_MS: u64 = 5_000;
 
+/// Username field guesses, most specific first (shared by `auth login` and
+/// `auth login --bwu`).
+const AUTH_USER_SELECTORS: &[&str] = &[
+    "input[type=email]",
+    "input[name=email]",
+    "input[id=email]",
+    "input[autocomplete=email]",
+    "input[autocomplete=username]",
+    "input[name=username]",
+    "input[name*=email i]",
+    "input[name*=user i]",
+    "input[id*=email i]",
+    "input[id*=user i]",
+    "input[type=text][name*=email i]",
+    "input[type=text][name*=user i]",
+    "input[type=text][id*=email i]",
+    "input[type=text][id*=user i]",
+    "input[type=text][autocomplete=email]",
+    "input[type=text][autocomplete=username]",
+];
+const AUTH_USER_FALLBACK_SELECTORS: &[&str] = &["input[type=text]", "input:not([type])"];
+
 /// First ab-connect build that implements the browser-level `ABExt.inspectTab`
 /// relay command used by `tab inspect`.
 const TAB_INSPECT_MIN_EXTENSION_VERSION: &str = "0.5.16";
@@ -2145,6 +2167,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "emulatemedia" => handle_set_media(cmd, state).await,
             "auth_save" => handle_auth_save(cmd).await,
             "auth_login" => handle_auth_login(cmd, state).await,
+            "auth_login_bwu" => handle_auth_login_bwu(cmd, state).await,
             "auth_list" => handle_credentials_list().await,
             "auth_delete" => handle_credentials_delete(cmd).await,
             "auth_show" => handle_auth_show(cmd).await,
@@ -11174,22 +11197,40 @@ pub async fn execute_command_recovering(cmd: &Value, state: &mut DaemonState) ->
     // `fill --from-env`: the whole command, `--observe` included, runs with
     // every field treated as sensitive, and the response is scrubbed of the
     // value as a last line of defence.
-    let secret = cmd
-        .get("secret")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        .then(|| cmd.get("value").and_then(Value::as_str))
-        .flatten()
-        .filter(|v| !v.is_empty())
-        .map(str::to_string);
-    let Some(secret) = secret else {
+    // `auth login --bwu` carries several (username, password, code, custom
+    // fields) in `secrets`.
+    let secrets = command_secrets(cmd);
+    if secrets.is_empty() {
         return Box::pin(execute_command_recovering_inner(cmd, state)).await;
-    };
+    }
     let mut out = super::sensitive::SECRET_COMMAND
         .scope(true, Box::pin(execute_command_recovering_inner(cmd, state)))
         .await;
-    super::sensitive::scrub_value(&mut out, &secret);
+    for secret in &secrets {
+        super::sensitive::scrub_value(&mut out, secret);
+    }
     out
+}
+
+/// The values a `"secret": true` command must never echo: `value` (`fill
+/// --from-env`) and every entry of `secrets`.
+fn command_secrets(cmd: &Value) -> Vec<String> {
+    if !cmd.get("secret").and_then(Value::as_bool).unwrap_or(false) {
+        return Vec::new();
+    }
+    let listed = cmd
+        .get("secrets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    cmd.get("value")
+        .and_then(Value::as_str)
+        .into_iter()
+        .chain(listed)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) -> Value {
@@ -15977,25 +16018,8 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // checked, even when the page re-renders or holds hidden duplicates.
     let marker = uuid::Uuid::new_v4().simple().to_string();
 
-    let preferred_user_selectors = [
-        "input[type=email]",
-        "input[name=email]",
-        "input[id=email]",
-        "input[autocomplete=email]",
-        "input[autocomplete=username]",
-        "input[name=username]",
-        "input[name*=email i]",
-        "input[name*=user i]",
-        "input[id*=email i]",
-        "input[id*=user i]",
-        "input[type=text][name*=email i]",
-        "input[type=text][name*=user i]",
-        "input[type=text][id*=email i]",
-        "input[type=text][id*=user i]",
-        "input[type=text][autocomplete=email]",
-        "input[type=text][autocomplete=username]",
-    ];
-    let fallback_user_selectors = ["input[type=text]", "input:not([type])"];
+    let preferred_user_selectors = AUTH_USER_SELECTORS;
+    let fallback_user_selectors = AUTH_USER_FALLBACK_SELECTORS;
     let auto_submit_selectors = [
         "button[type=submit]",
         "input[type=submit]",
@@ -16285,6 +16309,303 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
 
     outcome?;
     Ok(json!({ "loggedIn": true, "name": name }))
+}
+
+/// Fields a one-time code goes into, most specific first.
+const AUTH_OTP_SELECTORS: &[&str] = &[
+    "input[autocomplete=one-time-code]",
+    "input[name*=otp i]",
+    "input[id*=otp i]",
+    "input[name*=totp i]",
+    "input[id*=totp i]",
+    "input[name*=mfa i]",
+    "input[name*=2fa i]",
+    "input[name*=code i]",
+    "input[id*=code i]",
+    "input[inputmode=numeric]",
+];
+
+/// How long a step waits for a field the page may not have rendered yet
+/// before the default flow decides it is on a two-page login.
+const AUTH_BWU_PROBE_MS: u64 = 1_500;
+
+/// How long after submitting the default flow waits for a one-time-code field.
+const AUTH_BWU_OTP_WAIT_MS: u64 = 10_000;
+
+/// `auth login --bwu`, the half that runs under `bwu run`: the values arrive
+/// in the command (read from the environment and dropped by the CLI), the
+/// tab is the one the CLI picked the account for, and nothing navigates.
+///
+/// `steps` is the item's `_autotype` (rofi-rbw syntax, parsed by bwu):
+/// `username`, `password`, `totp`, `custom:<name>` fill a field; `tab` and
+/// `enter` press that key; `delay` waits a second. Without it the default is
+/// username, password, Enter, with two extras: a password field that only
+/// appears after the username was sent (one field per page) is waited for,
+/// and a one-time-code field that appears after submitting gets the code.
+///
+/// Enter is pressed only after the filled fields were read back; this
+/// command is never repeated by the #373 recovery (not `safe_to_repeat`),
+/// so a login is never submitted twice.
+async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let text = |k: &str| {
+        cmd.get(k)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let username = text("username");
+    let password = text("password");
+    let otp = text("otp");
+    let item = text("item").unwrap_or_default();
+    let origin = text("origin").ok_or("auth login --bwu: missing origin")?;
+    let custom: HashMap<String, String> = cmd
+        .get("fields")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let explicit: Option<Vec<String>> = cmd.get("steps").and_then(Value::as_array).map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    });
+    let no_submit = cmd
+        .get("noSubmit")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let auto = explicit.is_none();
+    let steps = explicit.unwrap_or_else(|| {
+        let mut v = Vec::new();
+        if username.is_some() {
+            v.push("username".to_string());
+        }
+        if password.is_some() {
+            v.push("password".to_string());
+        }
+        v.push("enter".to_string());
+        v
+    });
+
+    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    if mgr.navigate_opens_own_tab() {
+        return Err(
+            "auth login --bwu: the active tab is not one this session opened or \
+                    adopted, so nothing was filled. Run `tab adopt` on it first."
+                .to_string(),
+        );
+    }
+    let current = mgr.get_url().await.unwrap_or_default();
+    let have = url::Url::parse(&current)
+        .ok()
+        .map(|u| u.origin())
+        .filter(|o| o.is_tuple())
+        .map(|o| o.ascii_serialization());
+    if have.as_deref() != Some(origin.as_str()) {
+        return Err(format!(
+            "auth login --bwu: the tab moved to {} after the account was chosen for {origin}. \
+             Nothing was filled; run it again on the login page.",
+            have.unwrap_or_else(|| "a page without an origin".to_string())
+        ));
+    }
+    let session_id = mgr.active_session_id()?.to_string();
+    let timeout_ms = mgr.default_timeout_ms();
+    let marker = uuid::Uuid::new_v4().simple().to_string();
+    let pin = Some(origin.as_str());
+    let user_selectors: Vec<&str> = AUTH_USER_SELECTORS
+        .iter()
+        .chain(AUTH_USER_FALLBACK_SELECTORS)
+        .copied()
+        .collect();
+
+    // (tag, expected UTF-16 length) of every field filled since the last Enter.
+    let mut pending: Vec<(String, usize)> = Vec::new();
+    let mut filled: Vec<String> = Vec::new();
+    let mut submitted = false;
+    let mut otp_state = if otp.is_some() { "not asked" } else { "none" };
+
+    let outcome: Result<(), String> = async {
+        for (i, step) in steps.iter().enumerate() {
+            let tag = format!("bwu{i}-{marker}");
+            let (value, selectors, strict): (Option<&String>, Vec<&str>, bool) = match step.as_str() {
+                "username" => (username.as_ref(), user_selectors.clone(), true),
+                "password" => (password.as_ref(), vec!["input[type=password]"], true),
+                "totp" => (otp.as_ref(), AUTH_OTP_SELECTORS.to_vec(), true),
+                "tab" => {
+                    interaction::press_key(&mgr.client, &session_id, "Tab").await?;
+                    continue;
+                }
+                "delay" => {
+                    tokio::time::sleep(Duration::from_millis(1_000)).await;
+                    continue;
+                }
+                "enter" => {
+                    if no_submit {
+                        break;
+                    }
+                    verify_auth_fields(&mgr.client, &session_id, &origin, &pending).await?;
+                    interaction::press_key(&mgr.client, &session_id, "Enter").await?;
+                    pending.clear();
+                    submitted = true;
+                    continue;
+                }
+                other => match other.strip_prefix("custom:") {
+                    // A custom field goes where the sequence put the focus.
+                    Some(name) => (custom.get(name), vec![":focus"], false),
+                    None => return Err(format!("auth login --bwu: unknown _autotype step '{other}'")),
+                },
+            };
+            let Some(value) = value else {
+                // The item has no such value: the default flow skips it, an
+                // explicit sequence is wrong for this item.
+                if auto {
+                    continue;
+                }
+                return Err(format!(
+                    "auth login --bwu: the item's _autotype uses '{step}', which the item does not have"
+                ));
+            };
+            let found = if auto && step == "username" {
+                // A page that remembers the account shows only the password.
+                mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, AUTH_BWU_PROBE_MS, strict, pin)
+                    .await
+                    .ok()
+            } else if auto && step == "password" && !pending.is_empty() {
+                // One field per page: send the username, then wait for the password page.
+                match mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, AUTH_BWU_PROBE_MS, strict, pin).await {
+                    Ok(sel) => Some(sel),
+                    Err(e) if e.starts_with("the page moved") => return Err(e),
+                    Err(_) => {
+                        if no_submit {
+                            break;
+                        }
+                        verify_auth_fields(&mgr.client, &session_id, &origin, &pending).await?;
+                        interaction::press_key(&mgr.client, &session_id, "Enter").await?;
+                        pending.clear();
+                        Some(
+                            mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, timeout_ms, strict, pin)
+                                .await
+                                .map_err(|e| format!("auth login --bwu: no password field appeared after sending the username ({e})"))?,
+                        )
+                    }
+                }
+            } else {
+                Some(
+                    mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, timeout_ms, strict, pin)
+                        .await
+                        .map_err(|e| format!("auth login --bwu: no field for '{step}' ({e})"))?,
+                )
+            };
+            let Some(sel) = found else { continue };
+            interaction::fill(&mgr.client, &session_id, &state.ref_map, &sel, value, &state.iframe_sessions).await?;
+            // Exact length for secrets; the username only has to be there
+            // (fields normalize what is typed).
+            let len = if step == "username" || step.starts_with("custom:") {
+                0
+            } else {
+                value.encode_utf16().count()
+            };
+            pending.push((tag, len));
+            filled.push(step.clone());
+            if step == "totp" {
+                otp_state = "filled";
+            }
+        }
+
+        // Default flow: a code field after the password page gets the code.
+        if auto && submitted && !no_submit && otp_state == "not asked" {
+            if let Some(code) = otp.as_ref() {
+                let tag = format!("bwuotp-{marker}");
+                if let Ok(sel) = mark_usable_auth_element(
+                    &mgr.client, &session_id, AUTH_OTP_SELECTORS, &tag, AUTH_BWU_OTP_WAIT_MS, true, pin,
+                )
+                .await
+                {
+                    interaction::fill(&mgr.client, &session_id, &state.ref_map, &sel, code, &state.iframe_sessions).await?;
+                    verify_auth_fields(&mgr.client, &session_id, &origin, &[(tag, code.encode_utf16().count())]).await?;
+                    interaction::press_key(&mgr.client, &session_id, "Enter").await?;
+                    filled.push("totp".to_string());
+                    otp_state = "filled";
+                }
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    let cleanup = format!(
+        "(() => {{ for (const el of document.querySelectorAll('[data-cu-auth$=\"-{marker}\"]')) {{ \
+         el.removeAttribute('data-cu-auth'); delete el[Symbol.for('cu-auth')]; }} }})()"
+    );
+    let _ = mgr
+        .client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": cleanup })),
+            Some(&session_id),
+        )
+        .await;
+
+    outcome?;
+    if filled.is_empty() {
+        return Err("auth login --bwu: found no login field on this page to fill".to_string());
+    }
+    if submitted {
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+    }
+    let url = mgr.get_url().await.unwrap_or_default();
+    Ok(json!({
+        "item": item,
+        "filled": filled,
+        "submitted": submitted,
+        "otp": otp_state,
+        "url": url,
+    }))
+}
+
+/// Before Enter: every field filled since the last Enter is still the element
+/// that was chosen and still holds the value (exact length when `len > 0`,
+/// otherwise just non-empty), and the page
+/// is still on `origin`. Never reports a value.
+async fn verify_auth_fields(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    origin: &str,
+    fields: &[(String, usize)],
+) -> Result<(), String> {
+    let check = format!(
+        r#"(() => {{
+            if (location.origin !== {origin}) return 'the page moved to ' + location.origin;
+            for (const [tag, len] of {fields}) {{
+                const el = document.querySelector('[data-cu-auth=' + JSON.stringify(tag) + ']');
+                if (!el || !el.isConnected || el[Symbol.for('cu-auth')] !== tag) return 'a filled field was replaced';
+                const n = (el.value || '').length;
+                if (len > 0 ? n !== len : n === 0) return 'a filled field no longer holds what was typed';
+            }}
+            return '';
+        }})()"#,
+        origin = serde_json::to_string(origin).unwrap_or_default(),
+        fields = serde_json::to_string(fields).unwrap_or_default(),
+    );
+    let verdict: super::cdp::types::EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &super::cdp::types::EvaluateParams {
+                expression: check,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+    match verdict.result.value.as_ref().and_then(Value::as_str) {
+        Some(problem) if !problem.is_empty() => Err(format!(
+            "auth login --bwu stopped before submitting: {problem}. Nothing was submitted."
+        )),
+        _ => Ok(()),
+    }
 }
 
 // ---------------------------------------------------------------------------
