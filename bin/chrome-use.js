@@ -61,6 +61,16 @@ function getBinaryName() {
       return null;
   }
 
+  // Prefer a source-built native ARM64 executable when present. Otherwise,
+  // use the published x64 binary through Windows' built-in emulation, as
+  // install.ps1 already does. (From upstream vercel-labs/agent-browser #1725.)
+  if (osKey === 'win32' && archKey === 'arm64') {
+    const nativeBinaryName = `chrome-use-${osKey}-${archKey}.exe`;
+    if (!existsSync(join(__dirname, nativeBinaryName))) {
+      archKey = 'x64';
+    }
+  }
+
   const ext = os === 'win32' ? '.exe' : '';
   return `chrome-use-${osKey}-${archKey}${ext}`;
 }
