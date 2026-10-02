@@ -1993,7 +1993,17 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "canvas_capture" => handle_canvas_capture(cmd, state).await,
             "click" => handle_click(cmd, state).await,
             "dblclick" => handle_dblclick(cmd, state).await,
-            "fill" => handle_fill(cmd, state).await,
+            "fill" => {
+                // A value from `--from-env` (a password manager's `run`) is a
+                // secret wherever it lands: whatever the field looks like, it
+                // never appears in a result or error (fill --from-env).
+                let secret = cmd.get("secret").and_then(Value::as_bool) == Some(true);
+                let out = handle_fill(cmd, state).await;
+                match (secret, cmd.get("value").and_then(Value::as_str)) {
+                    (true, Some(v)) if !v.is_empty() => scrub_secret(out, v),
+                    _ => out,
+                }
+            }
             "type" => handle_type(cmd, state).await,
             "press" => handle_press(cmd, state).await,
             "pick" => handle_pick(cmd, state).await,
@@ -6522,6 +6532,25 @@ async fn handle_dblclick(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     )
     .await?;
     Ok(json!({ "clicked": selector }))
+}
+
+/// Replace every occurrence of `secret` in a fill's result or error with its
+/// masked form.
+fn scrub_secret(out: Result<Value, String>, secret: &str) -> Result<Value, String> {
+    let mask = super::sensitive::masked(secret);
+    match out {
+        Ok(v) => {
+            let text = v.to_string();
+            if text.contains(secret) {
+                let escaped = serde_json::to_string(secret).unwrap_or_default();
+                let inner = escaped.trim_matches('"');
+                Ok(serde_json::from_str(&text.replace(inner, &mask)).unwrap_or(v))
+            } else {
+                Ok(v)
+            }
+        }
+        Err(e) => Err(e.replace(secret, &mask)),
+    }
 }
 
 async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -18815,5 +18844,23 @@ mod tests {
                 "`{action}` mutates the page but does not observe"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod scrub_secret_tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_never_survives_in_a_fill_result_or_error() {
+        let out = scrub_secret(
+            Err("fill verification failed: read back \"ab\" after writing \"hunter2\"".into()),
+            "hunter2",
+        );
+        let e = out.unwrap_err();
+        assert!(!e.contains("hunter2"), "{e}");
+        assert!(e.contains("<filled 7 chars>"), "{e}");
+        let ok = scrub_secret(Ok(json!({"note": "formatted as hunter2"})), "hunter2").unwrap();
+        assert!(!ok.to_string().contains("hunter2"), "{ok}");
     }
 }

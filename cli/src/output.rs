@@ -2243,6 +2243,11 @@ chrome-use fill - Clear and fill an input field
 Usage: chrome-use fill <selector> <text>
        chrome-use fill <selector> --file <path>
        chrome-use fill <selector> --stdin
+       chrome-use fill <selector> --from-env <VAR>
+
+--from-env reads the value from an environment variable a password manager set,
+and treats it as a secret: it never appears in the result or an error.
+  bwu run --env PW='github.com#password' -- chrome-use fill @e3 --from-env PW
 
 Clears the field and fills it with the text, replacing existing content.
 Works on rich editors too (issue #41): CodeMirror 5, Monaco, ProseMirror and

@@ -105,6 +105,7 @@ chrome-use click @e1 --new-tab # Click and open in new tab
 chrome-use dblclick @e1        # Double-click
 chrome-use focus @e1           # Focus element
 chrome-use fill @e2 "text"     # Clear and type
+chrome-use fill @e3 --from-env PW  # Value from an env var a password manager set (`bwu run --env PW=…`); never echoed
 chrome-use type @e2 "text"     # Type without clearing (add --clear to clear first, --delay <ms> for per-key delay)
 chrome-use select-text @e2 "confirm" --prefix "please "   # Select one run of text inside the field (prefix/suffix disambiguate; they are not selected)
 chrome-use select-text @e2 "Hi Sam," --cursor-after       # Place the caret instead of selecting, so the next `type` continues there

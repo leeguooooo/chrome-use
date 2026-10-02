@@ -697,7 +697,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "fill" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "fill".to_string(),
-                usage: "fill <selector> <text> | fill <selector> --file <path> | fill <selector> --stdin",
+                usage: "fill <selector> <text> | fill <selector> --file <path> | fill <selector> --stdin | fill <selector> --from-env <VAR>",
             })?;
             // Large/multiline content without shell-escaping hell (issue #41):
             // `fill <sel> --file <path>` reads the value from a UTF-8 file, and
@@ -724,6 +724,26 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                             usage: "fill <selector> --stdin",
                         })?;
                     buf
+                }
+                // A secret from a password manager's `run` (e.g. `bwu run --env
+                // PW='item#password' -- chrome-use fill @e3 --from-env PW`): the
+                // value goes from the vault to the field without ever being an
+                // argument, a shell variable expansion, or output.
+                Some("--from-env") => {
+                    let var = rest.get(2).ok_or(ParseError::InvalidValue {
+                        message: "fill --from-env requires a variable name".to_string(),
+                        usage: "fill <selector> --from-env <VAR>",
+                    })?;
+                    let value = std::env::var(var).map_err(|_| ParseError::InvalidValue {
+                        message: format!(
+                            "fill --from-env: {var} is not set. Run this under a password \
+                             manager that sets it, e.g. `bwu run --env {var}='<item>#password' \
+                             -- chrome-use fill {sel} --from-env {var}`"
+                        ),
+                        usage: "fill <selector> --from-env <VAR>",
+                    })?;
+                    return Ok(json!({ "id": id, "action": "fill", "selector": sel,
+                                       "value": value, "secret": true }));
                 }
                 _ => rest[1..].join(" "),
             };
@@ -9107,5 +9127,25 @@ mod tests {
         }
         let cmd = parse_command(&args("auth login github"), &default_flags()).unwrap();
         assert_eq!(cmd["noNavigate"], false);
+    }
+
+    #[test]
+    fn fill_from_env_reads_the_variable_and_marks_it_secret() {
+        let _guard = crate::test_utils::EnvGuard::new(&["CU_TEST_FILL_PW"]);
+        _guard.set("CU_TEST_FILL_PW", "s3cret value");
+        let cmd = parse_command(
+            &args("fill @e3 --from-env CU_TEST_FILL_PW"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["value"], "s3cret value");
+        assert_eq!(cmd["secret"], true);
+        std::env::remove_var("CU_TEST_FILL_PW");
+        let err = parse_command(
+            &args("fill @e3 --from-env CU_TEST_FILL_PW"),
+            &default_flags(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:?}").contains("is not set"));
     }
 }

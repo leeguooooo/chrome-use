@@ -81,12 +81,29 @@ with credentials, not just OAuth.
 # install once
 curl -fsSL https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh
 
-# password (and 2FA code) for an item, piped straight into a field
-bwu get github.com | chrome-use fill '#password' --stdin
+# username and password for an item, straight from the vault into the fields.
+# `bwu run` asks for confirmation (Touch ID) for items outside its reveal
+# folders, logs every read, and hands the values only to the child process:
+# they are never arguments, never printed, and never in the transcript.
+bwu run --env CU_USER='github.com#username' -- chrome-use fill @e2 --from-env CU_USER
+bwu run --env CU_PW='github.com#password' -- chrome-use fill @e3 --from-env CU_PW
+
+# a one-time code
+bwu run --env CU_OTP='github.com#totp' -- chrome-use fill @e4 --from-env CU_OTP
 
 # passkey private key for sites that take a FIDO2/WebAuthn passkey
 bwu fido2 get
 ```
+
+A value from `--from-env` is treated as a secret whatever the field looks like:
+results and errors show `<filled N chars>`, never the value. Prefer it over
+`bwu get … | chrome-use fill … --stdin`, which skips the confirmation step and
+leaves the value one stray `echo` away from the transcript.
+
+Bitwarden's own inline menu (the dropdown next to a focused login field) is an
+extension frame chrome-use cannot click; while it is open Chrome blocks the tab
+for debugger commands. chrome-use closes it and carries on by itself for a tab
+in front. Filling through `bwu run` does not need that menu at all.
 
 This pairs with the local auth vault (`chrome-use auth`) above: keep credentials
 in Bitwarden, pull them at login time, and never put a password in shell history.
