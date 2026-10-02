@@ -1,16 +1,16 @@
 # Publish ab-connect to the Chrome Web Store from CI, so a release never depends
-# on someone being at a logged-in Mac.
+# on someone uploading a zip by hand.
 #
-# Fires automatically when extensions/ab-connect.zip changes on main — i.e. when
-# a repacked package lands, which is exactly the "ship this" signal. A guard
-# skips the run when the store already serves that version, so a re-push of the
-# same zip does nothing (submitting a version already in review is an API error,
-# not a no-op). Also runnable by hand (workflow_dispatch), with a draft option.
+# Fires when extensions/ab-connect.zip changes on main: a repacked package is
+# the "ship this" signal. `--if-new` skips the run when the store already has
+# that version (published or in review), so re-pushing the same zip is a no-op.
+# Also runnable by hand, with a draft option.
 #
-# One-time: add three repository secrets (Settings → Secrets and variables →
-# Actions), the same values as .secrets/cws.env locally:
-#   CWS_CLIENT_ID  CWS_CLIENT_SECRET  CWS_REFRESH_TOKEN
-# See scripts/publish-extension.sh for how to obtain them.
+# A failed run opens (or comments on) an issue labelled `cws-publish`: an
+# expired credential silently held 0.5.27-0.5.29 back for weeks.
+#
+# Credentials: repository secrets CWS_SA_KEY (service-account JSON) and
+# CWS_PUBLISHER_ID. See extensions/store/PUBLISHING.md.
 name: Publish extension (Chrome Web Store)
 
 on:
@@ -24,83 +24,67 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: publish-extension
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # `secrets` is not allowed in a step-level `if:` (it invalidates the whole
-    # workflow), so lift the "are creds present" check to a job-level env the
-    # steps can read.
-    env:
-      HAS_CREDS: ${{ secrets.CWS_CLIENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Verify the packaged zip matches the manifest version
+      - name: Verify the packaged zip matches the manifest
         run: |
           python3 - <<'PY'
           import json, zipfile
           m = json.load(open("extensions/ab-connect/manifest.json"))["version"]
-          z = json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json"))["version"]
-          assert m == z, f"manifest {m} != zip {z}; run scripts/pack-extension.sh and commit the zip"
-          assert "key" not in json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json")), "zip must not contain manifest key"
-          print(f"ab-connect {z} ready to publish")
-          PY
-      # Idempotency: on an automatic push run, skip when the store already holds
-      # this version (a re-push of the same zip, a docs commit that happened to
-      # touch the file). A manual run always proceeds. Submitting a version that
-      # is already uploaded/in-review is an API error, not a no-op, so this guard
-      # is what keeps the automatic trigger safe to fire on any main push.
-      - name: Decide whether to publish
-        id: decide
-        if: env.HAS_CREDS == 'true'
-        env:
-          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
-          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
-          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
-          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          python3 - <<'PY'
-          import json, os, urllib.parse, urllib.request, zipfile
-          ITEM = "knfcmbamhjmaonkfnjhldjedeobeafmk"
-          zver = json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json"))["version"]
-          def decide(value):
-              # Only this line belongs in GITHUB_OUTPUT. Redirecting the whole
-              # script there made the ::notice:: line parse as an output
-              # assignment and failed the step ("Invalid format").
-              with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-                  fh.write(f"publish={value}\n")
-
-          if os.environ.get("MANUAL") == "true":
-              decide("true"); raise SystemExit
-          tok = json.load(urllib.request.urlopen(urllib.request.Request(
-              "https://oauth2.googleapis.com/token",
-              data=urllib.parse.urlencode({
-                  "client_id": os.environ["CWS_CLIENT_ID"],
-                  "client_secret": os.environ["CWS_CLIENT_SECRET"],
-                  "refresh_token": os.environ["CWS_REFRESH_TOKEN"],
-                  "grant_type": "refresh_token"}).encode())))["access_token"]
-          req = urllib.request.Request(
-              f"https://www.googleapis.com/chromewebstore/v1.1/items/{ITEM}?projection=DRAFT",
-              headers={"Authorization": f"Bearer {tok}", "x-goog-api-version": "2"})
-          cur = json.load(urllib.request.urlopen(req)).get("crxVersion")
-          print(f"::notice::store draft version {cur}, packaged {zver}")
-          decide("false" if cur == zver else "true")
+          z = json.loads(zipfile.ZipFile("extensions/ab-connect.zip").read("manifest.json"))
+          assert m == z["version"], f"manifest {m} != zip {z['version']}; run scripts/pack-extension.sh and commit the zip"
+          assert "key" not in z, "the upload zip must not contain the manifest key"
+          print(f"ab-connect {m} ready to publish")
           PY
       - name: Publish
-        if: steps.decide.outputs.publish == 'true'
         env:
+          CWS_SA_KEY: ${{ secrets.CWS_SA_KEY }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          # Fallback for the old OAuth credentials, if still present.
           CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
           CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
           CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          DRAFT: ${{ inputs.draft }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          if [ -z "$CWS_CLIENT_ID" ]; then
-            echo "::error::CWS_CLIENT_ID / CWS_CLIENT_SECRET / CWS_REFRESH_TOKEN secrets are not set." >&2
-            exit 1
-          fi
-          if [ "${{ inputs.draft }}" = "true" ]; then
-            sh scripts/publish-extension.sh --draft
+          args=""
+          [ "$DRAFT" = "true" ] && args="$args --draft"
+          # A manual run always uploads; an automatic one only for a new version.
+          [ "$MANUAL" = "true" ] || args="$args --if-new"
+          python3 scripts/cws.py publish $args 2>&1 | tee publish.log
+          python3 scripts/cws.py status 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Report a failed publish
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ver=$(python3 -c "import json;print(json.load(open('extensions/ab-connect/manifest.json'))['version'])")
+          body=$(printf 'Publishing ab-connect %s to the Chrome Web Store failed.\n\nRun: %s\n\n```\n%s\n```\n\nSetup and fixes: extensions/store/PUBLISHING.md' \
+            "$ver" "$RUN_URL" "$(tail -20 publish.log 2>/dev/null)")
+          gh label create cws-publish --color B60205 --description "Chrome Web Store publish failed" 2>/dev/null || true
+          open=$(gh issue list --label cws-publish --state open --json number --jq '.[0].number')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
           else
-            sh scripts/publish-extension.sh
+            gh issue create --title "Chrome Web Store publish failed (ab-connect $ver)" --label cws-publish --body "$body"
           fi
+      - name: Close a resolved failure issue
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for n in $(gh issue list --label cws-publish --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Published fine in ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+          done

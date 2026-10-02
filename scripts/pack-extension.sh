@@ -18,7 +18,7 @@
 #   1. bump "version" in extensions/ab-connect/manifest.json
 #   2. run this script
 #   3. commit extensions/ab-connect.zip (+ .crx) + manifest.json
-#   4. upload ab-connect.zip to the Web Store (see extensions/store/SUBMISSION.html)
+#   4. merge to main: CI publishes it to the Web Store (extensions/store/PUBLISHING.md)
 set -e
 cd "$(dirname "$0")/.."
 KEY=.secrets/ab-connect.pem

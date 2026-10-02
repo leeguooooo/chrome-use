@@ -1,8 +1,8 @@
 #!/bin/sh
-# One-time: exchange a Google OAuth consent for a Chrome Web Store refresh token.
-# Run this once after creating a "Desktop app" OAuth client (see
-# scripts/publish-extension.sh header). The refresh token it prints goes into
-# .secrets/cws.env as CWS_REFRESH_TOKEN and is reused for every future publish.
+# Fallback only: the service account in extensions/store/PUBLISHING.md is the
+# supported way to publish. This exchanges a Google OAuth consent for a Chrome
+# Web Store refresh token (CWS_REFRESH_TOKEN in .secrets/cws.env). If the OAuth
+# app is still in "Testing", Google expires that token after 7 days.
 #
 #   sh scripts/cws-get-refresh-token.sh <CLIENT_ID> <CLIENT_SECRET>
 #
