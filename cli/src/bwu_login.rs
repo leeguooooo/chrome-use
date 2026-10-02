@@ -309,7 +309,7 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
     }
 
     if !flags.json {
-        eprintln!("logging in to {host} as vault item '{name}' (bwu may ask for Touch ID)");
+        eprintln!("logging in to {host} as vault item '{name}' (bwu asks for Touch ID unless require_touch_id is off)");
     }
     let me =
         std::env::current_exe().map_err(|e| format!("couldn't find chrome-use itself: {e}"))?;

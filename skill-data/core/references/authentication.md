@@ -94,9 +94,11 @@ chrome-use auth login --bwu --no-submit     # fill only, press nothing
   asked for a particular account, and ask when that is unclear. It never picks
   one by itself.
 - **Values never pass through you.** chrome-use runs itself again under
-  `bwu run`, which asks the user once (Touch ID, unless the item is in a
-  `reveal_folders` folder), logs the read, and hands the values to that child
-  process only. The response names which steps were filled, never the values.
+  `bwu run`, which logs the read and hands the values to that child process
+  only. By default it asks the user once with Touch ID (not for items in a
+  `reveal_folders` folder); a user who set `bwu config set require_touch_id
+  false` has chosen unattended runs, and it does not ask at all. The response
+  names which steps were filled, never the values.
 - **The page.** It fills the tab it is on (a tab this session opened or
   adopted) and stops if the page moves to another origin. Default steps:
   username, password, Enter. A password field that appears only after the
@@ -119,9 +121,10 @@ chrome-use auth login --bwu --no-submit     # fill only, press nothing
 curl -fsSL https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh
 
 # username and password for an item, straight from the vault into the fields.
-# `bwu run` asks for confirmation (Touch ID) for items outside its reveal
-# folders, logs every read, and hands the values only to the child process:
-# they are never arguments, never printed, and never in the transcript.
+# `bwu run` logs every read and hands the values only to the child process:
+# they are never arguments, never printed, and never in the transcript. It
+# asks for Touch ID first unless the item is in a reveal folder or the user
+# turned confirmation off (`require_touch_id false`).
 bwu run --env CU_USER='github.com#username' -- chrome-use fill @e2 --from-env CU_USER
 bwu run --env CU_PW='github.com#password' -- chrome-use fill @e3 --from-env CU_PW
 
