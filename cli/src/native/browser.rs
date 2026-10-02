@@ -2539,7 +2539,44 @@ impl BrowserManager {
         wait_until: WaitUntil,
         session_id: &str,
     ) -> Result<(), String> {
+        // Subscribe before probing so a lifecycle event that fires between
+        // the probe and the wait cannot be missed.
         let mut rx = self.client.subscribe();
+
+        // `wait_for_lifecycle` waits for the NEXT lifecycle event: right
+        // mid-navigation, wrong for a standalone `wait --load` on a page that
+        // already finished loading (or navigated client-side, which fires no
+        // new load event), where it burned the whole timeout. Resolve at once
+        // when the document is already there. The probe is bounded: a frozen
+        // relay tab may not answer, and then we wait for the event as before.
+        // (After upstream vercel-labs/agent-browser #1554.)
+        let already_reached = match wait_until {
+            WaitUntil::Load => Some("document.readyState === 'complete'"),
+            // readyState leaves 'loading' when DOMContentLoaded fires.
+            WaitUntil::DomContentLoaded => Some("document.readyState !== 'loading'"),
+            WaitUntil::NetworkIdle | WaitUntil::None => None,
+        };
+        if let Some(expression) = already_reached {
+            let probe = tokio::time::timeout(
+                Duration::from_secs(2),
+                self.client.send_command_typed::<_, EvaluateResult>(
+                    "Runtime.evaluate",
+                    &EvaluateParams {
+                        expression: expression.to_string(),
+                        return_by_value: Some(true),
+                        await_promise: Some(false),
+                    },
+                    Some(session_id),
+                ),
+            )
+            .await;
+            if let Ok(Ok(result)) = probe {
+                if result.result.value.as_ref().and_then(|v| v.as_bool()) == Some(true) {
+                    return Ok(());
+                }
+            }
+        }
+
         self.wait_for_lifecycle(wait_until, session_id, &mut rx)
             .await
     }
