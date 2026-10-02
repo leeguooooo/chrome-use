@@ -37,3 +37,28 @@ export async function reviveDiscardedTab(api, tabId, { timeoutMs = 8000, stepMs 
     await new Promise((r) => setTimeout(r, stepMs))
   }
 }
+
+/** How many replacements to remember; the oldest go first. */
+export const MAX_REMEMBERED = 64
+
+/**
+ * Record that `added` replaced `removed`, in place. Chains are flattened (an
+ * entry that pointed at `removed` now points at `added`) and the map keeps at
+ * most `limit` entries, dropping the oldest. Pure apart from mutating `replaced`.
+ */
+export function recordReplacement(replaced, removed, added, limit = MAX_REMEMBERED) {
+  for (const [from, to] of replaced) if (to === removed) replaced.set(from, added)
+  replaced.delete(removed)
+  replaced.set(removed, added)
+  while (replaced.size > limit) replaced.delete(replaced.keys().next().value)
+}
+
+/** Forget the chain starting at `tabId` once a session has followed it. */
+export function forgetReplacement(replaced, tabId) {
+  for (let i = 0; i < MAX_HOPS; i++) {
+    const next = replaced.get(tabId)
+    if (next == null) return
+    replaced.delete(tabId)
+    tabId = next
+  }
+}

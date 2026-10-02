@@ -51,7 +51,12 @@ import {
 import { shouldCheckForUpdate, canApplyUpdateNow } from './update-check.js';
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
-import { followReplacement, reviveDiscardedTab } from './tab-replacement.js';
+import {
+  followReplacement,
+  forgetReplacement,
+  recordReplacement,
+  reviveDiscardedTab,
+} from './tab-replacement.js';
 
 const HOST_NAME = 'com.agent_browser.connect';
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
@@ -278,8 +283,31 @@ const ownedTabs = new Set();
 
 // removed tabId -> the tabId Chrome put in its place (a discard, a prerender
 // swap). Followed by recoverSessionTab so a `cb-tab-<old>` session finds its
-// tab again instead of reporting it gone.
+// tab again instead of reporting it gone. Only tabs the relay knows are
+// recorded, the map is bounded, and it is mirrored to storage.session so a
+// service-worker restart between the discard and the next command keeps it.
 const replacedTabs = new Map();
+let replacedLoaded = null;
+function loadReplacedTabs() {
+  replacedLoaded ??= chrome.storage.session
+    .get('ab_replaced_tabs')
+    .then((g) => {
+      for (const [from, to] of g.ab_replaced_tabs || []) {
+        if (!replacedTabs.has(from)) replacedTabs.set(from, to);
+      }
+    })
+    .catch(() => {});
+  return replacedLoaded;
+}
+function saveReplacedTabs() {
+  chrome.storage.session.set({ ab_replaced_tabs: [...replacedTabs] }).catch(() => {});
+}
+function relayKnowsTab(tabId) {
+  if (ownedTabs.has(tabId) || recentlyRemovedOwned.has(tabId) || tabs.has(tabId)) return true;
+  if (sessionTargets.has(`cb-tab-${tabId}`)) return true;
+  for (const t of sessionToTab.values()) if (t === tabId) return true;
+  return false;
+}
 // Owned tabs whose onRemoved fired in the last few seconds: onReplaced may
 // arrive after it, and must still carry the ownership over.
 const recentlyRemovedOwned = new Set();
@@ -738,6 +766,7 @@ async function recoverSessionTab(sessionId) {
   //    swap): it lives on under a new id. A discarded tab is reloaded in the
   //    background first (never activated), then attached and aliased.
   if (tabId != null) {
+    await loadReplacedTabs();
     const replacement = followReplacement(replacedTabs, tabId);
     if (replacement !== tabId) {
       let tab = await chrome.tabs.get(replacement).catch(() => null);
@@ -750,6 +779,8 @@ async function recoverSessionTab(sessionId) {
           await attachTab(replacement);
           if (tabs.has(replacement)) {
             sessionToTab.set(sessionId, replacement); // alias dead session -> live tab
+            forgetReplacement(replacedTabs, tabId);
+            saveReplacedTabs();
             return replacement;
           }
         } catch (e) {
@@ -1751,8 +1782,12 @@ chrome.tabs.onUpdated.addListener(
 chrome.tabs.onReplaced.addListener(
   (addedTabId, removedTabId) =>
     void whenReady(async () => {
-      replacedTabs.set(removedTabId, addedTabId);
       await loadOwnedTabs();
+      if (relayKnowsTab(removedTabId)) {
+        await loadReplacedTabs();
+        recordReplacement(replacedTabs, removedTabId, addedTabId);
+        saveReplacedTabs();
+      }
       // Ownership follows the tab, so the session may still drive (and close)
       // it under its new id.
       if (ownedTabs.has(removedTabId) || recentlyRemovedOwned.has(removedTabId)) {
