@@ -662,7 +662,7 @@ mod malformed_reply_tests {
                         .unwrap();
                     // `message` must be a string: this cannot be parsed.
                     let reply = format!(r#"{{"id":{id},"error":{{"message":42}}}}"#);
-                    ws.send(Message::Text(reply.into())).await.unwrap();
+                    ws.send(Message::Text(reply)).await.unwrap();
                 }
             }
         });
