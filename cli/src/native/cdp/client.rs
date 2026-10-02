@@ -548,6 +548,8 @@ mod tests {
         );
     }
 
+    // tungstenite's handshake callback signature returns its own large Err.
+    #[allow(clippy::result_large_err)]
     #[tokio::test]
     async fn root_websocket_url_with_query_sends_slash_request_target() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
