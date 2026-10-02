@@ -16077,7 +16077,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             match mark_usable_auth_element(
                 &mgr.client,
                 &session_id,
-                &preferred_user_selectors,
+                preferred_user_selectors,
                 &user_tag,
                 preferred_window_ms,
                 true,
@@ -16101,7 +16101,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
                     mark_usable_auth_element(
                         &mgr.client,
                         &session_id,
-                        &fallback_user_selectors,
+                        fallback_user_selectors,
                         &user_tag,
                         fallback_window_ms,
                         true,
