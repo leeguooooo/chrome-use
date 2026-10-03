@@ -16701,17 +16701,24 @@ async fn type_code_once(
             Err(e) => return Err(e),
         };
         let now = eval("location.href".to_string()).await.unwrap_or(None);
-        match state {
+        let empty_now = match state {
             Some(Value::String(_)) => return Ok(true),
             _ if now.is_some() && now != before => return Ok(true),
-            Some(Value::Number(n)) if n.as_u64() == Some(0) => return Ok(true),
+            // Empty: the site cleared it on submit, or the insert never
+            // took. Not proof either way; keep watching for the page to move,
+            // and let check_code_accepted judge a page that stays.
+            Some(Value::Number(n)) if n.as_u64() == Some(0) => true,
             Some(Value::Number(n)) if n.as_u64() != Some(want as u64) => {
                 return Err("auth login --bwu: the code field did not take the code (it holds something else). Nothing was submitted.".to_string())
             }
-            _ => {}
-        }
+            _ => false,
+        };
         if tokio::time::Instant::now() >= deadline {
-            return Ok(false);
+            // A field still empty after the insert was submitted (or never got
+            // the code): no Enter either way; check_code_accepted reports a
+            // page that still asks for a code. A field holding the code gets
+            // the caller's Enter.
+            return Ok(empty_now);
         }
     }
 }
@@ -16753,7 +16760,7 @@ async fn check_code_accepted(
     match r {
         Ok(r) => match r.result.value {
             Some(Value::String(alert)) => Err(format!(
-                "auth login --bwu: the site did not accept the one-time code{}. Run `auth login --bwu`                  again on this page for a fresh code.",
+                "auth login --bwu: the site did not accept the one-time code{}. Run `auth login --bwu` again on this page for a fresh code.",
                 if alert.is_empty() { String::new() } else { format!(" (\"{alert}\")") }
             )),
             _ => Ok(()),
