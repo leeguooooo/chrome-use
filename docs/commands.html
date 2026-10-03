@@ -353,7 +353,7 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use cookies                     <span class="du-cmt"># 获取所有 Cookie</span>
 <span class="du-prompt">$</span> chrome-use cookies set name value      <span class="du-cmt"># 设置 Cookie</span>
-<span class="du-prompt">$</span> chrome-use cookies clear               <span class="du-cmt"># 清空 Cookie</span>
+<span class="du-prompt">$</span> chrome-use cookies clear --domain example.com  <span class="du-cmt"># 只清这个站点的 Cookie；--all --yes 清空整个浏览器</span>
 <span class="du-prompt">$</span> chrome-use storage local               <span class="du-cmt"># 全部 localStorage</span>
 <span class="du-prompt">$</span> chrome-use storage local key           <span class="du-cmt"># 指定键</span>
 <span class="du-prompt">$</span> chrome-use storage local set k v       <span class="du-cmt"># 设置值</span>

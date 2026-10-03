@@ -284,7 +284,7 @@
         <li><strong>别把 state 文件提交进仓库</strong> —— 里面是明文会话令牌，加进 <code>.gitignore</code>，不用了就删。</li>
         <li><strong>凭证走环境变量或保险库</strong> —— 用 <code>auth save</code> / <code>bwu</code> / <code>--stdin</code> / 环境变量，而不是把密码写死在命令里。</li>
         <li><strong>加密静态存储</strong> —— 设置 <code>AGENT_BROWSER_ENCRYPTION_KEY</code> 让存下来的会话状态加密。</li>
-        <li><strong>用完清理</strong> —— <code>chrome-use cookies clear</code> 加删掉临时 state 文件；CI 里干脆不落盘、跑完 <code>close</code>。</li>
+        <li><strong>用完清理</strong> —— <code>chrome-use cookies clear --domain &lt;站点&gt;</code> 加删掉临时 state 文件；CI 里干脆不落盘、跑完 <code>close</code>。</li>
       </ul>
 
       <div class="du-callout warn">

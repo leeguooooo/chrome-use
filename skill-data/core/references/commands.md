@@ -263,7 +263,8 @@ chrome-use set media light reduced-motion  # Light mode + reduced motion
 ```bash
 chrome-use cookies                     # Get all cookies
 chrome-use cookies set name value      # Set cookie
-chrome-use cookies clear               # Clear cookies
+chrome-use cookies clear --domain <d>   # Clear one site's cookies (--url <u>, --name <n>)
+chrome-use cookies clear --all --yes    # Clear EVERY cookie in the browser (signs a real profile out everywhere)
 chrome-use storage local               # Get all localStorage
 chrome-use storage local key           # Get specific key
 chrome-use storage local set k v       # Set value

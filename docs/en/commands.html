@@ -366,7 +366,7 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use cookies                     <span class="du-cmt"># get all cookies</span>
 <span class="du-prompt">$</span> chrome-use cookies set name value      <span class="du-cmt"># set a cookie</span>
-<span class="du-prompt">$</span> chrome-use cookies clear               <span class="du-cmt"># clear cookies</span>
+<span class="du-prompt">$</span> chrome-use cookies clear --domain example.com  <span class="du-cmt"># clear one site's cookies; --all --yes clears the whole browser</span>
 <span class="du-prompt">$</span> chrome-use storage local               <span class="du-cmt"># all of localStorage</span>
 <span class="du-prompt">$</span> chrome-use storage local key           <span class="du-cmt"># a specific key</span>
 <span class="du-prompt">$</span> chrome-use storage local set k v       <span class="du-cmt"># set a value</span>

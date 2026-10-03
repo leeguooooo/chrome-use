@@ -2562,8 +2562,22 @@ async fn e2e_cookies() {
         .any(|c| c["name"] == "test_cookie" && c["value"] == "hello123");
     assert!(found, "Should find the set cookie");
 
-    // Clear cookies
+    // A bare clear (what an older CLI sends) removes nothing: clearing the
+    // whole browser needs `all` and `yes`.
     let resp = execute_command(&json!({ "id": "5", "action": "cookies_clear" }), &mut state).await;
+    assert_eq!(resp["success"], false, "{resp}");
+    let resp = execute_command(&json!({ "id": "6", "action": "cookies_get" }), &mut state).await;
+    assert!(get_data(&resp)["cookies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["name"] == "test_cookie"));
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "cookies_clear", "all": true, "yes": true }),
+        &mut state,
+    )
+    .await;
     assert_success(&resp);
 
     // Verify cleared
@@ -2575,6 +2589,55 @@ async fn e2e_cookies() {
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
+}
+
+/// `cookies clear --domain` removes that site's cookies and nothing else: it
+/// used to ignore the flag and wipe every cookie in the browser.
+#[tokio::test]
+#[ignore]
+async fn e2e_cookies_clear_domain_leaves_other_sites_alone() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let set = |id: &str, name: &str, url: &str| {
+        json!({ "id": id, "action": "cookies_set",
+                "cookies": [{ "name": name, "value": "v", "url": url }] })
+    };
+    for (id, name, url) in [
+        ("2", "keep_parent", "https://example.org/"),
+        ("3", "drop_me", "https://app.example.org/"),
+        ("4", "keep_other", "https://example.net/"),
+    ] {
+        assert_success(&execute_command(&set(id, name, url), &mut state).await);
+    }
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "cookies_clear", "domain": "app.example.org" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["count"], 1, "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "cookies_get", "urls": [
+            "https://example.org/", "https://app.example.org/", "https://example.net/"
+        ] }),
+        &mut state,
+    )
+    .await;
+    let names: Vec<String> = get_data(&resp)["cookies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["name"].as_str().map(String::from))
+        .collect();
+    assert!(!names.contains(&"drop_me".to_string()), "{names:?}");
+    assert!(names.contains(&"keep_parent".to_string()), "{names:?}");
+    assert!(names.contains(&"keep_other".to_string()), "{names:?}");
+    let _ = execute_command(&json!({ "id": "9", "action": "close" }), &mut state).await;
 }
 
 // wait --load on a page that already finished loading must resolve

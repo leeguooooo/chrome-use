@@ -297,7 +297,7 @@
         <li><strong>Don't commit state files to a repo</strong> — they hold plaintext session tokens; add them to <code>.gitignore</code> and delete them when you're done.</li>
         <li><strong>Route credentials through env vars or a vault</strong> — use <code>auth save</code> / <code>bwu</code> / <code>--stdin</code> / environment variables instead of hardcoding the password in a command.</li>
         <li><strong>Encrypt at rest</strong> — set <code>AGENT_BROWSER_ENCRYPTION_KEY</code> so saved session state is encrypted.</li>
-        <li><strong>Clean up when done</strong> — <code>chrome-use cookies clear</code> plus deleting the temporary state file; in CI, don't persist to disk at all and run <code>close</code> when the job finishes.</li>
+        <li><strong>Clean up when done</strong> — <code>chrome-use cookies clear --domain &lt;site&gt;</code> plus deleting the temporary state file; in CI, don't persist to disk at all and run <code>close</code> when the job finishes.</li>
       </ul>
 
       <div class="du-callout warn">

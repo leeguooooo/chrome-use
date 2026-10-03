@@ -2611,17 +2611,81 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                                     });
                                 }
                             }
-                            _ => {
-                                // Unknown flag, skip it (or could error)
-                                i += 1;
+                            other => {
+                                return Err(ParseError::InvalidValue {
+                                    message: format!("cookies set: unknown argument `{other}`"),
+                                    usage: "cookies set <name> <value> [--url <url>] [--domain <d>] [--path <p>] [--httpOnly] [--secure] [--sameSite <Strict|Lax|None>] [--expires <ts>]",
+                                })
                             }
                         }
                     }
 
                     Ok(json!({ "id": id, "action": "cookies_set", "cookies": [cookie] }))
                 }
-                "clear" => Ok(json!({ "id": id, "action": "cookies_clear" })),
-                _ => Ok(json!({ "id": id, "action": "cookies_get" })),
+                // `clear` used to ignore everything after it and wipe every
+                // cookie in the browser: `cookies clear --domain x` on a real
+                // profile signed the user out of every site. It now takes a
+                // scope, and clearing everything has to be spelled out.
+                "clear" => {
+                    let usage = "cookies clear --domain <domain> | --url <url> [--name <cookie>] | --all --yes";
+                    let mut cmd = json!({ "id": id, "action": "cookies_clear" });
+                    let mut i = 1;
+                    while i < rest.len() {
+                        match rest[i] {
+                            flag @ ("--domain" | "--url" | "--name") => {
+                                let v = rest.get(i + 1).filter(|v| !v.starts_with("--")).ok_or(
+                                    ParseError::InvalidValue {
+                                        message: format!("cookies clear {flag} needs a value"),
+                                        usage,
+                                    },
+                                )?;
+                                cmd[&flag[2..]] = json!(v);
+                                i += 2;
+                            }
+                            "--all" => {
+                                cmd["all"] = json!(true);
+                                i += 1;
+                            }
+                            "--yes" | "-y" => {
+                                cmd["yes"] = json!(true);
+                                i += 1;
+                            }
+                            other => {
+                                return Err(ParseError::InvalidValue {
+                                    message: format!("cookies clear: unknown argument `{other}`"),
+                                    usage,
+                                })
+                            }
+                        }
+                    }
+                    let scoped = cmd.get("domain").is_some() || cmd.get("url").is_some();
+                    if scoped && cmd.get("all").is_some() {
+                        return Err(ParseError::InvalidValue {
+                            message: "cookies clear: --all cannot be combined with --domain/--url"
+                                .to_string(),
+                            usage,
+                        });
+                    }
+                    if !scoped && cmd.get("all").is_none() {
+                        return Err(ParseError::InvalidValue {
+                            message:
+                                "cookies clear needs a scope: --domain <domain> or --url <url> \
+                                      clears one site; --all --yes clears every cookie in the \
+                                      browser (on a real profile that signs you out everywhere)"
+                                    .to_string(),
+                            usage,
+                        });
+                    }
+                    Ok(cmd)
+                }
+                "get" | "list" => Ok(json!({ "id": id, "action": "cookies_get" })),
+                other if other.starts_with("--") => {
+                    Ok(json!({ "id": id, "action": "cookies_get" }))
+                }
+                other => Err(ParseError::UnknownSubcommand {
+                    subcommand: other.to_string(),
+                    valid_options: &["get", "set", "clear", "transfer"],
+                }),
             }
         }
 
@@ -5460,8 +5524,26 @@ mod tests {
 
     #[test]
     fn test_cookies_clear() {
-        let cmd = parse_command(&args("cookies clear"), &default_flags()).unwrap();
+        // No scope is refused, never a silent full wipe.
+        assert!(parse_command(&args("cookies clear"), &default_flags()).is_err());
+        let cmd = parse_command(
+            &args("cookies clear --domain platform.openai.com"),
+            &default_flags(),
+        )
+        .unwrap();
         assert_eq!(cmd["action"], "cookies_clear");
+        assert_eq!(cmd["domain"], "platform.openai.com");
+        let cmd = parse_command(&args("cookies clear --all --yes"), &default_flags()).unwrap();
+        assert_eq!(cmd["all"], true);
+        assert_eq!(cmd["yes"], true);
+        assert!(parse_command(&args("cookies clear --domian x.com"), &default_flags()).is_err());
+        assert!(parse_command(
+            &args("cookies clear --all --domain x.com"),
+            &default_flags()
+        )
+        .is_err());
+        assert!(parse_command(&args("cookies delete"), &default_flags()).is_err());
+        assert!(parse_command(&args("cookies set a b --bogus"), &default_flags()).is_err());
     }
 
     #[test]

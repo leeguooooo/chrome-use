@@ -369,7 +369,7 @@ fi
 
 3. **Clean up after automation**
    ```bash
-   chrome-use cookies clear
+   chrome-use cookies clear --domain <site>   # only that site; --all --yes clears the whole browser
    rm -f ./auth-state.json
    ```
 
