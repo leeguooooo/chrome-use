@@ -1457,7 +1457,6 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         if let Some(cleared) = data.get("cleared").and_then(|v| v.as_bool()) {
             if cleared {
                 let label = match action {
-                    Some("cookies_clear") => "Cookies cleared",
                     Some("console") => "Console log cleared",
                     _ => "Request log cleared",
                 };
@@ -3587,7 +3586,7 @@ Operations:
   get                                Get all cookies (default)
   set <name> <value> [options]       Set a cookie with optional properties
   clear --domain <domain>            Clear one site's cookies (and its subdomains')
-  clear --url <url>                  Clear the cookies that would be sent to <url>
+  clear --url <url>                  Same, for the host of <url> (never parent domains)
         [--name <cookie>]            ...only the cookie with this name
   clear --all --yes                  Clear EVERY cookie in the browser (on a real
                                      profile this signs you out of every site)
@@ -3627,8 +3626,11 @@ Examples:
   # Get all cookies
   chrome-use cookies
 
-  # Clear all cookies
-  chrome-use cookies clear
+  # Clear one site's cookies (the site and its subdomains, not parent domains)
+  chrome-use cookies clear --domain example.com
+
+  # Clear EVERY cookie in the browser (on a real profile: signed out everywhere)
+  chrome-use cookies clear --all --yes
 "##
         }
 

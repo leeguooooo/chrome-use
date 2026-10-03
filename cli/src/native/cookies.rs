@@ -22,6 +22,10 @@ pub struct Cookie {
     pub session: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub same_site: Option<String>,
+    /// A partitioned (CHIPS) cookie's key, passed back as-is to delete it:
+    /// without it Network.deleteCookies leaves the cookie in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_key: Option<Value>,
 }
 
 pub async fn get_all_cookies(client: &CdpClient, session_id: &str) -> Result<Vec<Cookie>, String> {
@@ -96,6 +100,29 @@ pub async fn set_cookies(
 /// itself or one of its subdomains, never a parent. `--domain
 /// platform.openai.com` must not touch `.openai.com`, which every other
 /// openai.com site also uses.
+/// The bare host in a `--domain`/`--url` value: `https://platform.openai.com/x`,
+/// `platform.openai.com:443` and `.platform.openai.com` all give
+/// `platform.openai.com`. `None` when nothing host-like is left.
+pub fn normalize_domain(input: &str) -> Option<String> {
+    let s = input.trim();
+    let host = match url::Url::parse(s) {
+        Ok(u) if u.has_host() => u.host_str()?.to_string(),
+        _ => {
+            let s = s.split('/').next().unwrap_or("");
+            let s = match s.rsplit_once(':') {
+                Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+                _ => s,
+            };
+            s.to_string()
+        }
+    };
+    let host = host
+        .trim_start_matches('.')
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    (!host.is_empty() && !host.contains(char::is_whitespace)).then_some(host)
+}
+
 pub fn domain_matches(cookie_domain: &str, domain: &str) -> bool {
     let c = cookie_domain.trim_start_matches('.').to_ascii_lowercase();
     let d = domain.trim_start_matches('.').to_ascii_lowercase();
@@ -129,12 +156,12 @@ pub fn site_sample(sites: &[String]) -> String {
 
 /// Delete one cookie exactly (name, domain and path).
 pub async fn delete_cookie(client: &CdpClient, session_id: &str, c: &Cookie) -> Result<(), String> {
+    let mut params = json!({ "name": c.name, "domain": c.domain, "path": c.path });
+    if let Some(key) = &c.partition_key {
+        params["partitionKey"] = key.clone();
+    }
     client
-        .send_command(
-            "Network.deleteCookies",
-            Some(json!({ "name": c.name, "domain": c.domain, "path": c.path })),
-            Some(session_id),
-        )
+        .send_command("Network.deleteCookies", Some(params), Some(session_id))
         .await?;
     Ok(())
 }
@@ -163,5 +190,26 @@ mod scope_tests {
         assert!(!domain_matches(".openai.com", "platform.openai.com"));
         assert!(!domain_matches("notopenai.com", "openai.com"));
         assert!(!domain_matches("github.com", ""));
+    }
+
+    #[test]
+    fn a_domain_given_as_a_url_or_with_a_port_is_normalized() {
+        for input in [
+            "platform.openai.com",
+            "https://platform.openai.com/settings",
+            "platform.openai.com:443",
+            ".Platform.OpenAI.com",
+        ] {
+            assert_eq!(
+                normalize_domain(input).as_deref(),
+                Some("platform.openai.com"),
+                "{input}"
+            );
+        }
+        assert_eq!(
+            normalize_domain("localhost:3000").as_deref(),
+            Some("localhost")
+        );
+        assert_eq!(normalize_domain("  ").as_deref(), None);
     }
 }

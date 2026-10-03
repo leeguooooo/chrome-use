@@ -2607,8 +2607,19 @@ async fn e2e_cookies_clear_domain_leaves_other_sites_alone() {
         json!({ "id": id, "action": "cookies_set",
                 "cookies": [{ "name": name, "value": "v", "url": url }] })
     };
+    // keep_parent is a domain cookie on .example.org: Chrome sends it to
+    // app.example.org too, which is what a parent-domain wipe would hit.
+    assert_success(
+        &execute_command(
+            &json!({ "id": "2", "action": "cookies_set", "cookies": [{
+                "name": "keep_parent", "value": "v", "domain": ".example.org", "path": "/",
+                "secure": true
+            }] }),
+            &mut state,
+        )
+        .await,
+    );
     for (id, name, url) in [
-        ("2", "keep_parent", "https://example.org/"),
         ("3", "drop_me", "https://app.example.org/"),
         ("4", "keep_other", "https://example.net/"),
     ] {
@@ -2637,6 +2648,36 @@ async fn e2e_cookies_clear_domain_leaves_other_sites_alone() {
     assert!(!names.contains(&"drop_me".to_string()), "{names:?}");
     assert!(names.contains(&"keep_parent".to_string()), "{names:?}");
     assert!(names.contains(&"keep_other".to_string()), "{names:?}");
+
+    // --url follows the same rule: the URL's host and below, never a parent.
+    assert_success(
+        &execute_command(
+            &set("7", "drop_too", "https://app.example.org/"),
+            &mut state,
+        )
+        .await,
+    );
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "cookies_clear", "url": "https://app.example.org/settings" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["count"], 1, "{resp}");
+    let names_at = |resp: &Value| -> Vec<String> {
+        get_data(resp)["cookies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c["name"].as_str().map(String::from))
+            .collect()
+    };
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "cookies_get", "urls": ["https://app.example.org/"] }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(names_at(&resp), vec!["keep_parent".to_string()], "{resp}");
     let _ = execute_command(&json!({ "id": "9", "action": "close" }), &mut state).await;
 }
 
