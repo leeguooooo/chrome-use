@@ -2633,6 +2633,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     while i < rest.len() {
                         match rest[i] {
                             flag @ ("--domain" | "--url" | "--name") => {
+                                if cmd.get(&flag[2..]).is_some() {
+                                    return Err(ParseError::InvalidValue {
+                                        message: format!("cookies clear: {flag} given twice"),
+                                        usage,
+                                    });
+                                }
                                 let v = rest.get(i + 1).filter(|v| !v.starts_with("--")).ok_or(
                                     ParseError::InvalidValue {
                                         message: format!("cookies clear {flag} needs a value"),
@@ -2659,6 +2665,20 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         }
                     }
                     let scoped = cmd.get("domain").is_some() || cmd.get("url").is_some();
+                    if cmd.get("domain").is_some() && cmd.get("url").is_some() {
+                        return Err(ParseError::InvalidValue {
+                            message: "cookies clear: give --domain or --url, not both".to_string(),
+                            usage,
+                        });
+                    }
+                    if cmd.get("name").is_some() && !scoped {
+                        return Err(ParseError::InvalidValue {
+                            message: "cookies clear --name needs --domain or --url (with --all it \
+                                      would be ignored and every cookie deleted)"
+                                .to_string(),
+                            usage,
+                        });
+                    }
                     if scoped && cmd.get("all").is_some() {
                         return Err(ParseError::InvalidValue {
                             message: "cookies clear: --all cannot be combined with --domain/--url"
@@ -2678,9 +2698,42 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
-                "get" | "list" => Ok(json!({ "id": id, "action": "cookies_get" })),
-                other if other.starts_with("--") => {
-                    Ok(json!({ "id": id, "action": "cookies_get" }))
+                // `cookies get [--url <url>]...`; anything else is an error
+                // rather than silently returning the current page's cookies.
+                "get" | "list" | "--url" => {
+                    let args = if *op == "--url" {
+                        &rest[..]
+                    } else {
+                        rest.get(1..).unwrap_or(&[])
+                    };
+                    let usage = "cookies get [--url <url>]...";
+                    let mut urls = Vec::new();
+                    let mut i = 0;
+                    while i < args.len() {
+                        match args[i] {
+                            "--url" => {
+                                let v = args.get(i + 1).filter(|v| !v.starts_with("--")).ok_or(
+                                    ParseError::InvalidValue {
+                                        message: "cookies get --url needs a value".to_string(),
+                                        usage,
+                                    },
+                                )?;
+                                urls.push(v.to_string());
+                                i += 2;
+                            }
+                            other => {
+                                return Err(ParseError::InvalidValue {
+                                    message: format!("cookies get: unknown argument `{other}`"),
+                                    usage,
+                                })
+                            }
+                        }
+                    }
+                    let mut cmd = json!({ "id": id, "action": "cookies_get" });
+                    if !urls.is_empty() {
+                        cmd["urls"] = json!(urls);
+                    }
+                    Ok(cmd)
                 }
                 other => Err(ParseError::UnknownSubcommand {
                     subcommand: other.to_string(),
@@ -5544,6 +5597,27 @@ mod tests {
         .is_err());
         assert!(parse_command(&args("cookies delete"), &default_flags()).is_err());
         assert!(parse_command(&args("cookies set a b --bogus"), &default_flags()).is_err());
+        // --name never rides along with a full clear.
+        assert!(parse_command(
+            &args("cookies clear --all --yes --name sid"),
+            &default_flags()
+        )
+        .is_err());
+        assert!(parse_command(&args("cookies clear --name sid"), &default_flags()).is_err());
+        assert!(parse_command(
+            &args("cookies clear --domain a.com --domain b.com"),
+            &default_flags()
+        )
+        .is_err());
+        assert!(parse_command(
+            &args("cookies clear --domain a.com --url https://b.com"),
+            &default_flags()
+        )
+        .is_err());
+        let cmd =
+            parse_command(&args("cookies get --url https://a.com"), &default_flags()).unwrap();
+        assert_eq!(cmd["urls"], json!(["https://a.com"]));
+        assert!(parse_command(&args("cookies get --domian x"), &default_flags()).is_err());
     }
 
     #[test]
