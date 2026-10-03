@@ -16425,6 +16425,10 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     let mut filled: Vec<String> = Vec::new();
     let mut submitted = false;
     let mut otp_state = if otp.is_some() { "not asked" } else { "none" };
+    // A code the site submitted by itself: the sequence's next `enter` is skipped.
+    let mut skip_enter = false;
+    // A code typed but not yet submitted: checked after the next `enter`.
+    let mut code_pending = false;
 
     let outcome: Result<(), String> = async {
         if auto {
@@ -16459,10 +16463,22 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     if no_submit {
                         break;
                     }
+                    if std::mem::take(&mut skip_enter) {
+                        continue;
+                    }
+                    // The default flow never submits a form it filled nothing
+                    // into: on a code-only 2FA page that would send an empty
+                    // code (a failed attempt) before the TOTP step runs.
+                    if auto && pending.is_empty() {
+                        continue;
+                    }
                     verify_auth_fields(&mgr.client, &session_id, &origin, &pending).await?;
                     interaction::press_key(&mgr.client, &session_id, "Enter").await?;
                     pending.clear();
                     submitted = true;
+                    if std::mem::take(&mut code_pending) {
+                        check_code_accepted(&mgr.client, &session_id, &origin).await?;
+                    }
                     continue;
                 }
                 other => match other.strip_prefix("custom:") {
@@ -16530,6 +16546,22 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 )
             };
             let Some(sel) = found else { continue };
+            if step == "totp" {
+                // Typed once, never re-written (see type_code_once); a site
+                // that submits by itself makes a following `enter` moot.
+                filled.push(step.clone());
+                otp_state = "filled";
+                if type_code_once(&mgr.client, &session_id, &sel, value, &origin).await? {
+                    submitted = true;
+                    skip_enter = true;
+                    pending.clear();
+                    check_code_accepted(&mgr.client, &session_id, &origin).await?;
+                } else {
+                    pending.push((tag, value.encode_utf16().count()));
+                    code_pending = true;
+                }
+                continue;
+            }
             interaction::fill(&mgr.client, &session_id, &state.ref_map, &sel, value, &state.iframe_sessions).await?;
             // Exact length for secrets; the username only has to be there
             // (fields normalize what is typed).
@@ -16540,9 +16572,6 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             };
             pending.push((tag, len));
             filled.push(step.clone());
-            if step == "totp" {
-                otp_state = "filled";
-            }
         }
 
         // Default flow: a code field gets the code, either after submitting
@@ -16555,35 +16584,18 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 if let Ok(sel) =
                     mark_usable_auth_element(&mgr.client, &session_id, AUTH_OTP_SELECTORS, &tag, wait, true, pin).await
                 {
-                    // Many sites submit by themselves once the last digit is
-                    // in (GitHub does): the page is gone before the fill's
-                    // read-back. That is the code being accepted, not an error.
-                    let before = mgr.get_url().await.unwrap_or_default();
-                    let left = match interaction::fill(&mgr.client, &session_id, &state.ref_map, &sel, code, &state.iframe_sessions).await {
-                        Ok(_) => false,
-                        Err(e) => {
-                            // Whatever the error says (a lost context, the
-                            // marked field missing on the next page), a new
-                            // URL means the site took the code and moved on.
-                            let now = mgr.get_url().await.unwrap_or_default();
-                            if page_went_away(&e) || (!now.is_empty() && now != before) {
-                                true
-                            } else {
-                                return Err(e);
-                            }
-                        }
-                    };
+                    let auto_submitted = type_code_once(&mgr.client, &session_id, &sel, code, &origin).await?;
                     filled.push("totp".to_string());
                     otp_state = "filled";
-                    if left {
+                    if auto_submitted {
                         submitted = true;
                     } else if !no_submit {
-                        match verify_auth_fields(&mgr.client, &session_id, &origin, &[(tag, code.encode_utf16().count())]).await {
-                            Ok(()) => interaction::press_key(&mgr.client, &session_id, "Enter").await?,
-                            Err(e) if page_went_away(&e) || e.contains("the page moved") => {}
-                            Err(e) => return Err(e),
-                        }
+                        verify_auth_fields(&mgr.client, &session_id, &origin, &[(tag, code.encode_utf16().count())]).await?;
+                        interaction::press_key(&mgr.client, &session_id, "Enter").await?;
                         submitted = true;
+                    }
+                    if submitted {
+                        check_code_accepted(&mgr.client, &session_id, &origin).await?;
                     }
                 }
             }
@@ -16622,6 +16634,134 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         "otp": otp_state,
         "url": url,
     }))
+}
+
+/// Type a one-time code into the marked field exactly once: focus, select
+/// what is there, one trusted `Input.insertText`. No read-back fallback and no
+/// blur: `fill` writes the value a second time when its read-back misses, and
+/// a site that submits on the last digit (GitHub) then submits the same code
+/// twice and rejects the second one as reused. Returns true when the site
+/// submitted by itself (the URL changed, or the field was locked, cleared or
+/// removed within a moment).
+async fn type_code_once(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    sel: &str,
+    code: &str,
+    origin: &str,
+) -> Result<bool, String> {
+    let sel_json = serde_json::to_string(sel).unwrap_or_default();
+    let eval = |expression: String| async move {
+        let r: super::cdp::types::EvaluateResult = client
+            .send_command_typed(
+                "Runtime.evaluate",
+                &super::cdp::types::EvaluateParams {
+                    expression,
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(session_id),
+            )
+            .await?;
+        Ok::<Option<Value>, String>(r.result.value)
+    };
+    let focused = eval(format!(
+        "(() => {{ const el = document.querySelector({sel_json}); if (!el) return false; \
+         el.focus(); try {{ el.select(); }} catch (e) {{}} return document.activeElement === el; }})()"
+    ))
+    .await?;
+    if focused != Some(Value::Bool(true)) {
+        return Err(
+            "auth login --bwu: the code field went away before the code was typed".to_string(),
+        );
+    }
+    let before = eval("location.href".to_string()).await?;
+    client
+        .send_command(
+            "Input.insertText",
+            Some(json!({ "text": code })),
+            Some(session_id),
+        )
+        .await?;
+    let want = code.encode_utf16().count();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1_500);
+    loop {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let state = match eval(format!(
+            "(() => {{ if (location.origin !== {origin}) return 'moved'; \
+             const el = document.querySelector({sel_json}); \
+             if (!el || !el.isConnected || el.disabled || el.readOnly) return 'locked'; \
+             return (el.value || '').length; }})()",
+            origin = serde_json::to_string(origin).unwrap_or_default()
+        ))
+        .await
+        {
+            Ok(v) => v,
+            Err(e) if page_went_away(&e) => return Ok(true),
+            Err(e) => return Err(e),
+        };
+        let now = eval("location.href".to_string()).await.unwrap_or(None);
+        match state {
+            Some(Value::String(_)) => return Ok(true),
+            _ if now.is_some() && now != before => return Ok(true),
+            Some(Value::Number(n)) if n.as_u64() == Some(0) => return Ok(true),
+            Some(Value::Number(n)) if n.as_u64() != Some(want as u64) => {
+                return Err("auth login --bwu: the code field did not take the code (it holds something else). Nothing was submitted.".to_string())
+            }
+            _ => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+    }
+}
+
+/// After a code was submitted: if the page still asks for one, the site
+/// rejected it. Report that with the page's own message, not a selector
+/// error from the re-rendered form.
+async fn check_code_accepted(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    origin: &str,
+) -> Result<(), String> {
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    let expression = format!(
+        r#"(() => {{
+            if (location.origin !== {origin}) return null;
+            const visible = (el) => {{ const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }};
+            const field = {sels}.flatMap((s) => {{ try {{ return [...document.querySelectorAll(s)]; }} catch (e) {{ return []; }} }})
+                .find((el) => visible(el) && !el.disabled && !(el.value || '').length);
+            if (!field) return null;
+            const alert = [...document.querySelectorAll('[role=alert], .flash-error, .flash-warn, .error, .alert, [aria-live=assertive]')]
+                .map((el) => (el.innerText || '').trim().replace(/\s+/g, ' ')).find((t) => t.length > 0);
+            return alert ? alert.slice(0, 160) : '';
+        }})()"#,
+        origin = serde_json::to_string(origin).unwrap_or_default(),
+        sels = serde_json::to_string(AUTH_OTP_SELECTORS).unwrap_or_default(),
+    );
+    let r: Result<super::cdp::types::EvaluateResult, String> = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &super::cdp::types::EvaluateParams {
+                expression,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await;
+    match r {
+        Ok(r) => match r.result.value {
+            Some(Value::String(alert)) => Err(format!(
+                "auth login --bwu: the site did not accept the one-time code{}. Run `auth login --bwu`                  again on this page for a fresh code.",
+                if alert.is_empty() { String::new() } else { format!(" (\"{alert}\")") }
+            )),
+            _ => Ok(()),
+        },
+        // Still navigating: the code went through.
+        Err(e) if page_went_away(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// A CDP error meaning the page navigated away under the command.
