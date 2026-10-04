@@ -657,6 +657,29 @@ pub fn read_session_version(session: &str) -> Option<String> {
 /// starting up.
 /// The one session name to move to when `session` is stuck: `foo` → `foo-2`,
 /// `foo-2` → `foo-3`, so following the advice twice does not chain suffixes.
+/// Mark this process's stdin/stdout/stderr handles as not inheritable, so a
+/// long-lived child spawned with handle inheritance does not keep the
+/// caller's pipes open (#392).
+#[cfg(windows)]
+fn clear_std_handle_inheritance() {
+    use windows_sys::Win32::Foundation::{
+        SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle and SetHandleInformation take no pointers; a
+        // null or invalid handle makes SetHandleInformation fail harmlessly.
+        unsafe {
+            let h = GetStdHandle(which);
+            if h != 0 && h != INVALID_HANDLE_VALUE {
+                SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+
 pub fn successor_session(session: &str) -> String {
     match session.rsplit_once('-') {
         Some((base, n)) if !base.is_empty() => match n.parse::<u32>() {
@@ -1243,6 +1266,17 @@ pub(crate) fn ensure_daemon_with_lifecycle_lock(
 
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         const DETACHED_PROCESS: u32 = 0x00000008;
+
+        // The daemon outlives this process by up to its idle timeout. Spawned
+        // with handle inheritance on, it also received every inheritable
+        // handle this process holds, including the stdout/stderr pipes of
+        // whoever ran us. A caller that reads our output to the end (Rust's
+        // `Command::output()`, Python's `subprocess.run`) then waited for the
+        // daemon to exit, not for us: "works, then hangs after idle" in #392,
+        // since a new daemon starts exactly after an idle exit or an adopt.
+        // Our own children still get these handles where we ask for them:
+        // Stdio::inherit duplicates them as inheritable.
+        clear_std_handle_inheritance();
 
         daemon_child = Some(
             cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
