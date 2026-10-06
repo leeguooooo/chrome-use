@@ -115,7 +115,7 @@ run_launch() {
   local out
   cu sbench-locale launch open about:blank >/dev/null
   out=$(ev sbench-locale launch "$WORKER_LANGS")
-  [ "$out" = "same ja-JP" ] && pass "locale applied everywhere" "$out" || fail "locale applied everywhere" "$out"
+  [ "$out" = "same ja-JP,ja" ] && pass "locale applied everywhere" "$out" || fail "locale applied everywhere" "$out"
   check_cloudflare sbench-locale launch "cloudflare with locale"
   cu sbench-locale launch close >/dev/null
   unset AGENT_BROWSER_LOCALE
