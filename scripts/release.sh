@@ -35,9 +35,11 @@ node scripts/sync-version.js >/dev/null
 node scripts/check-version-sync.js
 need node scripts/release-notes.js "v$V" >/dev/null
 for f in docs/changelog.html docs/en/changelog.html; do need grep -q "<strong>v$V</strong>" "$f"; done
-node --test scripts/release-notes.test.js >/dev/null
-node --test extensions/ab-connect/*.test.js >/dev/null
-sh scripts/test-install.sh >/dev/null
+# Quiet when they pass; on a failure show what failed instead of exiting silently.
+quiet() { _out=$("$@" 2>&1) || { printf '%s\n' "$_out" | tail -40 >&2; die "preflight failed: $*"; }; }
+quiet node --test scripts/release-notes.test.js
+quiet node --test extensions/ab-connect/*.test.js
+quiet sh scripts/test-install.sh
 cargo fmt --manifest-path cli/Cargo.toml -- --check
 if [ -n "$DRY" ]; then git --no-pager diff; echo "dry run: checks done, version bump reverted"; exit 0; fi
 

@@ -75,10 +75,12 @@ test('native duplicate restores the active tab and focus from another window', a
   assert.ok(calls.some((call) => call[0] === 'focusWindow' && call[1] === 9))
 })
 
-test('native duplicate does not stall when foreground activation completed without resolving', { timeout: 200 }, async () => {
+// Budgets in the next tests leave the stages before the hung one room to
+// finish on a busy machine; with 20ms a slow run timed out an earlier stage.
+test('native duplicate does not stall when foreground activation completed without resolving', { timeout: 1000 }, async () => {
   const { deps } = fixture({
-    transactionTimeoutMs: 20,
-    cleanupTimeoutMs: 5,
+    transactionTimeoutMs: 100,
+    cleanupTimeoutMs: 25,
     activateTab: () => new Promise(() => {}),
     getTab: async (tabId) => ({
       id: tabId,
@@ -93,11 +95,11 @@ test('native duplicate does not stall when foreground activation completed witho
   assert.equal(result.targetId, 'duplicate-target')
 })
 
-test('native duplicate does not stall when window focus completed without resolving', { timeout: 200 }, async () => {
+test('native duplicate does not stall when window focus completed without resolving', { timeout: 1000 }, async () => {
   let getWindowCalls = 0
   const { calls, deps } = fixture({
-    transactionTimeoutMs: 20,
-    cleanupTimeoutMs: 5,
+    transactionTimeoutMs: 100,
+    cleanupTimeoutMs: 25,
     focusWindow: (windowId) => {
       calls.push(['focusWindow', windowId])
       return new Promise(() => {})
@@ -125,10 +127,10 @@ test('native duplicate skips a redundant window focus request', async () => {
   assert.ok(!calls.some((call) => call[0] === 'focusWindow'))
 })
 
-test('foreground restore timeout rolls back the duplicate without stalling', { timeout: 200 }, async () => {
+test('foreground restore timeout rolls back the duplicate without stalling', { timeout: 1000 }, async () => {
   const { calls, deps } = fixture({
-    transactionTimeoutMs: 20,
-    cleanupTimeoutMs: 5,
+    transactionTimeoutMs: 100,
+    cleanupTimeoutMs: 25,
     activateTab: () => new Promise(() => {}),
     getTab: async (tabId) => ({
       id: tabId,
@@ -142,11 +144,11 @@ test('foreground restore timeout rolls back the duplicate without stalling', { t
   assert.ok(calls.some((call) => call[0] === 'remove' && call[1] === 22))
 })
 
-test('foreground restore observation timeout does not stall rollback', { timeout: 200 }, async () => {
+test('foreground restore observation timeout does not stall rollback', { timeout: 1000 }, async () => {
   let getTabCalls = 0
   const { calls, deps } = fixture({
-    transactionTimeoutMs: 20,
-    cleanupTimeoutMs: 5,
+    transactionTimeoutMs: 100,
+    cleanupTimeoutMs: 25,
     activateTab: () => new Promise(() => {}),
     getTab: async (tabId) => {
       getTabCalls += 1
@@ -163,8 +165,10 @@ for (const [stage, failure, expected] of [
   ['group', { groupTabInto: () => new Promise(() => {}) }, /tab grouping timed out/],
   ['debugger attach', { attachTab: () => new Promise(() => {}) }, /debugger attach timed out/],
 ]) {
-  test(`${stage} timeout rolls back the duplicate without stalling`, { timeout: 200 }, async () => {
-    const { calls, deps } = fixture({ transactionTimeoutMs: 5, ...failure })
+  // 50ms, not 5: the stages before the hung one must finish inside the budget,
+  // or a busy machine times out an earlier stage and the error names that one.
+  test(`${stage} timeout rolls back the duplicate without stalling`, { timeout: 1000 }, async () => {
+    const { calls, deps } = fixture({ transactionTimeoutMs: 50, ...failure })
 
     await assert.rejects(duplicateTab(params, deps), expected)
     assert.ok(calls.some((call) => call[0] === 'remove' && call[1] === 22))
