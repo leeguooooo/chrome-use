@@ -7637,9 +7637,8 @@ async fn scroll_until(cmd: &Value, state: &mut DaemonState, target: &str) -> Res
     let mut last = start;
     let mut steps: u64 = 0;
     let mut stuck: u32 = 0;
-    let mut found_offscreen = false;
 
-    let stop = loop {
+    let (stop, found_offscreen) = loop {
         let probe = super::element::probe_viewport(
             &mgr.client,
             &session_id,
@@ -7663,15 +7662,14 @@ async fn scroll_until(cmd: &Value, state: &mut DaemonState, target: &str) -> Res
                 "at": [probe.x.round() as i64, probe.y.round() as i64],
             }));
         }
-        found_offscreen = probe.found;
         if stuck >= SCROLL_UNTIL_STUCK_STEPS {
-            break ScrollUntilStop::End;
+            break (ScrollUntilStop::End, probe.found);
         }
         if steps >= max_steps {
-            break ScrollUntilStop::MaxSteps;
+            break (ScrollUntilStop::MaxSteps, probe.found);
         }
         if tokio::time::Instant::now() >= deadline {
-            break ScrollUntilStop::Timeout;
+            break (ScrollUntilStop::Timeout, probe.found);
         }
         interaction::scroll(
             &mgr.client,
