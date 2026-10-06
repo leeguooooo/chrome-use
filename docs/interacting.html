@@ -419,6 +419,7 @@
         <code>observed.humanCheck</code> 警告不等于必须交给人。
         易盾普通拼图先用 <code>solve-slider 1</code>；图标点选先截图，看清指令和目标后按顺序点击。
         截图坐标要按截图尺寸与视口尺寸换算成 CSS 像素，不要直接除以 devicePixelRatio。
+        先激活目标标签，再截图和取视口尺寸；激活可能改变页面布局。
       </p>
       <p>
         用 <code>chrome-use skills get core/captcha</code> 加载完整流程。最多尝试三道新题（含命令内重试）；
@@ -427,6 +428,7 @@
         <code>solve-slider</code> 耗尽尝试时返回错误并以非零状态退出。
         识别不清、尝试失败或需要本人操作时才用 <code>session handoff</code>，并在用户确认后恢复。
         这套流程不保证所有厂商和题型都能解开，也不允许关闭校验或伪造通过结果。
+        倒计时不走或验证码面板仍显示时，不要报告通过；厂商返回成功后仍要核验网站是否接受。
       </p>
 
       <hr class="du-divider" />

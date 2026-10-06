@@ -207,7 +207,7 @@ chrome-use snapshot -i --diff          # only what changed since the last snapsh
 
 The agent operates in your Chrome: you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
 
-For an authorized task, the bundled skill tells the agent to inspect and attempt ordinary CAPTCHAs before handing off: `solve-slider` for Yidun puzzles, screenshot-guided ordered clicks for readable icon challenges, then verify the site's result and continue. Load `chrome-use skills get core/captcha`. Attempts are bounded; unavailable or ambiguous challenges still need a handoff. This workflow does not guarantee every provider or challenge can be solved.
+For an authorized task, the bundled skill tells the agent to inspect and attempt ordinary CAPTCHAs before handing off: `solve-slider` for Yidun puzzles, screenshot-guided ordered clicks for readable icon challenges, then verify the site's result and continue. Load `chrome-use skills get core/captcha`. Attempts are bounded; unavailable or ambiguous challenges still need a handoff. This workflow does not guarantee every provider or challenge can be solved. Activate the target before capturing coordinates; a provider success or frozen resend countdown does not establish site acceptance.
 
 | Command | Purpose |
 |---|---|

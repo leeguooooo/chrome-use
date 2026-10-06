@@ -9,9 +9,14 @@ a dispatched action.
 
 ## Identify the current challenge
 
-Reuse the task's session and browser. Do not reload the login page. Read the
+Reuse the task's session and browser. Do not reload the login page. When
+coordinate input is needed on the relay, foreground the intended tab BEFORE
+capturing the image and measuring the viewport. Activation can change the
+viewport and invalidate coordinates from a background screenshot. Read the
 challenge text with a scoped snapshot; for an image challenge, capture and
-actually view a screenshot. Discover child frames with `frames` when needed.
+actually view a screenshot. Discover child frames with `frames` when needed. Prefer the current stable
+`frameId` for frame-scoped reads: another tab opening an iframe can change
+numeric frame indexes. Confirm the target frame's host before using its data.
 A slider can be replaced by an ordered-icon challenge after a failure: read
 the current instruction, not the previous challenge's type. Hidden slider
 DOM is not proof a slider is active.
@@ -50,8 +55,9 @@ enlarge the relevant region before identifying them. Do not act on a partial
 loading screenshot. Measure both dimensions:
 
 ```bash
-chrome-use eval 'JSON.stringify({width:innerWidth,height:innerHeight})'
 chrome-use bringToFront
+chrome-use screenshot ./challenge.png
+chrome-use eval 'JSON.stringify({width:innerWidth,height:innerHeight})'
 # Convert EACH screenshot point: x_css=x_image*viewport_width/image_width,
 # y_css=y_image*viewport_height/image_height. Do not assume devicePixelRatio.
 chrome-use --humanize human batch 'click 484 381' 'click 419 338' 'click 560 335'
@@ -72,7 +78,10 @@ target confidently, inspect a clearer image rather than guessing.
 
 Read the site's success/failure text and current visible challenge state.
 A command's Done receipt only means the input was dispatched. A vanished dialog
-alone may mean it was closed. For an SMS flow, a success message and a resend
+alone may mean it was closed. A frozen resend counter while the challenge is
+still visible is not a success receipt. A CAPTCHA provider can report success
+while the site's SMS/login endpoint rejects it; inspect that endpoint's result
+without printing credentials before reporting the login step complete. For an SMS flow, a success message and a resend
 countdown establish progress; the countdown does not prove SMS delivery or login.
 Continue the already-authorized task without another permission question after
 a verified success. Verify the authenticated account/target page after login;

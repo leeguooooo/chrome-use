@@ -2624,6 +2624,8 @@ return an error and a nonzero exit code. Read the site's result before continuin
 Enhanced/icon-shaped puzzles and ordered image clicks need the agent's visual
 inspection. Load `chrome-use skills get core/captcha` for bounded attempts,
 CSS-pixel coordinate conversion, ordered clicks, and result verification.
+Activate before capturing coordinates. Provider success or a frozen resend
+countdown alone does not establish that the site accepted verification.
 A CAPTCHA or vendor-script warning alone is not a reason to stop an authorized
 task. Follow the host's rules; hand off only if attempts fail or a person is needed.
 
