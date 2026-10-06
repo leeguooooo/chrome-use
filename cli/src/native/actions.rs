@@ -4337,6 +4337,12 @@ async fn annotate_site_change(
         .ok()
         .and_then(|u| u.host_str().map(String::from))
         .unwrap_or_default();
+    if host.is_empty() {
+        // A tab still loading in the background reads as about:blank. Leave
+        // the host unknown so the next command looks again.
+        state.site_hint_host = None;
+        return;
+    }
     if state.site_hint_host.as_deref() == Some(host.as_str()) {
         return;
     }
