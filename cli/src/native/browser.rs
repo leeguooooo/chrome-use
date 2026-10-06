@@ -888,7 +888,11 @@ pub fn to_ai_friendly_error(error: &str) -> String {
         // wholesale replacement threw the selector AND the hint away and always
         // blamed a closed shadow root / cross-origin iframe, two rare causes that
         // sent people down the wrong path (issue #202).
-        if error.contains("Hint:") || error.contains("Run `snapshot -i`") {
+        // A refused @ref already names its suggested refs and the refresh.
+        if error.contains("Hint:")
+            || error.contains("Run `snapshot -i`")
+            || error.contains("`snapshot -i` to refresh")
+        {
             return error.to_string();
         }
         // Selectors / `find` match the page DOM, which can't see inside a CLOSED
@@ -5452,6 +5456,14 @@ mod tests {
         .await;
         assert_eq!(result, Err("original lifecycle error".to_string()));
         assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn a_refused_ref_with_suggestions_gets_no_selector_hint() {
+        let refused = "Ref e4 could not be resolved: no element with that role and name is on \
+                       the page now.\n  try @e7 [button] \"Save now\"\nOr run `snapshot -i` to \
+                       refresh the refs.";
+        assert_eq!(to_ai_friendly_error(refused), refused);
     }
 
     #[test]
