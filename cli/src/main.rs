@@ -3184,7 +3184,8 @@ fn main() {
             // can't tell a rate-limited/failed call from a real empty result.
             // Promote such an adapter error into the top-level envelope so both
             // `--json` (`success:false`, `error`) and the exit code (1) reflect it.
-            if cmd.get("action").and_then(|v| v.as_str()) == Some("site") {
+            let raw_eval = cmd.get("rawEval").and_then(|v| v.as_bool()) == Some(true);
+            if cmd.get("action").and_then(|v| v.as_str()) == Some("site") && !raw_eval {
                 if let Some(result) = resp.data.as_ref().and_then(|d| d.get("result")) {
                     let adapter_err = result
                         .get("error")

@@ -439,6 +439,24 @@ pub const BUDGET_PLACEHOLDER: &str = "__CU_SITE_BUDGET_MS__";
 /// Read and drain a background run: `{state: running|done|lost, progress,
 /// requests, result?, error?}`. `lost` means the page navigated (or reloaded)
 /// and took the run with it. A finished run is removed from `window`.
+/// `eval --background`: start a plain expression the way `build_start` starts
+/// an adapter (same run object, so `poll_script` and the daemon's site runner
+/// handle it unchanged), without adapter args, files or helpers.
+pub fn build_expr_start(expr: &str, run_key: &str) -> String {
+    let key_json = serde_json::to_string(run_key).unwrap_or_default();
+    format!(
+        "(() => {{\n\
+         const K = {key_json};\n\
+         const run = {{ done: false, result: undefined, error: undefined, progress: [], requests: [], waiters: {{}}, seq: 0 }};\n\
+         Object.defineProperty(window, K, {{ value: run, configurable: true, enumerable: false, writable: true }});\n\
+         Promise.resolve().then(() => ({expr}\n)).then(\n\
+         (r) => {{ run.result = r; run.done = true; }},\n\
+         (e) => {{ run.error = String((e && e.stack) || e); run.done = true; }});\n\
+         return 'started';\n\
+         }})()"
+    )
+}
+
 pub fn poll_script(run_key: &str) -> String {
     let key_json = serde_json::to_string(run_key).unwrap_or_default();
     format!(

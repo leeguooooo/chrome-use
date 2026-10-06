@@ -4838,7 +4838,10 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .ok_or("site: missing 'script'")?
         .to_string();
 
-    ensure_site_domain(&domain, state).await?;
+    // `eval --background` sends no domain: run on the page as it is.
+    if !domain.is_empty() {
+        ensure_site_domain(&domain, state).await?;
+    }
 
     // A command from an older CLI carries a plain awaited eval, no run key.
     let Some(run_key) = cmd.get("runKey").and_then(|v| v.as_str()) else {
@@ -4877,7 +4880,7 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let mut backoff = Duration::from_secs(2);
     loop {
         attempt += 1;
-        if attempt > 1 {
+        if attempt > 1 && !domain.is_empty() {
             // A rerun after a navigation may have left the adapter's domain.
             ensure_site_domain(&domain, state).await?;
         }

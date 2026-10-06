@@ -56,43 +56,17 @@ class ChromeUsePage extends BasePage {
     }
   }
   // One Runtime.evaluate over the extension relay is cut off after ~8s, and
-  // adapters often await a search or a load inside the page for longer. So an
-  // expression is started in the page and awaited there for up to 6s; if it is
-  // still running, its promise stays in a page global and we poll for it.
-  // Statement code (evaluateWithArgs blocks) can't be wrapped without page-side
-  // eval(), which CSP blocks on many sites, so it runs directly as before.
+  // adapters often await a search or a load inside the page for longer.
+  // `eval --background` hands an expression to chrome-use's adapter runner,
+  // which starts it in the page and polls for the value. Statement code
+  // (evaluateWithArgs blocks) can't be wrapped as an expression without
+  // page-side eval(), which CSP blocks on many sites, so it runs directly.
   async evaluate(input, ...args) {
     const src = buildEvaluateExpression(input, args);
-    if (!isExpression(src)) {
-      const data = await cu(['eval', '--stdin'], src);
-      return data?.result;
-    }
-    const key = `__cu_oc_${Math.random().toString(36).slice(2)}`;
-    const k = JSON.stringify(key);
-    // Runs inside both wrappers below, where `box` is already bound.
-    const take = `if (!box.done) return { pending: true };
-      delete window[${k}];
-      return 'error' in box ? { error: box.error } : { value: box.value };`;
-    const start = `(async () => {
-      const box = window[${k}] = { done: false };
-      Promise.resolve().then(() => (${src}\n)).then(
-        (v) => { box.value = v; box.done = true; },
-        (e) => { box.error = (e && (e.stack || e.message)) || String(e); box.done = true; });
-      const t0 = Date.now();
-      while (!box.done && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 50));
-      ${take}
-    })()`;
-    const poll = `(async () => {
-      if (!window[${k}]) return { error: 'the page navigated before the evaluation finished' };
-      const box = window[${k}];
-      const t0 = Date.now();
-      while (!box.done && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 50));
-      ${take}
-    })()`;
-    let out = (await cu(['eval', '--stdin'], start))?.result;
-    while (out && out.pending) out = (await cu(['eval', '--stdin'], poll))?.result;
-    if (out && 'error' in out) throw new Error('Evaluate error: ' + out.error);
-    return out?.value;
+    const data = isExpression(src)
+      ? await cu(['eval', '--background', '--stdin'], src)
+      : await cu(['eval', '--stdin'], src);
+    return data?.result;
   }
   async getCookies(opts = {}) {
     const a = ['cookies', 'get'];

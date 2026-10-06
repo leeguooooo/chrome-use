@@ -1840,6 +1840,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // (no flag) stays the main frame. Leading-only so it never eats a token
             // from the script body.
             let mut frame: Option<String> = None;
+            // Optional leading `--background`: start the expression in the page
+            // and poll for its value, so it may run past the relay's ~8s limit on
+            // one evaluation. Reuses the `site` adapter runner.
+            let background = rest.first() == Some(&"--background");
+            let rest: Vec<&str> = if background { rest[1..].to_vec() } else { rest };
             let rest: Vec<&str> = if rest.first() == Some(&"--frame") {
                 let val = rest.get(1).copied().ok_or(ParseError::InvalidValue {
                     message: "eval --frame requires a value (CSS selector, @ref, url substring, \
@@ -1904,6 +1909,30 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     raw_script
                 }
             };
+            if background {
+                if frame.is_some() {
+                    return Err(ParseError::InvalidValue {
+                        message: "eval --background runs in the main frame; drop --frame"
+                            .to_string(),
+                        usage: "eval --background <js expression>",
+                    });
+                }
+                let run_key = format!("__cu_eval_{}", uuid::Uuid::new_v4().simple());
+                let timeout = crate::site::DEFAULT_RUN_TIMEOUT_MS;
+                return Ok(json!({
+                    "id": id,
+                    "action": "site",
+                    // No domain: run on the page as it is, don't navigate.
+                    "domain": "",
+                    "script": crate::site::build_expr_start(&script, &run_key),
+                    "runKey": run_key,
+                    "files": {},
+                    "runTimeoutMs": timeout,
+                    "timeout_ms": timeout + 10_000,
+                    // A plain evaluation: its value is data, never an adapter error.
+                    "rawEval": true,
+                }));
+            }
             let mut action = json!({ "id": id, "action": "evaluate", "script": script });
             if let Some(f) = frame {
                 action["frame"] = Value::String(f);
