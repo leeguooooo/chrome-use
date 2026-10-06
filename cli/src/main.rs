@@ -16,6 +16,7 @@ mod install;
 mod jev;
 mod mcp;
 mod native;
+mod opencli;
 mod output;
 mod ownership;
 mod read;
@@ -1611,6 +1612,81 @@ fn main() {
                 ),
             }
         }
+        // A `name/cmd` we have no adapter for but OpenCLI does: run it with
+        // OpenCLI's runtime over this session (opencli.rs). `site verify` too.
+        {
+            let verify = clean.get(1).map(|s| s.as_str()) == Some("verify");
+            let at = if verify { 2 } else { 1 };
+            if let Some(spec) = clean.get(at).filter(|s| opencli::handles(s)) {
+                let entry = opencli::lookup(spec).unwrap_or_default();
+                let write_fixture = verify && clean.iter().any(|a| a == "--write-fixture");
+                let rest: Vec<String> = clean[at + 1..]
+                    .iter()
+                    .filter(|a| !(verify && a.as_str() == "--write-fixture"))
+                    .cloned()
+                    .collect();
+                let mut env = opencli::run(spec, &entry, &rest, &flags.session);
+                let mut ok = env.get("success").and_then(|v| v.as_bool()) == Some(true);
+                let result = env.get("data").cloned().unwrap_or(Value::Null);
+                if ok && verify {
+                    let (vok, report) = site::verify_result(spec, &result, write_fixture);
+                    if !vok {
+                        ok = false;
+                        let issues: Vec<String> = report
+                            .get("issues")
+                            .and_then(|x| x.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|i| i.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        env["error"] = json!(format!("site verify {spec}: {}", issues.join("; ")));
+                    }
+                    env["verify"] = report;
+                }
+                if flags.json {
+                    let mut data = json!({ "result": result, "source": opencli::SOURCE_LABEL });
+                    if let Some(v) = env.get("verify") {
+                        data["verify"] = v.clone();
+                    }
+                    println!(
+                        "{}",
+                        json!({ "success": ok, "data": data, "error": if ok { Value::Null } else { env.get("error").cloned().unwrap_or(Value::Null) } })
+                    );
+                } else if ok {
+                    eprintln!("{}", color::dim(&format!("site {spec} (via OpenCLI)")));
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&result).unwrap_or_default()
+                    );
+                    if let Some(v) = env.get("verify") {
+                        if v.get("recorded").and_then(|x| x.as_bool()) == Some(true) {
+                            eprintln!(
+                                "{} site verify: fixture recorded",
+                                color::success_indicator()
+                            );
+                        } else {
+                            eprintln!("{} site verify: ok", color::success_indicator());
+                        }
+                    }
+                } else {
+                    let err = env
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("failed");
+                    match env
+                        .get("hint")
+                        .and_then(|v| v.as_str())
+                        .filter(|h| !h.is_empty())
+                    {
+                        Some(h) => eprintln!("{} {err} — {h}", color::error_indicator()),
+                        None => eprintln!("{} {err}", color::error_indicator()),
+                    }
+                }
+                exit(if ok { 0 } else { 1 });
+            }
+        }
         match clean.get(1).map(|s| s.as_str()) {
             Some("update") => {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -1631,9 +1707,23 @@ fn main() {
                 return;
             }
             Some("list") => {
+                let theirs: Vec<String> = {
+                    let ours = site::list_adapters().unwrap_or_default();
+                    let mut v: Vec<String> = opencli::manifest()
+                        .iter()
+                        .filter_map(opencli::spec_of)
+                        .filter(|s| !ours.contains(s))
+                        .collect();
+                    v.sort();
+                    v.dedup();
+                    v
+                };
                 match site::list_adapters() {
                     Ok(list) if flags.json => {
-                        println!("{}", json!({ "success": true, "adapters": list }))
+                        println!(
+                            "{}",
+                            json!({ "success": true, "adapters": list, "opencli": theirs })
+                        )
                     }
                     Ok(list) if list.is_empty() => {
                         println!("no site adapters installed — run `chrome-use site update`")
@@ -1641,6 +1731,9 @@ fn main() {
                     Ok(list) => {
                         for a in &list {
                             println!("{a}");
+                        }
+                        for a in &theirs {
+                            println!("{a} {}", color::dim("(opencli)"));
                         }
                         eprintln!(
                             "{}",
@@ -1659,6 +1752,16 @@ fn main() {
             }
             Some("info") => {
                 let spec = clean.get(2).cloned().unwrap_or_default();
+                if opencli::handles(&spec) {
+                    if let Some(entry) = opencli::lookup(&spec) {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&opencli::info(&entry))
+                                .unwrap_or_default()
+                        );
+                        return;
+                    }
+                }
                 match site::load_adapter(&spec) {
                     Ok(a) => println!(
                         "{}",

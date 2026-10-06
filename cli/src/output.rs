@@ -424,7 +424,17 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 .unwrap_or_default();
             if !cmds.is_empty() {
                 eprintln!("site adapters for {domain} — prefer these for structured data:");
-                eprintln!("   {}", color::dim(&cmds.join(", ")));
+                // OpenCLI can add dozens per site; the full list is in --json.
+                const SHOWN: usize = 12;
+                let mut line = cmds[..cmds.len().min(SHOWN)].join(", ");
+                if cmds.len() > SHOWN {
+                    line.push_str(&format!(
+                        " … +{} more (`chrome-use site list | grep {}`)",
+                        cmds.len() - SHOWN,
+                        cmds[0].split('/').next().unwrap_or("")
+                    ));
+                }
+                eprintln!("   {}", color::dim(&line));
                 eprintln!(
                     "   {}",
                     color::dim(&format!("e.g. chrome-use site {} --json", cmds[0]))

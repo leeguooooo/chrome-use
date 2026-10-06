@@ -899,6 +899,13 @@ pub async fn update() -> Result<usize, String> {
     if let Ok(json) = serde_json::to_string(&provenance) {
         let _ = std::fs::write(dir.join(".provenance.json"), json);
     }
+    // OpenCLI's adapters run from its own package (see opencli.rs); a failure
+    // here never fails the update.
+    match tokio::task::spawn_blocking(crate::opencli::sync).await {
+        Ok(Err(e)) => eprintln!("site update: {e}"),
+        Err(e) => eprintln!("site update: opencli: {e}"),
+        _ => {}
+    }
     write_domain_index(&dir);
     if let Some(p) = last_update_path() {
         let _ = std::fs::write(p, now_secs().to_string());
@@ -1124,7 +1131,30 @@ fn write_domain_index(dir: &std::path::Path) {
             }
         }
     }
-    let ordered: std::collections::BTreeMap<String, Vec<String>> = by_domain
+    // OpenCLI commands ride along after ours, for names we don't already have.
+    let ours: std::collections::HashSet<String> = by_domain
+        .values()
+        .flat_map(|v| v.iter().map(|(_, s)| s.clone()))
+        .collect();
+    let mut opencli_by_domain: std::collections::BTreeMap<String, Vec<(bool, String)>> =
+        Default::default();
+    for entry in crate::opencli::manifest() {
+        let (Some(spec), Some(domain)) = (
+            crate::opencli::spec_of(&entry),
+            entry.get("domain").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        if domain.is_empty() || ours.contains(&spec) {
+            continue;
+        }
+        let read_only = entry.get("access").and_then(|v| v.as_str()) == Some("read");
+        opencli_by_domain
+            .entry(domain.to_string())
+            .or_default()
+            .push((read_only, spec));
+    }
+    let mut ordered: std::collections::BTreeMap<String, Vec<String>> = by_domain
         .into_iter()
         .map(|(domain, mut v)| {
             // ours (official / configured) before community, then read-only
@@ -1139,6 +1169,13 @@ fn write_domain_index(dir: &std::path::Path) {
             (domain, v.into_iter().map(|(_, s)| s).collect())
         })
         .collect();
+    for (domain, mut v) in opencli_by_domain {
+        v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        ordered
+            .entry(domain)
+            .or_default()
+            .extend(v.into_iter().map(|(_, s)| s));
+    }
     if let Ok(json) = serde_json::to_string(&ordered) {
         let _ = std::fs::write(dir.join(".index.json"), json);
     }
