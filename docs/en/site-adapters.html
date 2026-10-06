@@ -227,8 +227,10 @@
       <h2>Auto-triggering — see it, use it</h2>
       <p>
         You don't have to remember which sites have adapters. chrome-use keeps the adapter sources in sync automatically
-        (<strong>on first use + weekly</strong>), and when you <code>open</code> / <code>navigate</code> / <code>snapshot</code> a page whose
-        <strong>domain has adapters</strong>, it proactively hints you:
+        (<strong>on first use + weekly</strong>), and whenever you reach a page whose <strong>domain has adapters</strong> it tells you:
+        on every <code>open</code> / <code>navigate</code> / <code>snapshot</code>, and on any other command that lands you on a different
+        site (<code>tab new</code>, switching tabs, <code>back</code> / <code>forward</code>, a click that navigates, the first command on a tab
+        you didn't open). Staying on one site, you hear about it once. The hint is:
       </p>
 
       <ul>
@@ -252,6 +254,17 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         just use the <code>site &lt;name&gt;/&lt;cmd&gt;</code> it names: cheaper, more reliable, and already installed. You also
         <strong>don't need</strong> to run <code>site update</code> yourself first — just use the command it gives you.
       </div>
+
+      <h3>A site you use a lot has no adapter</h3>
+      <p>
+        When you drive the same site a lot (30+ actions this session, or on 3+ days) and no adapter covers it, chrome-use
+        adds <code>siteAdapterSuggestion: {domain, actionsThisSession, daysUsed, message}</code> to one response (stderr:
+        <code>site adapter suggestion: …</code>), so the AI asks you whether to turn the steps it keeps repeating into an adapter.
+        It comes once per site per session and not again for two weeks; local hosts and IPs are skipped. If you say yes, the
+        AI writes it to <code>~/.chrome-use/my-sites/&lt;name&gt;/&lt;cmd&gt;.js</code>, registers the folder once with
+        <code>chrome-use site add ~/.chrome-use/my-sites</code>, and runs <code>site update</code>.
+        <code>AGENT_BROWSER_SITES_NO_SUGGEST=1</code> turns it off.
+      </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Exception on a fresh environment</div>

@@ -223,7 +223,7 @@
       <h2>自动触发 —— 看到就用它</h2>
       <p>
         你不用记住哪些站点有适配器。chrome-use 会自动保持适配器源同步（<strong>首次使用 + 每周</strong>），
-        并且当你 <code>open</code> / <code>navigate</code> / <code>snapshot</code> 一个<strong>域名有适配器</strong>的页面时主动提示你：
+        并且只要你到了一个<strong>域名有适配器</strong>的页面就主动提示你：<code>open</code> / <code>navigate</code> / <code>snapshot</code> 每次都提示；其他命令（<code>tab new</code>、切换标签页、<code>back</code> / <code>forward</code>、点击跳转、在别人打开的标签页上的第一条命令）只要换了站点也会提示。一直停在同一个站点只提示一次。提示形式：
       </p>
 
       <ul>
@@ -247,6 +247,16 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         直接用它点名的 <code>site &lt;name&gt;/&lt;cmd&gt;</code>：更省、更稳，而且已经装好了。你也<strong>不需要</strong>自己先跑
         <code>site update</code>，用它给出的命令即可。
       </div>
+
+      <h3>常用的站点还没有适配器</h3>
+      <p>
+        同一个站点操作得多（本次会话 30 条以上，或者用了 3 天以上），却没有适配器时，chrome-use 会在一次响应里加上
+        <code>siteAdapterSuggestion: {domain, actionsThisSession, daysUsed, message}</code>（stderr 一行 <code>site adapter suggestion: …</code>），
+        让 AI 问你要不要把反复做的步骤写成适配器。同一站点每次会话最多一次，两周内不再提；本机域名和 IP 不提示。
+        你同意后，AI 把适配器写进 <code>~/.chrome-use/my-sites/&lt;name&gt;/&lt;cmd&gt;.js</code>，用
+        <code>chrome-use site add ~/.chrome-use/my-sites</code> 登记一次，再 <code>site update</code>。
+        设 <code>AGENT_BROWSER_SITES_NO_SUGGEST=1</code> 关闭这个提示。
+      </p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 全新环境的例外</div>

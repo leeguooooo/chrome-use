@@ -32,6 +32,8 @@ install. For directory mappings and installer failures, load
 
 If an adapter is advertised as `siteAdapters` in JSON or on stderr, inspect
 its arguments with `site info <name>/<cmd>` and prefer it for matching reads.
+If a response carries `siteAdapterSuggestion`, ask the user whether to save the
+steps you keep repeating on that site as an adapter (`core/site-adapters`).
 Adapters execute as the logged-in user; use only operations within the task.
 
 ## Before you write `eval`

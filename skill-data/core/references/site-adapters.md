@@ -24,13 +24,36 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
   and the official [chrome-use-sites](https://github.com/leeguooooo/chrome-use-sites) pack.
 
 > **Auto-trigger — act on it.** chrome-use keeps both packs synced automatically (first use +
-> weekly), and when you `open`/`navigate`/`snapshot` a page whose domain has adapters it tells
-> you: a `site adapters for <domain>` line on stderr, and a `siteAdapters: {domain, commands}`
-> field in `--json`. **When you see that, prefer the listed `site <name>/<cmd>` over snapshot+click
+> weekly), and whenever you reach a page whose domain has adapters it tells you: on every
+> `open`/`navigate`/`snapshot`, and on any other command that lands you on a different site
+> (`tab new`/`tab <id>`, `back`/`forward`, a click that navigates, the first command on a tab you
+> didn't open). It prints a `site adapters for <domain>` line on stderr and adds a
+> `siteAdapters: {domain, commands}` field in `--json`. A session that stays on one site hears
+> about it once, not on every command. **When you see that, prefer the listed `site <name>/<cmd>` over snapshot+click
 > for reading data** — it's the cheaper, more reliable path and it's already installed. You don't
 > need to run `site update` yourself; just use the command it names. (Only on a brand-new setup
 > where the packs haven't been fetched yet, a named `site <name>/<cmd>` may say it's not installed —
 > run `site update` once, then re-run the command.)
+
+## When a site you keep driving has no adapter
+
+If you work on the same site a lot and no adapter covers it, chrome-use adds
+`siteAdapterSuggestion: {domain, actionsThisSession, daysUsed, message}` to one response (stderr:
+`site adapter suggestion: …`). It comes once per site per session and at most every two weeks.
+**Ask the user** whether to turn the steps you keep repeating there into an adapter. Don't write
+one without a yes. If they agree:
+
+1. Find the data source with `network requests` / `eval` (the site's own JSON API beats DOM
+   scraping), then write `~/.chrome-use/my-sites/<name>/<cmd>.js` in the format above
+   (`@meta` with `name`, `description`, `domain`, `args`, `readOnly`; then the `async function`).
+2. Register the folder once and sync: `chrome-use site add ~/.chrome-use/my-sites`, then
+   `chrome-use site update`. Keep your own adapters in that folder, not in `~/.chrome-use/sites`,
+   because a sync rewrites `~/.chrome-use/sites`.
+3. Run it: `chrome-use site <name>/<cmd> --json`. If it's generally useful, offer to send it to
+   [chrome-use-sites](https://github.com/leeguooooo/chrome-use-sites). That opens a PR from the
+   user's account, so ask before you do it.
+
+`AGENT_BROWSER_SITES_NO_SUGGEST=1` turns the suggestion off.
 
 ## Long text, local files, long runs
 
