@@ -4947,11 +4947,20 @@ Usage:
   chrome-use site list                 List installed adapters (name/command)
   chrome-use site update               Fetch/refresh the adapter packs
   chrome-use site info <name>          Show one pack's adapters and their args
+  chrome-use site analyze [url]        Find a page's API calls, embedded state and
+                                       anti-bot vendors; recommend a data source
+  chrome-use site verify <name>/<command> [args] [--write-fixture]
+                                       Run it and compare the result's shape with a
+                                       recorded fixture (--write-fixture records one)
 
 An adapter extracts structured JSON from a site through its own API/DOM,
 in the site's real logged-in page — so it replaces a snapshot+click scrape
-with one call. Adapters ship in community packs (epiral/bb-sites) and the
-official leeguooooo/chrome-use-sites pack; `update` syncs both.
+with one call. Adapters ship in the official leeguooooo/chrome-use-sites pack
+and the community epiral/bb-sites pack; `update` syncs both. When Node.js 20+
+is on PATH, `update` also installs OpenCLI (jackwener/OpenCLI): a `name/command`
+neither pack has runs through OpenCLI's own runtime over this session, marked
+"(opencli)" in `site list`. Ours win on a shared name.
+AGENT_BROWSER_SITES_NO_OPENCLI=1 turns OpenCLI off.
 
 The spec is always `name/command`. `site` alone, or a wrong spec, prints a
 one-line usage and points you at `site list`.

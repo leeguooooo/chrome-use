@@ -1884,6 +1884,9 @@ fn main() {
                 }
                 return;
             }
+            // `site analyze [url]` / `site verify <name>/<cmd> …` → daemon dispatch
+            // (commands.rs builds them).
+            Some("analyze") | Some("verify") => {}
             // `site <name>/<cmd> [args]` → fall through to the daemon dispatch.
             Some(spec) if spec.contains('/') => {
                 // #125: an adapter arg whose name collides with a reserved global
@@ -1918,7 +1921,7 @@ fn main() {
             }
             _ => {
                 eprintln!(
-                    "{} usage: chrome-use site <name>/<cmd> [args] | site update | site list | \
+                    "{} usage: chrome-use site <name>/<cmd> [args] | site analyze [url] | site verify <name>/<cmd> [args] [--write-fixture] | site update | site list | \
                      site info <name>/<cmd> | site sources | site add|remove <source>",
                     color::error_indicator()
                 );
