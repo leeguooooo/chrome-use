@@ -542,7 +542,15 @@ async fn handle_connection<S>(
 
                 let response = {
                     let mut s = state.lock().await;
-                    execute_command_recovering(&cmd, &mut s).await
+                    let (mut response, timing) =
+                        super::timing::timed(execute_command_recovering(&cmd, &mut s)).await;
+                    let ok = response.get("success").and_then(|v| v.as_bool()) == Some(true);
+                    let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                    super::timing::log_command(&s.session_id, action, ok, &timing);
+                    if let Some(obj) = response.as_object_mut() {
+                        obj.insert("timing".to_string(), timing);
+                    }
+                    response
                 };
 
                 let mut resp = serde_json::to_string(&response).unwrap_or_default();

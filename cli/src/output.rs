@@ -2343,7 +2343,7 @@ Examples:
             r##"
 chrome-use click - Click an element or a coordinate
 
-Usage: chrome-use click <selector> [--new-tab]
+Usage: chrome-use click <selector> [--new-tab] [--allow-dom]
        chrome-use click <x> <y> | <x>,<y> | --coords <x>,<y>
 
 Clicks on the specified element. The selector can be a CSS selector,
@@ -2357,7 +2357,9 @@ in a child never matches; use `contains(normalize-space(.), '...')`,
 "Element not found" error keeps the selector and the resolver's diagnosis.
 
 A left click is a trusted pointer click at the element's position. When
-that cannot be placed (the element is covered, or has no box), the click
+something else covers that position the click is refused with an error naming
+the cover; `--allow-dom` clicks the covered element through the DOM instead.
+When the position cannot be placed for another reason (no box), the click
 falls back to `element.click()`, which is `isTrusted: false`; the response
 then says `dispatch: dom` with a ⚠ warning naming why, because a page that
 only honours real input ignores such a click. A DOM-dispatched click still
@@ -3139,8 +3141,9 @@ Options:
   --max-height <px>    Downscale so the image's height ≤ px
   --scale <0..1>       Downscale by a factor, e.g. 0.5 (DPR-1, so screenshot px
                        line up 1:1 with `click x y`)
-                       Default: capped at 2000px longest edge unless overridden
-                       (AGENT_BROWSER_SCREENSHOT_MAX_EDGE; 0 disables). Annotated
+                       Default: capped at 1200px longest edge (width only with
+                       --full) unless overridden (AGENT_BROWSER_SCREENSHOT_MAX_EDGE;
+                       0 disables). --full-res keeps the captured size. Annotated
                        shots are never downscaled, so ref overlays stay aligned.
   --annotate           Overlay numbered labels on interactive elements.
                        Each label [N] corresponds to ref @eN from snapshot.
@@ -5163,7 +5166,7 @@ Core Commands:
                              per-field status + inline validation errors
   friction [--json|--clear]  Local log of failed commands (what's painful to
                              drive) — local only, never uploaded
-  screenshot [path]          Take screenshot (auto-downscaled to ≤2000px long edge;
+  screenshot [path]          Take screenshot (auto-downscaled to ≤1200px long edge;
                              --max-width/--max-height/--scale to override; --annotate
                              refreshes labels without invalidating existing refs)
   pdf <path>                 Save as PDF

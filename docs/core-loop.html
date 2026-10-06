@@ -177,7 +177,7 @@
       </div>
 
       <p>
-        截图会自动降采样到最长边 ≤ 2000px，好让图像阅读器读得下、并让像素和 <code>click x y</code> 对齐；
+        截图会自动降采样到最长边 ≤ 1200px（整页截图只限制宽度），好让图像阅读器读得下、并让像素和 <code>click x y</code> 对齐；
         用 <code>--max-width</code> / <code>--max-height</code> / <code>--scale</code> 可以覆盖。想点一个用 ref 命中不了的元素，
         <code>box @ref</code> 会给出它的 CSS 像素框和 <code>centerX/centerY</code>，直接喂给 <code>click &lt;centerX&gt; &lt;centerY&gt;</code>——不需要截图。
         canvas / WebGL 的坐标玩法见 <a href="/media.html">截图 · 录像 · 视口</a> 与画布相关章节。

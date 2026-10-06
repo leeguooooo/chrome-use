@@ -178,7 +178,7 @@
       </div>
 
       <p>
-        Screenshots auto-downsample to a longest edge of ≤ 2000px so image readers can take them in and so pixels line up with <code>click x y</code>;
+        Screenshots auto-downsample to a longest edge of ≤ 1200px (width only for full-page shots) so image readers can take them in and so pixels line up with <code>click x y</code>;
         override with <code>--max-width</code> / <code>--max-height</code> / <code>--scale</code>. To click an element a ref can't hit,
         <code>box @ref</code> gives its CSS-pixel box and <code>centerX/centerY</code>, which you feed straight to <code>click &lt;centerX&gt; &lt;centerY&gt;</code> — no screenshot needed.
         For canvas / WebGL coordinate tricks, see <a href="/en/media.html">Screenshots · Recording · Viewport</a> and the canvas-related sections.

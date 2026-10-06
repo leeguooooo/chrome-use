@@ -196,9 +196,11 @@ pub async fn click_reporting(
     click_count: i32,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<ClickOutcome, String> {
-    // AGENT_BROWSER_CLICK_MODE: "" (default) = coordinate click with a DOM
-    // fallback; "coord" = strict coordinate only (no fallback); "dom" = always
-    // dispatch through the DOM.
+    // AGENT_BROWSER_CLICK_MODE: "" (default) = coordinate click; a target that
+    // something else covers is refused, other coordinate failures fall back to
+    // the DOM; "dom-fallback" (= `click --allow-dom`) = also DOM-dispatch a
+    // covered target; "coord" = strict coordinate only (no fallback); "dom" =
+    // always dispatch through the DOM.
     let mode = std::env::var("AGENT_BROWSER_CLICK_MODE").unwrap_or_default();
 
     // (A) Scroll the target into view first so the computed coordinates land
@@ -296,12 +298,22 @@ pub async fn click_reporting(
             // overlay and still report success. If the click point doesn't hit the
             // target, dispatch through the DOM instead (targets the element
             // directly). Skipped for strict `coord` mode and non-left/multi-clicks.
-            if mode != "coord"
+            let covered = if mode != "coord"
                 && button == "left"
                 && click_count == 1
                 && parse_ref(selector_or_ref).is_none()
-                && point_misses_element(client, &effective_session_id, selector_or_ref).await
             {
+                point_misses_element(client, &effective_session_id, selector_or_ref).await
+            } else {
+                None
+            };
+            if let Some(cover) = covered {
+                // A DOM `.click()` on a covered target reports success for a click
+                // a user could not have made, and the agent then believes it hit
+                // the real control. Refuse unless the caller opted in.
+                if mode != "dom-fallback" {
+                    return Err(occluded_refusal(selector_or_ref, &cover));
+                }
                 eprintln!(
                     "[click] target occluded at its click point; dispatching through \
                      the DOM (set AGENT_BROWSER_CLICK_MODE=coord to disable)"
@@ -339,6 +351,14 @@ pub async fn click_reporting(
             if mode == "coord" || button != "left" || click_count != 1 {
                 return Err(e);
             }
+            // A persistent overlay (the @ref occlusion guard gave up): refuse
+            // unless the caller opted in, for the same reason as above.
+            if e.contains(" is occluded by ") && mode != "dom-fallback" {
+                return Err(format!(
+                    "{e} To click the covered element anyway through the DOM \
+                     (element.click(), isTrusted=false), add --allow-dom."
+                ));
+            }
             eprintln!(
                 "[click] coordinate click failed ({e}); falling back to DOM dispatch \
                  (set AGENT_BROWSER_CLICK_MODE=coord to disable)"
@@ -370,11 +390,25 @@ pub async fn click_reporting(
     }
 }
 
-/// True if a coordinate click at the selector's centre would land on something
-/// OTHER than the element (an overlay on top), i.e. the element is occluded.
-/// `false` when not occluded, the element is missing, or the probe fails (so we
-/// never block a click on a flaky probe — the normal coordinate path runs).
-async fn point_misses_element(client: &CdpClient, session_id: &str, selector: &str) -> bool {
+fn occluded_refusal(target: &str, cover: &str) -> String {
+    format!(
+        "click refused: {target} is covered by {cover} at its click point, so a click there \
+         would hit that instead. Dismiss the overlay (a cookie banner, a modal backdrop, a \
+         sticky header) and click again, or add --allow-dom to click the covered element \
+         through the DOM (element.click(), isTrusted=false; pages that only honour real \
+         input ignore it)."
+    )
+}
+
+/// What covers the selector's centre, when a coordinate click there would land
+/// on something OTHER than the element (an overlay on top). `None` when not
+/// occluded, the element is missing, or the probe fails (so we never block a
+/// click on a flaky probe — the normal coordinate path runs).
+async fn point_misses_element(
+    client: &CdpClient,
+    session_id: &str,
+    selector: &str,
+) -> Option<String> {
     let js = format!(
         r#"(() => {{
             const el = document.querySelector({sel});
@@ -385,7 +419,14 @@ async fn point_misses_element(client: &CdpClient, session_id: &str, selector: &s
             if (!hit) return false;
             // Not occluded if the hit is the element, a descendant, or an ancestor
             // wrapper (clicking those still reaches the element's handlers).
-            return !(hit === el || el.contains(hit) || hit.contains(el));
+            if (hit === el || el.contains(hit) || hit.contains(el)) return false;
+            let d = '<' + hit.tagName.toLowerCase();
+            if (hit.id) d += ' id="' + hit.id + '"';
+            const cls = typeof hit.className === 'string' ? hit.className.trim().split(/\s+/).slice(0, 2).join(' ') : '';
+            if (cls) d += ' class="' + cls + '"';
+            d += '>';
+            const t = (hit.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+            return t ? d + ' "' + t + '"' : d;
         }})()"#,
         sel = serde_json::to_string(selector).unwrap_or_default()
     );
@@ -401,8 +442,12 @@ async fn point_misses_element(client: &CdpClient, session_id: &str, selector: &s
         )
         .await
     {
-        Ok(r) => r.result.value.and_then(|v| v.as_bool()).unwrap_or(false),
-        Err(_) => false,
+        Ok(r) => r
+            .result
+            .value
+            .and_then(|v| v.as_str().map(String::from))
+            .filter(|s| !s.is_empty()),
+        Err(_) => None,
     }
 }
 

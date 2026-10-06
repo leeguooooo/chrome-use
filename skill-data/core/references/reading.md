@@ -149,9 +149,10 @@ missing feature. To work with them:
 ## Screenshot assets
 
 Use `screenshot [selector] [--clip x,y,w,h] <file>` for reusable image assets,
-visual evidence, or canvas state. Screenshots are downscaled to at most 2000px
-on the longest edge by default; `--max-width`, `--max-height`, and `--scale`
-control the output size. Do not infer CSS click coordinates from a resized
+visual evidence, or canvas state. Screenshots are downscaled to at most 1200px
+on the longest edge by default (width only for `--full`, so a long page stays
+readable); `--full-res` keeps the captured size, and `--max-width`,
+`--max-height`, and `--scale` control the output size. Do not infer CSS click coordinates from a resized
 image: for a known ref, `box @ref` returns CSS-pixel bounds and `centerX/centerY`.
 Prefer semantic refs for ordinary controls; see the canvas guidance above
 when the target has no semantic representation.

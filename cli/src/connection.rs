@@ -39,6 +39,9 @@ pub struct Response {
     pub retryable: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// Where the daemon spent the time: `{ms, cdpMs, cdpCalls, slowest}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<Value>,
 }
 
 #[allow(dead_code)]

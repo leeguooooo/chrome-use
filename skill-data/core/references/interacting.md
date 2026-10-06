@@ -217,12 +217,15 @@ split across nodes (React `{a} - {b}`) or nested in a child never matches; use
 snapshot `@ref`. "Element not found" keeps the selector plus the resolver's
 diagnosis, and an XPath with `text()` that matched nothing explains this.
 
-`click` auto-scrolls into view and, if the coordinate click is occluded, falls
-back to a DOM `.click()`. If a click *reports success but nothing happened* —
+`click` auto-scrolls into view. If something else covers the target (a cookie
+banner, a modal backdrop, a sticky header), the click is **refused** with an
+error naming what covers it, because a click there would hit the cover, not the
+control. Dismiss the cover and click again; `click --allow-dom` clicks the
+covered element through the DOM (`element.click()`, `isTrusted: false`) instead,
+for when you know the page accepts that. If a click *reports success but nothing happened* —
 classic for an autocomplete/menu `<li>` that closes on the input's blur — retry
 that one with `AGENT_BROWSER_CLICK_MODE=dom chrome-use click ...`, or just
-`chrome-use eval "<select the item via JS>"`. A DOM-dispatched click (the relay's
-default for left clicks) moves focus like a real click: the clicked element, its
+`chrome-use eval "<select the item via JS>"`. A DOM-dispatched click moves focus like a real click: the clicked element, its
 nearest focusable ancestor, or a label's control gets focus unless the handler
 already moved it, so `click <input>` then `press Meta+a` lands on that input. A
 plain `<li>` has no focusable target, so the input keeps focus and still selects.

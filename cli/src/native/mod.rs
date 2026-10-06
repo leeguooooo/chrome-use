@@ -61,6 +61,7 @@ pub mod stealth;
 pub mod storage;
 #[allow(dead_code)]
 pub mod stream;
+pub mod timing;
 #[allow(dead_code)]
 pub mod tracing;
 #[allow(dead_code)]

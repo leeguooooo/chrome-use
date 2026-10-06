@@ -1680,6 +1680,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // clear otherwise, so a value from an earlier command never leaks forward.
     match cmd.get("_clickMode").and_then(|v| v.as_str()) {
         Some(m) if !m.is_empty() => std::env::set_var("AGENT_BROWSER_CLICK_MODE", m),
+        // `click --allow-dom`: the pre-1.5.166 default, for this command only.
+        _ if cmd.get("allowDom").and_then(|v| v.as_bool()) == Some(true) => {
+            std::env::set_var("AGENT_BROWSER_CLICK_MODE", "dom-fallback")
+        }
         _ => std::env::remove_var("AGENT_BROWSER_CLICK_MODE"),
     }
     // Humanize: set the session level from the client's --humanize / env. Only
@@ -6271,8 +6275,11 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // Downscale the saved image so retina/full-page shots fit an agent's image
     // reader and screenshot pixels line up with `click x y` CSS px (issue #42).
     // Explicit --scale / --max-width / --max-height win; otherwise a default cap
-    // (2000px longest edge, AGENT_BROWSER_SCREENSHOT_MAX_EDGE overrides, 0 = off)
-    // applies. Annotated shots are left untouched so ref overlays stay aligned.
+    // (1200px longest edge — width only for --full, so a tall page stays
+    // readable; AGENT_BROWSER_SCREENSHOT_MAX_EDGE overrides, 0 = off; --full-res
+    // skips it) applies. Annotated shots are left untouched so ref overlays stay
+    // aligned. 1200 follows iphone-use: about 1.2k image tokens for a viewport
+    // instead of ~3.3k at 2000, with body text still legible.
     let mut resized: Option<(u32, u32)> = None;
     if !annotate {
         let scale = cmd.get("scale").and_then(|v| v.as_f64());
@@ -6284,16 +6291,28 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
             .get("maxHeight")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
-        let default_edge = if scale.is_none() && max_w.is_none() && max_h.is_none() {
+        let full_res = cmd.get("fullRes").and_then(|v| v.as_bool()) == Some(true);
+        let default_edge = if scale.is_none() && max_w.is_none() && max_h.is_none() && !full_res {
             std::env::var("AGENT_BROWSER_SCREENSHOT_MAX_EDGE")
                 .ok()
                 .and_then(|s| s.parse::<u32>().ok())
-                .or(Some(2000))
+                .or(Some(DEFAULT_SCREENSHOT_EDGE))
                 .filter(|&e| e > 0)
         } else {
             None
         };
-        resized = downscale_screenshot(&result.path, scale, max_w, max_h, default_edge);
+        let (default_edge, default_width) = if options.full_page {
+            (None, default_edge)
+        } else {
+            (default_edge, None)
+        };
+        resized = downscale_screenshot(
+            &result.path,
+            scale,
+            max_w.or(default_width),
+            max_h,
+            default_edge,
+        );
     }
 
     // Independent of the URL guard above (issue #184): if the saved image is one
@@ -6369,6 +6388,9 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
 /// `default_edge` cap — whichever yields the smaller image. Only ever shrinks;
 /// no-op (returns None) if the image is already within bounds or can't be read.
 /// Returns the new (width, height) when it actually resized.
+/// Default cap on a screenshot's longest edge (its width for `--full`).
+const DEFAULT_SCREENSHOT_EDGE: u32 = 1200;
+
 fn downscale_screenshot(
     path: &str,
     scale: Option<f64>,

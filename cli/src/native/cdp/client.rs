@@ -299,6 +299,19 @@ impl CdpClient {
         params: Option<Value>,
         session_id: Option<&str>,
     ) -> Result<Value, String> {
+        // Charged to the command being served, for its `timing` summary.
+        let started = std::time::Instant::now();
+        let out = self.send_command_untimed(method, params, session_id).await;
+        crate::native::timing::record(method, started.elapsed());
+        out
+    }
+
+    async fn send_command_untimed(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        session_id: Option<&str>,
+    ) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
         // Computed before `params` moves into the command: the budget for a

@@ -678,7 +678,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 .ok_or_else(|| ParseError::MissingArguments {
                     context: "click".to_string(),
                     usage:
-                        "click <selector> | click <x> <y> | click --coords <x>,<y> [--new-tab] [--follow]",
+                        "click <selector> | click <x> <y> | click --coords <x>,<y> [--new-tab] [--follow] [--allow-dom]",
                 })?;
             // A purely numeric first arg is never a valid CSS selector or @ref,
             // so it is almost certainly a coordinate that failed to parse as a
@@ -702,6 +702,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 });
             }
             let mut cmd = json!({ "id": id, "action": "click", "selector": sel });
+            // `--allow-dom`: if the target is covered, click it through the DOM
+            // (isTrusted=false) instead of refusing.
+            if rest.contains(&"--allow-dom") {
+                cmd["allowDom"] = json!(true);
+            }
             if new_tab {
                 cmd["newTab"] = json!(true);
             }
@@ -1428,6 +1433,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let mut max_width: Option<u32> = None;
             let mut max_height: Option<u32> = None;
             let mut scale: Option<f64> = None;
+            let mut full_res = false;
             let mut tab: Option<String> = None;
             let mut positional: Vec<&str> = Vec::new();
             let mut i = 0;
@@ -1446,6 +1452,8 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 match rest[i] {
                     "--full" | "-f" => full_page = true,
                     "--base64" | "-b" => base64 = true,
+                    // Keep the captured size: skip the default 1200px cap.
+                    "--full-res" => full_res = true,
                     // Downscale the saved image so retina/full-page shots fit an
                     // agent's image reader and screenshot px line up with click px (#42).
                     "--max-width" => {
@@ -1548,6 +1556,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 "path": path, "selector": selector,
                 "fullPage": full_page, "annotate": flags.annotate
             });
+            if full_res {
+                cmd["fullRes"] = json!(true);
+            }
             if base64 {
                 cmd["base64"] = json!(true);
             }

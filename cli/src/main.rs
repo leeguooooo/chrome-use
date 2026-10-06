@@ -2455,6 +2455,7 @@ fn main() {
                 code: None,
                 retryable: None,
                 warning: None,
+                timing: None,
             },
             Err(e) => {
                 let metadata = error_envelope::classify_error(&e);
@@ -2465,6 +2466,7 @@ fn main() {
                     data: None,
                     error: Some(e),
                     warning: None,
+                    timing: None,
                 }
             }
         };
