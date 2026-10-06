@@ -15,6 +15,25 @@ chrome-use snapshot -i --json          # machine-readable output
 chrome-use snapshot -i --reveal-values # print card / password / code values
 ```
 
+## Read only the needed region
+
+```bash
+chrome-use read                            # article text from active tab
+chrome-use snapshot -i -s "#main"          # scoped controls
+chrome-use snapshot -i -f "Save|Cancel"    # matching lines and ancestors
+chrome-use snapshot -i -u                  # include link URLs
+chrome-use get text --main                 # omit surrounding boilerplate
+chrome-use get attr @e1 href
+chrome-use frames                          # discover child frames
+```
+
+Refs can reach cross-origin frames and accessible closed-shadow controls.
+`get text` without a selector reads all frames; `get text --pierce` helps with
+closed shadow roots. Do not replace bounded reads with a full HTML dump.
+Use existing page evidence when it answers the next question; do not request
+DOM and screenshots together by default. Choose text/refs for controls and
+images for visuals.
+
 **Sensitive values are masked.** A field holding a card number, CVC, expiry,
 password or one-time code shows `<filled 19 chars>` instead of its value (decided
 by `autocomplete`, `type=password`, `name`/`id`, or the field's label), in
@@ -155,4 +174,5 @@ readable); `--full-res` keeps the captured size, and `--max-width`,
 `--max-height`, and `--scale` control the output size. Do not infer CSS click coordinates from a resized
 image: for a known ref, `box @ref` returns CSS-pixel bounds and `centerX/centerY`.
 Prefer semantic refs for ordinary controls; see the canvas guidance above
-when the target has no semantic representation.
+when the target has no semantic representation. Screenshots serve as requested
+assets and visual evidence; they are not a default extra check after a click.

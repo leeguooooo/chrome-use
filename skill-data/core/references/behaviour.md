@@ -7,6 +7,15 @@ into a crawl.
 **Related**: [waiting.md](waiting.md) for what a read means,
 [trust-boundaries.md](trust-boundaries.md) for what needs the user's say-so.
 
+## Reading command output
+
+- Output is short on purpose; `| tail -1` is not needed and cuts warnings.
+  An error's last line says what to do next. Do not discard stderr.
+- `eval` prints a string as text; a `JSON.stringify(...)` result prints as
+  JSON you parse once. `--json` gives the exact structured response.
+- Use one session name per task. After "session unresponsive", make the one
+  move it names and keep that name; a new name per error leaves daemons behind.
+
 ## One round trip per step
 
 An action and the read that checks it belong in the same command:
@@ -28,6 +37,14 @@ Both `--observe` and `--diff` say "no change" explicitly. That is evidence,
 not a failure: read the `why:` line under it before doing anything else. Do
 not re-run the same read without an action in between; the second answer is
 the first one.
+
+Read the action result and `observed.status`. An observation returns bounded
+changes and request context, or a new tree after a document replacement. An
+unavailable observation or `action_outcome_unknown` does not prove the action
+failed. Inspect current state before acting again; never blindly replay a
+send, submit, purchase, or other action that may have happened. For
+asynchronous work, wait on the relevant condition, then read; do not use
+fixed sleeps as proof.
 
 ## An action that did nothing is information
 
@@ -80,7 +97,8 @@ parameter that reflects the sort you chose: when the page exposes one
 authoritative signal for the fact you need, that is the answer. Do not confirm
 it again through a header badge, a second surface, or another full snapshot.
 `expect` exists for the cases where you want the check to be a command with an
-exit code, not a habit.
+exit code, not a habit. One authoritative signal is enough unless another
+signal contradicts it; command dispatch alone never settles the question.
 
 Once the requested task is complete, stop exploring. Answer, or move to the
 next task.
@@ -107,6 +125,8 @@ next task.
   not a disconnected browser. Keep the session, `open` the URL you need, and
   carry on. Do not restart the daemon, re-run setup, or re-read this skill for
   those errors. Restart only when an error says the browser itself is gone.
+- Use `close` only for the current session when its work is finished.
+  `close --all` affects other sessions.
 
 ## Talking to the user
 

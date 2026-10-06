@@ -20,6 +20,26 @@ Login flows, session persistence, OAuth, 2FA, and authenticated browsing.
 - [Token Refresh Handling](#token-refresh-handling)
 - [Security Best Practices](#security-best-practices)
 
+## Ground rules
+
+Reuse an authorized logged-in session first. Follow the user's authorization
+and the host's safety rules.
+
+On a login page, `auth login --bwu` uses a Bitwarden account; add `--item`
+when several match. In a `--launch` browser, `--passkey` signs in with only
+a vault passkey (bwu 0.9.0+); passkeys are unsupported on the extension relay.
+
+Never print secrets or put passwords in shell arguments/history. Use an
+authorized vault and stdin, and protect saved state files as credentials.
+Do not ask for secrets to be pasted into chat. A successful login requires
+reaching the requested authenticated destination, not merely clicking submit.
+
+For a step that actually requires the human, use `session handoff`, explain
+the step, and stop driving that session. Run `session resume` only after the
+user says they are done. An idle-recovery warning means a launched browser may
+have been replaced; inspect state instead of assuming the previous form/login
+survived.
+
 ## Import Auth from Your Browser
 
 The fastest way to authenticate is to reuse cookies from a Chrome session you are already logged into.

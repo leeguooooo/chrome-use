@@ -1,5 +1,29 @@
 # Skill installation and installer checks
 
+If the binary is missing, install it from GitHub Releases:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex
+```
+
+If the runner cannot discover chrome-use, run `chrome-use skill install`.
+It installs and verifies the binary's bundled discovery entry offline.
+`chrome-use skills update` refreshes the same entry; restart the runner or
+reload its skills afterward. Use `--project` for a local install.
+
+Skill content is bundled into the binary, so upgrading the binary updates it.
+`skills update` refreshes the runner's installed discovery stub instead. If
+the installed entry contains its own command manual without loading core,
+refresh that entry before relying on it. `chrome-use skills get core --full`
+includes every reference and template; use it only when you need the whole
+collection.
+
 `chrome-use skill install` installs the discovery entry bundled with the CLI.
 `skills update` and `skills refresh` do the same. No Node, npx, Git, network
 access or administrator privileges are needed for this step. It replaces only

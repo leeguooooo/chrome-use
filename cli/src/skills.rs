@@ -40,9 +40,10 @@ struct SkillInfo {
 ///   `skills get core`; the installed stub must explicitly perform this handoff
 ///   rather than duplicating the runtime command manual.
 /// - `skill-data/` — runtime skill content served by the CLI (`core`,
-///   `electron`, `slack`, `dogfood`, etc.). Core keeps ordinary actions and
-///   observation rules in its entry point; task-specific reading, connection,
-///   and adapter details are retrieved as `core/<reference>`.
+///   `electron`, `slack`, `dogfood`, etc.). Core keeps only the action-loop
+///   rules, trust boundaries and the routing table in its entry point; verb
+///   details, reading, connection and adapter details are retrieved as
+///   `core/<reference>`.
 ///
 /// Both are shipped in the npm package and searched by `discover_skills`.
 const SKILL_DIRS: &[&str] = &["skills", "skill-data"];

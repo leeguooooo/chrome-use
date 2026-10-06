@@ -1,5 +1,66 @@
 # Interacting
 
+## Ordinary actions
+
+Choose refs from the live page; the numbers below are examples.
+
+```bash
+chrome-use click @e3 --observe
+chrome-use fill @e2 "hello" --observe       # replace the field value
+chrome-use type @e2 " world"               # append
+chrome-use press Enter --selector @e2      # focus this control before the key
+chrome-use select @e4 "option-value"       # native select
+chrome-use pick @e4 --option "Europe"      # custom combobox
+chrome-use check @e5
+chrome-use uncheck @e5
+chrome-use scroll down 500
+chrome-use get value @e2
+chrome-use get text @e6
+chrome-use wait --text "<expected page text>"  # case-sensitive substring
+```
+
+`wait --text` matches an exact, case-sensitive substring of the page's visible
+text. Use the actual expected page wording: `Saved` will not match
+`Delivery saved.` When a receipt or confirmation is already visible, that is
+the answer; waiting for it again only spends the budget. A `Wait timed out`
+says the condition was not observed; on its own it tells you nothing about
+the connection.
+
+Prefer dedicated verbs over handwritten JavaScript: they check ref identity,
+handle frames, and dispatch the events widgets expect. For an autocomplete,
+use `type @ref "text" --key-events`, then choose its visible candidate; `--enter`
+can commit a candidate.
+
+A field showing your text does not prove the page saved it. Heed ⚠
+warnings from `fill`, `click` and `keyboard type`: a Save still disabled after
+a fill, a `dispatch: dom` click, or a refused click on a disabled control all
+mean the edit did not register. A ref marked `toggles=checkbox(...)` is a
+switch, not a link. It can be destructive, so do not click it to navigate.
+
+## Before you write `eval`
+
+In real sessions most `eval` calls re-implemented a command that already
+exists, and lost its verification and hints. Use the command:
+
+| About to eval | Use instead |
+|---|---|
+| `document.body.innerText`, `el.innerText` | `get text <sel>`, or `read` for the main content |
+| `[...].find(b => b.textContent === '查询').click()` | `click "text=查询"` or `find text "查询" click` |
+| `getBoundingClientRect()` | `get box <sel or @ref>` |
+| patching `fetch`/XHR to see an API response | `network requests --filter api`, then `network request <id>` (reads the body from its original renderer; `responseBodyError` explains an unavailable body) |
+| `sleep N` or a polling loop | `wait --text "…"`, `wait <sel>`, `wait --url <pattern>`, `wait --fn "<expr>"` |
+| setting `.value` through a native setter | `fill @eN "…"`: it reads the value back and says when it did not stick |
+| injecting a script before the page runs | `addinitscript <js>`, then `reload` |
+
+Keep `eval` for what no command does: page globals, framework stores, canvas,
+or a diagnostic question the verbs cannot answer, such as hidden form
+validity. Do not dump credential-bearing forms or bypass blockers just because
+an action failed. `eval` targets the main frame unless `--frame` is set.
+`eval` prints a string as text; a `JSON.stringify(...)` result prints as JSON
+you parse once.
+
+## Command list
+
 ```bash
 chrome-use click @e1                   # click
 chrome-use click @e1 --new-tab         # open link in new tab instead of navigating
@@ -242,6 +303,12 @@ chrome-use click --coords 449,320   # same, explicit flag
 A bare-number argument is always a coordinate, never a selector.
 
 ### Canvas / WebGL apps (games, map & 3D viewers, drawing tools)
+
+For semantic controls, prefer refs over pixels. Canvas/WebGL targets can lack
+DOM or accessibility nodes: capture their pixels and use coordinates when
+needed. Coordinate input over the relay may hit the foreground tab; use an
+owned isolated test tab for such work. For a ref's coordinates, `box @ref`
+provides CSS-pixel bounds and its center.
 
 These paint everything to a `<canvas>` and expose **almost no accessibility
 tree**, so `snapshot` comes back near-empty and refs are a dead end. `snapshot`

@@ -58,6 +58,27 @@ clearance.
 
 Full detail: `chrome-use skills get real-chrome`
 
+## Status, browser choice, and other people's tabs
+
+`chrome-use status` probes the extension for up to 10 seconds without a session
+daemon. Stale relay files do not count as online. A healthy relay does not prove
+that an individual page renderer responds; verify the intended page separately.
+
+Plain `open` connects through the extension relay after one-time extension
+setup; `extension connect` reconnects explicitly. `--launch` uses an isolated
+empty test profile that does not carry the user's login. Headed is the default.
+
+Task session isolation is automatic when an agent/terminal identity is
+available; otherwise it falls back to shared `default`. Use `--session <name>`
+for explicit isolation and reuse that name. `--browser <id|email>` pins a
+profile. `browsers` lists connected profiles; `tab list` lists session tabs.
+Adopt an existing user tab only when needed for the request. Do not close,
+navigate, or reconfigure unrelated tabs or sessions.
+
+An empty tab list or one stale tab is not proof the browser disconnected.
+Read the error before restarting anything. For setup/version failures, use
+`doctor --offline --quick`; load `core/troubleshooting` for diagnosis.
+
 
 Chrome refuses debugger access to a web tab while another extension's frame is
 in it, most often a password manager's inline autofill menu (Bitwarden,

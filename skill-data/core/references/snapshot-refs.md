@@ -83,7 +83,10 @@ chrome-use click @e12
 ## Ref Lifecycle
 
 Refs are stable for the same backend DOM node across snapshots in one document.
-Navigation and tab switches invalidate the identity map.
+Navigation and tab switches invalidate the identity map: use the new
+observation or snapshot before acting. Ordinary re-renders can self-heal when
+identity still matches. When a ref errors or a control is newly rendered,
+discover it again.
 An annotated screenshot refreshes that same-document snapshot without a hard
 reset, so inserting `screenshot --annotate` between snapshot and click does not
 renumber unchanged controls.
@@ -264,3 +267,5 @@ chrome-use get text @e5
 ## Context and status receipts
 
 Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or groups identified by a heading or one distinct linked product name and one action control. Named product links omit repeated context when their sibling action carries it. It preserves local text such as product prices without changing accessible names or refs. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
+
+Interactive snapshots also carry form alerts. A short observation is not proof that missing content is absent; scope the read or use a full snapshot.

@@ -25,8 +25,8 @@ before browser commands:
 chrome-use skills get core
 ```
 
-Load it once per conversation and follow its task-specific reference routing.
-Ordinary clicks and forms are covered there; do not load `--full` by default.
+Load it once per conversation. It holds the rules and routes each need to one
+`core/<topic>` reference; do not load `--full` by default.
 Reuse the same task session across calls. Follow the user's selected browser
 and tool preferences.
 

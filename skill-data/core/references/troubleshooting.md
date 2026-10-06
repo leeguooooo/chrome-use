@@ -169,3 +169,9 @@ extensions predating the generic call API. Extensions without inspectTab cannot
 confirm health. A timeout means no confirmation within the deadline, not proof
 of a permanent disconnect. Opening the relay connection retains its existing
 owned-target reannouncement behavior.
+
+## Friction log and bug reports
+
+Unexpected failures are logged locally by `chrome-use friction` (disable with
+`AGENT_BROWSER_NO_FRICTION_LOG=1`). If reporting a bug is authorized, include
+the exact command and observed result, with secrets and private content removed.

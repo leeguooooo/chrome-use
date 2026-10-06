@@ -1,7 +1,9 @@
 # CAPTCHA workflow
 
-For a user-authorized login or browser task, inspect and attempt an ordinary
-CAPTCHA before handing off. Do not stop just because the page says CAPTCHA,
+For a user-authorized login or browser task, a CAPTCHA is a task step, not an
+automatic stop. Inspect and attempt an ordinary CAPTCHA before handing off:
+`solve-slider` for an ordinary or rotating Yidun puzzle, or screenshot-guided
+clicks for a readable icon/ordered-image challenge. Do not stop just because the page says CAPTCHA,
 security verification, or human check. Follow the host's safety rules and the
 user's restrictions. Solve the visible challenge through normal controls;
 never remove the check, modify verification responses, or claim success from
