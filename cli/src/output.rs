@@ -374,6 +374,12 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     "   {}",
                     color::dim(&format!("e.g. chrome-use site {} --json", cmds[0]))
                 );
+                if let Some(pack) = cmds[0].split('/').next() {
+                    eprintln!(
+                        "   {}",
+                        color::dim(&format!("args: chrome-use site info {pack}"))
+                    );
+                }
             }
         }
         // `open` that landed on a page refusing this browser's sign-in (#387).

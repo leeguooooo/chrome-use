@@ -593,6 +593,11 @@ pub struct DaemonState {
     /// Session-scoped setup applied to the active page, replayed onto tabs the
     /// daemon creates or adopts. See [`SessionSetup`].
     pub session_setup: SessionSetup,
+    /// Host whose `site` adapters were last surfaced (or checked and found
+    /// none — stored as the host anyway, `""` for hostless pages). `None` until
+    /// the session first touches a page, so attaching to an already-open tab
+    /// also gets the hint. See `annotate_site_change`.
+    pub site_hint_host: Option<String>,
 }
 
 impl DaemonState {
@@ -657,6 +662,7 @@ impl DaemonState {
                 .unwrap_or(25_000),
             viewport: None,
             session_setup: SessionSetup::default(),
+            site_hint_host: None,
         }
     }
 
@@ -2588,6 +2594,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         }
     }
 
+    if ok {
+        annotate_site_change(action, &mut resp, state).await;
+    }
+
     // Auto-report pending JavaScript dialog so agents know why commands may hang
     if action != "dialog" {
         if let Some(ref dialog) = state.pending_dialog {
@@ -4248,6 +4258,81 @@ fn with_site_hint(mut result: Value, fallback_url: &str) -> Value {
         }
     }
     result
+}
+
+/// Actions after which the active page may sit on a different site than the
+/// last one we told the agent about: tab moves, history moves, clicks that
+/// navigate, and the read verbs an agent starts with on a tab it didn't open.
+const SITE_CHANGE_ACTIONS: &[&str] = &[
+    "tab_new",
+    "tab_switch",
+    "tab_close",
+    "tab_adopt",
+    "tab_duplicate",
+    "back",
+    "forward",
+    "reload",
+    "click",
+    "dblclick",
+    "press",
+    "read",
+    "do",
+    "actions",
+];
+
+/// Auto-trigger, generalised: `open` and `snapshot` always carry
+/// `siteAdapters`, but an agent also reaches a site by switching tabs, going
+/// back, clicking a link, or attaching to a tab the user already had open. After
+/// those, if the active page's host differs from the one last surfaced, attach
+/// the same `siteAdapters` hint. Same host → nothing, so a session that stays on
+/// one site hears about its adapters once rather than on every click.
+async fn annotate_site_change(action: &str, resp: &mut Value, state: &mut DaemonState) {
+    let data_hint = resp
+        .get("data")
+        .and_then(|d| d.get("siteAdapters"))
+        .and_then(|h| h.get("domain"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    if let Some(host) = data_hint {
+        // `open` / `snapshot` already said it; remember so we don't repeat.
+        state.site_hint_host = Some(host);
+        return;
+    }
+    let first_touch = state.site_hint_host.is_none();
+    if !first_touch && !SITE_CHANGE_ACTIONS.contains(&action) {
+        return;
+    }
+    // A blocking dialog freezes page JS; don't add a stall to report a hint.
+    if state.pending_dialog.is_some() {
+        return;
+    }
+    let Some(mgr) = state.browser.as_ref() else {
+        return;
+    };
+    let url = match tokio::time::timeout(Duration::from_millis(1500), mgr.get_url()).await {
+        Ok(Ok(u)) if !u.is_empty() => u,
+        _ => mgr.cached_active_url(),
+    };
+    let host = url::Url::parse(&url)
+        .ok()
+        .and_then(|u| u.host_str().map(String::from))
+        .unwrap_or_default();
+    if state.site_hint_host.as_deref() == Some(host.as_str()) {
+        return;
+    }
+    state.site_hint_host = Some(host);
+    let hint = with_site_hint(json!({ "url": url }), &url);
+    let Some(adapters) = hint.get("siteAdapters") else {
+        return;
+    };
+    if let Some(obj) = resp.as_object_mut() {
+        let data = obj
+            .entry("data")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(d) = data.as_object_mut() {
+            d.insert("siteAdapters".into(), adapters.clone());
+        }
+    }
 }
 
 /// After navigation, probe the page for known anti-bot vendor fingerprints
