@@ -125,6 +125,9 @@ pub async fn click(
     click_count: i32,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(), String> {
+    // Internal callers (check, download, sign-in) keep the DOM fallback for a
+    // covered target: a styled checkbox covering its own hidden input is the
+    // normal case there, and they verify the result themselves.
     click_reporting(
         client,
         session_id,
@@ -133,6 +136,7 @@ pub async fn click(
         button,
         click_count,
         iframe_sessions,
+        false,
     )
     .await
     .map(|_| ())
@@ -195,6 +199,9 @@ pub async fn click_reporting(
     button: &str,
     click_count: i32,
     iframe_sessions: &HashMap<String, String>,
+    // Refuse a target something else covers (the `click` command), instead of
+    // clicking it through the DOM.
+    refuse_covered: bool,
 ) -> Result<ClickOutcome, String> {
     // AGENT_BROWSER_CLICK_MODE: "" (default) = coordinate click; a target that
     // something else covers is refused, other coordinate failures fall back to
@@ -202,6 +209,7 @@ pub async fn click_reporting(
     // covered target; "coord" = strict coordinate only (no fallback); "dom" =
     // always dispatch through the DOM.
     let mode = std::env::var("AGENT_BROWSER_CLICK_MODE").unwrap_or_default();
+    let refuse_covered = refuse_covered && mode != "dom-fallback";
 
     // (A) Scroll the target into view first so the computed coordinates land
     // inside the viewport. Without this, an element below the fold (or revealed
@@ -311,7 +319,7 @@ pub async fn click_reporting(
                 // A DOM `.click()` on a covered target reports success for a click
                 // a user could not have made, and the agent then believes it hit
                 // the real control. Refuse unless the caller opted in.
-                if mode != "dom-fallback" {
+                if refuse_covered {
                     return Err(occluded_refusal(selector_or_ref, &cover));
                 }
                 eprintln!(
@@ -353,7 +361,7 @@ pub async fn click_reporting(
             }
             // A persistent overlay (the @ref occlusion guard gave up): refuse
             // unless the caller opted in, for the same reason as above.
-            if e.contains(" is occluded by ") && mode != "dom-fallback" {
+            if e.contains(" is occluded by ") && refuse_covered {
                 return Err(format!(
                     "{e} To click the covered element anyway through the DOM \
                      (element.click(), isTrusted=false), add --allow-dom."

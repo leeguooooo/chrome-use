@@ -6703,6 +6703,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                 button,
                 click_count,
                 &state.iframe_sessions,
+                true,
             )
             .await?,
         );
@@ -13306,6 +13307,7 @@ async fn execute_subaction(
                 "left",
                 1,
                 &state.iframe_sessions,
+                true,
             )
             .await?;
             let mut out = json!({ "clicked": selector, "dispatch": outcome.dispatch });
