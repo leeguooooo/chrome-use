@@ -191,6 +191,7 @@ pub(crate) fn disabled_click_error(selector_or_ref: &str) -> String {
 
 /// `click` that also reports how the click was delivered. A disabled target
 /// is refused rather than clicked.
+#[allow(clippy::too_many_arguments)]
 pub async fn click_reporting(
     client: &CdpClient,
     session_id: &str,
