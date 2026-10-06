@@ -212,6 +212,18 @@ chrome-use wait --load networkidle      # Wait for network idle (or -l)
 chrome-use wait --fn "window.ready"     # Wait for JS condition (or -f)
 ```
 
+## CAPTCHA continuation
+
+```bash
+chrome-use solve-slider 1       # ordinary Yidun puzzle: initial attempt + one retry
+chrome-use skills get core/captcha  # type detection, visual clicks, result verification
+```
+
+A verified slider success returns `solved:true`; exhausted attempts return an
+error and a nonzero exit code. `solve-slider` does not recognize ordered icons.
+For an authorized task, inspect and attempt the visible challenge before
+handoff. See `core/captcha` for coordinate conversion and bounded retries.
+
 ## Mouse Control
 
 ```bash

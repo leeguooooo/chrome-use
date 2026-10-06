@@ -409,9 +409,25 @@
 
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 还没覆盖的验证码</div>
-        易盾的<strong>增强版</strong>滑块（图标形状拼块 + 干扰项）和<strong>点选</strong>（按顺序点击）
-        是更难的挑战，目前尚未处理。
+        <code>solve-slider</code> 的内置检测器不自动识别增强版图标拼块或按顺序点选。
+        能看清的点选题由 agent 看截图、识别顺序、换算坐标并点击，不能把它当成滑块执行。
       </div>
+
+      <h3>遇到验证码先尝试</h3>
+      <p>
+        登录或浏览任务已获授权时，先读当前题型并尝试页面上的正常控件。验证码字样或
+        <code>observed.humanCheck</code> 警告不等于必须交给人。
+        易盾普通拼图先用 <code>solve-slider 1</code>；图标点选先截图，看清指令和目标后按顺序点击。
+        截图坐标要按截图尺寸与视口尺寸换算成 CSS 像素，不要直接除以 devicePixelRatio。
+      </p>
+      <p>
+        用 <code>chrome-use skills get core/captcha</code> 加载完整流程。最多尝试三道新题（含命令内重试）；
+        换题后重新读取，不复用旧坐标，不为重试反复发送短信。
+        点击命令返回 Done 不代表通过，要读页面的验证结果，再继续已授权的任务。
+        <code>solve-slider</code> 耗尽尝试时返回错误并以非零状态退出。
+        识别不清、尝试失败或需要本人操作时才用 <code>session handoff</code>，并在用户确认后恢复。
+        这套流程不保证所有厂商和题型都能解开，也不允许关闭校验或伪造通过结果。
+      </p>
 
       <hr class="du-divider" />
 

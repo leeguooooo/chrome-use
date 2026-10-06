@@ -432,9 +432,28 @@
 
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ CAPTCHAs not yet covered</div>
-        Yidun's <strong>enhanced</strong> slider (icon-shaped puzzle pieces + decoys) and <strong>click-select</strong>
-        (click in order) are harder challenges and aren't handled yet.
+        The built-in <code>solve-slider</code> detector does not automatically recognize enhanced icon-shaped pieces
+        or ordered clicks. An agent can inspect a readable icon challenge, convert screenshot coordinates, click in
+        order and verify the result. Do not run the slider solver on an ordered-click challenge.
       </div>
+
+      <h3>Attempt the visible challenge first</h3>
+      <p>
+        In an authorized login or browser task, identify the current challenge and try its normal controls.
+        A CAPTCHA label or <code>observed.humanCheck</code> warning does not prove personal presence is required.
+        Use <code>solve-slider 1</code> for an ordinary Yidun puzzle. For ordered icons, view a screenshot,
+        identify the instruction and targets, convert image coordinates to viewport CSS pixels and click in order.
+        Measure screenshot and viewport dimensions; do not simply divide by devicePixelRatio.
+      </p>
+      <p>
+        Load <code>chrome-use skills get core/captcha</code> for the complete workflow. Use at most three fresh
+        attempts, including solver retries. Reread refreshed challenges and do not resend SMS to retry them.
+        A Done receipt does not establish success: read the site's result, then continue the authorized task.
+        Exhausted <code>solve-slider</code> attempts return an error and a nonzero exit code.
+        Hand off only after failed attempts, ambiguous targets or a step requiring personal presence, and resume
+        after user confirmation. This workflow does not guarantee every provider or challenge can be solved;
+        do not disable checks or fabricate verification results.
+      </p>
 
       <hr class="du-divider" />
 

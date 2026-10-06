@@ -2595,9 +2595,11 @@ Examples:
             r##"
 chrome-use drag - Drag and drop
 
-Usage: chrome-use drag <source> <target>
+Usage: chrome-use drag <source> <target|dx[,dy]>
 
-Drags an element from source to target location.
+Drags an element to another target, or moves its handle by a CSS-pixel offset.
+For CAPTCHA classification, screenshot scaling and verified continuation,
+load `chrome-use skills get core/captcha`.
 Routing follows this session, not another profile's extension connection.
 
 Global Options:
@@ -2607,6 +2609,27 @@ Global Options:
 Examples:
   chrome-use drag "#draggable" "#drop-zone"
   chrome-use drag @e1 @e2
+  chrome-use drag @e1 +60,-3
+"##
+        }
+        "solve-slider" => {
+            r##"
+chrome-use solve-slider - Attempt a NetEase Yidun slider puzzle
+
+Usage: chrome-use solve-slider [retries]
+
+Detects an ordinary puzzle gap and drags the handle; default: 3 retries after
+an initial attempt. Verified success returns solved:true; exhausted attempts
+return an error and a nonzero exit code. Read the site's result before continuing.
+Enhanced/icon-shaped puzzles and ordered image clicks need the agent's visual
+inspection. Load `chrome-use skills get core/captcha` for bounded attempts,
+CSS-pixel coordinate conversion, ordered clicks, and result verification.
+A CAPTCHA or vendor-script warning alone is not a reason to stop an authorized
+task. Follow the host's rules; hand off only if attempts fail or a person is needed.
+
+Examples:
+  chrome-use solve-slider 1
+  chrome-use skills get core/captcha
 "##
         }
         "upload" => {
@@ -5108,7 +5131,10 @@ Core Commands:
                              disambiguate a repeated phrase (they are context,
                              not part of the selection); --cursor-before /
                              --cursor-after leave a caret instead of a selection
-  drag <src> <dst>           Drag and drop
+  drag <src> <dst|dx[,dy]>   Drag and drop, or move a slider handle by an offset
+  solve-slider [retries]    Attempt a NetEase Yidun puzzle (default: 3 retries)
+                             For ordered icon clicks and verified CAPTCHA
+                             continuation: skills get core/captcha
   upload <sel> <files...>    Upload files
   download <sel> <path>      Download file from an element
   download-url <url> [path]  Start a URL download through ab-connect. A blob:
@@ -5893,6 +5919,11 @@ pub fn print_version() {
 mod tests {
     use super::{eval_result_text, format_a11y_text, format_storage_text, print_command_help};
     use serde_json::json;
+
+    #[test]
+    fn slider_solver_has_its_own_help_topic() {
+        assert!(print_command_help("solve-slider"));
+    }
 
     #[test]
     fn site_has_its_own_help_topic() {

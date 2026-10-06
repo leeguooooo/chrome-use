@@ -426,6 +426,10 @@ persist the session (`state save` / `--session-name`) so later runs start alread
 logged in. Do NOT hand a login to the human just because it has a password or a
 2FA step — solve it. See the login patterns above and [session-management.md](session-management.md).
 
+For a CAPTCHA, load `core/captcha`: inspect its current type, try an ordinary
+slider solver or screenshot-guided ordered clicks, verify, and continue the
+authorized login. A loaded vendor script is not proof that a person is needed.
+
 **`session handoff` is a rare escape hatch, NOT how you log in.** Reach for it
 *only* when a step is genuinely impossible for the agent — an image/behavioral
 captcha you can't solve, an SMS/authenticator code you have no access to, a

@@ -14304,7 +14304,16 @@ async fn handle_solve_slider(cmd: &Value, state: &mut DaemonState) -> Result<Val
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         }
     }
-    Ok(json!({ "solved": false, "attempts": retries + 1, "detail": last }))
+    // An exhausted solver is a failed action, not a successful dispatch.
+    Err(format!(
+        "Slider verification did not succeed after {} attempt(s): status={}, tip={}. \
+         Inspect the current challenge with core/captcha before another attempt.",
+        retries + 1,
+        last.get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        last.get("tip").and_then(Value::as_str).unwrap_or("")
+    ))
 }
 
 async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {

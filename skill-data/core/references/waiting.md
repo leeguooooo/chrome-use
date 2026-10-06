@@ -128,9 +128,11 @@ with `resourcesTotal`.
 **`blocked_by_human_check`.** When an action changed nothing but loaded a known
 human-check script (OpenAI Sentinel, hCaptcha, Cloudflare Turnstile, reCAPTCHA,
 Arkose, DataDome, HUMAN, GeeTest), `observed.humanCheck` names the vendor and the
-result carries a `blocked_by_human_check` warning. The page is waiting for a
-person: do not repeat the click and do not try to get around it. Hand off with
-`session handoff`, and resume after the user has completed it.
+result carries a `blocked_by_human_check` warning. This is evidence of a script
+load and an unchanged page, not proof a person is required. Do not repeat the
+original submit. Inspect the current challenge and, within the authorized task
+and host rules, try its ordinary controls using `core/captcha`. Verify the
+result; hand off only when attempts fail or personal presence is required.
 
 **See what an action changed — `--observe`.** Add it to a mutating action
 (`click`/`fill`/`type`/`select`/`check`/`press`/`eval`) and instead of you

@@ -197,13 +197,16 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击。任意时刻都能接管（比如手动过验证码），然后让 agent 继续。
 
+任务已获授权时，内置 skill 要求 agent 先识别并尝试普通验证码：易盾拼图用 `solve-slider`，能看清的图标点选用截图识别顺序并点击，核验页面结果后继续。用 `chrome-use skills get core/captcha` 加载流程。重试有次数限制；识别不清或缺少操作能力时才交接。这不代表所有厂商和题型都能解开。
+
 | 命令 | 用途 |
 |---|---|
 | `chrome-use open <url>` | 连接你的 Chrome 并导航 |
 | `chrome-use snapshot -i` | 读页面；每次交互的起点 |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | 按文本、按快照 ref、或按视口坐标点击 |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` 整体替换，`type` 追加，都用可信输入事件；页面没反应时（比如保存按钮一直禁用）给出 ⚠ 警告 |
-| `chrome-use screenshot ./page.png` | 保存截图（截图是用来看和附上的输出，不是 agent 读页面的方式） |
+| `chrome-use screenshot ./page.png` | 保存视觉证据；图片验证码和 canvas 目标用截图，普通控件用 ref |
+| `chrome-use solve-slider 1` · `skills get core/captcha` | 尝试易盾拼图（未通过时非零退出）；加载点选与结果核验流程 |
 | `chrome-use find "edit web service settings button"` | 按自然语言描述返回排序后的候选，不自动执行 |
 | `chrome-use actions @e15` · `do @e15 expand` | 这个元素此刻支持什么，并只做其中之一 |
 | `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | 列出标签；选择已创建或已接管的标签；通过扩展或直接 CDP 连接，不导航地接管已打开的标签 |

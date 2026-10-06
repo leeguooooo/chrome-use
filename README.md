@@ -207,13 +207,16 @@ chrome-use snapshot -i --diff          # only what changed since the last snapsh
 
 The agent operates in your Chrome: you'll see tabs opening, pages loading, clicks happening in real time. You can take over at any point (e.g. solve a CAPTCHA), then let the agent continue.
 
+For an authorized task, the bundled skill tells the agent to inspect and attempt ordinary CAPTCHAs before handing off: `solve-slider` for Yidun puzzles, screenshot-guided ordered clicks for readable icon challenges, then verify the site's result and continue. Load `chrome-use skills get core/captcha`. Attempts are bounded; unavailable or ambiguous challenges still need a handoff. This workflow does not guarantee every provider or challenge can be solved.
+
 | Command | Purpose |
 |---|---|
 | `chrome-use open <url>` | Connect to your Chrome and navigate |
 | `chrome-use snapshot -i` | Read the page; the start of every interaction |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends, both with trusted input events; a ⚠ warning says when the page did not react (e.g. its Save stayed disabled) |
-| `chrome-use screenshot ./page.png` | Save a screenshot (an output for looking at, never the way an agent reads a page) |
+| `chrome-use screenshot ./page.png` | Save visual evidence; use it for image challenges and canvas targets, and refs for ordinary controls |
+| `chrome-use solve-slider 1` · `skills get core/captcha` | Attempt a Yidun puzzle (nonzero exit if unsolved); load ordered clicks and verification |
 | `chrome-use find "edit web service settings button"` | Ranked, non-acting candidates from a natural-language description |
 | `chrome-use actions @e15` · `do @e15 expand` | What this element supports right now, and perform one of exactly those |
 | `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | List tabs; select a created or adopted tab; attach an already-open tab through the extension or direct CDP without navigating it |

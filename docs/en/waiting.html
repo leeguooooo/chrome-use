@@ -326,7 +326,7 @@
       </p>
 
       <p>
-        When an action changed nothing but loaded a known human-check script (OpenAI Sentinel, hCaptcha, Cloudflare Turnstile, reCAPTCHA, Arkose, DataDome, HUMAN, GeeTest), <code>observed.humanCheck</code> names the vendor and the result carries a <code>blocked_by_human_check</code> warning. The page is waiting for a person: do not repeat the click and do not try to get around it. Hand off with <code>session handoff</code> and resume after the user has completed it.
+        When an action changed nothing but loaded a known human-check script (OpenAI Sentinel, hCaptcha, Cloudflare Turnstile, reCAPTCHA, Arkose, DataDome, HUMAN, GeeTest), <code>observed.humanCheck</code> names the vendor and the result carries a <code>blocked_by_human_check</code> warning. This establishes a script load and an unchanged page, not that personal presence is required. Do not repeat the original submit. Inspect the current challenge and use <code>core/captcha</code> to attempt ordinary controls within the authorized task, then verify the result. Hand off only when attempts fail or a person is required.
       </p>
 
       <hr class="du-divider" />

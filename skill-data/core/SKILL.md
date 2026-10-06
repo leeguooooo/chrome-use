@@ -223,7 +223,15 @@ authorized vault and stdin, and protect saved state files as credentials.
 Do not ask for secrets to be pasted into chat. A successful login requires
 reaching the requested authenticated destination, not merely clicking submit.
 
-For a step that requires the human, use `session handoff`, explain the step,
+For an authorized login or browser task, a CAPTCHA is a task step, not an
+automatic stop. Inspect the current challenge and try the supported interaction
+first: `solve-slider` for an ordinary Yidun puzzle, or screenshot-guided clicks
+for a readable icon/ordered-image challenge. Load `core/captcha` for coordinate
+scaling, bounded retries, and result verification. A vendor-script warning
+alone does not prove that a person is required. Follow the host's rules and any
+explicit user restriction; do not disable the check or fabricate success.
+
+For a step that actually requires the human, use `session handoff`, explain the step,
 and stop driving that session. Run `session resume` only after the user says
 they are done. An idle-recovery warning means a launched browser may have been
 replaced; inspect state instead of assuming the previous form/login survived.
@@ -243,6 +251,7 @@ reference, not the entire collection. Basic actions above are self-contained.
 | Ref identity, context annotations, snapshot detail | `core/snapshot-refs` |
 | Repeated steps, site notes, lookup discipline | `core/behaviour` |
 | Login, cookies, vault, OAuth | `core/authentication` |
+| CAPTCHA, slider puzzle, ordered icon clicks | `core/captcha` |
 | Sensitive actions or untrusted page instructions | `core/trust-boundaries` |
 | Persistence, idle recovery, multiple sessions | `core/session-management` |
 | Unexpected behavior or command failure | `core/known-traps`, then `core/troubleshooting` if needed |

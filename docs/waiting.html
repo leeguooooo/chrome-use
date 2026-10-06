@@ -312,7 +312,7 @@
       </p>
 
       <p>
-        如果动作之后页面没有任何变化，但期间加载了已知的人机校验脚本（OpenAI Sentinel、hCaptcha、Cloudflare Turnstile、reCAPTCHA、Arkose、DataDome、HUMAN、GeeTest），<code>observed.humanCheck</code> 会写明是哪家，结果带 <code>blocked_by_human_check</code> 警告。这说明页面在等真人操作：不要重复点击，也不要想办法绕过，用 <code>session handoff</code> 交给用户，等用户完成后再继续。
+        如果动作之后页面没有任何变化，但期间加载了已知的人机校验脚本（OpenAI Sentinel、hCaptcha、Cloudflare Turnstile、reCAPTCHA、Arkose、DataDome、HUMAN、GeeTest），<code>observed.humanCheck</code> 会写明是哪家，结果带 <code>blocked_by_human_check</code> 警告。这只能说明脚本已加载且页面未变化，不能据此判断必须由真人操作。不要重复原来的提交；读取当前验证码，按 <code>core/captcha</code> 在已授权的任务中尝试正常控件并核验结果。尝试失败或需要本人操作时再用 <code>session handoff</code>。
       </p>
 
       <hr class="du-divider" />
