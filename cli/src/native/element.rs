@@ -232,7 +232,7 @@ impl RefMap {
     }
 
     /// Role + name an earlier snapshot of this document minted `ref_id` for,
-    /// while its identity is still remembered (see [`STABLE_REF_GENERATIONS`]).
+    /// while it is still remembered (until navigation, see [`Self::clear`]).
     fn retired_identity(&self, ref_id: &str) -> Option<(String, String)> {
         self.retired.get(ref_id).cloned()
     }
