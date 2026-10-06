@@ -1919,6 +1919,27 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // `args`, and emit a `site` action: the daemon navigates to the
             // adapter's @meta.domain (reusing the tab if already there) and evals
             // the adapter function in the site's own logged-in page.
+            // `site analyze [url]`: scan the page for an adapter's data source.
+            if rest.first() == Some(&"analyze") {
+                let mut cmd = json!({ "id": id, "action": "site_analyze" });
+                if let Some(url) = rest.get(1) {
+                    cmd["url"] = json!(url);
+                }
+                return Ok(cmd);
+            }
+            // `site verify <name>/<cmd> [args] [--write-fixture]`: a normal run,
+            // then main.rs compares the result's shape with the stored fixture.
+            let (verify, rest): (Option<bool>, Vec<&str>) = if rest.first() == Some(&"verify") {
+                let write = rest.contains(&"--write-fixture");
+                let kept = rest[1..]
+                    .iter()
+                    .filter(|a| **a != "--write-fixture")
+                    .copied()
+                    .collect();
+                (Some(write), kept)
+            } else {
+                (None, rest.to_vec())
+            };
             let spec = rest.first().ok_or(ParseError::InvalidValue {
                 message: "site requires <name>/<command> (run `chrome-use site list`)".to_string(),
                 usage: "site <name>/<command> [args]",
@@ -2000,6 +2021,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 // The CLI's socket read waits timeout_ms + a margin, so a long run
                 // is not cut off client-side before the daemon answers.
                 "timeout_ms": run_timeout_ms + 10_000,
+                "verify": verify.map(|write| json!({ "spec": spec, "writeFixture": write })),
             }))
         }
 

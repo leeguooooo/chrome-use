@@ -2012,6 +2012,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "content" => handle_content(state).await,
             "evaluate" => handle_evaluate(cmd, state).await,
             "site" => handle_site(cmd, state).await,
+            "site_analyze" => handle_site_analyze(cmd, state).await,
             "script" => super::script::handle_script(cmd, state).await,
             "close" => handle_close(state).await,
             "keep" => handle_keep(cmd, state).await,
@@ -4794,6 +4795,37 @@ async fn resolve_iframe_selector(
 /// already loaded the adapter and built the `script`; here we just place the page
 /// and evaluate. Never disrupts the user's foreground tab — navigation happens on
 /// the daemon's own tab (same as every other command on the relay).
+/// `site analyze [url]`: scan the current page (after opening `url`, if given)
+/// for what an adapter should read — API calls the page made, state it embeds,
+/// anti-bot vendors — and recommend a data source.
+async fn handle_site_analyze(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    if cmd.get("url").and_then(|v| v.as_str()).is_some() {
+        handle_navigate(cmd, state).await?;
+    }
+    let mgr = state.browser.as_ref().ok_or("site analyze: no browser")?;
+    let raw = mgr.evaluate(crate::site::ANALYZE_JS, None).await?;
+    let strings = |key: &str| -> Vec<String> {
+        raw.get("signals")
+            .and_then(|s| s.get(key))
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let signals = humanize::DetectSignals {
+        cookie_names: strings("cookies"),
+        script_urls: strings("scripts"),
+        window_globals: strings("globals"),
+    };
+    let vendors = humanize::detected_vendors(&signals);
+    let host = raw.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    let adapters = crate::site::adapters_for_domain(host);
+    Ok(crate::site::analyze_report(&raw, &vendors, &adapters))
+}
+
 async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let domain = cmd
         .get("domain")

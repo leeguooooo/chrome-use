@@ -29,7 +29,7 @@ mod test_utils;
 mod upgrade;
 mod validation;
 
-use serde_json::json;
+use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::process::exit;
@@ -3103,6 +3103,44 @@ fn main() {
                                 None => err,
                             });
                         }
+                    }
+                }
+            }
+            // `site verify`: compare the result's shape with the stored fixture
+            // (or record it). A mismatch fails the command like an adapter error.
+            if let Some(v) = cmd.get("verify").filter(|v| !v.is_null()) {
+                if resp.success {
+                    let spec = v.get("spec").and_then(|x| x.as_str()).unwrap_or("");
+                    let write = v.get("writeFixture").and_then(|x| x.as_bool()) == Some(true);
+                    let result = resp
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.get("result"))
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    let (ok, report) = site::verify_result(spec, &result, write);
+                    if !ok {
+                        resp.success = false;
+                        let issues: Vec<String> = report
+                            .get("issues")
+                            .and_then(|x| x.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|i| i.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        resp.error = Some(format!(
+                            "site verify {spec}: {}",
+                            if issues.is_empty() {
+                                "could not record the fixture".to_string()
+                            } else {
+                                issues.join("; ")
+                            }
+                        ));
+                    }
+                    if let Some(d) = resp.data.as_mut().and_then(|d| d.as_object_mut()) {
+                        d.insert("verify".into(), report);
                     }
                 }
             }

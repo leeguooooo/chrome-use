@@ -300,6 +300,61 @@ fn stderr_is_discarded() -> bool {
     }
 }
 
+fn print_site_analyze(data: &serde_json::Value, strategy: &str, next: &[serde_json::Value]) {
+    let host = data.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    println!("site analyze: {host}");
+    let api = data
+        .get("api")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let seen = data
+        .get("requestsSeen")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    println!("  API candidates ({} of {seen} requests):", api.len());
+    for a in api.iter().take(8) {
+        let url = a.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let why: Vec<&str> = a
+            .get("reasons")
+            .and_then(|v| v.as_array())
+            .map(|r| r.iter().filter_map(|x| x.as_str()).collect())
+            .unwrap_or_default();
+        println!("    {url}");
+        println!("      {}", color::dim(&why.join(", ")));
+    }
+    let state = data
+        .get("state")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if !state.is_empty() {
+        println!("  Embedded state:");
+        for st in state.iter().take(8) {
+            let name = st.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let size = st.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+            let keys: Vec<&str> = st
+                .get("keys")
+                .and_then(|v| v.as_array())
+                .map(|r| r.iter().filter_map(|x| x.as_str()).collect())
+                .unwrap_or_default();
+            println!("    {name} ({size} chars) {}", color::dim(&keys.join(", ")));
+        }
+    }
+    if let Some(v) = data
+        .get("antiBot")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
+    {
+        let names: Vec<&str> = v.iter().filter_map(|x| x.as_str()).collect();
+        println!("  Anti-bot: {}", names.join(", "));
+    }
+    println!("  Strategy: {strategy}");
+    for (i, step) in next.iter().filter_map(|s| s.as_str()).enumerate() {
+        println!("  {}. {step}", i + 1);
+    }
+}
+
 pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
     print_response_body(resp, action, opts);
     // Every successful text response gets its observation, including branches
@@ -388,6 +443,35 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             if let Some(msg) = sugg.get("message").and_then(|v| v.as_str()) {
                 eprintln!("site adapter suggestion: {msg}");
             }
+        }
+        // `site verify`: the verdict, to stderr so the result stays parseable.
+        if let Some(v) = data.get("verify") {
+            if v.get("recorded").and_then(|x| x.as_bool()) == Some(true) {
+                let at = v.get("fixture").and_then(|x| x.as_str()).unwrap_or("");
+                eprintln!(
+                    "{} site verify: fixture recorded → {at}",
+                    color::success_indicator()
+                );
+            } else if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
+                match v.get("next").and_then(|x| x.as_str()) {
+                    Some(next) => eprintln!(
+                        "{} site verify: result non-empty; {next}",
+                        color::success_indicator()
+                    ),
+                    None => eprintln!(
+                        "{} site verify: matches the fixture",
+                        color::success_indicator()
+                    ),
+                }
+            }
+        }
+        // `site analyze`: a report, not a page result.
+        if let (Some(strategy), Some(next)) = (
+            data.get("strategy").and_then(|v| v.as_str()),
+            data.get("next").and_then(|v| v.as_array()),
+        ) {
+            print_site_analyze(data, strategy, next);
+            return;
         }
         // `open` that landed on a page refusing this browser's sign-in (#387).
         if let Some(h) = data.get("humanCheck") {

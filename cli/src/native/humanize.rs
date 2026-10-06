@@ -375,6 +375,25 @@ const VENDOR_MARKERS: &[(&str, &str)] = &[
     ("__cf_bm", "cloudflare-bot-mgmt"),
 ];
 
+/// The anti-bot vendors whose markers appear in `signals`, deduped, in marker
+/// order (for `site analyze`).
+pub fn detected_vendors(signals: &DetectSignals) -> Vec<&'static str> {
+    let hay: Vec<String> = signals
+        .cookie_names
+        .iter()
+        .chain(signals.script_urls.iter())
+        .chain(signals.window_globals.iter())
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    let mut out: Vec<&'static str> = Vec::new();
+    for (marker, vendor) in VENDOR_MARKERS {
+        if hay.iter().any(|h| h.contains(marker)) && !out.contains(vendor) {
+            out.push(vendor);
+        }
+    }
+    out
+}
+
 /// Decide the level for a page. Returns `Human` if any known anti-bot vendor is
 /// present, otherwise `baseline`. Misses just stay at baseline and false hits
 /// only cost a little latency, so matching is deliberately liberal.
