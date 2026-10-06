@@ -25,7 +25,10 @@ missing feature. To work with them:
 
 These paint everything to a `<canvas>` and expose **almost no accessibility
 tree**, so `snapshot` comes back near-empty and refs are a dead end. `snapshot`
-detects this and prints a one-line hint. Drive them the screenshot way:
+detects this, prints a one-line hint, and also saves a viewport screenshot and
+prints `screenshot: <path>`. View that image instead of calling `screenshot`
+again (JSON: `data.screenshot`, `screenshotReason: "sparse"`; opt out with
+`AGENT_BROWSER_SPARSE_SCREENSHOT=0`). Drive them the screenshot way:
 
 ```bash
 chrome-use canvas list                 # enumerate <canvas> elements (size, type)

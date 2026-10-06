@@ -191,6 +191,7 @@
 <span class="du-prompt">$</span> chrome-use select @e1 <span class="du-str">"value"</span>   <span class="du-cmt"># 选择下拉项</span>
 <span class="du-prompt">$</span> chrome-use select @e1 <span class="du-str">"a"</span> <span class="du-str">"b"</span>   <span class="du-cmt"># 多选</span>
 <span class="du-prompt">$</span> chrome-use scroll down 500     <span class="du-cmt"># 滚动页面（默认 down 300px）</span>
+<span class="du-prompt">$</span> chrome-use scroll down <span class="du-flag">--until</span> "#footer"  <span class="du-cmt"># 逐步滚到目标进入视口（selector/@ref/text=）</span>
 <span class="du-prompt">$</span> chrome-use scrollintoview @e1  <span class="du-cmt"># 滚动元素进入视口（别名：scrollinto）</span>
 <span class="du-prompt">$</span> chrome-use drag @e1 @e2        <span class="du-cmt"># 拖放</span>
 <span class="du-prompt">$</span> chrome-use upload @e1 file.pdf <span class="du-cmt"># 上传文件</span>

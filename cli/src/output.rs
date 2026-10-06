@@ -917,13 +917,31 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             // `--with-screenshot`: the image is an output, so its path is
             // reported and nothing more — the tree above is what the agent
             // reads the page from.
+            let sparse_shot =
+                data.get("screenshotReason").and_then(|v| v.as_str()) == Some("sparse");
             if let Some(p) = data.get("screenshot").and_then(|v| v.as_str()) {
-                eprintln!("{} {}", color::dim("screenshot:"), p);
+                if sparse_shot {
+                    // Attached on our own because the tree is near-empty: the
+                    // image is the page's content here, so say to look at it —
+                    // on stdout, next to the tree it stands in for.
+                    println!(
+                        "screenshot: {p} — this page draws to a canvas and the tree above is \
+                         nearly empty; view this image to see what is on screen"
+                    );
+                } else {
+                    eprintln!("{} {}", color::dim("screenshot:"), p);
+                }
             }
             if let Some(e) = data.get("screenshotError").and_then(|v| v.as_str()) {
                 eprintln!(
                     "{} --with-screenshot failed: {e}",
                     color::warning_indicator()
+                );
+            }
+            if let Some(e) = data.get("sparseScreenshotError").and_then(|v| v.as_str()) {
+                eprintln!(
+                    "{}",
+                    color::dim(&format!("(automatic screenshot skipped: {e})"))
                 );
             }
             // The adaptive wait hit its ceiling with the page still moving
@@ -968,6 +986,37 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     eprintln!("{}", color::dim(&format!("read on with: --from {next}")));
                 }
             }
+            return;
+        }
+        // `scroll --until`: say where the target turned up and how far it took.
+        if action == Some("scroll") && data.get("found").and_then(|v| v.as_bool()) == Some(true) {
+            let until = data
+                .get("until")
+                .and_then(|v| v.as_str())
+                .unwrap_or("target");
+            let steps = data.get("steps").and_then(|v| v.as_u64()).unwrap_or(0);
+            let distance = data.get("distance").and_then(|v| v.as_i64()).unwrap_or(0);
+            let dir = data
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("down");
+            let at = data.get("at").and_then(|v| v.as_array());
+            let xy = |i: usize| {
+                at.and_then(|a| a.get(i))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0)
+            };
+            let how = if steps == 0 {
+                "already in view".to_string()
+            } else {
+                format!("after scrolling {dir} {steps} step(s) ({distance}px)")
+            };
+            println!(
+                "{} {until} is in view {how}, at ({},{})",
+                color::success_indicator(),
+                xy(0),
+                xy(1)
+            );
             return;
         }
         // Frame list (`chrome-use frames`)
@@ -2889,10 +2938,11 @@ Usage: chrome-use scroll [direction] [amount] [options]
 
 Scrolls the page or a specific element in the specified direction.
 
-Without --selector, scroll dispatches a real (isTrusted) mouse wheel at a
-viewport coordinate, so it scrolls whatever container is under the pointer —
-including cross-origin iframes (Google Payments, Stripe, embedded checkout/KYC)
-that plain page scroll can't reach.
+Without --selector/--at/--frame it scrolls the page (window.scrollBy). --at and
+--frame dispatch a real (isTrusted) mouse wheel at a viewport coordinate, so
+they scroll whatever container is under the pointer — including cross-origin
+iframes (Google Payments, Stripe, embedded checkout/KYC) that plain page scroll
+can't reach.
 
 Arguments:
   direction            up, down, left, right (default: down)
@@ -2904,8 +2954,17 @@ Options:
                        screenshot) — precise way into a cross-origin iframe
   --frame <n>          Scroll the n-th frame from `chrome-use frames` (wheel at
                        that frame's center)
-
-Without --selector/--at/--frame the wheel lands at the viewport center.
+  --until <target>     Keep scrolling step by step until <target> is in the
+                       viewport: a CSS selector, XPath, @ref, `text=<label>` or
+                       a bare label. Step = [amount] if given, else ~80% of the
+                       viewport. Stops when found (prints where), or fails
+                       (exit 1) after the step/time budget or at the end of the
+                       page, saying how far it scrolled. Works with --selector
+                       to scroll a container instead of the page.
+  --until-text <text>  Same, matching visible text (= --until "text=<text>")
+  --max-steps <n>      Step budget for --until (default: 30)
+  --timeout <ms>       Time budget for --until (default: the action timeout,
+                       capped at 30000)
 
 Global Options:
   --json               Output as JSON
@@ -2919,6 +2978,9 @@ Examples:
   chrome-use scroll down 500 --selector "div.scroll-container"
   chrome-use scroll down 700 --at 640,400      # wheel at a pixel over an iframe
   chrome-use scroll down 700 --frame 2         # scroll frame 2 from `frames`
+  chrome-use scroll down --until "#comments"   # scroll until it is on screen
+  chrome-use scroll --until-text "Load more"
+  chrome-use scroll down --until @e12 --selector .feed --max-steps 50
 "##
         }
         "scrollintoview" | "scrollinto" => {
@@ -3339,6 +3401,13 @@ Options:
                        whole page lives in shadow roots); the JSON then carries
                        `source: "dom"` plus a `note`, and roles/names are
                        derived from tags and attributes. Refs work as usual.
+
+Canvas pages: when the tree is nearly empty (fewer than 3 refs) because a
+<canvas> fills most of the viewport (games, WebGL, maps, editors), snapshot
+also saves a viewport screenshot (default 1200px cap) and prints its path -
+JSON: `screenshot` plus `screenshotReason: "sparse"`. Best-effort: a failed
+capture never fails the snapshot. Not taken with --with-screenshot (which
+already saves one) or when AGENT_BROWSER_SPARSE_SCREENSHOT=0.
 
 Global Options:
   --json               Output as JSON
@@ -5160,6 +5229,7 @@ Core Commands:
                              stays 'hidden' — this is the way to make a page that
                              gates its UI on visibility render for real
   scroll <dir> [px]          Scroll (up/down/left/right)
+  scroll <dir> --until <sel> Scroll step by step until <sel>/@ref/text= is in view
   scrollintoview <sel>       Scroll element into view
   wait <sel|ms>              Wait for element or time
   expect <condition>         Assert (pass/fail + exit code): element visible/gone,
@@ -5591,6 +5661,7 @@ Environment:
   AGENT_BROWSER_DOWNLOAD_PATH    Default download directory for browser downloads
   AGENT_BROWSER_DEFAULT_TIMEOUT  Default action timeout in ms (default: 25000)
   AGENT_BROWSER_SETTLE_MS        Ceiling on the pre-observation wait in ms (default: 1000; 0 disables)
+  AGENT_BROWSER_SPARSE_SCREENSHOT  0 = don't auto-attach a screenshot to a near-empty canvas snapshot
   AGENT_BROWSER_SETTLE_QUIET_MS  DOM-quiet window that ends the wait early in ms (default: 100)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (default: 30)

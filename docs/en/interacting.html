@@ -396,6 +396,8 @@
 <span class="du-prompt">$</span> chrome-use scroll down 700 <span class="du-flag">--at</span> 640,400  <span class="du-cmt"># wheel at a pixel point—reaches cross-origin iframes</span>
                                         <span class="du-cmt"># (Stripe/checkout/KYC) that ordinary page scrolling can't</span>
 <span class="du-prompt">$</span> chrome-use scroll down 700 <span class="du-flag">--frame</span> 2    <span class="du-cmt"># scroll frame #2 from `chrome-use frames`</span>
+<span class="du-prompt">$</span> chrome-use scroll down <span class="du-flag">--until</span> "#comments" <span class="du-cmt"># step until the target is in view (also @ref, text=, --until-text)</span>
+                                        <span class="du-cmt"># not found: exit 1 saying how far it scrolled; cap with --max-steps / --timeout</span>
 <span class="du-prompt">$</span> chrome-use scrollintoview @e1           <span class="du-cmt"># scroll the element into the viewport</span></code></pre>
       </div>
 

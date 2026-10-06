@@ -123,6 +123,8 @@ chrome-use uncheck @e1         # Uncheck checkbox
 chrome-use select @e1 "value"  # Select by value/label; native setter commits controlled forms
 chrome-use select @e1 "a" "b"  # Select multiple options
 chrome-use scroll down 500     # Scroll page (default: down 300px)
+chrome-use scroll down --until "#footer"  # Step until target (selector/@ref/text=) is in view;
+                                          # --until-text "…", --max-steps 30, --timeout <ms>
 chrome-use scrollintoview @e1  # Scroll element into view (alias: scrollinto)
 chrome-use drag @e1 @e2        # Drag and drop
 chrome-use upload @e1 file.pdf # Upload files; consumed/cleared dropzones warn but succeed
@@ -789,6 +791,7 @@ AGENT_BROWSER_EXTENSIONS="/ext1,/ext2"       # Comma-separated extension paths
 AGENT_BROWSER_INIT_SCRIPTS="/a.js,/b.js"     # Comma-separated init script paths
 AGENT_BROWSER_ENABLE="react-devtools"        # Comma-separated built-in init script features
 AGENT_BROWSER_HIDE_SCROLLBARS="false"        # Keep native scrollbars visible in headless Chromium screenshots
+AGENT_BROWSER_SPARSE_SCREENSHOT="0"          # Don't auto-attach a screenshot to a near-empty canvas snapshot
 AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
 AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS="ws.example.com"  # Extra hostnames the dashboard accepts (reverse proxy); only loopback names otherwise

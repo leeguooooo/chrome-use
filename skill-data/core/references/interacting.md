@@ -60,6 +60,11 @@ chrome-use scroll down 700 --at 640,400 # wheel at a pixel — scrolls a cross-o
                                           # iframe (Payments/Stripe/checkout/KYC) that
                                           # plain page scroll can't reach
 chrome-use scroll down 700 --frame 2    # scroll frame 2 from `chrome-use frames`
+chrome-use scroll down --until "#comments"  # step until it is in the viewport (also
+                                          # @ref, text=Label, --until-text "…");
+                                          # exit 1 naming how far it went if not.
+                                          # --max-steps N (30) / --timeout ms;
+                                          # add --selector .feed for a scroll container
 chrome-use scrollintoview @e1          # scroll element into view
 chrome-use drag @e1 @e2                # drag and drop
 chrome-use drag @e1 60                 # drag a handle by +60px (slider/canvas); `+60,-3` for dx,dy
@@ -245,7 +250,10 @@ A bare-number argument is always a coordinate, never a selector.
 
 These paint everything to a `<canvas>` and expose **almost no accessibility
 tree**, so `snapshot` comes back near-empty and refs are a dead end. `snapshot`
-detects this and prints a one-line hint. Drive them the screenshot way:
+detects this, prints a one-line hint, and also saves a viewport screenshot and
+prints `screenshot: <path>` — view that image instead of calling `screenshot`
+again (JSON: `data.screenshot`, `screenshotReason: "sparse"`; opt out with
+`AGENT_BROWSER_SPARSE_SCREENSHOT=0`). Drive them the screenshot way:
 
 ```bash
 chrome-use canvas list                 # enumerate <canvas> elements (size, type)

@@ -4651,7 +4651,7 @@ async fn handle_evaluate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 /// `<iframe>`, or a URL substring matched against the live frame list.
 async fn resolve_frame_spec(
     mgr: &BrowserManager,
-    ref_map: &super::element::RefMap,
+    ref_map: &RefMap,
     iframe_sessions: &HashMap<String, String>,
     spec: &str,
 ) -> Result<String, String> {
@@ -4714,7 +4714,7 @@ async fn resolve_frame_spec(
 /// nothing or a non-frame element, so the caller can fall through to other specs.
 async fn resolve_iframe_selector(
     mgr: &BrowserManager,
-    ref_map: &super::element::RefMap,
+    ref_map: &RefMap,
     session_id: &str,
     selector: &str,
 ) -> Result<Option<String>, String> {
@@ -5899,6 +5899,7 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     // near-empty and agents get stuck looking for refs that will never exist
     // (dogfood: the Dead Cell game). When the tree is sparse but a canvas
     // dominates the viewport, tell them to switch to the screenshot-driven path.
+    let mut canvas_page = false;
     if ref_count < 3 {
         // One probe, two answers. The second is `document.visibilityState`
         // (issue #215): a tab we drive in the background really is hidden —
@@ -5915,6 +5916,7 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         if let Ok(v) = mgr.evaluate(probe_js, None).await {
             let canvas = v.get("canvas").and_then(|c| c.as_bool()).unwrap_or(false);
             let hidden = v.get("hidden").and_then(|h| h.as_bool()).unwrap_or(false);
+            canvas_page = canvas;
             if let Some(note) = sparse_tree_note(canvas, hidden) {
                 out["note"] = json!(note);
             }
@@ -5936,9 +5938,51 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
                 out["screenshotError"] = json!(e);
             }
         }
+    } else if canvas_page
+        && sparse_screenshot_enabled(env::var("AGENT_BROWSER_SPARSE_SCREENSHOT").ok().as_deref())
+    {
+        // The tree above is near-empty because the page paints to a canvas, so
+        // the next thing an agent does is ask for a screenshot. Take it now and
+        // save the round trip. Best-effort and time-boxed: the snapshot is the
+        // answer to this command, and a capture that fails or stalls (an
+        // occluded tab's compositor) must never cost the caller that answer.
+        let shot = tokio::time::timeout(
+            Duration::from_millis(SPARSE_SCREENSHOT_TIMEOUT_MS),
+            handle_screenshot(&json!({}), state),
+        )
+        .await;
+        match shot {
+            Ok(Ok(resp)) => {
+                if let Some(p) = resp.get("path").and_then(|v| v.as_str()) {
+                    out["screenshot"] = json!(p);
+                    out["screenshotReason"] = json!("sparse");
+                }
+            }
+            Ok(Err(e)) => {
+                out["sparseScreenshotError"] = json!(e);
+            }
+            Err(_) => {
+                out["sparseScreenshotError"] = json!(format!(
+                    "capture did not finish within {SPARSE_SCREENSHOT_TIMEOUT_MS}ms"
+                ));
+            }
+        }
     }
 
     Ok(out)
+}
+
+/// Upper bound on the automatic screenshot a sparse canvas snapshot attaches.
+const SPARSE_SCREENSHOT_TIMEOUT_MS: u64 = 5_000;
+
+/// Whether a sparse (canvas) snapshot should attach a screenshot on its own.
+/// On by default; `AGENT_BROWSER_SPARSE_SCREENSHOT=0` (or `false`/`off`/`no`)
+/// turns it off for callers that never read images.
+fn sparse_screenshot_enabled(env_value: Option<&str>) -> bool {
+    !matches!(
+        env_value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 /// Why a snapshot came back with almost nothing in it, when the page itself can
@@ -7377,6 +7421,10 @@ async fn handle_hover(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
 }
 
 async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    if let Some(target) = cmd.get("until").and_then(|v| v.as_str()) {
+        let target = target.to_string();
+        return scroll_until(cmd, state, &target).await;
+    }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
     let selector = cmd.get("selector").and_then(|v| v.as_str());
@@ -7447,6 +7495,277 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     )
     .await?;
     Ok(json!({ "scrolled": true, "via": "page" }))
+}
+
+/// Step budget for `scroll --until` when `--max-steps` isn't given.
+const SCROLL_UNTIL_MAX_STEPS: u64 = 30;
+/// Ceiling on the default (no `--timeout`) budget, so a long default timeout
+/// can't outlast the CLI's socket read and lose the "not found" answer.
+const SCROLL_UNTIL_DEFAULT_CAP_MS: u64 = 30_000;
+/// Pause after each step so lazy-loaded rows and smooth scrolling can land
+/// before the target is probed again.
+const SCROLL_UNTIL_SETTLE_MS: u64 = 250;
+/// Steps in a row where the scroll position did not move before the page is
+/// called exhausted. Two, not one: an infinite list may append rows a beat
+/// after the first step hits the bottom.
+const SCROLL_UNTIL_STUCK_STEPS: u32 = 2;
+
+/// Why `scroll --until` gave up without finding its target.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ScrollUntilStop {
+    MaxSteps,
+    Timeout,
+    End,
+}
+
+/// The error `scroll --until` returns when the target never came into view.
+/// Pure so the wording — which has to name how far it went and why it stopped,
+/// or the agent can't tell "not on this page" from "gave up early" — is
+/// testable without a browser.
+fn scroll_until_miss(
+    target: &str,
+    direction: &str,
+    steps: u64,
+    distance_px: f64,
+    stop: ScrollUntilStop,
+    found_offscreen: bool,
+    container: Option<&str>,
+) -> String {
+    let why = match stop {
+        ScrollUntilStop::MaxSteps => format!("hit the {steps}-step limit (raise with --max-steps)"),
+        ScrollUntilStop::Timeout => "ran out of time (raise with --timeout <ms>)".to_string(),
+        ScrollUntilStop::End => {
+            if steps <= SCROLL_UNTIL_STUCK_STEPS as u64 && distance_px == 0.0 {
+                match container {
+                    Some(_) => "the container did not move — check that --selector names the element that actually scrolls".to_string(),
+                    None => "the page did not move — if this list scrolls inside a container, pass --selector <container>".to_string(),
+                }
+            } else {
+                format!(
+                    "reached the end of the {}",
+                    if container.is_some() {
+                        "container"
+                    } else {
+                        "page"
+                    }
+                )
+            }
+        }
+    };
+    let state = if found_offscreen {
+        "exists but never came into the viewport"
+    } else {
+        "was not found"
+    };
+    format!(
+        "scroll --until: {target} {state} after scrolling {direction} {steps} step(s) ({px}px); {why}",
+        px = distance_px.abs().round() as i64,
+    )
+}
+
+/// `scroll [dir] --until <target>`: scroll step by step until `target` (CSS /
+/// XPath / `text=` / bare label / @ref) is in the viewport, or a step / time
+/// budget runs out. One call instead of the agent's scroll → snapshot → look
+/// loop, and it stops where the target is rather than a fixed distance past it.
+async fn scroll_until(cmd: &Value, state: &mut DaemonState, target: &str) -> Result<Value, String> {
+    if cmd.get("at").is_some() || cmd.get("frame").is_some() {
+        return Err(
+            "scroll --until scrolls the page (or a --selector container); it can't be combined \
+             with --at/--frame"
+                .to_string(),
+        );
+    }
+    let direction = cmd
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("down")
+        .to_string();
+    let container = cmd
+        .get("selector")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let max_steps = cmd
+        .get("maxSteps")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(SCROLL_UNTIL_MAX_STEPS);
+    let timeout_ms = match cmd.get("timeout").and_then(|v| v.as_u64()) {
+        Some(ms) => ms,
+        None => state.default_timeout_ms.min(SCROLL_UNTIL_DEFAULT_CAP_MS),
+    };
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
+
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+
+    // Step size: an explicit amount wins; otherwise most of a viewport, so each
+    // step shows new content while keeping some overlap with the last one.
+    let amount = match cmd.get("amount").and_then(|v| v.as_f64()) {
+        Some(a) if a > 0.0 => a,
+        _ => {
+            let (cx, cy) = viewport_center(mgr, &session_id).await?;
+            let span = if matches!(direction.as_str(), "left" | "right") {
+                cx * 2.0
+            } else {
+                cy * 2.0
+            };
+            (span * 0.8).round().max(100.0)
+        }
+    };
+    let (dx, dy, vertical) = match direction.as_str() {
+        "up" => (0.0, -amount, true),
+        "down" => (0.0, amount, true),
+        "left" => (-amount, 0.0, false),
+        "right" => (amount, 0.0, false),
+        other => {
+            return Err(format!(
+                "scroll --until: unknown direction `{other}` (use up, down, left or right)"
+            ))
+        }
+    };
+
+    let position = |pos: Option<(f64, f64)>| pos.map(|(x, y)| if vertical { y } else { x });
+    let start = position(
+        scroll_position(
+            mgr,
+            &session_id,
+            &state.ref_map,
+            container.as_deref(),
+            &state.iframe_sessions,
+        )
+        .await,
+    );
+    let mut last = start;
+    let mut steps: u64 = 0;
+    let mut stuck: u32 = 0;
+    let mut found_offscreen = false;
+
+    let stop = loop {
+        let probe = super::element::probe_viewport(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            target,
+            &state.iframe_sessions,
+        )
+        .await?;
+        if probe.in_viewport {
+            let distance = match (start, last) {
+                (Some(s), Some(l)) => l - s,
+                _ => steps as f64 * amount,
+            };
+            return Ok(json!({
+                "scrolled": steps > 0,
+                "found": true,
+                "until": target,
+                "direction": direction,
+                "steps": steps,
+                "distance": distance.abs().round() as i64,
+                "at": [probe.x.round() as i64, probe.y.round() as i64],
+            }));
+        }
+        found_offscreen = probe.found;
+        if stuck >= SCROLL_UNTIL_STUCK_STEPS {
+            break ScrollUntilStop::End;
+        }
+        if steps >= max_steps {
+            break ScrollUntilStop::MaxSteps;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break ScrollUntilStop::Timeout;
+        }
+        interaction::scroll(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            container.as_deref(),
+            dx,
+            dy,
+            &state.iframe_sessions,
+        )
+        .await?;
+        steps += 1;
+        tokio::time::sleep(tokio::time::Duration::from_millis(SCROLL_UNTIL_SETTLE_MS)).await;
+        let now = position(
+            scroll_position(
+                mgr,
+                &session_id,
+                &state.ref_map,
+                container.as_deref(),
+                &state.iframe_sessions,
+            )
+            .await,
+        );
+        // Unknown position (the read failed) never counts as stuck: better to
+        // spend the step budget than to stop on a guess.
+        if now.is_some() && now == last {
+            stuck += 1;
+        } else {
+            stuck = 0;
+        }
+        last = now;
+    };
+
+    let distance = match (start, last) {
+        (Some(s), Some(l)) => l - s,
+        _ => steps as f64 * amount,
+    };
+    Err(scroll_until_miss(
+        target,
+        &direction,
+        steps,
+        distance,
+        stop,
+        found_offscreen,
+        container.as_deref(),
+    ))
+}
+
+/// Current scroll offset `(x, y)` of the page, or of `container` when given.
+/// `None` when it can't be read; callers treat that as "unknown", never as
+/// "did not move".
+async fn scroll_position(
+    mgr: &BrowserManager,
+    session_id: &str,
+    ref_map: &RefMap,
+    container: Option<&str>,
+    iframe_sessions: &HashMap<String, String>,
+) -> Option<(f64, f64)> {
+    let value = match container {
+        Some(sel) => {
+            let (object_id, effective) = super::element::resolve_element_object_id(
+                &mgr.client,
+                session_id,
+                ref_map,
+                sel,
+                iframe_sessions,
+            )
+            .await
+            .ok()?;
+            mgr.client
+                .send_command_typed::<_, Value>(
+                    "Runtime.callFunctionOn",
+                    &json!({
+                        "functionDeclaration": "function() { return [this.scrollLeft, this.scrollTop]; }",
+                        "objectId": object_id,
+                        "returnByValue": true,
+                    }),
+                    Some(&effective),
+                )
+                .await
+                .ok()?
+        }
+        None => mgr
+            .client
+            .send_command_typed::<_, Value>(
+                "Runtime.evaluate",
+                &json!({ "expression": "[window.scrollX, window.scrollY]", "returnByValue": true }),
+                Some(session_id),
+            )
+            .await
+            .ok()?,
+    };
+    let arr = value.get("result")?.get("value")?.as_array()?;
+    Some((arr.first()?.as_f64()?, arr.get(1)?.as_f64()?))
 }
 
 /// Viewport center in CSS pixels, used as the default wheel landing point for
@@ -18411,6 +18730,66 @@ mod tests {
         assert!(sparse_tree_note(true, true).unwrap().contains("<canvas>"));
         // An ordinary page that is simply short gets no note at all.
         assert!(sparse_tree_note(false, false).is_none());
+    }
+
+    #[test]
+    fn sparse_screenshot_is_on_unless_explicitly_disabled() {
+        use super::sparse_screenshot_enabled;
+        assert!(sparse_screenshot_enabled(None));
+        assert!(sparse_screenshot_enabled(Some("1")));
+        assert!(sparse_screenshot_enabled(Some("")));
+        for off in ["0", "false", "OFF", " no "] {
+            assert!(!sparse_screenshot_enabled(Some(off)), "{off}");
+        }
+    }
+
+    #[test]
+    fn scroll_until_miss_names_distance_and_reason() {
+        use super::{scroll_until_miss, ScrollUntilStop};
+        let m = scroll_until_miss(
+            "#target",
+            "down",
+            30,
+            19200.4,
+            ScrollUntilStop::MaxSteps,
+            false,
+            None,
+        );
+        assert!(m.contains("#target was not found"), "{m}");
+        assert!(m.contains("down 30 step(s) (19200px)"), "{m}");
+        assert!(m.contains("--max-steps"), "{m}");
+
+        let t = scroll_until_miss(
+            "@e4",
+            "up",
+            5,
+            -1500.0,
+            ScrollUntilStop::Timeout,
+            true,
+            None,
+        );
+        assert!(t.contains("exists but never came into the viewport"), "{t}");
+        assert!(t.contains("(1500px)"), "{t}");
+        assert!(t.contains("--timeout"), "{t}");
+
+        let end = scroll_until_miss("x", "down", 12, 6000.0, ScrollUntilStop::End, false, None);
+        assert!(end.contains("reached the end of the page"), "{end}");
+
+        // A page that never moved at all is a different problem from one that
+        // ran out — point at --selector instead of claiming the end was reached.
+        let stuck = scroll_until_miss("x", "down", 2, 0.0, ScrollUntilStop::End, false, None);
+        assert!(stuck.contains("did not move"), "{stuck}");
+        assert!(stuck.contains("--selector"), "{stuck}");
+        let stuck_c = scroll_until_miss(
+            "x",
+            "down",
+            2,
+            0.0,
+            ScrollUntilStop::End,
+            false,
+            Some(".list"),
+        );
+        assert!(stuck_c.contains("container did not move"), "{stuck_c}");
     }
 
     use super::is_blank_capture_target;

@@ -2012,6 +2012,123 @@ fn build_selector_js(selector: &str) -> String {
     )
 }
 
+/// Where a `scroll --until` target sits relative to the viewport.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewportProbe {
+    /// The target exists in the document at all.
+    pub found: bool,
+    /// Some part of its box intersects the viewport.
+    pub in_viewport: bool,
+    /// Viewport-relative centre of its box (CSS px); meaningful when `found`.
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Measures `this` against the viewport. Shared by the selector and the @ref
+/// paths so both answer "in view" by the same rule.
+const VIEWPORT_RECT_FN: &str = "function() { const r = this.getBoundingClientRect(); \
+     return { top: r.top, left: r.left, w: r.width, h: r.height, \
+              vw: window.innerWidth, vh: window.innerHeight }; }";
+
+/// Whether a box intersects the viewport. A zero-size box (display:none, an
+/// empty leaf) never counts: scrolling cannot bring it into view, and saying
+/// it was found would hand the agent something it cannot click.
+pub(crate) fn rect_in_viewport(top: f64, left: f64, w: f64, h: f64, vw: f64, vh: f64) -> bool {
+    w > 0.0 && h > 0.0 && top < vh && top + h > 0.0 && left < vw && left + w > 0.0
+}
+
+fn viewport_probe_from(v: &Value) -> ViewportProbe {
+    let num = |k: &str| v.get(k).and_then(|x| x.as_f64());
+    match (
+        num("top"),
+        num("left"),
+        num("w"),
+        num("h"),
+        num("vw"),
+        num("vh"),
+    ) {
+        (Some(top), Some(left), Some(w), Some(h), Some(vw), Some(vh)) => ViewportProbe {
+            found: true,
+            in_viewport: rect_in_viewport(top, left, w, h, vw, vh),
+            x: left + w / 2.0,
+            y: top + h / 2.0,
+        },
+        _ => ViewportProbe {
+            found: false,
+            in_viewport: false,
+            x: 0.0,
+            y: 0.0,
+        },
+    }
+}
+
+/// Probe whether `selector_or_ref` exists and is in the viewport, for
+/// `scroll --until`. CSS / XPath / `text=` / bare-label
+/// targets go through the same finder `click` uses; an `@ref` goes through the
+/// ref map. A target that is simply absent is `found: false`, not an error —
+/// the caller keeps scrolling; only an invalid selector or an unknown ref
+/// errors, because no amount of scrolling fixes those.
+pub async fn probe_viewport(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<ViewportProbe, String> {
+    if parse_ref(selector_or_ref).is_some() {
+        let (object_id, effective_session_id) = resolve_element_object_id(
+            client,
+            session_id,
+            ref_map,
+            selector_or_ref,
+            iframe_sessions,
+        )
+        .await?;
+        let result: EvaluateResult = client
+            .send_command_typed(
+                "Runtime.callFunctionOn",
+                &CallFunctionOnParams {
+                    function_declaration: VIEWPORT_RECT_FN.to_string(),
+                    object_id: Some(object_id),
+                    arguments: None,
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(&effective_session_id),
+            )
+            .await?;
+        return Ok(viewport_probe_from(
+            &result.result.value.unwrap_or(Value::Null),
+        ));
+    }
+
+    let js = format!(
+        "(() => {{ const el = {find}; if (!el) return null; return ({rect}).call(el); }})()",
+        find = build_find_element_js(selector_or_ref),
+        rect = VIEWPORT_RECT_FN,
+    );
+    let result: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: js,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+    if let Some(ex) = result.exception_details {
+        return Err(format!(
+            "Invalid selector '{}': {}",
+            selector_or_ref, ex.text
+        ));
+    }
+    Ok(viewport_probe_from(
+        &result.result.value.unwrap_or(Value::Null),
+    ))
+}
+
 async fn resolve_by_selector(
     client: &CdpClient,
     session_id: &str,
@@ -3119,6 +3236,39 @@ mod tests {
         assert!(!both.contains("div.modal"), "{both}");
     }
     use super::*;
+
+    #[test]
+    fn rect_in_viewport_needs_an_intersecting_nonempty_box() {
+        // Fully inside.
+        assert!(rect_in_viewport(100.0, 10.0, 50.0, 20.0, 1280.0, 800.0));
+        // Partly visible at the bottom / top edge still counts.
+        assert!(rect_in_viewport(790.0, 10.0, 50.0, 20.0, 1280.0, 800.0));
+        assert!(rect_in_viewport(-10.0, 10.0, 50.0, 20.0, 1280.0, 800.0));
+        // Below / above / beside the viewport.
+        assert!(!rect_in_viewport(800.0, 10.0, 50.0, 20.0, 1280.0, 800.0));
+        assert!(!rect_in_viewport(3000.0, 10.0, 50.0, 20.0, 1280.0, 800.0));
+        assert!(!rect_in_viewport(-20.0, 10.0, 50.0, 20.0, 1280.0, 800.0));
+        assert!(!rect_in_viewport(100.0, 1300.0, 50.0, 20.0, 1280.0, 800.0));
+        // A zero-size box (display:none) is never "in view".
+        assert!(!rect_in_viewport(100.0, 10.0, 0.0, 0.0, 1280.0, 800.0));
+    }
+
+    #[test]
+    fn viewport_probe_reads_a_rect_and_treats_null_as_absent() {
+        let p = viewport_probe_from(&serde_json::json!({
+            "top": 100.0, "left": 20.0, "w": 40.0, "h": 10.0, "vw": 1280.0, "vh": 800.0
+        }));
+        assert!(p.found && p.in_viewport);
+        assert_eq!((p.x, p.y), (40.0, 105.0));
+
+        let below = viewport_probe_from(&serde_json::json!({
+            "top": 5000.0, "left": 20.0, "w": 40.0, "h": 10.0, "vw": 1280.0, "vh": 800.0
+        }));
+        assert!(below.found && !below.in_viewport);
+
+        let absent = viewport_probe_from(&Value::Null);
+        assert!(!absent.found && !absent.in_viewport);
+    }
 
     #[test]
     fn test_parse_ref_at_prefix() {

@@ -30,6 +30,9 @@ pub enum ParseError {
     InvalidSessionName { name: String },
 }
 
+const SCROLL_UNTIL_USAGE: &str = "scroll [direction] [amount] --until <selector|@ref|text=…> \
+     [--until-text <text>] [--max-steps <n>] [--timeout <ms>] [--selector <container>]";
+
 /// Top-level commands an agent is likely to mistype, used for "did you mean"
 /// suggestions on an unknown command (issue #29). Not exhaustive — just the
 /// common verbs plus a few known wrong-guesses mapped to the real command.
@@ -1254,6 +1257,40 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         }
                         i += 1;
                     }
+                    // `--until <selector|@ref|text=…>` / `--until-text "…"`:
+                    // keep scrolling until the target is in the viewport.
+                    flag @ ("--until" | "--until-text") => {
+                        let val = rest.get(i + 1).filter(|v| !v.is_empty()).ok_or(
+                            ParseError::MissingArguments {
+                                context: format!("scroll {flag}"),
+                                usage: SCROLL_UNTIL_USAGE,
+                            },
+                        )?;
+                        let target = if flag == "--until-text" {
+                            format!("text={val}")
+                        } else {
+                            val.to_string()
+                        };
+                        obj.insert("until".to_string(), json!(target));
+                        i += 1;
+                    }
+                    flag @ ("--max-steps" | "--timeout") => {
+                        let val = rest
+                            .get(i + 1)
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .filter(|n| *n > 0)
+                            .ok_or_else(|| ParseError::InvalidValue {
+                                message: format!("scroll {flag} needs a positive number"),
+                                usage: SCROLL_UNTIL_USAGE,
+                            })?;
+                        let key = if flag == "--max-steps" {
+                            "maxSteps"
+                        } else {
+                            "timeout"
+                        };
+                        obj.insert(key.to_string(), json!(val));
+                        i += 1;
+                    }
                     arg if arg.starts_with('-') => {}
                     _ => {
                         match positional_index {
@@ -1275,7 +1312,19 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             if !obj.contains_key("direction") {
                 obj.insert("direction".to_string(), json!("down"));
             }
-            if !obj.contains_key("amount") {
+            if obj.contains_key("until") {
+                // An explicit `--timeout` can outlast the socket read's default
+                // budget; give the read room so the "not found" answer arrives.
+                if let Some(t) = obj.get("timeout").and_then(|v| v.as_u64()) {
+                    obj.insert("timeout_ms".to_string(), json!(t + 10_000));
+                }
+                // No amount: the daemon steps by most of a viewport.
+            } else if obj.contains_key("maxSteps") || obj.contains_key("timeout") {
+                return Err(ParseError::InvalidValue {
+                    message: "scroll --max-steps/--timeout only apply with --until".to_string(),
+                    usage: SCROLL_UNTIL_USAGE,
+                });
+            } else if !obj.contains_key("amount") {
                 obj.insert("amount".to_string(), json!(300));
             }
             Ok(cmd)
@@ -9191,6 +9240,49 @@ mod tests {
         assert_eq!(cmd["direction"], "down");
         assert_eq!(cmd["amount"], 400);
         assert_eq!(cmd["selector"], ".panel");
+    }
+
+    #[test]
+    fn test_scroll_until_selector() {
+        let cmd = parse_command(&args("scroll down --until #target"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "scroll");
+        assert_eq!(cmd["direction"], "down");
+        assert_eq!(cmd["until"], "#target");
+        // No amount: the daemon steps by most of a viewport.
+        assert!(cmd.get("amount").is_none());
+        assert!(cmd.get("timeout_ms").is_none());
+    }
+
+    #[test]
+    fn test_scroll_until_defaults_direction_and_takes_limits() {
+        let cmd = parse_command(
+            &args("scroll --until @e12 --max-steps 10 --timeout 40000"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["direction"], "down");
+        assert_eq!(cmd["until"], "@e12");
+        assert_eq!(cmd["maxSteps"], 10);
+        assert_eq!(cmd["timeout"], 40000);
+        assert_eq!(cmd["timeout_ms"], 50000);
+    }
+
+    #[test]
+    fn test_scroll_until_text_maps_to_text_prefix() {
+        let cmd =
+            parse_command(&args("scroll up 500 --until-text Footer"), &default_flags()).unwrap();
+        assert_eq!(cmd["direction"], "up");
+        assert_eq!(cmd["amount"], 500);
+        assert_eq!(cmd["until"], "text=Footer");
+    }
+
+    #[test]
+    fn test_scroll_until_rejects_bad_input() {
+        assert!(parse_command(&args("scroll down --until"), &default_flags()).is_err());
+        assert!(parse_command(&args("scroll --until x --max-steps 0"), &default_flags()).is_err());
+        assert!(parse_command(&args("scroll --until x --timeout soon"), &default_flags()).is_err());
+        // The limits mean nothing without a target.
+        assert!(parse_command(&args("scroll down --max-steps 5"), &default_flags()).is_err());
     }
 
     #[test]

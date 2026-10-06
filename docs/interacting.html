@@ -376,6 +376,8 @@
 <span class="du-prompt">$</span> chrome-use scroll down 700 <span class="du-flag">--at</span> 640,400  <span class="du-cmt"># 在某像素点滚滚轮——能滚到普通页面</span>
                                         <span class="du-cmt"># 滚不到的跨源 iframe（Stripe/结算/KYC）</span>
 <span class="du-prompt">$</span> chrome-use scroll down 700 <span class="du-flag">--frame</span> 2    <span class="du-cmt"># 滚 `chrome-use frames` 里的第 2 帧</span>
+<span class="du-prompt">$</span> chrome-use scroll down <span class="du-flag">--until</span> "#comments" <span class="du-cmt"># 逐步滚动直到目标进入视口（也支持 @ref、text=、--until-text）</span>
+                                        <span class="du-cmt"># 找不到则退出码 1 并说明滚了多远；--max-steps / --timeout 设上限</span>
 <span class="du-prompt">$</span> chrome-use scrollintoview @e1           <span class="du-cmt"># 把元素滚进视口</span></code></pre>
       </div>
 

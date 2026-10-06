@@ -200,6 +200,7 @@
 <span class="du-prompt">$</span> chrome-use select @e1 <span class="du-str">"value"</span>   <span class="du-cmt"># pick a dropdown option</span>
 <span class="du-prompt">$</span> chrome-use select @e1 <span class="du-str">"a"</span> <span class="du-str">"b"</span>   <span class="du-cmt"># multi-select</span>
 <span class="du-prompt">$</span> chrome-use scroll down 500     <span class="du-cmt"># scroll the page (default down 300px)</span>
+<span class="du-prompt">$</span> chrome-use scroll down <span class="du-flag">--until</span> "#footer"  <span class="du-cmt"># step until the target (selector/@ref/text=) is in view</span>
 <span class="du-prompt">$</span> chrome-use scrollintoview @e1  <span class="du-cmt"># scroll element into the viewport (alias: scrollinto)</span>
 <span class="du-prompt">$</span> chrome-use drag @e1 @e2        <span class="du-cmt"># drag and drop</span>
 <span class="du-prompt">$</span> chrome-use upload @e1 file.pdf <span class="du-cmt"># upload a file</span>
