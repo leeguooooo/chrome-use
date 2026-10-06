@@ -142,6 +142,9 @@ pub struct RefMap {
 /// Bound on [`RefMap::retired`]; past it the memory starts over.
 const MAX_RETIRED_REFS: usize = 4096;
 
+/// Backend node id → current AX role + name, for the live page.
+pub type LiveIdentities = HashMap<i64, (String, String)>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct StableRefKey {
     backend_node_id: i64,
@@ -247,7 +250,7 @@ impl RefMap {
         exclude: &str,
         role: &str,
         name: &str,
-        live: Option<(&HashMap<i64, (String, String)>, Option<&str>)>,
+        live: Option<(&LiveIdentities, Option<&str>)>,
     ) -> Vec<ref_hints::RefSuggestion> {
         let candidates = self.map.iter().filter(|(id, e)| {
             if id.as_str() == exclude {
@@ -594,11 +597,11 @@ struct Reanchor {
     same_role: Vec<(i64, String)>,
     /// Every live node's backend id → role + name, so ref suggestions can be
     /// limited to refs that still resolve.
-    live: HashMap<i64, (String, String)>,
+    live: LiveIdentities,
 }
 
 /// Backend node id → current AX role + name, for every non-ignored node.
-fn live_identities(nodes: &[AXNode]) -> HashMap<i64, (String, String)> {
+fn live_identities(nodes: &[AXNode]) -> LiveIdentities {
     nodes
         .iter()
         .filter(|n| !n.ignored.unwrap_or(false))
@@ -615,7 +618,7 @@ async fn read_live_identities(
     session_id: &str,
     frame_id: Option<&str>,
     iframe_sessions: &HashMap<String, String>,
-) -> Option<HashMap<i64, (String, String)>> {
+) -> Option<LiveIdentities> {
     let (ax_params, effective_session_id) =
         resolve_ax_session(frame_id, session_id, iframe_sessions);
     let tree: GetFullAXTreeResult = client
@@ -3421,7 +3424,7 @@ mod tests {
         m.add("e5".to_string(), Some(42), "button", "Save", None);
         m.add("e9".to_string(), Some(60), "button", "Save draft", None);
         m.add("e10".to_string(), Some(61), "button", "Save as", None);
-        let mut live: HashMap<i64, (String, String)> = HashMap::new();
+        let mut live = LiveIdentities::new();
         // e9's node is live and unchanged; e10's node now says something else.
         live.insert(60, ("button".into(), "Save draft".into()));
         live.insert(61, ("button".into(), "Delete".into()));
