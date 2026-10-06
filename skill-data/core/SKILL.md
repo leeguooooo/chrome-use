@@ -258,6 +258,7 @@ reference, not the entire collection. Basic actions above are self-contained.
 | Persistence, idle recovery, multiple sessions | `core/session-management` |
 | Unexpected behavior or command failure | `core/known-traps`, then `core/troubleshooting` if needed |
 | Complete commands, flags, env, accessibility audits | `core/commands` |
+| Changing this repository: remote compilation and tests | `core/development` |
 | Tracing, recording, proxy | `core/profiling`, `core/video-recording`, `core/proxy-support` |
 | React tree, renders, Web Vitals | `react` |
 | Network interception, mocks, HAR | `network` |

@@ -21,7 +21,7 @@
     "prepare": "husky || true",
     "version:sync": "node scripts/sync-version.js",
     "version": "npm run version:sync && git add cli/Cargo.toml",
-    "build:native": "npm run version:sync && cargo build --release --manifest-path cli/Cargo.toml && node scripts/copy-native.js",
+    "build:native": "pnpm run version:sync && python3 scripts/remote-cargo.py --output cli/target/release/chrome-use build --release && node scripts/copy-native.js",
     "build:linux": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-linux",
     "build:macos": "npm run version:sync && bash -c 'cargo build --release --manifest-path cli/Cargo.toml --target aarch64-apple-darwin & PID1=$!; cargo build --release --manifest-path cli/Cargo.toml --target x86_64-apple-darwin & PID2=$!; wait $PID1 || exit 1; wait $PID2 || exit 1' && cp cli/target/aarch64-apple-darwin/release/chrome-use bin/chrome-use-darwin-arm64 && cp cli/target/x86_64-apple-darwin/release/chrome-use bin/chrome-use-darwin-x64",
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
@@ -29,7 +29,9 @@
     "build:docker": "docker build -t chrome-use-builder -f docker/Dockerfile.build .",
     "release": "npm run version:sync && npm run build:all-platforms && npm publish --tag fork",
     "postinstall": "node scripts/postinstall.js",
-    "clawhub:sync": "clawhub sync --all --bump patch"
+    "clawhub:sync": "clawhub sync --all --bump patch",
+    "build:190": "python3 scripts/remote-cargo.py build",
+    "test:190": "python3 scripts/remote-cargo.py test --bin chrome-use"
   },
   "keywords": [
     "browser",

@@ -69,6 +69,15 @@
         </a>
       </div>
 
+      <h2>Contributor checks on an SSH host</h2>
+      <p>
+        For repository changes, configure <code>git config --local chromeuse.remoteHost &lt;ssh-alias&gt;</code>,
+        then run <code>pnpm build:190</code> or <code>pnpm test:190</code>. <code>pnpm build:native</code>
+        builds remotely and fetches a checksum-verified native binary. SSH failures do not trigger local compilation.
+        The source snapshot includes Git-listed working files; use <code>git add -N &lt;path&gt;</code> for new files.
+        Receipts in <code>cli/target/remote-build-receipts/</code> record the input hash, toolchain and result.
+      </p>
+
       <hr class="du-divider" />
 
       <h2 id="write-a-rerunnable-test-suite">Write a rerunnable test suite</h2>

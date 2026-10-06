@@ -361,6 +361,13 @@ CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不�
 | [computer-use](https://github.com/leeguooooo/computer-use) | macOS 桌面本身 |
 | [pixcake-use](https://github.com/leeguooooo/pixcake-use) | 只读探查 PixCake：快照 / diff / SQLite 检查 |
 
+## 远程构建与测试
+
+先用 `git config --local chromeuse.remoteHost <SSH 别名>` 配置构建机。
+`pnpm build:190`、`pnpm test:190` 在远端运行 Cargo；`pnpm build:native` 也走远程构建，再取回校验过 SHA-256 的二进制。连接失败时不会回退到本机编译。
+
+脚本打包 Git 列出的当前工作文件，包含未提交修改。新源文件先用 `git add -N <路径>` 纳入清单。`cli/target/remote-build-receipts/` 保存输入哈希、远端工具链、命令、退出状态和产物校验值，详见[远程构建说明](scripts/REMOTE-BUILD.md)。
+
 ## 参与开发
 
 `AGENTS.md` 是这个仓库的约定：文档放在哪、怎么构建和测试，以及两条用教训换来的

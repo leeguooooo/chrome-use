@@ -161,8 +161,18 @@ finished, so a result without a verdict is not a result.
 
 ## Build and test
 
-`cargo` commands run from `cli/`, not the repo root — there is no workspace
-`Cargo.toml` at the top level.
+Run compilation and automated Cargo tests on the configured SSH build host by default. Do not start a heavy local Cargo job or silently fall back to local execution when SSH fails. Configure the host once with `git config --local chromeuse.remoteHost <ssh-alias>`; the alias remains outside committed files.
+
+```bash
+python3 scripts/remote-cargo.py test --bin chrome-use
+python3 scripts/remote-cargo.py build --release
+python3 scripts/remote-cargo.py fmt -- --check
+python3 scripts/remote-cargo.py clippy
+```
+
+The runner uploads Git-listed working-tree contents, including uncommitted edits. Mark new source files with `git add -N <path>` so they are included without staging their content. Each run has a source hash and receipt; fetched binaries must match the recorded SHA-256. Browser acceptance against an existing authenticated session remains separate from remote compilation/tests.
+
+Direct `cargo` commands below describe the remote execution context: they run from `cli/`, not the repo root. Use the SSH runner for normal interactive work. Explicit CI and platform release workflows retain their own build environments.
 
 ```bash
 cd cli && cargo build --release        # ~5-8 min on a laptop

@@ -388,6 +388,13 @@ to teach your agent, JSON on stdout.
 | [computer-use](https://github.com/leeguooooo/computer-use) | The macOS desktop itself |
 | [pixcake-use](https://github.com/leeguooooo/pixcake-use) | Read-only PixCake probing: snapshot / diff / SQLite inspection |
 
+## Remote developer checks
+
+Configure an SSH build host once with `git config --local chromeuse.remoteHost <ssh-alias>`.
+`pnpm build:190` and `pnpm test:190` run Cargo remotely; `pnpm build:native` also builds remotely and retrieves a checksum-verified native binary. These commands do not fall back to compiling on your workstation.
+
+The runner snapshots Git-listed working-tree files, including uncommitted edits. Use `git add -N <path>` for a new source file before running it. Receipts under `cli/target/remote-build-receipts/` record the input hash, remote toolchain, command, exit status and artifact checksum. See [remote build instructions](scripts/REMOTE-BUILD.md).
+
 ## Contributing
 
 `AGENTS.md` carries the conventions for this codebase: where docs live, how to

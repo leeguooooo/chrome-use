@@ -143,9 +143,9 @@ async function main() {
   } catch (err) {
     console.log(`Could not download native binary: ${err.message}`);
     console.log('');
-    console.log('To build the native binary locally:');
-    console.log('  1. Install Rust: https://rustup.rs');
-    console.log('  2. Run: npm run build:native');
+    console.log('Install the published CLI with the GitHub Release installer:');
+    console.log('  curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh');
+    console.log('For a source checkout, configure an SSH build host and run pnpm build:native.');
   }
 
   writeInstallMethod();

@@ -67,6 +67,15 @@
         </a>
       </div>
 
+      <h2>开发时使用 SSH 构建机</h2>
+      <p>
+        修改仓库代码时，先用 <code>git config --local chromeuse.remoteHost &lt;SSH 别名&gt;</code> 配置构建机，
+        再运行 <code>pnpm build:190</code> 或 <code>pnpm test:190</code>。
+        <code>pnpm build:native</code> 在远端构建并取回校验过 SHA-256 的二进制；连接失败不会触发本机编译。
+        源码快照包含 Git 列出的工作文件，新文件先用 <code>git add -N &lt;路径&gt;</code> 纳入清单。
+        <code>cli/target/remote-build-receipts/</code> 保存输入哈希、工具链和执行结果。
+      </p>
+
       <hr class="du-divider" />
 
       <h2 id="写可复跑的测试套件">写可复跑的测试套件</h2>

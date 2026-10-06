@@ -5091,7 +5091,8 @@ Start here (for AI agents):
   chrome-use skills get core --full
 
   Skills ship with the CLI (always version-matched) and include workflow
-  patterns, ref/selector usage, and copy-paste examples. Prefer this over
+  patterns, ref/selector usage, and copy-paste examples. For repository builds
+and tests on an SSH host, load core/development. Prefer the usage guide over
   guessing commands from flag docs alone. Specialized skills cover Electron
   apps, Slack, exploratory testing, and cloud browser providers.
 
