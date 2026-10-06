@@ -408,9 +408,10 @@
       </div>
 
       <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ 还没覆盖的验证码</div>
-        <code>solve-slider</code> 的内置检测器不自动识别增强版图标拼块或按顺序点选。
-        能看清的点选题由 agent 看截图、识别顺序、换算坐标并点击，不能把它当成滑块执行。
+        <div class="du-callout-title">滑块与点选的区别</div>
+        <code>solve-slider</code> 支持普通拼图和旋转图标拼块：先测量位移与角度的关系，
+        匹配主要轮廓，修正实际 CSS 位置，并核验当前这道题的结果。
+        按顺序点选由 agent 看截图、识别顺序、换算坐标并点击，不能把它当成滑块执行。
       </div>
 
       <h3>遇到验证码先尝试</h3>

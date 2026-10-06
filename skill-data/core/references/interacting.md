@@ -93,9 +93,11 @@ trajectory — the human motion is what passes yidun's behavioural check. Works 
 both float (embedded) and popup (modal, e.g. Zhihu) modes. It auto-detects the
 captcha on the active page; run it right after the submit that triggers the
 slider. The drag forces the humanize trajectory regardless of the global
-`AGENT_BROWSER_HUMANIZE` setting. The built-in slider detector does not
-automatically recognize enhanced icon-shaped pieces or ordered icons. For a
-readable click-in-order challenge, view its screenshot, identify the requested
+`AGENT_BROWSER_HUMANIZE` setting. The built-in detector also handles Yidun's
+rotating icon-shaped slider: it calibrates angular/linear motion, matches the
+main silhouette while ignoring small decoys, corrects the inline CSS position,
+and verifies the result on the same challenge. Ordered icons use a different
+workflow. For a readable click-in-order challenge, view its screenshot, identify the requested
 order, convert image coordinates to CSS pixels, click, and verify the site's
 result. Do not hand off merely because it is a CAPTCHA. Load `core/captcha`
 for the full workflow and bounded retries. Exhausted solver attempts return

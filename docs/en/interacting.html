@@ -431,10 +431,11 @@
       </div>
 
       <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ CAPTCHAs not yet covered</div>
-        The built-in <code>solve-slider</code> detector does not automatically recognize enhanced icon-shaped pieces
-        or ordered clicks. An agent can inspect a readable icon challenge, convert screenshot coordinates, click in
-        order and verify the result. Do not run the slider solver on an ordered-click challenge.
+        <div class="du-callout-title">Sliders and ordered clicks</div>
+        <code>solve-slider</code> handles ordinary puzzles and rotating icon-shaped pieces: it measures linear/angular
+        motion, matches the main silhouette, corrects the actual CSS position and verifies the current challenge.
+        Ordered clicks still use the agent's image understanding, coordinate conversion and ordinary clicks.
+        Do not run the slider solver on an ordered-click challenge.
       </div>
 
       <h3>Attempt the visible challenge first</h3>

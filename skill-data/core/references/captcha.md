@@ -27,15 +27,17 @@ Do not repeat the login/SMS submit to diagnose it. Inspect the challenge instead
 
 ## Slider puzzles
 
-For an ordinary NetEase Yidun puzzle on the main page:
+For an ordinary or rotating/icon-shaped NetEase Yidun puzzle on the main page:
 
 ```bash
 chrome-use solve-slider 1      # initial attempt plus at most one retry
 ```
 
 A verified success returns `solved:true`; exhausted attempts return an error
-and a nonzero exit code. Read the page's verification result. The ordinary detector does
-not cover every enhanced/icon-shaped puzzle or cross-origin frame. If it
+and a nonzero exit code. Read the page's verification result. The rotating detector measures how the piece translates and rotates, matches
+its main alpha silhouette, and reads its inline position back before release.
+It reports the result for that challenge, not another hidden widget's old
+success. Not every variant or cross-origin frame is covered. If it
 cannot locate the gap, view a fresh screenshot, locate the piece and gap when
 unambiguous, and use `drag <handle-ref> <dx[,dy]>`. Inspect again after a failed
 attempt; refreshes invalidate the old positions. Do not repeatedly drag the

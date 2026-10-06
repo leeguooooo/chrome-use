@@ -14187,34 +14187,62 @@ const YIDUN_PROBE: &str = r#"(function(){
   const vis=(sel)=>{let best=null,bw=-1;document.querySelectorAll(sel).forEach(e=>{
     const r=e.getBoundingClientRect(); if(r.width>bw){bw=r.width;best=e;}}); return best;};
   const h=vis('.yidun_slider');
-  const bgEl=vis('img.yidun_bg-img');     // for src + natural width
-  const jig=vis('img.yidun_jigsaw');
+  const root=h?.closest('.yidun');
+  const bgEl=root?.querySelector('img.yidun_bg-img');
+  const jig=root?.querySelector('img.yidun_jigsaw');
   // The puzzle's *displayed* width comes from the container DIV: in popup mode
   // (e.g. Zhihu) the inner <img> is 0-sized while .yidun_bgimg is the real
   // 320px box. Fall back to the img when there's no container.
-  const box=vis('.yidun_bgimg')||bgEl;
+  const box=root?.querySelector('.yidun_bgimg')||bgEl;
   if(!h||!bgEl||!jig||!box) return JSON.stringify({present:false});
   const hb=h.getBoundingClientRect();
   const cb=box.getBoundingClientRect();
   const jb=jig.getBoundingClientRect();
+  const cs=getComputedStyle(jig);
   return JSON.stringify({present:true,
+    rotating:/rotate\(/.test(jig.style.transform),
+    style_left:parseFloat(jig.style.left)||0,
+    angle:parseFloat(jig.style.transform.replace(/^rotate\(/,''))||0,
+    origin:cs.transformOrigin.split(' ').map(parseFloat),
+    track:h.parentElement.getBoundingClientRect().width-hb.width,
     hx:hb.x+hb.width/2, hy:hb.y+hb.height/2,
     bg_src:bgEl.src, jig_src:jig.src,
     bg_natW:bgEl.naturalWidth, bg_dispW:cb.width,
     piece_left: jb.x-cb.x});
 })()"#;
 
-/// Read the yidun result state after a release: success / error / pending.
-const YIDUN_RESULT: &str = r#"(function(){
-  const p=document.querySelector('.yidun');
-  const tip=document.querySelector('.yidun_tips__text');
-  const cls=p?p.className:'';
-  const txt=tip?tip.textContent:'';
-  let status='pending';
-  if(/success/.test(cls)||/成功|通过/.test(txt)) status='success';
-  else if(/error/.test(cls)||/失败|错误|重试|不正确/.test(txt)) status='error';
-  return JSON.stringify({status, txt, cls});
-})()"#;
+/// Pin the result to this challenge, including after its popup becomes hidden.
+/// Another widget's stale success is not evidence for the active challenge.
+pub(super) fn yidun_result_script(src: &str) -> String {
+    format!(
+        r#"(function(){{
+      const img=[...document.querySelectorAll('img.yidun_bg-img')].find(e=>e.src==={});
+      const p=img?.closest('.yidun'),tip=p?.querySelector('.yidun_tips__text');
+      const cls=p?p.className:'',txt=tip?tip.textContent:'';
+      let status=p?'pending':'changed';
+      if(/success/.test(cls)||/成功|通过/.test(txt))status='success';
+      else if(/error/.test(cls)||/失败|错误|重试|不正确/.test(txt))status='error';
+      return JSON.stringify({{status,txt,cls}});
+    }})()"#,
+        serde_json::to_string(src).unwrap()
+    )
+}
+
+async fn poll_yidun_result(
+    mgr: &super::browser::BrowserManager,
+    src: &str,
+) -> Result<Value, String> {
+    let script = yidun_result_script(src);
+    let mut detail = json!({"status":"pending"});
+    for _ in 0..12 {
+        tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+        detail = parse_json_string(mgr.evaluate(&script, None).await?, "yidun result")?;
+        if detail.get("status").and_then(Value::as_str) != Some("pending") {
+            break;
+        }
+    }
+    Ok(detail)
+}
 
 async fn yidun_mouse(
     mgr: &super::browser::BrowserManager,
@@ -14304,7 +14332,7 @@ async fn handle_solve_slider(cmd: &Value, state: &mut DaemonState) -> Result<Val
         if attempt < retries {
             let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
             let _ = mgr
-                .evaluate("document.querySelector('.yidun_refresh')?.click()", None)
+                .evaluate("[...document.querySelectorAll('.yidun_refresh')].find(e=>e.getBoundingClientRect().width>0)?.click()", None)
                 .await;
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         }
@@ -14319,6 +14347,79 @@ async fn handle_solve_slider(cmd: &Value, state: &mut DaemonState) -> Result<Val
             .unwrap_or("unknown"),
         last.get("tip").and_then(Value::as_str).unwrap_or("")
     ))
+}
+
+/// Measure enhanced motion while held, locate the rotated main silhouette,
+/// then correct the inline CSS position rather than its rotated bounding box.
+async fn solve_rotating_slider(
+    mgr: &super::browser::BrowserManager,
+    session_id: &str,
+    initial: &Value,
+    bg: &image::DynamicImage,
+    jig: &image::DynamicImage,
+) -> Result<Value, String> {
+    let number = |p: &Value, k: &str| p.get(k).and_then(Value::as_f64).unwrap_or(0.);
+    let (hx, hy) = (number(initial, "hx"), number(initial, "hy"));
+    let src = initial
+        .get("bg_src")
+        .and_then(Value::as_str)
+        .ok_or("Missing challenge image")?;
+    let mut handle_x = hx;
+    yidun_mouse(mgr, session_id, "mouseMoved", hx, hy, 0).await?;
+    yidun_mouse(mgr, session_id, "mousePressed", hx, hy, 1).await?;
+    // Always release on a calibration/detection failure as well as success.
+    let moved:Result<Value,String>=async{
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        for dx in [12.,25.]{handle_x=hx+dx;yidun_mouse(mgr,session_id,"mouseMoved",handle_x,hy,1).await?;tokio::time::sleep(std::time::Duration::from_millis(100)).await;}
+        let p1=parse_json_string(mgr.evaluate(YIDUN_PROBE,None).await?,"rotation calibration")?;
+        for dx in [44.,65.]{handle_x=hx+dx;yidun_mouse(mgr,session_id,"mouseMoved",handle_x,hy,1).await?;tokio::time::sleep(std::time::Duration::from_millis(100)).await;}
+        let p2=parse_json_string(mgr.evaluate(YIDUN_PROBE,None).await?,"rotation calibration")?;
+        if p1.get("bg_src")!=initial.get("bg_src")||p2.get("bg_src")!=initial.get("bg_src"){return Err("Challenge changed during rotation calibration".to_string());}
+        let(l1,l2)=(number(&p1,"style_left"),number(&p2,"style_left"));
+        let ratio=(l2-l1)/40.;
+        if !ratio.is_finite()||!(0.05..1.5).contains(&ratio){return Err("Rotating puzzle did not respond to the held drag".to_string());}
+        let rate=(number(&p2,"angle")-number(&p1,"angle"))/(l2-l1);
+        if !rate.is_finite()||!(0.02..5.).contains(&rate.abs()){return Err("Unsupported rotating puzzle motion".to_string());}
+        let scale=number(&p2,"bg_dispW")/number(&p2,"bg_natW");
+        let origins=p2.get("origin").and_then(Value::as_array).ok_or("Missing rotation origin")?;
+        let ox=origins.first().and_then(Value::as_f64).ok_or("Invalid rotation origin")?/scale;
+        let oy=origins.get(1).and_then(Value::as_f64).ok_or("Invalid rotation origin")?/scale;
+        let track=number(&p2,"track");
+        let offset=number(&p1,"angle")-rate*l1;
+        let found=super::rotating_slider::locate(bg,jig,super::rotating_slider::Motion{
+            scale,origin:(ox,oy),degrees_per_css:rate,angle_offset:offset,max_left:l1+(track-25.)*ratio,
+        }).ok_or("No confident rotated silhouette match; inspect a fresh challenge")?;
+        let dx=25.+(found.left-l1)/ratio;
+        if !dx.is_finite()||dx<0.||dx>track{return Err("Rotated target is outside the slider track".to_string());}
+        for step in humanize::move_path((handle_x,hy),(hx+dx,hy),humanize::HumanizeLevel::Human,humanize::next_seed()){
+            handle_x=step.x;yidun_mouse(mgr,session_id,"mouseMoved",step.x,step.y,1).await?;
+            if !step.delay.is_zero(){tokio::time::sleep(step.delay).await;}
+        }
+        handle_x=hx+dx;
+        let mut final_left=0.;
+        for attempt in 0..4{
+            tokio::time::sleep(std::time::Duration::from_millis(110)).await;
+            let p=parse_json_string(mgr.evaluate(YIDUN_PROBE,None).await?,"rotating piece readback")?;
+            if p.get("bg_src")!=initial.get("bg_src"){return Err("Challenge changed during rotating drag".to_string());}
+            final_left=number(&p,"style_left");let error=found.left-final_left;
+            if error.abs()<0.6{break;}
+            if attempt==3{return Err("Rotating piece did not reach its computed position".to_string());}
+            handle_x=(handle_x+error/ratio).clamp(hx,hx+track);
+            yidun_mouse(mgr,session_id,"mouseMoved",handle_x,hy,1).await?;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        Ok(json!({"kind":"rotating","target_left_css":found.left,"final_left_css":final_left,
+            "angle":offset+rate*found.left,"edge_error":found.edge_error,"ratio":ratio,"drag_css":handle_x-hx}))
+    }.await;
+    let release = yidun_mouse(mgr, session_id, "mouseReleased", handle_x, hy, 0).await;
+    release?;
+    let mut detail = moved?;
+    let result = poll_yidun_result(mgr, src).await?;
+    detail["solved"] = json!(result.get("status").and_then(Value::as_str) == Some("success"));
+    detail["status"] = result["status"].clone();
+    detail["tip"] = result["txt"].clone();
+    detail["cls"] = result["cls"].clone();
+    Ok(detail)
 }
 
 async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
@@ -14405,13 +14506,24 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
                 .map_err(|e| format!("read {url}: {e}"))
         }
     };
-    let bg_bytes = fetch(bg_src).await?;
+    let bg_bytes = fetch(bg_src.clone()).await?;
     let jig_bytes = fetch(jig_src).await?;
     // Pluggable detector: AGENT_BROWSER_SLIDER_DETECT_CMD lets an external
     // program (e.g. a cv2 prototype for the enhanced icon-shape variant) supply
     // the gap, reusing the robust Rust drag + closed-loop below. Falls back to
     // the built-in pure-Rust detector. The cmd is run as `sh -c "<cmd> <dir>"`
     // with bg.img + jig.img in <dir>, and must print JSON {drag_nat[,piece_x]}.
+    if probe
+        .get("rotating")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && std::env::var("AGENT_BROWSER_SLIDER_DETECT_CMD").is_err()
+    {
+        let bg_img = image::load_from_memory(&bg_bytes).map_err(|e| format!("decode bg: {e}"))?;
+        let jig_img =
+            image::load_from_memory(&jig_bytes).map_err(|e| format!("decode piece: {e}"))?;
+        return solve_rotating_slider(mgr, &session_id, &probe, &bg_img, &jig_img).await;
+    }
     let gap = if let Ok(cmd) = std::env::var("AGENT_BROWSER_SLIDER_DETECT_CMD") {
         detect_gap_external(&cmd, &bg_bytes, &jig_bytes).await?
     } else {
@@ -14525,7 +14637,10 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
     let mut detail = json!({});
     for _ in 0..12 {
         tokio::time::sleep(std::time::Duration::from_millis(180)).await;
-        let res = parse_json_string(mgr.evaluate(YIDUN_RESULT, None).await?, "yidun result")?;
+        let res = parse_json_string(
+            mgr.evaluate(&yidun_result_script(&bg_src), None).await?,
+            "yidun result",
+        )?;
         status = res
             .get("status")
             .and_then(|v| v.as_str())
@@ -18799,6 +18914,43 @@ mod tests {
         assert!(predicate_match("contains", "abc123", r"\d+", true));
         // invalid regex → false, not panic
         assert!(!predicate_match("matches", "x", "[unclosed", false));
+    }
+
+    #[test]
+    fn yidun_result_ignores_another_widgets_stale_success() {
+        let mut context = boa_engine::Context::default();
+        context
+            .eval(boa_engine::Source::from_bytes(
+                r#"
+          const stale={className:'yidun--success',querySelector:()=>({textContent:'成功'})};
+          const current={className:'yidun--error',querySelector:()=>({textContent:'失败'})};
+          const document={querySelectorAll:()=>[
+            {src:'https://fixture.test/old',closest:()=>stale},
+            {src:'https://fixture.test/current',closest:()=>current}
+          ]};
+        "#,
+            ))
+            .unwrap();
+        let script = yidun_result_script("https://fixture.test/current");
+        let value = context
+            .eval(boa_engine::Source::from_bytes(&script))
+            .unwrap();
+        let text = value
+            .to_string(&mut context)
+            .unwrap()
+            .to_std_string_escaped();
+        let result: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(result["status"], "error");
+        let script = yidun_result_script("https://fixture.test/replaced");
+        let value = context
+            .eval(boa_engine::Source::from_bytes(&script))
+            .unwrap();
+        let text = value
+            .to_string(&mut context)
+            .unwrap()
+            .to_std_string_escaped();
+        let result: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(result["status"], "changed");
     }
 
     #[test]

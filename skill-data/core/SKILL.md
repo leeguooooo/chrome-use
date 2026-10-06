@@ -225,7 +225,7 @@ reaching the requested authenticated destination, not merely clicking submit.
 
 For an authorized login or browser task, a CAPTCHA is a task step, not an
 automatic stop. Inspect the current challenge and try the supported interaction
-first: `solve-slider` for an ordinary Yidun puzzle, or screenshot-guided clicks
+first: `solve-slider` for an ordinary or rotating Yidun puzzle, or screenshot-guided clicks
 for a readable icon/ordered-image challenge. Load `core/captcha` for coordinate
 scaling, foreground activation before capture, bounded retries, and result
 verification. A provider success or frozen SMS countdown does not prove the

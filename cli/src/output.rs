@@ -2618,11 +2618,12 @@ chrome-use solve-slider - Attempt a NetEase Yidun slider puzzle
 
 Usage: chrome-use solve-slider [retries]
 
-Detects an ordinary puzzle gap and drags the handle; default: 3 retries after
-an initial attempt. Verified success returns solved:true; exhausted attempts
-return an error and a nonzero exit code. Read the site's result before continuing.
-Enhanced/icon-shaped puzzles and ordered image clicks need the agent's visual
-inspection. Load `chrome-use skills get core/captcha` for bounded attempts,
+Detects ordinary puzzle gaps and rotating/icon-shaped Yidun sliders. Rotating
+pieces use measured linear/angular motion, silhouette matching and CSS-position
+readback. Default: 3 retries after an initial attempt. Verified success returns
+solved:true; exhausted attempts return an error and a nonzero exit code.
+Read the site's result before continuing. Ordered image clicks need the agent's
+visual inspection. Load `chrome-use skills get core/captcha` for bounded attempts,
 CSS-pixel coordinate conversion, ordered clicks, and result verification.
 Activate before capturing coordinates. Provider success or a frozen resend
 countdown alone does not establish that the site accepted verification.
