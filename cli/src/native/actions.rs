@@ -218,6 +218,9 @@ fn set_json_path(root: &mut Value, path: &str, val: Value) {
 /// `network requests`. WebSocket frame payloads are intentionally excluded.
 #[derive(Clone, serde::Serialize)]
 pub struct TrackedRequest {
+    /// Renderer that observed this request; a body can belong to an OOPIF.
+    #[serde(skip)]
+    pub session_id: Option<String>,
     pub url: String,
     pub method: String,
     pub headers: Value,
@@ -1430,6 +1433,7 @@ impl DaemonState {
                                         .to_string();
                                     let timestamp = unix_timestamp_millis() as u64;
                                     self.tracked_requests.push(TrackedRequest {
+                                        session_id: event.session_id.clone(),
                                         url,
                                         method,
                                         headers,
@@ -1462,6 +1466,7 @@ impl DaemonState {
                                 .to_string();
                             let timestamp = unix_timestamp_millis() as u64;
                             self.tracked_requests.push(TrackedRequest {
+                                session_id: event.session_id.clone(),
                                 url,
                                 method: "GET".to_string(),
                                 headers: json!({}),
@@ -1533,11 +1538,11 @@ impl DaemonState {
                                         .get("mimeType")
                                         .and_then(|v| v.as_str())
                                         .map(String::from);
-                                    if let Some(entry) = self
-                                        .tracked_requests
-                                        .iter_mut()
-                                        .rev()
-                                        .find(|e| e.request_id == request_id)
+                                    if let Some(entry) =
+                                        self.tracked_requests.iter_mut().rev().find(|e| {
+                                            e.request_id == request_id
+                                                && e.session_id == event.session_id
+                                        })
                                     {
                                         entry.status = status;
                                         entry.mime_type = resp_mime;
@@ -16042,48 +16047,56 @@ async fn handle_requests(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     Ok(response)
 }
 
+/// Read a body from its recorded renderer; report unavailable bodies explicitly.
 async fn handle_request_detail(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let request_id = cmd
         .get("requestId")
-        .and_then(|v| v.as_str())
+        .and_then(Value::as_str)
         .ok_or("Missing 'requestId' parameter")?;
-
     let entry = state
         .tracked_requests
         .iter()
+        .rev()
         .find(|r| r.request_id == request_id)
         .ok_or("Request not found")?;
-
     let mut result = serde_json::to_value(entry).unwrap_or(json!({}));
-
-    if let Some(ref mgr) = state.browser {
-        if let Ok(session_id) = mgr.active_session_id() {
-            if let Ok(body_result) = mgr
-                .client
-                .send_command(
-                    "Network.getResponseBody",
-                    Some(json!({ "requestId": request_id })),
-                    Some(session_id),
-                )
-                .await
+    let body_result = match state.browser.as_ref() {
+        Some(mgr) => match entry
+            .session_id
+            .as_deref()
+            .or_else(|| mgr.active_session_id().ok())
+        {
+            Some(session_id) => {
+                mgr.client
+                    .send_command(
+                        "Network.getResponseBody",
+                        Some(json!({ "requestId": request_id })),
+                        Some(session_id),
+                    )
+                    .await
+            }
+            None => Err("Request renderer is unavailable".to_string()),
+        },
+        None => Err("Browser not launched".to_string()),
+    };
+    match body_result {
+        Ok(body_result) => {
+            let body = body_result
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if body_result
+                .get("base64Encoded")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
             {
-                let base64_encoded = body_result
-                    .get("base64Encoded")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                let body = body_result
-                    .get("body")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if base64_encoded {
-                    result["responseBody"] = json!(format!("[base64, {} chars]", body.len()));
-                } else {
-                    result["responseBody"] = json!(body);
-                }
+                result["responseBody"] = json!(format!("[base64, {} chars]", body.len()));
+            } else {
+                result["responseBody"] = json!(body);
             }
         }
+        Err(error) => result["responseBodyError"] = json!(error),
     }
-
     Ok(result)
 }
 
@@ -18791,6 +18804,7 @@ mod tests {
     #[test]
     fn test_request_matches_parity() {
         let r = TrackedRequest {
+            session_id: None,
             url: "https://x.com/api/save".to_string(),
             method: "POST".to_string(),
             headers: json!({}),

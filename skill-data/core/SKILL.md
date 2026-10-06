@@ -46,7 +46,7 @@ exists, and lost its verification and hints. Use the command:
 | `document.body.innerText`, `el.innerText` | `get text <sel>`, or `read` for the main content |
 | `[...].find(b => b.textContent === '查询').click()` | `click "text=查询"` or `find text "查询" click` |
 | `getBoundingClientRect()` | `get box <sel or @ref>` |
-| patching `fetch`/XHR to see an API response | `network requests --filter api`, then `network request <id>` (includes the body) |
+| patching `fetch`/XHR to see an API response | `network requests --filter api`, then `network request <id>` (reads the body from its original renderer; `responseBodyError` explains an unavailable body) |
 | `sleep N` or a polling loop | `wait --text "…"`, `wait <sel>`, `wait --url <pattern>`, `wait --fn "<expr>"` |
 | setting `.value` through a native setter | `fill @eN "…"`: it reads the value back and says when it did not stick |
 | injecting a script before the page runs | `addinitscript <js>`, then `reload` |

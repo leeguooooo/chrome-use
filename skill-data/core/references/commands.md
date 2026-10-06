@@ -358,6 +358,13 @@ set. It records the goal, the page text and field values, which includes
 anything already typed into the form, so treat the file as sensitive. The run report also splits `act_ms` into
 `act_read_ms`, `cmd_click_ms`, `cmd_press_ms` and `cmd_insert_ms`.
 
+## Response body provenance
+
+`network request <id>` reads the body from the renderer that captured it,
+including cross-origin frames. `responseBodyError` explains an unavailable or
+evicted body; it is not an empty response and not proof of server acceptance.
+The internal CDP session identifier is not included in JSON output.
+
 ## Network
 
 ```bash

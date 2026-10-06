@@ -205,6 +205,12 @@
 <span class="du-prompt">$</span> chrome-use network har stop /tmp/trace.har</code></pre>
       </div>
 
+      <p>
+        <code>network request &lt;id&gt;</code> reads the response body from the renderer that captured it,
+        including cross-origin frames. Evicted bodies or unavailable renderers carry <code>responseBodyError</code>.
+        HTTP 200 does not establish business success, and an unavailable body is not an empty response.
+      </p>
+
       <h2>Clean up rules</h2>
       <p>
         All route rules are persistent and stay in effect until you explicitly remove them. When you're done, use

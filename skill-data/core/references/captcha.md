@@ -81,7 +81,10 @@ A command's Done receipt only means the input was dispatched. A vanished dialog
 alone may mean it was closed. A frozen resend counter while the challenge is
 still visible is not a success receipt. A CAPTCHA provider can report success
 while the site's SMS/login endpoint rejects it; inspect that endpoint's result
-without printing credentials before reporting the login step complete. For an SMS flow, a success message and a resend
+without printing credentials before reporting the login step complete.
+`network request <id>` retrieves the response from the request's renderer,
+including cross-origin CAPTCHA frames. If it returns `responseBodyError`, the
+body is unavailable; HTTP 200 alone does not establish verification success. For an SMS flow, a success message and a resend
 countdown establish progress; the countdown does not prove SMS delivery or login.
 Continue the already-authorized task without another permission question after
 a verified success. Verify the authenticated account/target page after login;

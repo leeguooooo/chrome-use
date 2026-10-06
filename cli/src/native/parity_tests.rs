@@ -564,6 +564,7 @@ async fn test_daemon_state_new_defaults() {
 async fn test_tracked_request_struct() {
     use super::actions::TrackedRequest;
     let tr = TrackedRequest {
+        session_id: Some("private-renderer-id".to_string()),
         url: "https://example.com/api".to_string(),
         method: "GET".to_string(),
         headers: json!({"Accept": "text/html"}),
@@ -580,6 +581,8 @@ async fn test_tracked_request_struct() {
     assert_eq!(serialized["method"], "GET");
     assert_eq!(serialized["resourceType"], "Document");
     assert_eq!(serialized["timestamp"], 12345);
+    assert!(serialized.get("session_id").is_none());
+    assert!(serialized.get("sessionId").is_none());
 }
 
 #[tokio::test]
@@ -589,6 +592,7 @@ async fn test_request_tracking_state() {
     assert!(state.tracked_requests.is_empty());
 
     state.tracked_requests.push(super::actions::TrackedRequest {
+        session_id: None,
         url: "https://example.com".to_string(),
         method: "GET".to_string(),
         headers: json!({}),
@@ -601,6 +605,7 @@ async fn test_request_tracking_state() {
         mime_type: None,
     });
     state.tracked_requests.push(super::actions::TrackedRequest {
+        session_id: None,
         url: "https://other.com".to_string(),
         method: "POST".to_string(),
         headers: json!({}),

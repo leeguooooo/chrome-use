@@ -200,6 +200,12 @@
 <span class="du-prompt">$</span> chrome-use network har stop /tmp/trace.har</code></pre>
       </div>
 
+      <p>
+        <code>network request &lt;id&gt;</code> 从请求所属的页面或跨源帧读取响应正文。
+        正文已被丢弃或对应帧不可用时，返回 <code>responseBodyError</code> 说明原因。
+        HTTP 200 不等于业务成功，也不能把正文缺失当作空响应。
+      </p>
+
       <h2>清理规则</h2>
       <p>
         所有路由规则是常驻的，会一直生效直到你显式移除。收工时用

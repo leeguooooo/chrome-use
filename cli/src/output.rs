@@ -3649,6 +3649,9 @@ Subcommands:
     --method <method>        Filter by HTTP method (GET, POST, etc.)
     --status <code>          Filter by status (200, 2xx, 400-499)
   request <requestId>        View full request/response detail (including body)
+                             Body reads use the originating renderer, including
+                             cross-origin frames; responseBodyError explains
+                             an unavailable body.
   har <start|stop> [path]    Record and export a HAR file
 
 Global Options:

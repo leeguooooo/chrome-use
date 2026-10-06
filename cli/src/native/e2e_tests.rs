@@ -11315,6 +11315,22 @@ mod background_activation {
                                 .retain(|item| item["targetId"] != command["params"]["targetId"]);
                             json!({"success":true})
                         }
+                        "Network.getResponseBody" => {
+                            if command["sessionId"] != "session-iframe"
+                                || command["params"]["requestId"] == "evicted"
+                            {
+                                let response = json!({
+                                    "id": command["id"], "sessionId": command["sessionId"],
+                                    "error": {"code": -32000, "message": "No resource in this renderer"}
+                                });
+                                websocket
+                                    .send(Message::Text(response.to_string()))
+                                    .await
+                                    .unwrap();
+                                continue;
+                            }
+                            json!({"body":"{\"accepted\":false}", "base64Encoded":false})
+                        }
                         "Browser.getVersion" => json!({"product":"Chrome/fixture"}),
                         "Target.setDiscoverTargets"
                         | "Page.enable"
@@ -11431,6 +11447,65 @@ mod background_activation {
             "fixture received an unsupported CDP command"
         );
         response
+    }
+
+    #[tokio::test]
+    async fn e2e_mock_request_body_uses_captured_iframe_session() {
+        let fixture = ActivationCdpFixture::start().await;
+        let mut state = fixture.connect().await;
+        assert_success(
+            &execute_bounded(
+                &fixture,
+                &mut state,
+                json!({
+                    "id":"adopt", "action":"tab_adopt", "spec":"existing", "activate":true
+                }),
+            )
+            .await,
+        );
+        state
+            .tracked_requests
+            .push(super::super::actions::TrackedRequest {
+                session_id: Some("session-iframe".to_string()),
+                request_id: "iframe-request".to_string(),
+                url: "https://captcha.test/verify".to_string(),
+                method: "POST".to_string(),
+                headers: json!({}),
+                timestamp: 1,
+                resource_type: "Fetch".to_string(),
+                post_data: None,
+                status: Some(200),
+                response_headers: None,
+                mime_type: Some("application/json".to_string()),
+            });
+        let response = execute_bounded(
+            &fixture,
+            &mut state,
+            json!({
+                "id":"detail", "action":"request_detail", "requestId":"iframe-request"
+            }),
+        )
+        .await;
+        assert_success(&response);
+        assert_eq!(response["data"]["responseBody"], "{\"accepted\":false}");
+        assert!(fixture.commands().iter().any(
+            |c| c["method"] == "Network.getResponseBody" && c["sessionId"] == "session-iframe"
+        ));
+        state.tracked_requests[0].request_id = "evicted".to_string();
+        let response = execute_bounded(
+            &fixture,
+            &mut state,
+            json!({
+                "id":"gone", "action":"request_detail", "requestId":"evicted"
+            }),
+        )
+        .await;
+        assert_success(&response);
+        assert!(response["data"].get("responseBody").is_none());
+        assert!(response["data"]["responseBodyError"]
+            .as_str()
+            .unwrap()
+            .contains("No resource"));
     }
 
     #[tokio::test]
