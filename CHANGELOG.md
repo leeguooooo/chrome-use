@@ -1,8 +1,29 @@
 # Changelog
 
-## 1.5.163
+## 1.5.164
 
 <!-- release:start -->
+### New Features
+
+- **Rotating Yidun sliders.** `solve-slider` measures translation and rotation while dragging, matches the main puzzle silhouette, and checks the current question’s result. Unsupported or ambiguous shapes fail explicitly. (#412)
+
+### Bug Fixes
+
+- **Slider failure is a failed command.** Exhausted attempts now exit nonzero with `success:false`; a hidden widget’s old success cannot approve the current question. (#412)
+- **Cross-origin response bodies come from the frame that made the request.** Network detail uses the recorded renderer session and reports `responseBodyError` when the body is unavailable. (#412)
+
+### Improvements
+
+- **Agents attempt ordinary CAPTCHAs during authorized tasks.** The bundled guide covers sliders and ordered image clicks, bounded retries, foreground coordinate measurement, and site-level acceptance. A provider success or resend label alone does not prove SMS delivery or login. (#412)
+- **Development builds and tests can run over SSH.** Configure a build host for `build:native`, `build:190`, and `test:190`; the runner uploads Git-listed working-tree contents, serializes its Cargo cache, and verifies downloaded binaries against SHA-256 receipts. SSH failure never starts local compilation. (#412)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.163
+
 ### Improvements
 
 - **A failing adapter no longer hides a working OpenCLI command of the same name.** When one of our adapters fails and OpenCLI has a read command with that name, chrome-use runs OpenCLI's instead. Example: `hackernews/top` from the community pack fetches an API the page's security policy blocks, so it always failed; it now returns data through OpenCLI. Your arguments carry over by name, with common aliases mapped (`count` → `limit`, `q` → `query`). stderr says what happened; `--json` adds `source: "opencli"` and `fallbackFrom`. Write commands never retry. (#409)
@@ -10,7 +31,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.162
 
