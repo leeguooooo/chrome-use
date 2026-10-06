@@ -1822,6 +1822,11 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "snapshot" => {
             let mut cmd = json!({ "id": id, "action": "snapshot" });
             let obj = cmd.as_object_mut().unwrap();
+            // The daemon outlives the shell that started it, so an opt-out set
+            // on this invocation has to travel with the command to count.
+            if let Ok(v) = std::env::var("AGENT_BROWSER_SPARSE_SCREENSHOT") {
+                obj.insert("sparseScreenshot".to_string(), json!(v));
+            }
             let mut i = 0;
             while i < rest.len() {
                 match rest[i] {

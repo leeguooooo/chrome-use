@@ -1007,12 +1007,12 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     .unwrap_or(0)
             };
             let how = if steps == 0 {
-                "already in view".to_string()
+                "is already in view".to_string()
             } else {
-                format!("after scrolling {dir} {steps} step(s) ({distance}px)")
+                format!("is in view after scrolling {dir} {steps} step(s) ({distance}px)")
             };
             println!(
-                "{} {until} is in view {how}, at ({},{})",
+                "{} {until} {how}, at ({},{})",
                 color::success_indicator(),
                 xy(0),
                 xy(1)

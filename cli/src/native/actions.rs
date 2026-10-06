@@ -5939,7 +5939,15 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
             }
         }
     } else if canvas_page
-        && sparse_screenshot_enabled(env::var("AGENT_BROWSER_SPARSE_SCREENSHOT").ok().as_deref())
+        && sparse_screenshot_enabled(
+            // The caller's setting (forwarded by the CLI) wins over the
+            // environment the daemon happened to start with.
+            cmd.get("sparseScreenshot")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| env::var("AGENT_BROWSER_SPARSE_SCREENSHOT").ok())
+                .as_deref(),
+        )
     {
         // The tree above is near-empty because the page paints to a canvas, so
         // the next thing an agent does is ask for a screenshot. Take it now and
