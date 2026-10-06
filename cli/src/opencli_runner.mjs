@@ -55,9 +55,44 @@ class ChromeUsePage extends BasePage {
       await this.evaluate(waitForDomStableJs(maxMs, Math.min(500, maxMs))).catch(() => {});
     }
   }
+  // One Runtime.evaluate over the extension relay is cut off after ~8s, and
+  // adapters often await a search or a load inside the page for longer. So an
+  // expression is started in the page and awaited there for up to 6s; if it is
+  // still running, its promise stays in a page global and we poll for it.
+  // Statement code (evaluateWithArgs blocks) can't be wrapped without page-side
+  // eval(), which CSP blocks on many sites, so it runs directly as before.
   async evaluate(input, ...args) {
-    const data = await cu(['eval', '--stdin'], buildEvaluateExpression(input, args));
-    return data?.result;
+    const src = buildEvaluateExpression(input, args);
+    if (!isExpression(src)) {
+      const data = await cu(['eval', '--stdin'], src);
+      return data?.result;
+    }
+    const key = `__cu_oc_${Math.random().toString(36).slice(2)}`;
+    const k = JSON.stringify(key);
+    // Runs inside both wrappers below, where `box` is already bound.
+    const take = `if (!box.done) return { pending: true };
+      delete window[${k}];
+      return 'error' in box ? { error: box.error } : { value: box.value };`;
+    const start = `(async () => {
+      const box = window[${k}] = { done: false };
+      Promise.resolve().then(() => (${src}\n)).then(
+        (v) => { box.value = v; box.done = true; },
+        (e) => { box.error = (e && (e.stack || e.message)) || String(e); box.done = true; });
+      const t0 = Date.now();
+      while (!box.done && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 50));
+      ${take}
+    })()`;
+    const poll = `(async () => {
+      if (!window[${k}]) return { error: 'the page navigated before the evaluation finished' };
+      const box = window[${k}];
+      const t0 = Date.now();
+      while (!box.done && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 50));
+      ${take}
+    })()`;
+    let out = (await cu(['eval', '--stdin'], start))?.result;
+    while (out && out.pending) out = (await cu(['eval', '--stdin'], poll))?.result;
+    if (out && 'error' in out) throw new Error('Evaluate error: ' + out.error);
+    return out?.value;
   }
   async getCookies(opts = {}) {
     const a = ['cookies', 'get'];
@@ -100,6 +135,16 @@ class ChromeUsePage extends BasePage {
   }
   async insertText(text) {
     await this.evaluate((t) => document.execCommand('insertText', false, t), text);
+  }
+}
+
+function isExpression(src) {
+  try {
+    // Syntax check only; never called.
+    new Function(`return (${src}\n);`);
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 
