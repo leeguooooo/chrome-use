@@ -3222,18 +3222,18 @@ fn main() {
                 let entry = opencli::lookup(spec)
                     .filter(|e| e.get("access").and_then(|v| v.as_str()) == Some("read"));
                 if let Some(entry) = entry {
-                    let args: Vec<String> = cmd
-                        .get("siteArgs")
-                        .and_then(|v| v.as_array())
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|x| x.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                    let args =
+                        opencli::fallback_args(&entry, cmd.get("siteArgs").unwrap_or(&Value::Null));
                     let env = opencli::run(spec, &entry, &args, &flags.session);
                     if env.get("success").and_then(|v| v.as_bool()) == Some(true) {
-                        let first = resp.error.take().unwrap_or_default();
+                        let first = resp
+                            .error
+                            .take()
+                            .unwrap_or_default()
+                            .lines()
+                            .next()
+                            .unwrap_or("")
+                            .to_string();
                         if !flags.json {
                             eprintln!(
                                 "{}",
