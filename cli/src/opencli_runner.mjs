@@ -21,7 +21,8 @@ const { BasePage } = await mod('browser/base-page.js');
 const { buildEvaluateExpression } = await mod('browser/utils.js');
 const { getRegistry } = await mod('registry-api.js');
 const { executePipeline } = await mod('pipeline/index.js');
-const { coerceAndValidateArgs } = await mod('execution.js');
+const { prepareCommandArgs } = await mod('execution.js');
+const { shouldUseBrowserSession } = await mod('capabilityRouting.js');
 
 function cu(args, stdin) {
   return new Promise((resolve, reject) => {
@@ -134,20 +135,24 @@ try {
   await import(pathToFileURL(join(req.pkgDir, 'clis', req.modulePath)).href);
   const cmd = getRegistry().get(`${req.site}/${req.name}`);
   if (!cmd) throw new Error(`opencli: ${req.site}/${req.name} is not defined in ${req.modulePath}`);
-  const kwargs = coerceAndValidateArgs(cmd.args ?? [], req.kwargs ?? {});
-  cmd.validateArgs?.(kwargs);
-  const page = cmd.browser === false ? null : new ChromeUsePage();
-  if (page && cmd.navigateBefore !== false) {
-    const target = typeof cmd.navigateBefore === 'string'
-      ? cmd.navigateBefore
-      : cmd.domain ? `https://${cmd.domain}` : null;
-    const current = target ? await page.getCurrentUrl().catch(() => null) : null;
-    if (target && !(cmd.domain && hostMatches(current, cmd.domain))) await page.goto(target);
+  // Mirrors OpenCLI's executeCommand/runCommand (execution.js), minus its own
+  // browser transport: same arg preparation, same browser-or-not routing, the
+  // same pre-navigation rule (only a URL string in navigateBefore), and the
+  // same func signatures — func(kwargs) for browser:false, func(page, kwargs).
+  const kwargs = prepareCommandArgs(cmd, req.kwargs ?? {});
+  const page = shouldUseBrowserSession(cmd) ? new ChromeUsePage() : null;
+  if (page && typeof cmd.navigateBefore === 'string') {
+    const current = await page.getCurrentUrl().catch(() => null);
+    if (!(cmd.domain && hostMatches(current, cmd.domain))) await page.goto(cmd.navigateBefore);
   }
   let result;
-  if (typeof cmd.func === 'function') result = await cmd.func(page, kwargs);
-  else if (Array.isArray(cmd.pipeline)) result = await executePipeline(page, cmd.pipeline, { args: kwargs });
-  else throw new Error(`opencli: ${req.site}/${req.name} has neither func nor pipeline`);
+  if (typeof cmd.func === 'function') {
+    result = cmd.browser === false ? await cmd.func(kwargs) : await cmd.func(page, kwargs);
+  } else if (Array.isArray(cmd.pipeline)) {
+    result = await executePipeline(page, cmd.pipeline, { args: kwargs });
+  } else {
+    throw new Error(`opencli: ${req.site}/${req.name} has neither func nor pipeline`);
+  }
   emit({ success: true, data: result ?? null });
 } catch (e) {
   emit({ success: false, error: e?.message || String(e), hint: e?.hint, code: e?.code });
