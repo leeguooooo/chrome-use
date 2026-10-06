@@ -86,3 +86,4 @@ out/
 
 # CodeGraph local index
 .codegraph/
+.claude/worktrees/

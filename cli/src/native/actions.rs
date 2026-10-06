@@ -1984,7 +1984,15 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             .ok()
             .map(|v| super::observation::ResourceMark::from_value(&v))
             .unwrap_or_default();
-        let snap = observe_snapshot(state).await;
+        // With no snapshot taken yet there are no refs the action could be
+        // using, so register the baseline: otherwise the after-tree is numbered
+        // from scratch and the delta reports unchanged links as removed and
+        // re-added under new refs.
+        let snap = if state.ref_map.has_snapshot() {
+            observe_snapshot(state).await
+        } else {
+            observe_snapshot_registering(state).await
+        };
         Some((url, snap, (req_mark, resource_mark)))
     } else {
         None

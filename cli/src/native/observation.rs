@@ -51,6 +51,16 @@ fn request_line(method: &str, url: &str) -> (String, bool) {
     (shorten(&line, MAX_LINE_BYTES), shortened)
 }
 
+fn is_extension_url(url: &str) -> bool {
+    [
+        "chrome-extension://",
+        "moz-extension://",
+        "safari-web-extension://",
+    ]
+    .iter()
+    .any(|p| url.starts_with(p))
+}
+
 pub(super) fn summarize_requests<'a>(
     requests: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> RequestSummary {
@@ -61,6 +71,11 @@ pub(super) fn summarize_requests<'a>(
         shortened: 0,
     };
     for (method, url) in requests {
+        // Another extension's own fetches (locale files and the like) are not
+        // the page's response to the action.
+        if is_extension_url(url) {
+            continue;
+        }
         result.total += 1;
         if result.lines.len() == MAX_REQUESTS {
             result.omitted += 1;
@@ -76,6 +91,16 @@ pub(super) fn summarize_requests<'a>(
 #[cfg(test)]
 mod tests {
     use super::{human_check_vendor, human_check_verdict, resource_lines};
+
+    #[test]
+    fn extension_requests_are_not_the_pages_response() {
+        let s = super::summarize_requests([
+            ("GET", "chrome-extension://abc/locales.json"),
+            ("POST", "https://example.com/api/cart"),
+        ]);
+        assert_eq!(s.total, 1);
+        assert!(s.lines[0].contains("/api/cart"));
+    }
 
     #[test]
     fn human_check_vendors_are_recognized_by_url() {

@@ -157,6 +157,11 @@ struct StableRefEntry {
 const STABLE_REF_GENERATIONS: u64 = 32;
 
 impl RefMap {
+    /// Whether any snapshot has registered refs in this map yet.
+    pub fn has_snapshot(&self) -> bool {
+        self.snapshot_generation > 0
+    }
+
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),

@@ -1163,7 +1163,11 @@ fn write_domain_index(dir: &std::path::Path) {
         ) else {
             continue;
         };
-        if domain.is_empty() || ours.contains(&spec) {
+        // OpenCLI also drives local Electron apps over CDP (`localhost`,
+        // `127.0.0.1`); those are not websites, and indexing them would offer
+        // app commands on every local dev page.
+        let host = domain.split(':').next().unwrap_or(domain);
+        if domain.is_empty() || ours.contains(&spec) || is_local_host(host) {
             continue;
         }
         let read_only = entry.get("access").and_then(|v| v.as_str()) == Some("read");
@@ -1863,6 +1867,14 @@ mod tests {
             d.iter().any(|x| x.contains("non-empty list, now empty")),
             "{d:?}"
         );
+    }
+
+    #[test]
+    fn local_app_domains_with_ports_count_as_local() {
+        for d in ["localhost:9222", "127.0.0.1", "127.0.0.1:5173"] {
+            assert!(is_local_host(d.split(':').next().unwrap()), "{d}");
+        }
+        assert!(!is_local_host("www.v2ex.com"));
     }
 
     #[test]
