@@ -1243,7 +1243,10 @@ fn is_local_host(host: &str) -> bool {
         || host.ends_with(".localhost")
         || host.ends_with(".local")
         || host.parse::<std::net::IpAddr>().is_ok()
-        || host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok()
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .is_ok()
 }
 
 /// Pure decision: should a host with this usage get an adapter suggestion now?
@@ -1286,13 +1289,15 @@ fn write_usage(map: &serde_json::Map<String, Value>) {
 pub fn record_usage_day(host: &str) -> usize {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut map = read_usage();
-    let entry = map
-        .entry(host.to_string())
-        .or_insert_with(|| json!({}));
+    let entry = map.entry(host.to_string()).or_insert_with(|| json!({}));
     let mut days: Vec<String> = entry
         .get("days")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|d| d.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| d.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     if !days.contains(&today) {
         days.push(today);
@@ -1314,9 +1319,7 @@ pub fn last_suggested(host: &str) -> Option<u64> {
 
 pub fn mark_suggested(host: &str) {
     let mut map = read_usage();
-    let entry = map
-        .entry(host.to_string())
-        .or_insert_with(|| json!({}));
+    let entry = map.entry(host.to_string()).or_insert_with(|| json!({}));
     entry["suggested"] = json!(now_secs());
     write_usage(&map);
 }
@@ -1372,7 +1375,10 @@ mod tests {
     #[test]
     fn spec_of_keeps_runnable_adapters_only() {
         use std::path::Path;
-        assert_eq!(spec_of(Path::new("twitter/search.js")).as_deref(), Some("twitter/search"));
+        assert_eq!(
+            spec_of(Path::new("twitter/search.js")).as_deref(),
+            Some("twitter/search")
+        );
         assert_eq!(spec_of(Path::new("twitter/_helper.js")), None);
         assert_eq!(spec_of(Path::new("README.md")), None);
         assert_eq!(spec_of(Path::new("a/b/c.js")), None);
@@ -1396,10 +1402,30 @@ mod tests {
         assert!(should_suggest_adapter("example.com", 5, 3, None, now));
         assert!(!should_suggest_adapter("example.com", 4, 3, None, now));
         // cooldown
-        assert!(!should_suggest_adapter("example.com", 99, 9, Some(now - 86_400), now));
-        assert!(should_suggest_adapter("example.com", 99, 9, Some(now - 15 * 86_400), now));
+        assert!(!should_suggest_adapter(
+            "example.com",
+            99,
+            9,
+            Some(now - 86_400),
+            now
+        ));
+        assert!(should_suggest_adapter(
+            "example.com",
+            99,
+            9,
+            Some(now - 15 * 86_400),
+            now
+        ));
         // local hosts never
-        for h in ["", "localhost", "app.localhost", "nas.local", "127.0.0.1", "[::1]", "192.168.0.5"] {
+        for h in [
+            "",
+            "localhost",
+            "app.localhost",
+            "nas.local",
+            "127.0.0.1",
+            "[::1]",
+            "192.168.0.5",
+        ] {
             assert!(!should_suggest_adapter(h, 99, 9, None, now), "{h}");
         }
     }
