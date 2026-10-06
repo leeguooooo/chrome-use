@@ -266,6 +266,21 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         <code>AGENT_BROWSER_SITES_NO_SUGGEST=1</code> turns it off.
       </p>
 
+      <h3>OpenCLI commands work too</h3>
+      <p>
+        With Node.js 20+ on PATH, <code>site update</code> also installs <a href="https://github.com/jackwener/OpenCLI">OpenCLI</a> (about 180 sites and 1,300 commands; a pinned version, installed with <code>--ignore-scripts</code>).
+        A <code>name/cmd</code> that neither adapter pack has runs through OpenCLI's own runtime, driving your current chrome-use session and its logins, e.g.
+        <code>chrome-use site hackernews/best --limit 5 --json</code>. They show as <code>(opencli)</code> in <code>site list</code>, <code>site info</code> shows their args, and they come last in the site hint.
+        On a shared name ours win. <code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> turns them off.
+      </p>
+
+      <h3>Writing your own: analyze and verify</h3>
+      <p>
+        Do the action that loads the data on the page first (search, scroll, open the list), then run <code>chrome-use site analyze</code>. It lists the API calls the page made, the state it embeds (<code>__NEXT_DATA__</code>, <code>__INITIAL_STATE__</code>, …) and any anti-bot vendor, and recommends a data source.
+        In order of preference: a public API, the site's own JSON API called from the page with its cookies, embedded page state, then the DOM. Each step down breaks more often.
+        Once it works, <code>chrome-use site verify &lt;name&gt;/&lt;cmd&gt; [args] --write-fixture</code> records the shape of a good result; later, <code>site verify</code> fails (exit 1) when a field disappears, changes type, or a list comes back empty. The fixture keeps the shape only, never values.
+      </p>
+
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Exception on a fresh environment</div>
         Only on a <strong>brand-new environment where the adapter sources haven't been pulled yet</strong> might naming a

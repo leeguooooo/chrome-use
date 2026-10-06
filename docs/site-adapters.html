@@ -258,6 +258,21 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         设 <code>AGENT_BROWSER_SITES_NO_SUGGEST=1</code> 关闭这个提示。
       </p>
 
+      <h3>OpenCLI 的命令也能直接用</h3>
+      <p>
+        装了 Node.js 20+ 时，<code>site update</code> 会顺带安装 <a href="https://github.com/jackwener/OpenCLI">OpenCLI</a>（约 180 个站点、1300 多条命令，固定版本，<code>--ignore-scripts</code>）。
+        两个适配器库都没有的 <code>name/cmd</code>，会用 OpenCLI 自己的运行时执行，操作的还是你当前的 chrome-use 会话和登录态，比如
+        <code>chrome-use site hackernews/best --limit 5 --json</code>。<code>site list</code> 里标着 <code>(opencli)</code>，<code>site info</code> 能看参数，站点提示里排在最后。
+        同名时用我们自己的。<code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> 关闭。
+      </p>
+
+      <h3>自己写适配器：analyze 和 verify</h3>
+      <p>
+        先在页面上把加载数据的操作做一遍（搜索、滚动、打开列表），再跑 <code>chrome-use site analyze</code>：它列出页面发过的接口请求、页面里嵌着的初始数据（<code>__NEXT_DATA__</code>、<code>__INITIAL_STATE__</code> 等）和检测到的反爬厂商，并推荐取数方式。
+        优先顺序：公开 API，网站自己的 JSON 接口（在页面里带 cookie 调用），页面嵌入的数据，最后才是 DOM；越往后越容易坏。
+        写好后用 <code>chrome-use site verify &lt;name&gt;/&lt;cmd&gt; [参数] --write-fixture</code> 记下一次正确结果的结构；之后 <code>site verify</code> 发现字段消失、类型变了或列表变空就失败（退出码 1）。fixture 只存结构，不存数据。
+      </p>
+
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 全新环境的例外</div>
         只有在<strong>刚装好、适配器源还没拉取</strong>的全新环境里，点名一个 <code>site &lt;name&gt;/&lt;cmd&gt;</code>
