@@ -198,7 +198,7 @@ def main():
     if not 1 <= opts.jobs <= 16 or opts.timeout <= 0 or opts.min_free_gib < 1:
         parser.error('Invalid jobs, timeout or disk reserve')
     job = uuid.uuid4().hex
-    ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4', host]
+    ssh = ['ssh', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4', host]
     with tempfile.TemporaryDirectory(prefix='chrome-use-remote-') as td:
         archive = Path(td) / 'source.tar.gz'
         source_hash, manifest = snapshot(root, archive)
@@ -229,7 +229,7 @@ def main():
             dest.parent.mkdir(parents=True, exist_ok=True)
             temporary = dest.with_name(dest.name + '.' + job + '.remote-download')
             artifact = receipt['artifact']
-            subprocess.run(['scp', '-C', '-q', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', host + ':' + artifact['path'], str(temporary)], check=True)
+            subprocess.run(['scp', '-C', '-q', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', host + ':' + artifact['path'], str(temporary)], check=True)
             if hashlib.sha256(temporary.read_bytes()).hexdigest() != artifact['sha256']:
                 temporary.unlink(missing_ok=True)
                 raise RuntimeError('Downloaded artifact checksum mismatch')
