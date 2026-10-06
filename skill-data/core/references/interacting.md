@@ -82,7 +82,10 @@ re-target rather than reaching for `AGENT_BROWSER_VERIFY_REF=0`.
 node is gone, chrome-use acts on a replacement only if it is the *same control*:
 same role and the same accessible name (ignoring case and extra whitespace),
 re-found by role + name, by the replaced node's DOM attributes, or by
-fingerprint. The response then says so: `--json` gets `data.relocated: [{ref,
+fingerprint. One exception: a text field (textbox / searchbox / combobox /
+spinbutton) re-found by its own `id`, form `name` or test id is the same field
+even when the page rewrote its placeholder ("手机号" → "手机号或邮箱"), so it is
+filled, and the label change shows in the report. The response then says so: `--json` gets `data.relocated: [{ref,
 how: "role-name"|"dom-identity"|"adaptive", score?, role, name, was: {role,
 name}}]` (also on a failed action), and text output prints one `⚠ @e5 relocated
 (…)` line on stderr. **A ref that cannot be resolved is refused with

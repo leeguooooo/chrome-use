@@ -966,7 +966,13 @@ async fn confirmed_backend_node_id(
     let mut replaced_by = None;
     let mut guess: Option<Guess> = None;
     if let Some(heal) = dom_heal {
-        if dom_heal_accepts(&entry.role, &entry.name, &heal.hint.role, &heal.hint.name) {
+        if dom_heal_accepts(
+            &entry.role,
+            &entry.name,
+            &heal.hint.role,
+            &heal.hint.name,
+            &heal.hint.selector,
+        ) {
             eprintln!(
                 "[ref] {ref_id} re-bound to its replacement `{}` -> backendNodeId {} ({} \"{}\")",
                 heal.hint.selector, heal.backend_node_id, heal.hint.role, heal.hint.name
@@ -1147,13 +1153,43 @@ struct DomHeal {
     hint: LocatorHint,
 }
 
-/// Whether a node found by DOM attributes may stand in for a ref: only when it
-/// is the same control by role and (normalised) name. A replaced button with
-/// the same `data-testid` but a new label is the #162 hazard ("Add post"
-/// became "Post all"), and a text field whose placeholder was rewritten is
-/// offered as a suggested ref rather than typed into on a guess.
-fn dom_heal_accepts(want_role: &str, want_name: &str, role: &str, name: &str) -> bool {
+/// Roles whose accessible name is usually a placeholder or label that the page
+/// rewrites as state changes ("手机号" → "手机号或邮箱"), while the control
+/// itself stays the same field — the editable roles `fill` / `type` target.
+fn is_text_entry_role(role: &str) -> bool {
+    matches!(role, "textbox" | "searchbox" | "combobox" | "spinbutton")
+}
+
+/// Whether `selector` addresses the element by an attribute that names the
+/// control itself rather than its label: `id`, form `name`, or a test id.
+/// (`placeholder` / `aria-label` ARE the label, so they do not count.)
+fn is_identity_selector(selector: &str) -> bool {
+    selector.starts_with('#')
+        || ["[name=", "[data-testid=", "[data-test-id=", "[data-test="]
+            .iter()
+            .any(|a| selector.contains(a))
+}
+
+/// Whether a node found by DOM attributes may stand in for a ref.
+///
+/// The role must match, and so must the (normalised) name — a replaced button
+/// with the same `data-testid` but a new label is the #162 hazard ("Add post"
+/// became "Post all"). The one exception is a text-entry control matched by an
+/// identity attribute (#356): the form submits the field by its `id` / `name`,
+/// so that names it more reliably than a placeholder the page rewrites. The
+/// label change is still reported in `relocated` (was/now names).
+fn dom_heal_accepts(
+    want_role: &str,
+    want_name: &str,
+    role: &str,
+    name: &str,
+    selector: &str,
+) -> bool {
+    if role != want_role {
+        return false;
+    }
     ref_hints::same_identity(want_role, want_name, role, name)
+        || (is_text_entry_role(role) && is_identity_selector(selector))
 }
 
 /// Run on an element (`this`). Mode `describe` reports whether the element is
@@ -3852,29 +3888,91 @@ mod tests {
     /// is free to rewrite.
     #[test]
     fn a_replaced_node_found_by_dom_attributes_heals_only_when_identity_agrees() {
+        let id = "input[name=\"username\"]";
         // Same role + same name: the plain React remount.
-        assert!(dom_heal_accepts("textbox", "手机号", "textbox", "手机号"));
+        assert!(dom_heal_accepts(
+            "textbox",
+            "手机号",
+            "textbox",
+            "手机号",
+            id
+        ));
         // Whitespace and case are not identity.
         assert!(dom_heal_accepts(
             "button",
             "Save  changes",
             "button",
-            " save changes"
+            " save changes",
+            "#save"
         ));
-        // A rewritten placeholder is a different name: offered, not typed into.
+        // A different kind of control is never the same element.
+        assert!(!dom_heal_accepts(
+            "textbox",
+            "手机号",
+            "button",
+            "手机号",
+            id
+        ));
+    }
+
+    /// #356: a text field matched by its own id / form name / test id is the
+    /// same field even after its placeholder was rewritten — it is acted on.
+    #[test]
+    fn a_text_field_keeps_its_ref_across_a_relabel_when_its_id_matches() {
+        for role in ["textbox", "searchbox", "combobox", "spinbutton"] {
+            assert!(
+                dom_heal_accepts(role, "手机号", role, "手机号或邮箱", "#phone"),
+                "{role}"
+            );
+        }
+        assert!(dom_heal_accepts(
+            "textbox",
+            "手机号",
+            "textbox",
+            "手机号或邮箱",
+            "input[name=\"username\"]"
+        ));
+        assert!(dom_heal_accepts(
+            "textbox",
+            "Email",
+            "textbox",
+            "",
+            "input[data-testid=\"email\"]"
+        ));
+        // ...but not when only its label (placeholder / aria-label) matched.
         assert!(!dom_heal_accepts(
             "textbox",
             "手机号",
             "textbox",
-            "手机号或邮箱"
+            "邮箱",
+            "input[placeholder=\"邮箱\"]"
         ));
-        assert!(!dom_heal_accepts("textbox", "Email", "textbox", ""));
-        // A button with the same testid but a new label is the #162 hazard.
         assert!(!dom_heal_accepts(
-            "button", "Add post", "button", "Post all"
+            "textbox",
+            "手机号",
+            "textbox",
+            "邮箱",
+            "input[aria-label=\"邮箱\"]"
         ));
-        // A different kind of control is never the same element.
-        assert!(!dom_heal_accepts("textbox", "手机号", "button", "手机号"));
+    }
+
+    /// Everything that is not a text field refuses a new label, whatever
+    /// attribute matched it: that is a suggestion, not an action.
+    #[test]
+    fn a_relabelled_non_text_control_is_refused_even_by_id() {
+        for role in ["button", "link", "menuitem", "checkbox"] {
+            assert!(
+                !dom_heal_accepts(role, "Add post", role, "Post all", "#tweetButton"),
+                "{role}"
+            );
+            assert!(!dom_heal_accepts(
+                role,
+                "Delete",
+                role,
+                "Delete all",
+                "button[data-testid=\"del\"]"
+            ));
+        }
     }
 
     #[test]
