@@ -37,6 +37,7 @@ pub mod providers;
 pub mod react;
 #[allow(dead_code)]
 pub mod recording;
+pub mod ref_hints;
 #[allow(dead_code)]
 pub mod relay;
 #[allow(dead_code)]

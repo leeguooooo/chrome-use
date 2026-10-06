@@ -5,6 +5,7 @@ use serde_json::Value;
 use super::adaptive::{self, ElementFingerprint};
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
+use super::ref_hints::{self, RefRelocation, RelocationHow};
 
 /// Discover Monaco editor APIs exposed through the global object or AMD loader.
 ///
@@ -132,7 +133,14 @@ pub struct RefMap {
     snapshot_generation: u64,
     /// The session this map belongs to, for error messages. Empty = unknown.
     session_label: String,
+    /// Role + name of refs earlier snapshots of this document published and
+    /// the current one dropped, so "Unknown ref" can suggest the closest
+    /// current refs. Reset with the identities on navigation.
+    retired: HashMap<String, (String, String)>,
 }
+
+/// Bound on [`RefMap::retired`]; past it the memory starts over.
+const MAX_RETIRED_REFS: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct StableRefKey {
@@ -164,6 +172,7 @@ impl RefMap {
             stable_refs: HashMap::new(),
             snapshot_generation: 0,
             session_label: String::new(),
+            retired: HashMap::new(),
         }
     }
 
@@ -206,10 +215,58 @@ impl RefMap {
             (Some(lo), _) => format!(", e{lo}"),
             _ => String::new(),
         };
-        format!(
+        let mut msg = format!(
             "Unknown ref: {ref_id} — not in the current snapshot of session{session} ({} refs{range}). \
              Refs are re-minted by each `snapshot`; run `snapshot -i` again and use a fresh ref.",
             self.map.len()
+        );
+        // A ref an earlier snapshot minted is still remembered by its role +
+        // name, so the refs closest to what it was can be named — never acted on.
+        if let Some((role, name)) = self.retired_identity(ref_id) {
+            msg.push_str(&format!("\nIt was [{role} \"{name}\"]. "));
+            msg.push_str(&ref_hints::format_suggestions(
+                &self.suggest_refs(ref_id, &role, &name, None),
+            ));
+        }
+        msg
+    }
+
+    /// Role + name an earlier snapshot of this document minted `ref_id` for,
+    /// while its identity is still remembered (see [`STABLE_REF_GENERATIONS`]).
+    fn retired_identity(&self, ref_id: &str) -> Option<(String, String)> {
+        self.retired.get(ref_id).cloned()
+    }
+
+    /// Refs of the current snapshot closest to `role` + `name`, excluding
+    /// `exclude` itself. With `live` (the page's current backend node id →
+    /// role + name, read from the frame the ref lives in), only refs that
+    /// still resolve to the node they name are offered — a suggestion that is
+    /// itself stale would only send the agent round again.
+    pub fn suggest_refs(
+        &self,
+        exclude: &str,
+        role: &str,
+        name: &str,
+        live: Option<(&HashMap<i64, (String, String)>, Option<&str>)>,
+    ) -> Vec<ref_hints::RefSuggestion> {
+        let candidates = self.map.iter().filter(|(id, e)| {
+            if id.as_str() == exclude {
+                return false;
+            }
+            match live {
+                None => true,
+                Some((live, frame_id)) => {
+                    e.frame_id.as_deref() == frame_id
+                        && e.backend_node_id
+                            .and_then(|b| live.get(&b))
+                            .is_some_and(|(r, n)| *r == e.role && *n == e.name)
+                }
+            }
+        });
+        ref_hints::rank_suggestions(
+            role,
+            name,
+            candidates.map(|(id, e)| (id.as_str(), e.role.as_str(), e.name.as_str())),
         )
     }
 
@@ -220,7 +277,12 @@ impl RefMap {
     /// keep the same `@ref` across modal/list churn (issue #155). Navigation and
     /// tab switches call [`Self::clear`] instead, which hard-resets identities.
     pub fn begin_snapshot(&mut self) {
-        self.map.clear();
+        if self.retired.len() + self.map.len() > MAX_RETIRED_REFS {
+            self.retired.clear();
+        }
+        for (id, e) in self.map.drain() {
+            self.retired.insert(id, (e.role, e.name));
+        }
         self.snapshot_generation = self.snapshot_generation.saturating_add(1);
         let generation = self.snapshot_generation;
         self.stable_refs.retain(|_, entry| {
@@ -382,6 +444,7 @@ impl RefMap {
 
     pub fn clear(&mut self) {
         self.map.clear();
+        self.retired.clear();
         self.next_ref = 1;
         self.stable_refs.clear();
         self.snapshot_generation = 0;
@@ -461,6 +524,21 @@ async fn relocate_stale_ref(
                 "[adaptive] relocated {ref_id} ({} \"{}\") score={:.2} second={:.2} -> backendNodeId {}",
                 entry.role, entry.name, reloc.score, reloc.second_score, reloc.backend_node_id
             );
+            // The fingerprint's tag/text are the candidate's AX role/name.
+            let (role, name) = candidates
+                .iter()
+                .find(|(id, _)| *id == reloc.backend_node_id)
+                .map(|(_, fp)| (fp.tag.clone(), fp.text.clone()))
+                .unwrap_or_default();
+            ref_hints::record_relocation(RefRelocation {
+                ref_id: ref_id.to_string(),
+                how: RelocationHow::Adaptive,
+                score: Some(reloc.score),
+                was_role: entry.role.clone(),
+                was_name: entry.name.clone(),
+                role,
+                name,
+            });
             Some(reloc.backend_node_id)
         }
         Err(_) => None,
@@ -514,6 +592,41 @@ struct Reanchor {
     /// Every live node with the ref's role, and its current name — the pool
     /// the failure message draws usable locators from (#356).
     same_role: Vec<(i64, String)>,
+    /// Every live node's backend id → role + name, so ref suggestions can be
+    /// limited to refs that still resolve.
+    live: HashMap<i64, (String, String)>,
+}
+
+/// Backend node id → current AX role + name, for every non-ignored node.
+fn live_identities(nodes: &[AXNode]) -> HashMap<i64, (String, String)> {
+    nodes
+        .iter()
+        .filter(|n| !n.ignored.unwrap_or(false))
+        .filter_map(|n| {
+            n.backend_d_o_m_node_id
+                .map(|id| (id, (extract_ax_string(&n.role), extract_ax_string(&n.name))))
+        })
+        .collect()
+}
+
+/// [`live_identities`] for the frame a ref lives in, read fresh.
+async fn read_live_identities(
+    client: &CdpClient,
+    session_id: &str,
+    frame_id: Option<&str>,
+    iframe_sessions: &HashMap<String, String>,
+) -> Option<HashMap<i64, (String, String)>> {
+    let (ax_params, effective_session_id) =
+        resolve_ax_session(frame_id, session_id, iframe_sessions);
+    let tree: GetFullAXTreeResult = client
+        .send_command_typed(
+            "Accessibility.getFullAXTree",
+            &ax_params,
+            Some(effective_session_id),
+        )
+        .await
+        .ok()?;
+    Some(live_identities(&tree.nodes))
 }
 
 /// Read the full accessibility tree and return the node the ref names.
@@ -579,6 +692,7 @@ async fn reanchor_ref(
             target: Some(id),
             candidates: matches.len(),
             same_role,
+            live: HashMap::new(),
         });
     }
 
@@ -593,6 +707,7 @@ async fn reanchor_ref(
         target: by_value,
         candidates: matches.len(),
         same_role,
+        live: live_identities(&tree.nodes),
     })
 }
 
@@ -649,10 +764,12 @@ fn pick_reanchor_target(matches: &[i64], cached: i64, nth: Option<usize>) -> Opt
 /// promised the agent; (3) adaptive fingerprint relocation; (4) fail loudly.
 /// There is deliberately no "act on the cached node anyway" branch: every
 /// unconfirmed path either relocates to the element the ref names or errors.
+#[allow(clippy::too_many_arguments)]
 async fn confirmed_backend_node_id(
     client: &CdpClient,
     session_id: &str,
     effective_session_id: &str,
+    ref_map: &RefMap,
     ref_id: &str,
     entry: &RefEntry,
     backend_node_id: i64,
@@ -715,6 +832,15 @@ async fn confirmed_backend_node_id(
                 "[ref] {ref_id} re-anchored to backendNodeId {id} ({} \"{}\")",
                 entry.role, entry.name
             );
+            ref_hints::record_relocation(RefRelocation {
+                ref_id: ref_id.to_string(),
+                how: RelocationHow::RoleName,
+                score: None,
+                was_role: entry.role.clone(),
+                was_name: entry.name.clone(),
+                role: entry.role.clone(),
+                name: entry.name.clone(),
+            });
         }
         return Ok(id);
     }
@@ -745,6 +871,15 @@ async fn confirmed_backend_node_id(
                 "[ref] {ref_id} re-bound to its replacement `{}` -> backendNodeId {} ({} \"{}\")",
                 heal.hint.selector, heal.backend_node_id, heal.hint.role, heal.hint.name
             );
+            ref_hints::record_relocation(RefRelocation {
+                ref_id: ref_id.to_string(),
+                how: RelocationHow::DomIdentity,
+                score: None,
+                was_role: entry.role.clone(),
+                was_name: entry.name.clone(),
+                role: heal.hint.role.clone(),
+                name: heal.hint.name.clone(),
+            });
             return Ok(heal.backend_node_id);
         }
         replaced_by = Some(heal.hint);
@@ -770,6 +905,18 @@ async fn confirmed_backend_node_id(
                 // claim nobody checked.
                 None => err.replace(NOT_ON_PAGE, REANCHOR_UNFINISHED),
             };
+            // Refs from the current snapshot that are closest to this one and
+            // still resolve — offered, never acted on.
+            let live = reanchor
+                .as_ref()
+                .filter(|r| !r.live.is_empty())
+                .map(|r| (&r.live, entry.frame_id.as_deref()));
+            let suggestions = ref_map.suggest_refs(ref_id, &entry.role, &entry.name, live);
+            let base = ref_hints::insert_before(
+                &base,
+                LAST_RESORT_MARKER,
+                &ref_hints::format_suggestions(&suggestions),
+            );
             // A refusal that only offers "disable the check" leaves the agent
             // nowhere to go (#356). Name locators that work right now. They
             // are CSS selectors against the top document, so a ref inside a
@@ -1121,6 +1268,86 @@ fn indistinguishable_ref_error(ref_id: &str, entry: &RefEntry, candidates: usize
     )
 }
 
+/// A ref whose cached node is unusable (or that never had one): re-find it by
+/// role + name (+ nth), then by adaptive fingerprint. A node other than the
+/// recorded one is reported as a relocation; when neither finds it, the error
+/// names the closest refs of the current snapshot instead of guessing.
+async fn requery_stale_ref(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    ref_id: &str,
+    entry: &RefEntry,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<i64, String> {
+    let cause = match find_node_id_by_role_name(
+        client,
+        session_id,
+        &entry.role,
+        &entry.name,
+        entry.nth,
+        entry.frame_id.as_deref(),
+        iframe_sessions,
+    )
+    .await
+    {
+        Ok(id) => {
+            if entry.backend_node_id.is_some_and(|old| old != id) {
+                ref_hints::record_relocation(RefRelocation {
+                    ref_id: ref_id.to_string(),
+                    how: RelocationHow::RoleName,
+                    score: None,
+                    was_role: entry.role.clone(),
+                    was_name: entry.name.clone(),
+                    role: entry.role.clone(),
+                    name: entry.name.clone(),
+                });
+            }
+            return Ok(id);
+        }
+        Err(e) => e,
+    };
+    if let Some(id) = relocate_stale_ref(client, ref_id, entry, session_id, iframe_sessions).await {
+        return Ok(id);
+    }
+    let live = tokio::time::timeout(
+        identity_probe_budget() * RECOVERY_BUDGET_FACTOR,
+        read_live_identities(
+            client,
+            session_id,
+            entry.frame_id.as_deref(),
+            iframe_sessions,
+        ),
+    )
+    .await
+    .ok()
+    .flatten();
+    let suggestions = ref_map.suggest_refs(
+        ref_id,
+        &entry.role,
+        &entry.name,
+        live.as_ref().map(|l| (l, entry.frame_id.as_deref())),
+    );
+    Err(stale_ref_error(ref_id, entry, &cause, &suggestions))
+}
+
+/// Error for a ref that neither re-query nor fingerprint relocation could
+/// resolve with confidence.
+fn stale_ref_error(
+    ref_id: &str,
+    entry: &RefEntry,
+    cause: &str,
+    suggestions: &[ref_hints::RefSuggestion],
+) -> String {
+    format!(
+        "Ref {ref_id} [{} \"{}\"] is stale: {cause} — its node is gone and no confident match \
+         was found, so nothing was acted on.\n{}",
+        entry.role,
+        entry.name,
+        ref_hints::format_suggestions(suggestions)
+    )
+}
+
 /// Resolve a `@ref` or CSS selector to a click point. Returns
 /// `(centre_x, centre_y, width, height, session_id)`. Width/height come from the
 /// element's box model and feed humanize's in-bounds landing jitter; the CSS
@@ -1156,6 +1383,7 @@ pub async fn resolve_element_center(
                 client,
                 session_id,
                 effective_session_id,
+                ref_map,
                 &ref_id,
                 entry,
                 backend_node_id,
@@ -1199,25 +1427,8 @@ pub async fn resolve_element_center(
 
         // Fallback: re-query the accessibility tree to find a fresh node by role/name.
         // If that fails, try adaptive fingerprint relocation before giving up.
-        let fresh_id = match find_node_id_by_role_name(
-            client,
-            session_id,
-            &entry.role,
-            &entry.name,
-            entry.nth,
-            entry.frame_id.as_deref(),
-            iframe_sessions,
-        )
-        .await
-        {
-            Ok(id) => id,
-            Err(e) => match relocate_stale_ref(client, &ref_id, entry, session_id, iframe_sessions)
-                .await
-            {
-                Some(id) => id,
-                None => return Err(e),
-            },
-        };
+        let fresh_id =
+            requery_stale_ref(client, session_id, ref_map, &ref_id, entry, iframe_sessions).await?;
         let result: DomGetBoxModelResult = client
             .send_command_typed(
                 "DOM.getBoxModel",
@@ -1264,6 +1475,7 @@ pub async fn resolve_element_object_id(
                 client,
                 session_id,
                 effective_session_id,
+                ref_map,
                 &ref_id,
                 entry,
                 backend_node_id,
@@ -1293,25 +1505,8 @@ pub async fn resolve_element_object_id(
 
         // Fallback: re-query the accessibility tree to find a fresh node by role/name.
         // If that fails, try adaptive fingerprint relocation before giving up.
-        let fresh_id = match find_node_id_by_role_name(
-            client,
-            session_id,
-            &entry.role,
-            &entry.name,
-            entry.nth,
-            entry.frame_id.as_deref(),
-            iframe_sessions,
-        )
-        .await
-        {
-            Ok(id) => id,
-            Err(e) => match relocate_stale_ref(client, &ref_id, entry, session_id, iframe_sessions)
-                .await
-            {
-                Some(id) => id,
-                None => return Err(e),
-            },
-        };
+        let fresh_id =
+            requery_stale_ref(client, session_id, ref_map, &ref_id, entry, iframe_sessions).await?;
         let result: DomResolveNodeResult = client
             .send_command_typed(
                 "DOM.resolveNode",
@@ -3191,6 +3386,84 @@ mod tests {
         let e = m.unknown_ref_error("e240");
         assert!(e.contains("2 refs, e1…e7"), "{e}");
         assert!(e.contains("snapshot -i"), "{e}");
+        // Never seen, so nothing to compare against: no guesses offered.
+        assert!(!e.contains("try @"), "{e}");
+    }
+
+    #[test]
+    fn an_unknown_ref_from_an_earlier_snapshot_gets_the_closest_current_refs() {
+        let mut m = RefMap::with_session_label(Some("s3"));
+        m.begin_snapshot();
+        m.add("e5".to_string(), Some(42), "button", "Save", None);
+        m.add("e6".to_string(), Some(43), "button", "Cancel", None);
+        // The button was relabelled; the next snapshot minted it a new ref.
+        m.begin_snapshot();
+        m.add("e6".to_string(), Some(43), "button", "Cancel", None);
+        m.add("e14".to_string(), Some(42), "button", "Save changes", None);
+        m.add("e15".to_string(), Some(50), "link", "Help", None);
+
+        let e = m.unknown_ref_error("e5");
+        assert!(e.starts_with("Unknown ref: e5"), "{e}");
+        assert!(e.contains("It was [button \"Save\"]"), "{e}");
+        assert!(e.contains("try @e14 [button] \"Save changes\""), "{e}");
+        assert!(!e.contains("@e6"), "an unrelated label is not offered: {e}");
+        assert!(!e.contains("@e15"), "{e}");
+
+        // Navigation forgets the old document's refs entirely.
+        m.clear();
+        m.add("e1".to_string(), Some(1), "button", "Save", None);
+        assert!(!m.unknown_ref_error("e5").contains("try @"));
+    }
+
+    #[test]
+    fn stale_ref_suggestions_skip_refs_that_are_stale_themselves() {
+        let mut m = RefMap::new();
+        m.add("e5".to_string(), Some(42), "button", "Save", None);
+        m.add("e9".to_string(), Some(60), "button", "Save draft", None);
+        m.add("e10".to_string(), Some(61), "button", "Save as", None);
+        let mut live: HashMap<i64, (String, String)> = HashMap::new();
+        // e9's node is live and unchanged; e10's node now says something else.
+        live.insert(60, ("button".into(), "Save draft".into()));
+        live.insert(61, ("button".into(), "Delete".into()));
+
+        let all = m.suggest_refs("e5", "button", "Save", None);
+        let ids: Vec<&str> = all.iter().map(|s| s.ref_id.as_str()).collect();
+        assert_eq!(ids, vec!["e9", "e10"], "the ref itself is never offered");
+
+        let checked = m.suggest_refs("e5", "button", "Save", Some((&live, None)));
+        let ids: Vec<&str> = checked.iter().map(|s| s.ref_id.as_str()).collect();
+        assert_eq!(ids, vec!["e9"]);
+
+        // A ref in another frame cannot be checked against this frame's tree.
+        let other_frame = m.suggest_refs("e5", "button", "Save", Some((&live, Some("F1"))));
+        assert!(other_frame.is_empty());
+    }
+
+    #[test]
+    fn a_stale_ref_error_names_it_and_never_claims_an_action() {
+        let entry = RefEntry {
+            backend_node_id: Some(42),
+            role: "button".into(),
+            name: "Save".into(),
+            nth: None,
+            selector: None,
+            frame_id: None,
+            fingerprint: None,
+            dom_sourced: false,
+        };
+        let s = ref_hints::rank_suggestions("button", "Save", [("e14", "button", "Save changes")]);
+        let e = stale_ref_error(
+            "e5",
+            &entry,
+            "Could not locate element with role=button name=Save",
+            &s,
+        );
+        assert!(e.starts_with("Ref e5 [button \"Save\"] is stale"), "{e}");
+        assert!(e.contains("Could not locate element"), "{e}");
+        assert!(e.contains("nothing was acted on"), "{e}");
+        assert!(e.contains("try @e14 [button] \"Save changes\""), "{e}");
+        let e = stale_ref_error("e5", &entry, "gone", &[]);
+        assert!(e.contains("snapshot -i") && !e.contains("try @"), "{e}");
     }
 
     #[test]

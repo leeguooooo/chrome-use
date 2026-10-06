@@ -11507,6 +11507,17 @@ async fn handle_innerhtml(cmd: &Value, state: &mut DaemonState) -> Result<Value,
 /// state machine was enough to overflow a 2 MiB test-thread stack in debug
 /// builds. Here the two runs are sequential, never nested.
 pub async fn execute_command_recovering(cmd: &Value, state: &mut DaemonState) -> Value {
+    // A `@ref` that resolved to a node other than the one its snapshot
+    // recorded is reported on the response (`data.relocated`), never silent.
+    let (mut out, relocations) = super::ref_hints::collect_relocations(Box::pin(
+        execute_command_recovering_scrubbed(cmd, state),
+    ))
+    .await;
+    super::ref_hints::attach_relocations(&mut out, &relocations);
+    out
+}
+
+async fn execute_command_recovering_scrubbed(cmd: &Value, state: &mut DaemonState) -> Value {
     // `fill --from-env`: the whole command, `--observe` included, runs with
     // every field treated as sensitive, and the response is scrubbed of the
     // value as a last line of defence.

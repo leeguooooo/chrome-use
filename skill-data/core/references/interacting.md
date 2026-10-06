@@ -78,6 +78,17 @@ there is how an agent opens the wrong menu (or submits the wrong form) while the
 CLI prints `Done`. So an error here is the guard working — re-snapshot and
 re-target rather than reaching for `AGENT_BROWSER_VERIFY_REF=0`.
 
+**A relocation is never silent.** When the ref's original node was gone and the
+action landed on a different node (re-found by role + name, by the replaced
+node's DOM attributes, or by fingerprint), the response says so: `--json` gets
+`data.relocated: [{ref, how: "role-name"|"dom-identity"|"adaptive", score?,
+role, name, was: {role, name}}]`, and text output prints one `⚠ @e5 relocated
+(…)` line on stderr. Check it landed on what you meant. **A ref that cannot be
+resolved is refused with suggestions, never guessed:** the error lists up to
+three refs from the current snapshot closest by role + name (`try @e14 [button]
+"Save changes"`, only refs that still resolve) plus "run `snapshot -i` to
+refresh". Nothing acts on a suggestion — pick one yourself, or re-snapshot.
+
 | Env var | Effect |
 |---|---|
 | `AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS` | Budget for the identity check (default 2s direct CDP, 5s over the extension relay). Raise it on very large pages if you see "identity could not be confirmed". |
