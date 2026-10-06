@@ -2601,7 +2601,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     }
 
     if ok {
-        annotate_site_change(action, &mut resp, state).await;
+        annotate_site_change(action, cmd, &mut resp, state).await;
         suggest_site_adapter(&mut resp, state);
     }
 
@@ -4294,7 +4294,12 @@ const SITE_CHANGE_ACTIONS: &[&str] = &[
 /// those, if the active page's host differs from the one last surfaced, attach
 /// the same `siteAdapters` hint. Same host → nothing, so a session that stays on
 /// one site hears about its adapters once rather than on every click.
-async fn annotate_site_change(action: &str, resp: &mut Value, state: &mut DaemonState) {
+async fn annotate_site_change(
+    action: &str,
+    cmd: &Value,
+    resp: &mut Value,
+    state: &mut DaemonState,
+) {
     let data_hint = resp
         .get("data")
         .and_then(|d| d.get("siteAdapters"))
@@ -4317,10 +4322,17 @@ async fn annotate_site_change(action: &str, resp: &mut Value, state: &mut Daemon
     let Some(mgr) = state.browser.as_ref() else {
         return;
     };
-    let url = match tokio::time::timeout(Duration::from_millis(1500), mgr.get_url()).await {
+    let mut url = match tokio::time::timeout(Duration::from_millis(1500), mgr.get_url()).await {
         Ok(Ok(u)) if !u.is_empty() => u,
         _ => mgr.cached_active_url(),
     };
+    // `tab new <url>` returns before the new tab has left about:blank; judge
+    // it by where it is going.
+    if url.is_empty() || url == "about:blank" {
+        if let Some(requested) = cmd.get("url").and_then(|v| v.as_str()) {
+            url = requested.to_string();
+        }
+    }
     let host = url::Url::parse(&url)
         .ok()
         .and_then(|u| u.host_str().map(String::from))
