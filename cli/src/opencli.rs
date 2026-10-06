@@ -255,6 +255,55 @@ pub fn map_args(entry: &Value, rest: &[String]) -> Result<serde_json::Map<String
     Ok(out)
 }
 
+/// Same-meaning arg names across packs, for a fallback from one of our
+/// adapters to OpenCLI's command of the same name.
+const ARG_ALIASES: &[&[&str]] = &[
+    &["limit", "count", "n", "num", "max", "size"],
+    &["query", "q", "keyword", "keywords", "term"],
+    &["id", "item", "itemid"],
+    &["user", "username", "uid", "userid"],
+];
+
+/// Turn our adapter's resolved args (`{name: value}`) into `--name value`
+/// pairs OpenCLI's command declares, renaming through ARG_ALIASES and dropping
+/// what it doesn't take.
+pub fn fallback_args(entry: &Value, ours: &Value) -> Vec<String> {
+    let declared: Vec<String> = entry
+        .get("args")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|a| {
+            a.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_ascii_lowercase())
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (k, v) in ours.as_object().into_iter().flatten() {
+        let value = match v {
+            Value::String(s) => s.clone(),
+            Value::Null => continue,
+            other => other.to_string(),
+        };
+        let key = k.to_ascii_lowercase();
+        let target = if declared.contains(&key) {
+            Some(key)
+        } else {
+            ARG_ALIASES
+                .iter()
+                .find(|group| group.contains(&key.as_str()))
+                .and_then(|group| group.iter().find(|n| declared.iter().any(|d| d == *n)))
+                .map(|n| n.to_string())
+        };
+        if let Some(t) = target {
+            out.push(format!("--{t}"));
+            out.push(value);
+        }
+    }
+    out
+}
+
 /// Run `site/name` through OpenCLI's runtime. Returns the runner's envelope:
 /// `{success, data}` or `{success: false, error, hint?}`.
 pub fn run(spec: &str, entry: &Value, rest: &[String], session: &str) -> Value {
@@ -383,6 +432,20 @@ mod tests {
         assert_eq!(run_timeout(&k).as_secs(), 660);
         k.insert("timeout".into(), json!("10"));
         assert_eq!(run_timeout(&k).as_secs(), DEFAULT_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn fallback_args_rename_through_aliases_and_drop_unknown() {
+        let theirs = json!({"args": [{"name": "limit"}, {"name": "query"}]});
+        let ours = json!({"count": 3, "q": "rust", "sort": "new", "x": null});
+        let a = fallback_args(&theirs, &ours);
+        let pairs: Vec<_> = a
+            .chunks(2)
+            .map(|c| (c[0].as_str(), c[1].as_str()))
+            .collect();
+        assert!(pairs.contains(&("--limit", "3")), "{a:?}");
+        assert!(pairs.contains(&("--query", "rust")), "{a:?}");
+        assert_eq!(pairs.len(), 2, "{a:?}");
     }
 
     #[test]

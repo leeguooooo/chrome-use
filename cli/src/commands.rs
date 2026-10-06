@@ -2025,7 +2025,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 // For main.rs: a failed read can retry through OpenCLI's
                 // same-named command with the same arguments.
                 "spec": spec,
-                "siteArgs": rest[1..],
+                "siteArgs": inv.args.clone(),
             }))
         }
 
