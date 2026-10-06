@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Source transfer checks; run these on the SSH build host."""
+import ast
+import shutil
 import importlib.util
 import os
 from pathlib import Path
@@ -47,6 +49,25 @@ class SnapshotTests(unittest.TestCase):
         (self.root/'outside-link').symlink_to(outside)
         self.git('add','outside-link')
         with self.assertRaisesRegex(ValueError,'escapes checkout'):self.pack()
+    def test_damaged_cached_source_is_restored_and_preserved(self):
+        job=Path(self.temp.name)/'job';job.mkdir()
+        uploaded=job/'src';uploaded.mkdir();(uploaded/'main.rs').write_text('verified source')
+        cached=Path(self.temp.name)/'cached';cached.mkdir();(cached/'main.rs').write_text('damaged source')
+        # Execute the runner's cache-reuse branch against real filesystem state.
+        tree=ast.parse(remote.REMOTE_RUNNER)
+        branch=next(n for n in ast.walk(tree) if isinstance(n,ast.If)
+                    and ast.unparse(n.test)=='short_src.exists()')
+        namespace={'short_src':cached,'uploaded_src':uploaded,'job':job,'src':uploaded,'shutil':shutil}
+        def verify():
+            if (namespace['src']/'main.rs').read_text()!='verified source':
+                raise RuntimeError('Source changed')
+        namespace['verify_source']=verify
+        exec(compile(ast.Module(body=[branch],type_ignores=[]),'cache-reuse','exec'),namespace)
+        self.assertEqual((cached/'main.rs').read_text(),'verified source')
+        self.assertEqual((job/'invalid-source'/'main.rs').read_text(),'damaged source')
+        self.assertFalse(uploaded.exists())
+        verify()
+
     def test_embedded_runner_has_valid_python_syntax(self):
         compile(remote.REMOTE_RUNNER,'remote-runner','exec')
 

@@ -60,8 +60,15 @@ with (root/'cargo.lock').open('a') as lock:
  short_src=short_root/cfg['source_hash'][:16]
  uploaded_src=src
  if short_src.exists():
-  src=short_src;verify_source()
-  shutil.rmtree(uploaded_src)  # This invocation's verified archive only.
+  src=short_src
+  try:
+   verify_source()
+  except (RuntimeError,OSError):
+   # Preserve damaged contents for inspection, then restore our verified upload.
+   shutil.move(str(short_src),str(job/'invalid-source'))
+   shutil.move(str(uploaded_src),str(short_src))
+  else:
+   shutil.rmtree(uploaded_src)  # This invocation's verified archive only.
  else:
   shutil.move(str(uploaded_src),str(short_src));src=short_src
  verify_source()
@@ -222,7 +229,7 @@ def main():
             dest.parent.mkdir(parents=True, exist_ok=True)
             temporary = dest.with_name(dest.name + '.' + job + '.remote-download')
             artifact = receipt['artifact']
-            subprocess.run(['scp', '-q', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', host + ':' + artifact['path'], str(temporary)], check=True)
+            subprocess.run(['scp', '-C', '-q', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', host + ':' + artifact['path'], str(temporary)], check=True)
             if hashlib.sha256(temporary.read_bytes()).hexdigest() != artifact['sha256']:
                 temporary.unlink(missing_ok=True)
                 raise RuntimeError('Downloaded artifact checksum mismatch')

@@ -14349,6 +14349,27 @@ async fn handle_solve_slider(cmd: &Value, state: &mut DaemonState) -> Result<Val
     ))
 }
 
+/// Challenge-specific failures may use the bounded refresh/retry loop; CDP and
+/// setup faults remain fatal so a broken connection cannot trigger more input.
+fn rotating_attempt_result(result: Result<Value, String>) -> Result<Value, String> {
+    match result {
+        Err(error)
+            if matches!(
+                error.as_str(),
+                "Challenge changed during rotation calibration"
+                    | "Rotating puzzle did not respond to the held drag"
+                    | "No confident rotated silhouette match; inspect a fresh challenge"
+                    | "Rotated target is outside the slider track"
+                    | "Rotating piece did not reach its computed position"
+                    | "Challenge changed during rotating drag"
+            ) =>
+        {
+            Ok(json!({"solved": false, "status": "error", "tip": error}))
+        }
+        other => other,
+    }
+}
+
 /// Measure enhanced motion while held, locate the rotated main silhouette,
 /// then correct the inline CSS position rather than its rotated bounding box.
 async fn solve_rotating_slider(
@@ -14522,7 +14543,9 @@ async fn solve_slider_once(state: &mut DaemonState) -> Result<Value, String> {
         let bg_img = image::load_from_memory(&bg_bytes).map_err(|e| format!("decode bg: {e}"))?;
         let jig_img =
             image::load_from_memory(&jig_bytes).map_err(|e| format!("decode piece: {e}"))?;
-        return solve_rotating_slider(mgr, &session_id, &probe, &bg_img, &jig_img).await;
+        return rotating_attempt_result(
+            solve_rotating_slider(mgr, &session_id, &probe, &bg_img, &jig_img).await,
+        );
     }
     let gap = if let Ok(cmd) = std::env::var("AGENT_BROWSER_SLIDER_DETECT_CMD") {
         detect_gap_external(&cmd, &bg_bytes, &jig_bytes).await?
@@ -18914,6 +18937,20 @@ mod tests {
         assert!(predicate_match("contains", "abc123", r"\d+", true));
         // invalid regex → false, not panic
         assert!(!predicate_match("matches", "x", "[unclosed", false));
+    }
+
+    #[test]
+    fn rotating_failures_retry_only_challenge_outcomes() {
+        let failed = rotating_attempt_result(Err(
+            "No confident rotated silhouette match; inspect a fresh challenge".into(),
+        ))
+        .unwrap();
+        assert_eq!(failed["solved"], false);
+        assert_eq!(failed["status"], "error");
+        assert!(rotating_attempt_result(Err("CDP connection closed".into())).is_err());
+        assert!(rotating_attempt_result(Err("Missing rotation origin".into())).is_err());
+        let solved = rotating_attempt_result(Ok(json!({"solved": true}))).unwrap();
+        assert_eq!(solved["solved"], true);
     }
 
     #[test]
