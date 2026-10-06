@@ -4,69 +4,82 @@ const DEFAULT_TRANSACTION_TIMEOUT_MS = 5000
 const DEFAULT_CLEANUP_TIMEOUT_MS = 2000
 const TIMED_OUT = Symbol('timed-out')
 
-async function withTimeout(operation, timeoutMs) {
+// Every deadline below reads time through this clock. Production uses the real
+// one; tests inject a fake (`deps.now`, `deps.setTimeout`, `deps.clearTimeout`)
+// and advance it explicitly, so no test depends on how busy the machine is.
+function clockFrom(deps) {
+  return {
+    now: deps?.now ?? (() => Date.now()),
+    setTimeout: deps?.setTimeout ?? ((callback, ms) => setTimeout(callback, ms)),
+    clearTimeout: deps?.clearTimeout ?? ((timer) => clearTimeout(timer)),
+  }
+}
+
+async function withTimeout(clock, operation, timeoutMs) {
   let timer
   try {
     return await Promise.race([
       Promise.resolve().then(operation),
       new Promise((resolve) => {
-        timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs)
+        timer = clock.setTimeout(() => resolve(TIMED_OUT), timeoutMs)
       }),
     ])
   } finally {
-    clearTimeout(timer)
+    clock.clearTimeout(timer)
   }
 }
 
-async function bestEffort(operation, timeoutMs) {
+async function bestEffort(clock, operation, timeoutMs) {
   try {
-    await withTimeout(operation, timeoutMs)
+    await withTimeout(clock, operation, timeoutMs)
   } catch {}
 }
 
-async function observeWithin(operation, timeoutMs) {
+async function observeWithin(clock, operation, timeoutMs) {
   if (timeoutMs <= 0) return false
   try {
-    const result = await withTimeout(operation, timeoutMs)
+    const result = await withTimeout(clock, operation, timeoutMs)
     return result !== TIMED_OUT && Boolean(result)
   } catch {
     return false
   }
 }
 
-function remainingTime(deadline) {
-  return Math.max(0, deadline - Date.now())
+function remainingTime(clock, deadline) {
+  return Math.max(0, deadline - clock.now())
 }
 
-async function completeBefore(operation, deadline, stage) {
-  const timeoutMs = remainingTime(deadline)
+async function completeBefore(clock, operation, deadline, stage) {
+  const timeoutMs = remainingTime(clock, deadline)
   // An expired deadline has to stop the stage before it starts. `withTimeout`
   // with 0ms does not: an operation that settles in a microtask still beats a
   // 0ms timer, so a side-effecting stage (group, activate) could run after the
   // transaction was already over. #342 dropped this line; restored.
   if (timeoutMs === 0) throw new Error(`duplicateTab: ${stage} timed out`)
-  const result = await withTimeout(operation, timeoutMs)
+  const result = await withTimeout(clock, operation, timeoutMs)
   if (result !== TIMED_OUT) return result
-  // A timer can fire while `Date.now()` still reads short of the deadline it
+  // A timer can fire while `now()` still reads short of the deadline it
   // was set for. The next stage then saw a millisecond left, passed the check
   // above and ran. Wait the difference out so a timed-out stage always leaves
   // the deadline expired.
-  while (Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1))
+  while (clock.now() < deadline) await new Promise((resolve) => clock.setTimeout(resolve, 1))
   throw new Error(`duplicateTab: ${stage} timed out`)
 }
 
-async function settleOrVerify(operation, verify, deadline, operationTimeoutMs, stage) {
+async function settleOrVerify(clock, operation, verify, deadline, operationTimeoutMs, stage) {
   try {
     await completeBefore(
+      clock,
       operation,
-      Math.min(deadline, Date.now() + operationTimeoutMs),
+      Math.min(deadline, clock.now() + operationTimeoutMs),
       stage,
     )
   } catch (error) {
     if (
       await observeWithin(
+        clock,
         verify,
-        Math.max(remainingTime(deadline), Math.min(operationTimeoutMs, 25)),
+        Math.max(remainingTime(clock, deadline), Math.min(operationTimeoutMs, 25)),
       )
     )
       return
@@ -74,14 +87,15 @@ async function settleOrVerify(operation, verify, deadline, operationTimeoutMs, s
   }
 }
 
-async function restoreForegroundBestEffort(deps, tabId, windowId, deadline) {
-  await bestEffort(() => deps.activateTab(tabId), remainingTime(deadline))
+async function restoreForegroundBestEffort(clock, deps, tabId, windowId, deadline) {
+  await bestEffort(clock, () => deps.activateTab(tabId), remainingTime(clock, deadline))
   const focused = await observeWithin(
+    clock,
     () => deps.getWindow(windowId).then((window) => window?.focused === true),
-    remainingTime(deadline),
+    remainingTime(clock, deadline),
   )
   if (!focused) {
-    await bestEffort(() => deps.focusWindow(windowId), remainingTime(deadline))
+    await bestEffort(clock, () => deps.focusWindow(windowId), remainingTime(clock, deadline))
   }
 }
 
@@ -96,7 +110,8 @@ export async function duplicateTab(params, deps) {
 
   const transactionTimeoutMs = deps.transactionTimeoutMs ?? DEFAULT_TRANSACTION_TIMEOUT_MS
   const cleanupTimeoutMs = deps.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS
-  const transactionDeadline = Date.now() + transactionTimeoutMs
+  const clock = clockFrom(deps)
+  const transactionDeadline = clock.now() + transactionTimeoutMs
   let transactionActive = true
 
   // These three reads are bounded by the transaction deadline (#342 — before,
@@ -105,6 +120,7 @@ export async function duplicateTab(params, deps) {
   // focused window or an active tab the restore target falls back to the
   // source. #342 let any of them reject the whole duplicate instead.
   const sourceTab = await completeBefore(
+    clock,
     () => deps.getTab(sourceTabId),
     transactionDeadline,
     'source tab inspection',
@@ -114,12 +130,14 @@ export async function duplicateTab(params, deps) {
   }
 
   const lastFocusedWindow = await completeBefore(
+    clock,
     () => deps.getLastFocusedWindow(),
     transactionDeadline,
     'window inspection',
   ).catch(() => null)
   const restoreWindowId = lastFocusedWindow?.id ?? sourceTab.windowId
   const activeTabs = await completeBefore(
+    clock,
     () => deps.getActiveTabs(restoreWindowId),
     transactionDeadline,
     'active tab inspection',
@@ -130,6 +148,7 @@ export async function duplicateTab(params, deps) {
   const duplicatePromise = Promise.resolve().then(() => deps.duplicateTab(sourceTabId))
   try {
     const duplicate = await completeBefore(
+      clock,
       () => duplicatePromise,
       transactionDeadline,
       'native duplicate',
@@ -138,16 +157,19 @@ export async function duplicateTab(params, deps) {
     if (duplicateTabId == null) throw new Error('duplicateTab: no tab id')
     await deps.markOwned(duplicateTabId)
     await completeBefore(
+      clock,
       () => deps.groupTabInto(duplicateTabId, group),
       transactionDeadline,
       'tab grouping',
     )
     const entry = await completeBefore(
+      clock,
       () => deps.attachTab(duplicateTabId, () => transactionActive),
       transactionDeadline,
       'debugger attach',
     )
     await settleOrVerify(
+      clock,
       () => deps.activateTab(restoreTabId),
       () => deps.getTab(restoreTabId).then((tab) => tab?.active === true),
       transactionDeadline,
@@ -156,8 +178,9 @@ export async function duplicateTab(params, deps) {
     )
     const windowIsFocused = () =>
       deps.getWindow(restoreWindowId).then((window) => window?.focused === true)
-    if (!(await observeWithin(windowIsFocused, remainingTime(transactionDeadline)))) {
+    if (!(await observeWithin(clock, windowIsFocused, remainingTime(clock, transactionDeadline)))) {
       await settleOrVerify(
+        clock,
         () => deps.focusWindow(restoreWindowId),
         windowIsFocused,
         transactionDeadline,
@@ -169,39 +192,45 @@ export async function duplicateTab(params, deps) {
     return { sourceTargetId, targetId: entry.targetId }
   } catch (error) {
     transactionActive = false
-    const cleanupDeadline = Date.now() + cleanupTimeoutMs
+    const cleanupDeadline = clock.now() + cleanupTimeoutMs
     if (duplicateTabId != null) {
       await bestEffort(
+        clock,
         () => deps.unmarkOwned(duplicateTabId),
-        remainingTime(cleanupDeadline),
+        remainingTime(clock, cleanupDeadline),
       )
       await bestEffort(
+        clock,
         () => deps.isolateTab(duplicateTabId),
-        remainingTime(cleanupDeadline),
+        remainingTime(clock, cleanupDeadline),
       )
       await bestEffort(
+        clock,
         () => deps.removeTab(duplicateTabId),
-        remainingTime(cleanupDeadline),
+        remainingTime(clock, cleanupDeadline),
       )
     } else {
       void duplicatePromise.then(
         async (duplicate) => {
           const lateTabId = duplicate?.id ?? null
           if (lateTabId == null) return
-          const lateCleanupDeadline = Date.now() + cleanupTimeoutMs
+          const lateCleanupDeadline = clock.now() + cleanupTimeoutMs
           await bestEffort(
+            clock,
             () => deps.isolateTab(lateTabId),
-            remainingTime(lateCleanupDeadline),
+            remainingTime(clock, lateCleanupDeadline),
           )
           await bestEffort(
+            clock,
             () => deps.removeTab(lateTabId),
-            remainingTime(lateCleanupDeadline),
+            remainingTime(clock, lateCleanupDeadline),
           )
         },
         () => {},
       )
     }
     await restoreForegroundBestEffort(
+      clock,
       deps,
       restoreTabId,
       restoreWindowId,
