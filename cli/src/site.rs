@@ -1154,7 +1154,7 @@ fn write_domain_index(dir: &std::path::Path) {
             .or_default()
             .push((read_only, spec));
     }
-    let mut ordered: std::collections::BTreeMap<String, Vec<String>> = by_domain
+    let ordered: std::collections::BTreeMap<String, Vec<String>> = by_domain
         .into_iter()
         .map(|(domain, mut v)| {
             // ours (official / configured) before community, then read-only
@@ -1169,12 +1169,18 @@ fn write_domain_index(dir: &std::path::Path) {
             (domain, v.into_iter().map(|(_, s)| s).collect())
         })
         .collect();
-    for (domain, mut v) in opencli_by_domain {
-        v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-        ordered
-            .entry(domain)
-            .or_default()
-            .extend(v.into_iter().map(|(_, s)| s));
+    // OpenCLI goes in its own index so a lookup can always rank it after
+    // ours, even when the two packs spell the domain differently
+    // (`v2ex.com` vs `www.v2ex.com`).
+    let theirs: std::collections::BTreeMap<String, Vec<String>> = opencli_by_domain
+        .into_iter()
+        .map(|(domain, mut v)| {
+            v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            (domain, v.into_iter().map(|(_, s)| s).collect())
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&theirs) {
+        let _ = std::fs::write(dir.join(".index-opencli.json"), json);
     }
     if let Ok(json) = serde_json::to_string(&ordered) {
         let _ = std::fs::write(dir.join(".index.json"), json);
@@ -1236,22 +1242,30 @@ pub fn needs_refresh() -> bool {
 /// Reads the prebuilt `.index.json`; empty if the packs aren't synced yet.
 pub fn adapters_for_domain(host: &str) -> Vec<String> {
     let host = host.trim_start_matches("www.");
-    let Some(raw) = index_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
-        return Vec::new();
-    };
-    let Ok(idx) = serde_json::from_str::<std::collections::BTreeMap<String, Vec<String>>>(&raw)
-    else {
-        return Vec::new();
-    };
-    // Preserve the index's per-domain ordering (read-only adapters first); just
-    // dedup if a host somehow matches multiple domain keys.
+    // Ours first, then OpenCLI's (its own index, see write_domain_index).
     let mut out: Vec<String> = Vec::new();
-    for (domain, specs) in idx {
-        let d = domain.trim_start_matches("www.");
-        if host == d || host.ends_with(&format!(".{d}")) {
-            for s in specs {
-                if !out.contains(&s) {
-                    out.push(s);
+    let files = [
+        index_path(),
+        sites_dir().map(|d| d.join(".index-opencli.json")),
+    ];
+    for path in files.into_iter().flatten() {
+        if path.ends_with(".index-opencli.json") && crate::opencli::disabled() {
+            continue;
+        }
+        let Some(idx) = std::fs::read_to_string(&path).ok().and_then(|raw| {
+            serde_json::from_str::<std::collections::BTreeMap<String, Vec<String>>>(&raw).ok()
+        }) else {
+            continue;
+        };
+        // Preserve each index's per-domain ordering (read-only first); dedup
+        // when a host matches several domain keys.
+        for (domain, specs) in idx {
+            let d = domain.trim_start_matches("www.");
+            if host == d || host.ends_with(&format!(".{d}")) {
+                for s in specs {
+                    if !out.contains(&s) {
+                        out.push(s);
+                    }
                 }
             }
         }
@@ -1389,7 +1403,7 @@ pub const ANALYZE_JS: &str = r#"(() => {
   const out = { url: location.href, host: location.hostname, title: document.title };
   const host = location.hostname.replace(/^www\./, '');
   const base = host.split('.').slice(-2).join('.');
-  const noise = /google-analytics|googletagmanager|doubleclick|facebook\.net|hotjar|sentry|segment\.(io|com)|mixpanel|clarity\.ms|bat\.bing|newrelic|datadoghq|amplitude|\/collect\b|\/log(ging)?\b|\/track(ing)?\b|\/beacon\b|\/metrics?\b|\/report\b|\/telemetry\b|\/pixel\b/i;
+  const noise = /google-analytics|googletagmanager|doubleclick|googlesyndication|adtrafficquality|adservice|pagead|facebook\.net|hotjar|sentry|segment\.(io|com)|mixpanel|clarity\.ms|bat\.bing|newrelic|datadoghq|amplitude|\/collect\b|\/log(ging)?\b|\/track(ing)?\b|\/beacon\b|\/metrics?\b|\/report\b|\/telemetry\b|\/pixel\b/i;
   const seen = new Set();
   const api = [];
   for (const e of performance.getEntriesByType('resource')) {
@@ -1411,7 +1425,7 @@ pub const ANALYZE_JS: &str = r#"(() => {
     api.push({ url: e.name.length > 300 ? e.name.slice(0, 300) + '…' : e.name, type: e.initiatorType, sameSite, bytes: e.transferSize || 0, score, reasons });
   }
   api.sort((a, b) => b.score - a.score);
-  out.api = api.filter(a => a.score > 0).slice(0, 12);
+  out.api = api.filter(a => a.score >= 2).slice(0, 12);
   out.requestsSeen = api.length;
 
   const known = ['__NEXT_DATA__', '__NUXT__', '__NUXT_DATA__', '__INITIAL_STATE__', '__INITIAL_DATA__', '__INITIAL_PROPS__', '__PRELOADED_STATE__', '__APOLLO_STATE__', '__REDUX_STATE__', '__SSR_DATA__', '__remixContext', '__UNIVERSAL_DATA_FOR_REHYDRATION__', 'ytInitialData', 'ytInitialPlayerResponse', '__pinia', '__INITIAL_SSR_STATE__', 'g_initialProps', '__STATE__'];
@@ -1435,7 +1449,15 @@ pub const ANALYZE_JS: &str = r#"(() => {
     const sel = el.id ? 'script#' + el.id : 'script[type="' + el.type + '"]';
     out.state.push({ name: sel, ...describe(v) });
   }
-  out.state = out.state.filter(s => s.size === -1 || s.size > 200);
+  // Extension-injected globals (Vue/React devtools) and telemetry config are
+  // not the page's data.
+  const junk = /devtools|rum|analytics|tracking|gtm|sentry/i;
+  const seenState = new Set();
+  out.state = out.state.filter(s => {
+    if (junk.test(s.name) || seenState.has(s.name)) return false;
+    seenState.add(s.name);
+    return s.size === -1 || s.size > 200;
+  });
 
   out.webpack = Object.getOwnPropertyNames(window).filter(k => /^webpackChunk|^webpackJsonp/.test(k)).slice(0, 3);
   out.signals = {
