@@ -1470,6 +1470,22 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         match send_command_once(&cmd, session) {
             Ok(response) => return Ok(response),
             Err(e) => {
+                // Not retried: the command may already have run, and the
+                // daemon that dropped it is usually gone. Clear it so the next
+                // command starts a fresh one.
+                if is_daemon_closed_error(&e) {
+                    let was_alive = read_registered_daemon_pid(session)
+                        .map(is_pid_alive)
+                        .unwrap_or(false);
+                    kill_stale_daemon(session);
+                    return Err(format!(
+                        "The '{session}' session daemon closed the connection without \
+                         answering{}. It has been cleared; rerun the command to start a \
+                         fresh one. The command may already have run, so check the page \
+                         before repeating anything that submits or posts.",
+                        if was_alive { "" } else { " (it had exited)" }
+                    ));
+                }
                 if is_transient_error(&e) {
                     last_error = e;
                     continue;
@@ -1691,7 +1707,35 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
         }
     })?;
 
+    // The daemon closed the connection without answering (it exited, or the
+    // browser transport under it dropped and took it down). Parsing "" would
+    // report `EOF while parsing`, which reads as transient and was retried
+    // five times against a daemon that is gone (#401).
+    if response_line.trim().is_empty() {
+        return Err(DAEMON_CLOSED.to_string());
+    }
     serde_json::from_str(&response_line).map_err(|e| format!("Invalid response: {}", e))
+}
+
+const DAEMON_CLOSED: &str = "daemon closed the connection without a response";
+
+fn is_daemon_closed_error(error: &str) -> bool {
+    error.contains(DAEMON_CLOSED)
+}
+
+#[cfg(test)]
+mod daemon_closed_tests {
+    use super::*;
+
+    #[test]
+    fn a_dropped_connection_is_its_own_error_and_not_transient() {
+        assert!(is_daemon_closed_error(DAEMON_CLOSED));
+        assert!(!is_transient_error(DAEMON_CLOSED));
+        // A truncated (non-empty) reply still reads as transient.
+        assert!(is_transient_error(
+            "Invalid response: EOF while parsing a string at line 1 column 7"
+        ));
+    }
 }
 
 #[cfg(test)]
