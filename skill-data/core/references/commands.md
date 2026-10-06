@@ -827,8 +827,10 @@ AGENT_BROWSER_BLOCK_WEBRTC="1"        # --launch only. Hide local IP via WebRTC.
                                       #   through the proxy when one is set; "0" opts out.
 AGENT_BROWSER_HIDE_CANVAS="1"         # --launch only. Session-stable canvas/audio fingerprint noise.
 AGENT_BROWSER_ADAPTIVE_REF="0"        # Disable adaptive @ref relocation (on by default; relocates a
-                                      #   moved element by fingerprint when role/name re-query fails;
-                                      #   every relocation is reported in data.relocated + on stderr).
+                                      #   moved element by fingerprint when role/name re-query fails,
+                                      #   only onto the same role + name — a renamed match is refused
+                                      #   and offered as `try @eN`; every relocation is reported in
+                                      #   data.relocated + on stderr).
 ```
 
 > **Heads-up for `console` / `errors`:** capture is **off by default** in this stealth

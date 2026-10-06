@@ -357,22 +357,26 @@ fn print_site_analyze(data: &serde_json::Value, strategy: &str, next: &[serde_js
 
 pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
     print_response_body(resp, action, opts);
+    // A @ref that landed on a node other than the one its snapshot recorded:
+    // one stderr line each, so it is never silent — on a failed action too.
+    if !opts.json {
+        for r in resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("relocated"))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(line) = relocation_line(r) {
+                eprintln!("{} {}", color::warning_indicator(), line);
+            }
+        }
+    }
     // Every successful text response gets its observation, including branches
     // such as eval/check that return before the generic Done renderer.
     if !opts.json && resp.success {
         if let Some(data) = &resp.data {
-            // A @ref that landed on a node other than the one its snapshot
-            // recorded: one stderr line each, so it is never silent.
-            for r in data
-                .get("relocated")
-                .and_then(|v| v.as_array())
-                .into_iter()
-                .flatten()
-            {
-                if let Some(line) = relocation_line(r) {
-                    eprintln!("{} {}", color::warning_indicator(), line);
-                }
-            }
             if let Some(obs) = data.get("observed").and_then(|v| v.as_object()) {
                 print_observed(obs);
             }

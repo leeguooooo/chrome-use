@@ -11509,11 +11509,16 @@ async fn handle_innerhtml(cmd: &Value, state: &mut DaemonState) -> Result<Value,
 pub async fn execute_command_recovering(cmd: &Value, state: &mut DaemonState) -> Value {
     // A `@ref` that resolved to a node other than the one its snapshot
     // recorded is reported on the response (`data.relocated`), never silent.
-    let (mut out, relocations) = super::ref_hints::collect_relocations(Box::pin(
+    // A guess it refused to act on was offered as a fresh `@ref`; adopt those
+    // into the map so the suggestion works on the next command.
+    let (mut out, effects) = super::ref_hints::collect_ref_effects(Box::pin(
         execute_command_recovering_scrubbed(cmd, state),
     ))
     .await;
-    super::ref_hints::attach_relocations(&mut out, &relocations);
+    super::ref_hints::attach_relocations(&mut out, &effects.relocations);
+    for minted in effects.mints {
+        state.ref_map.adopt_minted(minted);
+    }
     out
 }
 

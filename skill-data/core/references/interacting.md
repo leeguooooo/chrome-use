@@ -78,21 +78,25 @@ there is how an agent opens the wrong menu (or submits the wrong form) while the
 CLI prints `Done`. So an error here is the guard working — re-snapshot and
 re-target rather than reaching for `AGENT_BROWSER_VERIFY_REF=0`.
 
-**A relocation is never silent.** When the ref's original node was gone and the
-action landed on a different node (re-found by role + name, by the replaced
-node's DOM attributes, or by fingerprint), the response says so: `--json` gets
-`data.relocated: [{ref, how: "role-name"|"dom-identity"|"adaptive", score?,
-role, name, was: {role, name}}]`, and text output prints one `⚠ @e5 relocated
-(…)` line on stderr. Check it landed on what you meant. **A ref that cannot be
-resolved is refused with suggestions, never guessed:** the error lists up to
-three refs from the current snapshot closest by role + name (`try @e14 [button]
-"Save changes"`, only refs that still resolve) plus "run `snapshot -i` to
-refresh". Nothing acts on a suggestion — pick one yourself, or re-snapshot.
+**A relocation is never silent, and never a rename.** When the ref's original
+node is gone, chrome-use acts on a replacement only if it is the *same control*:
+same role and the same accessible name (ignoring case and extra whitespace),
+re-found by role + name, by the replaced node's DOM attributes, or by
+fingerprint. The response then says so: `--json` gets `data.relocated: [{ref,
+how: "role-name"|"dom-identity"|"adaptive", score?, role, name, was: {role,
+name}}]` (also on a failed action), and text output prints one `⚠ @e5 relocated
+(…)` line on stderr. **A ref that cannot be resolved is refused with
+suggestions, never guessed.** That includes a confident match whose name
+changed ("Save" → "Save now"): it is not clicked. Instead the error names it
+and gives it a ref of its own (`try @e12 [button] "Save now"`), followed by up
+to three refs from the current snapshot that are closest by role + name and
+still resolve, plus "run `snapshot -i` to refresh". Nothing acts on a
+suggestion: pick one yourself, or re-snapshot.
 
 | Env var | Effect |
 |---|---|
 | `AGENT_BROWSER_VERIFY_REF_TIMEOUT_MS` | Budget for the identity check (default 2s direct CDP, 5s over the extension relay). Raise it on very large pages if you see "identity could not be confirmed". |
-| `AGENT_BROWSER_ADAPTIVE_REF=0` | Disable fingerprint relocation (exact role+name only). |
+| `AGENT_BROWSER_ADAPTIVE_REF=0` | Disable fingerprint relocation (exact role+name only). When on, a fingerprint match is acted on only if its role + name equal the snapshot's; a renamed match is offered as a suggested ref instead. |
 | `AGENT_BROWSER_VERIFY_REF=0` | Last resort — skips the check entirely and accepts that clicks may land on a re-rendered node. |
 
 **Slider-puzzle captchas (网易易盾 / yidun).** Unattended/headless logins can't

@@ -3,14 +3,15 @@
 //!
 //! `@ref`s stay stable across snapshots, and a ref whose node was replaced is
 //! re-found by role + name (+ nth), by stable DOM attributes, or by adaptive
-//! fingerprint scoring (`adaptive.rs`). Each of those acts on a node other than
-//! the one the snapshot recorded, so the command's response carries a
-//! `relocated` entry naming the ref, how it was re-found and what it landed on
-//! — a relocation is never silent.
+//! fingerprint scoring (`adaptive.rs`). A replacement is acted on only when it
+//! is the same control — same role, same normalised name — and then the
+//! command's response carries a `relocated` entry naming the ref, how it was
+//! re-found and what it landed on: a relocation is never silent.
 //!
-//! When a ref cannot be resolved, the error offers up to three refs from the
-//! current snapshot whose role + name are closest to it. They are suggestions
-//! only: nothing ever acts on one.
+//! When a ref cannot be resolved — including a confident match whose name
+//! changed — the error offers that match (as a freshly minted ref) and up to
+//! three refs from the current snapshot whose role + name are closest. They
+//! are suggestions only: nothing ever acts on one.
 //!
 //! The ranking and message formatting here are pure so they can be unit-tested.
 
@@ -75,16 +76,36 @@ impl RefRelocation {
     }
 }
 
+/// A ref minted for a live node that is offered as a suggestion but was not
+/// in any snapshot — the guess a relocation refused to act on because its
+/// name differs. Adopted into the session's ref map once the command ends, so
+/// `try @eN` works on the next command.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MintedRef {
+    pub ref_id: String,
+    pub backend_node_id: i64,
+    pub frame_id: Option<String>,
+    pub role: String,
+    pub name: String,
+    pub fingerprint: Option<adaptive::ElementFingerprint>,
+}
+
+/// What resolving `@ref`s did while serving one command.
+#[derive(Debug, Default)]
+pub struct RefEffects {
+    pub relocations: Vec<RefRelocation>,
+    pub mints: Vec<MintedRef>,
+}
+
 tokio::task_local! {
-    /// Relocations made while serving the current command.
-    static RELOCATIONS: RefCell<Vec<RefRelocation>>;
+    static EFFECTS: RefCell<RefEffects>;
 }
 
 /// Note a relocation for the running command. A no-op outside
-/// [`collect_relocations`] (unit tests, background tasks).
+/// [`collect_ref_effects`] (unit tests, background tasks).
 pub fn record_relocation(r: RefRelocation) {
-    let _ = RELOCATIONS.try_with(|cell| {
-        let mut list = cell.borrow_mut();
+    let _ = EFFECTS.try_with(|cell| {
+        let list = &mut cell.borrow_mut().relocations;
         // A command can resolve the same ref more than once (centre, then
         // object id; or a recovery retry). Report it once, latest wins.
         list.retain(|x| x.ref_id != r.ref_id);
@@ -92,23 +113,65 @@ pub fn record_relocation(r: RefRelocation) {
     });
 }
 
-/// Run `f` collecting every relocation it makes.
-pub async fn collect_relocations<F: Future>(f: F) -> (F::Output, Vec<RefRelocation>) {
-    RELOCATIONS
-        .scope(RefCell::new(Vec::new()), async move {
+/// Give a live node a ref for a suggestion. `known` is the ref the session
+/// already holds for this node with this identity, if any; otherwise a new id
+/// is taken from `next_free` onwards. `None` outside a command, where nothing
+/// could adopt the ref afterwards — the caller then offers no such suggestion.
+pub fn mint_ref(
+    known: Option<String>,
+    next_free: usize,
+    backend_node_id: i64,
+    frame_id: Option<&str>,
+    role: &str,
+    name: &str,
+    fingerprint: Option<adaptive::ElementFingerprint>,
+) -> Option<String> {
+    EFFECTS
+        .try_with(|cell| {
+            let mints = &mut cell.borrow_mut().mints;
+            if let Some(m) = mints
+                .iter()
+                .find(|m| m.backend_node_id == backend_node_id && m.frame_id.as_deref() == frame_id)
+            {
+                return m.ref_id.clone();
+            }
+            let ref_id = known.unwrap_or_else(|| {
+                let taken = mints
+                    .iter()
+                    .filter_map(|m| m.ref_id.strip_prefix('e').and_then(|n| n.parse().ok()))
+                    .map(|n: usize| n + 1)
+                    .max()
+                    .unwrap_or(0);
+                format!("e{}", next_free.max(taken))
+            });
+            mints.push(MintedRef {
+                ref_id: ref_id.clone(),
+                backend_node_id,
+                frame_id: frame_id.map(str::to_string),
+                role: role.to_string(),
+                name: name.to_string(),
+                fingerprint,
+            });
+            ref_id
+        })
+        .ok()
+}
+
+/// Run `f` collecting every relocation and minted suggestion it makes.
+pub async fn collect_ref_effects<F: Future>(f: F) -> (F::Output, RefEffects) {
+    EFFECTS
+        .scope(RefCell::new(RefEffects::default()), async move {
             let out = f.await;
-            let list = RELOCATIONS.with(|cell| cell.take());
-            (out, list)
+            let effects = EFFECTS.with(|cell| cell.take());
+            (out, effects)
         })
         .await
 }
 
-/// Put the relocations on a successful response's `data.relocated`.
+/// Put the relocations on the response's `data.relocated` — on a failure too,
+/// so "it moved, then the action failed" is not lost.
 pub fn attach_relocations(response: &mut Value, relocations: &[RefRelocation]) {
     if relocations.is_empty() {
-        return;
-    }
-    if response.get("success").and_then(Value::as_bool) != Some(true) {
         return;
     }
     let list = Value::Array(relocations.iter().map(RefRelocation::to_json).collect());
@@ -122,6 +185,38 @@ pub fn attach_relocations(response: &mut Value, relocations: &[RefRelocation]) {
     if let Some(d) = data.as_object_mut() {
         d.insert("relocated".to_string(), list);
     }
+}
+
+/// Accessible names compared the way a reader would: trimmed, inner
+/// whitespace collapsed, case-insensitive.
+pub fn normalize_name(name: &str) -> String {
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Whether a relocation candidate is the control the ref named: same role,
+/// same name after [`normalize_name`]. Only such a candidate is acted on; any
+/// other is a guess, offered as a suggestion instead.
+pub fn same_identity(want_role: &str, want_name: &str, role: &str, name: &str) -> bool {
+    want_role == role && normalize_name(want_name) == normalize_name(name)
+}
+
+/// Put the refused best match first, then the ranked refs, without
+/// duplicates, capped at [`MAX_SUGGESTIONS`].
+pub fn merge_suggestions(
+    first: Option<RefSuggestion>,
+    rest: Vec<RefSuggestion>,
+) -> Vec<RefSuggestion> {
+    let mut out: Vec<RefSuggestion> = first.into_iter().collect();
+    for s in rest {
+        if !out.iter().any(|x| x.ref_id == s.ref_id) {
+            out.push(s);
+        }
+    }
+    out.truncate(MAX_SUGGESTIONS);
+    out
 }
 
 /// A ref from the current snapshot offered in place of one that could not be
@@ -211,8 +306,8 @@ pub fn format_suggestions(suggestions: &[RefSuggestion]) -> String {
             .to_string();
     }
     let mut out = String::from(
-        "Closest refs in the current snapshot (suggestions only — nothing was acted on; check \
-         one is the control you meant):",
+        "Closest refs on the page (suggestions only — nothing was acted on; check one is the \
+         control you meant):",
     );
     for s in suggestions {
         out.push_str(&format!(
@@ -264,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn relocations_ride_on_success_only() {
+    fn relocations_ride_on_success_and_failure() {
         let mut ok = json!({"id": "1", "success": true, "data": {"clicked": true}});
         attach_relocations(&mut ok, &[reloc("e1", RelocationHow::RoleName, None)]);
         assert_eq!(ok["data"]["clicked"], true);
@@ -279,7 +374,8 @@ mod tests {
 
         let mut err = json!({"id": "1", "success": false, "error": "x"});
         attach_relocations(&mut err, &[reloc("e1", RelocationHow::RoleName, None)]);
-        assert!(err.get("data").is_none());
+        assert_eq!(err["data"]["relocated"][0]["ref"], "@e1");
+        assert_eq!(err["error"], "x");
 
         let mut untouched = json!({"id": "1", "success": true, "data": {}});
         attach_relocations(&mut untouched, &[]);
@@ -288,17 +384,79 @@ mod tests {
 
     #[tokio::test]
     async fn the_collector_reports_each_ref_once() {
-        let ((), list) = collect_relocations(async {
+        let ((), fx) = collect_ref_effects(async {
             record_relocation(reloc("e1", RelocationHow::RoleName, None));
             record_relocation(reloc("e2", RelocationHow::Adaptive, Some(0.9)));
             record_relocation(reloc("e1", RelocationHow::Adaptive, Some(0.75)));
         })
         .await;
+        let list = fx.relocations;
         assert_eq!(list.len(), 2);
         assert_eq!(list[1].ref_id, "e1");
         assert_eq!(list[1].how, RelocationHow::Adaptive);
         // Outside a command it is a silent no-op.
         record_relocation(reloc("e9", RelocationHow::RoleName, None));
+    }
+
+    #[tokio::test]
+    async fn minted_suggestions_take_fresh_ids_once_per_node() {
+        let ((a, b, again, known), fx) = collect_ref_effects(async {
+            let a = mint_ref(None, 10, 100, None, "button", "Save now", None);
+            let b = mint_ref(None, 10, 101, None, "button", "Save all", None);
+            let again = mint_ref(None, 10, 100, None, "button", "Save now", None);
+            let known = mint_ref(Some("e3".into()), 10, 102, None, "link", "Save", None);
+            (a, b, again, known)
+        })
+        .await;
+        assert_eq!(a.as_deref(), Some("e10"));
+        assert_eq!(b.as_deref(), Some("e11"));
+        assert_eq!(again.as_deref(), Some("e10"), "same node, same ref");
+        assert_eq!(
+            known.as_deref(),
+            Some("e3"),
+            "a ref the session holds is reused"
+        );
+        assert_eq!(fx.mints.len(), 3);
+        // Nothing could adopt a ref minted outside a command.
+        assert!(mint_ref(None, 10, 100, None, "button", "x", None).is_none());
+    }
+
+    #[test]
+    fn identity_compares_names_like_a_reader() {
+        assert!(same_identity(
+            "button",
+            " Save  changes ",
+            "button",
+            "save changes"
+        ));
+        assert!(!same_identity("button", "Save", "button", "Save now"));
+        assert!(!same_identity("button", "Delete", "button", "Delete all"));
+        assert!(!same_identity("button", "Save", "link", "Save"));
+    }
+
+    #[test]
+    fn the_refused_best_match_leads_the_suggestions() {
+        let first = RefSuggestion {
+            ref_id: "e10".into(),
+            role: "button".into(),
+            name: "Save now".into(),
+            score: 0.8,
+        };
+        let rest = rank_suggestions(
+            "button",
+            "Save",
+            [
+                ("e9", "button", "Save draft"),
+                ("e10", "button", "Save now"),
+                ("e11", "button", "Save as"),
+                ("e12", "button", "Saved"),
+            ],
+        );
+        let ids: Vec<String> = merge_suggestions(Some(first), rest)
+            .into_iter()
+            .map(|s| s.ref_id)
+            .collect();
+        assert_eq!(ids, vec!["e10", "e9", "e11"]);
     }
 
     #[test]

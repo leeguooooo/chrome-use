@@ -411,6 +411,75 @@ impl RefMap {
         );
     }
 
+    /// The ref this session already holds for a live node carrying this
+    /// identity, if any.
+    pub fn known_ref_for(
+        &self,
+        backend_node_id: i64,
+        frame_id: Option<&str>,
+        role: &str,
+        name: &str,
+    ) -> Option<String> {
+        let in_map = self.map.iter().find(|(_, e)| {
+            e.backend_node_id == Some(backend_node_id)
+                && e.frame_id.as_deref() == frame_id
+                && e.role == role
+                && e.name == name
+        });
+        if let Some((id, _)) = in_map {
+            return Some(id.clone());
+        }
+        let key = StableRefKey {
+            backend_node_id,
+            frame_id: frame_id.map(str::to_string),
+        };
+        self.stable_refs
+            .get(&key)
+            .filter(|e| e.role == role && e.name == name)
+            .map(|e| e.ref_id.clone())
+    }
+
+    /// Adopt a ref minted for a suggestion, so `try @eN` resolves next
+    /// command — and keeps that number in the next snapshot. A ref id that was
+    /// taken in the meantime is left alone.
+    pub fn adopt_minted(&mut self, m: ref_hints::MintedRef) {
+        if self.map.contains_key(&m.ref_id) {
+            return;
+        }
+        if let Some(n) = m
+            .ref_id
+            .strip_prefix('e')
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            self.next_ref = self.next_ref.max(n + 1);
+        }
+        self.stable_refs.insert(
+            StableRefKey {
+                backend_node_id: m.backend_node_id,
+                frame_id: m.frame_id.clone(),
+            },
+            StableRefEntry {
+                ref_id: m.ref_id.clone(),
+                last_seen_generation: self.snapshot_generation,
+                role: m.role.clone(),
+                name: m.name.clone(),
+            },
+        );
+        self.map.insert(
+            m.ref_id,
+            RefEntry {
+                backend_node_id: Some(m.backend_node_id),
+                role: m.role,
+                name: m.name,
+                nth: None,
+                selector: None,
+                frame_id: m.frame_id,
+                fingerprint: m.fingerprint,
+                dom_sourced: false,
+            },
+        );
+    }
+
     pub fn get(&self, ref_id: &str) -> Option<&RefEntry> {
         self.map.get(ref_id)
     }
@@ -503,19 +572,23 @@ async fn relocate_stale_ref(
     entry: &RefEntry,
     session_id: &str,
     iframe_sessions: &HashMap<String, String>,
-) -> Option<i64> {
+) -> AdaptiveOutcome {
     if std::env::var("AGENT_BROWSER_ADAPTIVE_REF").as_deref() == Ok("0") {
-        return None;
+        return AdaptiveOutcome::Nothing;
     }
-    let baseline = entry.fingerprint.as_ref()?;
-    let candidates = super::snapshot::collect_current_fingerprints(
+    let Some(baseline) = entry.fingerprint.as_ref() else {
+        return AdaptiveOutcome::Nothing;
+    };
+    let Ok(candidates) = super::snapshot::collect_current_fingerprints(
         client,
         session_id,
         entry.frame_id.as_deref(),
         iframe_sessions,
     )
     .await
-    .ok()?;
+    else {
+        return AdaptiveOutcome::Nothing;
+    };
     match adaptive::pick_best(
         baseline,
         &candidates,
@@ -523,16 +596,35 @@ async fn relocate_stale_ref(
         adaptive::ADAPTIVE_MARGIN,
     ) {
         Ok(reloc) => {
+            // The fingerprint's tag/text are the candidate's AX role/name.
+            let fingerprint = candidates
+                .iter()
+                .find(|(id, _)| *id == reloc.backend_node_id)
+                .map(|(_, fp)| fp.clone());
+            let (role, name) = fingerprint
+                .as_ref()
+                .map(|fp| (fp.tag.clone(), fp.text.clone()))
+                .unwrap_or_default();
+            if !ref_hints::same_identity(&entry.role, &entry.name, &role, &name) {
+                // A confident match by shape, but a different label: never
+                // act on it — hand it to the agent as a suggestion.
+                eprintln!(
+                    "[adaptive] refused {ref_id} ({} \"{}\") -> ({role} \"{name}\") score={:.2}: name differs",
+                    entry.role, entry.name, reloc.score
+                );
+                return AdaptiveOutcome::Refused(Box::new(Guess {
+                    backend_node_id: reloc.backend_node_id,
+                    role,
+                    name,
+                    how: RelocationHow::Adaptive,
+                    score: Some(reloc.score),
+                    fingerprint,
+                }));
+            }
             eprintln!(
                 "[adaptive] relocated {ref_id} ({} \"{}\") score={:.2} second={:.2} -> backendNodeId {}",
                 entry.role, entry.name, reloc.score, reloc.second_score, reloc.backend_node_id
             );
-            // The fingerprint's tag/text are the candidate's AX role/name.
-            let (role, name) = candidates
-                .iter()
-                .find(|(id, _)| *id == reloc.backend_node_id)
-                .map(|(_, fp)| (fp.tag.clone(), fp.text.clone()))
-                .unwrap_or_default();
             ref_hints::record_relocation(RefRelocation {
                 ref_id: ref_id.to_string(),
                 how: RelocationHow::Adaptive,
@@ -542,10 +634,20 @@ async fn relocate_stale_ref(
                 role,
                 name,
             });
-            Some(reloc.backend_node_id)
+            AdaptiveOutcome::Found(reloc.backend_node_id)
         }
-        Err(_) => None,
+        Err(_) => AdaptiveOutcome::Nothing,
     }
+}
+
+/// What adaptive relocation concluded.
+enum AdaptiveOutcome {
+    /// The same control (role + normalised name), re-found: act on it.
+    Found(i64),
+    /// A confident match whose name differs: offer it, do not act.
+    Refused(Box<Guess>),
+    /// Nothing usable (disabled, no fingerprint, no confident match).
+    Nothing,
 }
 
 /// Outcome of the cached-ref identity check.
@@ -862,14 +964,9 @@ async fn confirmed_backend_node_id(
     .ok()
     .flatten();
     let mut replaced_by = None;
+    let mut guess: Option<Guess> = None;
     if let Some(heal) = dom_heal {
-        if dom_heal_accepts(
-            &entry.role,
-            &entry.name,
-            &heal.hint.role,
-            &heal.hint.name,
-            &heal.hint.selector,
-        ) {
+        if dom_heal_accepts(&entry.role, &entry.name, &heal.hint.role, &heal.hint.name) {
             eprintln!(
                 "[ref] {ref_id} re-bound to its replacement `{}` -> backendNodeId {} ({} \"{}\")",
                 heal.hint.selector, heal.backend_node_id, heal.hint.role, heal.hint.name
@@ -885,65 +982,153 @@ async fn confirmed_backend_node_id(
             });
             return Ok(heal.backend_node_id);
         }
+        // Same kind of control under a new name: the agent decides, not us.
+        if heal.hint.role == entry.role {
+            guess = Some(Guess {
+                backend_node_id: heal.backend_node_id,
+                role: heal.hint.role.clone(),
+                name: heal.hint.name.clone(),
+                how: RelocationHow::DomIdentity,
+                score: None,
+                fingerprint: None,
+            });
+        }
         replaced_by = Some(heal.hint);
     }
 
-    match tokio::time::timeout(
+    let outcome = tokio::time::timeout(
         recovery_budget,
         relocate_stale_ref(client, ref_id, entry, session_id, iframe_sessions),
     )
     .await
-    {
-        Ok(Some(id)) => Ok(id),
-        // Nothing recovered it. Say which of the two situations this is: the
-        // element is gone, or several indistinguishable ones are on the page.
-        // "No element with that role and name" reads like the first even when
-        // it is the second, which sends the agent looking for something that
-        // has not happened (#224).
-        _ => {
-            let base = match reanchor.as_ref().map(|r| r.candidates) {
-                Some(n) if n > 1 => indistinguishable_ref_error(ref_id, entry, n),
-                Some(_) => err,
-                // The tree read never finished, so "not on the page" is a
-                // claim nobody checked.
-                None => err.replace(NOT_ON_PAGE, REANCHOR_UNFINISHED),
-            };
-            // Refs from the current snapshot that are closest to this one and
-            // still resolve — offered, never acted on.
-            let live = reanchor
-                .as_ref()
-                .filter(|r| !r.live.is_empty())
-                .map(|r| (&r.live, entry.frame_id.as_deref()));
-            let suggestions = ref_map.suggest_refs(ref_id, &entry.role, &entry.name, live);
-            let base = ref_hints::insert_before(
-                &base,
-                LAST_RESORT_MARKER,
-                &ref_hints::format_suggestions(&suggestions),
-            );
-            // A refusal that only offers "disable the check" leaves the agent
-            // nowhere to go (#356). Name locators that work right now. They
-            // are CSS selectors against the top document, so a ref inside a
-            // frame gets none rather than ones that would miss.
-            let mut hints: Vec<LocatorHint> = Vec::new();
-            if entry.frame_id.is_none() {
-                hints.extend(replaced_by);
-                if let Some(r) = reanchor.as_ref() {
-                    let more = tokio::time::timeout(
-                        identity_probe_budget(),
-                        locator_hints(client, effective_session_id, entry, &r.same_role),
-                    )
-                    .await
-                    .unwrap_or_default();
-                    for h in more {
-                        if !hints.iter().any(|x| x.selector == h.selector) {
-                            hints.push(h);
-                        }
-                    }
+    .unwrap_or(AdaptiveOutcome::Nothing);
+    match outcome {
+        AdaptiveOutcome::Found(id) => return Ok(id),
+        AdaptiveOutcome::Refused(g) => {
+            guess.get_or_insert(*g);
+        }
+        AdaptiveOutcome::Nothing => {}
+    }
+
+    // Nothing recovered it. Say which of the two situations this is: the
+    // element is gone, or several indistinguishable ones are on the page.
+    // "No element with that role and name" reads like the first even when
+    // it is the second, which sends the agent looking for something that
+    // has not happened (#224).
+    let base = match reanchor.as_ref().map(|r| r.candidates) {
+        Some(n) if n > 1 => indistinguishable_ref_error(ref_id, entry, n),
+        Some(_) => err,
+        // The tree read never finished, so "not on the page" is a
+        // claim nobody checked.
+        None => err.replace(NOT_ON_PAGE, REANCHOR_UNFINISHED),
+    };
+    // Refs closest to this one that still resolve — the refused guess first
+    // — offered, never acted on.
+    let live = reanchor
+        .as_ref()
+        .filter(|r| !r.live.is_empty())
+        .map(|r| &r.live);
+    let suggestions = ref_suggestions(ref_map, ref_id, entry, live, guess.as_ref());
+    let mut block = guess
+        .as_ref()
+        .map(|g| guess_note(entry, g))
+        .unwrap_or_default();
+    block.push_str(&ref_hints::format_suggestions(&suggestions));
+    let base = ref_hints::insert_before(&base, LAST_RESORT_MARKER, &block);
+    if !suggestions.is_empty() {
+        // Refs are the better way out; CSS selectors would only compete.
+        return Err(base);
+    }
+    // A refusal that only offers "disable the check" leaves the agent
+    // nowhere to go (#356). Name locators that work right now. They
+    // are CSS selectors against the top document, so a ref inside a
+    // frame gets none rather than ones that would miss.
+    let mut hints: Vec<LocatorHint> = Vec::new();
+    if entry.frame_id.is_none() {
+        hints.extend(replaced_by);
+        if let Some(r) = reanchor.as_ref() {
+            let more = tokio::time::timeout(
+                identity_probe_budget(),
+                locator_hints(client, effective_session_id, entry, &r.same_role),
+            )
+            .await
+            .unwrap_or_default();
+            for h in more {
+                if !hints.iter().any(|x| x.selector == h.selector) {
+                    hints.push(h);
                 }
             }
-            Err(insert_locator_hints(&base, &hints))
         }
     }
+    Err(insert_locator_hints(&base, &hints))
+}
+
+/// A live node a relocation step found but refused to act on, because its
+/// accessible name is not the one the snapshot recorded. It is offered as a
+/// suggested ref instead.
+#[derive(Debug, Clone)]
+struct Guess {
+    backend_node_id: i64,
+    role: String,
+    name: String,
+    how: RelocationHow,
+    score: Option<f64>,
+    fingerprint: Option<ElementFingerprint>,
+}
+
+/// Explains why the closest match was not acted on.
+fn guess_note(entry: &RefEntry, g: &Guess) -> String {
+    let score = g
+        .score
+        .map(|s| format!(", score {s:.2}"))
+        .unwrap_or_default();
+    format!(
+        "The closest match on the page now is [{} \"{}\"] (found by {}{score}), but its name \
+         differs from the snapshot's [{} \"{}\"], so it was not acted on.\n",
+        g.role,
+        g.name,
+        g.how.as_str(),
+        entry.role,
+        entry.name
+    )
+}
+
+/// Suggested refs for a ref that could not be resolved: the refused guess
+/// (given a ref of its own, adopted into the map after the command) first,
+/// then the closest refs of the current snapshot that still resolve.
+fn ref_suggestions(
+    ref_map: &RefMap,
+    ref_id: &str,
+    entry: &RefEntry,
+    live: Option<&LiveIdentities>,
+    guess: Option<&Guess>,
+) -> Vec<ref_hints::RefSuggestion> {
+    let frame_id = entry.frame_id.as_deref();
+    let first = guess.and_then(|g| {
+        let known = ref_map.known_ref_for(g.backend_node_id, frame_id, &g.role, &g.name);
+        ref_hints::mint_ref(
+            known,
+            ref_map.next_ref_num(),
+            g.backend_node_id,
+            frame_id,
+            &g.role,
+            &g.name,
+            g.fingerprint.clone(),
+        )
+        .map(|id| ref_hints::RefSuggestion {
+            ref_id: id,
+            role: g.role.clone(),
+            name: g.name.clone(),
+            score: g.score.unwrap_or(1.0),
+        })
+    });
+    let rest = ref_map.suggest_refs(
+        ref_id,
+        &entry.role,
+        &entry.name,
+        live.map(|l| (l, frame_id)),
+    );
+    ref_hints::merge_suggestions(first, rest)
 }
 
 /// A CSS selector that addresses one live element, with the AX identity it
@@ -962,34 +1147,13 @@ struct DomHeal {
     hint: LocatorHint,
 }
 
-/// Roles whose accessible name is usually a placeholder or label that the page
-/// rewrites as state changes ("手机号" → "手机号或邮箱"), while the control
-/// itself stays the same field.
-fn is_text_entry_role(role: &str) -> bool {
-    matches!(role, "textbox" | "searchbox" | "combobox" | "spinbutton")
-}
-
-/// Whether a node found by DOM attributes may stand in for a ref.
-///
-/// The role must match. The name must match too — a replaced button with the
-/// same `data-testid` but a new label is the #162 hazard ("Add post" became
-/// "Post all"). The one relaxation is a text-entry control matched by its `id`
-/// or form `name`: those attributes are what the form submits, so they name the
-/// field more reliably than a placeholder the page rewrites.
-fn dom_heal_accepts(
-    want_role: &str,
-    want_name: &str,
-    role: &str,
-    name: &str,
-    selector: &str,
-) -> bool {
-    if role != want_role {
-        return false;
-    }
-    if name == want_name {
-        return true;
-    }
-    is_text_entry_role(role) && (selector.starts_with('#') || selector.contains("[name="))
+/// Whether a node found by DOM attributes may stand in for a ref: only when it
+/// is the same control by role and (normalised) name. A replaced button with
+/// the same `data-testid` but a new label is the #162 hazard ("Add post"
+/// became "Post all"), and a text field whose placeholder was rewritten is
+/// offered as a suggested ref rather than typed into on a guess.
+fn dom_heal_accepts(want_role: &str, want_name: &str, role: &str, name: &str) -> bool {
+    ref_hints::same_identity(want_role, want_name, role, name)
 }
 
 /// Run on an element (`this`). Mode `describe` reports whether the element is
@@ -1310,9 +1474,11 @@ async fn requery_stale_ref(
         }
         Err(e) => e,
     };
-    if let Some(id) = relocate_stale_ref(client, ref_id, entry, session_id, iframe_sessions).await {
-        return Ok(id);
-    }
+    let guess = match relocate_stale_ref(client, ref_id, entry, session_id, iframe_sessions).await {
+        AdaptiveOutcome::Found(id) => return Ok(id),
+        AdaptiveOutcome::Refused(g) => Some(*g),
+        AdaptiveOutcome::Nothing => None,
+    };
     let live = tokio::time::timeout(
         identity_probe_budget() * RECOVERY_BUDGET_FACTOR,
         read_live_identities(
@@ -1325,12 +1491,11 @@ async fn requery_stale_ref(
     .await
     .ok()
     .flatten();
-    let suggestions = ref_map.suggest_refs(
-        ref_id,
-        &entry.role,
-        &entry.name,
-        live.as_ref().map(|l| (l, entry.frame_id.as_deref())),
-    );
+    let suggestions = ref_suggestions(ref_map, ref_id, entry, live.as_ref(), guess.as_ref());
+    let cause = match &guess {
+        Some(g) => format!("{cause}. {}", guess_note(entry, g).trim_end()),
+        None => cause,
+    };
     Err(stale_ref_error(ref_id, entry, &cause, &suggestions))
 }
 
@@ -3688,48 +3853,101 @@ mod tests {
     #[test]
     fn a_replaced_node_found_by_dom_attributes_heals_only_when_identity_agrees() {
         // Same role + same name: the plain React remount.
+        assert!(dom_heal_accepts("textbox", "手机号", "textbox", "手机号"));
+        // Whitespace and case are not identity.
         assert!(dom_heal_accepts(
-            "textbox",
-            "手机号",
-            "textbox",
-            "手机号",
-            "input[name=\"username\"]"
+            "button",
+            "Save  changes",
+            "button",
+            " save changes"
         ));
-        // Text field, placeholder rewritten, but matched by its form name.
-        assert!(dom_heal_accepts(
-            "textbox",
-            "手机号",
-            "textbox",
-            "手机号或邮箱",
-            "input[name=\"username\"]"
-        ));
-        assert!(dom_heal_accepts(
-            "textbox", "Email", "textbox", "", "#email"
-        ));
-        // ...but not when only a placeholder/aria-label selector matched it.
+        // A rewritten placeholder is a different name: offered, not typed into.
         assert!(!dom_heal_accepts(
             "textbox",
             "手机号",
             "textbox",
-            "邮箱",
-            "input[placeholder=\"邮箱\"]"
+            "手机号或邮箱"
         ));
+        assert!(!dom_heal_accepts("textbox", "Email", "textbox", ""));
         // A button with the same testid but a new label is the #162 hazard.
         assert!(!dom_heal_accepts(
-            "button",
-            "Add post",
-            "button",
-            "Post all",
-            "#tweetButton"
+            "button", "Add post", "button", "Post all"
         ));
         // A different kind of control is never the same element.
-        assert!(!dom_heal_accepts(
-            "textbox",
-            "手机号",
-            "button",
-            "手机号",
-            "input[name=\"username\"]"
-        ));
+        assert!(!dom_heal_accepts("textbox", "手机号", "button", "手机号"));
+    }
+
+    #[test]
+    fn a_suggested_ref_is_adopted_and_kept_by_the_next_snapshot() {
+        let mut m = RefMap::new();
+        m.begin_snapshot();
+        let e1 = m.snapshot_ref(Some(10), None, "button", "Save");
+        m.add(e1.clone(), Some(10), "button", "Save", None);
+        assert_eq!(
+            m.known_ref_for(10, None, "button", "Save"),
+            Some(e1.clone())
+        );
+        assert_eq!(m.known_ref_for(10, None, "button", "Save now"), None);
+
+        m.adopt_minted(ref_hints::MintedRef {
+            ref_id: "e7".into(),
+            backend_node_id: 99,
+            frame_id: None,
+            role: "button".into(),
+            name: "Save now".into(),
+            fingerprint: None,
+        });
+        assert_eq!(m.get("e7").map(|e| e.backend_node_id), Some(Some(99)));
+        assert_eq!(m.next_ref_num(), 8);
+        // The next snapshot keeps the number the error promised.
+        m.begin_snapshot();
+        assert_eq!(m.snapshot_ref(Some(99), None, "button", "Save now"), "e7");
+        // A taken id is never overwritten.
+        m.add("e8".into(), Some(5), "link", "Help", None);
+        m.adopt_minted(ref_hints::MintedRef {
+            ref_id: "e8".into(),
+            backend_node_id: 6,
+            frame_id: None,
+            role: "button".into(),
+            name: "x".into(),
+            fingerprint: None,
+        });
+        assert_eq!(m.get("e8").map(|e| e.role.as_str()), Some("link"));
+    }
+
+    #[test]
+    fn a_refused_guess_is_explained_and_offered_first() {
+        let entry = RefEntry {
+            backend_node_id: Some(42),
+            role: "button".into(),
+            name: "Save".into(),
+            nth: None,
+            selector: None,
+            frame_id: None,
+            fingerprint: None,
+            dom_sourced: false,
+        };
+        let g = Guess {
+            backend_node_id: 77,
+            role: "button".into(),
+            name: "Save now".into(),
+            how: RelocationHow::Adaptive,
+            score: Some(0.8),
+            fingerprint: None,
+        };
+        let note = guess_note(&entry, &g);
+        assert!(note.contains("[button \"Save now\"]"), "{note}");
+        assert!(note.contains("adaptive, score 0.80"), "{note}");
+        assert!(note.contains("not acted on"), "{note}");
+        // Outside a command no ref can be minted (nothing would adopt it), so
+        // only snapshot refs are offered.
+        let mut m = RefMap::new();
+        m.add("e9".into(), Some(60), "button", "Save draft", None);
+        let s = ref_suggestions(&m, "e5", &entry, None, Some(&g));
+        assert_eq!(
+            s.iter().map(|x| x.ref_id.as_str()).collect::<Vec<_>>(),
+            vec!["e9"]
+        );
     }
 
     /// #356: the refusal must lead with locators that keep the guard on, not
