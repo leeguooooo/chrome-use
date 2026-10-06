@@ -52,6 +52,34 @@ fn installed_version(root: &Path) -> Option<String> {
     v.get("version").and_then(|x| x.as_str()).map(String::from)
 }
 
+/// npm is `npm.cmd` on Windows; `Command` doesn't resolve PATHEXT for us.
+fn npm() -> &'static str {
+    if cfg!(windows) {
+        "npm.cmd"
+    } else {
+        "npm"
+    }
+}
+
+/// Default ceiling for one OpenCLI command, in seconds. A command that declares
+/// its own `timeout` arg (login flows wait for the user) gets that plus a
+/// margin. `AGENT_BROWSER_OPENCLI_TIMEOUT` (seconds) overrides the default.
+const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+fn run_timeout(kwargs: &serde_json::Map<String, Value>) -> std::time::Duration {
+    let base = std::env::var("AGENT_BROWSER_OPENCLI_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_TIMEOUT_SECS);
+    let declared = kwargs
+        .get("timeout")
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|t| t + 60)
+        .unwrap_or(0);
+    std::time::Duration::from_secs(base.max(declared))
+}
+
 fn on_path(bin: &str) -> bool {
     Command::new(bin)
         .arg("--version")
@@ -67,14 +95,14 @@ pub fn sync() -> Result<Option<usize>, String> {
     if disabled() {
         return Ok(None);
     }
-    if !on_path("node") || !on_path("npm") {
+    if !on_path("node") || !on_path(npm()) {
         return Ok(None);
     }
     let root = root().ok_or("opencli: cannot resolve home dir")?;
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let want = version();
     if installed_version(&root).as_deref() != Some(want.as_str()) {
-        let out = Command::new("npm")
+        let out = Command::new(npm())
             .arg("install")
             .arg("--prefix")
             .arg(&root)
@@ -265,18 +293,53 @@ pub fn run(spec: &str, entry: &Value, rest: &[String], session: &str) -> Value {
     if let Err(e) = std::fs::write(&req_path, req.to_string()) {
         return fail(format!("opencli: write request: {e}"));
     }
-    let out = Command::new("node")
+    let limit = run_timeout(&kwargs);
+    let child = Command::new("node")
         .arg(&runner)
         .arg(&req_path)
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .output();
-    let _ = std::fs::remove_file(&req_path);
-    let out = match out {
-        Ok(o) => o,
-        Err(e) => return fail(format!("opencli: node: {e}")),
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_file(&req_path);
+            return fail(format!("opencli: node: {e}"));
+        }
     };
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Read stdout on a thread so a chatty command can't fill the pipe while
+    // we wait on the deadline.
+    let mut pipe = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(p) = pipe.as_mut() {
+            let _ = std::io::Read::read_to_string(p, &mut buf);
+        }
+        buf
+    });
+    let started = std::time::Instant::now();
+    let timed_out = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break false,
+            Ok(None) if started.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break true;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(_) => break false,
+        }
+    };
+    let _ = std::fs::remove_file(&req_path);
+    let stdout = reader.join().unwrap_or_default();
+    if timed_out {
+        return fail(format!(
+            "site {spec} (OpenCLI) did not finish within {}s; the page may still be working. \
+             Set AGENT_BROWSER_OPENCLI_TIMEOUT=<seconds> for a longer limit",
+            limit.as_secs()
+        ));
+    }
     stdout
         .lines()
         .rev()
@@ -310,6 +373,16 @@ mod tests {
         assert_eq!(m["limit"], "7");
         assert!(map_args(&entry(), &s(&["a", "b"])).is_err());
         assert!(map_args(&entry(), &s(&["--limit"])).is_err());
+    }
+
+    #[test]
+    fn timeout_defaults_and_follows_a_declared_timeout_arg() {
+        let mut k = serde_json::Map::new();
+        assert_eq!(run_timeout(&k).as_secs(), DEFAULT_TIMEOUT_SECS);
+        k.insert("timeout".into(), json!("600"));
+        assert_eq!(run_timeout(&k).as_secs(), 660);
+        k.insert("timeout".into(), json!("10"));
+        assert_eq!(run_timeout(&k).as_secs(), DEFAULT_TIMEOUT_SECS);
     }
 
     #[test]
