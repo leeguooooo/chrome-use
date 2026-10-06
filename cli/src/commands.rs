@@ -2022,6 +2022,10 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 // is not cut off client-side before the daemon answers.
                 "timeout_ms": run_timeout_ms + 10_000,
                 "verify": verify.map(|write| json!({ "spec": spec, "writeFixture": write })),
+                // For main.rs: a failed read can retry through OpenCLI's
+                // same-named command with the same arguments.
+                "spec": spec,
+                "siteArgs": rest[1..],
             }))
         }
 

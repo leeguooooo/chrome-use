@@ -3212,6 +3212,45 @@ fn main() {
                     }
                 }
             }
+            // A failed adapter whose name OpenCLI also has, as a read: run that
+            // instead of failing. Precedence picks ours first, which must not
+            // hide a working command behind a broken one (e.g. a page CSP that
+            // blocks the adapter's API). Writes never retry — they may have
+            // half-run.
+            if cmd.get("action").and_then(|v| v.as_str()) == Some("site") && !resp.success {
+                let spec = cmd.get("spec").and_then(|v| v.as_str()).unwrap_or("");
+                let entry = opencli::lookup(spec)
+                    .filter(|e| e.get("access").and_then(|v| v.as_str()) == Some("read"));
+                if let Some(entry) = entry {
+                    let args: Vec<String> = cmd
+                        .get("siteArgs")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let env = opencli::run(spec, &entry, &args, &flags.session);
+                    if env.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                        let first = resp.error.take().unwrap_or_default();
+                        if !flags.json {
+                            eprintln!(
+                                "{}",
+                                color::dim(&format!(
+                                    "site {spec} failed ({first}); used OpenCLI's {spec} instead"
+                                ))
+                            );
+                        }
+                        resp.success = true;
+                        resp.data = Some(json!({
+                            "result": env.get("data").cloned().unwrap_or(Value::Null),
+                            "source": opencli::SOURCE_LABEL,
+                            "fallbackFrom": first,
+                        }));
+                    }
+                }
+            }
             // `site verify`: compare the result's shape with the stored fixture
             // (or record it). A mismatch fails the command like an adapter error.
             if let Some(v) = cmd.get("verify").filter(|v| !v.is_null()) {
