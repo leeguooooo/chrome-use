@@ -382,6 +382,13 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 }
             }
         }
+        // A site driven often that has no adapter: the agent should ask the user
+        // whether to capture the repeated steps as one.
+        if let Some(sugg) = data.get("siteAdapterSuggestion") {
+            if let Some(msg) = sugg.get("message").and_then(|v| v.as_str()) {
+                eprintln!("site adapter suggestion: {msg}");
+            }
+        }
         // `open` that landed on a page refusing this browser's sign-in (#387).
         if let Some(h) = data.get("humanCheck") {
             print_human_check(h);

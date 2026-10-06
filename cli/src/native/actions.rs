@@ -598,6 +598,10 @@ pub struct DaemonState {
     /// the session first touches a page, so attaching to an already-open tab
     /// also gets the hint. See `annotate_site_change`.
     pub site_hint_host: Option<String>,
+    /// Successful actions per host this session, and hosts already offered an
+    /// adapter suggestion — see `suggest_site_adapter`.
+    pub site_usage: HashMap<String, u32>,
+    pub site_suggested: HashSet<String>,
 }
 
 impl DaemonState {
@@ -663,6 +667,8 @@ impl DaemonState {
             viewport: None,
             session_setup: SessionSetup::default(),
             site_hint_host: None,
+            site_usage: HashMap::new(),
+            site_suggested: Default::default(),
         }
     }
 
@@ -2596,6 +2602,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
 
     if ok {
         annotate_site_change(action, &mut resp, state).await;
+        suggest_site_adapter(&mut resp, state);
     }
 
     // Auto-report pending JavaScript dialog so agents know why commands may hang
@@ -4264,6 +4271,7 @@ fn with_site_hint(mut result: Value, fallback_url: &str) -> Value {
 /// last one we told the agent about: tab moves, history moves, clicks that
 /// navigate, and the read verbs an agent starts with on a tab it didn't open.
 const SITE_CHANGE_ACTIONS: &[&str] = &[
+    "navigate",
     "tab_new",
     "tab_switch",
     "tab_close",
@@ -4325,12 +4333,68 @@ async fn annotate_site_change(action: &str, resp: &mut Value, state: &mut Daemon
     let Some(adapters) = hint.get("siteAdapters") else {
         return;
     };
+    insert_data_field(resp, "siteAdapters", adapters.clone());
+}
+
+/// The other half of the auto-trigger: a site the agent keeps driving that has
+/// NO adapter. Count successful actions per host; once it is clearly a regular
+/// (many actions this session, or several days of use), attach
+/// `siteAdapterSuggestion` so the agent asks the user whether to capture the
+/// repeated steps as an adapter. Once per host per session, and not again for
+/// two weeks after it was offered. `AGENT_BROWSER_SITES_NO_SUGGEST=1` disables.
+fn suggest_site_adapter(resp: &mut Value, state: &mut DaemonState) {
+    let Some(host) = state.site_hint_host.clone() else {
+        return;
+    };
+    if host.is_empty() || state.site_suggested.contains(&host) {
+        return;
+    }
+    let count = state.site_usage.entry(host.clone()).or_insert(0);
+    *count += 1;
+    let count = *count;
+    if count == 1 {
+        // First action on this host this session: stamp today's use. Skip the
+        // adapter-index lookup until there's a reason to decide.
+        let _ = crate::site::record_usage_day(&host);
+        return;
+    }
+    if std::env::var_os("AGENT_BROWSER_SITES_NO_SUGGEST").is_some() {
+        return;
+    }
+    if count < 5 {
+        return;
+    }
+    let days = crate::site::record_usage_day(&host);
+    let now = crate::site::unix_now();
+    if !crate::site::should_suggest_adapter(
+        &host,
+        count,
+        days,
+        crate::site::last_suggested(&host),
+        now,
+    ) {
+        return;
+    }
+    // Sites that already have adapters get `siteAdapters` instead.
+    state.site_suggested.insert(host.clone());
+    if !crate::site::adapters_for_domain(&host).is_empty() {
+        return;
+    }
+    crate::site::mark_suggested(&host);
+    insert_data_field(
+        resp,
+        "siteAdapterSuggestion",
+        crate::site::adapter_suggestion(&host, count, days),
+    );
+}
+
+fn insert_data_field(resp: &mut Value, key: &str, value: Value) {
     if let Some(obj) = resp.as_object_mut() {
         let data = obj
             .entry("data")
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
         if let Some(d) = data.as_object_mut() {
-            d.insert("siteAdapters".into(), adapters.clone());
+            d.insert(key.into(), value);
         }
     }
 }

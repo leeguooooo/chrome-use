@@ -1167,6 +1167,125 @@ pub fn adapters_for_domain(host: &str) -> Vec<String> {
     out
 }
 
+/// `~/.chrome-use/site-usage.json` — per host: the days it was driven (last
+/// 30 distinct) and when we last suggested writing an adapter for it. Hosts
+/// only, never paths; local to this machine.
+fn usage_path() -> Option<PathBuf> {
+    dirs_home().map(|h| h.join(".chrome-use").join("site-usage.json"))
+}
+
+/// Actions in one session on an adapter-less host before suggesting one.
+const SUGGEST_SESSION_ACTIONS: u32 = 30;
+/// ...or this many distinct days on it, with at least a few actions today.
+const SUGGEST_DAYS: usize = 3;
+const SUGGEST_DAYS_MIN_ACTIONS: u32 = 5;
+/// Don't ask again about the same host within this window.
+const SUGGEST_COOLDOWN_SECS: u64 = 14 * 86_400;
+
+fn is_local_host(host: &str) -> bool {
+    host.is_empty()
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.parse::<std::net::IpAddr>().is_ok()
+        || host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok()
+}
+
+/// Pure decision: should a host with this usage get an adapter suggestion now?
+pub fn should_suggest_adapter(
+    host: &str,
+    session_actions: u32,
+    days_used: usize,
+    last_suggested: Option<u64>,
+    now: u64,
+) -> bool {
+    if is_local_host(host) {
+        return false;
+    }
+    if last_suggested.is_some_and(|t| now.saturating_sub(t) < SUGGEST_COOLDOWN_SECS) {
+        return false;
+    }
+    session_actions >= SUGGEST_SESSION_ACTIONS
+        || (days_used >= SUGGEST_DAYS && session_actions >= SUGGEST_DAYS_MIN_ACTIONS)
+}
+
+fn read_usage() -> serde_json::Map<String, Value> {
+    usage_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn write_usage(map: &serde_json::Map<String, Value>) {
+    if let Some(p) = usage_path() {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(p, Value::Object(map.clone()).to_string());
+    }
+}
+
+/// Note that `host` was driven today. Call once per host per session; returns
+/// the number of distinct days it has been used (today included).
+pub fn record_usage_day(host: &str) -> usize {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut map = read_usage();
+    let entry = map
+        .entry(host.to_string())
+        .or_insert_with(|| json!({}));
+    let mut days: Vec<String> = entry
+        .get("days")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|d| d.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    if !days.contains(&today) {
+        days.push(today);
+        let excess = days.len().saturating_sub(30);
+        days.drain(..excess);
+        entry["days"] = json!(days);
+        write_usage(&map);
+    }
+    days.len()
+}
+
+/// When this host was last suggested for an adapter, if ever.
+pub fn last_suggested(host: &str) -> Option<u64> {
+    read_usage()
+        .get(host)
+        .and_then(|e| e.get("suggested"))
+        .and_then(|v| v.as_u64())
+}
+
+pub fn mark_suggested(host: &str) {
+    let mut map = read_usage();
+    let entry = map
+        .entry(host.to_string())
+        .or_insert_with(|| json!({}));
+    entry["suggested"] = json!(now_secs());
+    write_usage(&map);
+}
+
+/// The `siteAdapterSuggestion` payload: frequent use of a site with no adapter.
+/// Phrased as a question for the user — writing one is their call.
+pub fn adapter_suggestion(host: &str, session_actions: u32, days_used: usize) -> Value {
+    json!({
+        "domain": host,
+        "actionsThisSession": session_actions,
+        "daysUsed": days_used,
+        "message": format!(
+            "{host} is driven often and has no site adapter. Ask the user whether to \
+             turn the repeated steps into one (a single `chrome-use site <name>/<cmd>` call); \
+             only write it if they agree. Guide: `chrome-use skills get core/site-adapters`."
+        ),
+    })
+}
+
+/// `now_secs` for callers outside this module.
+pub fn unix_now() -> u64 {
+    now_secs()
+}
+
 /// Map CLI args to the adapter's `args` object. Positional args fill the adapter's
 /// declared `args` keys in order; `--key value` overrides by name. The adapter
 /// validates required args itself.
@@ -1195,6 +1314,22 @@ pub fn map_args(adapter: &Adapter, positional: &[String], named: &[(String, Stri
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn adapter_suggestion_thresholds() {
+        let now = 10_000_000;
+        assert!(!should_suggest_adapter("example.com", 29, 1, None, now));
+        assert!(should_suggest_adapter("example.com", 30, 1, None, now));
+        assert!(should_suggest_adapter("example.com", 5, 3, None, now));
+        assert!(!should_suggest_adapter("example.com", 4, 3, None, now));
+        // cooldown
+        assert!(!should_suggest_adapter("example.com", 99, 9, Some(now - 86_400), now));
+        assert!(should_suggest_adapter("example.com", 99, 9, Some(now - 15 * 86_400), now));
+        // local hosts never
+        for h in ["", "localhost", "app.localhost", "nas.local", "127.0.0.1", "[::1]", "192.168.0.5"] {
+            assert!(!should_suggest_adapter(h, 99, 9, None, now), "{h}");
+        }
+    }
+
     use super::*;
 
     const SAMPLE: &str = r#"/* @meta
