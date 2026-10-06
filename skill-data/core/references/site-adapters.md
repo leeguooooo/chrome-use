@@ -27,7 +27,9 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
   [OpenCLI](https://github.com/jackwener/OpenCLI) (~1,300 commands over ~180 sites). A
   `name/cmd` that neither pack has runs through OpenCLI's own runtime, driving this same
   session. They show as `(opencli)` in `site list`, `site info` shows their args, and they come
-  last in the `siteAdapters` hint. Same command, same JSON: `chrome-use site hackernews/best
+  last in the `siteAdapters` hint. If one of our adapters fails and OpenCLI has a read command
+  of the same name, chrome-use runs that instead (stderr says so; `--json` adds
+  `source: "opencli"` and `fallbackFrom`). Writes never retry. Same command, same JSON: `chrome-use site hackernews/best
   --limit 5 --json`. `AGENT_BROWSER_SITES_NO_OPENCLI=1` turns them off.
 
 > **Auto-trigger — act on it.** chrome-use keeps both packs synced automatically (first use +

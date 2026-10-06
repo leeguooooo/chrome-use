@@ -271,7 +271,7 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         With Node.js 20+ on PATH, <code>site update</code> also installs <a href="https://github.com/jackwener/OpenCLI">OpenCLI</a> (about 180 sites and 1,300 commands; a pinned version, installed with <code>--ignore-scripts</code>).
         A <code>name/cmd</code> that neither adapter pack has runs through OpenCLI's own runtime, driving your current chrome-use session and its logins, e.g.
         <code>chrome-use site hackernews/best --limit 5 --json</code>. They show as <code>(opencli)</code> in <code>site list</code>, <code>site info</code> shows their args, and they come last in the site hint.
-        On a shared name ours win. <code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> turns them off.
+        On a shared name ours win; if ours fails and OpenCLI has a read command of the same name, that runs instead (writes never retry). <code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> turns them off.
       </p>
 
       <h3>Writing your own: analyze and verify</h3>
