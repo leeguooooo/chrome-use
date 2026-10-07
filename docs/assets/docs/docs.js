@@ -582,8 +582,8 @@
         lng === "en" ? "A Mac app that opens every link in the right browser or profile, by URL rules."
                      : "按网址规则，把每个链接自动用对的浏览器 / Profile 打开的 Mac 小工具。"],
       ["Pastyx", "https://paste.leeguoo.com/?" + utm + "pastyx",
-        lng === "en" ? "An online clipboard that syncs across all your devices — no install (native Mac app too)."
-                     : "在线剪贴板，免安装，多设备实时同步（也有原生 Mac 版）。"]
+        lng === "en" ? "Clipboard history for Mac and Windows, with optional sync and web access."
+                     : "Mac 和 Windows 剪贴板历史，可选同步和网页版。"]
     ].forEach(function (it) {
       var li = el("li");
       var a = el("a", null, it[0]);

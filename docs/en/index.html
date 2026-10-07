@@ -84,8 +84,8 @@
 
       <p class="du-lede">
         chrome-use lets <span class="mark">any AI agent drive your real, logged-in Chrome</span> —
-        Claude Code, Cursor, Codex, your own scripts. It shares your existing login sessions and is
-        <strong>uses your existing browser profile, with documented detector measurements</strong>:
+        Claude Code, Cursor, Codex, your own scripts. It reuses your existing login sessions and browser profile.
+        <strong>Detector results are documented for the tested conditions</strong>:
         <a href="/en/real-chrome.html">CreepJS scores it 0% bot</a>.
       </p>
 
@@ -109,12 +109,10 @@
 
       <h2>Why chrome-use</h2>
       <p>
-        <strong>No fresh Chrome. No re-login. No "are you a robot?" walls.</strong> Typical browser
-        automation boots an <em>empty</em> browser with a blank profile — so you redo every login,
-        fight every captcha, and still get flagged as automation. chrome-use points the agent at the
-        Chrome you're <em>already</em> signed into everything on. It clicks in <em>your</em> window,
-        so you watch it work and grab the wheel the moment it hits a 2FA prompt or captcha, then let
-        it continue.
+        Connect an agent to the Chrome profile you already use. You keep the existing login sessions,
+        watch its work and take over when a website requests verification. Fresh browser contexts start
+        without those sessions; other automation tools can also use persistent profiles or existing-browser
+        connections, so compare the actual connection path.
       </p>
 
       <div class="du-cards">
