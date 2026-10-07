@@ -630,10 +630,10 @@ async fn take_snapshot_at_depth(
     let mut nodes_with_refs: Vec<(usize, usize)> = Vec::new();
 
     // Pre-collect cursor-interactive elements so we can mark them with refs during tree building
-    let cursor_elements: HashMap<i64, CursorElementInfo> =
-        find_cursor_interactive_elements(client, session_id)
-            .await
-            .unwrap_or_default();
+    // These read-only enrichment requests share no result dependencies.
+    // Join within this task (not spawn) so command timing records both spans.
+    // The core AX tree and subsequent ref assignment remain ordered.
+    let cursor_future = find_cursor_interactive_elements(client, session_id);
 
     // Collect inline validation/error messages so `-i` (interactive-only) mode
     // still surfaces *why* a submit was rejected (issue #57). These are usually
@@ -644,14 +644,17 @@ async fn take_snapshot_at_depth(
     // main-frame errors at every nested level.
     // An out-of-process iframe (Stripe's fields) is scanned on its own
     // session; its messages were invisible before (#375).
-    let error_elements: Vec<ErrorElement> =
+    let error_future = async {
         if options.interactive && (depth == 0 || effective_session_id != session_id) {
             find_error_elements(client, effective_session_id)
                 .await
                 .unwrap_or_default()
         } else {
             Vec::new()
-        };
+        }
+    };
+    let (cursor_result, error_elements) = tokio::join!(cursor_future, error_future);
+    let cursor_elements: HashMap<i64, CursorElementInfo> = cursor_result.unwrap_or_default();
 
     promote_hidden_inputs(&mut tree_nodes, &cursor_elements);
     for node in tree_nodes.iter_mut() {

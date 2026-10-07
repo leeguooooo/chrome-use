@@ -298,8 +298,11 @@ async fn run_action(
     let data = resp.get("data").cloned().unwrap_or(Value::Null);
     let errmsg = resp.get("error").and_then(|v| v.as_str()).map(String::from);
 
-    ctx.steps
-        .push(json!({ "op": verb, "ok": ok, "error": errmsg }));
+    let mut step = json!({ "op": verb, "ok": ok, "error": errmsg });
+    if let Some(advisory) = data.pointer("/observed/noProgress") {
+        step["noProgress"] = advisory.clone();
+    }
+    ctx.steps.push(step);
 
     if let Some(name) = bind {
         ctx.vars.insert(

@@ -302,7 +302,7 @@ impl CdpClient {
         // Charged to the command being served, for its `timing` summary.
         let started = std::time::Instant::now();
         let out = self.send_command_untimed(method, params, session_id).await;
-        crate::native::timing::record(method, started.elapsed());
+        crate::native::timing::record_span(method, started, std::time::Instant::now());
         out
     }
 

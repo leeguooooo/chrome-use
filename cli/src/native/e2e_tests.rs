@@ -11767,3 +11767,88 @@ mod background_activation {
         assert_eq!(closes[0]["params"]["targetId"], "created-1");
     }
 }
+
+/// Exercise the real observe/CLI data path: a dispatched click can succeed
+/// while its unchanged AX observation only warrants an advisory, not failure.
+#[tokio::test]
+#[ignore]
+async fn e2e_efficiency_repeated_observations_and_script_advisories() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>loop probe</title>
+<button id="noop" onclick="window.clicks=(window.clicks||0)+1">Stable</button>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    let launch = Box::pin(execute_command(
+        &json!({"id":"launch","action":"launch",
+        "headless":true,"args":["--no-sandbox","--disable-dev-shm-usage"]}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&launch);
+    let nav = Box::pin(execute_command(
+        &json!({"id":"nav","action":"navigate",
+        "url":format!("http://127.0.0.1:{port}/")}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&nav);
+    let mut last = Value::Null;
+    for index in 0..5 {
+        last = Box::pin(execute_command(
+            &json!({"id":index.to_string(),"action":"click",
+            "selector":"#noop","observe":true}),
+            &mut state,
+        ))
+        .await;
+        assert_success(&last);
+        if index == 0 {
+            assert!(
+                last.pointer("/data/observed/noProgress").is_none(),
+                "{last}"
+            );
+        }
+    }
+    assert!(
+        last.pointer("/data/observed/noProgress/attempts")
+            .and_then(Value::as_u64)
+            .is_some_and(|n| n >= 3),
+        "{last}"
+    );
+    assert_evaluate(&mut state, "count", "window.clicks", json!(5)).await;
+    // An unobserved/error path breaks the streak, including early returns.
+    let _ = Box::pin(execute_command(
+        &json!({"id":"deny","action":"deny"}),
+        &mut state,
+    ))
+    .await;
+    let response = Box::pin(execute_command(
+        &json!({"id":"after-deny","action":"click",
+        "selector":"#noop","observe":true}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&response);
+    assert!(response.pointer("/data/observed/noProgress").is_none());
+    let program = json!({"id":"script","action":"script","program":[
+        {"do":"click","selector":"#noop","observe":true},
+        {"do":"click","selector":"#noop","observe":true},
+        {"do":"click","selector":"#noop","observe":true}
+    ]});
+    let response = Box::pin(execute_command(&program, &mut state)).await;
+    assert_success(&response);
+    assert!(
+        response["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step.get("noProgress").is_some()),
+        "{response}"
+    );
+    let closed = Box::pin(execute_command(
+        &json!({"id":"close","action":"close"}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&closed);
+    server.abort();
+}
