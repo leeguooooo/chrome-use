@@ -453,7 +453,7 @@
       </p>
 
       <p>
-        标签页被隐藏再显示一次，菜单就会关掉。对 session 自己开的、正在前台的标签页，chrome-use 会自己这样做（短暂显示一个空白页），然后在安全的前提下自动重试（读取、<code>fill</code>、<code>select</code> 等）；点击、按键这类可能已执行一半的命令不会重试，报错里会说明。后台标签页不会被自动切到前台：报错里会给出一条可以直接执行的 <code>extension call tabs.update</code> 命令（<code>tab select --activate</code> 此时用不了，它要先连上调试器）。想避免它：这类字段用 <code>fill</code> 而不是 <code>type --key-events</code>，在密码管理器里对该网站关闭内联菜单，或者改用 <code>--launch</code> 的独立 profile。
+        标签页一被隐藏，菜单就会关掉。对 session 自己开的标签页，chrome-use 会自己处理，不需要调试器命令：它短暂显示一个自己的空白页（后台标签页会先显示一下再隐藏），结束后原来在前台的标签页回到前台。之后在安全的前提下自动重试（读取、<code>fill</code>、<code>select</code> 等；如果 <code>fill</code> 的值已经在字段里，就直接确认，不再重填）。点击、按键这类不能重试的命令，chrome-use 会在执行前先检查，发现被挡就先把菜单关掉再执行。实在关不掉时，报错会说明原因和下一步；标签页和已填内容都还在，不要因此关闭标签页或重启 Chrome。想避免它：这类字段用 <code>fill</code> 而不是 <code>type --key-events</code>，或者在密码管理器里对该网站关闭内联菜单。
       </p>
 
       <hr class="du-divider" />

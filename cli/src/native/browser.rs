@@ -383,6 +383,15 @@ fn pending_adopt_directive() -> Option<String> {
 /// we store it. Some sites prepend runs of ZWJ / word-joiner / invisible-times /
 /// BOM to `document.title` (badging, watermarking, anti-scrape); left in, they
 /// pollute `tab list`, break text matching, and wreck column alignment (#33).
+/// The tab group of a `tabs.get` result, if the tab is in one.
+fn live_group(tab: &Result<Value, String>) -> Option<i64> {
+    tab.as_ref()
+        .ok()?
+        .get("groupId")
+        .and_then(Value::as_i64)
+        .filter(|g| *g >= 0)
+}
+
 fn sanitize_title(s: &str) -> String {
     s.chars()
         .filter(|&c| {
@@ -685,6 +694,13 @@ pub(crate) fn installed_inline_menu_extensions() -> Vec<&'static str> {
     found
 }
 
+/// Whether any local Chrome profile has an inline-menu password manager
+/// installed. Read once per daemon: it gates a pre-check on every click.
+pub(crate) fn inline_menu_manager_installed() -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(|| !installed_inline_menu_extensions().is_empty())
+}
+
 /// What to tell the reader about a tab blocked by another extension's frame.
 pub(crate) fn foreign_frame_hint() -> String {
     let installed = installed_inline_menu_extensions();
@@ -700,11 +716,11 @@ pub(crate) fn foreign_frame_hint() -> String {
     };
     format!(
         "\nCause: {culprit}. While that frame is in the tab Chrome refuses every debugger command \
-         on it; the tab works again once it closes. It closes when the tab is hidden and shown again: \
-         for a tab in front chrome-use does that itself; a background tab has to be \
-         brought to the front (the command is below). Fill such fields with \
-         `fill` (one write) rather than `type --key-events`, and to stop it happening, turn off that \
-         extension's inline menu for this site or drive a `--launch` profile without it."
+         on it; the tab works again once it closes. It closes when the tab is hidden: for a tab \
+         this session created, chrome-use does that itself (a tab switch of well under a second, \
+         after which the tab that was in front is in front again). Fill such fields with \
+         `fill` (one write) rather than `type --key-events`. To stop it happening, the user can \
+         turn off that extension's inline menu for this site."
     )
 }
 
@@ -2908,28 +2924,83 @@ impl BrowserManager {
         Some((format_tab_id(page.tab_id), page.url.clone()))
     }
 
-    /// Like `pinned_tab_summary`, but with the url Chrome reports for the tab
-    /// right now. While debugger access is blocked the daemon receives no page
-    /// events, so its cached url stays on the page where the block began. After
-    /// the user logs in and the tab moves on, the note kept naming the old page
-    /// (#357). `chrome.tabs` metadata needs no debugger access, so ask it and
-    /// refresh the cache. Falls back to the cached url when it cannot ask.
-    /// Close another extension's frame by switching the pinned tab out of and
-    /// back into view (#373). A password manager's inline menu blocks every
-    /// debugger command while it is open, and closes when its page changes
-    /// visibility; `chrome.tabs` can do that with no debugger command, the only
-    /// kind still refused. Only for a tab this session created that is already
-    /// in front: a blank tab is shown for a moment and the tab comes back, so
-    /// the user's view ends where it was. A background tab is left alone (the
-    /// agent never force-fronts a tab); the error points at
-    /// `tab select --activate`. The page and what was typed stay as they were.
-    pub async fn cycle_pinned_tab_visibility(&mut self, blur_focused: bool) -> Result<(), String> {
+    /// One allow-listed `chrome.*` call through the relay (`ABExt.call`),
+    /// returning Chrome's result. Needs no debugger access.
+    async fn chrome_call(
+        &self,
+        namespace: &str,
+        method: &str,
+        args: Value,
+    ) -> Result<Value, String> {
+        let out: Value = self
+            .client
+            .send_command(
+                "ABExt.call",
+                Some(json!({ "namespace": namespace, "method": method, "args": args })),
+                None,
+            )
+            .await?;
+        Ok(out.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    /// Whether Chrome refuses debugger commands on the pinned tab right now
+    /// (#373). One no-op evaluate; `false` when it cannot tell.
+    pub async fn pinned_tab_blocked(&self) -> bool {
+        let Ok(session_id) = self.active_session_id().map(str::to_string) else {
+            return false;
+        };
+        match self
+            .client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({ "expression": "0", "returnByValue": true })),
+                Some(&session_id),
+            )
+            .await
+        {
+            Err(e) => is_debugger_access_denied(&e),
+            Ok(_) => false,
+        }
+    }
+
+    /// Close another extension's frame by hiding the pinned tab for a moment
+    /// (#373). A password manager's inline menu blocks every debugger command
+    /// while it is open, and closes when its page is hidden (Bitwarden:
+    /// `visibilitychange` to `hidden` force-closes it). `chrome.tabs` can do that
+    /// with no debugger command, the only kind still refused.
+    ///
+    /// Only for a tab this session created. A blank tab of our own is put next
+    /// to the tab in front of the pinned tab's window and shown for a moment:
+    ///
+    /// - pinned tab in front: the blank tab hides it, the focused field is
+    ///   blurred while it is hidden (so the menu does not reopen when it is
+    ///   shown), and the pinned tab comes back;
+    /// - pinned tab in the background: a background tab is already hidden, so it
+    ///   is shown for a moment and then hidden by the blank tab, which sits where
+    ///   the user's tab was; closing it hands the front back to that tab. The
+    ///   user sees a flash of well under a second and ends on the tab they were
+    ///   on.
+    ///
+    /// Before #373's fix the blank tab was never shown: the relay creates every
+    /// tab inactive (the CLI's `background: false` is ignored), so the tab
+    /// in front never changed and the menu stayed open.
+    ///
+    /// Returns a note for the caller's warning when the front tab could not be
+    /// put back exactly; errors when nothing was tried or the menu stayed open.
+    pub async fn cycle_pinned_tab_visibility(
+        &mut self,
+        blur_focused: bool,
+    ) -> Result<Option<String>, String> {
         if !self.on_relay() {
             return Err("not on the extension relay".to_string());
         }
         let pinned = self.active_target_id.clone().ok_or("no pinned tab")?;
         if !self.created_targets.contains(&pinned) {
-            return Err("the pinned tab was not created by this session".to_string());
+            return Err(
+                "the pinned tab was not created by this session, and chrome-use \
+                        does not switch the user's own tabs"
+                    .to_string(),
+            );
         }
         let page = self
             .pages
@@ -2947,87 +3018,241 @@ impl BrowserManager {
             .await?;
         let chrome_tab = live
             .get("chromeTabId")
-            .and_then(|v| v.as_i64())
+            .and_then(Value::as_i64)
             .ok_or("no Chrome tab id")?;
-        let activate = |tab: i64| json!({ "namespace": "tabs", "method": "update", "args": [tab, { "active": true }] });
-        if live.get("active").and_then(|v| v.as_bool()) == Some(true) {
-            let created: Value = self
-                .client
-                .send_command(
-                    "Target.createTarget",
-                    Some(json!({ "url": "about:blank", "background": false })),
-                    None,
+        let window_id = live
+            .get("windowId")
+            .and_then(Value::as_i64)
+            .ok_or("no Chrome window id")?;
+        let in_front = live.get("active").and_then(Value::as_bool) == Some(true);
+        let window = self
+            .chrome_call("windows", "get", json!([window_id]))
+            .await
+            .unwrap_or(Value::Null);
+        if window.get("state").and_then(Value::as_str) == Some("minimized") {
+            return Err(
+                "its window is minimized, so switching tabs in it hides nothing".to_string(),
+            );
+        }
+        let front = self
+            .chrome_call(
+                "tabs",
+                "query",
+                json!([{ "active": true, "windowId": window_id }]),
+            )
+            .await?;
+        let front = front
+            .as_array()
+            .and_then(|tabs| tabs.first())
+            .cloned()
+            .ok_or("no tab is in front of its window")?;
+        let front_tab = front
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or("no front tab id")?;
+        let front_index = front.get("index").and_then(Value::as_i64).unwrap_or(0);
+        // Activating a tab expands its collapsed group; put that back after.
+        let collapsed_group =
+            match live_group(&self.chrome_call("tabs", "get", json!([chrome_tab])).await) {
+                Some(group) => {
+                    let info = self
+                        .chrome_call("tabGroups", "get", json!([group]))
+                        .await
+                        .unwrap_or(Value::Null);
+                    (info.get("collapsed").and_then(Value::as_bool) == Some(true)).then_some(group)
+                }
+                None => None,
+            };
+
+        let created: Value = self
+            .client
+            .send_command(
+                "Target.createTarget",
+                Some(json!({ "url": "about:blank", "background": false })),
+                None,
+            )
+            .await?;
+        // Owned from the start, so `close` cleans it up if closing it here
+        // fails; released only once Chrome confirms it is gone.
+        let temp = created
+            .get("targetId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or("the blank tab has no target id")?;
+        self.remember_created_target(&temp);
+        let temp_tab = self
+            .client
+            .send_command_typed::<_, Value>("ABExt.inspectTab", &json!({ "targetId": temp }), None)
+            .await
+            .ok()
+            .and_then(|v| v.get("chromeTabId").and_then(Value::as_i64));
+
+        let flipped = match temp_tab {
+            Some(temp_tab) => {
+                self.flip_visibility(
+                    chrome_tab,
+                    temp_tab,
+                    window_id,
+                    front_index,
+                    in_front,
+                    blur_focused.then_some(session_id.as_str()),
                 )
-                .await?;
-            // Owned from the start, so `close` cleans it up if closing it here
-            // fails; released only once Chrome confirms it is gone.
-            let temp = created
-                .get("targetId")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            if let Some(temp) = &temp {
-                self.remember_created_target(temp);
+                .await
             }
+            None => Err("the blank tab has no Chrome tab id".to_string()),
+        };
+
+        let closed = self
+            .client
+            .send_command(
+                "Target.closeTarget",
+                Some(json!({ "targetId": temp })),
+                None,
+            )
+            .await
+            .ok()
+            .and_then(|v| v.get("success").and_then(Value::as_bool))
+            .unwrap_or(false);
+        if closed {
+            let _ = self.forget_created_target(&temp);
+        }
+        flipped?;
+
+        let mut note = None;
+        if in_front {
+            // Bitwarden re-inserts its overlay frame for a moment when the tab is
+            // shown again, even with no field focused; a command sent at once hits
+            // it. Let that settle before the caller repeats anything (#373).
+            tokio::time::sleep(Duration::from_millis(700)).await;
+        } else {
+            // Closing the blank tab hands the front to the tab now at its index:
+            // the one the user was on. Check, and say so if Chrome chose another.
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            let now = self
+                .chrome_call(
+                    "tabs",
+                    "query",
+                    json!([{ "active": true, "windowId": window_id }]),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.as_array().and_then(|t| t.first()).cloned());
+            let now_id = now
+                .as_ref()
+                .and_then(|t| t.get("id"))
+                .and_then(Value::as_i64);
+            if now_id.is_some() && now_id != Some(front_tab) {
+                let back = self
+                    .chrome_call("tabs", "update", json!([front_tab, { "active": true }]))
+                    .await;
+                if back.is_err() {
+                    let title = now
+                        .as_ref()
+                        .and_then(|t| t.get("title"))
+                        .and_then(Value::as_str)
+                        .map(sanitize_title)
+                        .unwrap_or_default();
+                    note = Some(format!(
+                        "Chrome put a different tab in front of that window afterwards \
+                         (\"{title}\") instead of the one that was there (Chrome tab \
+                         {front_tab}); tell the user if it matters"
+                    ));
+                }
+            }
+            if let Some(session) = blur_focused.then_some(session_id.as_str()) {
+                // The pinned tab is hidden again; take focus out of the field so
+                // the menu does not reopen the next time it is shown.
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                self.blur_focused_field(session).await;
+            }
+        }
+        if let Some(group) = collapsed_group {
+            let _ = self
+                .chrome_call("tabGroups", "update", json!([group, { "collapsed": true }]))
+                .await;
+        }
+        // The menu closes asynchronously (a message round trip inside the
+        // password manager). Give it a moment before calling it a failure.
+        for _ in 0..6 {
+            if !self.pinned_tab_blocked().await {
+                return Ok(note);
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        Err("the menu was still open after chrome-use hid the tab for a moment".to_string())
+    }
+
+    /// The tab switches of [`Self::cycle_pinned_tab_visibility`]; the caller
+    /// closes the blank tab whatever happens here.
+    async fn flip_visibility(
+        &self,
+        chrome_tab: i64,
+        temp_tab: i64,
+        window_id: i64,
+        front_index: i64,
+        in_front: bool,
+        blur_session: Option<&str>,
+    ) -> Result<(), String> {
+        let activate = |tab: i64| json!([tab, { "active": true }]);
+        // In front: right of the pinned tab. In the background: where the
+        // user's tab is, so that closing the blank tab returns the front to it.
+        let index = if in_front {
+            front_index + 1
+        } else {
+            front_index
+        };
+        self.chrome_call(
+            "tabs",
+            "move",
+            json!([temp_tab, { "windowId": window_id, "index": index }]),
+        )
+        .await?;
+        if in_front {
+            self.chrome_call("tabs", "update", activate(temp_tab))
+                .await?;
             tokio::time::sleep(Duration::from_millis(300)).await;
             // While the tab is hidden the menu's frame is gone and debugger
             // commands work again. Take focus out of the field it was attached
             // to: Bitwarden reopens its menu on a focused login field as soon
             // as the tab is shown, so the repeat hit the same block (#373).
             // The value typed so far stays.
-            if blur_focused {
-                let _ = self
-                    .client
-                    .send_command(
-                        "Runtime.evaluate",
-                        Some(json!({
-                            "expression": "(() => { const a = document.activeElement; \
-                                if (a && a !== document.body && a.blur) a.blur(); })()",
-                        })),
-                        Some(&session_id),
-                    )
-                    .await;
+            if let Some(session) = blur_session {
+                self.blur_focused_field(session).await;
             }
-            let back = self
-                .client
-                .send_command("ABExt.call", Some(activate(chrome_tab)), None)
-                .await;
-            if let Some(temp) = temp {
-                let closed = self
-                    .client
-                    .send_command(
-                        "Target.closeTarget",
-                        Some(json!({ "targetId": temp })),
-                        None,
-                    )
-                    .await
-                    .ok()
-                    .and_then(|v| v.get("success").and_then(|s| s.as_bool()))
-                    .unwrap_or(false);
-                if closed {
-                    let _ = self.forget_created_target(&temp);
-                }
-            }
-            back?;
-            // Bitwarden re-inserts its overlay frame for a moment when the tab is
-            // shown again, even with no field focused; a command sent at once hits
-            // it. Let that settle before the caller repeats anything (#373).
-            tokio::time::sleep(Duration::from_millis(700)).await;
+            self.chrome_call("tabs", "update", activate(chrome_tab))
+                .await?;
         } else {
-            // The agent never brings a tab to the front on its own, and the tab
-            // the user is looking at is not this relay's to switch back to.
-            // `tab select --activate` cannot help here: it needs the debugger
-            // first. chrome.tabs does not.
-            return Err(format!(
-                "the tab is in the background, and chrome-use does not bring tabs to the front \
-                 on its own. To do it, run `chrome-use extension call tabs.update \
-                 '[{chrome_tab},{{\"active\":true}}]'`: the tab comes to the front, the menu \
-                 closes, and the next command works"
-            ));
+            // Shown, then hidden: the hide is what closes the menu.
+            self.chrome_call("tabs", "update", activate(chrome_tab))
+                .await?;
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            self.chrome_call("tabs", "update", activate(temp_tab))
+                .await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        tokio::time::sleep(Duration::from_millis(300)).await;
         Ok(())
     }
 
+    async fn blur_focused_field(&self, session_id: &str) {
+        let _ = self
+            .client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": "(() => { const a = document.activeElement; \
+                        if (a && a !== document.body && a.blur) a.blur(); })()",
+                })),
+                Some(session_id),
+            )
+            .await;
+    }
+
+    /// Like `pinned_tab_summary`, but with the url Chrome reports for the tab
+    /// right now. While debugger access is blocked the daemon receives no page
+    /// events, so its cached url stays on the page where the block began. After
+    /// the user logs in and the tab moves on, the note kept naming the old page
+    /// (#357). `chrome.tabs` metadata needs no debugger access, so ask it and
+    /// refresh the cache. Falls back to the cached url when it cannot ask.
     pub async fn live_pinned_tab_summary(&mut self) -> Option<(String, String)> {
         let pinned = self.active_target_id.clone()?;
         let index = self.pages.iter().position(|p| p.target_id == pinned)?;
@@ -5551,6 +5776,22 @@ mod tests {
                        the page now.\n  try @e7 [button] \"Save now\"\nOr run `snapshot -i` to \
                        refresh the refs.";
         assert_eq!(to_ai_friendly_error(refused), refused);
+    }
+
+    /// #373: the cause hint must not send agents to a `--launch` profile
+    /// (they abandoned the user's logged-in Chrome over it).
+    #[test]
+    fn foreign_frame_hint_does_not_suggest_relaunching() {
+        let hint = foreign_frame_hint();
+        assert!(!hint.contains("--launch"), "{hint}");
+        assert!(hint.contains("chrome-use does that itself"), "{hint}");
+    }
+
+    #[test]
+    fn live_group_ignores_ungrouped_tabs_and_errors() {
+        assert_eq!(live_group(&Ok(json!({ "groupId": 7 }))), Some(7));
+        assert_eq!(live_group(&Ok(json!({ "groupId": -1 }))), None);
+        assert_eq!(live_group(&Err("x".to_string())), None);
     }
 
     #[test]

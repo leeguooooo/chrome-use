@@ -487,7 +487,7 @@
       </p>
 
       <p>
-        The menu closes when the tab is hidden and shown again. For a tab the session created that is in front, chrome-use does that itself (a blank tab for a moment), then repeats the command when repeating is harmless (a read, <code>fill</code>, <code>select</code>); a click or key press is not repeated, and the error says so. A background tab is never brought to the front on its own: the error gives the exact <code>extension call tabs.update</code> command that does it (<code>tab select --activate</code> cannot, it needs the debugger first). To avoid it, fill such fields with <code>fill</code> rather than <code>type --key-events</code>, turn the inline menu off for the site in the password manager, or use a <code>--launch</code> profile.
+        The menu closes when its tab is hidden. For a tab the session created, chrome-use does that itself, with no debugger command: it shows a blank tab of its own for a moment (a background tab is shown first, then hidden), and the tab that was in front is in front again afterwards. It then repeats the command when repeating is harmless (a read, <code>fill</code>, <code>select</code>; a <code>fill</code> whose value is already in the field is confirmed instead of repeated). Before a click, key press or other command that cannot be repeated, chrome-use checks for the block first and clears it before the command runs. If it still cannot clear it, the error says why and what to do next; the tab and what was typed are intact, so do not close tabs or relaunch Chrome over it. To avoid it, fill such fields with <code>fill</code> rather than <code>type --key-events</code>, or turn the inline menu off for the site in the password manager.
       </p>
 
       <hr class="du-divider" />

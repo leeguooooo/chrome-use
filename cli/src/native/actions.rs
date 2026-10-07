@@ -12405,31 +12405,66 @@ fn command_secrets(cmd: &Value) -> Vec<String> {
 }
 
 async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) -> Value {
+    let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    // A click or key press cannot be repeated once it may have run, so check
+    // for the block before running it: a password manager's menu opens a moment
+    // after `fill` focused a field, and the next command is usually the click
+    // on the button next to it (#373). Only when such a manager is installed;
+    // the check is one no-op evaluate.
+    let mut pre: Option<Result<Option<String>, String>> = None;
+    if acts_on_page(action) && !safe_to_repeat(action) {
+        if let Some(mgr) = state.browser.as_mut() {
+            if mgr.on_relay()
+                && super::browser::inline_menu_manager_installed()
+                && mgr.pinned_tab_blocked().await
+            {
+                let blur = !acts_at_focus(action);
+                pre = Some(Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await);
+            }
+        }
+    }
     let first = execute_command(cmd, state).await;
     if !is_denied(&first) {
-        return first;
+        return match pre {
+            Some(Ok(note)) => with_menu_warning(first, "before running the command", note),
+            _ => first,
+        };
     }
-    let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
     // Take focus out of the field only when the command will be repeated: a
     // `press Enter` the agent re-runs must still reach the field.
     let blur = safe_to_repeat(action);
-    let recovery = match state.browser.as_mut() {
-        Some(mgr) if mgr.on_relay() => Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await,
+    let recovery = match (pre, state.browser.as_mut()) {
+        // Already tried just now, before the command ran: do not flash twice.
+        (Some(Err(reason)), _) => Err(reason),
+        (_, Some(mgr)) if mgr.on_relay() => Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await,
         _ => Err("not on the extension relay".to_string()),
     };
-    if let Err(reason) = recovery {
-        let mut out = first;
-        if let Some(Value::String(e)) = out.get_mut("error") {
-            e.push_str(&format!("\n(No automatic recovery: {reason}.)"));
+    let note = match recovery {
+        Ok(note) => note,
+        Err(reason) => {
+            let mut out = first;
+            if let Some(Value::String(e)) = out.get_mut("error") {
+                e.push_str(&no_recovery_note(&reason));
+            }
+            return out;
         }
-        return out;
+    };
+    // `fill` usually wrote the value before the menu opened and blocked its
+    // read-back. Check the field before writing it again: the repeat focuses
+    // the field, which opens the menu again.
+    if action == "fill" {
+        if let Some(verified) = Box::pin(read_back_fill(cmd, state, note.clone())).await {
+            return verified;
+        }
     }
     if !safe_to_repeat(action) {
         let mut out = first;
         if let Some(Value::String(e)) = out.get_mut("error") {
             e.push_str(
-                "\nchrome-use briefly switched tabs, which closes such a menu, but did not repeat \
-                 this command: it may already have run in part. Check the page, then run it again.",
+                "\nchrome-use closed the menu (it hid the tab for a moment), so the tab works \
+                 again, but did not repeat this command: it may already have run in part. \
+                 Check the page (`snapshot -i`), then run it again if it did not take effect. \
+                 Do not close the tab or the session over this.",
             );
         }
         return out;
@@ -12441,21 +12476,54 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     // recovery also takes focus out of the field) and check the value
     // directly (#373).
     if action == "fill" && is_denied(&second) {
-        if let Some(verified) = Box::pin(verify_fill_after_menu(cmd, state)).await {
-            return verified;
+        let again = match state.browser.as_mut() {
+            Some(mgr) => Box::pin(mgr.cycle_pinned_tab_visibility(true)).await,
+            None => Err("no browser".to_string()),
+        };
+        if let Ok(note) = again {
+            if let Some(verified) = Box::pin(read_back_fill(cmd, state, note)).await {
+                return verified;
+            }
         }
     }
     if second.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        if let Some(obj) = second.as_object_mut() {
-            obj.entry("warning").or_insert_with(|| {
-                json!(
-                    "another extension's frame (a password manager's inline menu) blocked this \
-                     tab; chrome-use briefly switched tabs to close it, then ran the command again"
-                )
-            });
+        return with_menu_warning(second, "then ran the command again", note);
+    }
+    if is_denied(&second) {
+        if let Some(Value::String(e)) = second.get_mut("error") {
+            e.push_str(&no_recovery_note(
+                "the menu opened again when the command was repeated",
+            ));
         }
     }
     second
+}
+
+/// The warning on a command that succeeded after the menu was closed.
+fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value {
+    let mut warning = format!(
+        "a password manager's inline menu (another extension's frame) blocked this tab; \
+         chrome-use hid the tab for a moment to close it, {what}"
+    );
+    if let Some(note) = note {
+        warning.push_str(&format!(". {note}"));
+    }
+    if let Some(obj) = out.as_object_mut() {
+        obj.entry("warning").or_insert_with(|| json!(warning));
+    }
+    out
+}
+
+/// The tail of a blocked command's error when chrome-use could not close the
+/// menu: a safe next step, so the agent does not reach for `close --all` or a
+/// `--launch` profile (both lose the user's tabs or session, #373).
+fn no_recovery_note(reason: &str) -> String {
+    format!(
+        "\n(No automatic recovery: {reason}.) The tab and what was typed into it are intact: \
+         do not close tabs, stop the session or relaunch Chrome over this. Next: run the \
+         command again; if it is still blocked, ask the user to press Escape in that tab \
+         (or click the page outside the field) to close the menu, then repeat it."
+    )
 }
 
 fn is_denied(resp: &Value) -> bool {
@@ -12466,15 +12534,16 @@ fn is_denied(resp: &Value) -> bool {
             .is_some_and(super::browser::is_debugger_access_denied)
 }
 
-/// After a `fill` blocked twice by a password manager's menu: close the menu,
-/// then read the field. If it holds the requested value, the fill worked and
-/// only its follow-up was blocked. The value is compared here and never
-/// echoed.
-async fn verify_fill_after_menu(cmd: &Value, state: &mut DaemonState) -> Option<Value> {
+/// After a `fill` blocked by a password manager's menu and the menu closed:
+/// read the field. If it holds the requested value, the fill worked and only
+/// its follow-up was blocked. The value is compared here and never echoed.
+async fn read_back_fill(
+    cmd: &Value,
+    state: &mut DaemonState,
+    note: Option<String>,
+) -> Option<Value> {
     let selector = cmd.get("selector").and_then(|v| v.as_str())?.to_string();
     let wanted = cmd.get("value").and_then(|v| v.as_str())?.to_string();
-    let mgr = state.browser.as_mut()?;
-    Box::pin(mgr.cycle_pinned_tab_visibility(true)).await.ok()?;
     let read = Box::pin(execute_command(
         &json!({ "id": cmd.get("id").cloned().unwrap_or(Value::Null),
                  "action": "inputvalue", "selector": selector, "revealValues": true }),
@@ -12485,11 +12554,14 @@ async fn verify_fill_after_menu(cmd: &Value, state: &mut DaemonState) -> Option<
     if actual != wanted {
         return None;
     }
-    let mut warning = "a password manager's inline menu reopened on this field and blocked \
-                       the fill's follow-up; chrome-use closed it and confirmed the field holds \
-                       the value. Focus has left the field, so `press Enter` needs `--selector` \
-                       to reach it."
+    let mut warning = "a password manager's inline menu opened on this field and blocked \
+                       the fill's follow-up; chrome-use hid the tab for a moment to close it \
+                       and confirmed the field holds the value. Focus has left the field, so \
+                       `press Enter` needs `--selector` to reach it."
         .to_string();
+    if let Some(note) = note {
+        warning.push_str(&format!(" {note}."));
+    }
     if cmd.get("observe").and_then(Value::as_bool) == Some(true) {
         warning.push_str(
             " No --observe change list: the block cut the observation short; run `snapshot -i` \
@@ -12502,6 +12574,47 @@ async fn verify_fill_after_menu(cmd: &Value, state: &mut DaemonState) -> Option<
         "data": { "filled": selector, "verifiedAfterBlock": true },
         "warning": warning,
     }))
+}
+
+/// Commands that drive the page through the debugger and change it: the ones
+/// worth checking for a blocked tab before they run (#373).
+fn acts_on_page(action: &str) -> bool {
+    matches!(
+        action,
+        "click"
+            | "dblclick"
+            | "type"
+            | "press"
+            | "pick"
+            | "hover"
+            | "scroll"
+            | "select_text"
+            | "paste"
+            | "mouse"
+            | "keyboard"
+            | "focus"
+            | "clear"
+            | "selectall"
+            | "dispatch"
+            | "tap"
+            | "setvalue"
+            | "upload"
+            | "drag"
+            | "wheel"
+            | "evaluate"
+            | "eval"
+            | "form_fill"
+            | "navigate"
+            | "back"
+            | "forward"
+            | "reload"
+    )
+}
+
+/// Commands that act wherever focus already is, so the recovery must leave the
+/// focused field focused.
+fn acts_at_focus(action: &str) -> bool {
+    matches!(action, "press" | "keyboard" | "paste")
 }
 
 /// Commands that leave the page as they found it, or set it to the same end
@@ -19230,9 +19343,8 @@ fn pinned_tab_note(tab: &str, url: &str) -> String {
          A child frame on the page (an embedded extension widget) is the likely target of \
          the block; `tab inspect` still reads browser-level metadata. Chrome re-checks \
          every command and this session caches no blocked state: the tab works again once \
-         that frame is gone. To keep going now, open the page in a fresh tab of this same \
-         session with `chrome-use tab new <url>` — no new --session is needed, and \
-         re-adopting this tab does not help."
+         that frame is gone — no new --session is needed, and re-adopting this tab does \
+         not help."
     };
     format!("\nThis session is driving {tab} ({url}){diagnosis}")
 }
@@ -19249,6 +19361,55 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    /// #373: the pre-check covers the commands the recovery will not repeat,
+    /// and the commands that act at the current focus keep it.
+    #[test]
+    fn inline_menu_pre_check_covers_unrepeatable_page_actions() {
+        for action in [
+            "click", "dblclick", "press", "type", "keyboard", "eval", "navigate",
+        ] {
+            assert!(acts_on_page(action) && !safe_to_repeat(action), "{action}");
+        }
+        for action in ["snapshot", "fill", "inputvalue", "tab_list", "close"] {
+            assert!(
+                !(acts_on_page(action) && !safe_to_repeat(action)),
+                "{action}"
+            );
+        }
+        assert!(acts_at_focus("press") && acts_at_focus("keyboard"));
+        assert!(!acts_at_focus("click") && !acts_at_focus("fill"));
+    }
+
+    /// #373: a blocked command that could not be recovered must not steer the
+    /// agent to destructive workarounds; agents closed every tab or relaunched.
+    #[test]
+    fn no_recovery_note_gives_a_safe_next_step() {
+        let note = no_recovery_note("the menu was still open");
+        assert!(note.contains("the menu was still open"), "{note}");
+        assert!(note.contains("Escape"), "{note}");
+        assert!(note.contains("do not close tabs"), "{note}");
+        assert!(
+            !note.contains("--all") && !note.contains("--launch"),
+            "{note}"
+        );
+    }
+
+    #[test]
+    fn menu_warning_keeps_the_note_and_an_existing_warning() {
+        let out = with_menu_warning(
+            json!({ "success": true }),
+            "then ran the command again",
+            Some("Chrome put a different tab in front".to_string()),
+        );
+        let w = out["warning"].as_str().unwrap();
+        assert!(
+            w.contains("hid the tab for a moment") && w.contains("different tab"),
+            "{w}"
+        );
+        let kept = with_menu_warning(json!({ "success": true, "warning": "x" }), "y", None);
+        assert_eq!(kept["warning"], "x");
+    }
+
     /// `close --all` run by one agent closed every other agent's tab mid-task;
     /// their next command came back from a fresh about:blank with no warning,
     /// and they filled and submitted the form again. Only a close that came
