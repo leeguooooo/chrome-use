@@ -1250,14 +1250,27 @@ impl WebSession {
         let issue = format!("{}/{number}", issues_url(repo));
         self.run(&["open", &issue], None, 60)?;
         let needle = comment_needle(comment);
-        let before = self.load("comment", &needle)?.needle_count;
+        let loaded = self.load("comment", &needle)?;
+        let (before, old_anchor) = (loaded.needle_count, loaded.anchor);
         self.fill("body", comment)?;
         self.verify_and_submit("comment", &needle, None, comment)?;
         match self.wait("comment", &needle, 30, |s| s.needle_count > before) {
-            Some(s) if s.needle_count > before => Ok(match s.anchor {
-                Some(a) => format!("{issue}#{a}"),
-                None => issue,
-            }),
+            Some(s) if s.needle_count > before => {
+                // The comment shows up before GitHub gives it an id; wait a
+                // little for the permalink, else link the issue.
+                let new_anchor = |s: &FormState| s.anchor.is_some() && s.anchor != old_anchor;
+                let anchor = if new_anchor(&s) {
+                    s.anchor
+                } else {
+                    self.wait("comment", &needle, 6, new_anchor)
+                        .filter(new_anchor)
+                        .and_then(|s| s.anchor)
+                };
+                Ok(match anchor {
+                    Some(a) => format!("{issue}#{a}"),
+                    None => issue,
+                })
+            }
             _ => Err("pressed Comment, but the comment did not appear on the issue".into()),
         }
     }
