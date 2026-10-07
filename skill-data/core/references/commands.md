@@ -549,11 +549,13 @@ EOF
 
 ### Script results
 
+Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`.
+
 For `script` JSON op-lists or JS programs, inspect program outcome separately
-from transport `success`. Nested `data.ok:false` fails the parent script even
+from transport `success`. Nested daemon-envelope `data.ok:false` fails the parent script even
 when transport succeeded. JS failures retain `ok:false`, `return:null`,
 `error`, `logs` and `advisories`. Both forms retain observed hints in
-`data.advisories` (at most 20), including nested and failed runs; JSON `steps`
+CLI top-level `advisories` (daemon-envelope `data.advisories`, at most 20), including nested and failed runs; JSON `steps`
 also retain the action's `noProgress`. Text output prints the aggregate hints
 once. Hints do not change action success or retry it. See
 [interacting.md](interacting.md) for the script forms and

@@ -219,7 +219,7 @@
 
       <p>普通 CLI/MCP 准备连接时，只有成功复用同一浏览器连接、目标和会话，且未加载 storage state，才会保留连续计数。新浏览器、重新绑定、准备失败或加载 storage state 仍会清空计数。</p>
 
-      <p>脚本在 <code>data.advisories</code> 中保留提示，最多 20 条，嵌套脚本和后续失败的运行也会保留。JSON op-list 的对应 <code>steps</code> 条目另带 <code>noProgress</code>；文字输出只打印汇总提示一次。JS 脚本失败时保留 <code>ok:false</code>、<code>return:null</code>、<code>error</code>、<code>logs</code> 和 <code>advisories</code>。嵌套脚本的 <code>data.ok:false</code> 会使父脚本失败，即使传输层 <code>success</code> 为 true；调度成功不能证明程序成功。</p>
+      <p>脚本在 <code>advisories</code>（CLI <code>script --json</code> 顶层；daemon envelope 中为 <code>data.advisories</code>） 中保留提示，最多 20 条，嵌套脚本和后续失败的运行也会保留。JSON op-list 的对应 <code>steps</code> 条目另带 <code>noProgress</code>；文字输出只打印汇总提示一次。JS 脚本失败时保留 <code>ok:false</code>、<code>return:null</code>、<code>error</code>、<code>logs</code> 和 <code>advisories</code>。daemon envelope 中嵌套脚本的 <code>data.ok:false</code> 会使父脚本失败，即使传输层 <code>success</code> 为 true；调度成功不能证明程序成功。</p>
 
       <h2>看清动作改了什么 — --observe</h2>
       <p>请求最多显示 20 条摘要，每条最多 256 个 UTF-8 字节；data URL 只显示媒体头和编码后载荷大小。JSON 同时返回 <code>requestsTotal</code>、<code>requestsOmitted</code>、<code>requestsShortened</code>。完整记录用 <code>network requests --json</code> 查看。<code>changed:false</code> 只表示树与 URL 没变，有请求时仍显示摘要。</p>

@@ -17,7 +17,7 @@ Capture Chrome DevTools performance profiles during browser automation for perfo
 
 ## Command timing and task efficiency
 
-Every JSON daemon reply carries `timing.ms` (command wall time), `cdpCalls`,
+Timed daemon replies carry `timing.ms` (command wall time), `cdpCalls`,
 `cdpMs` (sum of completed foreground CDP request durations), `cdpBusyMs` (union of those
 request intervals clipped to command wall time), `nonCdpMs` (`ms` minus
 `cdpBusyMs`), and the three `slowest` methods. Concurrent requests may make
@@ -26,6 +26,8 @@ work; neither field measures CPU use or model latency. Only completed,
 recorded foreground intervals contribute to CDP occupancy. Spawned background
 tasks do not inherit this recorder; background CDP work is not included.
 `nonCdpMs` is the remaining wall duration, not a pure daemon processing cost.
+
+Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`.
 
 The daemon appends action, session, outcome and timing to
 `~/.chrome-use/timing.jsonl`, rotating at 20 MB. It omits URLs, selectors and

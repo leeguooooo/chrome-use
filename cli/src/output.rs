@@ -5673,8 +5673,11 @@ Batch:
   batch [--bail] ["cmd" ...]  Execute multiple commands sequentially (args or stdin)
   script <file|->             Run JSON or JS steps in one daemon round trip.
                               Script ok:false fails even if transport succeeded.
-                              data.advisories retains up to 20 noProgress hints
-                              through nested/failed scripts; text prints them once.
+                              CLI JSON prints bare program data; advisories retains
+                              up to 20 hints (daemon: data.advisories), including
+                              nested/failed scripts; text prints them once.
+                              Batch JSON is a result array; script/batch omit
+                              top-level timing.
                               --bail stops on first error (default: continue all)
 
 Agent loop (experimental):
