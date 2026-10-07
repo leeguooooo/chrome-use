@@ -619,6 +619,14 @@ pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
 const MENU_STILL_OPEN: &str = "the menu was still open after chrome-use hid the tab for a moment";
 /// [`MENU_STILL_OPEN`] for a tab in front, which gets a second try.
 const MENU_STILL_OPEN_IN_FRONT: &str = "menu still open (tab in front)";
+/// The recovery's error when the menu stayed open and Chrome is not the
+/// window in front: a covered window's tabs are all hidden already, so
+/// switching tabs never makes the page hidden (#449).
+const MENU_COVERED_WINDOW: &str = "the menu was still open after chrome-use hid the tab for a \
+    moment. Chrome is not the window in front: while another app covers it (or it is on another \
+    Space), macOS reports every tab in it as hidden, so hiding the tab closes nothing. Ask the \
+    user to bring that Chrome window to the front once (or to press Escape in the tab); \
+    chrome-use then closes the menu by itself on the next command";
 
 /// Password managers whose inline autofill menu is a frame of their own
 /// extension, mounted next to a focused login or card field. While that frame
@@ -3243,6 +3251,19 @@ impl BrowserManager {
                 return Ok(note);
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        // Hiding the tab closes the menu only when the page was visible to
+        // begin with. Chrome on macOS reports every tab of a window that
+        // another app covers (or that sits on another Space) as hidden, so
+        // with the user working in another app the switches change nothing
+        // (#449: the agent's terminal was in front of Chrome).
+        let window_focused = self
+            .chrome_call("windows", "get", json!([window_id]))
+            .await
+            .ok()
+            .and_then(|w| w.get("focused").and_then(Value::as_bool));
+        if window_focused == Some(false) {
+            return Err(MENU_COVERED_WINDOW.to_string());
         }
         Err(if in_front {
             MENU_STILL_OPEN_IN_FRONT

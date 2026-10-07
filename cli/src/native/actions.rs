@@ -18028,11 +18028,33 @@ async fn auth_close_menu(
             no_recovery_note("the password manager's menu kept reopening during the login")
         ));
     }
-    *closed += 1;
     mgr.cycle_pinned_tab_visibility(true)
         .await
-        .map(|_| ())
+        .map(|_| *closed += 1)
         .map_err(|why| format!("{cause}{}", no_recovery_note(&why)))
+}
+
+/// After a login: a password manager's menu that opened on the next page's
+/// field (the 2FA code field the page focuses) is closed now, so the next
+/// command finds the tab usable. Returns why it could not be, if it is open.
+async fn auth_close_menu_after(mgr: &mut BrowserManager, closed: &mut u32) -> Option<String> {
+    if !(mgr.on_relay()
+        && super::browser::inline_menu_manager_installed()
+        && mgr.pinned_tab_blocked().await)
+    {
+        return None;
+    }
+    match mgr.cycle_pinned_tab_visibility(true).await {
+        Ok(_) => {
+            *closed += 1;
+            None
+        }
+        Err(why) => Some(format!(
+            "a password manager's inline menu is open on the page now (another extension's \
+             frame; Chrome refuses every debugger command on the tab while it is there), and \
+             chrome-use could not close it: {why}"
+        )),
+    }
 }
 
 /// Wait for the first USABLE element any of `selectors` matches (visible,
@@ -18520,13 +18542,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
 
     // Leave the tab usable for what comes next: a password manager's menu
     // still open on the last field is closed now.
-    if menu_closed < AUTH_MENU_CLOSE_LIMIT
-        && mgr.on_relay()
-        && super::browser::inline_menu_manager_installed()
-        && mgr.pinned_tab_blocked().await
-    {
-        let _ = auth_close_menu(mgr, &mut menu_closed, "").await;
-    }
+    let menu_left_open = auth_close_menu_after(mgr, &mut menu_closed).await;
 
     // Leave the page as found, whether or not the login went through: drop
     // this login's markers (if the page is still there).
@@ -18554,8 +18570,8 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     if let Some(via) = submit_via {
         out["submittedWith"] = json!(via);
     }
-    if menu_closed > 0 {
-        out["warning"] = json!(auth_menu_warning(menu_closed));
+    if let Some(w) = auth_warning(menu_closed, menu_left_open) {
+        out["warning"] = json!(w);
     }
     Ok(out)
 }
@@ -19058,8 +19074,16 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         // The page now asks for a code this login has no value for (an SMS
         // or a trusted-device code): report it rather than a finished login.
         if submitted && !no_submit && otp_state != "filled" && passkey_state != "used" {
+            // The login went through either way: a menu this cannot close is
+            // reported with the result, not as a failed login.
             let tag = format!("bwuneed-{marker}");
-            if unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_CODE_HINT_SELECTORS, &tag, AUTH_BWU_PROBE_MS, true, pin).await).is_ok() {
+            let mut found = mark_usable_auth_element(&mgr.client, &scope, AUTH_CODE_HINT_SELECTORS, &tag, AUTH_BWU_PROBE_MS, true, pin).await;
+            if matches!(&found, Err(e) if super::browser::is_debugger_access_denied(e))
+                && auth_close_menu(&mut *mgr, &mut menu_closed, "").await.is_ok()
+            {
+                found = mark_usable_auth_element(&mgr.client, &scope, AUTH_CODE_HINT_SELECTORS, &tag, 0, true, pin).await;
+            }
+            if found.is_ok() {
                 needs = Some("a verification code");
             }
         }
@@ -19069,13 +19093,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
 
     // Leave the tab usable for what comes next (the 2FA step): a menu that
     // opened on the last field is closed now, not by the next command.
-    if menu_closed < AUTH_MENU_CLOSE_LIMIT
-        && mgr.on_relay()
-        && super::browser::inline_menu_manager_installed()
-        && mgr.pinned_tab_blocked().await
-    {
-        let _ = auth_close_menu(mgr, &mut menu_closed, "").await;
-    }
+    let menu_left_open = auth_close_menu_after(mgr, &mut menu_closed).await;
 
     let cleanup = format!(
         "(() => {{ for (const el of document.querySelectorAll('[data-cu-auth$=\"-{marker}\"]')) {{ \
@@ -19136,8 +19154,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         out["needs"] = json!(what);
         out["next"] = json!(auth_needs_code_hint(scope.frame_origin.as_deref()));
     }
-    if menu_closed > 0 {
-        out["warning"] = json!(auth_menu_warning(menu_closed));
+    if let Some(w) = auth_warning(menu_closed, menu_left_open) {
+        out["warning"] = json!(w);
     }
     Ok(out)
 }
@@ -19157,6 +19175,16 @@ fn auth_needs_code_hint(frame: Option<&str>) -> String {
          Get it from the user, or from their messages (message-use) or mail (mail-use), then type \
          it into the code field. {place}"
     )
+}
+
+/// A login's warning: the menu it closed, and the one it could not.
+fn auth_warning(closed: u32, left_open: Option<String>) -> Option<String> {
+    let mut parts = Vec::new();
+    if closed > 0 {
+        parts.push(auth_menu_warning(closed));
+    }
+    parts.extend(left_open);
+    (!parts.is_empty()).then(|| parts.join(". "))
 }
 
 /// The warning on a login that had to close a password manager's inline menu.
