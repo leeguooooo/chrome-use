@@ -30,6 +30,52 @@ pub enum ParseError {
     InvalidSessionName { name: String },
 }
 
+const PICK_USAGE: &str =
+    "pick <selector|@ref> --option \"<text>\"  (or: pick <selector|@ref> \"<text>\")";
+
+/// `pick` arguments: `<target> --option <text…>` or the positional sugar
+/// `<target> <text…>`. A stray word between the target and `--option`, or an
+/// unknown flag in the positional form, is ambiguous and refused rather than
+/// guessed at.
+fn parse_pick_args(rest: &[&str]) -> Result<(String, String), ParseError> {
+    let missing = || ParseError::MissingArguments {
+        context: "pick".to_string(),
+        usage: PICK_USAGE,
+    };
+    let sel = match rest.first() {
+        Some(s) if *s != "--option" && *s != "-o" => *s,
+        _ => return Err(missing()),
+    };
+    let opt_pos = rest.iter().position(|a| *a == "--option" || *a == "-o");
+    let option = match opt_pos {
+        Some(p) => {
+            if p != 1 {
+                return Err(ParseError::InvalidValue {
+                    message: format!(
+                        "pick: unexpected {:?} before --option; give the target, then --option and the option text",
+                        rest[1..p].join(" ")
+                    ),
+                    usage: PICK_USAGE,
+                });
+            }
+            rest[p + 1..].join(" ")
+        }
+        None => {
+            if let Some(flag) = rest[1..].iter().find(|a| a.starts_with("--")) {
+                return Err(ParseError::InvalidValue {
+                    message: format!("pick: unknown flag {flag:?}"),
+                    usage: PICK_USAGE,
+                });
+            }
+            rest[1..].join(" ")
+        }
+    };
+    if option.trim().is_empty() {
+        return Err(missing());
+    }
+    Ok((sel.to_string(), option))
+}
+
 const SCROLL_UNTIL_USAGE: &str = "scroll [direction] [amount] --until <selector|@ref|text=…> \
      [--until-text <text>] [--max-steps <n>] [--timeout <ms>] [--selector <container>]";
 
@@ -874,27 +920,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // pick <selector|@ref> --option "<text>"  — atomic combobox select:
             // open the control, wait for options (incl. portal menus), match by
             // text, fire the right event sequence, verify. Covers native <select>,
-            // ARIA combobox/listbox, and react-select.
-            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
-                context: "pick".to_string(),
-                usage: "pick <selector> --option \"<text>\"",
-            })?;
-            let opt_pos = rest.iter().position(|a| *a == "--option" || *a == "-o");
-            let option = match opt_pos {
-                Some(p) => rest[p + 1..].join(" "),
-                None => {
-                    return Err(ParseError::MissingArguments {
-                        context: "pick".to_string(),
-                        usage: "pick <selector> --option \"<text>\"",
-                    })
-                }
-            };
-            if option.is_empty() {
-                return Err(ParseError::MissingArguments {
-                    context: "pick".to_string(),
-                    usage: "pick <selector> --option \"<text>\"",
-                });
-            }
+            // ARIA combobox/listbox, react-select, and type-to-search
+            // (autocomplete) fields. `pick <ref> "<text>"` is accepted as sugar.
+            let (sel, option) = parse_pick_args(&rest)?;
             Ok(json!({ "id": id, "action": "pick", "selector": sel, "option": option }))
         }
         "hover" => {
@@ -5492,6 +5520,35 @@ pub fn shell_words_split(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_accepts_option_flag_and_positional_sugar() {
+        let parse = |a: &[&str]| {
+            let a: Vec<String> = a.iter().map(|s| s.to_string()).collect();
+            parse_command(&a, &default_flags())
+        };
+        let flag = parse(&["pick", "@e6", "--option", "Kyoto"]).unwrap();
+        assert_eq!(flag["action"], "pick");
+        assert_eq!(flag["selector"], "@e6");
+        assert_eq!(flag["option"], "Kyoto");
+        let short = parse(&["pick", "@e6", "-o", "New", "York"]).unwrap();
+        assert_eq!(short["option"], "New York");
+        // The positional form agents reach for first.
+        let sugar = parse(&["pick", "@e6", "Kyoto"]).unwrap();
+        assert_eq!(sugar["selector"], "@e6");
+        assert_eq!(sugar["option"], "Kyoto");
+        let multi = parse(&["pick", "#city", "San Francisco"]).unwrap();
+        assert_eq!(multi["option"], "San Francisco");
+
+        // Ambiguous or incomplete forms are refused, not guessed.
+        assert!(parse(&["pick", "@e6"]).is_err());
+        assert!(parse(&["pick"]).is_err());
+        assert!(parse(&["pick", "--option", "Kyoto"]).is_err());
+        assert!(parse(&["pick", "@e6", "--option"]).is_err());
+        assert!(parse(&["pick", "@e6", "--option", " "]).is_err());
+        assert!(parse(&["pick", "@e6", "stray", "--option", "Kyoto"]).is_err());
+        assert!(parse(&["pick", "@e6", "Kyoto", "--force"]).is_err());
+    }
 
     #[test]
     fn keep_defaults_to_deliverable_and_validates_its_reason() {

@@ -1082,6 +1082,45 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             print_with_boundaries(html, origin, opts);
             return;
         }
+        // pick: name the option chosen, and for an autocomplete field what was
+        // typed, what the field now holds and which hidden fields it set.
+        if action == Some("pick") {
+            if let Some(picked) = data.get("picked").and_then(|v| v.as_str()) {
+                let warning = data.get("warning").and_then(|v| v.as_str());
+                let indicator = if warning.is_some() {
+                    color::warning_indicator()
+                } else {
+                    color::success_indicator()
+                };
+                let mut detail = Vec::new();
+                if let Some(typed) = data.get("typed").and_then(|v| v.as_str()) {
+                    detail.push(format!("typed {typed:?}, clicked the suggestion"));
+                }
+                if let Some(value) = data.get("value").and_then(|v| v.as_str()) {
+                    detail.push(format!("value {value:?}"));
+                }
+                if let Some(h) = data.get("hiddenChanged").and_then(|v| v.as_array()) {
+                    let set: Vec<&str> = h.iter().filter_map(|x| x.as_str()).collect();
+                    if !set.is_empty() {
+                        detail.push(format!("set {}", set.join(", ")));
+                    }
+                }
+                if detail.is_empty() {
+                    println!("{} Picked {:?}", indicator, picked);
+                } else {
+                    println!(
+                        "{} Picked {:?} {}",
+                        indicator,
+                        picked,
+                        color::dim(&format!("({})", detail.join("; ")))
+                    );
+                }
+                if let Some(w) = warning {
+                    eprintln!("{} {}", color::warning_indicator(), w);
+                }
+                return;
+            }
+        }
         // Value
         if let Some(value) = data.get("value").and_then(|v| v.as_str()) {
             println!("{}", value);
@@ -2576,6 +2615,8 @@ Options:
   (alias --keys)       Input.insertText. Use for autocomplete / combobox fields
                        that only react to key events — e.g. a postal-code box
                        that auto-fills city/prefecture, or Google Places.
+                       To choose one of an autocomplete field's suggestions,
+                       use `pick <ref> --option "<text>"` instead.
 
 Global Options:
   --json               Output as JSON
@@ -2672,6 +2713,9 @@ controls use platform setters plus input/change events so React and Vue
 controlled forms commit the selection. Custom ARIA/react-select controls
 are opened and matched through their visible option list.
 
+For an autocomplete (type-to-search) field, use `pick <ref> --option "<text>"`
+instead: `select` does not type, so its suggestions never appear.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
@@ -2680,6 +2724,36 @@ Examples:
   chrome-use select "#country" "US"
   chrome-use select @e5 "option2"
   chrome-use select "#menu" "opt1" "opt2" "opt3"
+"##
+        }
+        "pick" => {
+            r##"
+chrome-use pick - Choose an option in any combobox, including autocomplete fields
+
+Usage: chrome-use pick <selector|@ref> --option "<text>"
+       chrome-use pick <selector|@ref> "<text>"
+
+Native <select>: selects the matching option. Custom combobox (ARIA listbox,
+react-select, portal menus): opens it, waits for the option, clicks it.
+Autocomplete / type-to-search field (an input with role=combobox,
+aria-autocomplete=list|both, or aria-controls pointing at a listbox): if
+opening it lists no match, pick clears the field, types the text (trusted
+input, like `type`), waits up to 5s for the suggestions to appear and settle,
+clicks the best match (exact, then case-insensitive, then prefix, then
+substring), and checks that the field took it. The output names the option,
+the field's value and any hidden form field the choice set (e.g. a city code).
+
+Errors, rather than reporting success, when no option matches; the error
+lists the options that were visible.
+
+Global Options:
+  --json               Output as JSON
+  --session <name>     Use specific session
+
+Examples:
+  chrome-use pick @e4 --option "Europe"        # custom dropdown
+  chrome-use pick @e6 --option "Kyoto"         # autocomplete: types, clicks the suggestion
+  chrome-use pick "#country" "Japan"           # positional form
 "##
         }
         "drag" => {
@@ -5244,7 +5318,10 @@ Core Commands:
   focus <sel>                Focus element
   check <sel>                Check checkbox
   uncheck <sel>              Uncheck checkbox
-  select <sel> <val...>      Select dropdown option
+  select <sel> <val...>      Select dropdown option (native <select>)
+  pick <sel> --option <text> Choose an option in any combobox. Autocomplete
+                             field → `pick <ref> --option "<text>"`: types it,
+                             waits for the suggestions, clicks the match
   paste <text>               Paste content with a MIME type instead of typing it
                              [--format text|md|html] [--selector <sel>]. Never
                              touches the real clipboard, and a newline stays a

@@ -7134,12 +7134,262 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     Ok(out)
 }
 
+/// Shared page-side helpers for `pick`: whitespace normalisation and the
+/// option-candidate collector. Candidates are tagged `data-cu-pick-idx=<i>` so
+/// the Rust side can rank their texts and click one by index.
+const PICK_JS_PRELUDE: &str = r#"
+    const norm = s => String(s ?? '')
+        .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const doc = el.ownerDocument || document;
+    const visible = o => !!(o.offsetParent !== null || (o.getClientRects && o.getClientRects().length));
+    const linked = () => ['aria-controls', 'aria-owns']
+        .flatMap(a => (el.getAttribute(a) || '').split(/\s+/))
+        .filter(Boolean)
+        .map(id => doc.getElementById(id))
+        .filter(Boolean);
+    const collect = () => {
+        let opts = [];
+        for (const scope of linked()) {
+            if (scope.getAttribute('role') === 'option') opts.push(scope);
+            opts.push(...scope.querySelectorAll('[role=option]'));
+        }
+        if (!opts.some(visible)) opts = [...doc.querySelectorAll('[role=option]')];
+        if (!opts.some(visible)) opts = [...doc.querySelectorAll('li[role=option], [class*=option], [class*=item]')];
+        return [...new Set(opts)].filter(o => o !== el && visible(o) && norm(o.textContent)).slice(0, 200);
+    };
+    const hiddenFields = () => {
+        const scope = el.form || el.closest('form, fieldset, [role=group], [role=search]') || doc;
+        const out = {};
+        for (const h of scope.querySelectorAll('input[type=hidden]')) {
+            const k = h.name || h.id;
+            if (k) out[k] = String(h.value).slice(0, 80);
+        }
+        return out;
+    };
+"#;
+
+/// Open (optionally) and poll for option candidates. Resolves once a
+/// candidate containing `want` is visible and the list stopped changing
+/// between two polls (an async suggestion list refines as results land), or
+/// at the deadline. Also reports whether the target is a type-to-search
+/// (autocomplete) field, so the caller knows typing is the way to summon
+/// options.
+fn pick_collect_function() -> String {
+    format!(
+        r#"async function(want, open, waitMs) {{
+            const el = this;
+            {prelude}
+            const lw = norm(want).toLowerCase();
+            const role = (el.getAttribute('role') || '').toLowerCase();
+            const ac = (el.getAttribute('aria-autocomplete') || '').toLowerCase();
+            const textTypes = ['', 'text', 'search', 'email', 'url', 'tel', 'number'];
+            const editable = !el.disabled && !el.readOnly && (
+                (el.tagName === 'INPUT' && textTypes.includes((el.getAttribute('type') || '').toLowerCase()))
+                || el.tagName === 'TEXTAREA' || el.isContentEditable);
+            const ownsListbox = linked().some(t =>
+                t.getAttribute('role') === 'listbox' || t.querySelector('[role=option]'));
+            const typeahead = editable && (ac === 'list' || ac === 'both' || role === 'combobox' || ownsListbox);
+
+            if (open) {{
+                const fire = (n, t) => n.dispatchEvent(new MouseEvent(t, {{ bubbles: true, cancelable: true, view: window }}));
+                (el.focus && el.focus());
+                ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach(t => fire(el, t));
+            }}
+            // An empty type-to-search field rarely lists anything on open, so
+            // don't spend the full wait there before typing.
+            const deadline = Date.now() + (open && typeahead ? Math.min(waitMs, 700) : waitMs);
+            let opts = collect(), prev = null;
+            while (Date.now() < deadline) {{
+                const texts = opts.map(o => norm(o.textContent));
+                if (texts.some(t => t.toLowerCase().includes(lw))) {{
+                    const sig = texts.join('\u0001');
+                    if (sig === prev) break;
+                    prev = sig;
+                }}
+                await new Promise(r => setTimeout(r, 120));
+                opts = collect();
+            }}
+            for (const o of doc.querySelectorAll('[data-cu-pick-idx]')) o.removeAttribute('data-cu-pick-idx');
+            opts.forEach((o, i) => o.setAttribute('data-cu-pick-idx', String(i)));
+            return {{
+                texts: opts.map(o => norm(o.textContent)),
+                typeahead,
+                topFrame: window.top === window,
+                hidden: hiddenFields(),
+            }};
+        }}"#,
+        prelude = PICK_JS_PRELUDE
+    )
+}
+
+/// Click candidate `idx` with a synthetic pointer/mouse sequence — what `pick`
+/// has always done for a portal menu, and the fallback when the option lives in
+/// a frame the trusted coordinate click can't address.
+const PICK_DOM_CLICK_JS: &str = r#"function(idx) {
+    const doc = this.ownerDocument || document;
+    const opt = doc.querySelector('[data-cu-pick-idx="' + idx + '"]');
+    if (!opt) return false;
+    const fire = t => opt.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+    (opt.scrollIntoView && opt.scrollIntoView({ block: 'center' }));
+    ['pointermove', 'pointerover', 'mouseover', 'pointerdown', 'mousedown', 'mouseup', 'click'].forEach(fire);
+    return true;
+}"#;
+
+/// After the click: did the field take the option? Polls briefly for the
+/// field's value to match the option and for the list to close (or the option
+/// to be marked selected, or a hidden companion field to change), then
+/// reports what it saw and removes the candidate tags.
+fn pick_verify_function() -> String {
+    format!(
+        r#"async function(idx, chosen, hiddenBefore) {{
+            const el = this;
+            {prelude}
+            const lc = norm(chosen).toLowerCase();
+            const deadline = Date.now() + 1500;
+            let r;
+            for (;;) {{
+                const value = norm(el.value !== undefined ? el.value : el.textContent);
+                const lv = value.toLowerCase();
+                const opt = doc.querySelector('[data-cu-pick-idx="' + idx + '"]');
+                const closed = !opt || !opt.isConnected || !visible(opt)
+                    || opt.getAttribute('aria-selected') === 'true';
+                const after = hiddenFields();
+                const hiddenChanged = Object.keys(after)
+                    .filter(k => after[k] !== (hiddenBefore || {{}})[k])
+                    .map(k => k + '=' + after[k]);
+                const valueOk = !!lv && (lv === lc || lv.includes(lc) || lc.includes(lv));
+                r = {{ value, closed, hiddenChanged, verified: valueOk && (closed || hiddenChanged.length > 0) }};
+                if (r.verified || Date.now() > deadline) break;
+                await new Promise(res => setTimeout(res, 100));
+            }}
+            for (const o of doc.querySelectorAll('[data-cu-pick-idx]')) o.removeAttribute('data-cu-pick-idx');
+            return r;
+        }}"#,
+        prelude = PICK_JS_PRELUDE
+    )
+}
+
+/// How well an option's visible text matches what `pick` was asked for:
+/// 0 exact, 1 case-insensitive, 2 case-insensitive prefix, 3 substring.
+/// `None` when it doesn't match at all. Whitespace runs are collapsed first.
+fn pick_match_rank(want: &str, text: &str) -> Option<u8> {
+    let collapse = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (w, t) = (collapse(want), collapse(text));
+    if w.is_empty() {
+        return None;
+    }
+    if t == w {
+        return Some(0);
+    }
+    let (lw, lt) = (w.to_lowercase(), t.to_lowercase());
+    if lt == lw {
+        Some(1)
+    } else if lt.starts_with(&lw) {
+        Some(2)
+    } else if lt.contains(&lw) {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+/// The best candidate for `want`: lowest rank wins, and among equals the
+/// shortest text (the most specific option), then document order.
+fn pick_best_option(want: &str, texts: &[String]) -> Option<usize> {
+    texts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| pick_match_rank(want, t).map(|r| (r, t.chars().count(), i)))
+        .min()
+        .map(|(_, _, i)| i)
+}
+
+fn pick_texts(v: &Value) -> Vec<String> {
+    v.get("texts")
+        .and_then(|t| t.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The visible options, deduplicated and capped, for an error message.
+fn pick_available(texts: &[String]) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    for t in texts {
+        if !seen.contains(&t.as_str()) {
+            seen.push(t);
+        }
+    }
+    let more = seen.len().saturating_sub(15);
+    let mut out = seen
+        .iter()
+        .take(15)
+        .map(|t| format!("{t:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if more > 0 {
+        out.push_str(&format!(" (+{more} more)"));
+    }
+    if out.is_empty() {
+        "none".to_string()
+    } else {
+        out
+    }
+}
+
+fn pick_hidden_changed(verify: &Value) -> Option<Value> {
+    verify
+        .get("hiddenChanged")
+        .filter(|h| h.as_array().is_some_and(|a| !a.is_empty()))
+        .cloned()
+}
+
+async fn pick_call(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    func: String,
+    args: Vec<Value>,
+) -> Result<Value, String> {
+    let result: super::cdp::types::EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &super::cdp::types::CallFunctionOnParams {
+                function_declaration: func,
+                object_id: Some(object_id.to_string()),
+                arguments: Some(
+                    args.into_iter()
+                        .map(|v| super::cdp::types::CallArgument {
+                            value: Some(v),
+                            object_id: None,
+                        })
+                        .collect(),
+                ),
+                return_by_value: Some(true),
+                await_promise: Some(true),
+            },
+            Some(session_id),
+        )
+        .await?;
+    if let Some(ref ex) = result.exception_details {
+        return Err(format!("pick failed: {}", ex.text));
+    }
+    Ok(result.result.value.unwrap_or(Value::Null))
+}
+
 /// Atomic combobox select: `pick <selector> --option "<text>"`. Opens the control
 /// (so a portal-rendered menu mounts), polls for the option by visible text, then
 /// fires the full pointer/mouse event sequence on it — covering native `<select>`,
 /// ARIA combobox/listbox, and react-select, which a bare `click`+`press Enter`
-/// can't do reliably. Runs as one in-page async routine so the open→render→pick
-/// dance happens without round-trips that let the menu collapse between commands.
+/// can't do reliably. A type-to-search (autocomplete) field shows nothing until
+/// typed into, so when opening it surfaces no match, `pick` types the text the
+/// way `type` does (trusted input, field cleared first), waits for suggestions,
+/// clicks the best one, and verifies the field took it.
 async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
@@ -7161,74 +7411,204 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     )
     .await?;
 
-    let func = format!(
-        r#"async function() {{
-            const want = {opt};
+    // Native <select>: set the best-matching option and dispatch input/change.
+    let native = pick_call(
+        &mgr.client,
+        &effective_session_id,
+        &object_id,
+        r#"function(want) {
+            if (this.tagName !== 'SELECT') return null;
             const norm = s => (s || '').replace(/\s+/g, ' ').trim();
-            const matches = el => norm(el.textContent).toLowerCase().includes(want.toLowerCase());
-            const el = this;
-            const fire = (n, t) => n.dispatchEvent(new MouseEvent(t, {{ bubbles: true, cancelable: true, view: window }}));
+            const lw = norm(want).toLowerCase();
+            const opts = [...this.options];
+            const opt = opts.find(o => norm(o.textContent) === norm(want))
+                || opts.find(o => norm(o.textContent).toLowerCase() === lw)
+                || opts.find(o => norm(o.textContent).toLowerCase().startsWith(lw))
+                || opts.find(o => norm(o.textContent).toLowerCase().includes(lw));
+            if (!opt) return { ok: false, available: opts.map(o => norm(o.textContent)) };
+            this.value = opt.value;
+            this.dispatchEvent(new Event('input', { bubbles: true }));
+            this.dispatchEvent(new Event('change', { bubbles: true }));
+            return { ok: true, picked: norm(opt.textContent), value: this.value };
+        }"#
+        .to_string(),
+        vec![json!(option)],
+    )
+    .await?;
+    if native.is_object() {
+        if native.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            return Ok(json!({
+                "picked": native.get("picked"),
+                "value": native.get("value"),
+                "selector": selector,
+                "kind": "select",
+            }));
+        }
+        return Err(format!(
+            "no <option> matched {option:?}. available options: {}",
+            pick_available(&pick_texts(&json!({ "texts": native.get("available") })))
+        ));
+    }
 
-            // Native <select>: set the matching option and dispatch input/change.
-            if (el.tagName === 'SELECT') {{
-                const opt = [...el.options].find(matches);
-                if (!opt) return {{ ok: false, error: 'no <option> matched ' + JSON.stringify(want) }};
-                el.value = opt.value;
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                return {{ ok: true, picked: norm(opt.textContent), value: el.value, kind: 'select' }};
-            }}
-
-            // Custom widget: open it.
-            (el.focus && el.focus());
-            ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach(t => fire(el, t));
-
-            // Poll for the option to render anywhere in the document (portals
-            // mount the menu outside the trigger), then click it.
-            const sel = '[role=option], [role=listbox] [role=option], li[role=option], [class*=option], [class*=item]';
-            const find = () => [...document.querySelectorAll(sel)].find(o => o.offsetParent !== null && matches(o));
-            const deadline = Date.now() + 2500;
-            let opt = find();
-            while (!opt && Date.now() < deadline) {{
-                await new Promise(r => setTimeout(r, 80));
-                opt = find();
-            }}
-            if (!opt) return {{ ok: false, error: 'option ' + JSON.stringify(want) + ' did not appear after opening the control' }};
-            (opt.scrollIntoView && opt.scrollIntoView({{ block: 'center' }}));
-            ['pointermove', 'pointerover', 'mouseover', 'pointerdown', 'mousedown', 'mouseup', 'click'].forEach(t => fire(opt, t));
-            return {{ ok: true, picked: norm(opt.textContent), kind: 'custom' }};
-        }}"#,
-        opt = serde_json::to_string(option).unwrap_or_default(),
-    );
-
-    let result: super::cdp::types::EvaluateResult = mgr
-        .client
-        .send_command_typed(
-            "Runtime.callFunctionOn",
-            &super::cdp::types::CallFunctionOnParams {
-                function_declaration: func,
-                object_id: Some(object_id),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(true),
-            },
-            Some(&effective_session_id),
+    // Custom widget: open it and look for the option.
+    let opened = pick_call(
+        &mgr.client,
+        &effective_session_id,
+        &object_id,
+        pick_collect_function(),
+        vec![json!(option), json!(true), json!(2500)],
+    )
+    .await?;
+    let texts = pick_texts(&opened);
+    let typeahead = opened
+        .get("typeahead")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if let Some(idx) = pick_best_option(option, &texts) {
+        pick_call(
+            &mgr.client,
+            &effective_session_id,
+            &object_id,
+            PICK_DOM_CLICK_JS.to_string(),
+            vec![json!(idx)],
         )
         .await?;
+        let verify = pick_call(
+            &mgr.client,
+            &effective_session_id,
+            &object_id,
+            pick_verify_function(),
+            vec![json!(idx), json!(texts[idx]), opened["hidden"].clone()],
+        )
+        .await
+        .unwrap_or(Value::Null);
+        let mut out = json!({
+            "picked": texts[idx],
+            "selector": selector,
+            "kind": "custom",
+            "via": "open",
+        });
+        if let Some(h) = pick_hidden_changed(&verify) {
+            out["hiddenChanged"] = h;
+        }
+        return Ok(out);
+    }
+    if !typeahead {
+        return Err(format!(
+            "option {option:?} did not appear after opening the control. visible options: {}. \
+             If this field only lists options after you type, `type {selector} \"<text>\"`, \
+             then `snapshot -i` and click the suggestion",
+            pick_available(&texts)
+        ));
+    }
 
-    if let Some(ref ex) = result.exception_details {
-        return Err(format!("pick failed: {}", ex.text));
-    }
-    let val = result.result.value.unwrap_or(Value::Null);
-    if val.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        Ok(json!({ "picked": val.get("picked"), "selector": selector }))
+    // Type-to-search: type the text like `type --clear` does (trusted
+    // insertText), then wait for the suggestion list.
+    interaction::type_text(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        option,
+        true,
+        None,
+        &state.iframe_sessions,
+        false,
+    )
+    .await?;
+    let listed = pick_call(
+        &mgr.client,
+        &effective_session_id,
+        &object_id,
+        pick_collect_function(),
+        vec![json!(option), json!(false), json!(5000)],
+    )
+    .await?;
+    let texts = pick_texts(&listed);
+    let Some(idx) = pick_best_option(option, &texts) else {
+        return Err(format!(
+            "typed {option:?} into {selector} (an autocomplete field), but no suggestion matching it \
+             appeared within 5s. suggestions shown: {}. The text is left in the field; the form may \
+             reject it without a chosen suggestion. Try a shorter prefix (`pick {selector} --option \
+             \"<first letters>\"` matches by prefix) or `snapshot -i` to see what the field offers",
+            pick_available(&texts)
+        ));
+    };
+    let chosen = texts[idx].clone();
+
+    // Click the suggestion like a user: a trusted pointer click when the
+    // option is in the top frame (a CSS selector resolves there), otherwise
+    // the in-page event sequence.
+    let top_frame = listed
+        .get("topFrame")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut dispatch = "dom";
+    let mut click_warning = None;
+    if top_frame && effective_session_id == session_id {
+        let outcome = interaction::click_reporting(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            &format!("[data-cu-pick-idx=\"{idx}\"]"),
+            "left",
+            1,
+            &state.iframe_sessions,
+            false,
+        )
+        .await?;
+        dispatch = outcome.dispatch;
+        click_warning = outcome.warning;
     } else {
-        Err(val
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("pick failed")
-            .to_string())
+        pick_call(
+            &mgr.client,
+            &effective_session_id,
+            &object_id,
+            PICK_DOM_CLICK_JS.to_string(),
+            vec![json!(idx)],
+        )
+        .await?;
     }
+
+    let verify = pick_call(
+        &mgr.client,
+        &effective_session_id,
+        &object_id,
+        pick_verify_function(),
+        vec![json!(idx), json!(chosen), listed["hidden"].clone()],
+    )
+    .await?;
+    let verified = verify
+        .get("verified")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut out = json!({
+        "picked": chosen,
+        "selector": selector,
+        "kind": "autocomplete",
+        "via": "typed",
+        "typed": option,
+        "value": verify.get("value"),
+        "dispatch": dispatch,
+        "verified": verified,
+    });
+    if let Some(h) = pick_hidden_changed(&verify) {
+        out["hiddenChanged"] = h;
+    }
+    if !verified {
+        let value = verify.get("value").and_then(|v| v.as_str()).unwrap_or("");
+        let mut w = format!(
+            "clicked suggestion {chosen:?}, but the field did not confirm the choice (value now \
+             {value:?}, suggestion list still open). Check with `snapshot -i` / `get value {selector}`"
+        );
+        if let Some(cw) = click_warning {
+            w.push_str(&format!("; {cw}"));
+        }
+        out["warning"] = json!(w);
+    } else if let Some(cw) = click_warning {
+        out["warning"] = json!(cw);
+    }
+    Ok(out)
 }
 
 async fn handle_press(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -20922,5 +21302,50 @@ mod tests {
                 "`{action}` mutates the page but does not observe"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn match_rank_orders_exact_case_prefix_substring() {
+        assert_eq!(pick_match_rank("Kyoto", "Kyoto"), Some(0));
+        assert_eq!(pick_match_rank("kyoto", "Kyoto"), Some(1));
+        assert_eq!(pick_match_rank("Kyo", "Kyoto"), Some(2));
+        assert_eq!(pick_match_rank("Kyoto", "Kyoto Station"), Some(2));
+        assert_eq!(pick_match_rank("Kyoto", "Higashi Kyoto"), Some(3));
+        assert_eq!(pick_match_rank("New  York", " New York "), Some(0));
+        assert_eq!(pick_match_rank("Kyoto", "Osaka"), None);
+        assert_eq!(pick_match_rank("", "Osaka"), None);
+        assert_eq!(pick_match_rank("  ", "Osaka"), None);
+    }
+
+    #[test]
+    fn best_option_prefers_exact_then_case_then_prefix() {
+        // The suggestion list for "Kyoto" often lists longer names first.
+        let texts = s(&["Kyoto Station", "Higashi Kyoto", "kyoto", "Kyoto"]);
+        assert_eq!(pick_best_option("Kyoto", &texts), Some(3));
+        let texts = s(&["Kyoto Station", "Higashi Kyoto", "KYOTO"]);
+        assert_eq!(pick_best_option("Kyoto", &texts), Some(2));
+        let texts = s(&["Higashi Kyoto", "Kyoto Station", "Kyoto Tower"]);
+        // Prefix beats substring; among prefixes the shortest wins.
+        assert_eq!(pick_best_option("kyoto", &texts), Some(2));
+        let texts = s(&["Osaka", "Kobe"]);
+        assert_eq!(pick_best_option("Kyoto", &texts), None);
+        assert_eq!(pick_best_option("Kyoto", &[]), None);
+    }
+
+    #[test]
+    fn available_dedupes_and_caps() {
+        assert_eq!(pick_available(&[]), "none");
+        assert_eq!(pick_available(&s(&["A", "B", "A"])), "\"A\", \"B\"");
+        let many: Vec<String> = (0..20).map(|i| format!("o{i}")).collect();
+        assert!(pick_available(&many).ends_with("(+5 more)"));
     }
 }
