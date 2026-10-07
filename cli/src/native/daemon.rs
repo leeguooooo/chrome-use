@@ -196,6 +196,9 @@ pub async fn run_daemon(session: &str) {
     // Tell a future CLI of another version that this daemon can hand its tab
     // over instead of closing it (see `upgrade_handoff`).
     crate::upgrade_handoff::advertise_capability(session);
+    // Whether this daemon replaces one of another version that already exited
+    // on its own (idle timeout), leaving the session's tab open (#448).
+    crate::upgrade_handoff::note_daemon_start(session);
 
     // On Unix the daemon listens on a Unix domain socket; on Windows it uses
     // TCP, so there is no .sock file — only a .port file written by the server.

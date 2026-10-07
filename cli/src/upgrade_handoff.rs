@@ -13,6 +13,14 @@
 //! over. A daemon from before this change cannot answer the request; the CLI
 //! then records what it can learn from `tab_list` and stops it without the tab
 //! sweep (see `connection::ensure_daemon_with_lifecycle_lock`).
+//!
+//! Often no CLI ever meets the old daemon: it exits on its own after the idle
+//! timeout (10 minutes by default), leaving the user's tabs open, before the
+//! first command of the new version runs. Then there is no mismatch to act on
+//! and no handoff file. Each daemon therefore also records its version in
+//! `<session>.daemon-version`, which outlives it, and a starting daemon whose
+//! predecessor left owned tabs and was of another version (or of one from
+//! before the record) says on the first `@ref` that the upgrade cost the refs.
 
 use std::fs;
 use std::io::Write;
@@ -187,6 +195,63 @@ pub fn take(session: &str) -> Option<UpgradeHandoff> {
     take_in(&crate::connection::get_socket_dir(), session)
 }
 
+/// `<session>.daemon-version`: the version of the last daemon that served this
+/// session. Unlike `<session>.version` it outlives the daemon, so a daemon that
+/// starts after its predecessor already exited on its own (the idle timeout,
+/// which leaves the user's tabs open) can still tell it replaced an older one.
+pub fn daemon_version_path_in(dir: &Path, session: &str) -> PathBuf {
+    dir.join(format!("{session}.daemon-version"))
+}
+
+/// Read the previous daemon's version for `session`, then record `version` as
+/// the current one. `None` when no daemon of a version that keeps this record
+/// has served the session.
+pub fn record_daemon_version_in(dir: &Path, session: &str, version: &str) -> Option<String> {
+    let path = daemon_version_path_in(dir, session);
+    let previous = fs::read_to_string(&path)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let _ = fs::create_dir_all(dir);
+    let _ = fs::write(&path, version);
+    previous
+}
+
+/// The upgrade a starting daemon can infer without a handoff file: the
+/// previous daemon left tabs this session owns, and it was of another version
+/// (`previous` differs), or of a version from before this record existed
+/// (`previous` is `None`). Its refs are gone either way; whether the tab came
+/// back is settled on the first browser connect.
+pub fn implied_upgrade(
+    previous: Option<&str>,
+    current: &str,
+    left_owned_tabs: bool,
+) -> Option<UpgradeHandoff> {
+    if !left_owned_tabs || previous == Some(current) {
+        return None;
+    }
+    Some(UpgradeHandoff::new(previous.unwrap_or(""), current))
+}
+
+static IMPLIED_UPGRADE: std::sync::Mutex<Option<UpgradeHandoff>> = std::sync::Mutex::new(None);
+
+/// Called once at daemon start, before anything touches the session's tabs.
+pub fn note_daemon_start(session: &str) {
+    let dir = crate::connection::get_socket_dir();
+    let left_owned_tabs = crate::connection::has_created_targets(session);
+    let current = build_version();
+    let previous = record_daemon_version_in(&dir, session, &current);
+    let implied = implied_upgrade(previous.as_deref(), &current, left_owned_tabs);
+    if let Ok(mut slot) = IMPLIED_UPGRADE.lock() {
+        *slot = implied;
+    }
+}
+
+/// The upgrade inferred at daemon start, once.
+pub fn take_implied_upgrade() -> Option<UpgradeHandoff> {
+    IMPLIED_UPGRADE.lock().ok().and_then(|mut slot| slot.take())
+}
+
 /// Record that this daemon understands [`HANDOFF_ACTION`].
 pub fn advertise_capability(session: &str) {
     let path = caps_path_in(&crate::connection::get_socket_dir(), session);
@@ -286,6 +351,45 @@ mod tests {
 
         let unknown = UpgradeHandoff::new("", "1.5.173").refs_lost_note(false);
         assert!(unknown.starts_with("chrome-use was upgraded (an older version → 1.5.173)"));
+    }
+
+    #[test]
+    fn daemon_version_record_survives_and_reports_the_previous_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(record_daemon_version_in(dir.path(), "s", "1.5.176"), None);
+        assert_eq!(
+            record_daemon_version_in(dir.path(), "s", "1.5.177").as_deref(),
+            Some("1.5.176")
+        );
+        assert_eq!(
+            fs::read_to_string(daemon_version_path_in(dir.path(), "s")).unwrap(),
+            "1.5.177"
+        );
+    }
+
+    #[test]
+    fn implied_upgrade_needs_owned_tabs_and_another_version() {
+        // Same version restarting after an idle exit: nothing to say.
+        assert_eq!(implied_upgrade(Some("1.5.176"), "1.5.176", true), None);
+        // No tabs left behind: no snapshot can have survived to go stale.
+        assert_eq!(implied_upgrade(Some("1.5.175"), "1.5.176", false), None);
+
+        let known = implied_upgrade(Some("1.5.175"), "1.5.176", true).unwrap();
+        assert_eq!(
+            (known.from_version.as_str(), known.to_version.as_str()),
+            ("1.5.175", "1.5.176")
+        );
+        assert!(!known.tab_kept && known.refs.is_none());
+
+        // A daemon from before the record (1.5.175 and older) left tabs.
+        let mut old = implied_upgrade(None, "1.5.176", true).unwrap();
+        old.url = Some("https://example.com/".into());
+        assert_eq!(
+            old.refs_lost_note(true),
+            "chrome-use was upgraded (an older version → 1.5.176) and its daemon restarted; \
+             this session's tab was kept (https://example.com/), but refs from before the \
+             upgrade are gone — run `snapshot -i` and use its refs."
+        );
     }
 
     #[test]

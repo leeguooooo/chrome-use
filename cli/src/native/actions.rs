@@ -5555,8 +5555,16 @@ async fn handle_upgrade_handoff(cmd: &Value, state: &mut DaemonState) -> Result<
 /// Returns true when it handled the restart (the legacy `.restore-url`
 /// navigation is then skipped).
 async fn try_resume_after_upgrade(state: &mut DaemonState) -> bool {
+    // Taken either way, so it can only ever apply to the first connect.
+    let implied = crate::upgrade_handoff::take_implied_upgrade();
     let Some(handoff) = crate::upgrade_handoff::take(&state.session_id) else {
-        return false;
+        return match implied {
+            Some(handoff) => {
+                note_upgrade_without_handoff(state, handoff).await;
+                true
+            }
+            None => false,
+        };
     };
     let _ = fs::remove_file(get_restore_url_path(&state.session_id));
     let Some(mgr) = state.browser.as_mut() else {
@@ -5628,6 +5636,34 @@ async fn try_resume_after_upgrade(state: &mut DaemonState) -> bool {
         .ref_map
         .set_restart_note(handoff.refs_lost_note(false));
     true
+}
+
+/// The previous daemon was of another version but exited on its own (the idle
+/// timeout) before any CLI could ask it to hand over, so nothing recorded its
+/// refs. Discovery has already taken the session's owned tab back, or not; say
+/// which on the first `@ref` instead of "NO snapshot refs at all" (#448).
+async fn note_upgrade_without_handoff(
+    state: &mut DaemonState,
+    mut handoff: crate::upgrade_handoff::UpgradeHandoff,
+) {
+    let _ = fs::remove_file(get_restore_url_path(&state.session_id));
+    let Some(mgr) = state.browser.as_ref() else {
+        return;
+    };
+    let tab_kept = mgr.handoff_target().is_some();
+    if tab_kept {
+        let url = match tokio::time::timeout(Duration::from_secs(3), mgr.get_url()).await {
+            Ok(Ok(url)) if !url.is_empty() => url,
+            _ => mgr.cached_active_url(),
+        };
+        handoff.url = Some(url).filter(|u| !u.is_empty() && u != "about:blank");
+    }
+    handoff.tab_kept = tab_kept;
+    if !state.ref_map.has_snapshot() {
+        state
+            .ref_map
+            .set_restart_note(handoff.refs_lost_note(tab_kept));
+    }
 }
 
 async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
