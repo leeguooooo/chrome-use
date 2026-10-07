@@ -1227,9 +1227,9 @@ pub(crate) fn foreground_conflict_refusal(owner: &str, title: &str) -> String {
          clicks could start doing nothing. Your tab does not need to be in front to be \
          driven: clicks and typing reach a background tab, and its results just arrive later \
          (a hidden page runs timers about once a second). Wait for the result \
-         (`wait --text <expected>` or `wait 2000`) and `snapshot -i` before repeating \
-         anything. If this page really ignores input while hidden, hand the step to the user, \
-         or repeat with `--force` to hide session '{owner}''s tab anyway."
+         (`wait --text <expected>`) and `snapshot -i` before repeating anything. If this \
+         page really ignores input while hidden, hand the step to the user. Do not override \
+         this refusal: session '{owner}' is another agent's work in progress."
     )
 }
 
@@ -5340,7 +5340,7 @@ mod tests {
     /// delivered; wait and re-read) before the override, and must be
     /// recognisable so `tab adopt` can keep the adopt and report it.
     #[test]
-    fn foreground_conflict_refusal_says_wait_first_and_force_last() {
+    fn foreground_conflict_refusal_says_wait_and_never_offers_force() {
         let conflict = ForegroundConflict {
             owner: "ab-hn2".to_string(),
             title: "Checkout".to_string(),
@@ -5350,9 +5350,9 @@ mod tests {
         assert!(r.contains("'ab-hn2'"), "{r}");
         assert!(r.contains("Checkout"), "{r}");
         assert!(r.contains("reach a background tab"), "{r}");
-        let wait_at = r.find("wait --text").expect("says to wait");
-        let force_at = r.find("--force").expect("names the override");
-        assert!(wait_at < force_at, "{r}");
+        // Weak models ran the override the moment the error named it.
+        assert!(r.contains("wait --text"), "{r}");
+        assert!(!r.contains("--force"), "{r}");
         assert_eq!(
             conflict.warning(),
             foreground_conflict_warning("ab-hn2", "Checkout")

@@ -1318,7 +1318,8 @@ fn close_all_refusal_message(own: &str, others: &[CloseAllTarget]) -> String {
     }
     msg.push_str(&format!(
         "To close only your own session ({own}), run `chrome-use close`.\n\
-         To really close every session, including the ones above, run `chrome-use close --all --force`."
+         Do not close the sessions above to get past this: they are other agents' work in \
+         progress. Only the user can decide to close them all."
     ));
     msg
 }
@@ -3895,7 +3896,8 @@ mod tests {
         assert!(msg.contains("1 other live session belongs"), "{msg}");
         assert!(msg.contains("other (pid 100, started 1m ago)"), "{msg}");
         assert!(msg.contains("`chrome-use close`"), "{msg}");
-        assert!(msg.contains("close --all --force"), "{msg}");
+        // Agents ran the override as soon as the message named it.
+        assert!(!msg.contains("--force"), "{msg}");
         assert!(msg.contains("(mine)"), "{msg}");
     }
 

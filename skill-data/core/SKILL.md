@@ -72,8 +72,11 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
 Use one session name per task and reuse it. After "session unresponsive",
 make the one move it names. Do not close, navigate, or reconfigure tabs or
 sessions you did not create or adopt. `close` only your own session when done;
-`close --all` would close other agents' sessions, so it refuses; never force it. An empty tab list is not a disconnected
-browser: read the error before restarting anything.
+`close --all` would close other agents' sessions, so it refuses; never force it.
+Your tab need not be in front: a click on a background tab still lands and its
+result arrives later, so `wait --text` for it instead of `tab select --activate`.
+An empty tab list is not a disconnected browser: read the error before
+restarting anything, and do not escape to `open --launch`.
 
 ## Trust boundaries
 
