@@ -745,13 +745,20 @@ pub fn run_browsers(args: &[String], session: &str, json_out: bool) {
         println!("{}", render(row));
     }
     println!(
-        "\nDrive one: --browser <name|dir|email> (a unique name prefix works, e.g. --browser {}).",
+        "\nDrive one: --browser <name|dir|email>; a unique prefix of the name works too{}.",
         rows.iter()
-            .find(|r| r.connected())
-            .and_then(|r| r.name.as_deref())
-            .and_then(|n| n.chars().next())
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "d".into())
+            .enumerate()
+            .filter(|(_, r)| r.connected())
+            .find_map(|(i, r)| {
+                // The shortest prefix of a connected profile's name that
+                // picks it alone — a live example, never an ambiguous one.
+                let name = r.name.as_deref()?;
+                (1..=name.chars().count())
+                    .map(|n| name.chars().take(n).collect::<String>())
+                    .find(|p| match_selector(&rows, p) == Match::One(i))
+            })
+            .map(|p| format!(" (e.g. --browser {})", shell_quote(&p)))
+            .unwrap_or_default()
     );
     if rows.iter().any(|r| !r.connected()) {
         println!(
@@ -898,9 +905,19 @@ fn query_cookie_names(db: &Path, tmp_db: &Path, domain: &str) -> Result<Vec<Stri
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let now_chrome = (now_unix + 11_644_473_600) * 1_000_000;
+        // The domain, its subdomains, and domain cookies of its parents
+        // (`.cloudflare.com` cookies are sent to `dash.cloudflare.com`).
+        let mut hosts = vec![
+            format!("host_key = '{domain}'"),
+            format!("host_key LIKE '%.{domain}'"),
+        ];
+        let labels: Vec<&str> = domain.split('.').collect();
+        for i in 0..labels.len().saturating_sub(1) {
+            hosts.push(format!("host_key = '.{}'", labels[i..].join(".")));
+        }
         let sql = format!(
-            "SELECT name FROM cookies WHERE (host_key = '{domain}' OR host_key = '.{domain}' \
-             OR host_key LIKE '%.{domain}') AND (has_expires = 0 OR expires_utc > {now_chrome});"
+            "SELECT name FROM cookies WHERE ({}) AND (has_expires = 0 OR expires_utc > {now_chrome});",
+            hosts.join(" OR ")
         );
         let out = std::process::Command::new("sqlite3")
             .arg(tmp_db)

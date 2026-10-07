@@ -195,7 +195,7 @@ fn configured_profile_ws(selector: &str, why: &str) -> String {
         Ok(row) => row.ws.unwrap_or_default(),
         Err(msg) => {
             eprintln!(
-                "{} {msg} (chosen by {why} in ~/.chrome-use/config.json)",
+                "{} {msg} (chosen by {why} in the chrome-use config)",
                 color::error_indicator()
             );
             exit(1);
