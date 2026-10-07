@@ -41,7 +41,7 @@ chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚�
 |---|:---:|:---:|:---:|:---:|
 | **任意** agent / CLI 都能用（不绑单一 app） | ✅ | ✅ | ❌ 仅 Claude | ✅ |
 | 驱动你**真实、已登录**的 Chrome | 可配置；新上下文默认无登录态 | ✅ | ✅ | ✅ |
-| 连接方式 / **"Allow remote debugging?" 弹框** | —（自带浏览器） | `--remote-debugging-port` · **每次连都弹** 🔴 | `chrome.debugger` · 无 | 原生消息 · **从不** ✅ |
+| 连接方式 / **"Allow remote debugging?" 弹框** | —（自带浏览器） | `--remote-debugging-port` · 取决于版本和模式 | `chrome.debugger` · 无 | 原生消息 · **从不** ✅ |
 | 真实浏览器指纹（CreepJS ~0%）¹ | ❌ 自动化特征 / headless | ✅ | ✅ | ✅ **已实测 0%** |
 | **无 `Runtime.enable` CDP 泄漏**（rebrowser）² | ❌ 泄漏 | ❌ 泄漏 | — | ✅ **默认关闭** |
 | 多 agent 共用**同一个**真实 Chrome、标签组隔离³ | ❌ 各开各的浏览器 | ⚠️ 共享 tab、无隔离 | ❌ 单 app | ✅ |

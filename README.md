@@ -41,7 +41,7 @@ A **new browser context** starts without your existing login sessions. Playwrigh
 |---|:---:|:---:|:---:|:---:|
 | Works with **any** agent / CLI (not one app) | ✅ | ✅ | ❌ Claude only | ✅ |
 | Drives your **real, logged-in** Chrome | Configurable; fresh contexts start empty | ✅ | ✅ | ✅ |
-| Connect method / **"Allow remote debugging?" popup** | — (own browser) | `--remote-debugging-port` · **every connection** 🔴 | `chrome.debugger` · no | native messaging · **never** ✅ |
+| Connect method / **"Allow remote debugging?" popup** | — (own browser) | `--remote-debugging-port` · version/mode dependent | `chrome.debugger` · no | native messaging · **never** ✅ |
 | Real-browser fingerprint (CreepJS ~0%)¹ | ❌ automation markers / headless | ✅ | ✅ | ✅ **verified 0%** |
 | **No `Runtime.enable` CDP leak** (rebrowser)² | ❌ leaks | ❌ leaks | — | ✅ **off by default** |
 | Many agents on **one** real Chrome, isolated tab groups³ | ❌ separate browsers | ⚠️ shared tabs, no isolation | ❌ single app | ✅ |
