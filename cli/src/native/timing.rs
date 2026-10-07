@@ -4,7 +4,10 @@
 //! method and how long Chrome took to answer — and a summary goes back with
 //! the response as a top-level `timing` object, which `--json` callers see.
 //! A slow command can then be split into Chrome's time (`cdpMs`, by method)
-//! and the daemon's own work and waits (`ms` minus `cdpMs`).
+//! and non-CDP time (`ms` minus `cdpBusyMs`). `cdpMs` sums request
+//! durations and can exceed wall time when reads overlap; `cdpBusyMs` is
+//! the union of recorded foreground request intervals, not CPU time.
+//! Spawned background work is outside this task-local recorder.
 //!
 //! The daemon also appends one JSON line per command to
 //! `~/.chrome-use/timing.jsonl` (rotated to `.1` past 20 MB): action, session,
@@ -22,14 +25,26 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 tokio::task_local! {
-    static RECORDER: Mutex<Vec<(String, Duration)>>;
+    static RECORDER: Mutex<Vec<(String, Duration, Instant, Instant)>>;
 }
 
 /// Record one CDP call. A no-op outside a timed command.
 pub fn record(method: &str, elapsed: Duration) {
+    let end = Instant::now();
+    record_span(method, end - elapsed, end);
+}
+
+/// Record real start/end instants so overlapping reads are counted only once
+/// in wall-time occupancy. Called in the same task-local scope as the request.
+pub fn record_span(method: &str, start: Instant, end: Instant) {
     let _ = RECORDER.try_with(|r| {
         if let Ok(mut calls) = r.lock() {
-            calls.push((method.to_string(), elapsed));
+            calls.push((
+                method.to_string(),
+                end.saturating_duration_since(start),
+                start,
+                end,
+            ));
         }
     });
 }
@@ -47,7 +62,23 @@ pub async fn timed<F: Future>(f: F) -> (F::Output, Value) {
                         .unwrap_or_default()
                 })
                 .unwrap_or_default();
-            (out, summarize(started.elapsed(), &calls))
+            let end = Instant::now();
+            let durations: Vec<_> = calls.iter().map(|(m, d, _, _)| (m.clone(), *d)).collect();
+            let spans: Vec<_> = calls
+                .iter()
+                .map(|(_, _, a, b)| {
+                    (
+                        a.saturating_duration_since(started),
+                        b.saturating_duration_since(started),
+                    )
+                })
+                .collect();
+            let total = end.duration_since(started);
+            let mut summary = summarize(total, &durations);
+            let busy = interval_union(total, &spans);
+            summary["cdpBusyMs"] = json!(ms(busy));
+            summary["nonCdpMs"] = json!(ms(total.saturating_sub(busy)));
+            (out, summary)
         })
         .await
 }
@@ -79,6 +110,25 @@ pub fn summarize(total: Duration, calls: &[(String, Duration)]) -> Value {
             .map(|(m, n, d)| json!({ "method": m, "count": n, "ms": ms(*d) }))
             .collect::<Vec<_>>(),
     })
+}
+
+/// Union of completed CDP intervals clipped to this command's wall budget.
+fn interval_union(total: Duration, spans: &[(Duration, Duration)]) -> Duration {
+    let mut spans: Vec<_> = spans
+        .iter()
+        .map(|(a, b)| ((*a).min(total), (*b).min(total)))
+        .filter(|(a, b)| b > a)
+        .collect();
+    spans.sort_unstable();
+    let mut busy = Duration::ZERO;
+    let mut end = Duration::ZERO;
+    for (a, b) in spans {
+        if b > end {
+            busy += b - a.max(end);
+            end = b;
+        }
+    }
+    busy
 }
 
 const LOG_ROTATE_BYTES: u64 = 20 << 20;
@@ -170,6 +220,56 @@ mod tests {
         assert_eq!(out, 7);
         assert_eq!(t["cdpCalls"], 1);
         assert_eq!(t["slowest"][0]["method"], "Page.navigate");
+    }
+
+    #[test]
+    fn overlapping_cdp_intervals_do_not_double_count_wall_time() {
+        let d = Duration::from_millis;
+        assert_eq!(
+            interval_union(d(100), &[(d(0), d(80)), (d(20), d(100))]),
+            d(100)
+        );
+        assert_eq!(
+            interval_union(d(100), &[(d(70), d(200)), (d(10), d(20))]),
+            d(40)
+        );
+        assert_eq!(interval_union(d(100), &[(d(60), d(40))]), Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn timed_reports_accumulated_and_wall_occupancy_separately() {
+        let (_, t) = timed(async {
+            let start = Instant::now();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let end = Instant::now();
+            record_span("Read.one", start, end);
+            record_span("Read.two", start, end);
+        })
+        .await;
+        assert!(t["cdpMs"].as_u64().unwrap() >= t["cdpBusyMs"].as_u64().unwrap() * 2);
+        assert!(t["cdpBusyMs"].as_u64().unwrap() <= t["ms"].as_u64().unwrap());
+        assert_eq!(t["cdpCalls"], 2);
+    }
+
+    #[tokio::test]
+    async fn joined_requests_inherit_recorder_but_spawned_work_does_not() {
+        let (_, timing) = timed(async {
+            let read = |method: &'static str| async move {
+                let start = Instant::now();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                record_span(method, start, Instant::now());
+            };
+            tokio::join!(read("Read.one"), read("Read.two"));
+            tokio::spawn(read("Background.read")).await.unwrap();
+        })
+        .await;
+        assert_eq!(timing["cdpCalls"], 2);
+        assert!(timing["cdpMs"].as_u64().unwrap() > timing["cdpBusyMs"].as_u64().unwrap());
+        assert!(timing["slowest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["method"] != "Background.read"));
     }
 
     #[test]

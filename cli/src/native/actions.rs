@@ -620,6 +620,8 @@ pub struct DaemonState {
     /// one-line "offer the user `chrome-use report`" nudge — see
     /// `crate::friction::NudgeTracker`.
     pub report_nudge: crate::friction::NudgeTracker,
+    /// Consecutive verified unchanged attempts, scoped to this daemon session.
+    pub progress: super::progress::ProgressTracker,
 }
 
 impl DaemonState {
@@ -691,6 +693,7 @@ impl DaemonState {
             login_wall_hosts: Default::default(),
             login_wall_last: None,
             report_nudge: Default::default(),
+            progress: Default::default(),
         }
     }
 
@@ -1690,7 +1693,22 @@ impl Drop for DaemonState {
     }
 }
 
+/// Clear advisory streaks on every path that produced no complete observation,
+/// including policy gates and launch errors that return before dispatch.
 pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
+    let response = Box::pin(execute_command_inner(cmd, state)).await;
+    if response["success"] != true
+        || response
+            .pointer("/data/observed/status")
+            .and_then(Value::as_str)
+            != Some("complete")
+    {
+        state.progress.reset();
+    }
+    response
+}
+
+async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
 
     // Apply per-invocation overrides the client forwarded (the daemon's own env
@@ -2004,6 +2022,9 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // interactive snapshot instead, which is what collapses
     // `navigate` + `snapshot` into one round trip.
     let observe_navigation = observe_requested && NAVIGATION_OBSERVABLE_ACTIONS.contains(&action);
+    if !observe {
+        state.progress.reset();
+    }
     let observe_baseline = if observe {
         enable_request_tracking(state).await;
         let _ = state.drain_cdp_events();
@@ -2367,6 +2388,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         }
     };
 
+    if !ok {
+        state.progress.reset();
+    }
+
     // `--observe`: after a successful mutating action, settle briefly, re-snapshot,
     // and attach ONLY the delta vs the baseline (added/removed lines, url change,
     // requests fired). Collapses act→wait→snapshot→diff into one reply.
@@ -2515,7 +2540,22 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
                 .entry("data")
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
             if let Some(d) = data.as_object_mut() {
-                d.insert("observed".into(), Value::Object(observed));
+                let mut observation = Value::Object(observed);
+                if d.contains_key("openedTab")
+                    || d.contains_key("dialog")
+                    || state.pending_dialog.is_some()
+                {
+                    // The original page can stay unchanged after a successful
+                    // popup or dialog action. It is not a stalled attempt.
+                    state.progress.reset();
+                } else if let Ok(screen) = &snap1 {
+                    if let Some(hint) = state.progress.observe(cmd, &observation, screen) {
+                        observation["noProgress"] = hint;
+                    }
+                } else {
+                    state.progress.reset();
+                }
+                d.insert("observed".into(), observation);
             }
             // A page waiting for a person must not read as "the click did
             // nothing", or the caller clicks again (#377).

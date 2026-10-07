@@ -3748,6 +3748,26 @@ fn dispatch_script(flags: &Flags, cmd: serde_json::Value) {
                         serde_json::to_string_pretty(&other).unwrap_or_default()
                     ),
                 }
+                for advisory in data
+                    .get("advisories")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(hint) = advisory.get("hint").and_then(Value::as_str) {
+                        eprintln!("{} {}", color::warning_indicator(), hint);
+                    }
+                }
+                for step in data
+                    .get("steps")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(hint) = step.pointer("/noProgress/hint").and_then(Value::as_str) {
+                        eprintln!("{} {}", color::warning_indicator(), hint);
+                    }
+                }
                 if let Some(err) = data.get("error").and_then(|v| v.as_str()) {
                     eprintln!("{} {}", color::error_indicator(), err);
                 }

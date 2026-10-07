@@ -5823,6 +5823,11 @@ Options:
   --no-settle                Capture immediately, without waiting for the page
                              to stop changing
   --with-screenshot <path>   Save the pixels alongside a structural observation
+                            Text remains the default; add pixels for visual controls.
+                            Repeated identical settled clicks/keys with no observed
+                            activity carry observed.noProgress (advisory only).
+                            Timing JSON: ms=wall, cdpMs=cumulative requests,
+                            cdpBusyMs=request interval union, nonCdpMs=wall-busy.
                              (`snapshot`, or an action with `--observe`), from
                              the same settled moment. The tree is what you read;
                              the image is for looking at
@@ -5981,6 +5986,13 @@ fn print_human_check(h: &serde_json::Value) {
 /// the delta: a silent `✓ Done` is indistinguishable from the flag being
 /// ignored, which is exactly how this went unnoticed.
 fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
+    if let Some(hint) = obs
+        .get("noProgress")
+        .and_then(|v| v.get("hint"))
+        .and_then(|v| v.as_str())
+    {
+        eprintln!("{} {}", color::warning_indicator(), hint);
+    }
     let changed = obs.get("changed").and_then(|v| v.as_bool());
     if let Some(status) = obs.get("status").and_then(|v| v.as_str()) {
         if status != "complete" {
@@ -6278,6 +6290,9 @@ mod tests {
             match case.as_str() {
                 "eval" => data["result"] = serde_json::Value::Null,
                 "check" => data["checked"] = json!(true),
+                "no_progress" => {
+                    data["observed"]["noProgress"] = json!({"hint":"Repeated action fixture"})
+                }
                 "unavailable" => {
                     data["observed"] = json!({"status":"unavailable","changed":null,
                     "errors":[{"stage":"afterSnapshot","message":"fixture capture denied"}]})
@@ -6311,6 +6326,7 @@ mod tests {
             "navigation",
             "json",
             "unavailable",
+            "no_progress",
         ] {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
@@ -6337,6 +6353,9 @@ mod tests {
                     1,
                     "{case}: {stderr}"
                 );
+                if case == "no_progress" {
+                    assert_eq!(stderr.matches("Repeated action fixture").count(), 1);
+                }
                 if case == "navigation" {
                     assert_eq!(stdout.matches("observed snapshot:").count(), 1);
                 } else if case == "unavailable" {

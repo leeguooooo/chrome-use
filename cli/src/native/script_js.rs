@@ -53,6 +53,7 @@ pub async fn run_js(
     // Actor loop: service one bridged op at a time until the engine finishes and
     // drops its sender (channel closes). `__log` is handled locally (no browser).
     let mut logs: Vec<Value> = Vec::new();
+    let mut advisories: Vec<Value> = Vec::new();
     while let Some(msg) = req_rx.recv().await {
         let action = msg.cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
         if action == "__log" {
@@ -62,13 +63,23 @@ pub async fn run_js(
             continue;
         }
         let result = Box::pin(execute_command(&msg.cmd, state)).await;
+        collect_advisory(&result, &mut advisories);
         let _ = msg.reply.send(result);
     }
 
     match engine.await {
-        Ok(Ok(ret)) => Ok(json!({ "return": ret, "logs": logs })),
+        Ok(Ok(ret)) => Ok(json!({ "return": ret, "logs": logs, "advisories": advisories })),
         Ok(Err(e)) => Err(e),
         Err(e) => Err(format!("script engine thread failed: {}", e)),
+    }
+}
+
+/// Keep bounded advisory evidence even when a script ignores a cu.* return.
+fn collect_advisory(response: &Value, advisories: &mut Vec<Value>) {
+    if advisories.len() < 20 {
+        if let Some(advisory) = response.pointer("/data/observed/noProgress") {
+            advisories.push(advisory.clone());
+        }
     }
 }
 
@@ -367,6 +378,7 @@ pub async fn run_js_in(
     // Same actor loop as a one-shot run: the thread drops its `cu_tx` when the
     // job finishes, which closes this channel and ends the loop.
     let mut logs: Vec<Value> = Vec::new();
+    let mut advisories: Vec<Value> = Vec::new();
     while let Some(msg) = req_rx.recv().await {
         let action = msg.cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
         if action == "__log" {
@@ -376,6 +388,7 @@ pub async fn run_js_in(
             continue;
         }
         let result = Box::pin(execute_command(&msg.cmd, state)).await;
+        collect_advisory(&result, &mut advisories);
         let _ = msg.reply.send(result);
     }
 
@@ -384,7 +397,9 @@ pub async fn run_js_in(
         handle.busy = false;
     }
     match outcome {
-        Ok(Ok(ret)) => Ok(json!({ "return": ret, "logs": logs, "context": name })),
+        Ok(Ok(ret)) => {
+            Ok(json!({ "return": ret, "logs": logs, "advisories": advisories, "context": name }))
+        }
         Ok(Err(e)) => Err(e),
         Err(_) => {
             state.script_contexts.map.remove(name);
@@ -558,5 +573,29 @@ mod persistent_context_tests {
         let mut contexts = JsContexts::default();
         assert!(!contexts.drop_context("nope"));
         assert!(contexts.names().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod advisory_tests {
+    use super::*;
+
+    #[test]
+    fn discarded_script_results_still_collect_bounded_advisories() {
+        let mut advisories = Vec::new();
+        collect_advisory(
+            &json!({"success":true,"data":{"result":"ordinary"}}),
+            &mut advisories,
+        );
+        assert!(advisories.is_empty());
+        for _ in 0..25 {
+            collect_advisory(
+                &json!({"success":true,"data":{"observed":{"noProgress":
+                {"hint":"Inspect state", "retryAction":false}}}}),
+                &mut advisories,
+            );
+        }
+        assert_eq!(advisories.len(), 20);
+        assert_eq!(advisories[0]["retryAction"], false);
     }
 }
