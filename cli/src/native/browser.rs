@@ -615,6 +615,11 @@ pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
             && lower.contains("different extension"))
 }
 
+/// The recovery's error when the menu was open again after the tab was shown.
+const MENU_STILL_OPEN: &str = "the menu was still open after chrome-use hid the tab for a moment";
+/// [`MENU_STILL_OPEN`] for a tab in front, which gets a second try.
+const MENU_STILL_OPEN_IN_FRONT: &str = "menu still open (tab in front)";
+
 /// Password managers whose inline autofill menu is a frame of their own
 /// extension, mounted next to a focused login or card field. While that frame
 /// is in a tab, Chrome refuses every debugger command on the tab (#373).
@@ -3002,9 +3007,46 @@ impl BrowserManager {
     ///
     /// Returns a note for the caller's warning when the front tab could not be
     /// put back exactly; errors when nothing was tried or the menu stayed open.
+    ///
+    /// `blur_focused: false` (a key press that must reach the focused field):
+    /// in the background the field keeps focus, since the tab ends hidden. In
+    /// front the tab is shown again, and a focused login field reopens the menu
+    /// at once (#449: `press` / `keyboard type` stayed blocked), so focus leaves
+    /// the field while the tab is hidden and goes back to it at the end, right
+    /// before the command.
+    ///
+    /// A tab in front whose menu is open again after that gets one more try
+    /// with a longer hidden moment: a sign-in widget (Apple's, in an iframe)
+    /// puts the cursor back into its field when the tab is shown.
     pub async fn cycle_pinned_tab_visibility(
         &mut self,
         blur_focused: bool,
+    ) -> Result<Option<String>, String> {
+        match self
+            .cycle_pinned_tab_visibility_once(blur_focused, false)
+            .await
+        {
+            Err(e) if e == MENU_STILL_OPEN_IN_FRONT => self
+                .cycle_pinned_tab_visibility_once(blur_focused, true)
+                .await
+                .map_err(|e| {
+                    if e == MENU_STILL_OPEN_IN_FRONT {
+                        format!(
+                            "{MENU_STILL_OPEN}, twice: the page probably puts the cursor back \
+                             into its login field whenever the tab is shown, which reopens the menu"
+                        )
+                    } else {
+                        e
+                    }
+                }),
+            other => other,
+        }
+    }
+
+    async fn cycle_pinned_tab_visibility_once(
+        &mut self,
+        blur_focused: bool,
+        second_try: bool,
     ) -> Result<Option<String>, String> {
         if !self.on_relay() {
             return Err("not on the extension relay".to_string());
@@ -3040,6 +3082,9 @@ impl BrowserManager {
             .and_then(Value::as_i64)
             .ok_or("no Chrome window id")?;
         let in_front = live.get("active").and_then(Value::as_bool) == Some(true);
+        // In front, focus that must stay in the field leaves it while the tab
+        // is hidden and is put back at the end (see above).
+        let refocus = in_front && !blur_focused;
         let window = self
             .chrome_call("windows", "get", json!([window_id]))
             .await
@@ -3110,7 +3155,9 @@ impl BrowserManager {
                     window_id,
                     front_index,
                     in_front,
-                    blur_focused.then_some(session_id.as_str()),
+                    (blur_focused || refocus).then_some(session_id.as_str()),
+                    refocus,
+                    if second_try { 900 } else { 300 },
                 )
                 .await
             }
@@ -3178,7 +3225,7 @@ impl BrowserManager {
                 // The pinned tab is hidden again; take focus out of the field so
                 // the menu does not reopen the next time it is shown.
                 tokio::time::sleep(Duration::from_millis(150)).await;
-                self.blur_focused_field(session).await;
+                self.blur_focused_field(session, false).await;
             }
         }
         if let Some(group) = collapsed_group {
@@ -3190,15 +3237,24 @@ impl BrowserManager {
         // password manager). Give it a moment before calling it a failure.
         for _ in 0..6 {
             if !self.pinned_tab_blocked().await {
+                if refocus {
+                    self.refocus_marked_field(&session_id).await;
+                }
                 return Ok(note);
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        Err("the menu was still open after chrome-use hid the tab for a moment".to_string())
+        Err(if in_front {
+            MENU_STILL_OPEN_IN_FRONT
+        } else {
+            MENU_STILL_OPEN
+        }
+        .to_string())
     }
 
     /// The tab switches of [`Self::cycle_pinned_tab_visibility`]; the caller
     /// closes the blank tab whatever happens here.
+    #[allow(clippy::too_many_arguments)]
     async fn flip_visibility(
         &self,
         chrome_tab: i64,
@@ -3207,6 +3263,8 @@ impl BrowserManager {
         front_index: i64,
         in_front: bool,
         blur_session: Option<&str>,
+        remember_focus: bool,
+        hidden_ms: u64,
     ) -> Result<(), String> {
         let activate = |tab: i64| json!([tab, { "active": true }]);
         // In front: right of the pinned tab. In the background: where the
@@ -3225,14 +3283,14 @@ impl BrowserManager {
         if in_front {
             self.chrome_call("tabs", "update", activate(temp_tab))
                 .await?;
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            tokio::time::sleep(Duration::from_millis(hidden_ms)).await;
             // While the tab is hidden the menu's frame is gone and debugger
             // commands work again. Take focus out of the field it was attached
             // to: Bitwarden reopens its menu on a focused login field as soon
             // as the tab is shown, so the repeat hit the same block (#373).
             // The value typed so far stays.
             if let Some(session) = blur_session {
-                self.blur_focused_field(session).await;
+                self.blur_focused_field(session, remember_focus).await;
             }
             self.chrome_call("tabs", "update", activate(chrome_tab))
                 .await?;
@@ -3248,18 +3306,112 @@ impl BrowserManager {
         Ok(())
     }
 
-    async fn blur_focused_field(&self, session_id: &str) {
+    /// Take focus out of the focused field: in the page, and in its
+    /// same-process child frames, where a sign-in form in an iframe keeps its
+    /// own focused field (#449). With `remember`, the field is marked for
+    /// [`Self::refocus_marked_field`].
+    async fn blur_focused_field(&self, session_id: &str, remember: bool) {
+        let mark = if remember {
+            "if (a.tagName !== 'IFRAME' && a.tagName !== 'FRAME') a.setAttribute('data-cu-refocus', '1');"
+        } else {
+            ""
+        };
+        let expression = format!(
+            "(() => {{ const a = document.activeElement; \
+             if (a && a !== document.body && a.blur) {{ {mark} a.blur(); }} }})()"
+        );
+        // Frames first: the page's own blur moves focus off the frame element.
+        for context in self.child_frame_worlds(session_id).await {
+            let _ = self
+                .client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(json!({ "expression": expression, "contextId": context })),
+                    Some(session_id),
+                )
+                .await;
+        }
         let _ = self
             .client
             .send_command(
                 "Runtime.evaluate",
-                Some(json!({
-                    "expression": "(() => { const a = document.activeElement; \
-                        if (a && a !== document.body && a.blur) a.blur(); })()",
-                })),
+                Some(json!({ "expression": expression })),
                 Some(session_id),
             )
             .await;
+    }
+
+    /// Put focus back on the field [`Self::blur_focused_field`] marked, in the
+    /// page or in a child frame. Last, right before the command that needs it:
+    /// the menu reopens on it a moment later.
+    async fn refocus_marked_field(&self, session_id: &str) {
+        let expression = "(() => { const el = document.querySelector('[data-cu-refocus]'); \
+            if (!el) return false; el.removeAttribute('data-cu-refocus'); \
+            el.focus({ preventScroll: true }); return true; })()";
+        let found = self
+            .client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({ "expression": expression, "returnByValue": true })),
+                Some(session_id),
+            )
+            .await
+            .ok()
+            .and_then(|v| v.pointer("/result/value").and_then(Value::as_bool))
+            == Some(true);
+        if found {
+            return;
+        }
+        for context in self.child_frame_worlds(session_id).await {
+            let found = self
+                .client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(json!({ "expression": expression, "contextId": context, "returnByValue": true })),
+                    Some(session_id),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.pointer("/result/value").and_then(Value::as_bool))
+                == Some(true);
+            if found {
+                return;
+            }
+        }
+    }
+
+    /// An isolated world in each same-process child frame of the page (at most
+    /// a handful), to reach a field focused inside a frame.
+    async fn child_frame_worlds(&self, session_id: &str) -> Vec<i64> {
+        let Ok(tree) = self
+            .client
+            .send_command_no_params("Page.getFrameTree", Some(session_id))
+            .await
+        else {
+            return Vec::new();
+        };
+        let mut frames = Vec::new();
+        super::element::flatten_frame_tree(&tree["frameTree"], true, &mut frames);
+        let mut worlds = Vec::new();
+        for (frame_id, _, is_top) in frames.into_iter().take(9) {
+            if is_top {
+                continue;
+            }
+            if let Some(id) = self
+                .client
+                .send_command(
+                    "Page.createIsolatedWorld",
+                    Some(json!({ "frameId": frame_id, "worldName": "chrome_use_focus" })),
+                    Some(session_id),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.get("executionContextId").and_then(Value::as_i64))
+            {
+                worlds.push(id);
+            }
+        }
+        worlds
     }
 
     /// Like `pinned_tab_summary`, but with the url Chrome reports for the tab

@@ -82,6 +82,12 @@ const AUTH_USER_SELECTORS: &[&str] = &[
     "input[type=text][id*=user i]",
     "input[type=text][autocomplete=email]",
     "input[type=text][autocomplete=username]",
+    // Apple's sign-in widget: `<input type=text id=account_name_text_field
+    // placeholder="Email or Phone Number">`, no name, no autocomplete (#449).
+    "input[id*=account_name i]",
+    "input[id*=accountname i]",
+    "input[type=text][placeholder*=email i]",
+    "input[type=text][aria-label*=email i]",
 ];
 const AUTH_USER_FALLBACK_SELECTORS: &[&str] = &["input[type=text]", "input:not([type])"];
 
@@ -12781,7 +12787,9 @@ async fn read_back_fill(
 }
 
 /// Commands that drive the page through the debugger and change it: the ones
-/// worth checking for a blocked tab before they run (#373).
+/// worth checking for a blocked tab before they run (#373). Every command
+/// that touches the page is here or in [`safe_to_repeat`] (#449: a key, a
+/// locator action or a login on a blocked tab got no recovery).
 fn acts_on_page(action: &str) -> bool {
     matches!(
         action,
@@ -12792,22 +12800,55 @@ fn acts_on_page(action: &str) -> bool {
             | "pick"
             | "hover"
             | "scroll"
+            | "scrollintoview"
             | "select_text"
             | "paste"
             | "mouse"
+            | "mousedown"
+            | "mouseup"
+            | "mousemove"
             | "keyboard"
+            | "keydown"
+            | "keyup"
+            | "inserttext"
+            | "input_keyboard"
+            | "input_mouse"
+            | "input_touch"
+            | "swipe"
             | "focus"
             | "clear"
             | "selectall"
+            | "multiselect"
             | "dispatch"
             | "tap"
             | "setvalue"
             | "upload"
+            | "download"
             | "drag"
             | "wheel"
             | "evaluate"
             | "eval"
+            | "evalhandle"
+            | "waitforfunction"
+            | "script"
+            | "addscript"
+            | "addstyle"
+            | "setcontent"
+            | "pushstate"
+            | "solve_slider"
             | "form_fill"
+            | "getbyrole"
+            | "getbytext"
+            | "getbylabel"
+            | "getbyplaceholder"
+            | "getbyalttext"
+            | "getbytitle"
+            | "getbytestid"
+            | "nth"
+            | "do"
+            | "site"
+            | "auth_login"
+            | "auth_login_bwu"
             | "navigate"
             | "back"
             | "forward"
@@ -12854,6 +12895,39 @@ fn safe_to_repeat(action: &str) -> bool {
             | "extract"
             | "stealth_status"
             | "cf_status"
+            | "frame"
+            | "mainframe"
+            | "expect"
+            | "findfuzzy"
+            | "highlight"
+            | "pdf"
+            | "vitals"
+            | "react_tree"
+            | "react_inspect"
+            | "react_suspense"
+            | "diff_snapshot"
+            | "diff_screenshot"
+            | "canvas_list"
+            | "canvas_capture"
+            | "waitforloadstate"
+            | "waitforurl"
+            | "storage_get"
+            | "storage_set"
+            | "storage_clear"
+            | "cookies_get"
+            | "cookies_set"
+            | "cookies_clear"
+            | "viewport"
+            | "device"
+            | "emulatemedia"
+            | "set_media"
+            | "timezone"
+            | "locale"
+            | "geolocation"
+            | "useragent"
+            | "user_agent"
+            | "offline"
+            | "headers"
     )
 }
 
@@ -17473,6 +17547,494 @@ async fn handle_http_credentials(cmd: &Value, state: &mut DaemonState) -> Result
 // Auth handlers
 // ---------------------------------------------------------------------------
 
+/// Where a login's fields are: the tab's top document, or a child frame of the
+/// same site. App Store Connect's sign-in form is an idmsa.apple.com iframe; a
+/// login that only looked at the top document found no field there (#449).
+struct AuthScope {
+    /// The session that reaches the document: the tab's own, or an
+    /// out-of-process frame's.
+    session_id: String,
+    /// The tab's session. Keys are pressed there; Chrome routes them to the
+    /// focused frame.
+    page_session: String,
+    /// The child frame (`None`: the top document).
+    frame_id: Option<String>,
+    /// An isolated world in a same-process child frame (0: the main world of
+    /// `session_id`). Renewed when the frame loads its next page.
+    context_id: std::sync::atomic::AtomicI64,
+    /// A child frame's origin: its fields are filled only while it is there.
+    frame_origin: Option<String>,
+}
+
+impl AuthScope {
+    fn top(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            page_session: session_id.to_string(),
+            frame_id: None,
+            context_id: std::sync::atomic::AtomicI64::new(0),
+            frame_origin: None,
+        }
+    }
+
+    fn in_frame(&self) -> bool {
+        self.frame_id.is_some()
+    }
+
+    /// The origin the fields must stay on: the frame's own, else `top`.
+    fn pin<'a>(&'a self, top: Option<&'a str>) -> Option<&'a str> {
+        self.frame_origin.as_deref().or(top)
+    }
+}
+
+/// The origin of a child frame that may receive the credentials of a login on
+/// `top_url`: an http(s) frame of the same site (idmsa.apple.com under
+/// appstoreconnect.apple.com), never a downgrade from https. A frame of
+/// another site (an ad, a "Sign in with Google" widget) gets nothing.
+fn auth_frame_origin(top_url: &str, frame_url: &str) -> Option<String> {
+    let top = url::Url::parse(top_url).ok()?;
+    let frame = url::Url::parse(frame_url).ok()?;
+    let web = |u: &url::Url| matches!(u.scheme(), "http" | "https");
+    if !web(&top) || !web(&frame) || (top.scheme() == "https" && frame.scheme() != "https") {
+        return None;
+    }
+    if !super::login_wall::related(top.host_str()?, frame.host_str()?) {
+        return None;
+    }
+    Some(frame.origin().ascii_serialization())
+}
+
+/// A fresh isolated world in a same-process child frame. Its DOM is the
+/// frame's; page scripts cannot see what runs there.
+async fn auth_frame_world(
+    client: &super::cdp::client::CdpClient,
+    page_session: &str,
+    frame_id: &str,
+) -> Result<i64, String> {
+    let ctx: Value = client
+        .send_command(
+            "Page.createIsolatedWorld",
+            Some(json!({ "frameId": frame_id, "worldName": "chrome_use_auth" })),
+            Some(page_session),
+        )
+        .await?;
+    ctx.get("executionContextId")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("no execution context for frame {frame_id}"))
+}
+
+/// `Runtime.evaluate` in the scope's document. A child frame that loaded its
+/// next page (a separate password page) gets a new world once; the scripts
+/// themselves check the origin, so that never reaches another site.
+async fn auth_eval(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    expression: &str,
+    by_value: bool,
+) -> Result<super::cdp::types::EvaluateResult, String> {
+    let mut renewed = false;
+    loop {
+        let ctx = scope.context_id.load(std::sync::atomic::Ordering::Relaxed);
+        let mut params = json!({
+            "expression": expression,
+            "returnByValue": by_value,
+            "awaitPromise": false,
+        });
+        if ctx != 0 {
+            params["contextId"] = json!(ctx);
+        }
+        let result = client
+            .send_command_typed::<_, super::cdp::types::EvaluateResult>(
+                "Runtime.evaluate",
+                &params,
+                Some(&scope.session_id),
+            )
+            .await;
+        match (result, scope.frame_id.as_deref()) {
+            (Err(e), Some(frame)) if ctx != 0 && !renewed && page_went_away(&e) => {
+                renewed = true;
+                let id = auth_frame_world(client, &scope.page_session, frame)
+                    .await
+                    .map_err(|_| e)?;
+                scope
+                    .context_id
+                    .store(id, std::sync::atomic::Ordering::Relaxed);
+            }
+            (result, _) => return result,
+        }
+    }
+}
+
+/// The element `sel` matches in the scope, as a remote object.
+async fn auth_object(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    sel: &str,
+) -> Result<String, String> {
+    let expression = format!(
+        "document.querySelector({})",
+        serde_json::to_string(sel).unwrap_or_default()
+    );
+    let r = auth_eval(client, scope, &expression, false).await?;
+    if r.exception_details.is_some() {
+        return Err(format!("auth login: invalid selector {sel}"));
+    }
+    r.result
+        .object_id
+        .ok_or_else(|| "auth login: the field went away before it was filled".to_string())
+}
+
+/// `fill` for a field marked in the scope. The top document keeps the plain
+/// `fill` path; a child frame's field is resolved in its own document.
+async fn auth_fill(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    ref_map: &RefMap,
+    iframe_sessions: &HashMap<String, String>,
+    sel: &str,
+    value: &str,
+) -> Result<(), String> {
+    if !scope.in_frame() {
+        return interaction::fill(
+            client,
+            &scope.session_id,
+            ref_map,
+            sel,
+            value,
+            iframe_sessions,
+        )
+        .await
+        .map(|_| ());
+    }
+    let object_id = auth_object(client, scope, sel).await?;
+    interaction::fill_object(client, &scope.session_id, &object_id, value)
+        .await
+        .map(|_| ())
+}
+
+/// Bring the scope's list of same-site child frames up to date: frames that
+/// went away or changed origin are dropped, new ones get a world (same-process)
+/// or their own session (out-of-process).
+async fn refresh_auth_frames(
+    client: &super::cdp::client::CdpClient,
+    page_session: &str,
+    top_url: &str,
+    iframe_sessions: &HashMap<String, String>,
+    frames: &mut Vec<AuthScope>,
+) {
+    let mut found: Vec<(String, String)> = Vec::new();
+    if let Ok(tree) = client
+        .send_command_no_params("Page.getFrameTree", Some(page_session))
+        .await
+    {
+        let mut all = Vec::new();
+        super::element::flatten_frame_tree(&tree["frameTree"], true, &mut all);
+        found.extend(
+            all.into_iter()
+                .filter(|(_, _, is_top)| !is_top)
+                .map(|(id, url, _)| (id, url)),
+        );
+    }
+    for (fid, sid) in iframe_sessions {
+        if found.iter().any(|(id, _)| id == fid) {
+            continue;
+        }
+        let url = client
+            .send_command_no_params("Page.getFrameTree", Some(sid))
+            .await
+            .ok()
+            .and_then(|t| {
+                t.pointer("/frameTree/frame/url")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        found.push((fid.clone(), url));
+    }
+    frames.retain(|s| {
+        found.iter().any(|(id, url)| {
+            s.frame_id.as_deref() == Some(id.as_str())
+                && auth_frame_origin(top_url, url) == s.frame_origin
+        })
+    });
+    for (fid, url) in found {
+        if frames
+            .iter()
+            .any(|s| s.frame_id.as_deref() == Some(fid.as_str()))
+        {
+            continue;
+        }
+        let Some(origin) = auth_frame_origin(top_url, &url) else {
+            continue;
+        };
+        let (session_id, ctx) = match iframe_sessions.get(&fid) {
+            Some(sid) => (sid.clone(), 0),
+            None => match auth_frame_world(client, page_session, &fid).await {
+                Ok(ctx) => (page_session.to_string(), ctx),
+                Err(_) => continue,
+            },
+        };
+        frames.push(AuthScope {
+            session_id,
+            page_session: page_session.to_string(),
+            frame_id: Some(fid),
+            context_id: std::sync::atomic::AtomicI64::new(ctx),
+            frame_origin: Some(origin),
+        });
+    }
+}
+
+/// Wait until the top document, or a same-site child frame, shows a usable
+/// field for `selectors`; mark it (see [`mark_usable_auth_element`]) and
+/// return where it is with its selector. The top document wins when both
+/// have one. A blocked tab (another extension's frame) is returned as is, for
+/// the caller to recover.
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_auth_scope(
+    client: &super::cdp::client::CdpClient,
+    page_session: &str,
+    iframe_sessions: &HashMap<String, String>,
+    top_url: &str,
+    top_origin: Option<&str>,
+    selectors: &[&str],
+    tag: &str,
+    timeout_ms: u64,
+    strict: bool,
+) -> Result<(AuthScope, String), String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let top = AuthScope::top(page_session);
+    let mut frames: Vec<AuthScope> = Vec::new();
+    let mut scanned: Option<tokio::time::Instant> = None;
+    loop {
+        match mark_usable_auth_element(client, &top, selectors, tag, 0, strict, top_origin).await {
+            Ok(sel) => return Ok((top, sel)),
+            Err(e)
+                if e.starts_with("the page moved")
+                    || super::browser::is_debugger_access_denied(&e) =>
+            {
+                return Err(e)
+            }
+            Err(_) => {}
+        }
+        let rescan = match scanned {
+            None => true,
+            Some(t) => t.elapsed() >= Duration::from_millis(500),
+        };
+        if rescan {
+            refresh_auth_frames(client, page_session, top_url, iframe_sessions, &mut frames).await;
+            scanned = Some(tokio::time::Instant::now());
+        }
+        let mut hit = None;
+        for (i, frame) in frames.iter().enumerate() {
+            match mark_usable_auth_element(
+                client,
+                frame,
+                selectors,
+                tag,
+                0,
+                strict,
+                frame.frame_origin.as_deref(),
+            )
+            .await
+            {
+                Ok(sel) => {
+                    hit = Some((i, sel));
+                    break;
+                }
+                Err(e) if super::browser::is_debugger_access_denied(&e) => return Err(e),
+                // Not there yet, or the frame moved to another page: skip it.
+                Err(_) => {}
+            }
+        }
+        if let Some((i, sel)) = hit {
+            return Ok((frames.swap_remove(i), sel));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("Wait timed out after {timeout_ms}ms"));
+        }
+        tokio::time::sleep(Duration::from_millis(AUTH_LOGIN_SELECTOR_POLL_INTERVAL_MS)).await;
+    }
+}
+
+/// Words on a control that submits a sign-in form, and on controls next to it
+/// that do something else (another sign-in method, a recovery link).
+const AUTH_SUBMIT_WORDS: &str = r"sign[\s_-]?in|log[\s_-]?in|log[\s_-]?on|continue|next|submit|verify|登录|登入|继续|下一步|确定";
+const AUTH_NOT_SUBMIT_WORDS: &str = r"passkey|security key|with google|with apple|with facebook|with microsoft|with github|forgot|reset|create|sign[\s_-]?up|register|cancel|back|show|hide|remember|help|通行密钥|忘记|注册|取消|返回";
+
+/// Mark the control that submits the form the field `field_tag` is in (the
+/// whole document when it has no form): a visible, enabled button whose words
+/// say sign in / continue, or the form's own submit button, never one for
+/// another sign-in method ("Sign in with Passkey" sits next to Apple's).
+fn auth_submit_finder(field_tag: Option<&str>, submit_tag: &str) -> String {
+    format!(
+        r#"(() => {{
+            const field = {field} === null ? null
+                : document.querySelector('[data-cu-auth=' + JSON.stringify({field}) + ']');
+            const usable = (el) => {{
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'
+                    && !el.matches(':disabled') && el.getAttribute('aria-disabled') !== 'true';
+            }};
+            const label = (el) => [el.innerText, el.value, el.getAttribute('aria-label'), el.title, el.id, el.name]
+                .filter((v) => typeof v === 'string' && v).join(' ').toLowerCase();
+            const yes = new RegExp({yes}, 'i');
+            const no = new RegExp({no}, 'i');
+            const sel = 'button, input[type=submit], input[type=image], input[type=button], [role=button]';
+            const form = field && field.form;
+            let all = [...(form || document).querySelectorAll(sel)].filter(usable);
+            if (!all.length && form) all = [...document.querySelectorAll(sel)].filter(usable);
+            let best = null, bestScore = 0;
+            for (const el of all) {{
+                const words = label(el);
+                if (no.test(words)) continue;
+                const submits = el.type === 'submit' || el.type === 'image';
+                let score = (yes.test(words) ? 3 : 0) + (submits ? 2 : 0) + (form && el.form === form ? 1 : 0);
+                if (!yes.test(words) && !submits) score = 0;
+                if (score > bestScore) {{ best = el; bestScore = score; }}
+            }}
+            if (!best) return false;
+            for (const old of document.querySelectorAll('[data-cu-auth=' + JSON.stringify({tag}) + ']')) {{
+                if (old !== best) old.removeAttribute('data-cu-auth');
+            }}
+            best.setAttribute('data-cu-auth', {tag});
+            best[Symbol.for('cu-auth')] = {tag};
+            return true;
+        }})()"#,
+        field = serde_json::to_string(&field_tag).unwrap_or_default(),
+        yes = serde_json::to_string(AUTH_SUBMIT_WORDS).unwrap_or_default(),
+        no = serde_json::to_string(AUTH_NOT_SUBMIT_WORDS).unwrap_or_default(),
+        tag = serde_json::to_string(submit_tag).unwrap_or_default(),
+    )
+}
+
+/// Submit the form a login just filled, once. In a child frame (Apple's
+/// sign-in widget ignores Enter) its submit button is activated the way a
+/// keyboard user does: focused, then a trusted Space, which the browser turns
+/// into a trusted click. With no such button, or in the top document, the
+/// field gets Enter (focused again first: closing a password manager's menu
+/// takes focus out of it). A key is pressed once and never repeated: a failed
+/// key-up after the key-down is not an error (#449).
+///
+/// `marked`: the caller already marked the control (`data-cu-auth="submit-<marker>"`,
+/// a submit selector the user named).
+async fn auth_submit(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    field_tag: Option<&str>,
+    marker: &str,
+    marked: bool,
+) -> Result<&'static str, String> {
+    if scope.in_frame() {
+        let submit_tag = format!("submit-{marker}");
+        let found = marked
+            || auth_eval(
+                client,
+                scope,
+                &auth_submit_finder(field_tag, &submit_tag),
+                true,
+            )
+            .await?
+            .result
+            .value
+                == Some(Value::Bool(true));
+        if found {
+            let tag_json = serde_json::to_string(&submit_tag).unwrap_or_default();
+            let ready = auth_eval(
+                client,
+                scope,
+                &format!(
+                    "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+                     if (!b) return false; const k = Symbol.for('cu-clicked'); b[k] = ''; \
+                     b.addEventListener('click', (e) => {{ b[k] = e.isTrusted ? 'trusted' : 'synthetic'; }}, {{ once: true, capture: true }}); \
+                     b.focus(); return document.activeElement === b; }})()"
+                ),
+                true,
+            )
+            .await?
+            .result
+            .value
+                == Some(Value::Bool(true));
+            if ready {
+                interaction::press_key(client, &scope.page_session, "space").await?;
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            // Not focused: no key went out, so the DOM click below is the only one.
+            let clicked = auth_eval(
+                client,
+                scope,
+                &format!(
+                    "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+                     if (!b) return 'gone'; const k = Symbol.for('cu-clicked'); \
+                     if (b[k]) return b[k]; b.click(); return 'dom'; }})()"
+                ),
+                true,
+            )
+            .await;
+            return Ok(match clicked {
+                // Blocked once the key was out: the trusted click has happened
+                // (Space clicks on key-up); pressing again would submit twice.
+                Err(e) if ready && super::browser::is_debugger_access_denied(&e) => "button",
+                Ok(r) => match r.result.value.as_ref().and_then(Value::as_str) {
+                    Some("dom") => "button (DOM click)",
+                    Some("gone") if !ready => {
+                        return Err(
+                            "auth login: the sign-in button went away before it was pressed; \
+                             nothing was submitted"
+                                .to_string(),
+                        )
+                    }
+                    _ => "button",
+                },
+                // The frame moved on under the click: it went through.
+                Err(e) if page_went_away(&e) => "button",
+                Err(e) => return Err(e),
+            });
+        }
+    }
+    if let Some(tag) = field_tag {
+        let tag_json = serde_json::to_string(tag).unwrap_or_default();
+        auth_eval(
+            client,
+            scope,
+            &format!(
+                "(() => {{ const el = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+                 if (el && document.activeElement !== el) el.focus(); }})()"
+            ),
+            true,
+        )
+        .await?;
+    }
+    interaction::press_key_once(client, &scope.page_session, "Enter").await?;
+    Ok("enter")
+}
+
+/// How many times one login closes a password manager's inline menu before
+/// it gives up: the menu reopens on every focused login field.
+const AUTH_MENU_CLOSE_LIMIT: u32 = 6;
+
+/// A password manager's inline menu (another extension's frame) blocked the
+/// tab during a login: close it the way #373 does (hide the tab for a moment,
+/// focus out of the field), so the login can go on (#449). `cause` is the
+/// blocked step's error, kept in the message when that is not possible.
+async fn auth_close_menu(
+    mgr: &mut BrowserManager,
+    closed: &mut u32,
+    cause: &str,
+) -> Result<(), String> {
+    if *closed >= AUTH_MENU_CLOSE_LIMIT {
+        return Err(format!(
+            "{cause}{}",
+            no_recovery_note("the password manager's menu kept reopening during the login")
+        ));
+    }
+    *closed += 1;
+    mgr.cycle_pinned_tab_visibility(true)
+        .await
+        .map(|_| ())
+        .map_err(|why| format!("{cause}{}", no_recovery_note(&why)))
+}
+
 /// Wait for the first USABLE element any of `selectors` matches (visible,
 /// enabled, editable; a hidden duplicate earlier in the DOM is skipped), mark
 /// it `data-cu-auth="<tag>"`, and return a selector for exactly that element.
@@ -17487,7 +18049,7 @@ async fn handle_http_credentials(cmd: &Value, state: &mut DaemonState) -> Result
 /// its fields filled.
 async fn mark_usable_auth_element(
     client: &super::cdp::client::CdpClient,
-    session_id: &str,
+    scope: &AuthScope,
     selectors: &[&str],
     tag: &str,
     timeout_ms: u64,
@@ -17531,17 +18093,7 @@ async fn mark_usable_auth_element(
         }})()"#
     );
     loop {
-        let result: super::cdp::types::EvaluateResult = client
-            .send_command_typed(
-                "Runtime.evaluate",
-                &super::cdp::types::EvaluateParams {
-                    expression: expression.clone(),
-                    return_by_value: Some(true),
-                    await_promise: Some(false),
-                },
-                Some(session_id),
-            )
-            .await?;
+        let result = auth_eval(client, scope, &expression, true).await?;
         match result.result.value.as_ref() {
             Some(Value::Bool(true)) => return Ok(format!("[data-cu-auth=\"{tag}\"]")),
             Some(Value::String(now)) => {
@@ -17701,37 +18253,43 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
         }
     };
 
+    // Where the fields are: the page, or a sign-in frame of the same site (#449).
+    let mut scope = AuthScope::top(&session_id);
+    let mut menu_closed = 0u32;
+    let mut submit_via: Option<&'static str> = None;
+    let top_url = mgr.get_url().await.unwrap_or_default();
+
     let outcome: Result<(), String> = async {
-        // Find and fill username
-        let user_sel = if let Some(s) = username_sel {
-            mark_usable_auth_element(
-                &mgr.client,
-                &session_id,
-                &[&s],
-                &user_tag,
-                auth_timeout_ms,
-                false,
-                origin,
+        // A step refused because a password manager's inline menu is open
+        // closes the menu and runs once more (see `auth login --bwu`).
+        macro_rules! unblocked {
+            ($step:expr) => {{
+                let first = $step;
+                match first {
+                    Err(e) if super::browser::is_debugger_access_denied(&e) => {
+                        auth_close_menu(&mut *mgr, &mut menu_closed, &e).await?;
+                        $step
+                    }
+                    other => other,
+                }
+            }};
+        }
+        // Find and fill username: in the page, or in a sign-in frame of the
+        // same site (Apple's sign-in widget is an iframe).
+        let (found, user_sel) = if let Some(s) = username_sel {
+            unblocked!(
+                wait_for_auth_scope(&mgr.client, &session_id, &state.iframe_sessions, &top_url, origin, &[&s], &user_tag, auth_timeout_ms, false).await
             )
-            .await
             .map_err(|e| timed_out(e, format!("Timed out waiting for username selector '{s}'")))?
         } else {
             let preferred_window_ms =
                 auth_timeout_ms.min(AUTH_LOGIN_PREFERRED_SELECTOR_WINDOW_MS);
             let fallback_window_ms = auth_timeout_ms.saturating_sub(preferred_window_ms);
 
-            match mark_usable_auth_element(
-                &mgr.client,
-                &session_id,
-                preferred_user_selectors,
-                &user_tag,
-                preferred_window_ms,
-                true,
-                origin,
-            )
-            .await
-            {
-                Ok(selector) => selector,
+            match unblocked!(
+                wait_for_auth_scope(&mgr.client, &session_id, &state.iframe_sessions, &top_url, origin, preferred_user_selectors, &user_tag, preferred_window_ms, true).await
+            ) {
+                Ok(found) => found,
                 Err(e) if e.starts_with("the page moved") => {
                     return Err(format!("auth login stopped: {e}"))
                 }
@@ -17744,16 +18302,9 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
                         ));
                     }
 
-                    mark_usable_auth_element(
-                        &mgr.client,
-                        &session_id,
-                        fallback_user_selectors,
-                        &user_tag,
-                        fallback_window_ms,
-                        true,
-                        origin,
+                    unblocked!(
+                        wait_for_auth_scope(&mgr.client, &session_id, &state.iframe_sessions, &top_url, origin, fallback_user_selectors, &user_tag, fallback_window_ms, true).await
                     )
-                    .await
                     .map_err(|e| {
                         timed_out(e, format!(
                             "Timed out waiting for username field (preferred selectors for {}ms: {}; fallback selectors for {}ms: {})",
@@ -17766,66 +18317,89 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 }
             }
         };
-        interaction::fill(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            &user_sel,
-            &username,
-            &state.iframe_sessions,
-        )
-        .await?;
+        scope = found;
+        // In a frame, its fields stay on the frame's origin.
+        let here: Option<String> = scope
+            .frame_origin
+            .clone()
+            .or_else(|| origin.map(str::to_string));
+        let pin = here.as_deref();
 
-        // Find and fill password
+        // Fill one marked field; a password manager's menu that opened on it
+        // is closed and the field checked before it is written again.
+        macro_rules! fill_field {
+            ($sel:expr, $tag:expr, $value:expr) => {{
+                match auth_fill(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, $sel, $value).await {
+                    Err(e) if super::browser::is_debugger_access_denied(&e) => {
+                        auth_close_menu(&mut *mgr, &mut menu_closed, &e).await?;
+                        let exact = [($tag.to_string(), $value.encode_utf16().count())];
+                        let holds = match pin {
+                            Some(o) => verify_auth_fields(&mgr.client, &scope, o, &exact).await.is_ok(),
+                            None => false,
+                        };
+                        if holds {
+                            Ok(())
+                        } else {
+                            unblocked!(auth_fill(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, $sel, $value).await)
+                        }
+                    }
+                    other => other,
+                }
+            }};
+        }
+        fill_field!(&user_sel, &user_tag, &username)?;
+
+        // Find and fill password. In a sign-in frame the password field may
+        // only appear once the username was sent (Apple: Continue, then the
+        // password); there the username goes first when no password field
+        // shows within a moment.
         let custom_pass = password_sel.is_some();
         let pass_wanted = password_sel.unwrap_or_else(|| "input[type=password]".to_string());
-        let pass_sel = mark_usable_auth_element(
-            &mgr.client,
-            &session_id,
-            &[&pass_wanted],
-            &pass_tag,
-            auth_timeout_ms,
-            !custom_pass,
-            origin,
-        )
-        .await
-        .map_err(|e| {
-            timed_out(e, format!("Timed out waiting for password selector '{pass_wanted}'"))
-        })?;
-        interaction::fill(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            &pass_sel,
-            &password,
-            &state.iframe_sessions,
-        )
-        .await?;
+        let two_step = scope.in_frame() && !custom_pass;
+        let first_wait = if two_step {
+            AUTH_BWU_PROBE_MS.min(auth_timeout_ms)
+        } else {
+            auth_timeout_ms
+        };
+        let pass_sel = match unblocked!(
+            mark_usable_auth_element(&mgr.client, &scope, &[&pass_wanted], &pass_tag, first_wait, !custom_pass, pin).await
+        ) {
+            Ok(sel) => sel,
+            Err(e) if two_step && !e.starts_with("the page moved") => {
+                if let Some(o) = pin {
+                    unblocked!(verify_auth_fields(&mgr.client, &scope, o, &[(user_tag.clone(), 0)]).await)?;
+                }
+                submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, Some(&user_tag), &marker, false).await)?);
+                unblocked!(
+                    mark_usable_auth_element(&mgr.client, &scope, &[&pass_wanted], &pass_tag, auth_timeout_ms, true, pin).await
+                )
+                .map_err(|e| {
+                    timed_out(e, format!(
+                        "Timed out waiting for password selector '{pass_wanted}' after sending the username"
+                    ))
+                })?
+            }
+            Err(e) => {
+                return Err(timed_out(e, format!("Timed out waiting for password selector '{pass_wanted}'")))
+            }
+        };
+        fill_field!(&pass_sel, &pass_tag, &password)?;
 
         // Find the submit control
         let sub_sel = if let Some(s) = submit_sel {
-            mark_usable_auth_element(
-                &mgr.client,
-                &session_id,
-                &[&s],
-                &submit_tag,
-                auth_timeout_ms,
-                false,
-                origin,
+            unblocked!(
+                mark_usable_auth_element(&mgr.client, &scope, &[&s], &submit_tag, auth_timeout_ms, false, pin).await
             )
-            .await
+            .map(Some)
             .map_err(|e| timed_out(e, format!("Timed out waiting for submit selector '{s}'")))?
+        } else if scope.in_frame() {
+            // In a frame, `auth_submit` picks the form's sign-in button itself.
+            None
         } else {
-            mark_usable_auth_element(
-                &mgr.client,
-                &session_id,
-                &auto_submit_selectors,
-                &submit_tag,
-                auth_timeout_ms,
-                true,
-                origin,
+            unblocked!(
+                mark_usable_auth_element(&mgr.client, &scope, &auto_submit_selectors, &submit_tag, auth_timeout_ms, true, pin).await
             )
-            .await
+            .map(Some)
             .map_err(|e| {
                 timed_out(
                     e,
@@ -17862,7 +18436,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 }}
                 return '';
             }})()"#,
-            origin = serde_json::to_string(&origin).unwrap_or_default(),
+            origin = serde_json::to_string(&pin).unwrap_or_default(),
             user = serde_json::to_string(&user_sel).unwrap_or_default(),
             pass = serde_json::to_string(&pass_sel).unwrap_or_default(),
             username = serde_json::to_string(&username).unwrap_or_default(),
@@ -17871,18 +18445,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             user_tag = serde_json::to_string(&user_tag).unwrap_or_default(),
             pass_tag = serde_json::to_string(&pass_tag).unwrap_or_default(),
         );
-        let verdict: super::cdp::types::EvaluateResult = mgr
-            .client
-            .send_command_typed(
-                "Runtime.evaluate",
-                &super::cdp::types::EvaluateParams {
-                    expression: check,
-                    return_by_value: Some(true),
-                    await_promise: Some(false),
-                },
-                Some(&session_id),
-            )
-            .await?;
+        let verdict = unblocked!(auth_eval(&mgr.client, &scope, &check, true).await)?;
         if let Some(problem) = verdict
             .result
             .value
@@ -17896,16 +18459,31 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             ));
         }
 
-        interaction::click(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            &sub_sel,
-            "left",
-            1,
-            &state.iframe_sessions,
-        )
-        .await?;
+        if scope.in_frame() {
+            submit_via = Some(
+                unblocked!(auth_submit(&mgr.client, &scope, Some(&pass_tag), &marker, sub_sel.is_some()).await)?,
+            );
+        } else if let Some(sub_sel) = sub_sel {
+            // A click is never sent twice: a menu that opened on the password
+            // field is closed before it, not after a refused click.
+            if mgr.on_relay()
+                && super::browser::inline_menu_manager_installed()
+                && mgr.pinned_tab_blocked().await
+            {
+                auth_close_menu(&mut *mgr, &mut menu_closed, "auth login: the tab is blocked").await?;
+            }
+            interaction::click(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                &sub_sel,
+                "left",
+                1,
+                &state.iframe_sessions,
+            )
+            .await?;
+            submit_via = Some("button");
+        }
 
         // Wait for navigation after submit (with fallback timeout)
         let mut rx = mgr.client.subscribe();
@@ -17916,7 +18494,9 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             let result = tokio::time::timeout_at(deadline, rx.recv()).await;
             match result {
                 Ok(Ok(event)) => {
-                    if event.session_id.as_deref() == Some(&session_id) {
+                    if event.session_id.as_deref() == Some(&session_id)
+                        || event.session_id.as_deref() == Some(scope.session_id.as_str())
+                    {
                         match event.method.as_str() {
                             "Page.frameNavigated" | "Page.loadEventFired" => {
                                 navigated = true;
@@ -17938,6 +18518,16 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
     .await;
 
+    // Leave the tab usable for what comes next: a password manager's menu
+    // still open on the last field is closed now.
+    if menu_closed < AUTH_MENU_CLOSE_LIMIT
+        && mgr.on_relay()
+        && super::browser::inline_menu_manager_installed()
+        && mgr.pinned_tab_blocked().await
+    {
+        let _ = auth_close_menu(mgr, &mut menu_closed, "").await;
+    }
+
     // Leave the page as found, whether or not the login went through: drop
     // this login's markers (if the page is still there).
     let cleanup = format!(
@@ -17952,9 +18542,22 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             Some(&session_id),
         )
         .await;
+    if scope.in_frame() {
+        let _ = auth_eval(&mgr.client, &scope, &cleanup, true).await;
+    }
 
     outcome?;
-    Ok(json!({ "loggedIn": true, "name": name }))
+    let mut out = json!({ "loggedIn": true, "name": name });
+    if let Some(frame) = &scope.frame_origin {
+        out["frame"] = json!(frame);
+    }
+    if let Some(via) = submit_via {
+        out["submittedWith"] = json!(via);
+    }
+    if menu_closed > 0 {
+        out["warning"] = json!(auth_menu_warning(menu_closed));
+    }
+    Ok(out)
 }
 
 /// Fields a one-time code goes into, most specific first.
@@ -17969,6 +18572,26 @@ const AUTH_OTP_SELECTORS: &[&str] = &[
     "input[name*=code i]",
     "input[id*=code i]",
     "input[inputmode=numeric]",
+];
+
+/// Fields that ask for a verification code, for saying so after a login that
+/// has no code to give (#449). Wider than [`AUTH_OTP_SELECTORS`]: Apple's
+/// six one-digit inputs (`input.form-security-code-input`) are reported here,
+/// never typed into.
+const AUTH_CODE_HINT_SELECTORS: &[&str] = &[
+    "input[autocomplete=one-time-code]",
+    "input[name*=otp i]",
+    "input[id*=otp i]",
+    "input[name*=totp i]",
+    "input[name*=mfa i]",
+    "input[name*=2fa i]",
+    "input[name*=verification i]",
+    "input[id*=verification i]",
+    "input[class*=security-code i]",
+    "input[aria-label*=\"verification code\" i]",
+    "input[aria-label*=\"security code\" i]",
+    "input[aria-label*=验证码]",
+    "input[placeholder*=验证码]",
 ];
 
 /// How long a step waits for a field the page may not have rendered yet
@@ -18134,8 +18757,35 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     let mut skip_enter = false;
     // A code typed but not yet submitted: checked after the next `enter`.
     let mut code_pending = false;
+    // Where the fields are: the top document, or a sign-in frame of the same
+    // site (Apple's idmsa.apple.com widget on App Store Connect, #449).
+    let mut scope = AuthScope::top(&session_id);
+    // How the form was last submitted: "enter", or "button" in a frame.
+    let mut submit_via: Option<&'static str> = None;
+    // How often a password manager's inline menu blocked the tab and was closed.
+    let mut menu_closed = 0u32;
+    // A step after the login that this login cannot do (a 2FA code it has no
+    // value for): reported, never guessed.
+    let mut needs: Option<&'static str> = None;
 
     let outcome: Result<(), String> = async {
+        // A step refused because a password manager's inline menu is open
+        // (another extension's frame: Chrome refuses every debugger command on
+        // the tab while it is there) closes the menu and runs once more. A
+        // refused command did not run, so only steps that are a single read,
+        // mark or key press, or that check before acting, go through here.
+        macro_rules! unblocked {
+            ($step:expr) => {{
+                let first = $step;
+                match first {
+                    Err(e) if super::browser::is_debugger_access_denied(&e) => {
+                        auth_close_menu(&mut *mgr, &mut menu_closed, &e).await?;
+                        $step
+                    }
+                    other => other,
+                }
+            }};
+        }
         if passkey_first {
             // Sign in with the passkey: a page that asks by itself needs
             // nothing; otherwise press its passkey sign-in button.
@@ -18164,20 +18814,38 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             check_passkey_accepted(&mgr.client, &session_id, &current).await?;
             return Ok(());
         }
-        if auto {
-            // Wait (full timeout) until the page shows any field this login
-            // could fill; after that, each step only checks briefly whether
-            // its field is there (a code-only 2FA page gets just the code).
+        // Wait (full timeout) until the page, or a sign-in frame of the same
+        // site, shows any field this login could fill; the login then stays in
+        // that document. After that, each step only checks briefly whether its
+        // field is there (a code-only 2FA page gets just the code).
+        let fills_fields = steps
+            .iter()
+            .any(|s| matches!(s.as_str(), "username" | "password" | "totp"));
+        if auto || fills_fields {
             let any: Vec<&str> = AUTH_USER_SELECTORS
                 .iter()
                 .chain(&["input[type=password]"])
                 .chain(if otp.is_some() { AUTH_OTP_SELECTORS } else { &[] })
                 .copied()
                 .collect();
-            mark_usable_auth_element(&mgr.client, &session_id, &any, &format!("bwuprobe-{marker}"), timeout_ms, true, pin)
-                .await
-                .map_err(|e| format!("auth login --bwu: no login field appeared on this page ({e})"))?;
+            let probe = format!("bwuprobe-{marker}");
+            match unblocked!(
+                wait_for_auth_scope(&mgr.client, &session_id, &state.iframe_sessions, &current, pin, &any, &probe, timeout_ms, true).await
+            ) {
+                Ok((found, _)) => scope = found,
+                Err(e) if auto || e.starts_with("the page moved") => {
+                    return Err(format!(
+                        "auth login --bwu: no login field appeared on this page or in a sign-in frame of the same site ({e})"
+                    ))
+                }
+                // An explicit sequence: its steps wait in the top document, as before.
+                Err(_) => {}
+            }
         }
+        // The origin the fields must stay on: the frame's own in a frame.
+        let here = scope.frame_origin.clone().unwrap_or_else(|| origin.clone());
+        let here = here.as_str();
+        let pin = Some(here);
         for (i, step) in steps.iter().enumerate() {
             let tag = format!("bwu{i}-{marker}");
             let (value, selectors, strict): (Option<&String>, Vec<&str>, bool) = match step.as_str() {
@@ -18205,12 +18873,13 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     if auto && pending.is_empty() {
                         continue;
                     }
-                    verify_auth_fields(&mgr.client, &session_id, &origin, &pending).await?;
-                    interaction::press_key(&mgr.client, &session_id, "Enter").await?;
+                    unblocked!(verify_auth_fields(&mgr.client, &scope, here, &pending).await)?;
+                    let last = pending.last().map(|(t, _)| t.clone());
+                    submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, last.as_deref(), &marker, false).await)?);
                     pending.clear();
                     submitted = true;
                     if std::mem::take(&mut code_pending) {
-                        check_code_accepted(&mgr.client, &session_id, &origin).await?;
+                        unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
                     }
                     continue;
                 }
@@ -18234,14 +18903,13 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 // A page that remembers the account shows only the password.
                 // The broad text-input guess only next to a password field,
                 // so a one-time-code field is never taken for the username.
-                match mark_usable_auth_element(&mgr.client, &session_id, AUTH_USER_SELECTORS, &tag, AUTH_BWU_PROBE_MS, strict, pin).await {
+                match unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_USER_SELECTORS, &tag, AUTH_BWU_PROBE_MS, strict, pin).await) {
                     Ok(sel) => Some(sel),
                     Err(e) if e.starts_with("the page moved") => return Err(e),
                     Err(_) => {
                         let probe = format!("bwupw-{marker}");
-                        if mark_usable_auth_element(&mgr.client, &session_id, &["input[type=password]"], &probe, 0, true, pin).await.is_ok() {
-                            mark_usable_auth_element(&mgr.client, &session_id, AUTH_USER_FALLBACK_SELECTORS, &tag, 0, strict, pin)
-                                .await
+                        if unblocked!(mark_usable_auth_element(&mgr.client, &scope, &["input[type=password]"], &probe, 0, true, pin).await).is_ok() {
+                            unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_USER_FALLBACK_SELECTORS, &tag, 0, strict, pin).await)
                                 .ok()
                         } else {
                             None
@@ -18249,32 +18917,31 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     }
                 }
             } else if auto && step == "password" && pending.is_empty() {
-                mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, AUTH_BWU_PROBE_MS, strict, pin)
-                    .await
+                unblocked!(mark_usable_auth_element(&mgr.client, &scope, &selectors, &tag, AUTH_BWU_PROBE_MS, strict, pin).await)
                     .ok()
             } else if auto && step == "password" && !pending.is_empty() {
-                // One field per page: send the username, then wait for the password page.
-                match mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, AUTH_BWU_PROBE_MS, strict, pin).await {
+                // One field per page: send the username, then wait for the
+                // password page (Apple: Continue, then the password field).
+                match unblocked!(mark_usable_auth_element(&mgr.client, &scope, &selectors, &tag, AUTH_BWU_PROBE_MS, strict, pin).await) {
                     Ok(sel) => Some(sel),
                     Err(e) if e.starts_with("the page moved") => return Err(e),
                     Err(_) => {
                         if no_submit {
                             break;
                         }
-                        verify_auth_fields(&mgr.client, &session_id, &origin, &pending).await?;
-                        interaction::press_key(&mgr.client, &session_id, "Enter").await?;
+                        unblocked!(verify_auth_fields(&mgr.client, &scope, here, &pending).await)?;
+                        let last = pending.last().map(|(t, _)| t.clone());
+                        submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, last.as_deref(), &marker, false).await)?);
                         pending.clear();
                         Some(
-                            mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, timeout_ms, strict, pin)
-                                .await
+                            unblocked!(mark_usable_auth_element(&mgr.client, &scope, &selectors, &tag, timeout_ms, strict, pin).await)
                                 .map_err(|e| format!("auth login --bwu: no password field appeared after sending the username ({e})"))?,
                         )
                     }
                 }
             } else {
                 Some(
-                    mark_usable_auth_element(&mgr.client, &session_id, &selectors, &tag, timeout_ms, strict, pin)
-                        .await
+                    unblocked!(mark_usable_auth_element(&mgr.client, &scope, &selectors, &tag, timeout_ms, strict, pin).await)
                         .map_err(|e| format!("auth login --bwu: no field for '{step}' ({e})"))?,
                 )
             };
@@ -18284,18 +18951,32 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 // that submits by itself makes a following `enter` moot.
                 filled.push(step.clone());
                 otp_state = "filled";
-                if type_code_once(&mgr.client, &session_id, &sel, value, &origin).await? {
+                if type_code_once(&mgr.client, &scope, &sel, value, here).await? {
                     submitted = true;
                     skip_enter = true;
                     pending.clear();
-                    check_code_accepted(&mgr.client, &session_id, &origin).await?;
+                    unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
                 } else {
                     pending.push((tag, value.encode_utf16().count()));
                     code_pending = true;
                 }
                 continue;
             }
-            interaction::fill(&mgr.client, &session_id, &state.ref_map, &sel, value, &state.iframe_sessions).await?;
+            match auth_fill(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, &sel, value).await {
+                Ok(()) => {}
+                Err(e) if super::browser::is_debugger_access_denied(&e) => {
+                    // The menu opened on the field while it was being filled,
+                    // usually after the value went in. Close it, then check
+                    // the field before writing again: writing focuses it,
+                    // which opens the menu once more.
+                    auth_close_menu(&mut *mgr, &mut menu_closed, &e).await?;
+                    let exact = [(tag.clone(), value.encode_utf16().count())];
+                    if verify_auth_fields(&mgr.client, &scope, here, &exact).await.is_err() {
+                        unblocked!(auth_fill(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, &sel, value).await)?;
+                    }
+                }
+                Err(e) => return Err(e),
+            }
             // Exact length for secrets; the username only has to be there
             // (fields normalize what is typed).
             let len = if step == "username" || step.starts_with("custom:") {
@@ -18355,27 +19036,46 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 let tag = format!("bwuotp-{marker}");
                 let wait = if code_only { AUTH_BWU_PROBE_MS } else { AUTH_BWU_OTP_WAIT_MS };
                 if let Ok(sel) =
-                    mark_usable_auth_element(&mgr.client, &session_id, AUTH_OTP_SELECTORS, &tag, wait, true, pin).await
+                    unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_OTP_SELECTORS, &tag, wait, true, pin).await)
                 {
-                    let auto_submitted = type_code_once(&mgr.client, &session_id, &sel, code, &origin).await?;
+                    let auto_submitted = type_code_once(&mgr.client, &scope, &sel, code, here).await?;
                     filled.push("totp".to_string());
                     otp_state = "filled";
                     if auto_submitted {
                         submitted = true;
                     } else if !no_submit {
-                        verify_auth_fields(&mgr.client, &session_id, &origin, &[(tag, code.encode_utf16().count())]).await?;
-                        interaction::press_key(&mgr.client, &session_id, "Enter").await?;
+                        let fields = [(tag.clone(), code.encode_utf16().count())];
+                        unblocked!(verify_auth_fields(&mgr.client, &scope, here, &fields).await)?;
+                        submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, Some(&tag), &marker, false).await)?);
                         submitted = true;
                     }
                     if submitted {
-                        check_code_accepted(&mgr.client, &session_id, &origin).await?;
+                        unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
                     }
                 }
+            }
+        }
+        // The page now asks for a code this login has no value for (an SMS
+        // or a trusted-device code): report it rather than a finished login.
+        if submitted && !no_submit && otp_state != "filled" && passkey_state != "used" {
+            let tag = format!("bwuneed-{marker}");
+            if unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_CODE_HINT_SELECTORS, &tag, AUTH_BWU_PROBE_MS, true, pin).await).is_ok() {
+                needs = Some("a verification code");
             }
         }
         Ok(())
     }
     .await;
+
+    // Leave the tab usable for what comes next (the 2FA step): a menu that
+    // opened on the last field is closed now, not by the next command.
+    if menu_closed < AUTH_MENU_CLOSE_LIMIT
+        && mgr.on_relay()
+        && super::browser::inline_menu_manager_installed()
+        && mgr.pinned_tab_blocked().await
+    {
+        let _ = auth_close_menu(mgr, &mut menu_closed, "").await;
+    }
 
     let cleanup = format!(
         "(() => {{ for (const el of document.querySelectorAll('[data-cu-auth$=\"-{marker}\"]')) {{ \
@@ -18389,6 +19089,9 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             Some(&session_id),
         )
         .await;
+    if scope.in_frame() {
+        let _ = auth_eval(&mgr.client, &scope, &cleanup, true).await;
+    }
 
     // The ceremony is over (check_passkey_accepted waited for its result):
     // the private key does not outlive the login. A cleanup that cannot be
@@ -18409,20 +19112,61 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     if filled.is_empty() && passkey_state != "used" {
         return Err("auth login --bwu: found no login field on this page to fill".to_string());
     }
-    if submitted {
+    if submitted && needs.is_none() {
         tokio::time::sleep(Duration::from_millis(1_500)).await;
     }
     let url = mgr.get_url().await.unwrap_or_default();
     // Leaving the login page is the best sign the login went through; the
     // caller still checks with `snapshot`.
-    Ok(json!({
+    let mut out = json!({
         "item": item,
         "filled": filled,
         "submitted": submitted,
         "otp": otp_state,
         "passkey": passkey_state,
         "url": url,
-    }))
+    });
+    if let Some(frame) = &scope.frame_origin {
+        out["frame"] = json!(frame);
+    }
+    if let Some(via) = submit_via {
+        out["submittedWith"] = json!(via);
+    }
+    if let Some(what) = needs {
+        out["needs"] = json!(what);
+        out["next"] = json!(auth_needs_code_hint(scope.frame_origin.as_deref()));
+    }
+    if menu_closed > 0 {
+        out["warning"] = json!(auth_menu_warning(menu_closed));
+    }
+    Ok(out)
+}
+
+/// What to do when the page asks for a code after the login (#449): the vault
+/// item has none, and a code is never guessed.
+fn auth_needs_code_hint(frame: Option<&str>) -> String {
+    let place = match frame {
+        Some(origin) => format!(
+            "The code field is in the sign-in frame ({origin}): `snapshot -i` lists it with a ref, \
+             or `frames` + `frame <id>` switches into it."
+        ),
+        None => "`snapshot -i` lists the code field.".to_string(),
+    };
+    format!(
+        "The page now asks for a verification code (2FA), which this vault item does not hold. \
+         Get it from the user, or from their messages (message-use) or mail (mail-use), then type \
+         it into the code field. {place}"
+    )
+}
+
+/// The warning on a login that had to close a password manager's inline menu.
+fn auth_menu_warning(times: u32) -> String {
+    format!(
+        "a password manager's inline menu (another extension's frame, which blocks every debugger \
+         command on the tab) opened on a login field {times} time(s); chrome-use hid the tab for a \
+         moment each time to close it, and took focus out of the field. To stop it, the user can \
+         turn off that extension's inline menu for this site."
+    )
 }
 
 /// Part of the error for a vault passkey that keeps a signature counter; the
@@ -18902,24 +19646,15 @@ async fn click_passkey_button(
 /// removed within a moment).
 async fn type_code_once(
     client: &super::cdp::client::CdpClient,
-    session_id: &str,
+    scope: &AuthScope,
     sel: &str,
     code: &str,
     origin: &str,
 ) -> Result<bool, String> {
     let sel_json = serde_json::to_string(sel).unwrap_or_default();
+    let session_id = scope.session_id.as_str();
     let eval = |expression: String| async move {
-        let r: super::cdp::types::EvaluateResult = client
-            .send_command_typed(
-                "Runtime.evaluate",
-                &super::cdp::types::EvaluateParams {
-                    expression,
-                    return_by_value: Some(true),
-                    await_promise: Some(false),
-                },
-                Some(session_id),
-            )
-            .await?;
+        let r = auth_eval(client, scope, &expression, true).await?;
         Ok::<Option<Value>, String>(r.result.value)
     };
     let focused = eval(format!(
@@ -18985,7 +19720,7 @@ async fn type_code_once(
 /// error from the re-rendered form.
 async fn check_code_accepted(
     client: &super::cdp::client::CdpClient,
-    session_id: &str,
+    scope: &AuthScope,
     origin: &str,
 ) -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(2_500)).await;
@@ -19003,17 +19738,7 @@ async fn check_code_accepted(
         origin = serde_json::to_string(origin).unwrap_or_default(),
         sels = serde_json::to_string(AUTH_OTP_SELECTORS).unwrap_or_default(),
     );
-    let r: Result<super::cdp::types::EvaluateResult, String> = client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &super::cdp::types::EvaluateParams {
-                expression,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await;
+    let r = auth_eval(client, scope, &expression, true).await;
     match r {
         Ok(r) => match r.result.value {
             Some(Value::String(alert)) => Err(format!(
@@ -19041,7 +19766,7 @@ fn page_went_away(e: &str) -> bool {
 /// is still on `origin`. Never reports a value.
 async fn verify_auth_fields(
     client: &super::cdp::client::CdpClient,
-    session_id: &str,
+    scope: &AuthScope,
     origin: &str,
     fields: &[(String, usize)],
 ) -> Result<(), String> {
@@ -19059,17 +19784,7 @@ async fn verify_auth_fields(
         origin = serde_json::to_string(origin).unwrap_or_default(),
         fields = serde_json::to_string(fields).unwrap_or_default(),
     );
-    let verdict: super::cdp::types::EvaluateResult = client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &super::cdp::types::EvaluateParams {
-                expression: check,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await?;
+    let verdict = auth_eval(client, scope, &check, true).await?;
     match verdict.result.value.as_ref().and_then(Value::as_str) {
         Some(problem) if !problem.is_empty() => Err(format!(
             "auth login --bwu stopped before submitting: {problem}. Nothing was submitted."
@@ -19588,6 +20303,105 @@ mod tests {
         }
         assert!(acts_at_focus("press") && acts_at_focus("keyboard"));
         assert!(!acts_at_focus("click") && !acts_at_focus("fill"));
+    }
+
+    /// #449: every command that reads or drives the page gets the inline-menu
+    /// recovery, either checked before it runs or repeated after it was
+    /// refused. `get text`, `eval`, `press`, the frame commands and the logins
+    /// were all blocked on App Store Connect.
+    #[test]
+    fn inline_menu_recovery_covers_every_page_command() {
+        for action in [
+            "gettext",
+            "read",
+            "eval",
+            "evaluate",
+            "press",
+            "type",
+            "keyboard",
+            "inserttext",
+            "keydown",
+            "snapshot",
+            "screenshot",
+            "frame",
+            "frames",
+            "title",
+            "url",
+            "find",
+            "getbytext",
+            "getbyrole",
+            "nth",
+            "expect",
+            "waitforfunction",
+            "auth_login",
+            "auth_login_bwu",
+            "scrollintoview",
+            "multiselect",
+            "pdf",
+            "storage_get",
+        ] {
+            assert!(acts_on_page(action) || safe_to_repeat(action), "{action}");
+        }
+        // A command is never both checked first and repeated afterwards.
+        for action in ["getbytext", "frame", "auth_login_bwu", "eval", "gettext"] {
+            assert!(
+                !(acts_on_page(action) && safe_to_repeat(action)),
+                "{action}"
+            );
+        }
+    }
+
+    /// #449: credentials go into a child frame only when it is the same site
+    /// as the page, over https when the page is.
+    #[test]
+    fn login_frames_must_be_the_same_site() {
+        assert_eq!(
+            auth_frame_origin(
+                "https://appstoreconnect.apple.com/login",
+                "https://idmsa.apple.com/appleauth/auth/signin?widgetKey=x"
+            )
+            .as_deref(),
+            Some("https://idmsa.apple.com")
+        );
+        assert_eq!(
+            auth_frame_origin(
+                "http://127.0.0.1:8731/",
+                "http://127.0.0.1:8732/signin.html"
+            )
+            .as_deref(),
+            Some("http://127.0.0.1:8732")
+        );
+        assert!(
+            auth_frame_origin("https://example.com/", "https://accounts.google.com/x").is_none()
+        );
+        assert!(auth_frame_origin("https://shop.example.co.uk/", "https://evil.co.uk/").is_none());
+        assert!(auth_frame_origin("https://a.example.com/", "http://b.example.com/").is_none());
+        assert!(auth_frame_origin("https://a.example.com/", "about:blank").is_none());
+        assert!(
+            auth_frame_origin("https://a.example.com/", "chrome-extension://abc/menu.html")
+                .is_none()
+        );
+    }
+
+    /// #449: Apple's sign-in widget has no name/autocomplete on its account
+    /// field and a "Sign in with Passkey" button next to its own.
+    #[test]
+    fn login_selectors_cover_apples_sign_in_widget() {
+        assert!(AUTH_USER_SELECTORS.contains(&"input[id*=account_name i]"));
+        let yes = regex_lite::Regex::new(&format!("(?i){AUTH_SUBMIT_WORDS}")).unwrap();
+        let no = regex_lite::Regex::new(&format!("(?i){AUTH_NOT_SUBMIT_WORDS}")).unwrap();
+        for words in ["continue sign-in", "sign in", "log in", "next", "登录"] {
+            assert!(yes.is_match(words) && !no.is_match(words), "{words}");
+        }
+        for words in [
+            "sign in with passkey swp",
+            "forgot password?",
+            "create account",
+        ] {
+            assert!(no.is_match(words), "{words}");
+        }
+        let js = auth_submit_finder(Some("user-x"), "submit-x");
+        assert!(js.contains("submit-x") && js.contains("user-x"));
     }
 
     /// #373: a blocked command that could not be recovered must not steer the

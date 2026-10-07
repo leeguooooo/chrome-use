@@ -2713,7 +2713,11 @@ async fn eval_text_in_frame(client: &CdpClient, session_id: &str, frame_id: &str
         .unwrap_or_default()
 }
 
-fn flatten_frame_tree(node: &Value, is_top: bool, out: &mut Vec<(String, String, bool)>) {
+pub(crate) fn flatten_frame_tree(
+    node: &Value,
+    is_top: bool,
+    out: &mut Vec<(String, String, bool)>,
+) {
     if let Some(frame) = node.get("frame") {
         if let Some(id) = frame.get("id").and_then(|v| v.as_str()) {
             let url = frame

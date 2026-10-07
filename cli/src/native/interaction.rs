@@ -1009,7 +1009,20 @@ pub async fn fill_reporting(
         iframe_sessions,
     )
     .await?;
+    fill_object(client, &effective_session_id, &object_id, value).await
+}
 
+/// [`fill_reporting`] for an element already resolved to a remote object on
+/// `session_id`, e.g. one found in a child frame's isolated world (`auth
+/// login` in a sign-in iframe, #449).
+pub async fn fill_object(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    value: &str,
+) -> Result<FillOutcome, String> {
+    let object_id = object_id.to_string();
+    let effective_session_id = session_id.to_string();
     let result: EvaluateResult = client
         .send_command_typed(
             "Runtime.callFunctionOn",
@@ -2717,6 +2730,47 @@ fn is_platform_select_all(key: &str, modifiers: Option<i32>) -> bool {
 
 pub async fn press_key(client: &CdpClient, session_id: &str, key: &str) -> Result<(), String> {
     press_key_with_modifiers(client, session_id, key, None).await
+}
+
+/// `press_key` for a key whose key-down submits something (Enter in a login
+/// form). Once the key-down was delivered, a failed key-up is not reported:
+/// the caller must not press the key a second time (#449).
+pub async fn press_key_once(client: &CdpClient, session_id: &str, key: &str) -> Result<(), String> {
+    let (key_name, code, key_code) = named_key_info(key);
+    let text = key_text(&key_name);
+    client
+        .send_command_typed::<_, Value>(
+            "Input.dispatchKeyEvent",
+            &DispatchKeyEventParams {
+                event_type: "keyDown".to_string(),
+                key: Some(key_name.clone()),
+                code: Some(code.clone()),
+                text: text.clone(),
+                unmodified_text: text,
+                windows_virtual_key_code: Some(key_code),
+                native_virtual_key_code: Some(key_code),
+                modifiers: None,
+            },
+            Some(session_id),
+        )
+        .await?;
+    let _ = client
+        .send_command_typed::<_, Value>(
+            "Input.dispatchKeyEvent",
+            &DispatchKeyEventParams {
+                event_type: "keyUp".to_string(),
+                key: Some(key_name),
+                code: Some(code),
+                text: None,
+                unmodified_text: None,
+                windows_virtual_key_code: Some(key_code),
+                native_virtual_key_code: Some(key_code),
+                modifiers: None,
+            },
+            Some(session_id),
+        )
+        .await;
+    Ok(())
 }
 
 /// Dispatch a keyDown+keyUp sequence for `key` with an optional CDP modifier bitmask.
