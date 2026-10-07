@@ -3518,7 +3518,11 @@ Closes the browser instance for the current session.
 Aliases: quit, exit
 
 Options:
-  --all                Close all active sessions
+  --all                Close all active sessions. Refuses, listing them, when
+                       sessions other than yours are live (other agents' or
+                       other Claude sessions' work); add --force to close
+                       them anyway
+  --force, --yes       With --all: close every session, not only yours
 
 Global Options:
   --json               Output as JSON
@@ -3528,6 +3532,7 @@ Examples:
   chrome-use close
   chrome-use close --session mysession
   chrome-use close --all
+  chrome-use close --all --force
 "##
         }
 
@@ -5304,7 +5309,8 @@ Core Commands:
   keep                       Leave the active tab for the user — exempt it from
                              auto-close/idle cleanup + remove it from the session
                              tab group (so scratch tabs get cleaned, this one stays)
-  close [--all]              Close browser (--all closes every session)
+  close [--all]              Close browser (--all closes every session; refuses
+                             while other sessions are live unless --force)
 
 Navigation:
   back                       Go back

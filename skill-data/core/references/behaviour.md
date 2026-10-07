@@ -126,7 +126,8 @@ next task.
   carry on. Do not restart the daemon, re-run setup, or re-read this skill for
   those errors. Restart only when an error says the browser itself is gone.
 - Use `close` only for the current session when its work is finished.
-  `close --all` affects other sessions.
+  `close --all` would close other agents' sessions too, so it refuses while
+  they are live; do not add `--force` to get past that.
 
 ## Talking to the user
 
