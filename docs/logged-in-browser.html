@@ -9,4 +9,21 @@
 chrome-use extension install
 chrome-use doctor</code></pre><p>按<a href="/install.html">安装指南</a>完成扩展安装。doctor 的诊断不能代替网站账号检查。</p><h2>一个可复现的只读任务</h2><pre><code>chrome-use --session seo-example open https://github.com/leeguooooo/chrome-use
 chrome-use --session seo-example snapshot -i
-chrome-use --session seo-example get title</code></pre><p>预期结果：打开仓库页，snapshot 返回页面元素，标题含 leeguooooo/chrome-use。无需发送消息或改变账号数据。</p><h2>怎么接到 agent？</h2><p>能运行 shell 的 Codex、Claude Code 用 CLI，先读 chrome-use skills get core；只能接 MCP 的客户端用 chrome-use mcp。</p><h2>和 Playwright、browser-use 怎么选？</h2><p>已有登录态、人工接管和多个 agent 共用浏览器是 chrome-use 的重点。Playwright 适合测试和编程自动化，也能连接已有浏览器。browser-use 提供 agent 框架。选型时比较实际连接路径，不能把其他工具一概当作空浏览器。</p><h2>能保证没有验证码吗？</h2><p>不能。指纹测试不等于网站放行。登录、验证码和二次验证由用户处理。</p><p><a href="/mcp.html">MCP</a> · <a href="/sessions.html">Sessions</a> · <a href="/compare.html">Comparison</a> · <a href="/stealth.html">Detector evidence</a></p></main></div><script src="/assets/docs/docs.js"></script></body></html>
+chrome-use --session seo-example get title</code></pre><p>预期结果：打开仓库页，snapshot 返回页面元素，标题含 leeguooooo/chrome-use。无需发送消息或改变账号数据。</p><h2>怎么接到 agent？</h2><p>能运行 shell 的 Codex、Claude Code 用 CLI，先读 chrome-use skills get core；只能接 MCP 的客户端用 chrome-use mcp。</p><h2>和 Playwright、browser-use 怎么选？</h2><p>已有登录态、人工接管和多个 agent 共用浏览器是 chrome-use 的重点。Playwright 适合测试和编程自动化，也能连接已有浏览器。browser-use 提供 agent 框架。选型时比较实际连接路径，不能把其他工具一概当作空浏览器。</p><h2>能保证没有验证码吗？</h2><p>不能。指纹测试不等于网站放行。登录、验证码和二次验证由用户处理。</p><p><a href="/mcp.html">MCP</a> · <a href="/sessions.html">Sessions</a> · <a href="/compare.html">Comparison</a> · <a href="/stealth.html">Detector evidence</a></p><h2>让 agent 完成一个真实任务</h2>
+<p>把下面的任务交给能运行 shell 的 Codex、Claude Code 或其他 agent。它会在你现有的 Chrome 里搜索公开 GitHub issue，你可以在标签页里看它操作。</p>
+<p><a data-growth-action="install_guide" href="/install.html">安装 CLI 和 Chrome 扩展</a> · <a data-growth-action="github_repo" href="https://github.com/leeguooooo/chrome-use">查看源码</a></p>
+<pre id="agent-task"><code>用 chrome-use 打开 https://github.com/leeguooooo/chrome-use/issues，
+搜索 is:issue daemon。先读 chrome-use skills get core。
+使用 first-task 专用 session；用 snapshot -i 获取当前 refs，
+填入 Search issues 输入框，再用 --observe 提交搜索。
+检查结果 URL 中的查询条件，读取列表，返回三个匹配的标题和链接。
+不要新建或修改 issue。遇到登录、权限或人工验证，让我处理。</code></pre>
+<button type="button" data-growth-copy="agent-task">复制任务给 agent</button>
+<p role="status" data-growth-status aria-live="polite"></p>
+<video controls preload="none" width="960" style="max-width:100%;height:auto" data-growth-demo aria-label="chrome-use 搜索 GitHub issue"><source src="/assets/docs/logged-in-task.webm" type="video/webm"></video>
+<p>2026 年 10 月 7 日录制，使用我们已有登录态的 Chrome：填写查询、提交、显示筛选结果。5.3 秒片段只包含浏览器动作，不包含安装、模型思考或最终报告。公开搜索在未登录时也能运行，这段演示证明浏览器操作，不证明访问了私有数据。</p>
+<h2>检查首次任务结果</h2>
+<p>结果 URL 应包含 <code>q=is%3Aissue+daemon</code>，等价编码也可以。agent 应从页面读取匹配标题和链接。仅有命令返回成功，还不能说明任务完成。</p>
+<p>需要登录态的任务，可以从你自己的后台页面开始，只读取内容。继续前先确认页面上的账号。登录或验证时，你可以直接接管同一个 Chrome 窗口。</p>
+<p>卡住了？<a data-growth-action="setup_feedback" href="https://github.com/leeguooooo/chrome-use/issues/new">告诉我们在哪个安装步骤失败</a>，附上系统、CLI 版本和脱敏后的错误。不要提交 cookie、token 或私有页面内容。浏览器任务在本地执行；本文档网站使用统计来衡量访问和安装入口点击。</p>
+</main></div><script src="/assets/docs/docs.js"></script><script src="/assets/docs/growth.js" defer></script></body></html>
