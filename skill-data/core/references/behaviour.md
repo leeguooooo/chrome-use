@@ -59,6 +59,14 @@ An `observed.noProgress` hint means repeated attempts had unchanged evidence,
 not that the action failed. Inspect state or wait for the relevant condition;
 do not turn the hint into an automatic replay.
 
+Scripts preserve observed hints in `data.advisories`, bounded to 20 entries,
+including nested results and failed runs. JSON op-list scripts additionally
+keep `noProgress` on the corresponding `steps` entry; text output prints the
+aggregate advisories once. A JS failure retains `ok:false`, `return:null`,
+`error`, `logs`, and `advisories`. A nested script with `data.ok:false` fails
+the parent even if transport `success` is true. Read program outcome, not
+transport acknowledgement.
+
 ## An action that did nothing is information
 
 When a click, fill, or select reports no change:

@@ -199,6 +199,8 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 同一目标和页面连续三次相同的 `click`、`dblclick` 或 `press`，相邻间隔不超过 60 秒，且完整、稳定的观察没有发现树、请求、资源或 frame 活动时，`observed.noProgress` 会提示检查状态或等待任务所需的条件。它不改变动作 success，不证明写入失败，也不会重试。
 
+脚本在 `data.advisories` 中保留提示，最多 20 条，嵌套脚本和后续失败的运行也会保留。JSON op-list 的对应 `steps` 条目另带 `noProgress`；文字输出只打印汇总提示一次。JS 脚本失败时保留 `ok:false`、`return:null`、`error`、`logs` 和 `advisories`。嵌套脚本的 `data.ok:false` 会使父脚本失败，即使传输层 `success` 为 true；调度成功不能证明程序成功。
+
 JSON 命令计时包含 `cdpMs`（已完成前台 CDP 请求耗时之和）、`cdpBusyMs`（请求时间区间在命令总耗时内的并集）和 `nonCdpMs`（总耗时减去并集）。请求并发时 `cdpMs` 可以超过总耗时；这些都是经过时间，不是 CPU 占用。后台任务不继承计时器，`nonCdpMs` 也不等于纯 daemon 处理时间。tool/HTTP 调用数不能当成模型回合，模型回合需要调用方 trace。任务测量见[核心循环](https://chrome-use.leeguoo.com/core-loop.html#task-efficiency)。
 
 Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击。任意时刻都能接管（比如手动过验证码），然后让 agent 继续。
