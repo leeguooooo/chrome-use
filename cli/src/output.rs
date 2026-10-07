@@ -4778,12 +4778,64 @@ Examples:
 "##
         }
 
+        // === Browsers (Chrome profiles) ===
+        "browsers" => {
+            r##"
+chrome-use browsers - Chrome profiles on this machine and which are connected
+
+Usage:
+  chrome-use browsers [--json]
+  chrome-use browsers --who <domain> [--json]
+
+Lists every profile in Chrome's Local State: display name, directory, signed-in
+account, whether its extension relay is connected, which one is the default
+without --browser, and which one this --session uses. Unconnected rows show the
+command that connects them.
+
+--who <domain>: for every profile, whether it looks signed in to <domain>, from
+cookie NAMES in the profile's on-disk cookie store (never values; no tab is
+opened). "signed in" = a cookie the site only sets for a signed-in user (known
+sites); "session cookies present" = session-like names, not proof. Where a site
+adapter <site>/me exists, the row shows the command that reports the account.
+
+Pick a profile:
+  --browser <name|prefix|dir|email|id>   e.g. --browser Davian, --browser d,
+                                         --browser "Profile 14"
+  A prefix that fits several profiles is an error listing them.
+  A profile without a live relay is an error naming `chrome-use connect --browser`.
+
+Defaults (~/.chrome-use/config.json):
+  "profiles": {
+    "default": "Leo",
+    "routes": [{"match": "dash.cloudflare.com", "profile": "Leo"},
+               {"match": "github.com/acme/*",   "profile": "Davian"}]
+  }
+  On a session's first connect without --browser: the first route matching the
+  first `open` URL, then a ChooseBrowser rule, then "default", then the most
+  recently used profile. The session stays on that profile afterwards.
+  The choice is printed once: `profile: Davian (Profile 14, …) — <rule>`.
+
+Examples:
+  chrome-use browsers
+  chrome-use browsers --who github.com
+  chrome-use --browser dav open https://github.com
+"##
+        }
+
         // === Connect ===
         "connect" => {
             r##"
-chrome-use connect - Connect to browser via CDP
+chrome-use connect - Connect to browser via CDP, or connect a Chrome profile
 
 Usage: chrome-use connect <port|url>
+       chrome-use connect --browser <profile> [--wait <secs>]
+
+--browser <profile>: connect that Chrome profile to chrome-use, lazily. If the
+extension is missing there, opens its Chrome Web Store page IN THAT PROFILE —
+the user clicks "Add to Chrome" once; if it is installed but the profile isn't
+open, opens a window in it; if Chrome has it disabled, opens its extensions
+page. Then waits (default 120s) for that profile's relay. It opens a window in
+the user's Chrome, so agents ask the user first.
 
 Connects to a running browser instance via Chrome DevTools Protocol (CDP).
 This allows controlling browsers, Electron apps, or remote browser services.
@@ -5466,8 +5518,10 @@ Core Commands:
   the reply is still pending. A host connection does not verify page liveness.
   reconnect                  Re-bind to the running Chrome's relay (alias for
                              `extension connect`) — recover a dropped relay, no reinstall
-  browsers                   List connected Chrome profiles; pin a session to one
-                             with --browser <id|email> (for multi-profile Chrome)
+  browsers [--who <domain>]  List every Chrome profile (name, dir, account, connected,
+                             default, this session); --who: which look signed in to a site
+  connect --browser <name>   Connect one more Chrome profile (opens a window there;
+                             one "Add to Chrome" click if the extension is missing)
   keep                       Leave the active tab for the user — exempt it from
                              auto-close/idle cleanup + remove it from the session
                              tab group (so scratch tabs get cleaned, this one stays)
@@ -5776,9 +5830,11 @@ Options:
   --headed                   Always on (default). Headless is forbidden (bot-detection tell);
                              display-less servers can opt back in with AGENT_BROWSER_ALLOW_HEADLESS=1
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
-  --browser <id|email>       Pin this session to a specific connected Chrome profile
-                             (run `chrome-use browsers` to list; for multi-profile
-                             relay setups). Sticky per session.
+  --browser <profile>        Pin this session to a Chrome profile: display name, a unique
+                             name prefix, directory ("Profile 14"), email, or id
+                             (or AGENT_BROWSER_PROFILE). `chrome-use browsers` lists them.
+                             Sticky per session. Defaults: ~/.chrome-use/config.json
+                             "profiles": {"default": …, "routes": [{"match", "profile"}]}
   --no-choosebrowser         Ignore ChooseBrowser's site rules for this command.
   --remember                 With an explicit --browser, ask ChooseBrowser to route this
                              site to that profile from now on. macOS + ChooseBrowser only.

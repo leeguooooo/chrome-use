@@ -107,6 +107,7 @@ Run `chrome-use skills get <name>` with one name below.
 | Mid-transition reads, `wait`, observation limits | `core/waiting` |
 | Ref identity, context annotations, snapshot detail | `core/snapshot-refs` |
 | `status`, extension setup, browser/profile choice, relay denial | `core/connection` |
+| Several Chrome profiles/accounts: which to use, connecting one | `core/connection` (Choosing a profile) |
 | Site adapter arguments, installation, sources | `core/site-adapters` |
 | Login, cookies, vault, passkeys, OAuth, handoff | `core/authentication` |
 | CAPTCHA, slider puzzle, ordered icon clicks | `core/captcha` |

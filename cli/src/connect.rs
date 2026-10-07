@@ -79,78 +79,6 @@ const OLD_PROFILE_IDS: &[&str] = &[
     "work.pwtk.chrome-use.ab-connect",
 ];
 
-/// `chrome-use browsers` — list the Chrome profiles whose ab-connect worker is
-/// currently connected to the relay, so an agent/user can pin a session to one
-/// with `--browser <id|email>` (issue #60). Local; no daemon.
-pub fn run_browsers(json: bool) {
-    let profiles = list_relay_profiles();
-    // The profile the CLI drives without `--browser`. Must match what actually
-    // gets bound, not the last `hello` writer — marking the wrong row `default`
-    // was the third symptom of #319.
-    let default = driving_profile().map(|(id, _)| id);
-    if json {
-        let arr: Vec<_> = profiles
-            .iter()
-            .map(|(id, email, ws)| {
-                serde_json::json!({
-                    "id": id,
-                    "email": email,
-                    "wsUrl": ws,
-                    "default": default.as_deref() == Some(id.as_str()),
-                })
-            })
-            .collect();
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({
-                "success": true,
-                "data": { "browsers": arr }
-            }))
-            .unwrap_or_default()
-        );
-        return;
-    }
-    if profiles.is_empty() {
-        // A stale native-host launcher (its target binary moved/deleted) makes
-        // Chrome's connectNative fail instantly, so the relay never connects and
-        // this list is empty for a reason that has nothing to do with the
-        // extension version. Surface that cause instead of only blaming ab-connect.
-        let host = native_host_report();
-        if !host.manifests.is_empty() && !host.is_healthy() {
-            let bin = host.target_bin.as_deref().unwrap_or("<unresolved>");
-            println!(
-                "no connected Chrome profiles.\n\
-                 The native-messaging host is broken: its launcher points at a binary that is \
-                 missing or not executable ({bin}).\n\
-                 Chrome can't start the host, so the relay can't connect. Fix it:\n  \
-                 chrome-use extension connect      (repoints the host at this binary)\n  \
-                 chrome-use doctor                 (full diagnosis)"
-            );
-            return;
-        }
-        println!(
-            "no connected Chrome profiles.\n\
-             (needs ab-connect \u{2265}0.5.3; if Chrome is running, try `chrome-use reconnect` \
-             or `chrome-use doctor`.)"
-        );
-        return;
-    }
-    println!("Connected Chrome profiles — drive one with `--browser <id|email>`:");
-    for (id, email, _) in &profiles {
-        let mark = if default.as_deref() == Some(id.as_str()) {
-            "  (default)"
-        } else {
-            ""
-        };
-        match email {
-            Some(e) => println!("  {e}  [{id}]{mark}"),
-            None => println!(
-                "  {id}{mark}  (no email — grant the ext `identity` permission to show it)"
-            ),
-        }
-    }
-}
-
 /// `chrome-use extension <install|uninstall|status>` (local; no daemon).
 /// `args` is the cleaned argv including the leading "extension".
 pub fn run_connect(args: &[String], json: bool) {
@@ -1475,8 +1403,8 @@ fn installed_host_manifests() -> Vec<PathBuf> {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ChromeExtensionStatus {
-    id: String,
+pub(crate) struct ChromeExtensionStatus {
+    pub(crate) id: String,
     name: Option<String>,
     version: Option<String>,
     path: Option<String>,
@@ -1484,7 +1412,7 @@ struct ChromeExtensionStatus {
     idle_version: Option<String>,
     idle_path: Option<String>,
     active_permissions: Vec<String>,
-    disable_reasons: Vec<String>,
+    pub(crate) disable_reasons: Vec<String>,
     active_bit: Option<bool>,
     from_webstore: Option<bool>,
 }
@@ -1546,14 +1474,16 @@ fn chrome_profile_roots() -> Vec<PathBuf> {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChromeProfileInfo {
     /// Browser data root, e.g. `…/Google/Chrome`.
-    root: String,
+    pub(crate) root: String,
     /// Profile directory name: `Default`, `Profile 2`, …
-    dir: String,
+    pub(crate) dir: String,
     /// Human name shown in Chrome's profile switcher.
-    name: Option<String>,
+    pub(crate) name: Option<String>,
     /// Signed-in Google account, when the profile has one.
-    email: Option<String>,
-    extension: Option<ChromeExtensionStatus>,
+    pub(crate) email: Option<String>,
+    /// The Google account's full name (`gaia_name`), when signed in.
+    pub(crate) gaia_name: Option<String>,
+    pub(crate) extension: Option<ChromeExtensionStatus>,
 }
 
 impl ChromeProfileInfo {
@@ -1588,7 +1518,7 @@ impl ChromeProfileInfo {
 /// `Local State` (the authoritative registry — profile dirs are NOT guessable:
 /// deleting Profile 3 leaves a numbering gap, and this user-visible bug shipped
 /// once as a hardcoded `Profile 1..3` scan that missed Profile 4-14).
-fn chrome_profiles() -> Vec<ChromeProfileInfo> {
+pub(crate) fn chrome_profiles() -> Vec<ChromeProfileInfo> {
     let mut out = Vec::new();
     for root in chrome_profile_roots() {
         let Ok(text) = std::fs::read_to_string(root.join("Local State")) else {
@@ -1597,30 +1527,45 @@ fn chrome_profiles() -> Vec<ChromeProfileInfo> {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
             continue;
         };
-        let Some(cache) = value
-            .pointer("/profile/info_cache")
-            .and_then(|v| v.as_object())
-        else {
-            continue;
-        };
-        for (dir, info) in cache {
-            out.push(ChromeProfileInfo {
-                root: root.display().to_string(),
-                dir: dir.clone(),
-                name: info
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.trim().is_empty())
-                    .map(ToString::to_string),
-                email: info
-                    .get("user_name")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.trim().is_empty())
-                    .map(ToString::to_string),
-                extension: profile_extension_status(&root, dir),
-            });
+        for mut p in parse_local_state_profiles(&root, &value) {
+            p.extension = profile_extension_status(&root, &p.dir);
+            out.push(p);
         }
     }
+    out.sort_by_key(|p| p.sort_key());
+    out
+}
+
+/// Pure half of [`chrome_profiles`]: the profiles one `Local State` lists in
+/// `profile.info_cache` (extension status left empty — that needs the disk).
+pub(crate) fn parse_local_state_profiles(
+    root: &Path,
+    value: &serde_json::Value,
+) -> Vec<ChromeProfileInfo> {
+    let Some(cache) = value
+        .pointer("/profile/info_cache")
+        .and_then(|v| v.as_object())
+    else {
+        return Vec::new();
+    };
+    let text = |info: &serde_json::Value, key: &str| {
+        info.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+    };
+    let mut out: Vec<ChromeProfileInfo> = cache
+        .iter()
+        .map(|(dir, info)| ChromeProfileInfo {
+            root: root.display().to_string(),
+            dir: dir.clone(),
+            name: text(info, "name"),
+            email: text(info, "user_name"),
+            gaia_name: text(info, "gaia_name"),
+            extension: None,
+        })
+        .collect();
     out.sort_by_key(|p| p.sort_key());
     out
 }
@@ -2238,8 +2183,21 @@ pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> 
 /// one-click-per-profile flow is the floor the browser's security model allows.)
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 fn open_store_in_profile(profile: &ChromeProfileInfo) -> bool {
+    open_in_profile(profile, Some(STORE_URL))
+}
+
+/// Open a window of one specific Chrome profile (optionally on `url`). Works
+/// whether or not Chrome is running: a running Chrome gets the request handed
+/// over and opens the window in that profile; a stopped one starts in it.
+/// Opening a window is also what wakes a profile whose extension is installed
+/// but idle — its worker only runs while the profile is open.
+pub(crate) fn open_in_profile(profile: &ChromeProfileInfo, url: Option<&str>) -> bool {
     let root = Path::new(&profile.root);
     let profile_arg = format!("--profile-directory={}", profile.dir);
+    let mut extra: Vec<&str> = vec![&profile_arg];
+    if let Some(u) = url {
+        extra.push(u);
+    }
     #[cfg(target_os = "macos")]
     {
         let app = match root.file_name().and_then(|s| s.to_str()) {
@@ -2249,8 +2207,10 @@ fn open_store_in_profile(profile: &ChromeProfileInfo) -> bool {
             Some("Chromium") => "Chromium",
             _ => return false,
         };
+        let mut args = vec!["-na", app, "--args"];
+        args.extend(extra);
         std::process::Command::new("open")
-            .args(["-na", app, "--args", &profile_arg, STORE_URL])
+            .args(args)
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
@@ -2264,15 +2224,24 @@ fn open_store_in_profile(profile: &ChromeProfileInfo) -> bool {
             Some("chromium") => "chromium",
             _ => return false,
         };
-        std::process::Command::new(bin)
-            .args([&profile_arg, STORE_URL])
-            .spawn()
-            .is_ok()
+        std::process::Command::new(bin).args(extra).spawn().is_ok()
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = (root, profile_arg);
-        false
+        // `start chrome` resolves through Chrome's App Paths registration, so
+        // no install-location guessing. Only stable Google Chrome has that
+        // short name; other flavours are left to the user.
+        let display = root.display().to_string();
+        if !display.contains("Google\\Chrome\\User Data") {
+            return false;
+        }
+        let mut args = vec!["/C", "start", "", "chrome"];
+        args.extend(extra);
+        std::process::Command::new("cmd")
+            .args(args)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
     }
 }
 
@@ -3020,63 +2989,15 @@ pub fn relay_url_for_selector_or_default(selector: Option<&str>) -> Result<Optio
 pub fn relay_profile_for_browser(
     selector: &str,
 ) -> Result<(String, Option<String>, String), String> {
-    let profiles = list_relay_profiles();
-    let ws = match_browser(&profiles, selector)?;
-    profiles
-        .into_iter()
-        .find(|(_, _, w)| *w == ws)
-        .ok_or_else(|| format!("--browser: could not identify the profile behind '{selector}'"))
-}
-
-/// Pure selector→ws-url resolution (separated from the filesystem read so it can
-/// be unit-tested). Matches a profileId (exact, then prefix) or an email
-/// substring (case-insensitive). Exact id wins over prefix/email so a full id is
-/// never ambiguous; otherwise multiple matches are an explicit error.
-fn match_browser(
-    profiles: &[(String, Option<String>, String)],
-    selector: &str,
-) -> Result<String, String> {
-    let sel = selector.trim();
-    let sel_lc = sel.to_lowercase();
-    if let Some((_, _, ws)) = profiles.iter().find(|(id, _, _)| id == sel) {
-        return Ok(ws.clone());
-    }
-    let matches: Vec<&(String, Option<String>, String)> = profiles
-        .iter()
-        .filter(|(id, email, _)| {
-            id.starts_with(sel)
-                || email
-                    .as_deref()
-                    .is_some_and(|e| e.to_lowercase().contains(&sel_lc))
-        })
-        .collect();
-    match matches.as_slice() {
-        [one] => Ok(one.2.clone()),
-        [] => Err(format!(
-            "--browser: no connected Chrome profile matches '{sel}'.{}",
-            render_browser_list(profiles)
-        )),
-        many => Err(format!(
-            "--browser: '{sel}' is ambiguous ({} profiles match) — use a longer id/email.{}",
-            many.len(),
-            render_browser_list(profiles)
-        )),
-    }
-}
-
-/// Human-readable list of connected profiles for error messages and `browsers`.
-fn render_browser_list(profiles: &[(String, Option<String>, String)]) -> String {
-    if profiles.is_empty() {
-        return " (no profile-aware extension is connected — needs ab-connect ≥0.5.3)".to_string();
-    }
-    let mut s = String::from("\nConnected Chrome profiles:");
-    for (id, email, _) in profiles {
-        match email {
-            Some(e) => s.push_str(&format!("\n  {e}  ({id})")),
-            None => s.push_str(&format!("\n  {id}")),
-        }
-    }
-    s
+    // Matching (display name, directory, email, id, name prefix) and the
+    // "not connected — here's how" errors live with the profile inventory.
+    crate::profiles::resolve_connected(selector).map(|row| {
+        (
+            row.relay_id.unwrap_or_default(),
+            row.relay_email.or(row.email),
+            row.ws.unwrap_or_default(),
+        )
+    })
 }
 
 /// Short one-line label for a profile in a warning (email if known, else id).
@@ -3531,6 +3452,7 @@ mod tests {
             dir: dir.to_string(),
             name: Some(format!("name-{dir}")),
             email: email.map(ToString::to_string),
+            gaia_name: None,
             extension: with_ext.then(|| ChromeExtensionStatus {
                 id: "knfcmbamhjmaonkfnjhldjedeobeafmk".to_string(),
                 name: Some("chrome-use".to_string()),
@@ -3713,47 +3635,6 @@ mod tests {
         r.launcher_executable = true;
         r.target_exists = false;
         assert!(!r.is_healthy());
-    }
-
-    #[test]
-    fn match_browser_resolves_by_id_email_prefix_and_errors() {
-        let p = |id: &str, email: Option<&str>, ws: &str| {
-            (id.to_string(), email.map(|e| e.to_string()), ws.to_string())
-        };
-        let profiles = vec![
-            p("uuid-aaa", Some("me@example.com"), "ws://127.0.0.1:1/a"),
-            p("uuid-bbb", None, "ws://127.0.0.1:2/b"),
-            p("ccc-work", Some("work@corp.com"), "ws://127.0.0.1:3/c"),
-        ];
-        // exact id
-        assert_eq!(
-            match_browser(&profiles, "uuid-bbb").unwrap(),
-            "ws://127.0.0.1:2/b"
-        );
-        // unique prefix
-        assert_eq!(
-            match_browser(&profiles, "ccc").unwrap(),
-            "ws://127.0.0.1:3/c"
-        );
-        // email substring (case-insensitive)
-        assert_eq!(
-            match_browser(&profiles, "WORK@corp").unwrap(),
-            "ws://127.0.0.1:3/c"
-        );
-        // exact id wins even though "uuid-aaa" is also a prefix of itself
-        assert_eq!(
-            match_browser(&profiles, "uuid-aaa").unwrap(),
-            "ws://127.0.0.1:1/a"
-        );
-        // ambiguous prefix
-        assert!(match_browser(&profiles, "uuid-").is_err());
-        // no match
-        let e = match_browser(&profiles, "nope").unwrap_err();
-        assert!(e.contains("no connected Chrome profile matches 'nope'"));
-        // empty set
-        assert!(match_browser(&[], "anything")
-            .unwrap_err()
-            .contains("no connected"));
     }
 
     #[test]

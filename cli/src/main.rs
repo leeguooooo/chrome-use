@@ -19,6 +19,7 @@ mod native;
 mod opencli;
 mod output;
 mod ownership;
+mod profiles;
 mod read;
 mod report;
 mod session_title;
@@ -186,6 +187,22 @@ fn session_command_route(sub: Option<&str>) -> SessionCommandRoute {
 /// on whatever the session already has open, so consulting a routing rule there
 /// would answer a question nobody asked — and could move the session to another
 /// profile mid-task.
+/// Resolve a profile named in `~/.chrome-use/config.json` (`profiles`) to its
+/// relay endpoint, or stop with the reason — the user wrote that rule, so a
+/// silent fallback to another profile would be the wrong account (#437).
+fn configured_profile_ws(selector: &str, why: &str) -> String {
+    match profiles::resolve_connected(selector) {
+        Ok(row) => row.ws.unwrap_or_default(),
+        Err(msg) => {
+            eprintln!(
+                "{} {msg} (chosen by {why} in ~/.chrome-use/config.json)",
+                color::error_indicator()
+            );
+            exit(1);
+        }
+    }
+}
+
 fn target_url_for_choosebrowser(argv: &[String]) -> Option<String> {
     const NAVIGATES: &[&str] = &["open", "goto", "navigate"];
     let verb = argv.first()?.as_str();
@@ -2087,8 +2104,20 @@ fn main() {
     // `browsers` (no daemon): list the connected Chrome profiles so an agent can
     // pin a session to one with `--browser <id|email>` (issue #60).
     if clean.first().map(|s| s.as_str()) == Some("browsers") {
-        connect::run_browsers(flags.json);
+        profiles::run_browsers(&clean[1..], &flags.session, flags.json);
         return;
+    }
+
+    // `connect --browser <selector>` (no port/url): connect one more Chrome
+    // profile lazily — open the Web Store page (or just a window, if the
+    // extension is already there) in that profile and wait for its relay.
+    if clean.first().map(|s| s.as_str()) == Some("connect")
+        && clean.get(1).is_none_or(|a| a.starts_with("--"))
+    {
+        if let Some(sel) = flags.browser.as_deref() {
+            profiles::run_connect_profile(sel, &clean[1..], flags.json);
+            return;
+        }
     }
 
     // Session management is local and daemon-free. Route stop/prune to daemon
@@ -2348,17 +2377,37 @@ fn main() {
     // concurrent agents don't fight). To switch a *running* session's profile,
     // start a fresh `--session` (or close it first).
     let mut browser_email: Option<String> = None;
-    let browser_selector = flags.browser.clone().or_else(|| {
-        flags
+    // Which relay endpoint this invocation picked for the session, and why —
+    // for the one-line "profile: …" note (#437).
+    let mut profile_choice: Option<(String, String)> = None;
+    let first_attach = !connection::daemon_ready(&flags.session);
+    // `--profile` / AGENT_BROWSER_PROFILE doubles as a profile selector when it
+    // names a Chrome profile (display name, directory, email, id). A path or
+    // an unknown name keeps its launch-mode meaning.
+    let profile_as_selector = flags.browser.is_none()
+        && flags.cdp.is_none()
+        && !flags.force_launch
+        && flags
             .profile
-            .as_ref()
-            .filter(|p| connect::relay_profile_for_browser(p).is_ok())
-            .cloned()
-    });
+            .as_deref()
+            .is_some_and(profiles::names_a_profile);
+    let browser_selector = if flags.browser.is_some() {
+        flags.browser.clone()
+    } else if profile_as_selector {
+        flags.profile.clone()
+    } else {
+        None
+    };
     if let Some(sel) = browser_selector.as_ref() {
         match connect::relay_profile_for_browser(sel) {
             Ok((_, email, url)) => {
                 browser_email = email;
+                let why = if flags.browser.is_some() {
+                    "--browser"
+                } else {
+                    "--profile / AGENT_BROWSER_PROFILE"
+                };
+                profile_choice = Some((url.clone(), why.to_string()));
                 flags.cdp = Some(url);
                 flags.auto_connect = false;
             }
@@ -2374,23 +2423,43 @@ fn main() {
         // first time. Once it's running it stays bound to its profile — otherwise
         // re-resolving on every invocation would silently hop the session to a
         // different profile as the user changes window focus mid-task.
-        && !connection::daemon_ready(&flags.session)
+        && first_attach
     {
         // No explicit `--browser`. With several Chrome profiles each running the
         // extension, the relay's generic endpoint is whichever host connected
         // last — often NOT the profile the user is logged into for the task, so
-        // the agent lands on a logged-out profile. Default instead to the profile
-        // the user is actively using (most recently focused window); if that's
-        // ambiguous, keep the legacy default but warn loudly with how to pick.
-        //
+        // the agent lands on a logged-out profile. In order:
+        //   1. a route in ~/.chrome-use/config.json `profiles.routes` (#437),
+        //   2. a ChooseBrowser rule for the site (#244),
+        //   3. `profiles.default` from the same config (#437),
+        //   4. the profile the user is actively using (most recently focused),
+        //   5. the legacy last-connected default, with a warning.
+        let target_url = target_url_for_choosebrowser(&clean);
+        let configured = profiles::load_profiles_config();
+        if let (Some(cfg), Some(url)) = (configured.as_ref(), target_url.as_deref()) {
+            if let Some(route) = cfg
+                .routes
+                .iter()
+                .find(|r| profiles::route_matches(&r.pattern, url))
+            {
+                let why = format!("config route \"{}\"", route.pattern);
+                let ws = configured_profile_ws(&route.profile, &why);
+                profile_choice = Some((ws.clone(), why));
+                flags.cdp = Some(ws);
+                flags.auto_connect = false;
+            }
+        }
+
         // Before guessing from focus, though: the user may already have written
         // down which account this site belongs to. ChooseBrowser stores exactly
         // that mapping, and a rule they authored beats any inference we make
         // from which window they happen to be looking at (issue #244).
-        let cb_pick = if flags.no_choosebrowser {
+        let cb_pick = if flags.no_choosebrowser || flags.cdp.is_some() {
             None
         } else {
-            target_url_for_choosebrowser(&clean).and_then(|u| choosebrowser::profile_for_url(&u))
+            target_url
+                .clone()
+                .and_then(|u| choosebrowser::profile_for_url(&u))
         };
         if let Some((profile, choice)) = cb_pick {
             // A rule naming a profile the relay has no endpoint for means that
@@ -2412,48 +2481,103 @@ fn main() {
                 .as_deref()
                 .and_then(|email| connect::relay_url_for_browser(email).ok());
             if let Some(url) = relay_url {
-                flags.cdp = Some(url);
-                flags.auto_connect = false;
-                // Say where the choice came from. Without this the user sees
-                // a different account open than the window they were looking
-                // at, with nothing to explain it.
-                eprintln!(
-                        "{} using Chrome profile {} — a ChooseBrowser rule routes this site there{}. Override with --browser <id|email>, or skip with --no-choosebrowser.",
-                        color::dim("·"),
-                        profile.directory,
+                // Say where the choice came from (in the profile line). Without
+                // this the user sees a different account open than the window
+                // they were looking at, with nothing to explain it.
+                profile_choice = Some((
+                    url.clone(),
+                    format!(
+                        "a ChooseBrowser rule routes this site there{} (skip with --no-choosebrowser)",
                         choice
                             .rule_id
                             .as_deref()
                             .map(|r| format!(" ({r})"))
                             .unwrap_or_default(),
-                    );
+                    ),
+                ));
+                flags.cdp = Some(url);
+                flags.auto_connect = false;
             }
         }
 
-        let profiles = connect::list_relay_profiles();
-        if flags.cdp.is_none() && profiles.len() >= 2 {
+        if flags.cdp.is_none() {
+            if let Some(default) = configured
+                .as_ref()
+                .and_then(|c| c.default.clone())
+                .filter(|d| !d.trim().is_empty())
+            {
+                let why = "config profiles.default".to_string();
+                let ws = configured_profile_ws(&default, &why);
+                profile_choice = Some((ws.clone(), why));
+                flags.cdp = Some(ws);
+                flags.auto_connect = false;
+            }
+        }
+
+        let relay_profiles = connect::list_relay_profiles();
+        if flags.cdp.is_none() && relay_profiles.len() >= 2 {
             match connect::most_recently_focused_profile() {
-                Some((id, email, ws)) => {
+                Some((_, _, ws)) => {
+                    profile_choice = Some((
+                        ws.clone(),
+                        format!(
+                            "most recently used of {} connected profiles; pick with --browser",
+                            relay_profiles.len()
+                        ),
+                    ));
                     flags.cdp = Some(ws);
                     flags.auto_connect = false;
-                    eprintln!(
-                        "{} {} Chrome profiles connected — driving {} (most recently used). Override with --browser <id|email>.",
-                        color::warning_indicator(),
-                        profiles.len(),
-                        connect::profile_label(&id, email.as_deref()),
-                    );
                 }
                 None => {
                     eprintln!(
-                        "{} {} Chrome profiles connected and none is clearly in focus — driving the last-connected one, which may be logged out. Pick one with --browser <id|email>:",
+                        "{} {} Chrome profiles connected and none is clearly in focus — driving the last-connected one, which may be logged out. Pick one with --browser <name|email> (see `chrome-use browsers`):",
                         color::warning_indicator(),
-                        profiles.len(),
+                        relay_profiles.len(),
                     );
-                    for (id, email, _) in &profiles {
+                    for (id, email, _) in &relay_profiles {
                         eprintln!("    {}", connect::profile_label(id, email.as_deref()));
                     }
                 }
             }
+        }
+    }
+
+    // #437: which profile does this session use? Said once — on the session's
+    // first attach, when `--browser` re-points it, and on `open`/`goto` — not
+    // on every command. Written after the daemon is up (its startup clears
+    // per-session sidecars).
+    let mut profile_record: Option<(profiles::ProfileRow, String)> = None;
+    let mut profile_note: Option<serde_json::Value> = None;
+    let is_navigation = matches!(
+        clean.first().map(|s| s.as_str()),
+        Some("open") | Some("goto") | Some("navigate")
+    );
+    if flags.provider.is_none() && !flags.force_launch {
+        let previous = profiles::session_profile(&flags.session);
+        if let Some((ws, why)) = &profile_choice {
+            if let Some(row) = profiles::row_for_ws(ws) {
+                let changed = previous
+                    .as_ref()
+                    .and_then(|v| v.get("id").and_then(|x| x.as_str()).map(String::from))
+                    != row.relay_id;
+                if first_attach || changed || is_navigation {
+                    profile_record = Some((row, why.clone()));
+                }
+            }
+        } else if first_attach && flags.auto_connect && flags.cdp.is_none() {
+            // The generic endpoint: whichever profile's host connected last.
+            if let Some((id, _)) = connect::relay_ext_profile() {
+                if let Some(row) = profiles::row_for_relay_id(&id) {
+                    let why = if connect::list_relay_profiles().len() <= 1 {
+                        "the only connected profile"
+                    } else {
+                        "the last-connected profile"
+                    };
+                    profile_record = Some((row, why.to_string()));
+                }
+            }
+        } else if is_navigation && !first_attach {
+            profile_note = previous;
         }
     }
 
@@ -2799,6 +2923,15 @@ fn main() {
             }
         };
     drop(_session_lifecycle_lock);
+    if let Some((row, why)) = profile_record.take() {
+        profiles::record_session_profile(&flags.session, &row, &why);
+        profile_note = profiles::session_profile(&flags.session);
+    }
+    if let Some(note) = &profile_note {
+        if !flags.json {
+            eprintln!("{}", color::dim(&profiles::profile_line(note)));
+        }
+    }
     if flags.force_launch && flags.cdp.is_none() && flags.provider.is_none() {
         connection::mark_session_launched(&flags.session);
     }
@@ -3558,6 +3691,19 @@ fn main() {
             }
             // Extract action for context-specific output handling
             let action = cmd.get("action").and_then(|v| v.as_str());
+            // #437: `--json` carries the session's profile as a field on the
+            // same occasions text mode prints the "profile:" line.
+            if let (true, Some(note)) = (flags.json, &profile_note) {
+                match resp.data.as_mut() {
+                    Some(serde_json::Value::Object(map)) => {
+                        map.insert("profile".to_string(), profiles::profile_json(note));
+                    }
+                    None if resp.success => {
+                        resp.data = Some(json!({ "profile": profiles::profile_json(note) }));
+                    }
+                    _ => {}
+                }
+            }
             print_response_with_opts(&resp, action, &output_opts);
             // `expect` is an assertion: map to a 3-way exit code so it composes in
             // shells/CI — 0 pass, 1 condition false, 2 un-evaluable (transport

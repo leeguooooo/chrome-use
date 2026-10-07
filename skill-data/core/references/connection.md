@@ -29,8 +29,7 @@ unless the command is safe to repeat or Chrome explicitly rejected it before dis
   Chrome's code-sign clone so interrupted automation sessions do not leak disk.
 - **`--profile auto`** (or `AGENT_BROWSER_PROFILE=auto`) reuses the user's real
   Chrome profile — real cookies, login, extensions.
-- Many profiles? `chrome-use browsers` lists connected ones; `--browser <id|email>`
-  pins this session to one (sticky per session).
+- Many profiles? See [Choosing a profile](#choosing-a-profile) below.
 
 **Per-agent isolation is automatic:** each `--session <name>` gets its own colored
 Chrome tab group + dedicated daemon and drives only tabs it created or explicitly
@@ -70,10 +69,66 @@ empty test profile that does not carry the user's login. Headed is the default.
 
 Task session isolation is automatic when an agent/terminal identity is
 available; otherwise it falls back to shared `default`. Use `--session <name>`
-for explicit isolation and reuse that name. `--browser <id|email>` pins a
-profile. `browsers` lists connected profiles; `tab list` lists session tabs.
+for explicit isolation and reuse that name. `--browser <name>` pins a
+profile. `browsers` lists Chrome profiles; `tab list` lists session tabs.
 Adopt an existing user tab only when needed for the request. Do not close,
 navigate, or reconfigure unrelated tabs or sessions.
+
+## Choosing a profile
+
+Each Chrome profile is its own login: one may hold the work GitHub account,
+another the personal one. Pick the profile before the task, not after a login wall.
+
+1. `chrome-use browsers` lists every profile: display name, directory,
+   account, connected, default (used without `--browser`), and the one this
+   session uses.
+2. `chrome-use browsers --who <domain>` shows which profiles look signed in
+   to a site. It reads cookie names from disk, never values, and opens no tab.
+   "signed in" is a known login cookie; "session cookies present" only suggests a login.
+3. Pin the session with `--browser <name>`. It accepts a display name
+   (`Davian`), a unique name prefix (`d`), a directory (`"Profile 14"`), an
+   email, or an id; `AGENT_BROWSER_PROFILE` takes the same values.
+   A prefix that fits several profiles is an error listing them; use the directory.
+   The session stays on that profile until closed.
+   `open` and a session's first command print `profile: <name> (<dir>, <email>) — <why>`.
+   `--json` returns the same as a `profile` field.
+4. On a login wall, fix the login in that profile (`core/authentication`,
+   `auth login --bwu`). Do not switch to another profile.
+
+**Connecting another profile.** Only profiles running the extension are
+connected; most people install it in one. `chrome-use connect --browser <name>`
+connects one when it's needed. It opens the extension's Web Store page in that
+profile, and the user clicks "Add to Chrome" once. If the extension is already
+installed, it opens a window in that profile instead (the extension runs only
+while the profile is open). If Chrome has it disabled, it opens its extensions
+page. Then it waits for the relay. **It opens a window in the user's Chrome, so
+ask the user before running it.** `--browser` naming an unconnected profile
+fails with exactly this command.
+
+**Defaults.** In `~/.chrome-use/config.json`:
+
+```json
+{"profiles": {"default": "Leo",
+  "routes": [{"match": "dash.cloudflare.com", "profile": "Leo"},
+             {"match": "github.com/acme/*", "profile": "Davian"}]}}
+```
+
+A session's first connect without `--browser` goes through these in order:
+
+1. the first route matching the first `open` URL (host plus subdomains;
+   the path is a prefix or `*` glob);
+2. a ChooseBrowser rule;
+3. `default`;
+4. the most recently used profile.
+
+The profile line names the rule that chose.
+
+**Every profile at once (opt-in).** Chrome's `ExtensionInstallForcelist`
+policy installs the extension into every profile. `chrome-use extension
+install` can write that policy. It needs a macOS configuration profile
+approved by an admin, and it puts Chrome in "managed by your organization"
+mode, which locks some settings (Secure DNS among them), so it is not the
+default.
 
 An empty tab list or one stale tab is not proof the browser disconnected.
 Read the error before restarting anything. For setup/version failures, use

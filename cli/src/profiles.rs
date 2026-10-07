@@ -1,0 +1,1490 @@
+//! Chrome profiles the way the user names them (#437).
+//!
+//! The relay knows a connected profile only by a UUID the extension minted and,
+//! when the profile granted `identity`, its email. People call profiles by the
+//! name in Chrome's profile switcher ("Davian", "the d one") or its directory
+//! ("Profile 14"). This module joins the two views — every profile in `Local
+//! State`, plus which of them has a live relay — and builds the user-facing
+//! pieces on top: the `browsers` table, `--browser` matching, `connect
+//! --browser` (lazy, one-click per profile), `browsers --who <domain>`, the
+//! per-session "profile:" line, and config-driven routing.
+
+use crate::color;
+use crate::connect::{self, ChromeProfileInfo};
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+
+/// One Chrome profile, as `Local State` and the relay together describe it.
+/// A relay with no matching `Local State` entry (e.g. Chrome's data root is in
+/// an unusual place) still gets a row, carrying only what the relay knows.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProfileRow {
+    /// Name in Chrome's profile switcher.
+    pub name: Option<String>,
+    /// Profile directory: `Default`, `Profile 14`, …
+    pub dir: Option<String>,
+    /// Browser data root the directory lives under.
+    pub root: Option<String>,
+    /// Signed-in Google account (`Local State`'s `user_name`).
+    pub email: Option<String>,
+    /// The Google account's full name.
+    pub gaia_name: Option<String>,
+    /// Extension-minted profile id, when the profile is connected.
+    pub relay_id: Option<String>,
+    /// Email the extension reported (only with the `identity` permission).
+    pub relay_email: Option<String>,
+    /// The profile's relay endpoint, when connected.
+    pub ws: Option<String>,
+    pub has_extension: bool,
+    /// Chrome lists disable reasons for the extension in this profile.
+    pub extension_disabled: bool,
+}
+
+impl ProfileRow {
+    pub fn connected(&self) -> bool {
+        self.ws.is_some()
+    }
+
+    fn account(&self) -> Option<&str> {
+        self.email.as_deref().or(self.relay_email.as_deref())
+    }
+
+    /// The shortest thing a person would call this profile.
+    pub fn short(&self) -> String {
+        self.name
+            .clone()
+            .or_else(|| self.dir.clone())
+            .or_else(|| self.account().map(ToString::to_string))
+            .or_else(|| self.relay_id.clone())
+            .unwrap_or_else(|| "?".to_string())
+    }
+
+    /// `Davian (Profile 14, someone@gmail.com)`.
+    pub fn label(&self) -> String {
+        let mut inner: Vec<String> = Vec::new();
+        if self.name.is_some() {
+            if let Some(d) = &self.dir {
+                inner.push(d.clone());
+            }
+        }
+        if self.name.is_some() || self.dir.is_some() {
+            if let Some(a) = self.account() {
+                inner.push(a.to_string());
+            }
+        } else if self.account().is_some() {
+            // Relay-only row: headed by the email, so name the id beside it.
+            if let Some(id) = &self.relay_id {
+                inner.push(id.clone());
+            }
+        }
+        let head = self.short();
+        if inner.is_empty() {
+            head
+        } else {
+            format!("{head} ({})", inner.join(", "))
+        }
+    }
+
+    fn same_profile(&self, other: &ProfileRow) -> bool {
+        match (&self.dir, &other.dir) {
+            (Some(a), Some(b)) => a == b && self.root == other.root,
+            _ => self.relay_id.is_some() && self.relay_id == other.relay_id,
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "name": self.name,
+            "dir": self.dir,
+            "email": self.account(),
+            "gaiaName": self.gaia_name,
+            "id": self.relay_id,
+            "connected": self.connected(),
+            "hasExtension": self.has_extension,
+            "extensionDisabled": self.extension_disabled,
+        })
+    }
+}
+
+// --- Inventory ---------------------------------------------------------------
+
+/// Join `Local State` profiles with live relays. `dir_of` maps a relay id to
+/// the `(root, dir)` whose extension storage holds it; email is the fallback
+/// (only when exactly one profile carries that email — several profiles can
+/// be signed in to the same account).
+pub fn join_rows(
+    local: &[ChromeProfileInfo],
+    relays: &[(String, Option<String>, String)],
+    dir_of: &dyn Fn(&str) -> Option<(String, String)>,
+) -> Vec<ProfileRow> {
+    let mut rows: Vec<ProfileRow> = local
+        .iter()
+        .map(|p| ProfileRow {
+            name: p.name.clone(),
+            dir: Some(p.dir.clone()),
+            root: Some(p.root.clone()),
+            email: p.email.clone(),
+            gaia_name: p.gaia_name.clone(),
+            has_extension: p.extension.is_some(),
+            extension_disabled: p
+                .extension
+                .as_ref()
+                .is_some_and(|e| !e.disable_reasons.is_empty()),
+            ..Default::default()
+        })
+        .collect();
+    for (id, email, ws) in relays {
+        let by_dir = dir_of(id).and_then(|(root, dir)| {
+            rows.iter().position(|r| {
+                r.relay_id.is_none()
+                    && r.dir.as_deref() == Some(dir.as_str())
+                    && r.root.as_deref() == Some(root.as_str())
+            })
+        });
+        let by_email = || {
+            let e = email.as_deref()?.to_lowercase();
+            let hits: Vec<usize> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    r.relay_id.is_none()
+                        && r.dir.is_some()
+                        && r.email.as_deref().map(str::to_lowercase).as_deref() == Some(e.as_str())
+                })
+                .map(|(i, _)| i)
+                .collect();
+            if hits.len() == 1 {
+                Some(hits[0])
+            } else {
+                None
+            }
+        };
+        match by_dir.or_else(by_email) {
+            Some(i) => {
+                let r = &mut rows[i];
+                r.relay_id = Some(id.clone());
+                r.relay_email = email.clone();
+                r.ws = Some(ws.clone());
+                r.has_extension = true;
+            }
+            None => rows.push(ProfileRow {
+                relay_id: Some(id.clone()),
+                relay_email: email.clone(),
+                ws: Some(ws.clone()),
+                has_extension: true,
+                ..Default::default()
+            }),
+        }
+    }
+    rows
+}
+
+/// Find which profile directory a relay id belongs to. The extension keeps
+/// its id in `chrome.storage.local`, i.e. the profile's `Local Extension
+/// Settings/<extension id>/` LevelDB — new writes land in the plain-text
+/// `.log`, compacted ones in `.ldb` (short values stay literal under snappy).
+fn relay_id_dir(id: &str, local: &[ChromeProfileInfo]) -> Option<(String, String)> {
+    if id.len() < 8 {
+        return None;
+    }
+    let needle = id.as_bytes();
+    for p in local {
+        for ext in [connect::STORE_EXTENSION_ID, connect::EXTENSION_ID] {
+            let dir = Path::new(&p.root)
+                .join(&p.dir)
+                .join("Local Extension Settings")
+                .join(ext);
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let ext_ok = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e == "log" || e == "ldb");
+                if !ext_ok {
+                    continue;
+                }
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if bytes.windows(needle.len()).any(|w| w == needle) {
+                        return Some((p.root.clone(), p.dir.clone()));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Every profile on this machine plus every live relay, joined.
+pub fn load_rows() -> Vec<ProfileRow> {
+    let local = connect::chrome_profiles();
+    let relays = connect::list_relay_profiles();
+    join_rows(&local, &relays, &|id| relay_id_dir(id, &local))
+}
+
+// --- Selector matching -------------------------------------------------------
+
+#[derive(Debug, PartialEq)]
+pub enum Match {
+    One(usize),
+    None,
+    Ambiguous(Vec<usize>),
+}
+
+/// Resolve what a person typed to one profile. In order:
+/// 1. exact (case-insensitive): relay id, directory, display name, email,
+///    Google account name;
+/// 2. a prefix of the display name (`d` → `Davian`);
+/// 3. the pre-#437 forms: relay-id prefix, email substring.
+///
+/// Several hits on a prefix are always an error listing them. Several exact
+/// or legacy hits resolve to the one connected profile among them, if there
+/// is exactly one — the same email signed in to three profiles, one of which
+/// runs the extension, kept working before this matcher knew the other two.
+pub fn match_selector(rows: &[ProfileRow], selector: &str) -> Match {
+    let sel = selector.trim();
+    if sel.is_empty() {
+        return Match::None;
+    }
+    let lc = sel.to_lowercase();
+    let eq = |v: &Option<String>| v.as_deref().is_some_and(|x| x.to_lowercase() == lc);
+    let hits = |f: &dyn Fn(&ProfileRow) -> bool| -> Vec<usize> {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, r)| f(r))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    let decide = |c: Vec<usize>, prefer_connected: bool| -> Option<Match> {
+        match c.len() {
+            0 => None,
+            1 => Some(Match::One(c[0])),
+            _ => {
+                if prefer_connected {
+                    let live: Vec<usize> =
+                        c.iter().copied().filter(|&i| rows[i].connected()).collect();
+                    if live.len() == 1 {
+                        return Some(Match::One(live[0]));
+                    }
+                }
+                Some(Match::Ambiguous(c))
+            }
+        }
+    };
+    let exact = hits(&|r| {
+        eq(&r.relay_id)
+            || eq(&r.dir)
+            || eq(&r.name)
+            || eq(&r.email)
+            || eq(&r.relay_email)
+            || eq(&r.gaia_name)
+    });
+    if let Some(m) = decide(exact, true) {
+        return m;
+    }
+    let prefix = hits(&|r| {
+        r.name
+            .as_deref()
+            .is_some_and(|n| n.to_lowercase().starts_with(&lc))
+    });
+    if let Some(m) = decide(prefix, false) {
+        return m;
+    }
+    let legacy = hits(&|r| {
+        r.relay_id.as_deref().is_some_and(|id| id.starts_with(sel))
+            || [&r.email, &r.relay_email]
+                .iter()
+                .any(|e| e.as_deref().is_some_and(|e| e.to_lowercase().contains(&lc)))
+    });
+    decide(legacy, true).unwrap_or(Match::None)
+}
+
+/// Quote a selector for a copy-pasteable command line.
+fn shell_quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | '+'))
+    {
+        s.to_string()
+    } else {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    }
+}
+
+/// The selector to suggest for a row: its display name when that alone
+/// picks it, else its directory, else its id.
+pub fn suggested_selector(rows: &[ProfileRow], i: usize) -> String {
+    let r = &rows[i];
+    for cand in [&r.name, &r.dir, &r.relay_id].into_iter().flatten() {
+        if match_selector(rows, cand) == Match::One(i) {
+            return cand.clone();
+        }
+    }
+    r.short()
+}
+
+pub fn connect_command(selector: &str) -> String {
+    format!("chrome-use connect --browser {}", shell_quote(selector))
+}
+
+fn list_lines(rows: &[ProfileRow], which: &[usize]) -> String {
+    which
+        .iter()
+        .map(|&i| {
+            let r = &rows[i];
+            format!(
+                "\n  {}{}",
+                r.label(),
+                if r.connected() { "  [connected]" } else { "" }
+            )
+        })
+        .collect()
+}
+
+/// What to say about a profile that matched but has no live relay.
+pub fn not_connected_message(selector: &str, row: &ProfileRow) -> String {
+    let cmd = connect_command(selector);
+    let ask = "It opens a window in the user's Chrome, so ask the user before running it.";
+    if !row.has_extension {
+        format!(
+            "profile \"{selector}\" doesn't have the chrome-use extension yet — run `{cmd}` \
+             (one click in Chrome), then repeat. {ask}"
+        )
+    } else if row.extension_disabled {
+        format!(
+            "profile \"{selector}\" ({}) has the chrome-use extension, but Chrome has it \
+             disabled — run `{cmd}` (opens its extension page to re-enable it), then repeat. {ask}",
+            row.dir.as_deref().unwrap_or("?")
+        )
+    } else {
+        format!(
+            "profile \"{selector}\" ({}) has the chrome-use extension but isn't open in Chrome \
+             right now — run `{cmd}` (opens a window in that profile), then repeat. {ask}",
+            row.dir.as_deref().unwrap_or("?")
+        )
+    }
+}
+
+/// Pure resolution to any profile (connected or not), with the user-facing
+/// error for no match / several matches.
+pub fn resolve_in(rows: &[ProfileRow], selector: &str) -> Result<usize, String> {
+    let sel = selector.trim();
+    match match_selector(rows, sel) {
+        Match::One(i) => Ok(i),
+        Match::Ambiguous(c) => Err(format!(
+            "'{sel}' matches {} Chrome profiles — use the directory name or email:{}",
+            c.len(),
+            list_lines(rows, &c)
+        )),
+        Match::None => {
+            let all: Vec<usize> = (0..rows.len()).collect();
+            Err(if rows.is_empty() {
+                format!(
+                    "no Chrome profile matches '{sel}' (no Chrome profiles found and no \
+                     extension connected — run `chrome-use doctor`)"
+                )
+            } else {
+                format!(
+                    "no Chrome profile matches '{sel}'. Profiles (see `chrome-use browsers`):{}",
+                    list_lines(rows, &all)
+                )
+            })
+        }
+    }
+}
+
+/// Does `selector` name any Chrome profile on this machine (connected or not,
+/// even ambiguously)? Lets `--profile`/AGENT_BROWSER_PROFILE act as a
+/// selector without stealing its launch-mode meaning (a path, a new name).
+pub fn names_a_profile(selector: &str) -> bool {
+    // `auto` is `--profile`'s own keyword (the last-used profile), not a name
+    // prefix.
+    if selector.trim().eq_ignore_ascii_case("auto") {
+        return false;
+    }
+    match_selector(&load_rows(), selector) != Match::None
+}
+
+/// Pure resolution to a CONNECTED profile.
+pub fn resolve_connected_in(rows: &[ProfileRow], selector: &str) -> Result<usize, String> {
+    let i = resolve_in(rows, selector)?;
+    if rows[i].connected() {
+        Ok(i)
+    } else {
+        Err(not_connected_message(selector.trim(), &rows[i]))
+    }
+}
+
+pub fn resolve_connected(selector: &str) -> Result<ProfileRow, String> {
+    let rows = load_rows();
+    resolve_connected_in(&rows, selector).map(|i| rows[i].clone())
+}
+
+/// The row behind a relay endpoint (what a session is bound to).
+pub fn row_for_ws(ws: &str) -> Option<ProfileRow> {
+    load_rows()
+        .into_iter()
+        .find(|r| r.ws.as_deref() == Some(ws))
+}
+
+pub fn row_for_relay_id(id: &str) -> Option<ProfileRow> {
+    load_rows()
+        .into_iter()
+        .find(|r| r.relay_id.as_deref() == Some(id))
+}
+
+// --- Routing config ----------------------------------------------------------
+
+/// `"profiles"` in `~/.chrome-use/config.json`:
+/// `{"default": "<selector>", "routes": [{"match": "github.com/acme/*", "profile": "Davian"}]}`.
+#[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
+pub struct ProfilesConfig {
+    #[serde(default)]
+    pub default: Option<String>,
+    #[serde(default)]
+    pub routes: Vec<Route>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Route {
+    #[serde(rename = "match")]
+    pub pattern: String,
+    pub profile: String,
+}
+
+fn config_path() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("AGENT_BROWSER_CONFIG").filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(p));
+    }
+    Some(dirs::home_dir()?.join(".chrome-use").join("config.json"))
+}
+
+pub fn parse_profiles_config(config: &Value) -> Option<ProfilesConfig> {
+    serde_json::from_value(config.get("profiles")?.clone()).ok()
+}
+
+pub fn load_profiles_config() -> Option<ProfilesConfig> {
+    let text = std::fs::read_to_string(config_path()?).ok()?;
+    parse_profiles_config(&serde_json::from_str(&text).ok()?)
+}
+
+/// `*` matches any run of characters; everything else literally.
+fn glob(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let (mut pi, mut ti) = (0, 0);
+    let (mut star, mut mark) = (None, 0);
+    while ti < t.len() {
+        if pi < p.len() && p[pi] != '*' && p[pi] == t[ti] {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// Does a route pattern (`host[/path]`) cover `url`? The host matches itself
+/// and its subdomains (`*.` prefix optional); a path without `*` is a prefix
+/// on segment boundaries (`github.com/acme` covers `/acme/x`, not `/acmeco`).
+/// Case-insensitive.
+pub fn route_matches(pattern: &str, url: &str) -> bool {
+    let pattern = pattern.trim().to_lowercase();
+    let pattern = pattern
+        .strip_prefix("https://")
+        .or_else(|| pattern.strip_prefix("http://"))
+        .unwrap_or(&pattern);
+    let normalized = if url.contains("://") {
+        url.to_string()
+    } else {
+        format!("https://{url}")
+    };
+    let Ok(u) = url::Url::parse(&normalized) else {
+        return false;
+    };
+    let Some(host) = u.host_str().map(str::to_lowercase) else {
+        return false;
+    };
+    let (phost, ppath) = match pattern.split_once('/') {
+        Some((h, p)) => (h, Some(p)),
+        None => (pattern, None),
+    };
+    let phost = phost.strip_prefix("*.").unwrap_or(phost);
+    if phost.is_empty() || !(host == phost || host.ends_with(&format!(".{phost}"))) {
+        return false;
+    }
+    let Some(ppath) = ppath.map(|p| p.trim_matches('/')).filter(|p| !p.is_empty()) else {
+        return true;
+    };
+    let path = u.path().trim_start_matches('/').to_lowercase();
+    if ppath.contains('*') {
+        glob(ppath, &path)
+    } else {
+        path == ppath || path.starts_with(&format!("{ppath}/"))
+    }
+}
+
+/// The configured choice for a session's first connect: the first route
+/// matching `url`, else `default`. Returns `(selector, why)`.
+pub fn choose_configured(cfg: &ProfilesConfig, url: Option<&str>) -> Option<(String, String)> {
+    if let Some(u) = url {
+        if let Some(r) = cfg.routes.iter().find(|r| route_matches(&r.pattern, u)) {
+            return Some((r.profile.clone(), format!("config route \"{}\"", r.pattern)));
+        }
+    }
+    cfg.default
+        .as_ref()
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| (d.clone(), "config profiles.default".to_string()))
+}
+
+// --- Per-session record ------------------------------------------------------
+
+fn session_profile_path(session: &str) -> PathBuf {
+    crate::connection::get_socket_dir().join(format!("{session}.browser-profile"))
+}
+
+/// Remember which profile a session bound to, and why, so later commands
+/// (`open`, `browsers`) can say so without re-deciding.
+pub fn record_session_profile(session: &str, row: &ProfileRow, reason: &str) {
+    let mut v = row.to_json();
+    v["reason"] = json!(reason);
+    v["label"] = json!(row.label());
+    let _ = std::fs::write(session_profile_path(session), v.to_string());
+}
+
+pub fn session_profile(session: &str) -> Option<Value> {
+    let text = std::fs::read_to_string(session_profile_path(session)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// `profile: Davian (Profile 14, x@gmail.com) — config route "github.com/acme/*"`.
+pub fn profile_line(record: &Value) -> String {
+    let label = record.get("label").and_then(|v| v.as_str()).unwrap_or("?");
+    match record.get("reason").and_then(|v| v.as_str()) {
+        Some(r) if !r.is_empty() => format!("profile: {label} — {r}"),
+        _ => format!("profile: {label}"),
+    }
+}
+
+/// JSON shape of the per-session record for `--json` output.
+pub fn profile_json(record: &Value) -> Value {
+    json!({
+        "name": record.get("name"),
+        "dir": record.get("dir"),
+        "email": record.get("email"),
+        "id": record.get("id"),
+        "reason": record.get("reason"),
+    })
+}
+
+// --- `chrome-use browsers` ---------------------------------------------------
+
+/// Terminal column width: CJK and other wide characters take two cells.
+fn display_width(s: &str) -> usize {
+    s.chars()
+        .map(|c| if (c as u32) >= 0x1100 { 2 } else { 1 })
+        .sum()
+}
+
+fn pad(s: &str, w: usize) -> String {
+    let n = display_width(s);
+    format!("{s}{}", " ".repeat(w.saturating_sub(n)))
+}
+
+/// The profile `browsers` marks as default: the configured `profiles.default`
+/// when it names a connected profile, else the one the CLI drives today.
+fn default_index(rows: &[ProfileRow], cfg: Option<&ProfilesConfig>) -> Option<usize> {
+    if let Some(sel) = cfg.and_then(|c| c.default.as_deref()) {
+        if let Ok(i) = resolve_connected_in(rows, sel) {
+            return Some(i);
+        }
+    }
+    let (id, _) = connect::driving_profile()?;
+    rows.iter()
+        .position(|r| r.relay_id.as_deref() == Some(id.as_str()))
+}
+
+pub fn run_browsers(args: &[String], session: &str, json_out: bool) {
+    if let Some(pos) = args.iter().position(|a| a == "--who") {
+        match args.get(pos + 1).filter(|d| !d.starts_with("--")) {
+            Some(domain) => run_who(domain, json_out),
+            None => {
+                fail(json_out, "usage: chrome-use browsers --who <domain>");
+            }
+        }
+        return;
+    }
+    let rows = load_rows();
+    let cfg = load_profiles_config();
+    let default = default_index(&rows, cfg.as_ref());
+    let session_id = crate::connection::daemon_ready(session)
+        .then(|| session_profile(session))
+        .flatten()
+        .and_then(|v| {
+            v.get("id")
+                .and_then(|x| x.as_str())
+                .map(ToString::to_string)
+        });
+    let in_session =
+        |r: &ProfileRow| session_id.is_some() && r.relay_id.as_deref() == session_id.as_deref();
+
+    if json_out {
+        let arr: Vec<Value> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let mut v = r.to_json();
+                v["wsUrl"] = json!(r.ws);
+                v["default"] = json!(default == Some(i));
+                v["session"] = json!(in_session(r));
+                if !r.connected() {
+                    v["connectCommand"] = json!(connect_command(&suggested_selector(&rows, i)));
+                }
+                v
+            })
+            .collect();
+        println!("{}", json!({"success": true, "data": {"browsers": arr}}));
+        return;
+    }
+
+    if rows.is_empty() {
+        let host = connect::native_host_report();
+        if !host.manifests.is_empty() && !host.is_healthy() {
+            let bin = host.target_bin.as_deref().unwrap_or("<unresolved>");
+            println!(
+                "no Chrome profiles found and none connected.\n\
+                 The native-messaging host is broken: its launcher points at a binary that is \
+                 missing or not executable ({bin}).\n  \
+                 chrome-use extension connect      (repoints the host at this binary)\n  \
+                 chrome-use doctor                 (full diagnosis)"
+            );
+        } else {
+            println!(
+                "no Chrome profiles found and none connected.\n\
+                 (if Chrome is running, try `chrome-use reconnect` or `chrome-use doctor`.)"
+            );
+        }
+        return;
+    }
+
+    let header = [
+        "PROFILE",
+        "DIR",
+        "ACCOUNT",
+        "CONNECTED",
+        "DEFAULT",
+        "SESSION",
+        "",
+    ];
+    let mut table: Vec<[String; 7]> = Vec::new();
+    for (i, r) in rows.iter().enumerate() {
+        let connected = if r.connected() {
+            "yes".to_string()
+        } else if r.extension_disabled {
+            "no (disabled)".to_string()
+        } else if r.has_extension {
+            "no (not open)".to_string()
+        } else {
+            "no".to_string()
+        };
+        table.push([
+            r.name.clone().unwrap_or_else(|| "-".into()),
+            r.dir.clone().unwrap_or_else(|| "-".into()),
+            r.account().unwrap_or("-").to_string(),
+            connected,
+            if default == Some(i) { "*" } else { "" }.to_string(),
+            if in_session(r) { "*" } else { "" }.to_string(),
+            if r.connected() {
+                String::new()
+            } else {
+                connect_command(&suggested_selector(&rows, i))
+            },
+        ]);
+    }
+    let mut widths = [0usize; 7];
+    for (c, h) in header.iter().enumerate() {
+        widths[c] = display_width(h);
+    }
+    for row in &table {
+        for (w, cell) in widths.iter_mut().zip(row.iter()) {
+            *w = (*w).max(display_width(cell));
+        }
+    }
+    let render = |cells: &[String]| -> String {
+        let mut line = String::new();
+        for (c, cell) in cells.iter().enumerate() {
+            if c == cells.len() - 1 {
+                line.push_str(cell);
+            } else {
+                line.push_str(&pad(cell, widths[c]));
+                line.push_str("  ");
+            }
+        }
+        line.trim_end().to_string()
+    };
+    let head: Vec<String> = header.iter().map(|s| s.to_string()).collect();
+    println!("{}", render(&head));
+    for row in &table {
+        println!("{}", render(row));
+    }
+    println!(
+        "\nDrive one: --browser <name|dir|email> (a unique name prefix works, e.g. --browser {}).",
+        rows.iter()
+            .find(|r| r.connected())
+            .and_then(|r| r.name.as_deref())
+            .and_then(|n| n.chars().next())
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "d".into())
+    );
+    if rows.iter().any(|r| !r.connected()) {
+        println!(
+            "Not connected: the command on its row connects it — it opens a window in that \
+             profile (one click if the extension isn't there yet). Agents: ask the user first."
+        );
+    }
+}
+
+fn fail(json_out: bool, msg: &str) {
+    if json_out {
+        println!("{}", json!({"success": false, "error": msg}));
+    } else {
+        eprintln!("{} {msg}", color::error_indicator());
+    }
+    std::process::exit(1);
+}
+
+// --- `browsers --who <domain>` -----------------------------------------------
+
+/// Cookies that only exist while signed in, for sites where we know them. A
+/// hit here is reported as "signed in"; elsewhere only as "session cookies".
+const KNOWN_SESSION_COOKIES: &[(&str, &[&str])] = &[
+    (
+        "github.com",
+        &["user_session", "__Host-user_session_same_site"],
+    ),
+    ("google.com", &["SID", "__Secure-1PSID", "__Secure-3PSID"]),
+    ("x.com", &["auth_token"]),
+    ("twitter.com", &["auth_token"]),
+    ("reddit.com", &["reddit_session", "token_v2"]),
+    ("gitlab.com", &["_gitlab_session"]),
+    ("linkedin.com", &["li_at"]),
+    ("facebook.com", &["c_user"]),
+    ("instagram.com", &["sessionid"]),
+    ("zhihu.com", &["z_c0"]),
+    ("bilibili.com", &["SESSDATA"]),
+    ("weibo.com", &["SUB"]),
+    ("xiaohongshu.com", &["web_session"]),
+];
+
+/// Present even when signed out, or rotated by CDNs/bot defence: never
+/// evidence of a session.
+const NOT_SESSION: &[&str] = &[
+    "logged_in",
+    "__cf_bm",
+    "cf_clearance",
+    "_cfuvid",
+    "__cflb",
+    "_octo",
+    "tz",
+    "preferred_color_mode",
+];
+
+/// Names that look like a session/auth cookie when we have no site list.
+pub fn looks_like_session_cookie(name: &str) -> bool {
+    if NOT_SESSION.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        return false;
+    }
+    let lc = name.to_lowercase();
+    if lc.starts_with("_ga") || lc.starts_with("_gid") || lc.starts_with("_gcl") {
+        return false;
+    }
+    ["sess", "auth", "token", "sid", "login", "jwt"]
+        .iter()
+        .any(|k| lc.contains(k))
+}
+
+#[derive(Debug, PartialEq)]
+pub enum WhoState {
+    SignedIn(Vec<String>),
+    SessionCookies(Vec<String>),
+    None,
+}
+
+/// Classify the (unexpired) cookie names a profile holds for `domain`.
+pub fn classify_cookies(domain: &str, names: &[String]) -> WhoState {
+    let domain = domain.trim_start_matches('.').to_lowercase();
+    let known = KNOWN_SESSION_COOKIES
+        .iter()
+        .find(|(d, _)| domain == *d || domain.ends_with(&format!(".{d}")))
+        .map(|(_, n)| *n);
+    let mut uniq: Vec<String> = names.to_vec();
+    uniq.sort();
+    uniq.dedup();
+    if let Some(known) = known {
+        let hits: Vec<String> = uniq
+            .iter()
+            .filter(|n| known.iter().any(|k| k == n))
+            .cloned()
+            .collect();
+        if !hits.is_empty() {
+            return WhoState::SignedIn(hits);
+        }
+    }
+    let generic: Vec<String> = uniq
+        .into_iter()
+        .filter(|n| looks_like_session_cookie(n))
+        .collect();
+    if generic.is_empty() {
+        WhoState::None
+    } else {
+        WhoState::SessionCookies(generic)
+    }
+}
+
+fn valid_domain(d: &str) -> bool {
+    !d.is_empty()
+        && d.len() <= 253
+        && d.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && !d.starts_with('-')
+}
+
+/// Names (never values) of the unexpired cookies a profile's on-disk store
+/// holds for `domain` and its subdomains. Reads a copy, so a running Chrome
+/// is neither blocked nor disturbed.
+fn cookie_names(root: &str, dir: &str, domain: &str) -> Result<Vec<String>, String> {
+    let base = Path::new(root).join(dir);
+    let db = [base.join("Network").join("Cookies"), base.join("Cookies")]
+        .into_iter()
+        .find(|p| p.is_file())
+        .ok_or_else(|| "no cookie store".to_string())?;
+    let tmp = std::env::temp_dir().join(format!("chrome-use-who-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let result = query_cookie_names(&db, &tmp.join("Cookies"), domain);
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+fn query_cookie_names(db: &Path, tmp_db: &Path, domain: &str) -> Result<Vec<String>, String> {
+    {
+        std::fs::copy(db, tmp_db).map_err(|e| format!("copy failed: {e}"))?;
+        for suffix in ["-wal", "-shm"] {
+            let mut s = db.to_path_buf().into_os_string();
+            s.push(suffix);
+            let mut d = tmp_db.to_path_buf().into_os_string();
+            d.push(suffix);
+            let _ = std::fs::copy(PathBuf::from(s), PathBuf::from(d));
+        }
+        // Chrome stores expiry as microseconds since 1601-01-01.
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let now_chrome = (now_unix + 11_644_473_600) * 1_000_000;
+        let sql = format!(
+            "SELECT name FROM cookies WHERE (host_key = '{domain}' OR host_key = '.{domain}' \
+             OR host_key LIKE '%.{domain}') AND (has_expires = 0 OR expires_utc > {now_chrome});"
+        );
+        let out = std::process::Command::new("sqlite3")
+            .arg(tmp_db)
+            .arg(&sql)
+            .output()
+            .map_err(|e| format!("sqlite3 unavailable: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "sqlite3: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+}
+
+/// A local site adapter that reports the signed-in account, if one exists
+/// for this domain (`github.com` → `github/me`).
+fn whoami_adapter(domain: &str) -> Option<String> {
+    let labels: Vec<&str> = domain.trim_start_matches('.').split('.').collect();
+    let site = if labels.len() >= 2 {
+        labels[labels.len() - 2]
+    } else {
+        labels.first()?
+    };
+    let dir = dirs::home_dir()?
+        .join(".chrome-use")
+        .join("sites")
+        .join(site);
+    ["me", "whoami"]
+        .into_iter()
+        .find(|n| dir.join(format!("{n}.js")).is_file())
+        .map(|n| format!("{site}/{n}"))
+}
+
+fn run_who(domain: &str, json_out: bool) {
+    let domain = domain
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('.')
+        .to_lowercase();
+    if !valid_domain(&domain) {
+        fail(json_out, &format!("--who: '{domain}' is not a domain"));
+        return;
+    }
+    let rows = load_rows();
+    let adapter = whoami_adapter(&domain);
+    let mut out: Vec<Value> = Vec::new();
+    let mut lines: Vec<[String; 4]> = Vec::new();
+    for (i, r) in rows.iter().enumerate() {
+        let (Some(root), Some(dir)) = (&r.root, &r.dir) else {
+            continue;
+        };
+        let (state, cookies, error) = match cookie_names(root, dir, &domain) {
+            Ok(names) => match classify_cookies(&domain, &names) {
+                WhoState::SignedIn(n) => ("signed in", n, None),
+                WhoState::SessionCookies(n) => ("session cookies present", n, None),
+                WhoState::None => ("none", Vec::new(), None),
+            },
+            Err(e) => ("unknown", Vec::new(), Some(e)),
+        };
+        let hint = match (&adapter, r.connected(), state) {
+            (Some(a), true, "signed in" | "session cookies present") => Some(format!(
+                "chrome-use --browser {} site {a}",
+                shell_quote(&suggested_selector(&rows, i))
+            )),
+            _ => None,
+        };
+        out.push(json!({
+            "profile": r.to_json(),
+            "state": state,
+            "cookieNames": cookies,
+            "error": error,
+            "whoamiCommand": hint,
+        }));
+        let mut detail = if cookies.is_empty() {
+            error.unwrap_or_default()
+        } else {
+            let shown: Vec<&str> = cookies.iter().take(3).map(String::as_str).collect();
+            format!(
+                "{}{}",
+                shown.join(", "),
+                if cookies.len() > 3 { ", …" } else { "" }
+            )
+        };
+        if let Some(h) = &hint {
+            detail = format!("{detail}  → as whom: {h}");
+        }
+        lines.push([
+            r.label(),
+            if r.connected() { "yes" } else { "no" }.to_string(),
+            state.to_string(),
+            detail,
+        ]);
+    }
+    if json_out {
+        println!(
+            "{}",
+            json!({"success": true, "data": {"domain": domain, "profiles": out}})
+        );
+        return;
+    }
+    if lines.is_empty() {
+        println!("no Chrome profiles found on this machine.");
+        return;
+    }
+    let header = ["PROFILE", "CONNECTED", domain.as_str(), "COOKIE NAMES"];
+    let mut w = [0usize; 3];
+    for (c, wc) in w.iter_mut().enumerate() {
+        *wc = lines
+            .iter()
+            .map(|l| display_width(&l[c]))
+            .chain([display_width(header[c])])
+            .max()
+            .unwrap_or(0);
+    }
+    println!(
+        "{}  {}  {}  {}",
+        pad(header[0], w[0]),
+        pad(header[1], w[1]),
+        pad(header[2], w[2]),
+        header[3]
+    );
+    for l in &lines {
+        println!(
+            "{}",
+            format!(
+                "{}  {}  {}  {}",
+                pad(&l[0], w[0]),
+                pad(&l[1], w[1]),
+                pad(&l[2], w[2]),
+                l[3]
+            )
+            .trim_end()
+        );
+    }
+    println!(
+        "\nFrom each profile's cookie store on disk (names only, never values; Chrome writes \
+         new cookies to disk within ~30s). \"signed in\" = a cookie {domain} only sets for a \
+         signed-in user; \"session cookies present\" = session-like names, not proof."
+    );
+}
+
+// --- `chrome-use connect --browser <selector>` ---------------------------------
+
+/// Connect one more profile, lazily: open the Web Store page in that profile
+/// (one click: "Add to Chrome"), or — if the extension is already there —
+/// open a window so its worker starts, then wait for its relay.
+pub fn run_connect_profile(selector: &str, args: &[String], json_out: bool) {
+    let wait_secs: u64 = args
+        .iter()
+        .position(|a| a == "--wait")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(120);
+    let rows = load_rows();
+    let i = match resolve_in(&rows, selector) {
+        Ok(i) => i,
+        Err(e) => {
+            fail(json_out, &e);
+            return;
+        }
+    };
+    let row = rows[i].clone();
+    let done = |row: &ProfileRow, already: bool| {
+        if json_out {
+            println!(
+                "{}",
+                json!({"success": true, "data": {"connected": true, "alreadyConnected": already, "profile": row.to_json()}})
+            );
+        } else if already {
+            println!(
+                "{} {} is already connected — use --browser {}",
+                color::success_indicator(),
+                row.label(),
+                shell_quote(selector.trim())
+            );
+        } else {
+            println!(
+                "{} connected {} — use --browser {}",
+                color::success_indicator(),
+                row.label(),
+                shell_quote(selector.trim())
+            );
+        }
+    };
+    if row.connected() {
+        done(&row, true);
+        return;
+    }
+    let local = connect::chrome_profiles()
+        .into_iter()
+        .find(|p| Some(&p.dir) == row.dir.as_ref() && Some(&p.root) == row.root.as_ref());
+    let Some(local) = local else {
+        fail(
+            json_out,
+            &format!(
+                "can't find {} on disk — open it in Chrome yourself, then re-run.",
+                row.label()
+            ),
+        );
+        return;
+    };
+    // The relay needs the native-messaging host; registering it is idempotent
+    // and touches no browser state, so do it rather than describe it.
+    connect::ensure_host_installed();
+    let host = connect::native_host_report();
+    if host.manifests.is_empty() || !host.is_healthy() {
+        fail(
+            json_out,
+            "the native-messaging host isn't registered correctly, so no profile can connect — \
+             run `chrome-use extension connect` (or `chrome-use doctor`) first.",
+        );
+        return;
+    }
+
+    let (opened, action, told) = match &local.extension {
+        Some(ext) if !ext.disable_reasons.is_empty() => {
+            let url = format!("chrome://extensions/?id={}", ext.id);
+            (
+                connect::open_in_profile(&local, Some(&url)),
+                "enable",
+                format!(
+                    "The chrome-use extension is installed in {} but Chrome has it disabled \
+                     ({}). Turn it on (and accept any permission prompt) in the extensions \
+                     page that just opened in that profile.",
+                    row.label(),
+                    ext.disable_reasons.join(", ")
+                ),
+            )
+        }
+        Some(_) => (
+            connect::open_in_profile(&local, None),
+            "open-window",
+            format!(
+                "The extension is installed in {} but that profile isn't open. Opened a window \
+                 in it so the extension can start.",
+                row.label()
+            ),
+        ),
+        None => (
+            connect::open_in_profile(&local, Some(connect::STORE_URL)),
+            "store",
+            format!(
+                "Opened the chrome-use page of the Chrome Web Store in {}. Click \"Add to \
+                 Chrome\" there — that's the only step; Chrome keeps it updated after.",
+                row.label()
+            ),
+        ),
+    };
+    if !opened {
+        let manual = match action {
+            "store" => format!("open {} in that profile", connect::STORE_URL),
+            _ => "open that profile from Chrome's profile menu".to_string(),
+        };
+        fail(
+            json_out,
+            &format!(
+                "couldn't open a Chrome window in {} automatically — {manual}, then re-run.",
+                row.label()
+            ),
+        );
+        return;
+    }
+    if !json_out {
+        eprintln!("{told}");
+        eprint!("waiting up to {wait_secs}s for it to connect ");
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait_secs);
+    loop {
+        if let Some(now) = load_rows()
+            .into_iter()
+            .find(|r| r.same_profile(&row) && r.connected())
+        {
+            if !json_out {
+                eprintln!();
+            }
+            done(&now, false);
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        if !json_out {
+            eprint!(".");
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+    }
+    if !json_out {
+        eprintln!();
+    }
+    let msg = format!(
+        "{} isn't connected yet ({}). Re-run `{}` to keep waiting.",
+        row.label(),
+        match action {
+            "store" => "was \"Add to Chrome\" clicked?",
+            "enable" => "is the extension switched on?",
+            _ => "the extension's worker can take ~30s to wake",
+        },
+        connect_command(selector.trim())
+    );
+    if json_out {
+        println!(
+            "{}",
+            json!({"success": false, "error": msg, "data": {"connected": false, "action": action, "profile": row.to_json()}})
+        );
+    } else {
+        eprintln!("{} {msg}", color::error_indicator());
+    }
+    std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn local(dir: &str, name: &str, email: Option<&str>, _ext: bool) -> ChromeProfileInfo {
+        let state = json!({"profile": {"info_cache": {dir: {
+            "name": name, "user_name": email.unwrap_or(""), "gaia_name": "G"
+        }}}});
+        connect::parse_local_state_profiles(Path::new("/root"), &state)
+            .pop()
+            .unwrap()
+    }
+
+    #[test]
+    fn parses_local_state_info_cache() {
+        let state = json!({"profile": {"info_cache": {
+            "Profile 14": {"name": "Davian", "user_name": "d@x.com", "gaia_name": "Davian P"},
+            "Default": {"name": "Leo", "user_name": "", "gaia_name": ""},
+            "Profile 2": {"name": "  "}
+        }}});
+        let ps = connect::parse_local_state_profiles(Path::new("/r"), &state);
+        let dirs: Vec<&str> = ps.iter().map(|p| p.dir.as_str()).collect();
+        assert_eq!(dirs, ["Default", "Profile 2", "Profile 14"]);
+        assert_eq!(ps[0].name.as_deref(), Some("Leo"));
+        assert_eq!(ps[0].email, None);
+        assert_eq!(ps[1].name, None);
+        assert_eq!(ps[2].email.as_deref(), Some("d@x.com"));
+        assert_eq!(ps[2].gaia_name.as_deref(), Some("Davian P"));
+        assert_eq!(ps[2].root, "/r");
+        assert!(connect::parse_local_state_profiles(Path::new("/r"), &json!({})).is_empty());
+    }
+
+    fn rows() -> Vec<ProfileRow> {
+        let locals = vec![
+            local("Default", "Leo", Some("leo@gmail.com"), false),
+            local("Profile 14", "Davian", Some("davian@gmail.com"), false),
+            local("Profile 12", "wind", Some("wind@gmail.com"), false),
+            local("Profile 7", "wind", Some("wind@gmail.com"), false),
+            local("Profile 13", "dora", Some("dora@gmail.com"), false),
+        ];
+        let relays = vec![
+            (
+                "27ade1bc-0000".to_string(),
+                Some("leo@gmail.com".to_string()),
+                "ws://a".to_string(),
+            ),
+            ("9f00aa11-0000".to_string(), None, "ws://b".to_string()),
+        ];
+        // 9f00… has no email: only the storage scan places it.
+        join_rows(&locals, &relays, &|id| {
+            (id == "9f00aa11-0000").then(|| ("/root".to_string(), "Profile 14".to_string()))
+        })
+    }
+
+    #[test]
+    fn join_places_relays_by_storage_then_unique_email() {
+        let r = rows();
+        assert_eq!(r.len(), 5);
+        assert_eq!(r[0].ws.as_deref(), Some("ws://a")); // by email
+        assert_eq!(r[1].ws.as_deref(), Some("ws://b")); // by storage scan
+        assert!(!r[2].connected());
+        // A relay nobody can place still gets a row.
+        let extra = join_rows(
+            &[],
+            &[("x-1".into(), Some("a@b".into()), "ws://c".into())],
+            &|_| None,
+        );
+        assert_eq!(extra.len(), 1);
+        assert_eq!(extra[0].label(), "a@b (x-1)");
+        // Two profiles share an email: email alone must not pick one.
+        let shared = join_rows(
+            &[
+                local("Profile 12", "wind", Some("w@x"), false),
+                local("Profile 7", "wind", Some("w@x"), false),
+            ],
+            &[("id-wind-1".into(), Some("w@x".into()), "ws://w".into())],
+            &|_| None,
+        );
+        assert_eq!(shared.len(), 3);
+        assert!(shared[2].dir.is_none());
+    }
+
+    #[test]
+    fn selector_exact_dir_email_name_and_id() {
+        let r = rows();
+        assert_eq!(match_selector(&r, "Profile 14"), Match::One(1));
+        assert_eq!(match_selector(&r, "profile 14"), Match::One(1));
+        assert_eq!(match_selector(&r, "DAVIAN"), Match::One(1));
+        assert_eq!(match_selector(&r, "davian@gmail.com"), Match::One(1));
+        assert_eq!(match_selector(&r, "27ade1bc-0000"), Match::One(0));
+        assert_eq!(match_selector(&r, "Default"), Match::One(0));
+    }
+
+    #[test]
+    fn selector_prefix_and_ambiguity() {
+        let r = rows();
+        // "da" → only Davian; "d" → Davian and dora: an error, never a guess,
+        // even though only Davian is connected.
+        assert_eq!(match_selector(&r, "da"), Match::One(1));
+        assert_eq!(match_selector(&r, "d"), Match::Ambiguous(vec![1, 4]));
+        assert_eq!(match_selector(&r, "l"), Match::One(0));
+        // Two profiles named "wind", neither connected → ambiguous; the
+        // directory still picks one.
+        assert_eq!(match_selector(&r, "wind"), Match::Ambiguous(vec![2, 3]));
+        assert_eq!(match_selector(&r, "Profile 7"), Match::One(3));
+        let e = resolve_in(&r, "wind").unwrap_err();
+        assert!(e.contains("matches 2") && e.contains("Profile 12") && e.contains("Profile 7"));
+        assert_eq!(match_selector(&r, "nobody"), Match::None);
+        assert_eq!(match_selector(&r, "  "), Match::None);
+    }
+
+    #[test]
+    fn selector_legacy_forms_still_work() {
+        let r = rows();
+        assert_eq!(match_selector(&r, "9f00"), Match::One(1)); // id prefix
+        assert_eq!(match_selector(&r, "LEO@gmail"), Match::One(0)); // email substring
+                                                                    // an email substring hitting several profiles, two of them connected
+        assert_eq!(
+            match_selector(&r, "@gmail.com"),
+            Match::Ambiguous(vec![0, 1, 2, 3, 4])
+        );
+    }
+
+    #[test]
+    fn unconnected_match_says_how_to_connect() {
+        let r = rows();
+        let e = resolve_connected_in(&r, "dora").unwrap_err();
+        assert!(e.starts_with("profile \"dora\" doesn't have the chrome-use extension yet"));
+        assert!(e.contains("`chrome-use connect --browser dora`"));
+        assert!(e.contains("ask the user"));
+        let mut with_ext = r.clone();
+        with_ext[4].has_extension = true;
+        let e = resolve_connected_in(&with_ext, "dora").unwrap_err();
+        assert!(e.contains("isn't open in Chrome"));
+        let e = resolve_connected_in(&r, "Profile 12").unwrap_err();
+        assert!(e.contains("connect --browser \"Profile 12\""));
+        assert_eq!(resolve_connected_in(&r, "dav"), Ok(1));
+    }
+
+    #[test]
+    fn suggested_selector_prefers_unique_name() {
+        let r = rows();
+        assert_eq!(suggested_selector(&r, 1), "Davian");
+        assert_eq!(suggested_selector(&r, 2), "Profile 12");
+    }
+
+    #[test]
+    fn labels() {
+        let r = rows();
+        assert_eq!(r[1].label(), "Davian (Profile 14, davian@gmail.com)");
+    }
+
+    #[test]
+    fn route_matching() {
+        assert!(route_matches(
+            "dash.cloudflare.com",
+            "https://dash.cloudflare.com/x/y"
+        ));
+        assert!(!route_matches(
+            "dash.cloudflare.com",
+            "https://cloudflare.com/"
+        ));
+        assert!(route_matches(
+            "cloudflare.com",
+            "https://dash.cloudflare.com/"
+        ));
+        assert!(route_matches(
+            "*.cloudflare.com",
+            "https://dash.cloudflare.com/"
+        ));
+        assert!(!route_matches(
+            "cloudflare.com",
+            "https://notcloudflare.com/"
+        ));
+        assert!(route_matches(
+            "github.com/acme/*",
+            "https://github.com/acme/repo/pulls"
+        ));
+        assert!(route_matches("github.com/ACME/*", "github.com/acme/repo"));
+        assert!(!route_matches(
+            "github.com/acme/*",
+            "https://github.com/other/repo"
+        ));
+        assert!(route_matches("github.com/acme", "https://github.com/acme"));
+        assert!(route_matches(
+            "github.com/acme",
+            "https://github.com/acme/x"
+        ));
+        assert!(!route_matches(
+            "github.com/acme",
+            "https://github.com/acmeco"
+        ));
+        assert!(route_matches(
+            "github.com/*/settings",
+            "https://github.com/a/settings"
+        ));
+        assert!(!route_matches("", "https://github.com/"));
+        assert!(!route_matches("github.com", "not a url at all"));
+    }
+
+    #[test]
+    fn configured_choice_route_then_default() {
+        let cfg = parse_profiles_config(&json!({"report": {"auto": true}, "profiles": {
+            "default": "Leo",
+            "routes": [
+                {"match": "dash.cloudflare.com", "profile": "Leo"},
+                {"match": "github.com/acme/*", "profile": "Davian"}
+            ]
+        }}))
+        .unwrap();
+        assert_eq!(
+            choose_configured(&cfg, Some("https://github.com/acme/x")),
+            Some((
+                "Davian".to_string(),
+                "config route \"github.com/acme/*\"".to_string()
+            ))
+        );
+        assert_eq!(
+            choose_configured(&cfg, Some("https://example.com")),
+            Some(("Leo".to_string(), "config profiles.default".to_string()))
+        );
+        assert_eq!(
+            choose_configured(&cfg, None).map(|c| c.0),
+            Some("Leo".to_string())
+        );
+        assert_eq!(
+            choose_configured(&ProfilesConfig::default(), Some("https://x.com")),
+            None
+        );
+        assert!(parse_profiles_config(&json!({"profile": "Default"})).is_none());
+    }
+
+    #[test]
+    fn who_cookie_classification() {
+        let n = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            classify_cookies("github.com", &n(&["_octo", "logged_in", "user_session"])),
+            WhoState::SignedIn(n(&["user_session"]))
+        );
+        // Signed-out GitHub still carries `logged_in=no` and `_octo`.
+        assert_eq!(
+            classify_cookies("github.com", &n(&["_octo", "logged_in", "_gh_sess"])),
+            WhoState::SessionCookies(n(&["_gh_sess"]))
+        );
+        assert_eq!(
+            classify_cookies("example.com", &n(&["_ga", "__cf_bm", "tz"])),
+            WhoState::None
+        );
+        assert_eq!(
+            classify_cookies("dash.cloudflare.com", &n(&["vses2", "CF_Session"])),
+            WhoState::SessionCookies(n(&["CF_Session"]))
+        );
+        assert!(valid_domain("github.com"));
+        assert!(!valid_domain("x' OR 1=1"));
+    }
+
+    #[test]
+    fn profile_line_format() {
+        let r = rows();
+        let mut v = r[1].to_json();
+        v["label"] = json!(r[1].label());
+        v["reason"] = json!("--browser");
+        assert_eq!(
+            profile_line(&v),
+            "profile: Davian (Profile 14, davian@gmail.com) — --browser"
+        );
+    }
+}

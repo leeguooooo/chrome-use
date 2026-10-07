@@ -537,6 +537,9 @@ pub fn cleanup_stale_files(session: &str) {
     let _ = fs::remove_file(&version_path);
     let profile_path = get_profile_path(session);
     let _ = fs::remove_file(&profile_path);
+    // Which Chrome profile the session used and why (#437); the next first
+    // attach decides again.
+    let _ = fs::remove_file(get_socket_dir().join(format!("{}.browser-profile", session)));
     let stream_path = get_socket_dir().join(format!("{}.stream", session));
     let _ = fs::remove_file(&stream_path);
     // Drop the ownership sidecar too (issue #89): a dead session's handoff
