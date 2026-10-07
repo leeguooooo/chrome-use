@@ -15,6 +15,18 @@ chrome-use snapshot -i --json          # machine-readable output
 chrome-use snapshot -i --reveal-values # print card / password / code values
 ```
 
+## Keep model input focused
+
+Use `snapshot -i -c` when empty structural nodes add no context. Use a scoped
+read for a known panel and `--diff` when a previous observation leaves an
+unanswered question. Keep full-tree reads for context missing from the compact
+view. Do not infer a token saving from byte counts; measure each separately.
+
+Text and refs are the default. For visual state, add
+`--with-screenshot <path>` to the snapshot or observed action rather than
+performing an unrelated capture later. Do not request images on every step
+when labels and values already answer the question.
+
 ## Read only the needed region
 
 ```bash

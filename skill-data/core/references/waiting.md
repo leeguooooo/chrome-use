@@ -60,6 +60,16 @@ output to look at or attach, and never a substitute for the structural read. Wai
 something *specific* is still `wait`'s job — the settle only knows that the
 page stopped, not that what you wanted appeared.
 
+**Repeated unchanged attempts are advisory.** `observed.noProgress` appears
+from the third identical observed `click`, `dblclick`, or `press` on the same
+target and screen, with at most 60 seconds between attempts. Each observation
+must be complete and quiet, with settling enabled (`waitedMs > 0`),
+`changed:false`, `sawChange:false`, no pending work, and no detected requests,
+resources, new frames or human-check script. Activity or incomplete evidence
+breaks the streak. The hint sets `retryAction:false`; it never changes success
+or runs another action. This detector only covers the evidence collected by
+observe: an unchanged tree does not establish that a server write failed.
+
 **When `--observe` says `no change`, read the `why:` line under it.** The
 daemon probes the target after a quiet action and reports the first decisive
 finding: the control is disabled, it is not rendered, it sits outside the

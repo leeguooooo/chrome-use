@@ -46,6 +46,19 @@ send, submit, purchase, or other action that may have happened. For
 asynchronous work, wait on the relevant condition, then read; do not use
 fixed sleeps as proof.
 
+## Group known work
+
+Use `batch` for a known action sequence, `script` for bounded conditional
+observe/decide/act/verify flows, and `form fill --map` for several fields
+instead of one model decision per field. Do not guess refs after a page
+replacement. Verify the requested result, not how many calls were sent.
+Use `snapshot -i -c` or a scoped read when discovering controls. Text/refs
+usually suffice; request a screenshot only for a visual question.
+
+An `observed.noProgress` hint means repeated attempts had unchanged evidence,
+not that the action failed. Inspect state or wait for the relevant condition;
+do not turn the hint into an automatic replay.
+
 ## An action that did nothing is information
 
 When a click, fill, or select reports no change:

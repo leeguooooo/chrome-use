@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>The Core Loop · chrome-use docs</title>
-  <meta name="description" content="chrome-use's basic rhythm: open → snapshot -i → click / type → snapshot again. Understand when @ref goes stale, when it self-heals, why you always snapshot-first and never locate by screenshot, and when to switch between the structured and eval driving paths." />
+  <meta name="description" content="chrome-use's basic rhythm: open, read, act and observe, then re-read only when needed. Use compact views, batch, script and optional screenshots to reduce calls, verify effects and measure whole tasks." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -44,13 +44,21 @@
       </div>
 
       <p class="du-lede">
-        To drive the browser through a task, the rhythm is almost always these four steps:<span class="mark">open the page → see what's on it → act on the @ref the snapshot gave you → snapshot again the moment the page changes</span>.
+        To drive the browser through a task, the rhythm is almost always these four steps:<span class="mark">open the page → read the controls → act on @refs and observe → re-read only when needed</span>.
         Get this loop flowing, then understand when <code>@ref</code> goes stale and when it self-heals, and you've got ninety percent of chrome-use's day-to-day usage.
       </p>
 
       <p>The core skill includes the default observation and stopping rules, plus ordinary click and form commands. Load <code>core/reading</code>, <code>core/connection</code>, or <code>core/site-adapters</code> only when needed. Choose the cheapest check that answers the next question; do not request both DOM and screenshots by default. An authoritative page signal ends verification unless contradicted. Missing observations do not justify replaying an action.</p>
 
       <!-- ============ THE LOOP ============ -->
+      <h2 id="task-efficiency">Fewer calls, measured per task</h2>
+      <p>Start with <code>snapshot -i -c</code> for compact controls or scope the read to a known panel. Use <code>batch</code> for known action sequences, <code>script</code> for bounded conditional flows, and <code>form fill --map</code> for several fields. Verify the requested page signal at the end. Grouping actions does not establish their effects.</p>
+      <p>Keep text and refs as the default. Add <code>--with-screenshot &lt;path&gt;</code> when pixels answer a question the tree cannot. An <code>observed.noProgress</code> hint advises inspecting state after repeated unchanged attempts; it does not change success or retry. See <a href="/en/waiting.html#no-progress">detection limits</a>.</p>
+      <p>JSON command timing reports <code>cdpMs</code> as the sum of completed foreground request durations, <code>cdpBusyMs</code> as their interval union within command wall time, and <code>nonCdpMs</code> as wall time minus that union. Concurrent requests can make the sum exceed wall time. These fields measure elapsed duration, not CPU use or model latency. Background tasks do not inherit the recorder; the remaining wall time is not pure daemon processing cost.</p>
+      <p>Compare the same task and initial state with a freshly built binary; record its version, separate cold and warm runs, and alternate variants. Record success, unknown outcomes, tool and CDP calls, returned bytes and task wall time. Model round trips require caller traces; tool/HTTP calls cannot establish them. Measure tokens with a named tokenizer or model usage report. A faster failed run is not a speedup. Load <code>chrome-use skills get core/profiling</code> for timing details; the repository's <code>bench/README.md</code> describes the replay harness.</p>
+
+      <p>From the repository root, collect one explicit run with <code>python3 bench/run-task.py TASK --binary cli/target/release/chrome-use --output /tmp/run.tsv --run-id run-1</code>, then summarize it with <code>python3 bench/task-metrics.py /tmp/run.tsv</code>. Without a complete matching caller trace (<code>--trace</code>), model turns are null. Bytes combine CLI stdout/stderr, not exact model input. <code>--cold</code> only skips warmup; it does not prove a stopped daemon.</p>
+
       <h2>The four-step loop</h2>
       <p>
         Each step decides based on the result of the last: <code>snapshot -i</code> gives you a structured view containing only interactive elements,

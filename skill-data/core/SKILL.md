@@ -67,6 +67,23 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
 
    Keep `eval` for page globals, framework stores, canvas.
 
+## Reduce calls without dropping verification
+
+Start with `snapshot -i -c` for compact controls; scope to a known region when
+possible. Use `batch` for known sequences, `script` for bounded conditional
+flows, and `form fill --map` for several fields. Read the relevant command
+reference before composing a sequence; grouping actions does not prove their
+effects. Verify the requested page signal at the end.
+
+Use text/refs by default. Add `--with-screenshot <path>` to a snapshot or
+observed action only for a visual question the tree cannot answer.
+
+`observed.noProgress` advises inspecting state or waiting on a specific
+condition after repeated unchanged, fully observed clicks or key presses.
+It never changes success or retries. No visible change does not prove a
+write failed. See `core/waiting` for detection limits and `core/profiling`
+for command timing and task measurement.
+
 ## Sessions and tabs
 
 Use one session name per task and reuse it. After "session unresponsive",

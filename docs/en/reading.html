@@ -83,6 +83,10 @@
         and gives stable, usable <code>@ref</code> values — the proper entry point for driving clicks and typing.
       </div>
 
+      <h3>Keep input focused</h3>
+      <p>Use <code>snapshot -i -c</code> when empty structural nodes add no context, and scope reads to the panel you need. Use a full tree when compact output omits necessary context. Re-read with <code>--diff</code> only when the previous observation leaves a question. Byte counts are not token counts; measure each separately.</p>
+      <p>Text and refs are the default. For a visual question, add <code>--with-screenshot &lt;path&gt;</code> to a snapshot or observed action to capture pixels alongside the read. Do not capture images on every step when labels and values answer the question. See <a href="/en/waiting.html">settling and observation limits</a>.</p>
+
       <h3>Reading snapshot's output</h3>
       <p>The output is an indented accessibility tree, where indentation represents nesting depth:</p>
 
