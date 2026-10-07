@@ -208,9 +208,11 @@ chrome-use report --session <name> --note "…" --submit --yes
   "+1, also seen on <version, platform, mode>" there instead of a new issue;
   `--new` files a separate one. The search uses `gh`, else the public GitHub
   API, else `site github/issues` in the user's Chrome.
-- Filing uses `gh` when it is logged in, else the `github/issue-create`
-  adapter in the user's logged-in Chrome, else it prints a prefilled
-  new-issue URL for the user to open (the body is cut to fit).
+- Filing uses `gh` when it is logged in, else the github.com new-issue form
+  (or comment box, for a +1) in the user's logged-in Chrome, in a tab of its
+  own that is closed afterwards, else it prints a prefilled new-issue URL for
+  the user to open (the body is cut to fit). Not signed in to github.com in
+  Chrome: the reply says so and falls back to the URL.
 - Consent: `--submit` refuses without `--yes`, unless the user pre-approved
   with `AGENT_BROWSER_REPORT_AUTO=1` or `"report": {"auto": true}` in
   `~/.chrome-use/config.json`. Never pass `--yes` on your own judgement.

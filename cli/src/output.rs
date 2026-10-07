@@ -3322,11 +3322,18 @@ the task, offer the user `chrome-use report`; file only once they say yes.
   --open           Open the prefilled new-issue page in the browser.
   --no-search      Skip the search for existing issues.
 
-Filing tries, in order: `gh` when it is authenticated; the github/issue-create
-site adapter in your logged-in Chrome; a prefilled
+Filing tries, in order: `gh` when it is authenticated; the github.com
+new-issue form (or the issue's comment box, for a +1) in your logged-in Chrome,
+driven in its own tab that is closed afterwards; a prefilled
 https://github.com/leeguooooo/chrome-use/issues/new URL to open (body cut to
-fit). Existing issues are found by the failure's signature (cu-sig-…, the same
-command + error) via gh, the public GitHub search API, or site github/issues.
+fit). The Chrome path needs you signed in to github.com there; when you are
+not, it says so and falls back to the URL. Existing issues are found by the
+failure's signature (cu-sig-…, the same command + error) via gh, the public
+GitHub search API, or site github/issues.
+
+Testing only: AGENT_BROWSER_REPORT_REPO=<owner/repo> files into another
+repository (use a private scratch repo, never a real one by accident), and
+AGENT_BROWSER_REPORT_VIA=web skips gh when filing (=url skips Chrome too).
 
 Redacted: URL query strings and fragments, cookies, tokens, auth headers,
 typed values, emails, home-directory paths (→ ~), and anything shaped like a
