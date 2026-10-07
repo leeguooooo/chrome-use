@@ -144,6 +144,8 @@ JS</code></pre>
         直接返回页面里的值；其余失败即抛异常，脚本快速失败。程序的返回值就是命令的返回值，<code>cu.log(...)</code> 收集进度行。
       </p>
 
+      <p>程序结果与传输成功分开判断：嵌套 <code>script</code> 的 <code>data.ok:false</code> 会使父脚本失败，即使 <code>success:true</code>。JS 失败仍保留 <code>ok:false</code>、<code>return:null</code>、<code>error</code> 和 <code>logs</code>。两种脚本都在 <code>data.advisories</code> 中保留观察提示，最多 20 条，嵌套和失败运行也保留；JSON op-list 的 <code>steps</code> 另带对应动作的 <code>noProgress</code>。文字输出只打印汇总提示一次。这些提示不改变动作 success，也不重试动作。</p>
+
       <h2>引擎跑在守护进程里</h2>
       <p>ego 也能写一段 JS 跑完整个任务，chrome-use script 反超它的点在<strong>引擎的位置</strong>。</p>
       <p>

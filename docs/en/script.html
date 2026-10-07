@@ -145,6 +145,8 @@ JS</code></pre>
         the rest throw on failure so the script fails fast. The program's return value is the command's result; <code>cu.log(...)</code> collects progress lines.
       </p>
 
+      <p>Read program outcome separately from transport success: a nested <code>script</code> with <code>data.ok:false</code> fails its parent even if <code>success:true</code>. JS failures retain <code>ok:false</code>, <code>return:null</code>, <code>error</code> and <code>logs</code>. Both script forms retain observed hints in <code>data.advisories</code> (at most 20), including nested and failed runs; JSON op-list <code>steps</code> also retain each action's <code>noProgress</code>. Text output prints the aggregate hints once. These hints neither change action success nor retry an action.</p>
+
       <h2>The engine runs in the daemon</h2>
       <p>ego can also write one JS program that runs a whole task; where chrome-use script pulls ahead is <strong>where the engine lives</strong>.</p>
       <p>

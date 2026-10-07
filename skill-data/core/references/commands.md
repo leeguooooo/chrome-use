@@ -547,6 +547,18 @@ Array.from(links).map(a => a.href);
 EOF
 ```
 
+### Script results
+
+For `script` JSON op-lists or JS programs, inspect program outcome separately
+from transport `success`. Nested `data.ok:false` fails the parent script even
+when transport succeeded. JS failures retain `ok:false`, `return:null`,
+`error`, `logs` and `advisories`. Both forms retain observed hints in
+`data.advisories` (at most 20), including nested and failed runs; JSON `steps`
+also retain the action's `noProgress`. Text output prints the aggregate hints
+once. Hints do not change action success or retry it. See
+[interacting.md](interacting.md) for the script forms and
+[behaviour.md](behaviour.md) for interpreting outcomes.
+
 ## State Management
 
 ```bash
