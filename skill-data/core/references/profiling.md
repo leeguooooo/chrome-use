@@ -6,6 +6,7 @@ Capture Chrome DevTools performance profiles during browser automation for perfo
 
 ## Contents
 
+- [Command timing and task efficiency](#command-timing-and-task-efficiency)
 - [Basic Profiling](#basic-profiling)
 - [Profiler Commands](#profiler-commands)
 - [Categories](#categories)
@@ -13,6 +14,48 @@ Capture Chrome DevTools performance profiles during browser automation for perfo
 - [Output Format](#output-format)
 - [Viewing Profiles](#viewing-profiles)
 - [Limitations](#limitations)
+
+## Command timing and task efficiency
+
+Every JSON daemon reply carries `timing.ms` (command wall time), `cdpCalls`,
+`cdpMs` (sum of completed foreground CDP request durations), `cdpBusyMs` (union of those
+request intervals clipped to command wall time), `nonCdpMs` (`ms` minus
+`cdpBusyMs`), and the three `slowest` methods. Concurrent requests may make
+`cdpMs` greater than wall time. `nonCdpMs` includes waits and other elapsed
+work; neither field measures CPU use or model latency. Only completed,
+recorded foreground intervals contribute to CDP occupancy. Spawned background
+tasks do not inherit this recorder; background CDP work is not included.
+`nonCdpMs` is the remaining wall duration, not a pure daemon processing cost.
+
+The daemon appends action, session, outcome and timing to
+`~/.chrome-use/timing.jsonl`, rotating at 20 MB. It omits URLs, selectors and
+page content. `AGENT_BROWSER_TIMING_LOG=0` disables the log.
+
+For a task comparison, use a freshly built binary and record its version.
+Separate cold and warm runs, use the same initial state and task, alternate
+variants, and record final success, unknown outcomes, tool calls, CDP calls,
+returned bytes and task wall time. Model round trips require caller trace
+records; daemon or HTTP calls cannot establish them. Token counts require a
+named tokenizer or model usage report. A shorter failed run is not a speedup.
+The repository's `bench/README.md` describes the replay harness.
+
+Summarize an explicit replay run from the repository root:
+
+```bash
+python3 bench/run-task.py bench/tasks/hn.txt \
+  --binary cli/target/release/chrome-use --output /tmp/hn-warm.tsv --run-id hn-warm-1
+python3 bench/task-metrics.py /tmp/hn-warm.tsv
+# Optional: a complete caller trace for this same run
+python3 bench/task-metrics.py /tmp/hn-warm.tsv --trace /tmp/hn-warm-trace.jsonl
+```
+
+One TSV represents one run; existing output files are not overwritten. Without
+a complete explicit caller trace, `model_round_trips` is null. The collector's
+UTF-8 byte count combines CLI stdout and stderr, not exact model input. Warmup
+success is recorded; `--cold` only skips warmup and does not prove a stopped
+daemon. Binary/source hashes identify inputs; match a build receipt separately
+to prove their relationship. A final passing assertion establishes task success;
+failed earlier calls and unknown outcomes still contribute to its cost.
 
 ## Basic Profiling
 
@@ -23,7 +66,7 @@ chrome-use profiler start
 # Perform actions
 chrome-use navigate https://example.com
 chrome-use click "#button"
-chrome-use wait 1000
+chrome-use wait --text "Ready"
 
 # Stop and save
 chrome-use profiler stop ./trace.json
@@ -46,13 +89,13 @@ chrome-use profiler stop ./trace.json
 
 The `--categories` flag accepts a comma-separated list of Chrome trace categories. Default categories include:
 
-- `devtools.timeline` -- standard DevTools performance traces
-- `v8.execute` -- time spent running JavaScript
-- `blink` -- renderer events
-- `blink.user_timing` -- `performance.mark()` / `performance.measure()` calls
-- `latencyInfo` -- input-to-latency tracking
-- `renderer.scheduler` -- task scheduling and execution
-- `toplevel` -- broad-spectrum basic events
+- `devtools.timeline`: standard DevTools performance traces
+- `v8.execute`: time spent running JavaScript
+- `blink`: renderer events
+- `blink.user_timing`: `performance.mark()` / `performance.measure()` calls
+- `latencyInfo`: input-to-latency tracking
+- `renderer.scheduler`: task scheduling and execution
+- `toplevel`: broad-spectrum basic events
 
 Several `disabled-by-default-*` categories are also included for detailed timeline, call stack, and V8 CPU profiling data.
 
@@ -73,7 +116,7 @@ chrome-use profiler stop ./page-load-profile.json
 chrome-use navigate https://app.example.com
 chrome-use profiler start
 chrome-use click "#submit"
-chrome-use wait 2000
+chrome-use wait --text "Saved"
 chrome-use profiler stop ./interaction-profile.json
 ```
 
@@ -110,7 +153,7 @@ The `metadata.clock-domain` field is set based on the host platform (Linux or ma
 Load the output JSON file in any of these tools:
 
 - **Chrome DevTools**: Performance panel > Load profile (Ctrl+Shift+I > Performance)
-- **Perfetto UI**: https://ui.perfetto.dev/ -- drag and drop the JSON file
+- **Perfetto UI**: https://ui.perfetto.dev/: drag and drop the JSON file
 - **Trace Viewer**: `chrome://tracing` in any Chromium browser
 
 ## Limitations

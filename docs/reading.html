@@ -88,6 +88,10 @@
         并且给出稳定可用的 <code>@ref</code>——这是驱动点击 / 输入的正规入口。
       </div>
 
+<h3>只读取下一步需要的内容</h3>
+      <p>空结构节点没有提供上下文时，用 <code>snapshot -i -c</code>；已知面板用 scoped read。精简输出缺少必要上下文时再读完整树。只有上一次观察仍留下问题时才用 <code>--diff</code> 重读。字节数不等于 token 数，两者分别测量。</p>
+      <p>默认读取文字和 ref。视觉问题用 <code>--with-screenshot &lt;path&gt;</code>，让快照或带 observe 的动作同时采集像素；标签和值已能回答问题时，不必每步截图。见<a href="/waiting.html">等待与观察范围</a>。</p>
+
       <h3>读懂 snapshot 的输出</h3>
       <p>输出是缩进的可访问性树，缩进代表嵌套深度：</p>
 

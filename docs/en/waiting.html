@@ -225,6 +225,10 @@
       <hr class="du-divider" />
 
       <!-- ============ OBSERVE ============ -->
+<h2 id="no-progress">Repeated unchanged attempts</h2>
+      <p><code>observed.noProgress</code> appears from the third identical observed <code>click</code>, <code>dblclick</code>, or <code>press</code> on the same target and screen, with at most 60 seconds between attempts. Each observation must be complete and quiet, with settling enabled (<code>waitedMs &gt; 0</code>), <code>changed:false</code>, <code>sawChange:false</code>, no pending work, and no detected request, resource, new-frame or human-check activity. Activity or incomplete evidence breaks the streak.</p>
+      <p>The hint carries <code>retryAction:false</code>. It advises inspecting current state or waiting for a task-specific condition; it never changes action success or runs another action. No observed accessibility or request change does not prove a server write failed. Do not blindly replay a send, submit, purchase or delete.</p>
+
       <h2>See what an action changed — --observe</h2>
       <p>Requests are summarized to at most 20 entries of 256 UTF-8 bytes each. Data URLs include their media header and encoded payload size, not the payload. JSON includes <code>requestsTotal</code>, <code>requestsOmitted</code>, and <code>requestsShortened</code>. Use <code>network requests --json</code> for full captured details. Request summaries still appear with <code>changed:false</code>, which describes tree and URL changes only.</p>
       <p>

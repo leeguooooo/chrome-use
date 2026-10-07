@@ -213,6 +213,10 @@
       <hr class="du-divider" />
 
       <!-- ============ OBSERVE ============ -->
+<h2 id="no-progress">重复操作仍未观察到变化</h2>
+      <p>同一目标和页面连续三次相同的 <code>click</code>、<code>dblclick</code> 或 <code>press</code>，相邻间隔不超过 60 秒时，<code>observed.noProgress</code> 才可能出现。每次观察都需 complete、quiet，已开启等待（<code>waitedMs &gt; 0</code>），<code>changed:false</code>、<code>sawChange:false</code>，无 pending 工作，也未发现请求、资源、新 frame 或人机校验活动。有活动或证据不完整会中断连续计数。</p>
+      <p>提示带 <code>retryAction:false</code>，建议检查当前状态或等待任务所需的条件；它不改变动作 success，也不执行其他动作。未观察到可访问性树或请求变化不证明服务器写入失败，不要盲目重放发送、提交、购买或删除。</p>
+
       <h2>看清动作改了什么 — --observe</h2>
       <p>请求最多显示 20 条摘要，每条最多 256 个 UTF-8 字节；data URL 只显示媒体头和编码后载荷大小。JSON 同时返回 <code>requestsTotal</code>、<code>requestsOmitted</code>、<code>requestsShortened</code>。完整记录用 <code>network requests --json</code> 查看。<code>changed:false</code> 只表示树与 URL 没变，有请求时仍显示摘要。</p>
       <p>

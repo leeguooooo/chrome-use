@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>核心循环 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 的基本节奏：open → snapshot -i → click / type → 再 snapshot。理解 @ref 何时失效、何时自愈，以及为什么永远快照优先、绝不靠截图定位；结构化与 eval 两条驱动路径何时切换。" />
+  <meta name="description" content="chrome-use 的基本节奏：打开、读取、操作并观察，只按需要重读。用 compact、batch、script 和按需截图减少调用，核验结果并按任务测量耗时。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -49,13 +49,21 @@
       </div>
 
       <p class="du-lede">
-        驱动浏览器完成一件事，节奏几乎永远是这四步：<span class="mark">打开页面 → 看清页面上有什么 → 对着快照给出的 @ref 动手 → 页面一变就重新快照</span>。
+        驱动浏览器完成一件事，节奏几乎永远是这四步：<span class="mark">打开页面 → 读取控件 → 用 @ref 操作并观察 → 只按需要重读</span>。
         把这个循环跑顺，再理解 <code>@ref</code> 何时失效、何时自愈，你就掌握了 chrome-use 九成的日常用法。
       </p>
 
       <p>core 技能已包含默认观察、停止验证规则，以及普通点击和表单命令。按需加载 <code>core/reading</code>、<code>core/connection</code> 或 <code>core/site-adapters</code>。每次只读取能回答下一步问题的状态，不默认同时请求 DOM 和截图。页面信号足以确认目标且没有矛盾时，停止验证；观察缺失不能作为重放动作的理由。</p>
 
       <!-- ============ THE LOOP ============ -->
+      <h2 id="task-efficiency">减少调用，按完整任务测量</h2>
+      <p>用 <code>snapshot -i -c</code> 精简控件视图，已知面板用 scoped read。已知动作序列用 <code>batch</code>，有条件分支的流程用 <code>script</code>，多个字段用 <code>form fill --map</code>。最后核验任务要求的页面信号；把动作放在一起执行不等于证明动作生效。</p>
+      <p>默认读取文字和 ref。只有树无法回答视觉问题时才加 <code>--with-screenshot &lt;path&gt;</code>。<code>observed.noProgress</code> 在重复操作仍未观察到变化时提示检查状态，不改变 success，也不重试。见<a href="/waiting.html#no-progress">检测范围</a>。</p>
+      <p>JSON 命令计时中，<code>cdpMs</code> 是已完成前台请求的耗时之和，<code>cdpBusyMs</code> 是请求时间区间在命令总耗时内的并集，<code>nonCdpMs</code> 是总耗时减去并集。并发请求可让累计耗时超过总耗时。这些值都是经过时间，不是 CPU 占用或模型耗时。后台任务不继承计时器，剩余墙钟也不等于纯 daemon 处理时间。</p>
+      <p>比较时使用新构建的二进制并记录版本，在相同初始状态执行相同任务；cold 和 warm 分开，交替运行两个版本。记录成功率、unknown 结果、tool/CDP 调用数、返回字节和任务总耗时。模型回合需要调用方 trace，不能用 tool/HTTP 调用数代替。token 需用指定 tokenizer 或模型用量报告测量。失败任务跑得更快不能算提速。计时细节见 <code>chrome-use skills get core/profiling</code>，回放方法见仓库的 <code>bench/README.md</code>。</p>
+
+      <p>在仓库根目录用 <code>python3 bench/run-task.py TASK --binary cli/target/release/chrome-use --output /tmp/run.tsv --run-id run-1</code> 采集一次显式 run，再用 <code>python3 bench/task-metrics.py /tmp/run.tsv</code> 汇总。没有完整且匹配的调用方 trace（<code>--trace</code>）时，模型回合为 null。字节数合并 CLI 的 stdout/stderr，不是精确的模型输入。<code>--cold</code> 只跳过 warmup，不证明 daemon 已停止。</p>
+
       <h2>四步循环</h2>
       <p>
         每一步都对着上一步的结果做决定：<code>snapshot -i</code> 给你一份只含可交互元素的结构化视图，
