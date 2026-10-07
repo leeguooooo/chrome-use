@@ -1263,16 +1263,112 @@ fn run_dashboard_stop(json_mode: bool) {
     }
 }
 
-fn run_close_all(flags: &Flags) {
+/// A live session `close --all` would close, as shown when it refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CloseAllTarget {
+    name: String,
+    pid: u32,
+    /// Seconds since the daemon started (its `.pid` file was written).
+    age_secs: Option<u64>,
+}
+
+/// The live sessions that are not the caller's own. `close --all` closes
+/// every session in the user's Chrome — other agents' and other Claude
+/// sessions' work included — so it refuses while any of these exist unless
+/// `--force` is given. An empty result means `close --all` proceeds.
+fn close_all_blockers(sessions: &[CloseAllTarget], own: &str, force: bool) -> Vec<CloseAllTarget> {
+    if force {
+        return Vec::new();
+    }
+    sessions.iter().filter(|s| s.name != own).cloned().collect()
+}
+
+/// `--force` (or `--yes` / `-y`, the confirmation `cookies clear --all` takes)
+/// lets `close --all` close other agents' sessions too.
+fn close_all_forced(args: &[String]) -> bool {
+    args.iter()
+        .any(|a| matches!(a.as_str(), "--force" | "--yes" | "-y"))
+}
+
+fn format_age(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86400 => format!("{}h{}m", s / 3600, (s % 3600) / 60),
+        s => format!("{}d{}h", s / 86400, (s % 86400) / 3600),
+    }
+}
+
+fn close_all_refusal_message(own: &str, others: &[CloseAllTarget]) -> String {
+    let (count, verb) = if others.len() == 1 {
+        ("1 other live session".to_string(), "belongs")
+    } else {
+        (format!("{} other live sessions", others.len()), "belong")
+    };
+    let mut msg = format!(
+        "refusing `close --all`: {count} {verb} to other agents or other Claude sessions \
+         and would be closed too:\n"
+    );
+    for s in others {
+        let age = s
+            .age_secs
+            .map(|a| format!(", started {} ago", format_age(a)))
+            .unwrap_or_default();
+        msg.push_str(&format!("  - {} (pid {}{age})\n", s.name, s.pid));
+    }
+    msg.push_str(&format!(
+        "To close only your own session ({own}), run `chrome-use close`.\n\
+         To really close every session, including the ones above, run `chrome-use close --all --force`."
+    ));
+    msg
+}
+
+fn run_close_all(flags: &Flags, force: bool) {
     // walk_daemons auto-cleans stale .pid / .sock / .stream sidecar files and
     // separates out the standalone dashboard. We only want to send `close` to
     // real session daemons; the dashboard has its own `dashboard stop`.
     let inventory = walk_daemons();
-    let sessions: Vec<(String, u32)> = inventory
+    let socket_dir = get_socket_dir();
+    let now = std::time::SystemTime::now();
+    let targets: Vec<CloseAllTarget> = inventory
         .sessions
         .iter()
-        .map(|s| (s.name.clone(), s.pid))
+        .map(|s| CloseAllTarget {
+            name: s.name.clone(),
+            pid: s.pid,
+            age_secs: fs::metadata(socket_dir.join(format!("{}.pid", s.name)))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| now.duration_since(t).ok())
+                .map(|d| d.as_secs()),
+        })
         .collect();
+
+    let blockers = close_all_blockers(&targets, &flags.session, force);
+    if !blockers.is_empty() {
+        let message = close_all_refusal_message(&flags.session, &blockers);
+        if flags.json {
+            print_json_value(json!({
+                "success": false,
+                "error": message,
+                "type": "close_all_other_sessions",
+                "code": "close_all_other_sessions",
+                "retryable": false,
+                "data": {
+                    "ownSession": flags.session,
+                    "otherSessions": blockers
+                        .iter()
+                        .map(|s| json!({ "name": s.name, "pid": s.pid, "ageSecs": s.age_secs }))
+                        .collect::<Vec<_>>(),
+                },
+            }));
+        } else {
+            eprintln!("{} {}", color::error_indicator(), message);
+        }
+        exit(1);
+    }
+
+    let sessions: Vec<(String, u32)> = targets.into_iter().map(|s| (s.name, s.pid)).collect();
 
     if sessions.is_empty() {
         if flags.json {
@@ -2375,7 +2471,7 @@ fn main() {
         Some("close") | Some("quit") | Some("exit")
     ) && clean.iter().any(|a| a == "--all")
     {
-        run_close_all(&flags);
+        run_close_all(&flags, close_all_forced(&clean));
         return;
     }
 
@@ -3751,6 +3847,64 @@ mod tests {
         assert!(reason.contains("`chrome-use session prune`"), "{reason}");
         assert!(reason.contains("`ab-hn1`"), "{reason}");
         assert!(stopped_from_outside_reason("ab-hn1", "ab-hn1", "session stop").is_none());
+    }
+
+    fn target(name: &str) -> CloseAllTarget {
+        CloseAllTarget {
+            name: name.to_string(),
+            pid: 100,
+            age_secs: Some(90),
+        }
+    }
+
+    #[test]
+    fn close_all_with_only_own_session_proceeds() {
+        let sessions = vec![target("mine")];
+        assert!(close_all_blockers(&sessions, "mine", false).is_empty());
+        assert!(close_all_blockers(&[], "mine", false).is_empty());
+    }
+
+    #[test]
+    fn close_all_refuses_when_other_sessions_are_live() {
+        let sessions = vec![target("mine"), target("other-a"), target("other-b")];
+        let blockers = close_all_blockers(&sessions, "mine", false);
+        let names: Vec<_> = blockers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["other-a", "other-b"]);
+        // The caller's own session need not be running for others to block.
+        assert_eq!(close_all_blockers(&sessions[1..], "mine", false).len(), 2);
+    }
+
+    #[test]
+    fn close_all_force_overrides_the_guard() {
+        let sessions = vec![target("mine"), target("other")];
+        assert!(close_all_blockers(&sessions, "mine", true).is_empty());
+    }
+
+    #[test]
+    fn close_all_force_flag_spellings() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(!close_all_forced(&args(&["close", "--all"])));
+        assert!(close_all_forced(&args(&["close", "--all", "--force"])));
+        assert!(close_all_forced(&args(&["close", "--yes", "--all"])));
+        assert!(close_all_forced(&args(&["quit", "--all", "-y"])));
+    }
+
+    #[test]
+    fn close_all_refusal_lists_sessions_and_both_ways_out() {
+        let msg = close_all_refusal_message("mine", &[target("other")]);
+        assert!(msg.contains("1 other live session belongs"), "{msg}");
+        assert!(msg.contains("other (pid 100, started 1m ago)"), "{msg}");
+        assert!(msg.contains("`chrome-use close`"), "{msg}");
+        assert!(msg.contains("close --all --force"), "{msg}");
+        assert!(msg.contains("(mine)"), "{msg}");
+    }
+
+    #[test]
+    fn format_age_units() {
+        assert_eq!(format_age(5), "5s");
+        assert_eq!(format_age(125), "2m");
+        assert_eq!(format_age(3_900), "1h5m");
+        assert_eq!(format_age(90_000), "1d1h");
     }
 
     #[test]

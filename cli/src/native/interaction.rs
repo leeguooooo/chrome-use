@@ -3101,6 +3101,25 @@ pub async fn select_option(
             ));
         }
         let what = "No option matched";
+        let custom = result.and_then(|v| v.get("kind")).and_then(|v| v.as_str()) == Some("custom");
+        if custom {
+            // Not a native <select>: `select` only opens it and looks. An
+            // autocomplete field lists nothing until typed into, and `pick`
+            // is the verb that types, waits for suggestions and clicks one.
+            let first = values.first().map(String::as_str).unwrap_or("<text>");
+            return Err(format!(
+                "{} {:?}: {} is not a native <select>, so `select` can only open it and look \
+                 (visible options: {}). For a custom or autocomplete (type-to-search) combobox use \
+                 `pick {} --option {:?}`: it types the text, waits for the suggestions and clicks \
+                 the match",
+                what,
+                values,
+                selector_or_ref,
+                if avail.is_empty() { "none" } else { &avail },
+                selector_or_ref,
+                first
+            ));
+        }
         return Err(format!(
             "{} {:?}. available options: {}",
             what, values, avail

@@ -11,6 +11,7 @@ chrome-use type @e2 " world"               # append
 chrome-use press Enter --selector @e2      # focus this control before the key
 chrome-use select @e4 "option-value"       # native select
 chrome-use pick @e4 --option "Europe"      # custom combobox
+chrome-use pick @e6 --option "Kyoto"       # autocomplete field: types, clicks the suggestion
 chrome-use check @e5
 chrome-use uncheck @e5
 chrome-use scroll down 500
@@ -27,9 +28,15 @@ says the condition was not observed; on its own it tells you nothing about
 the connection.
 
 Prefer dedicated verbs over handwritten JavaScript: they check ref identity,
-handle frames, and dispatch the events widgets expect. For an autocomplete,
-use `type @ref "text" --key-events`, then choose its visible candidate; `--enter`
-can commit a candidate.
+handle frames, and dispatch the events widgets expect.
+
+Autocomplete field (type-to-search combobox: suggestions appear only after
+you type, and the form wants one of them chosen) → `pick @ref --option "<text>"`.
+It clears the field, types the text, waits for the suggestions, clicks the
+best match and reports the field's value and any hidden code it set. `select`
+does not type, so it cannot reach those suggestions. Use `type --key-events`
+(or `--enter` to commit a tag) only when the field reacts to keystrokes alone
+or `pick` reports that no suggestion appeared.
 
 A field showing your text does not prove the page saved it. Heed ⚠
 warnings from `fill`, `click` and `keyboard type`: a Save still disabled after
@@ -81,8 +88,7 @@ chrome-use type @e6 "ChatGPT" --enter  # type (real keystrokes, implies --key-ev
                                           # async-autocomplete / tag widget. Use when typing
                                           # alone shows no dropdown and the field needs a tag
                                           # confirmed (e.g. juejin 「添加标签」). If you'd rather
-                                          # pick from the list, type --key-events first, then
-                                          # snapshot -i and click the candidate.
+                                          # pick from the list, use `pick @e6 --option "…"`.
 chrome-use press Enter                 # press a key at current focus (down+up).
                                           # The output names where it landed
                                           # ("Pressed Enter → textarea[name=q]").
@@ -110,6 +116,11 @@ chrome-use pick @e4 --option "Europe"  # ANY combobox (react-select / ARIA /
                                           # (no silent no-op). Use this for custom
                                           # dropdowns where `select` returns ✓ but
                                           # changes nothing.
+chrome-use pick @e6 --option "Kyoto"   # AUTOCOMPLETE field (role=combobox input,
+                                          # aria-autocomplete=list): types the text,
+                                          # waits for suggestions, clicks the best
+                                          # match (exact > case > prefix), verifies
+                                          # the value; `pick @e6 "Kyoto"` also works
 chrome-use upload @e5 file1.pdf        # upload file(s) — works over the extension relay too:
                                           # chrome.debugger forbids setFileInputFiles, so the
                                           # file's bytes are streamed into the page and rebuilt as

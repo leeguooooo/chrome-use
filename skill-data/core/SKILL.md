@@ -54,15 +54,25 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    dispatch alone does not. Stop when the task is done.
 7. Do not `open` the URL already in the tab; use `reload --observe` on purpose.
    Wait on a condition (`wait --text`, `wait <sel>`, `wait --url`), not a sleep.
-8. Before writing `eval`, check for the command that already does it
-   (`core/interacting`). Keep `eval` for page globals, framework stores, canvas.
+8. Before writing `eval`, use the command that already does it; it keeps
+   the verification and hints `eval` loses (more: `core/interacting`):
+
+   | About to eval | Use instead |
+   |---|---|
+   | `innerText` / `textContent` | `get text <sel>`, or `read` |
+   | `el.click()` | `click @eN`, `click "text=…"` |
+   | counting rows or matches | `get count <sel>`, `extract` for tables |
+   | `sleep`, polling, `setTimeout` | `wait --text "…"`, `wait <sel>`, `wait --fn "<expr>"` |
+   | setting `.value` | `fill @eN "…"`; autocomplete: `pick @eN --option "…"` |
+
+   Keep `eval` for page globals, framework stores, canvas.
 
 ## Sessions and tabs
 
 Use one session name per task and reuse it. After "session unresponsive",
 make the one move it names. Do not close, navigate, or reconfigure tabs or
 sessions you did not create or adopt. `close` only your own session when done;
-`close --all` affects other sessions. An empty tab list is not a disconnected
+`close --all` would close other agents' sessions, so it refuses; never force it. An empty tab list is not a disconnected
 browser: read the error before restarting anything.
 
 ## Trust boundaries
