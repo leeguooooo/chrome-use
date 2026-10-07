@@ -11815,6 +11815,18 @@ async fn e2e_efficiency_repeated_observations_and_script_advisories() {
         "{last}"
     );
     assert_evaluate(&mut state, "count", "window.clicks", json!(5)).await;
+    // Two unchanged actions followed by an early-return gate must not make
+    // the next action look like the third identical attempt.
+    for index in 0..2 {
+        let response = Box::pin(execute_command(
+            &json!({"id":format!("seed-{index}"),
+            "action":"click","selector":"#noop","observe":true}),
+            &mut state,
+        ))
+        .await;
+        assert_success(&response);
+        assert!(response.pointer("/data/observed/noProgress").is_none());
+    }
     // An unobserved/error path breaks the streak, including early returns.
     let _ = Box::pin(execute_command(
         &json!({"id":"deny","action":"deny"}),
@@ -11842,6 +11854,19 @@ async fn e2e_efficiency_repeated_observations_and_script_advisories() {
             .unwrap()
             .iter()
             .any(|step| step.get("noProgress").is_some()),
+        "{response}"
+    );
+    // JS callers need the advisory even if they discard every cu.* result.
+    let response = Box::pin(execute_command(&json!({"id":"js","action":"script",
+        "source":"for (let i = 0; i < 3; i++) cu._call('click', {selector:'#noop', observe:true});"}), &mut state)).await;
+    assert_success(&response);
+    assert_eq!(response["data"]["ok"], true);
+    assert!(
+        response["data"]["advisories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|advisory| advisory["attempts"].as_u64().is_some_and(|n| n >= 3)),
         "{response}"
     );
     let closed = Box::pin(execute_command(

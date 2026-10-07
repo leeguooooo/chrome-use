@@ -28,7 +28,8 @@ tokio::task_local! {
     static RECORDER: Mutex<Vec<(String, Duration, Instant, Instant)>>;
 }
 
-/// Record one CDP call. A no-op outside a timed command.
+/// Synthetic-duration helper for recorder tests.
+#[cfg(test)]
 pub fn record(method: &str, elapsed: Duration) {
     let end = Instant::now();
     record_span(method, end - elapsed, end);
