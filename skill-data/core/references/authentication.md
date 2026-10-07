@@ -158,6 +158,29 @@ chrome-use auth login --bwu --passkey       # sign in with the vault passkey
 - Result: `{"item", "filled": [...], "submitted", "otp": "filled" | "not asked" | "none", "passkey": "used" | "not asked" | "unsupported" | "unavailable" | "none", "url"}`.
   Run `snapshot` afterwards to see whether the site accepted the login.
 
+### Login walls
+
+When a command leaves the tab on a site's sign-in page instead of the page
+asked for (an expired session bounced `open`, `reload`, `back` or a click to
+`/login?redirect_uri=…`), chrome-use says so once per host per session: a
+`login wall: <host> redirected to its sign-in page; …` line on stderr and
+`loginWall: {url, returnTo, host, hint}` in the JSON data. Sign in with
+`auth login --bwu` (with `--item` when several vault logins match), then open
+`returnTo` and continue. Ask the user only when no vault item matches, a
+second factor needs them, or the login fails. Detection reads the URL first
+(sign-in paths and hosts, a `redirect_uri` / `return_to` / `next` / `continue`
+parameter pointing back, or a bounce from another page of the same site) and
+checks the page for a visible password or username field when the URL alone
+is not conclusive, so a page that only links to a login is not flagged.
+
+To sign in automatically, set `"auth": {"autoLogin": "bwu"}` in
+`~/.chrome-use/config.json` or `AGENT_BROWSER_AUTO_LOGIN=bwu`. The first wall
+per host per session then runs the `auth login --bwu` flow with the only
+vault login for the site (several or none are reported, never guessed),
+returns to `returnTo`, and reports `loginWall.autoLogin: {ok, item, error,
+returnedTo}`. It handles a one-time code exactly as `auth login --bwu` does
+and nothing more.
+
 ### Single fields
 
 ```bash

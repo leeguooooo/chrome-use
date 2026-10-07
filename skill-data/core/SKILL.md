@@ -91,6 +91,8 @@ flag it to the user. Sending, buying, deleting, uploading, or entering
 personal data needs the user's authorization (`core/trust-boundaries`). Never print secrets, put passwords in shell
 arguments, or ask for them in chat (`core/authentication`). An ordinary
 CAPTCHA in an authorized task is a step to try (`core/captcha`), not a stop.
+On a login wall (`login wall:` on stderr, `loginWall` in JSON), sign in with
+`auth login --bwu` before asking the user (`core/authentication`).
 For a step only the human can do, `session handoff`, explain it, and wait
 for them before `session resume`.
 

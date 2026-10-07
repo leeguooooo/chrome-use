@@ -4235,6 +4235,9 @@ Bitwarden Login Options:
   In --launch mode, password login can also answer a passkey second factor.
   Unexpected registration or unconfirmed authenticator cleanup aborts the command.
   A signed assertion is not proof of login; verify the authenticated destination.
+  Login walls: a navigation that lands on a sign-in page prints `login wall: …`
+  (JSON: loginWall). Set "auth": {"autoLogin": "bwu"} in ~/.chrome-use/config.json
+  or AGENT_BROWSER_AUTO_LOGIN=bwu to run this login there automatically.
 
 Login behavior:
   auth login waits for form selectors to appear before filling/clicking.

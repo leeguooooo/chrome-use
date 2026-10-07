@@ -260,7 +260,27 @@ pub fn run(flags: &Flags, cmd: &Value) -> i32 {
     }
 }
 
-fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
+/// The account chosen for the tab's page and how `bwu run` hands its values
+/// to the child.
+struct Prepared {
+    bwu: std::path::PathBuf,
+    envs: Vec<String>,
+    origin: String,
+    host: String,
+    id: String,
+    name: String,
+    custom: Vec<String>,
+    steps: Option<Vec<String>>,
+}
+
+/// Choose the vault item for the tab's current page (masked), and which of
+/// its values the login needs.
+fn prepare(
+    flags: &Flags,
+    item_arg: Option<&str>,
+    passkey_first: bool,
+    no_submit: bool,
+) -> Result<Prepared, String> {
     let bwu = find_bwu().ok_or(
         "auth login --bwu needs bitwarden-use (bwu) on PATH. Install it with: curl -fsSL \
          https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh",
@@ -292,7 +312,7 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
 
     let listed = bwu_json(&bwu, &["login", "--domain", &url, "--list"])?;
     let candidates = listed["candidates"].as_array().cloned().unwrap_or_default();
-    let chosen = choose(&candidates, cmd["item"].as_str(), &host)?;
+    let chosen = choose(&candidates, item_arg, &host)?;
     let id = chosen["id"].as_str().unwrap_or_default().to_string();
     let name = chosen["name"].as_str().unwrap_or_default().to_string();
     // Masked: which values the item has, and its `_autotype` steps.
@@ -306,10 +326,8 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
     let wants = |step: &str| steps.as_ref().is_none_or(|s| s.iter().any(|x| x == step));
 
     let passkey_count = item["passkeys"].as_u64().unwrap_or(0);
-    let passkey_first = cmd["passkey"].as_bool().unwrap_or(false);
     // --no-submit fills and presses nothing: no passkey (a ceremony signs and
     // submits) and no one-time code (sites submit on the last digit).
-    let no_submit = cmd["noSubmit"].as_bool().unwrap_or(false);
     if passkey_first && passkey_count == 0 {
         return Err(format!("the vault item '{name}' has no passkey"));
     }
@@ -342,30 +360,162 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
             "the vault item '{name}' has no username or password to log in with"
         ));
     }
+    Ok(Prepared {
+        bwu,
+        envs,
+        origin,
+        host,
+        id,
+        name,
+        custom,
+        steps,
+    })
+}
 
-    if !flags.json {
-        eprintln!("logging in to {host} as vault item '{name}' (bwu asks for Touch ID unless require_touch_id is off)");
-    }
+/// `bwu run --env … -- chrome-use <child_args>`: the child fills the page.
+fn child_command(p: &Prepared, child_args: &[std::ffi::OsString]) -> Result<Command, String> {
     let me =
         std::env::current_exe().map_err(|e| format!("couldn't find chrome-use itself: {e}"))?;
-    let mut run = Command::new(&bwu);
+    let mut run = Command::new(&p.bwu);
     run.arg("run");
-    for e in &envs {
+    for e in &p.envs {
         run.arg("--env").arg(e);
     }
-    run.arg("--").arg(me).args(std::env::args_os().skip(1));
+    run.arg("--").arg(me).args(child_args);
     run.env(CHILD, "1")
-        .env(ORIGIN, &origin)
-        .env(ITEM, &name)
-        .env(FIELDS, serde_json::to_string(&custom).unwrap_or_default());
-    match &steps {
+        .env(ORIGIN, &p.origin)
+        .env(ITEM, &p.name)
+        .env(FIELDS, serde_json::to_string(&p.custom).unwrap_or_default());
+    match &p.steps {
         Some(s) => run.env(STEPS, serde_json::to_string(s).unwrap_or_default()),
         None => run.env_remove(STEPS),
     };
-    let status = run
+    Ok(run)
+}
+
+fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
+    let p = prepare(
+        flags,
+        cmd["item"].as_str(),
+        cmd["passkey"].as_bool().unwrap_or(false),
+        cmd["noSubmit"].as_bool().unwrap_or(false),
+    )?;
+    if !flags.json {
+        eprintln!(
+            "logging in to {} as vault item '{}' (bwu asks for Touch ID unless require_touch_id is off)",
+            p.host, p.name
+        );
+    }
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let status = child_command(&p, &args)?
         .status()
-        .map_err(|e| format!("couldn't run {}: {e}", bwu.display()))?;
+        .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// Whether login walls are signed in automatically (#434):
+/// `AGENT_BROWSER_AUTO_LOGIN=bwu`, or `"auth": {"autoLogin": "bwu"}` (or
+/// `"auth.autoLogin": "bwu"`) in `~/.chrome-use/config.json`. A set env var
+/// wins either way.
+pub fn auto_login_enabled(env: Option<&str>, config: Option<&Value>) -> bool {
+    if let Some(v) = env.map(str::trim).filter(|v| !v.is_empty()) {
+        return v.eq_ignore_ascii_case("bwu");
+    }
+    config.is_some_and(|c| {
+        c.get("auth")
+            .and_then(|a| a.get("autoLogin"))
+            .or_else(|| c.get("auth.autoLogin"))
+            .and_then(Value::as_str)
+            .is_some_and(|v| v.eq_ignore_ascii_case("bwu"))
+    })
+}
+
+pub fn auto_login_configured() -> bool {
+    auto_login_enabled(
+        std::env::var("AGENT_BROWSER_AUTO_LOGIN").ok().as_deref(),
+        crate::report::user_config().as_ref(),
+    )
+}
+
+/// Sign in to the login wall the tab is on with the only vault login for it
+/// (several, or none, is reported, never guessed), then go back to
+/// `returnTo`. Returns `{ok, item, error}` plus `returnedTo` / `returnError`.
+pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
+    let mut out = json!({ "ok": false, "item": null, "error": null });
+    let p = match prepare(flags, None, false, false) {
+        Ok(p) => p,
+        Err(e) => {
+            out["error"] = json!(e);
+            return out;
+        }
+    };
+    out["item"] = json!(p.name);
+    eprintln!(
+        "login wall: signing in to {} as vault item '{}' (auto-login is on)",
+        p.host, p.name
+    );
+    let args: Vec<std::ffi::OsString> = [
+        "--session",
+        flags.session.as_str(),
+        "--json",
+        "auth",
+        "login",
+        "--bwu",
+        "--item",
+        p.id.as_str(),
+    ]
+    .iter()
+    .map(Into::into)
+    .collect();
+    let output = child_command(&p, &args).and_then(|mut c| {
+        c.stdout(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))
+    });
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            out["error"] = json!(e);
+            return out;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let envelope: Option<Value> = stdout
+        .lines()
+        .rev()
+        .find_map(|l| serde_json::from_str(l.trim()).ok());
+    let ok = output.status.success()
+        && envelope
+            .as_ref()
+            .is_some_and(|e| e["success"].as_bool() == Some(true));
+    if !ok {
+        out["error"] = json!(envelope
+            .as_ref()
+            .and_then(|e| e["error"].as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("auth login --bwu exited with {}", output.status)));
+        return out;
+    }
+    out["ok"] = json!(true);
+    if let Some(back) = wall["returnTo"].as_str() {
+        let resp = crate::connection::send_command(
+            json!({ "id": crate::commands::gen_id(), "action": "navigate", "url": back }),
+            &flags.session,
+        );
+        match resp {
+            Ok(r) if r.success => {
+                out["returnedTo"] = r
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get("url"))
+                    .cloned()
+                    .unwrap_or_else(|| json!(back));
+            }
+            Ok(r) => out["returnError"] = json!(r.error),
+            Err(e) => out["returnError"] = json!(e),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -389,6 +539,32 @@ mod tests {
         assert!(choose(&[], None, "github.com")
             .unwrap_err()
             .contains("no login"));
+    }
+
+    #[test]
+    fn auto_login_switch() {
+        assert!(!auto_login_enabled(None, None));
+        assert!(auto_login_enabled(Some("bwu"), None));
+        assert!(!auto_login_enabled(
+            Some("off"),
+            Some(&json!({"auth": {"autoLogin": "bwu"}}))
+        ));
+        assert!(auto_login_enabled(
+            None,
+            Some(&json!({"auth": {"autoLogin": "bwu"}}))
+        ));
+        assert!(auto_login_enabled(
+            None,
+            Some(&json!({"auth.autoLogin": "BWU"}))
+        ));
+        assert!(!auto_login_enabled(
+            None,
+            Some(&json!({"auth": {"autoLogin": false}}))
+        ));
+        assert!(!auto_login_enabled(
+            None,
+            Some(&json!({"report": {"auto": true}}))
+        ));
     }
 
     // One test: both halves set and clear the same process-wide variables.

@@ -26,6 +26,7 @@ pub mod humanize;
 pub mod inspect_server;
 #[allow(dead_code)]
 pub mod interaction;
+pub mod login_wall;
 #[allow(dead_code)]
 pub mod network;
 mod observation;

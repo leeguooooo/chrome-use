@@ -503,7 +503,7 @@ pub fn submit_allowed(yes: bool, env_auto: Option<&str>, config: Option<&Value>)
     })
 }
 
-fn user_config() -> Option<Value> {
+pub(crate) fn user_config() -> Option<Value> {
     let path = dirs::home_dir()?.join(".chrome-use").join("config.json");
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }

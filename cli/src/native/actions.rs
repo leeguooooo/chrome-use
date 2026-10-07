@@ -611,6 +611,11 @@ pub struct DaemonState {
     /// adapter suggestion — see `suggest_site_adapter`.
     pub site_usage: HashMap<String, u32>,
     pub site_suggested: HashSet<String>,
+    /// Hosts already reported as a login wall this session (#434): once each.
+    pub login_wall_hosts: HashSet<String>,
+    /// The last page this session saw that was not a sign-in page, so a
+    /// later bounce to one can name where it came from.
+    pub login_wall_last: Option<String>,
     /// Repeated failures and eval-after-failure in this session, for the
     /// one-line "offer the user `chrome-use report`" nudge — see
     /// `crate::friction::NudgeTracker`.
@@ -683,6 +688,8 @@ impl DaemonState {
             site_hint_host: None,
             site_usage: HashMap::new(),
             site_suggested: Default::default(),
+            login_wall_hosts: Default::default(),
+            login_wall_last: None,
             report_nudge: Default::default(),
         }
     }
@@ -2037,6 +2044,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // and retrying the action up to 3 times over ~3s before surfacing the unchanged
     // error. `navigate`/`launch` run their own reattach, and a read that never
     // recovers still fails loudly rather than retarget onto the wrong tab (#58/#8.1).
+    // Where the tab was before this command, for login-wall detection (#434).
+    let url_before = state.browser.as_ref().map(|m| m.cached_active_url());
     let stale_recoverable = action != "navigate"
         && action != "launch"
         && state.browser.as_ref().is_some_and(|m| m.on_relay());
@@ -2657,6 +2666,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     if ok {
         annotate_site_change(action, cmd, &mut resp, state).await;
         suggest_site_adapter(&mut resp, state);
+        annotate_login_wall(action, cmd, &mut resp, state, url_before.as_deref()).await;
     }
     if let Some(sugg) = report_suggestion {
         insert_data_field(&mut resp, "reportSuggestion", sugg);
@@ -4425,6 +4435,111 @@ async fn annotate_site_change(
         return;
     };
     insert_data_field(resp, "siteAdapters", adapters.clone());
+}
+
+/// Commands that never land on a login wall by themselves, or are the login.
+const LOGIN_WALL_SKIP_ACTIONS: &[&str] = &[
+    "close",
+    "auth_login",
+    "auth_login_bwu",
+    "auth_save",
+    "auth_show",
+    "auth_delete",
+    "auth_list",
+    "dialog",
+];
+
+/// Say when the tab sits on a site's sign-in page instead of the page the
+/// caller wanted (#434), and route the agent to `auth login --bwu`. Runs on
+/// every successful command so a client-side redirect that lands after
+/// `open` returned is caught by the next one; the URL check is free (cached
+/// url), and the page is probed only for a sign-in-looking URL or a redirect
+/// away from an explicitly requested page. Once per host per session.
+async fn annotate_login_wall(
+    action: &str,
+    cmd: &Value,
+    resp: &mut Value,
+    state: &mut DaemonState,
+    url_before: Option<&str>,
+) {
+    use super::login_wall;
+    if LOGIN_WALL_SKIP_ACTIONS.contains(&action) || state.pending_dialog.is_some() {
+        return;
+    }
+    let Some(mgr) = state.browser.as_ref() else {
+        return;
+    };
+    let current = resp
+        .get("data")
+        .and_then(|d| d.get("url"))
+        .and_then(|v| v.as_str())
+        .filter(|u| u.starts_with("http"))
+        .map(str::to_string)
+        .unwrap_or_else(|| mgr.cached_active_url());
+    // The page the caller explicitly asked for, else the last ordinary page.
+    let explicit = match action {
+        "navigate" => cmd.get("url").and_then(|v| v.as_str()).map(str::to_string),
+        "reload" => url_before.map(str::to_string),
+        _ => None,
+    };
+    let intended = explicit.clone().or_else(|| state.login_wall_last.clone());
+    let Some(signal) = login_wall::classify(&current, intended.as_deref()) else {
+        if current.starts_with("http") {
+            state.login_wall_last = Some(current);
+        }
+        return;
+    };
+    if signal.strength == login_wall::Strength::Redirected && explicit.is_none() {
+        // Moving around a site is not a wall unless the caller asked for a
+        // page and got another one.
+        state.login_wall_last = Some(current);
+        return;
+    }
+    let host = url::Url::parse(&current)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default();
+    if state.login_wall_hosts.contains(&host) {
+        return;
+    }
+    if signal.strength != login_wall::Strength::Strong {
+        let user: Vec<&str> = AUTH_USER_SELECTORS.to_vec();
+        let js = login_wall::probe_js(&user);
+        let probe = tokio::time::timeout(
+            Duration::from_millis(1500),
+            Box::pin(mgr.evaluate(&js, None)),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+        if !login_wall::confirmed(signal.strength, &probe) {
+            if signal.strength == login_wall::Strength::Redirected {
+                state.login_wall_last = Some(current);
+            }
+            return;
+        }
+    }
+    state.login_wall_hosts.insert(host.clone());
+    // Name the site the caller was trying to reach: the way back, else the
+    // page it came from on the same site.
+    let host_of = |u: &str| {
+        url::Url::parse(u)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+    };
+    let from_host = signal.return_to.as_deref().and_then(host_of).or_else(|| {
+        intended
+            .as_deref()
+            .and_then(host_of)
+            .filter(|h| login_wall::related(h, &host))
+    });
+    insert_data_field(
+        resp,
+        "loginWall",
+        login_wall::report(&current, &signal, from_host.as_deref()),
+    );
 }
 
 /// The other half of the auto-trigger: a site the agent keeps driving that has

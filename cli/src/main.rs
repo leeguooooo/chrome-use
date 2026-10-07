@@ -3462,6 +3462,39 @@ fn main() {
                     }
                 }
             }
+            // #434: the tab landed on a sign-in page. Say so on stderr (once
+            // per host per session; the daemon decides), and with auto-login
+            // on, sign in from the vault and go back.
+            let wall = resp.data.as_ref().and_then(|d| d.get("loginWall")).cloned();
+            if let Some(wall) = wall {
+                if let Some(h) = wall.get("hint").and_then(|v| v.as_str()) {
+                    eprintln!("{} {}", color::warning_indicator(), h);
+                }
+                if bwu_login::auto_login_configured() {
+                    let auto = bwu_login::auto_login(&flags, &wall);
+                    match auto.get("error").and_then(|v| v.as_str()) {
+                        Some(e) => eprintln!(
+                            "{} login wall: auto-login failed: {e}",
+                            color::warning_indicator()
+                        ),
+                        None => eprintln!(
+                            "login wall: signed in{}",
+                            auto.get("returnedTo")
+                                .and_then(|v| v.as_str())
+                                .map(|u| format!("; back on {u}"))
+                                .unwrap_or_default()
+                        ),
+                    }
+                    if let Some(w) = resp
+                        .data
+                        .as_mut()
+                        .and_then(|d| d.get_mut("loginWall"))
+                        .and_then(|w| w.as_object_mut())
+                    {
+                        w.insert("autoLogin".into(), auto);
+                    }
+                }
+            }
             if let Some(err) = resp.error.as_mut() {
                 if err.contains("has NO snapshot refs") {
                     // Keep what to do last: agents read errors through `tail -1`.
