@@ -5,12 +5,12 @@
 <!-- release:start -->
 ### Bug Fixes
 
-- Fixed **repeated unchanged action hints across CLI calls** being reset by the CLI's browser readiness check. A successful launch reuse on the same connection, target and session keeps the observation streak; rebinding, failed checks and loading storage state still clear it.
+- Fixed **repeated unchanged action hints across CLI calls** being reset by the CLI's browser readiness check. A successful launch reuse on the same connection, target and session keeps the observation streak; rebinding, failed checks and loading storage state still clear it. (#447)
 
 ### Improvements
 
-- **Real CLI regression coverage** checks launch handshakes, actual button activations, batch postconditions, failed and nested script advisories, and cleanup against an explicitly selected binary.
-- **JSON output guides** distinguish ordinary command envelopes, batch arrays and bare script results so callers read the actual advisories and timing fields.
+- **Real CLI regression coverage** checks launch handshakes, actual button activations, batch postconditions, failed and nested script advisories, and cleanup against an explicitly selected binary. (#447)
+- **JSON output guides** distinguish ordinary command envelopes, batch arrays and bare script results so callers read the actual advisories and timing fields. (#447)
 
 ### Contributors
 
