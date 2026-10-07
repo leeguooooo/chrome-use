@@ -11794,6 +11794,15 @@ async fn e2e_efficiency_repeated_observations_and_script_advisories() {
     assert_success(&nav);
     let mut last = Value::Null;
     for index in 0..5 {
+        let ready = Box::pin(execute_command(
+            &json!({"id":format!("ready-{index}"),
+            "action":"launch","headless":true,"args":["--no-sandbox","--disable-dev-shm-usage"]}),
+            &mut state,
+        ))
+        .await;
+        assert_success(&ready);
+        assert_eq!(ready["data"]["reused"], true, "{ready}");
+
         last = Box::pin(execute_command(
             &json!({"id":index.to_string(),"action":"click",
             "selector":"#noop","observe":true}),
@@ -11890,6 +11899,32 @@ async fn e2e_efficiency_repeated_observations_and_script_advisories() {
             "{response}"
         );
     }
+    // A failed rebind preserves the old browser, but must break the streak.
+    for index in 0..2 {
+        let response = Box::pin(execute_command(
+            &json!({"id":format!("rebind-seed-{index}"),
+            "action":"click","selector":"#noop","observe":true}),
+            &mut state,
+        ))
+        .await;
+        assert_success(&response);
+        assert!(response.pointer("/data/observed/noProgress").is_none());
+    }
+    let failed_launch = Box::pin(execute_command(
+        &json!({"id":"bad-rebind",
+        "action":"launch","cdpUrl":"ws://127.0.0.1:1/devtools/browser/missing"}),
+        &mut state,
+    ))
+    .await;
+    assert_eq!(failed_launch["success"], false, "{failed_launch}");
+    let response = Box::pin(execute_command(
+        &json!({"id":"after-rebind-error",
+        "action":"click","selector":"#noop","observe":true}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&response);
+    assert!(response.pointer("/data/observed/noProgress").is_none());
     let closed = Box::pin(execute_command(
         &json!({"id":"close","action":"close"}),
         &mut state,

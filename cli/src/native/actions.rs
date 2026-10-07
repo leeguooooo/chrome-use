@@ -1693,15 +1693,32 @@ impl Drop for DaemonState {
     }
 }
 
-/// Clear advisory streaks on every path that produced no complete observation,
-/// including policy gates and launch errors that return before dispatch.
+/// Clear advisory streaks when an operation has no complete observation.
+/// The CLI sends launch readiness checks before ordinary commands; a successful
+/// reuse on the same connection/target/session is not a new user operation.
 pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
+    fn context(state: &DaemonState) -> Option<(String, String, String)> {
+        let manager = state.browser.as_ref()?;
+        Some((
+            manager.ws_url().to_string(),
+            manager.active_target_id().ok()?.to_string(),
+            manager.active_session_id().ok()?.to_string(),
+        ))
+    }
+    let before = context(state);
     let response = Box::pin(execute_command_inner(cmd, state)).await;
-    if response["success"] != true
-        || response
-            .pointer("/data/observed/status")
-            .and_then(Value::as_str)
-            != Some("complete")
+    let unchanged_launch = cmd["action"] == "launch"
+        && response["success"] == true
+        && response.pointer("/data/reused").and_then(Value::as_bool) == Some(true)
+        && cmd.get("storageState").is_none()
+        && before.is_some()
+        && before == context(state);
+    if !unchanged_launch
+        && (response["success"] != true
+            || response
+                .pointer("/data/observed/status")
+                .and_then(Value::as_str)
+                != Some("complete"))
     {
         state.progress.reset();
     }
@@ -2022,7 +2039,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // interactive snapshot instead, which is what collapses
     // `navigate` + `snapshot` into one round trip.
     let observe_navigation = observe_requested && NAVIGATION_OBSERVABLE_ACTIONS.contains(&action);
-    if !observe {
+    if !observe && action != "launch" {
         state.progress.reset();
     }
     let observe_baseline = if observe {
