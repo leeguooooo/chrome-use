@@ -458,6 +458,14 @@ or the liveness probe, and leaves it in the foreground. It changes the visible
 tab and may help a background tab respond; activation alone is not evidence
 that page reads work. Read the page again to verify recovery.
 
+A background tab does not need activating to be driven: clicks and typing reach
+it, and a hidden page only runs its timers late (about once a second), so a
+result can land after `--observe` returns "no change". Wait for it
+(`wait --text <expected>`) and re-read before repeating anything. On the relay,
+`tab select|adopt --activate` is refused while another session's tab is in
+front of the same window, because activating yours would hide it and break that
+session's clicks; `--force` overrides that.
+
 If new-tab initialization fails, the error includes the retained target ID. Use
 `tab select <targetId> --activate` with the same session and connection endpoint,
 then `snapshot -i`. Do not repeat `tab new` to recover that target or automatically

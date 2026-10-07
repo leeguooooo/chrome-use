@@ -3054,12 +3054,21 @@ pub fn unchanged_note(
         );
     }
     if hidden {
+        // Not "bring it forward": the input WAS delivered. A hidden page runs
+        // its timers late (at most once a second) and paints nothing, so a
+        // result driven by a setTimeout or a fetch routinely lands after this
+        // observation closed. Telling agents to `--activate` here sent them to
+        // steal the foreground from other sessions sharing the window and to
+        // repeat submissions that had already gone through.
         return "the page is in a background tab (document.visibilityState is `hidden`). \
-                Some pages, sign-in buttons and Discourse forums among them, ignore input \
-                while hidden. Bring it forward with `tab select <this tab> --activate` (this \
-                changes the tab the user sees) and repeat, or hand the step to the user. In a \
-                window shared with another session, activating a tab there hides that \
-                session's tab."
+                The input was delivered, but a hidden page runs its timers late (about once a \
+                second) and does not paint, so the result often arrives after this \
+                observation. Do NOT repeat the action yet, especially a submit: wait for its \
+                result (`wait --text <expected>` or `wait 2000`), then `snapshot -i`. Only if \
+                it still has not reacted does this page ignore input while hidden; then hand \
+                the step to the user, or use `tab select <this tab> --activate`, which \
+                changes the tab the user sees and is refused while another session's tab is \
+                in front of that window."
             .to_string();
     }
     if !in_viewport {
@@ -3612,10 +3621,19 @@ mod tests {
         let offscreen = unchanged_note(false, true, false, None, false);
         assert!(offscreen.contains("outside the viewport"), "{offscreen}");
 
-        // A background tab: some pages ignore input while hidden (#385).
+        // A background tab (#385). The input was delivered; the first move is
+        // to wait and re-read, not to activate (which hides other sessions'
+        // tabs) or to repeat a submit that may already have gone through.
         let hidden = unchanged_note(false, true, true, None, true);
         assert!(hidden.contains("background tab"), "{hidden}");
-        assert!(hidden.contains("--activate"), "{hidden}");
+        assert!(hidden.contains("input was delivered"), "{hidden}");
+        assert!(hidden.contains("Do NOT repeat"), "{hidden}");
+        assert!(hidden.contains("wait --text"), "{hidden}");
+        let wait_at = hidden.find("wait --text").unwrap();
+        let activate_at = hidden
+            .find("--activate")
+            .expect("activation stays the last resort");
+        assert!(wait_at < activate_at, "{hidden}");
         // ...but a disabled or covered target is still the better answer.
         let covered_hidden = unchanged_note(false, true, true, Some("div.modal"), true);
         assert!(covered_hidden.contains("div.modal"), "{covered_hidden}");

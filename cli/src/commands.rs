@@ -2972,11 +2972,14 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         .find(|arg| !arg.starts_with("--"))
                         .ok_or(ParseError::MissingArguments {
                             context: format!("tab {sub}"),
-                            usage: "tab select <ref> [--activate]",
+                            usage: "tab select <ref> [--activate [--force]]",
                         })?;
                     let mut cmd = json!({ "id": id, "action": "tab_switch", "tabId": tab_ref });
                     if rest.iter().any(|a| *a == "--activate" || *a == "--front") {
                         cmd["activate"] = json!(true);
+                    }
+                    if rest.contains(&"--force") {
+                        cmd["forceActivate"] = json!(true);
                     }
                     Ok(cmd)
                 }
@@ -2991,12 +2994,15 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         .find(|arg| !arg.starts_with("--"))
                         .ok_or(ParseError::MissingArguments {
                             context: "tab adopt".to_string(),
-                            usage: "tab adopt <url-substring|targetId> [--activate]",
+                            usage: "tab adopt <url-substring|targetId> [--activate [--force]]",
                         })?;
                     let mut cmd = json!({ "id": id, "action": "tab_adopt", "spec": spec });
                     // Activation is opt-in and must precede the liveness probe.
                     if rest.iter().any(|a| *a == "--activate" || *a == "--front") {
                         cmd["activate"] = json!(true);
+                    }
+                    if rest.contains(&"--force") {
+                        cmd["forceActivate"] = json!(true);
                     }
                     Ok(cmd)
                 }
@@ -3029,6 +3035,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     let mut cmd = json!({ "id": id, "action": "tab_switch", "tabId": tab_ref });
                     if rest.iter().any(|a| *a == "--activate" || *a == "--front") {
                         cmd["activate"] = json!(true);
+                    }
+                    if rest.contains(&"--force") {
+                        cmd["forceActivate"] = json!(true);
                     }
                     Ok(cmd)
                 }
@@ -7149,6 +7158,21 @@ mod tests {
             parse_command(&args("tab switch --activate t2"), &default_flags()).unwrap();
         assert_eq!(switch_front["tabId"], "t2");
         assert_eq!(switch_front["activate"], true);
+        assert!(switch_front.get("forceActivate").is_none());
+
+        // `--force` overrides the refusal to hide another session's front tab.
+        let forced =
+            parse_command(&args("tab select t2 --activate --force"), &default_flags()).unwrap();
+        assert_eq!(forced["tabId"], "t2");
+        assert_eq!(forced["activate"], true);
+        assert_eq!(forced["forceActivate"], true);
+        let adopt_forced = parse_command(
+            &args("tab adopt drama/videos --activate --force"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(adopt_forced["spec"], "drama/videos");
+        assert_eq!(adopt_forced["forceActivate"], true);
     }
 
     #[test]

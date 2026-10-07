@@ -747,6 +747,21 @@ fn session_stop_forced_note(session: &str, tabs: usize) -> String {
     )
 }
 
+/// Why `target`'s daemon is being stopped, for its own agent to read on its
+/// next command — `None` when the caller is stopping its own session. Another
+/// session's `session stop <name>` or `session prune` closes that session's
+/// tabs while its agent may be mid-task; without this its next command opens
+/// a blank tab and answers as if nothing happened.
+fn stopped_from_outside_reason(target: &str, own: &str, command: &str) -> Option<String> {
+    if target == own {
+        return None;
+    }
+    Some(format!(
+        "`chrome-use {command}` run from session `{own}` stopped it at {}",
+        chrono::Local::now().format("%H:%M:%S")
+    ))
+}
+
 fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
     let subcommand = args.get(1).map(|s| s.as_str());
 
@@ -773,6 +788,9 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
             }
             let stopped = (|| -> Result<(), String> {
                 let _lock = connection::lock_session_lifecycle(target)?;
+                if let Some(reason) = stopped_from_outside_reason(target, session, "session stop") {
+                    native::daemon::mark_session_closed(target, &reason);
+                }
                 connection::kill_stale_daemon(target);
                 if connection::has_created_targets(target) {
                     let _ = native::browser::DAEMON_SESSION.set(target.to_string());
@@ -844,6 +862,9 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
                 .map(|s| s.name)
                 .collect();
             for s in &sessions {
+                if let Some(reason) = stopped_from_outside_reason(s, session, "session prune") {
+                    native::daemon::mark_session_closed(s, &reason);
+                }
                 connection::kill_stale_daemon(s);
             }
             if json_mode {
@@ -1269,7 +1290,10 @@ fn run_close_all(flags: &Flags) {
     let mut failed: Vec<(String, String)> = Vec::new();
 
     for (session, pid) in &sessions {
-        let cmd = json!({ "id": gen_id(), "action": "close" });
+        // `closedBy` lets every OTHER session's daemon record that its tabs
+        // were closed from outside, so its own agent is told on its next
+        // command instead of silently getting a fresh about:blank.
+        let cmd = json!({ "id": gen_id(), "action": "close", "closedBy": flags.session });
         match send_command(cmd, session) {
             Ok(resp) if resp.success => closed.push(session.clone()),
             Ok(resp) => {
@@ -3717,6 +3741,17 @@ fn run_batch(flags: &Flags, bail: bool, arg_commands: Option<Vec<Vec<String>>>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Stopping another session leaves it a reason naming who stopped it;
+    /// stopping your own does not.
+    #[test]
+    fn stopping_another_session_is_explained_to_it() {
+        let reason = stopped_from_outside_reason("ab-so2", "ab-hn1", "session prune")
+            .expect("another session is told");
+        assert!(reason.contains("`chrome-use session prune`"), "{reason}");
+        assert!(reason.contains("`ab-hn1`"), "{reason}");
+        assert!(stopped_from_outside_reason("ab-hn1", "ab-hn1", "session stop").is_none());
+    }
 
     #[test]
     fn test_parse_proxy_simple() {

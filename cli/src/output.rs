@@ -3925,6 +3925,9 @@ Operations:
   select <ref> [--activate]  Switch tabs (external: created or adopted only)
   adopt <url|targetId> [--activate]
                              Attach an existing tab without navigating it
+  --force                    With --activate: bring the tab forward even though
+                             another session's tab is in front of that window
+                             (refused without it, since that tab would be hidden)
   inspect <ref>              Read browser-level state (relay requires ab-connect 0.5.16+)
   close [ref]                Close a tab (external: session-created only)
   <ref>                      Switch tabs (external: created or adopted only)
@@ -5372,11 +5375,13 @@ Tabs:
                              Dead relay tab records are removed on reconnect.
   tab new [url] [--activate]
                              Create a tab; --activate raises it before initialization
-  tab select <ref> [--activate]
+  tab select <ref> [--activate [--force]]
                              Select a tab (external: created or adopted only)
-  tab adopt <url|targetId> [--activate]
+  tab adopt <url|targetId> [--activate [--force]]
                              Attach an existing tab (extension or CDP), no reload
-                             --activate (alias --front) leaves the target in front
+                             --activate (alias --front) leaves the target in front;
+                             refused while another session's tab is in front of
+                             that window (it would be hidden) unless --force
   tab inspect <ref>          Browser metadata without page JS (ab-connect 0.5.16+ on relay)
   tab close [ref]            Close a tab (external: session-created only)
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning

@@ -1190,6 +1190,49 @@ fn connection_alive_from_probe(probe: LivenessProbe, is_external_attach: bool) -
     }
 }
 
+/// Another live session's tab is in front of the window an activation would
+/// change (#385): bringing ours forward hides theirs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ForegroundConflict {
+    pub owner: String,
+    pub title: String,
+}
+
+impl ForegroundConflict {
+    /// The warning when `--force` activated anyway.
+    pub fn warning(&self) -> String {
+        foreground_conflict_warning(&self.owner, &self.title)
+    }
+
+    /// Why an activation without `--force` was refused, and what to do
+    /// instead.
+    pub fn refusal(&self) -> String {
+        foreground_conflict_refusal(&self.owner, &self.title)
+    }
+}
+
+/// The error for an activation refused because it would hide another
+/// session's tab. Agents reached for `--activate` because a click on their
+/// background tab "did nothing"; the click had been delivered and the result
+/// was only late, so the right move is to wait and re-read.
+pub(crate) fn foreground_conflict_refusal(owner: &str, title: &str) -> String {
+    let what = if title.is_empty() {
+        "a tab".to_string()
+    } else {
+        format!("a tab (\"{title}\")")
+    };
+    format!(
+        "foreground_in_use: not bringing this tab forward. Session '{owner}' has {what} in \
+         front of the same window, and activating yours would hide it, so that session's \
+         clicks could start doing nothing. Your tab does not need to be in front to be \
+         driven: clicks and typing reach a background tab, and its results just arrive later \
+         (a hidden page runs timers about once a second). Wait for the result \
+         (`wait --text <expected>` or `wait 2000`) and `snapshot -i` before repeating \
+         anything. If this page really ignores input while hidden, hand the step to the user, \
+         or repeat with `--force` to hide session '{owner}''s tab anyway."
+    )
+}
+
 /// The warning for an activation that hid another session's tab (#385).
 pub(crate) fn foreground_conflict_warning(owner: &str, title: &str) -> String {
     let what = if title.is_empty() {
@@ -4092,15 +4135,29 @@ impl BrowserManager {
 
     /// Explicit recovery uses the browser connection before renderer probing.
     /// Returns a warning when the activation hid another session's tab.
-    pub async fn activate_active_tab(&self) -> Result<Option<String>, String> {
+    pub async fn activate_active_tab(&self, force: bool) -> Result<Option<String>, String> {
         let target_id = self.active_target_id()?.to_string();
-        self.activate_target(&target_id).await
+        self.activate_target(&target_id, force).await
     }
 
     /// Browser-level activation must not wait for a blocked renderer session.
-    /// Returns a warning when the activation hid another session's tab.
-    async fn activate_target(&self, target_id: &str) -> Result<Option<String>, String> {
+    ///
+    /// When another live session's tab is in front of the same window, the
+    /// activation is refused unless `force`: bringing this tab forward would
+    /// hide that tab, and a hidden page can ignore its session's clicks
+    /// (#385). Agents sharing the agent window kept doing exactly that to each
+    /// other, each "fixing" its own background tab by breaking another's. With
+    /// `force` it goes ahead and the returned warning names who was hidden.
+    async fn activate_target(
+        &self,
+        target_id: &str,
+        force: bool,
+    ) -> Result<Option<String>, String> {
         let conflict = self.foreground_conflict(target_id).await;
+        if let (Some(conflict), false) = (&conflict, force) {
+            return Err(conflict.refusal());
+        }
+        let conflict = conflict.map(|c| c.warning());
         self.client
             .send_command(
                 "Target.activateTarget",
@@ -4116,7 +4173,7 @@ impl BrowserManager {
     /// ignore input (#385), so two sessions sharing a window keep breaking each
     /// other's clicks without either seeing why. Best effort: any failure to
     /// find out returns `None`.
-    async fn foreground_conflict(&self, target_id: &str) -> Option<String> {
+    async fn foreground_conflict(&self, target_id: &str) -> Option<ForegroundConflict> {
         if !self.on_relay() {
             return None;
         }
@@ -4170,8 +4227,12 @@ impl BrowserManager {
         })
         .await
         .ok()??;
-        let title = front.get("title").and_then(Value::as_str).unwrap_or("");
-        Some(foreground_conflict_warning(&owner, title))
+        let title = front
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Some(ForegroundConflict { owner, title })
     }
 
     pub async fn set_timezone(&self, timezone_id: &str) -> Result<(), String> {
@@ -4813,7 +4874,8 @@ impl BrowserManager {
     }
 
     pub async fn tab_switch_by_id(&mut self, tab_id: u32) -> Result<Value, String> {
-        self.tab_switch_by_id_with_activation(tab_id, false).await
+        self.tab_switch_by_id_with_activation(tab_id, false, false)
+            .await
     }
 
     /// Check ownership before activation, then initialize the requested renderer.
@@ -4821,6 +4883,7 @@ impl BrowserManager {
         &mut self,
         tab_id: u32,
         activate: bool,
+        force_activate: bool,
     ) -> Result<Value, String> {
         let index = self
             .pages
@@ -4838,7 +4901,7 @@ impl BrowserManager {
         let mut warning = None;
         if activate {
             let target_id = target.target_id.clone();
-            warning = self.activate_target(&target_id).await?;
+            warning = self.activate_target(&target_id, force_activate).await?;
         }
         let mut switched = self.tab_switch(index).await?;
         if let (Some(w), Some(obj)) = (warning, switched.as_object_mut()) {
@@ -5270,6 +5333,30 @@ mod tests {
         assert!(w.contains("Log in - OpenAI"), "{w}");
         assert!(w.contains("separate window"), "{w}");
         assert!(foreground_conflict_warning("x", "").contains("its tab"));
+    }
+
+    /// Activating over another session's front tab is refused by default. The
+    /// error has to give the agent the move that actually helps (the click was
+    /// delivered; wait and re-read) before the override, and must be
+    /// recognisable so `tab adopt` can keep the adopt and report it.
+    #[test]
+    fn foreground_conflict_refusal_says_wait_first_and_force_last() {
+        let conflict = ForegroundConflict {
+            owner: "ab-hn2".to_string(),
+            title: "Checkout".to_string(),
+        };
+        let r = conflict.refusal();
+        assert!(r.starts_with("foreground_in_use:"), "{r}");
+        assert!(r.contains("'ab-hn2'"), "{r}");
+        assert!(r.contains("Checkout"), "{r}");
+        assert!(r.contains("reach a background tab"), "{r}");
+        let wait_at = r.find("wait --text").expect("says to wait");
+        let force_at = r.find("--force").expect("names the override");
+        assert!(wait_at < force_at, "{r}");
+        assert_eq!(
+            conflict.warning(),
+            foreground_conflict_warning("ab-hn2", "Checkout")
+        );
     }
 
     use super::url_matches_adopt_spec;

@@ -577,6 +577,12 @@ pub struct DaemonState {
     pub mouse_state: MouseState,
     /// Tracks the currently open JavaScript dialog (alert/confirm/prompt), if any.
     pub pending_dialog: Option<PendingDialog>,
+    /// Why this session's previous browser or tabs are gone, read by the
+    /// client's auto-connect `launch` (sent before the first command of a fresh
+    /// daemon) and reported on the next real command's reply. Without it a
+    /// fresh daemon on the relay connected in that `launch`, so the command
+    /// that followed found a browser and never said the old tabs were gone.
+    replaced_browser_pending: Option<String>,
     /// When true, automatically dismiss `beforeunload` dialogs and accept `alert`
     /// dialogs so they never block the agent.  Enabled by default.
     pub auto_dialog: bool,
@@ -652,6 +658,7 @@ impl DaemonState {
             dialog_handler_task: None,
             mouse_state: MouseState::default(),
             pending_dialog: None,
+            replaced_browser_pending: None,
             auto_dialog: !matches!(
                 env::var("AGENT_BROWSER_NO_AUTO_DIALOG").as_deref(),
                 Ok("1" | "true" | "yes")
@@ -1771,6 +1778,18 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // previous one, so the reply can say so instead of describing the fresh
     // `about:blank` as if it were the page they left (issue #216).
     let mut replaced_browser: Option<String> = None;
+    // A fresh daemon on the relay is connected by the client's `launch`, which
+    // comes before the agent's own command and whose reply nobody reads. Take
+    // the marker there and report it on the command that follows.
+    if action == "launch" {
+        if state.browser.is_none() {
+            if let Some(reason) = super::daemon::take_reaped_marker(&state.session_id) {
+                state.replaced_browser_pending = Some(reason);
+            }
+        }
+    } else if let Some(reason) = state.replaced_browser_pending.take() {
+        replaced_browser = Some(reason);
+    }
     let skip_launch = matches!(
         action,
         "" | "launch"
@@ -2031,7 +2050,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             "site" => handle_site(cmd, state).await,
             "site_analyze" => handle_site_analyze(cmd, state).await,
             "script" => super::script::handle_script(cmd, state).await,
-            "close" => handle_close(state).await,
+            "close" => handle_close(cmd, state).await,
             "keep" => handle_keep(cmd, state).await,
             "stealth_status" => handle_stealth_status(state).await,
             "snapshot" => handle_snapshot(cmd, state).await,
@@ -2500,14 +2519,9 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // without this line concludes the page navigated away, and a human who left
     // a form half-filled is told nothing at all.
     if let Some(why) = replaced_browser {
+        let on_relay = state.browser.as_ref().is_some_and(|m| m.on_relay());
         if let Some(obj) = resp.as_object_mut() {
-            let note = format!(
-                "This session's previous browser is gone ({why}) and a fresh one was launched \
-                 for this command — anything open in the old window, including typed input, is \
-                 not here. A launched browser is reaped after the daemon sits idle \
-                 (AGENT_BROWSER_IDLE_TIMEOUT_MS, default 600000ms; set 0 to keep it). While a \
-                 human is working in the window, `session handoff` also holds it open."
-            );
+            let note = replaced_browser_note(&why, on_relay);
             match obj.get("warning").and_then(|v| v.as_str()) {
                 Some(existing) => {
                     let merged = format!("{note}\n{existing}");
@@ -5284,10 +5298,16 @@ async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     }))
 }
 
-async fn handle_close(state: &mut DaemonState) -> Result<Value, String> {
+async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     // A closed session is no longer a launched one; the next command picks its
     // browser from its own flags again.
     crate::connection::clear_session_launched(&state.session_id);
+    // `close --all` from another session: this session's agent did not ask for
+    // it and is probably mid-task. Leave a marker so its next command says its
+    // tabs were closed, instead of quietly answering from a fresh about:blank.
+    if let Some(reason) = closed_by_other_session_reason(cmd, &state.session_id) {
+        super::daemon::mark_session_closed(&state.session_id, &reason);
+    }
     // A fresh daemon after idle has no manager, but still owns the external tabs
     // recorded by its predecessor. Explicit close must not silently ignore them.
     if state.browser.is_none() {
@@ -10180,6 +10200,7 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 cmd.get("activate")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                force_activate(cmd),
             )
             .await;
         let new_target = mgr.active_target_id().ok().map(ToString::to_string);
@@ -10400,12 +10421,21 @@ async fn handle_tab_adopt(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        let warning = state
+        let activation = state
             .browser
             .as_ref()
             .ok_or("Browser not launched")?
-            .activate_active_tab()
-            .await?;
+            .activate_active_tab(force_activate(cmd))
+            .await;
+        // The adopt itself already happened; a refused activation (another
+        // session's tab in front) is reported on it rather than undoing it.
+        let warning = match activation {
+            Ok(warning) => warning,
+            Err(e) if e.starts_with("foreground_in_use:") => {
+                Some(format!("adopted, but left in the background: {e}"))
+            }
+            Err(e) => return Err(e),
+        };
         if let (Some(w), Some(obj)) = (warning, result.as_object_mut()) {
             append_warning(obj, &w);
         }
@@ -11829,6 +11859,61 @@ async fn handle_innerhtml(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     )
     .await?;
     Ok(json!({ "html": html }))
+}
+
+/// `--force` on `tab select|adopt --activate`: bring the tab forward even
+/// though another live session's tab is in front of that window.
+fn force_activate(cmd: &Value) -> bool {
+    cmd.get("forceActivate")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Why this session's browser was closed by someone else, when the `close`
+/// came from `close --all` run in a different session (`closedBy`). `None`
+/// for the session's own `close`: its agent asked for it and knows.
+fn closed_by_other_session_reason(cmd: &Value, own_session: &str) -> Option<String> {
+    let by = cmd.get("closedBy").and_then(Value::as_str)?.trim();
+    if by.is_empty() || by == own_session {
+        return None;
+    }
+    Some(format!(
+        "`chrome-use close --all` run from session `{by}` closed it at {}",
+        chrono::Local::now().format("%H:%M:%S")
+    ))
+}
+
+/// The warning on the first reply after this session's browser or tabs were
+/// replaced (issue #216). Pure so the wording is testable.
+///
+/// On the extension relay nothing was launched: the session's tabs in the
+/// user's Chrome were closed and this command opened a blank one. That case
+/// matters most, because several agents share that Chrome, and one of them
+/// closing everything otherwise looks exactly like the page resetting itself:
+/// the agent fills the form again and submits it twice.
+fn replaced_browser_note(why: &str, on_relay: bool) -> String {
+    let mut note = if on_relay {
+        format!(
+            "This session's previous tabs are gone ({why}); this command ran in a new blank \
+             tab. Anything open there, including typed input, is not here. If you were partway \
+             through a form or had just submitted one, check whether it already went through \
+             before doing it again."
+        )
+    } else {
+        format!(
+            "This session's previous browser is gone ({why}) and a fresh one was launched \
+             for this command — anything open in the old window, including typed input, is \
+             not here."
+        )
+    };
+    if why.starts_with("the idle timeout") {
+        note.push_str(
+            " A launched browser is reaped after the daemon sits idle \
+             (AGENT_BROWSER_IDLE_TIMEOUT_MS, default 600000ms; set 0 to keep it). While a \
+             human is working in the window, `session handoff` also holds it open.",
+        );
+    }
+    note
 }
 
 /// Run a command, and once more if another extension's frame blocked the tab
@@ -18740,6 +18825,57 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    /// `close --all` run by one agent closed every other agent's tab mid-task;
+    /// their next command came back from a fresh about:blank with no warning,
+    /// and they filled and submitted the form again. Only a close that came
+    /// from a different session is recorded: a session's own `close` was asked
+    /// for by its own agent.
+    #[test]
+    fn a_close_from_another_session_is_recorded_and_an_own_close_is_not() {
+        let other = closed_by_other_session_reason(
+            &json!({ "action": "close", "closedBy": "ab-hn1" }),
+            "ab-so2",
+        )
+        .expect("a close from another session is recorded");
+        assert!(other.contains("close --all"), "{other}");
+        assert!(other.contains("`ab-hn1`"), "{other}");
+
+        assert!(closed_by_other_session_reason(
+            &json!({ "action": "close", "closedBy": "ab-so2" }),
+            "ab-so2"
+        )
+        .is_none());
+        assert!(closed_by_other_session_reason(&json!({ "action": "close" }), "ab-so2").is_none());
+        assert!(closed_by_other_session_reason(
+            &json!({ "action": "close", "closedBy": "  " }),
+            "ab-so2"
+        )
+        .is_none());
+    }
+
+    /// On the relay the warning talks about tabs, names who closed them and
+    /// says to check before redoing a submission; the idle-reap advice only
+    /// rides along when the idle timeout was the cause.
+    #[test]
+    fn the_replaced_browser_note_fits_the_cause() {
+        let relay = replaced_browser_note(
+            "`chrome-use close --all` run from session `ab-hn1` closed it at 09:41:15",
+            true,
+        );
+        assert!(relay.contains("previous tabs are gone"), "{relay}");
+        assert!(relay.contains("`ab-hn1`"), "{relay}");
+        assert!(relay.contains("new blank tab"), "{relay}");
+        assert!(relay.contains("already went through"), "{relay}");
+        assert!(!relay.contains("IDLE_TIMEOUT"), "{relay}");
+
+        let idle = replaced_browser_note(
+            "the idle timeout closed it after 600000ms with no commands",
+            false,
+        );
+        assert!(idle.contains("fresh one was launched"), "{idle}");
+        assert!(idle.contains("AGENT_BROWSER_IDLE_TIMEOUT_MS"), "{idle}");
+    }
+
     /// An empty tree has two very different causes, and the output cannot tell
     /// them apart on its own (issues #206 and #215). Canvas wins when both
     /// hold: a canvas app has no tree to render whether or not anyone is
