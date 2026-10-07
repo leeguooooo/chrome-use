@@ -691,6 +691,15 @@ fn search_queries(draft: &Draft) -> Vec<String> {
             words.join(" ")
         ));
     }
+    // The same title (an earlier agent report, or the `--title` the agent
+    // chose to match an issue it already knows) counts as the same failure.
+    let title: String = draft.title.chars().filter(|c| *c != '"').collect();
+    if !title.trim().is_empty() {
+        q.push(format!(
+            "repo:{REPO} is:issue is:open in:title \"{}\"",
+            title.trim()
+        ));
+    }
     q
 }
 
@@ -1499,5 +1508,26 @@ mod tests {
         assert!(o.submit && o.yes && o.new);
         assert!(parse_opts(&a(&["--bogus"]), &[]).is_err());
         assert!(parse_opts(&a(&["--last"]), &[]).is_err());
+    }
+
+    #[test]
+    fn the_search_looks_for_the_signature_the_words_and_the_title() {
+        let entries = vec![
+            rec(1, "s", "click", "Element not found: #a"),
+            rec(2, "s", "click", "Element not found: #b"),
+        ];
+        let d = build_draft(&entries, Some("My \"quoted\" title"), None, "- env");
+        let q = search_queries(&d);
+        assert_eq!(q.len(), 3, "{q:?}");
+        assert!(q[0].ends_with("\"cu-sig-2b1cedf4\""), "{}", q[0]);
+        assert!(
+            q[1].ends_with("in:title click element not found"),
+            "{}",
+            q[1]
+        );
+        assert!(q[2].ends_with("in:title \"My quoted title\""), "{}", q[2]);
+        assert!(q
+            .iter()
+            .all(|x| x.starts_with("repo:leeguooooo/chrome-use is:issue is:open")));
     }
 }
