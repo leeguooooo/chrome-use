@@ -18,7 +18,7 @@ at the end only when the task or a symptom needs it.
 | Public article or docs URL | `chrome-use read <url>` |
 | Active logged-in page | `chrome-use read` |
 | Structured data from a supported site | listed `site <name>/<cmd>` adapter |
-| Table or repeating records | `extract --schema '{rows,fields}'` |
+| Table or repeating records | `extract --schema '{"rows":"tbody tr","fields":{"job":"td:nth-child(1)","status":"td:nth-child(2)"}}'` |
 | Operate controls | `snapshot -i`, then refs |
 | Bookmarked page | `find-url <keywords>` |
 | Image, visual or canvas state | `screenshot` or `canvas capture` |

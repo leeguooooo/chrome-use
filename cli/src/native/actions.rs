@@ -8830,7 +8830,51 @@ async fn wait_for_text(
         "(document.body.innerText || '').includes({})",
         serde_json::to_string(text).unwrap_or_default()
     );
-    poll_until_true(client, session_id, &check_fn, timeout_ms).await
+    let result = poll_until_true(client, session_id, &check_fn, timeout_ms).await;
+    let Err(e) = result else {
+        return Ok(());
+    };
+    // A wait on the wrong capitalisation ("Grand Total" for "Grand total")
+    // times out with nothing to show for it, and agents then fall back to
+    // `eval`. Name the page's actual wording when it differs only in case or
+    // spacing.
+    let probe = format!(
+        "(() => {{ const want = {}.toLowerCase().replace(/\\s+/g, ' ').trim(); \
+         const body = (document.body.innerText || '').replace(/\\s+/g, ' '); \
+         const i = body.toLowerCase().indexOf(want); \
+         return want && i >= 0 ? body.slice(i, i + want.length) : null; }})()",
+        serde_json::to_string(text).unwrap_or_default()
+    );
+    let near = tokio::time::timeout(
+        Duration::from_secs(3),
+        client.send_command(
+            "Runtime.evaluate",
+            Some(serde_json::json!({ "expression": probe, "returnByValue": true })),
+            Some(session_id),
+        ),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .and_then(|v| {
+        v.pointer("/result/value")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    });
+    Err(near_text_hint(e, text, near.as_deref()))
+}
+
+/// Add the page's actual wording to a `wait --text` timeout when it differs
+/// from the requested text only in case or spacing.
+fn near_text_hint(error: String, wanted: &str, near: Option<&str>) -> String {
+    match near {
+        Some(n) if n != wanted => format!(
+            "{error}: the page does show \"{n}\", which differs from \"{wanted}\" only in \
+             case or spacing (`--text` is exact). Use `wait --text \"{n}\"`, or read it now: \
+             the text is already on the page."
+        ),
+        _ => error,
+    }
 }
 
 async fn wait_for_function(
@@ -21483,5 +21527,28 @@ mod pick_tests {
         assert_eq!(pick_available(&s(&["A", "B", "A"])), "\"A\", \"B\"");
         let many: Vec<String> = (0..20).map(|i| format!("o{i}")).collect();
         assert!(pick_available(&many).ends_with("(+5 more)"));
+    }
+}
+
+#[cfg(test)]
+mod near_text_hint_tests {
+    use super::near_text_hint;
+
+    #[test]
+    fn names_the_pages_wording_when_only_case_differs() {
+        let e = near_text_hint(
+            "Wait timed out after 25000ms".into(),
+            "Grand Total",
+            Some("Grand total"),
+        );
+        assert!(e.starts_with("Wait timed out after 25000ms"), "{e}");
+        assert!(e.contains("wait --text \"Grand total\""), "{e}");
+    }
+
+    #[test]
+    fn leaves_the_error_alone_without_a_near_match() {
+        let e = "Wait timed out after 5000ms".to_string();
+        assert_eq!(near_text_hint(e.clone(), "Saved", None), e);
+        assert_eq!(near_text_hint(e.clone(), "Saved", Some("Saved")), e);
     }
 }
