@@ -63,23 +63,18 @@ pub async fn run_js(
             continue;
         }
         let result = Box::pin(execute_command(&msg.cmd, state)).await;
-        collect_advisory(&result, &mut advisories);
+        super::progress::collect_advisories(&result, &mut advisories);
         let _ = msg.reply.send(result);
     }
 
     match engine.await {
         Ok(Ok(ret)) => Ok(json!({ "return": ret, "logs": logs, "advisories": advisories })),
-        Ok(Err(e)) => Err(e),
-        Err(e) => Err(format!("script engine thread failed: {}", e)),
-    }
-}
-
-/// Keep bounded advisory evidence even when a script ignores a cu.* return.
-fn collect_advisory(response: &Value, advisories: &mut Vec<Value>) {
-    if advisories.len() < 20 {
-        if let Some(advisory) = response.pointer("/data/observed/noProgress") {
-            advisories.push(advisory.clone());
+        Ok(Err(e)) => {
+            Ok(json!({"ok":false,"return":null,"error":e,"logs":logs,"advisories":advisories}))
         }
+        Err(e) => Ok(
+            json!({"ok":false,"return":null,"error":format!("script engine thread failed: {e}"),"logs":logs,"advisories":advisories}),
+        ),
     }
 }
 
@@ -205,8 +200,8 @@ const CU_PRELUDE: &str = r#"
 globalThis.cu = {
   _call(action, params) {
     const r = JSON.parse(__cu(action, JSON.stringify(params || {})));
-    if (!r || r.success !== true) {
-      throw new Error((r && r.error) || ('cu.' + action + ' failed'));
+    if (!r || r.success !== true || (action === 'script' && r.data && r.data.ok === false)) {
+      throw new Error((r && (r.error || (r.data && r.data.error))) || ('cu.' + action + ' failed'));
     }
     return r.data;
   },
@@ -388,7 +383,7 @@ pub async fn run_js_in(
             continue;
         }
         let result = Box::pin(execute_command(&msg.cmd, state)).await;
-        collect_advisory(&result, &mut advisories);
+        super::progress::collect_advisories(&result, &mut advisories);
         let _ = msg.reply.send(result);
     }
 
@@ -400,12 +395,14 @@ pub async fn run_js_in(
         Ok(Ok(ret)) => {
             Ok(json!({ "return": ret, "logs": logs, "advisories": advisories, "context": name }))
         }
-        Ok(Err(e)) => Err(e),
+        Ok(Err(e)) => Ok(
+            json!({"ok":false,"return":null,"error":e,"logs":logs,"advisories":advisories,"context":name}),
+        ),
         Err(_) => {
             state.script_contexts.map.remove(name);
-            Err(format!(
+            Ok(json!({"ok":false,"return":null,"error":format!(
                 "script context `{name}` ended without a result; it has been released"
-            ))
+            ),"logs":logs,"advisories":advisories,"context":name}))
         }
     }
 }
@@ -578,18 +575,18 @@ mod persistent_context_tests {
 
 #[cfg(test)]
 mod advisory_tests {
-    use super::*;
+    use serde_json::json;
 
     #[test]
     fn discarded_script_results_still_collect_bounded_advisories() {
         let mut advisories = Vec::new();
-        collect_advisory(
+        crate::native::progress::collect_advisories(
             &json!({"success":true,"data":{"result":"ordinary"}}),
             &mut advisories,
         );
         assert!(advisories.is_empty());
         for _ in 0..25 {
-            collect_advisory(
+            crate::native::progress::collect_advisories(
                 &json!({"success":true,"data":{"observed":{"noProgress":
                 {"hint":"Inspect state", "retryAction":false}}}}),
                 &mut advisories,

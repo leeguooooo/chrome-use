@@ -11869,6 +11869,27 @@ async fn e2e_efficiency_repeated_observations_and_script_advisories() {
             .any(|advisory| advisory["attempts"].as_u64().is_some_and(|n| n >= 3)),
         "{response}"
     );
+    let failed_source = "for (let i = 0; i < 3; i++) cu._call('click', {selector:'#noop', observe:true}); throw new Error('after actions');";
+    for program in [
+        json!({"id":"failed-js","action":"script","source":failed_source}),
+        json!({"id":"nested-json","action":"script","program":[
+            {"do":"script","source":failed_source}
+        ]}),
+        json!({"id":"nested-js","action":"script","source":format!(
+            "cu._call('script', {{source:{}}});", serde_json::to_string(failed_source).unwrap())}),
+    ] {
+        let response = Box::pin(execute_command(&program, &mut state)).await;
+        assert_success(&response); // script transport success is separate from program ok.
+        assert_eq!(response["data"]["ok"], false, "{response}");
+        assert!(
+            response["data"]["advisories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|advisory| advisory["attempts"].as_u64().is_some_and(|n| n >= 3)),
+            "{response}"
+        );
+    }
     let closed = Box::pin(execute_command(
         &json!({"id":"close","action":"close"}),
         &mut state,

@@ -40,6 +40,7 @@ enum Flow {
 struct Ctx {
     vars: Map<String, Value>,
     steps: Vec<Value>,
+    advisories: Vec<Value>,
     start: Instant,
     budget: Option<Duration>,
     auto_confirm: bool,
@@ -97,7 +98,7 @@ pub async fn handle_script(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 Ok(data) => {
                     let mut obj = data;
                     if let Some(m) = obj.as_object_mut() {
-                        m.insert("ok".to_string(), json!(true));
+                        m.entry("ok").or_insert(json!(true));
                     }
                     Ok(obj)
                 }
@@ -114,7 +115,7 @@ pub async fn handle_script(cmd: &Value, state: &mut DaemonState) -> Result<Value
             Ok(data) => {
                 let mut obj = data;
                 if let Some(m) = obj.as_object_mut() {
-                    m.insert("ok".to_string(), json!(true));
+                    m.entry("ok").or_insert(json!(true));
                 }
                 Ok(obj)
             }
@@ -143,6 +144,7 @@ pub async fn handle_script(cmd: &Value, state: &mut DaemonState) -> Result<Value
     let mut ctx = Ctx {
         vars: Map::new(),
         steps: Vec::new(),
+        advisories: Vec::new(),
         start: Instant::now(),
         budget: cmd
             .get("timeout_ms")
@@ -172,6 +174,7 @@ pub async fn handle_script(cmd: &Value, state: &mut DaemonState) -> Result<Value
         "return": ret,
         "vars": Value::Object(ctx.vars),
         "steps": ctx.steps,
+        "advisories": ctx.advisories,
         "timedOut": timed_out,
         "error": err,
     }))
@@ -291,12 +294,24 @@ async fn run_action(
         }
     }
 
+    super::progress::collect_advisories(&resp, &mut ctx.advisories);
     let ok = resp
         .get("success")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(false)
+        && (alias_action(verb) != "script" || resp.pointer("/data/ok") == Some(&json!(true)));
     let data = resp.get("data").cloned().unwrap_or(Value::Null);
-    let errmsg = resp.get("error").and_then(|v| v.as_str()).map(String::from);
+    let errmsg = resp
+        .get("error")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            if ok {
+                None
+            } else {
+                data.get("error").and_then(Value::as_str)
+            }
+        })
+        .map(String::from);
 
     let mut step = json!({ "op": verb, "ok": ok, "error": errmsg });
     if let Some(advisory) = data.pointer("/observed/noProgress") {
