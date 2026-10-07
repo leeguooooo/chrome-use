@@ -3040,8 +3040,11 @@ impl BrowserManager {
                 .map_err(|e| {
                     if e == MENU_STILL_OPEN_IN_FRONT {
                         format!(
-                            "{MENU_STILL_OPEN}, twice: the page probably puts the cursor back \
-                             into its login field whenever the tab is shown, which reopens the menu"
+                            "{MENU_STILL_OPEN}, twice. Either the page puts the cursor back \
+                             into its login field whenever the tab is shown, which reopens the \
+                             menu, or the frame is the password manager's \"save login?\" bar \
+                             (it appears after a sign-in and does not close when the tab is \
+                             hidden; the user closes it with its X or Save)"
                         )
                     } else {
                         e

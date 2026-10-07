@@ -17957,7 +17957,27 @@ async fn auth_submit(
                 == Some(Value::Bool(true));
             if ready {
                 interaction::press_key(client, &scope.page_session, "space").await?;
-                tokio::time::sleep(Duration::from_millis(150)).await;
+                // The click normally lands with the key-up; give a slow page a
+                // moment before the DOM click below, so it is never clicked twice.
+                let tag_json = tag_json.clone();
+                for _ in 0..4 {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let seen = scope_eval(
+                        client,
+                        scope,
+                        &format!(
+                            "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+                             return !b || !!b[Symbol.for('cu-clicked')]; }})()"
+                        ),
+                        true,
+                    )
+                    .await;
+                    match seen {
+                        Ok(r) if r.result.value == Some(Value::Bool(true)) => break,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
             }
             // Not focused: no key went out, so the DOM click below is the only one.
             let clicked = scope_eval(
@@ -18050,9 +18070,11 @@ async fn auth_close_menu_after(mgr: &mut BrowserManager, closed: &mut u32) -> Op
             None
         }
         Err(why) => Some(format!(
-            "a password manager's inline menu is open on the page now (another extension's \
-             frame; Chrome refuses every debugger command on the tab while it is there), and \
-             chrome-use could not close it: {why}"
+            "a password manager's frame is open on the page now (its inline menu on the next \
+             page's field, or its \"save login?\" bar after the sign-in; Chrome refuses every \
+             debugger command on the tab while it is there), and chrome-use could not close it: \
+             {why}. A \"save login?\" bar does not close when the tab is hidden: the user closes \
+             it (its X or Save)"
         )),
     }
 }
