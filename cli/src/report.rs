@@ -1052,8 +1052,14 @@ const WEB_FORM_JS: &str = r#"(() => {
   if (P.needle) {
     const text = document.body ? document.body.innerText : '';
     for (let i = text.indexOf(P.needle); i >= 0; i = text.indexOf(P.needle, i + 1)) needleCount++;
-    const boxes = [...document.querySelectorAll('[id^="issuecomment-"]')].filter(e => e.innerText.includes(P.needle));
-    if (boxes.length) anchor = boxes[boxes.length - 1].id;
+    // The id sits on the comment's header; its text is in an ancestor that
+    // holds no other comment.
+    for (const e of document.querySelectorAll('[id^="issuecomment-"]')) {
+      for (let n = e, i = 0; n && i < 8; n = n.parentElement, i++) {
+        if (n.querySelectorAll('[id^="issuecomment-"]').length > 1) break;
+        if (n.innerText.includes(P.needle)) { anchor = e.id; break; }
+      }
+    }
   }
   return JSON.stringify({
     ready: document.readyState, login, url: location.href,
