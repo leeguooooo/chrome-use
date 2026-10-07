@@ -355,6 +355,26 @@ fn print_site_analyze(data: &serde_json::Value, strategy: &str, next: &[serde_js
     }
 }
 
+/// The one stderr line for a `reportSuggestion` / `reportHint`, unless the
+/// agent's shell opted out (`AGENT_BROWSER_NO_REPORT_HINTS=1`; the daemon may
+/// have been started before that was set).
+fn report_nudge_line(data: Option<&serde_json::Value>) -> Option<String> {
+    if std::env::var_os("AGENT_BROWSER_NO_REPORT_HINTS").is_some() {
+        return None;
+    }
+    let data = data?;
+    if let Some(msg) = data
+        .get("reportSuggestion")
+        .and_then(|s| s.get("message"))
+        .and_then(|v| v.as_str())
+    {
+        return Some(msg.to_string());
+    }
+    data.get("reportHint")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
 pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
     print_response_body(resp, action, opts);
     // A @ref that landed on a node other than the one its snapshot recorded:
@@ -371,6 +391,14 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             if let Some(line) = relocation_line(r) {
                 eprintln!("{} {}", color::warning_indicator(), line);
             }
+        }
+    }
+    // The nudge toward `chrome-use report` — failed responses included, since
+    // the repeated failure is usually the one carrying it. In --json mode it
+    // rides in the payload instead.
+    if !opts.json {
+        if let Some(line) = report_nudge_line(resp.data.as_ref()) {
+            eprintln!("{}", color::dim(&line));
         }
     }
     // Every successful text response gets its observation, including branches
@@ -3257,6 +3285,57 @@ turns "what should we improve" into real usage data instead of guesswork.
 
 Privacy: LOCAL ONLY — never uploaded. Records the host (e.g. example.com), never
 the full URL/query/params. Opt out entirely: AGENT_BROWSER_NO_FRICTION_LOG=1.
+To send the maintainers a redacted draft of it: `chrome-use report`.
+"##
+        }
+
+        // === Bug report ===
+        "report" => {
+            r##"
+chrome-use report - Draft (and, with the user's OK, file) a GitHub issue
+
+Usage:
+  chrome-use report [--note "<what you were trying to do>"] [--title <t>]
+                    [--last <n>] [--this-session | --any-session] [--json]
+  chrome-use report --submit [--yes] [--new] [--dry-run]
+
+For when chrome-use got in your way: a command failed and you worked around
+it, an error sent you the wrong way, or a feature was missing. At the end of
+the task, offer the user `chrome-use report`; file only once they say yes.
+
+  (no flags)       Print a redacted markdown draft from the friction log, the
+                   open issues that already track the same failure, and where
+                   it would go. Sends nothing.
+  --note <text>    What you were trying to do. Also enough on its own to report
+                   something that did not fail (a missing feature).
+  --title <t>      Issue title (default: the most frequent failure).
+  --last <n>       Draft from the last n failures (default 20).
+  --this-session   Only this session's failures (default: this session's from
+                   the last 6 hours when it has any, else all). --any-session
+                   ignores sessions.
+  --submit         File it. Refused unless --yes, AGENT_BROWSER_REPORT_AUTO=1,
+                   or "report": {"auto": true} in ~/.chrome-use/config.json.
+  --yes            The user approved this report just now.
+  --new            File a new issue even if one tracks the same failure
+                   (default: a "+1, also seen on …" comment there).
+  --dry-run        With --submit: check consent and show the plan, send nothing.
+  --open           Open the prefilled new-issue page in the browser.
+  --no-search      Skip the search for existing issues.
+
+Filing tries, in order: `gh` when it is authenticated; the github/issue-create
+site adapter in your logged-in Chrome; a prefilled
+https://github.com/leeguooooo/chrome-use/issues/new URL to open (body cut to
+fit). Existing issues are found by the failure's signature (cu-sig-…, the same
+command + error) via gh, the public GitHub search API, or site github/issues.
+
+Redacted: URL query strings and fragments, cookies, tokens, auth headers,
+typed values, emails, home-directory paths (→ ~), and anything shaped like a
+secret. Host names are kept. Screenshots are never attached.
+
+Nudges: when the same failure repeats in a session, or an `eval` follows a
+failed command, the response carries `reportSuggestion` and one stderr line;
+`close` mentions `report` after 3+ failures. Opt out:
+AGENT_BROWSER_NO_REPORT_HINTS=1.
 "##
         }
 
@@ -5365,6 +5444,8 @@ Core Commands:
                              per-field status + inline validation errors
   friction [--json|--clear]  Local log of failed commands (what's painful to
                              drive) — local only, never uploaded
+  report [--note <t>] [--submit --yes]  Draft a redacted GitHub issue from it;
+                             files (or +1s an existing one) only with the user's OK
   screenshot [path]          Take screenshot (auto-downscaled to ≤1200px long edge;
                              --max-width/--max-height/--scale to override; --annotate
                              refreshes labels without invalidating existing refs)

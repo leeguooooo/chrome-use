@@ -173,5 +173,45 @@ owned-target reannouncement behavior.
 ## Friction log and bug reports
 
 Unexpected failures are logged locally by `chrome-use friction` (disable with
-`AGENT_BROWSER_NO_FRICTION_LOG=1`). If reporting a bug is authorized, include
-the exact command and observed result, with secrets and private content removed.
+`AGENT_BROWSER_NO_FRICTION_LOG=1`). Nothing leaves the machine until a report
+is filed with the user's OK.
+
+**When to offer a report.** chrome-use got in your way: a command failed and
+you worked around it (often with `eval`), an error sent you the wrong way, or
+a feature you needed was missing. Finish the task first, then offer it in one
+line. chrome-use nudges at those moments: a response carries
+`reportSuggestion` (plus one stderr line) when the same failure repeats in a
+session or an `eval` follows a failed command, and `close` mentions `report`
+after three or more failures. Each nudge appears once per failure per session;
+`AGENT_BROWSER_NO_REPORT_HINTS=1` turns them off.
+
+**The flow.**
+
+```bash
+# 1. Draft. Sends nothing; prints the markdown, matching open issues, and
+#    where it would go. Use the session you were driving.
+chrome-use report --session <name> --note "export the orders table as CSV"
+# 2. Show the draft to the user and ask. Only with their yes:
+chrome-use report --session <name> --note "…" --submit --yes
+```
+
+- The draft comes from this session's failures of the last six hours (else
+  the most recent ones); `--last N`, `--this-session` and `--any-session`
+  change that. `--title` overrides the generated title. A `--note` alone is
+  enough to report a missing feature.
+- Redacted before printing: URL query strings and fragments, cookies, tokens
+  and auth headers, typed values, emails, home-directory paths (shown as `~`),
+  and anything shaped like a secret. Host names stay. Read the draft anyway;
+  screenshots are never attached and nothing redacts pixels.
+- Duplicates: the draft carries a signature (`cu-sig-…`, the command plus the
+  error's stable words). If an open issue already has it, `--submit` posts
+  "+1, also seen on <version, platform, mode>" there instead of a new issue;
+  `--new` files a separate one. The search uses `gh`, else the public GitHub
+  API, else `site github/issues` in the user's Chrome.
+- Filing uses `gh` when it is logged in, else the `github/issue-create`
+  adapter in the user's logged-in Chrome, else it prints a prefilled
+  new-issue URL for the user to open (the body is cut to fit).
+- Consent: `--submit` refuses without `--yes`, unless the user pre-approved
+  with `AGENT_BROWSER_REPORT_AUTO=1` or `"report": {"auto": true}` in
+  `~/.chrome-use/config.json`. Never pass `--yes` on your own judgement.
+  `--submit --yes --dry-run` checks everything and sends nothing.

@@ -94,6 +94,9 @@ pub fn record(action: &str, error: &str, origin: &str, now_unix: u64) {
         "error": error.chars().take(200).collect::<String>(),
         "host": host_of(origin),
         "version": env!("CARGO_PKG_VERSION"),
+        // Which session failed, so `report` can draft from "this session"
+        // instead of everything the machine ever logged.
+        "session": std::env::var("AGENT_BROWSER_SESSION").ok(),
     });
     let path = friction_path();
     if let Some(parent) = path.parent() {
@@ -118,7 +121,7 @@ pub fn record_now(action: &str, error: &str, origin: &str) {
 }
 
 /// Parse the log into records (skipping malformed lines).
-fn read_records() -> Vec<Value> {
+pub(crate) fn read_records() -> Vec<Value> {
     let Ok(text) = std::fs::read_to_string(friction_path()) else {
         return Vec::new();
     };
@@ -224,171 +227,266 @@ pub fn run_friction(args: &[String], json_out: bool) {
     section("by error category:", "byCategory");
     section("by host:", "byHost");
     println!("(local only; `chrome-use friction --json` for raw, `--clear` to reset)");
+    println!("(to send the maintainers a redacted draft of this: `chrome-use report`)");
 }
 
-const ISSUES_NEW_URL: &str = "https://github.com/leeguooooo/chrome-use/issues/new";
+// ---------------------------------------------------------------------------
+// Failure signatures and the "offer to file it" nudge
+// ---------------------------------------------------------------------------
 
-/// Build a paste-ready GitHub issue body from the local friction log + build
-/// metadata. De-identified (friction records only carry host, never full URLs).
-fn report_markdown(agg: &Value) -> String {
-    let total = agg.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-    let list = |key: &str| -> String {
-        agg.get(key)
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .map(|it| {
-                        format!(
-                            "- {} × {}",
-                            it.get("count").and_then(|v| v.as_u64()).unwrap_or(0),
-                            it.get("name").and_then(|v| v.as_str()).unwrap_or("?")
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "- (none)".to_string())
-    };
-    format!(
-        "## What happened\n<!-- what you were doing, the exact command, expected vs actual -->\n\n\
-         ## Environment\n{env}\n\n\
-         ## Local friction summary\n_{total} failed command(s) recorded locally._\n\n\
-         **By command**\n{by_cmd}\n\n**By category**\n{by_cat}\n\n**By host**\n{by_host}\n\n\
-         ---\n{scope}\n",
-        env = environment_block(),
-        total = total,
-        by_cmd = list("byCommand"),
-        by_cat = list("byCategory"),
-        by_host = list("byHost"),
-        scope = REPORT_SCOPE,
-    )
-}
-
-/// What the report contains and what it deliberately leaves out.
-///
-/// Stating the boundary is the point, not politeness: a person deciding
-/// whether to paste this into a public issue cannot verify it line by line,
-/// and "de-identified" on its own is a claim they have to take on faith. The
-/// last line is the one that matters most — text redaction says nothing about
-/// pixels, and assuming otherwise is how a token ends up in a screenshot
-/// attached to a public issue (issue #275).
-pub const REPORT_SCOPE: &str = "\
-_Included: chrome-use and extension versions, platform, and per-command failure counts \
-grouped by error category and **host name only**._\n\n\
-_Excluded: full URLs and query strings, page content, form input, cookies, tokens, \
-credentials, and anything about tabs other than the ones that failed. The local log this \
-is built from (`~/.chrome-use/friction.jsonl`) never records them either._\n\n\
-_**Screenshots are not included, and are a separate decision.** If you attach one, nothing \
-above redacts it — check the image yourself for logged-in pages, tokens in the address bar, \
-and other tabs._";
-
-/// Version and connection facts, gathered without touching a page.
-///
-/// The extension version and whether the relay is up are the two things that
-/// explain most reports, and both are already sitting in sidecar files — asking
-/// the user to run `doctor` separately and paste it was one step that mostly
-/// did not happen.
-fn environment_block() -> String {
-    let mut out = format!(
-        "- chrome-use: {}\n- platform: {}/{}",
-        env!("CARGO_PKG_VERSION"),
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-    );
-    match crate::connect::relay_ext_version_driving() {
-        Some(v) => out.push_str(&format!(
-            "\n- ab-connect: {v} (bundled with this CLI: {})",
-            env!("AB_CONNECT_VERSION")
-        )),
-        None => out.push_str(&format!(
-            "\n- ab-connect: not connected (this CLI bundles {})",
-            env!("AB_CONNECT_VERSION")
-        )),
-    }
-    out.push_str(&format!(
-        "\n- extension relay: {}",
-        if crate::connect::relay_url().is_some() {
-            "up"
-        } else {
-            "down"
+/// The stable words of an error: its first line, lowercased, with quoted
+/// parts, selectors, refs, numbers and URLs dropped. Two failures of the same
+/// kind on different pages (`#a` vs `#b`) end up with the same words, which is
+/// what both the in-session nudge and the GitHub dedup need.
+pub fn error_words(error: &str) -> String {
+    let first = error.lines().next().unwrap_or("").to_lowercase();
+    let mut in_quote: Option<char> = None;
+    let mut cleaned = String::with_capacity(first.len());
+    for ch in first.chars() {
+        match in_quote {
+            Some(q) if ch == q => in_quote = None,
+            Some(_) => {}
+            None if matches!(ch, '"' | '\'' | '`') => in_quote = Some(ch),
+            None => cleaned.push(ch),
         }
-    ));
-    out
+    }
+    let mut out: Vec<&str> = Vec::new();
+    for tok in cleaned.split_whitespace() {
+        let t = tok.trim_matches(|c: char| ":,.;!?()[]{}".contains(c));
+        if t.len() >= 2 && t.chars().all(|c| c.is_ascii_alphabetic()) {
+            out.push(t);
+            if out.len() == 8 {
+                break;
+            }
+        }
+    }
+    out.join(" ")
 }
 
-/// `chrome-use report [--open] [--json]` — OPT-IN. Packages the local friction
-/// log + build metadata into a paste-ready GitHub issue. Never auto-uploads;
-/// `--open` just opens the (empty) new-issue page in the browser for you.
-pub fn run_report(args: &[String], json_out: bool) {
-    let records = read_records();
-    let agg = aggregate(&records);
-    let body = report_markdown(&agg);
+/// Human-readable key of a failure: `click/element_not_found: element not found`.
+pub fn signature_key(action: &str, error: &str) -> String {
+    format!("{action}/{}: {}", categorize(error), error_words(error))
+}
 
-    if json_out {
-        println!(
-            "{}",
-            json!({ "success": true, "data": {
-                "issueUrl": ISSUES_NEW_URL,
-                "markdown": body,
-                "friction": agg,
-            }})
-        );
-        return;
+/// Short, stable id of a failure signature (`cu-sig-1a2b3c4d`). FNV-1a, so it
+/// is identical across builds, platforms and Rust versions — it is written into
+/// public issues and searched for later.
+pub fn signature_id(key: &str) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in key.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("cu-sig-{h:08x}")
+}
+
+/// Categories about how the command was typed or a policy the user set, not
+/// chrome-use getting in the way. Still logged, but they never nudge.
+fn nudge_worthy(category: &str) -> bool {
+    !matches!(category, "usage" | "policy")
+}
+
+/// `AGENT_BROWSER_NO_REPORT_HINTS=1` silences every report nudge; with the
+/// friction log off there is nothing to report from, so those stay quiet too.
+pub fn report_hints_enabled() -> bool {
+    std::env::var_os("AGENT_BROWSER_NO_REPORT_HINTS").is_none()
+        && std::env::var_os("AGENT_BROWSER_NO_FRICTION_LOG").is_none()
+}
+
+/// How long after a failed action an `eval` still reads as "worked around it".
+pub const EVAL_WORKAROUND_WINDOW: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Failures in one session before `close` suggests a report.
+pub const CLOSE_HINT_THRESHOLD: u32 = 3;
+
+/// Per-session bookkeeping for the report nudge. Lives in the daemon state;
+/// pure over the `Instant`s it is handed so the throttling is unit-testable.
+#[derive(Default, Debug)]
+pub struct NudgeTracker {
+    counts: std::collections::HashMap<String, u32>,
+    offered: std::collections::HashSet<String>,
+    /// `(signature key, when)` of the latest non-eval failure.
+    last_failure: Option<(String, std::time::Instant)>,
+    /// Failures recorded this session (for the `close` hint).
+    failures: u32,
+}
+
+impl NudgeTracker {
+    /// A command failed. Returns a `reportSuggestion` the second time the same
+    /// signature fails in this session — once per signature.
+    pub fn on_failure(
+        &mut self,
+        action: &str,
+        error: &str,
+        now: std::time::Instant,
+        session: &str,
+    ) -> Option<Value> {
+        self.failures += 1;
+        if !nudge_worthy(categorize(error)) {
+            return None;
+        }
+        let key = signature_key(action, error);
+        if !is_eval(action) {
+            self.last_failure = Some((key.clone(), now));
+        }
+        let count = self.counts.entry(key.clone()).or_insert(0);
+        *count += 1;
+        let n = *count;
+        if n >= 2 && self.offered.insert(key.clone()) {
+            return Some(report_suggestion(&key, "repeated_failure", n, session));
+        }
+        None
     }
 
-    println!("{}", body);
-    println!("─────────────────────────────────────────────");
-    println!("Copy the block above into a new issue: {ISSUES_NEW_URL}");
-    println!(
-        "(Nothing was uploaded, and `--open` only opens the empty new-issue page — \
-         what gets posted is whatever you paste.)"
-    );
-
-    if args.iter().any(|a| a == "--open") {
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        let _ = std::process::Command::new(opener)
-            .arg(ISSUES_NEW_URL)
-            .spawn();
+    /// The agent ran `eval`. Shortly after a failed action that usually means
+    /// it is scripting around chrome-use; offer once for that failure.
+    pub fn on_eval(&mut self, now: std::time::Instant, session: &str) -> Option<Value> {
+        let (key, at) = self.last_failure.take()?;
+        if now.saturating_duration_since(at) > EVAL_WORKAROUND_WINDOW {
+            return None;
+        }
+        if !self.offered.insert(key.clone()) {
+            return None;
+        }
+        let n = self.counts.get(&key).copied().unwrap_or(1);
+        Some(report_suggestion(&key, "eval_workaround", n, session))
     }
+
+    /// One line for `close` when this session hit enough friction; resets so
+    /// a reused session does not repeat it.
+    pub fn close_hint(&mut self, session: &str) -> Option<String> {
+        if self.failures < CLOSE_HINT_THRESHOLD {
+            return None;
+        }
+        let n = self.failures;
+        self.failures = 0;
+        Some(format!(
+            "this session hit {n} chrome-use failures; if chrome-use got in the way, \
+             offer the user to file it: `{}`",
+            report_command(session)
+        ))
+    }
+}
+
+pub fn is_eval(action: &str) -> bool {
+    matches!(action, "eval" | "evaluate" | "evalhandle")
+}
+
+/// The command the nudge tells the agent to run. Names the session when it is
+/// not the default, so `report` drafts from the same session's failures.
+pub fn report_command(session: &str) -> String {
+    if session.is_empty() || session == "default" {
+        "chrome-use report --note \"<what you were trying to do>\"".to_string()
+    } else {
+        format!("chrome-use report --session {session} --note \"<what you were trying to do>\"")
+    }
+}
+
+fn report_suggestion(key: &str, reason: &str, count: u32, session: &str) -> Value {
+    let command = report_command(session);
+    json!({
+        "signature": signature_id(key),
+        "key": key,
+        "reason": reason,
+        "count": count,
+        "command": command,
+        "message": format!(
+            "chrome-use got in the way here; at the end of the task, offer the user to file it: `{command}`"
+        ),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The boundary has to be stated, and the screenshot line has to be its
-    /// own sentence: text redaction says nothing about pixels (#275).
     #[test]
-    fn the_report_states_what_it_leaves_out() {
-        for excluded in [
-            "full URLs",
-            "cookies",
-            "tokens",
-            "credentials",
-            "form input",
-        ] {
-            assert!(REPORT_SCOPE.contains(excluded), "missing: {excluded}");
-        }
-        assert!(REPORT_SCOPE.contains("Screenshots are not included"));
-        assert!(
-            REPORT_SCOPE.contains("nothing \nabove redacts it")
-                || REPORT_SCOPE.contains("nothing above redacts it")
-        );
+    fn signatures_ignore_the_page_specific_parts() {
+        let a = signature_key("click", "Element not found: #missing-a");
+        let b = signature_key("click", "Element not found: \"#other .thing\"");
+        assert_eq!(a, b);
+        assert_eq!(a, "click/element_not_found: element not found");
+        // Stable across builds: written into public issues and searched later.
+        assert_eq!(signature_id(&a), "cu-sig-2b1cedf4");
+        // A different command or kind of failure is a different signature.
+        assert_ne!(a, signature_key("fill", "Element not found: #x"));
+        assert_ne!(a, signature_key("click", "Operation timed out"));
     }
 
-    /// The two facts that explain most reports have to be in the block itself,
-    /// not behind "please also run doctor and paste it".
     #[test]
-    fn the_environment_block_carries_the_extension_and_relay_state() {
-        let env = environment_block();
-        assert!(env.contains("chrome-use:"), "{env}");
-        assert!(env.contains("ab-connect:"), "{env}");
-        assert!(env.contains("extension relay:"), "{env}");
+    fn the_nudge_fires_on_the_second_failure_once_per_signature() {
+        let mut t = NudgeTracker::default();
+        let now = std::time::Instant::now();
+        assert!(t
+            .on_failure("click", "Element not found: #a", now, "default")
+            .is_none());
+        let s = t
+            .on_failure("click", "Element not found: #b", now, "default")
+            .expect("second failure with the same signature nudges");
+        assert_eq!(s["reason"], "repeated_failure");
+        assert_eq!(s["count"], 2);
+        assert_eq!(s["signature"], "cu-sig-2b1cedf4");
+        assert!(s["message"]
+            .as_str()
+            .unwrap()
+            .contains("offer the user to file it: `chrome-use report --note"));
+        // Third time: already offered for this signature.
+        assert!(t
+            .on_failure("click", "Element not found: #c", now, "default")
+            .is_none());
+        // A different signature gets its own single chance.
+        assert!(t
+            .on_failure("fill", "Operation timed out", now, "default")
+            .is_none());
+        assert!(t
+            .on_failure("fill", "Operation timed out", now, "default")
+            .is_some());
+        assert!(t
+            .on_failure("fill", "Operation timed out", now, "default")
+            .is_none());
+        // Usage mistakes never nudge.
+        assert!(t
+            .on_failure("type", "Missing 'text' parameter", now, "s")
+            .is_none());
+        assert!(t
+            .on_failure("type", "Missing 'text' parameter", now, "s")
+            .is_none());
+    }
+
+    #[test]
+    fn an_eval_right_after_a_failure_nudges_once() {
+        let mut t = NudgeTracker::default();
+        let now = std::time::Instant::now();
+        assert!(t.on_eval(now, "default").is_none(), "no failure yet");
+        t.on_failure("click", "Element not found: #a", now, "work");
+        let s = t
+            .on_eval(now + std::time::Duration::from_secs(10), "work")
+            .expect("eval within the window nudges");
+        assert_eq!(s["reason"], "eval_workaround");
+        assert!(s["command"].as_str().unwrap().contains("--session work"));
+        // Already offered: the same failure and another eval stay quiet.
+        assert!(t
+            .on_failure("click", "Element not found: #a", now, "work")
+            .is_none());
+        assert!(t.on_eval(now, "work").is_none());
+        // Outside the window: no nudge.
+        let mut t = NudgeTracker::default();
+        t.on_failure("hover", "Operation timed out", now, "default");
+        let late = now + EVAL_WORKAROUND_WINDOW + std::time::Duration::from_secs(1);
+        assert!(t.on_eval(late, "default").is_none());
+    }
+
+    #[test]
+    fn close_hints_only_after_enough_friction_and_only_once() {
+        let mut t = NudgeTracker::default();
+        let now = std::time::Instant::now();
+        t.on_failure("click", "Element not found: #a", now, "default");
+        t.on_failure("click", "Operation timed out", now, "default");
+        assert!(t.close_hint("default").is_none());
+        t.on_failure("fill", "Operation timed out", now, "default");
+        let h = t.close_hint("default").expect("three failures");
+        assert!(h.contains("chrome-use report"), "{h}");
+        assert!(t.close_hint("default").is_none(), "reset after the hint");
     }
 
     #[test]

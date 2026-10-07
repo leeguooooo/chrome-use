@@ -611,6 +611,10 @@ pub struct DaemonState {
     /// adapter suggestion — see `suggest_site_adapter`.
     pub site_usage: HashMap<String, u32>,
     pub site_suggested: HashSet<String>,
+    /// Repeated failures and eval-after-failure in this session, for the
+    /// one-line "offer the user `chrome-use report`" nudge — see
+    /// `crate::friction::NudgeTracker`.
+    pub report_nudge: crate::friction::NudgeTracker,
 }
 
 impl DaemonState {
@@ -679,6 +683,7 @@ impl DaemonState {
             site_hint_host: None,
             site_usage: HashMap::new(),
             site_suggested: Default::default(),
+            report_nudge: Default::default(),
         }
     }
 
@@ -2287,6 +2292,23 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             .unwrap_or_default();
         crate::friction::record_now(action, e, &origin);
     }
+    // The nudge toward `chrome-use report`: the same failure twice, or an
+    // `eval` right after a failed action (the agent scripting around us).
+    let report_suggestion = if crate::friction::report_hints_enabled() {
+        let now = std::time::Instant::now();
+        let mut sugg = match result {
+            Err(ref e) => state
+                .report_nudge
+                .on_failure(action, e, now, &state.session_id),
+            Ok(_) => None,
+        };
+        if sugg.is_none() && crate::friction::is_eval(action) {
+            sugg = state.report_nudge.on_eval(now, &state.session_id);
+        }
+        sugg
+    } else {
+        None
+    };
     let mut resp = match result {
         Ok(data) => success_response(&id, data),
         // The accessibility engine already returns command-specific errors
@@ -2635,6 +2657,14 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     if ok {
         annotate_site_change(action, cmd, &mut resp, state).await;
         suggest_site_adapter(&mut resp, state);
+    }
+    if let Some(sugg) = report_suggestion {
+        insert_data_field(&mut resp, "reportSuggestion", sugg);
+    }
+    if action == "close" && ok && crate::friction::report_hints_enabled() {
+        if let Some(hint) = state.report_nudge.close_hint(&state.session_id) {
+            insert_data_field(&mut resp, "reportHint", json!(hint));
+        }
     }
 
     // Auto-report pending JavaScript dialog so agents know why commands may hang

@@ -20,6 +20,7 @@ mod opencli;
 mod output;
 mod ownership;
 mod read;
+mod report;
 mod session_title;
 mod silence;
 mod site;
@@ -2075,10 +2076,10 @@ fn main() {
         return;
     }
 
-    // `report` (no daemon, OPT-IN): package the local friction log + build info
-    // into a paste-ready GitHub issue. Never auto-uploads.
+    // `report` (no daemon): draft a redacted GitHub issue from the friction
+    // log; `--submit` files it only with the user's OK (report.rs).
     if clean.first().map(|s| s.as_str()) == Some("report") {
-        friction::run_report(&clean[1..], flags.json);
+        report::run_report(&clean[1..], &args, &flags.session, flags.json);
         return;
     }
 
