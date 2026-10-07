@@ -864,6 +864,7 @@ pub async fn hover(
         iframe_sessions,
     )
     .await?;
+    restore_rendering_if_hidden(client, &effective_session_id).await;
     client
         .send_command_typed::<_, Value>(
             "Input.dispatchMouseEvent",
@@ -3998,6 +3999,73 @@ async fn wait_for_paint_settled(client: &CdpClient, session_id: &str) {
     .await;
 }
 
+/// Whether a `document.visibilityState` reply says the page is hidden.
+/// Anything else (visible, prerender, an unreadable reply) leaves the page
+/// alone: re-asserting focus emulation is only worth it for a hidden page.
+fn visibility_reply_is_hidden(reply: &Value) -> bool {
+    reply
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(Value::as_str)
+        == Some("hidden")
+}
+
+/// Make a hidden page render again before a coordinate mouse event.
+///
+/// Background tabs are kept rendering by `Emulation.setFocusEmulationEnabled`
+/// (see `enable_domains`): Chrome then counts the tab as captured, so it stays
+/// `visible` while it is not the tab in front. That state does not always
+/// last. On a login page in a profile with Bitwarden installed, the page went
+/// `hidden` the moment `fill` focused the email field (the same `fill` on a
+/// page without a login form kept it `visible`), and the menu recovery for
+/// #373 hides the tab on purpose. Chrome delivers a coordinate mouse event to
+/// a hidden page only after about 5 seconds: the first
+/// `Input.dispatchMouseEvent` of each click (the move) took 5.0s while the
+/// page itself was idle, so every click after such a `fill` took over 5s.
+///
+/// Turning focus emulation off and on again takes the capture back and the
+/// page is `visible` again (measured: 5.2s clicks became 0.2s). Sending
+/// `enabled: true` alone does nothing, because Chrome ignores a request for
+/// the state it believes is already set. The page sees a window blur/focus
+/// pair and a `visibilitychange`, the same as a user switching back to it,
+/// which is what the click is about to imitate anyway. Keyboard input and
+/// `Input.insertText` are not hit-tested, so they do not need this.
+///
+/// One evaluate when the page is visible. Best-effort throughout: a failure
+/// here leaves the click as it was. `AGENT_BROWSER_KEEP_HIDDEN=1` opts out.
+pub(crate) async fn restore_rendering_if_hidden(client: &CdpClient, session_id: &str) -> bool {
+    if std::env::var("AGENT_BROWSER_KEEP_HIDDEN").as_deref() == Ok("1") {
+        return false;
+    }
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_millis(1000),
+        client.send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": "document.visibilityState", "returnByValue": true })),
+            Some(session_id),
+        ),
+    )
+    .await;
+    match probe {
+        Ok(Ok(reply)) if visibility_reply_is_hidden(&reply) => {}
+        _ => return false,
+    }
+    for enabled in [false, true] {
+        if client
+            .send_command(
+                "Emulation.setFocusEmulationEnabled",
+                Some(json!({ "enabled": enabled })),
+                Some(session_id),
+            )
+            .await
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Click at a raw viewport coordinate, bypassing element/selector resolution
 /// (issue #8.4 first-class coordinate click). Honors the humanize trajectory and
 /// press dwell exactly like a selector click — it shares `dispatch_click`.
@@ -4026,6 +4094,7 @@ async fn dispatch_click(
     // decelerating trajectory starting from where the cursor last landed, which
     // removes the "instant jump to exact centre, no prior movement" tell that
     // behavioural anti-bot systems flag.
+    restore_rendering_if_hidden(client, session_id).await;
     let level = humanize::active_level();
     let start = humanize::last_cursor();
     let seed = humanize::next_seed();
@@ -5251,5 +5320,94 @@ mod trusted_input_diagnostics_tests {
         assert_eq!(keyboard_type_verdict("a\n", Some(&f), Some(&f)), Ok(None));
         assert_eq!(keyboard_type_verdict("\t", Some(&f), Some(&f)), Ok(None));
         assert_eq!(keyboard_type_verdict("  ", Some(&f), Some(&f)), Ok(None));
+    }
+}
+
+#[cfg(test)]
+mod hidden_page_tests {
+    use super::{restore_rendering_if_hidden, visibility_reply_is_hidden};
+    use crate::native::cdp::client::CdpClient;
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
+
+    #[test]
+    fn only_a_hidden_reply_counts_as_hidden() {
+        let reply = |v: Value| json!({ "result": { "type": "string", "value": v } });
+        assert!(visibility_reply_is_hidden(&reply(json!("hidden"))));
+        assert!(!visibility_reply_is_hidden(&reply(json!("visible"))));
+        assert!(!visibility_reply_is_hidden(&reply(json!("prerender"))));
+        assert!(!visibility_reply_is_hidden(&reply(json!(null))));
+        assert!(!visibility_reply_is_hidden(&json!({})));
+    }
+
+    type Seen = Arc<Mutex<Vec<(String, Value)>>>;
+
+    /// A fake page answering `document.visibilityState` with `state`; returns
+    /// the client and every `(method, params)` it was sent.
+    async fn fake_page(state: &'static str) -> (CdpClient, Seen) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(text) = msg else { continue };
+                let cmd: Value = serde_json::from_str(&text).unwrap();
+                let method = cmd["method"].as_str().unwrap_or("").to_string();
+                log.lock()
+                    .unwrap()
+                    .push((method.clone(), cmd["params"].clone()));
+                let result = if method == "Runtime.evaluate" {
+                    json!({ "result": { "type": "string", "value": state } })
+                } else {
+                    json!({})
+                };
+                let reply =
+                    json!({ "id": cmd["id"], "result": result, "sessionId": cmd["sessionId"] });
+                ws.send(Message::Text(reply.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        (client, seen)
+    }
+
+    /// A hidden page gets focus emulation turned off and on again (sending
+    /// `true` alone is ignored by Chrome), on the page's own session.
+    #[tokio::test]
+    async fn a_hidden_page_has_focus_emulation_reasserted() {
+        let (client, seen) = fake_page("hidden").await;
+        assert!(restore_rendering_if_hidden(&client, "S1").await);
+        let seen = seen.lock().unwrap().clone();
+        let methods: Vec<&str> = seen.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(
+            methods,
+            [
+                "Runtime.evaluate",
+                "Emulation.setFocusEmulationEnabled",
+                "Emulation.setFocusEmulationEnabled"
+            ]
+        );
+        assert_eq!(seen[1].1["enabled"], json!(false));
+        assert_eq!(seen[2].1["enabled"], json!(true));
+    }
+
+    /// A visible page (the normal case for a background tab) costs one
+    /// evaluate and nothing else: no focus/blur churn for the page to see.
+    #[tokio::test]
+    async fn a_visible_page_is_left_alone() {
+        let (client, seen) = fake_page("visible").await;
+        assert!(!restore_rendering_if_hidden(&client, "S1").await);
+        let seen = seen.lock().unwrap().clone();
+        let methods: Vec<&str> = seen.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["Runtime.evaluate"]);
     }
 }
