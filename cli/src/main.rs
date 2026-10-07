@@ -2436,18 +2436,15 @@ fn main() {
         //   5. the legacy last-connected default, with a warning.
         let target_url = target_url_for_choosebrowser(&clean);
         let configured = profiles::load_profiles_config();
-        if let (Some(cfg), Some(url)) = (configured.as_ref(), target_url.as_deref()) {
-            if let Some(route) = cfg
-                .routes
-                .iter()
-                .find(|r| profiles::route_matches(&r.pattern, url))
-            {
-                let why = format!("config route \"{}\"", route.pattern);
-                let ws = configured_profile_ws(&route.profile, &why);
-                profile_choice = Some((ws.clone(), why));
-                flags.cdp = Some(ws);
-                flags.auto_connect = false;
-            }
+        if let Some((sel, why)) = configured
+            .as_ref()
+            .zip(target_url.as_deref())
+            .and_then(|(cfg, url)| profiles::choose_route(cfg, url))
+        {
+            let ws = configured_profile_ws(&sel, &why);
+            profile_choice = Some((ws.clone(), why));
+            flags.cdp = Some(ws);
+            flags.auto_connect = false;
         }
 
         // Before guessing from focus, though: the user may already have written
@@ -2501,13 +2498,8 @@ fn main() {
         }
 
         if flags.cdp.is_none() {
-            if let Some(default) = configured
-                .as_ref()
-                .and_then(|c| c.default.clone())
-                .filter(|d| !d.trim().is_empty())
-            {
-                let why = "config profiles.default".to_string();
-                let ws = configured_profile_ws(&default, &why);
+            if let Some((sel, why)) = configured.as_ref().and_then(profiles::configured_default) {
+                let ws = configured_profile_ws(&sel, &why);
                 profile_choice = Some((ws.clone(), why));
                 flags.cdp = Some(ws);
                 flags.auto_connect = false;

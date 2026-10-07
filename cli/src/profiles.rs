@@ -538,14 +538,16 @@ pub fn route_matches(pattern: &str, url: &str) -> bool {
     }
 }
 
-/// The configured choice for a session's first connect: the first route
-/// matching `url`, else `default`. Returns `(selector, why)`.
-pub fn choose_configured(cfg: &ProfilesConfig, url: Option<&str>) -> Option<(String, String)> {
-    if let Some(u) = url {
-        if let Some(r) = cfg.routes.iter().find(|r| route_matches(&r.pattern, u)) {
-            return Some((r.profile.clone(), format!("config route \"{}\"", r.pattern)));
-        }
-    }
+/// The first configured route matching `url`, as `(selector, why)`.
+pub fn choose_route(cfg: &ProfilesConfig, url: &str) -> Option<(String, String)> {
+    cfg.routes
+        .iter()
+        .find(|r| route_matches(&r.pattern, url))
+        .map(|r| (r.profile.clone(), format!("config route \"{}\"", r.pattern)))
+}
+
+/// The configured `profiles.default`, as `(selector, why)`.
+pub fn configured_default(cfg: &ProfilesConfig) -> Option<(String, String)> {
     cfg.default
         .as_ref()
         .filter(|d| !d.trim().is_empty())
@@ -1430,6 +1432,10 @@ mod tests {
             ]
         }}))
         .unwrap();
+        let choose_configured = |cfg: &ProfilesConfig, url: Option<&str>| {
+            url.and_then(|u| choose_route(cfg, u))
+                .or_else(|| configured_default(cfg))
+        };
         assert_eq!(
             choose_configured(&cfg, Some("https://github.com/acme/x")),
             Some((
