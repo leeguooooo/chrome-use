@@ -18780,6 +18780,17 @@ const AUTH_BWU_OTP_WAIT_MS: u64 = 10_000;
 /// Enter is pressed only after the filled fields were read back; this
 /// command is never repeated by the #373 recovery (not `safe_to_repeat`),
 /// so a login is never submitted twice.
+/// How long `auth login --bwu` looks for a login field on a page that is not a
+/// sign-in URL before concluding the session is already signed in.
+const AUTH_BWU_SIGNED_IN_PROBE_MS: u64 = 3_000;
+
+/// Whether `url` is itself a sign-in page (login path, accounts host, …).
+fn auth_url_is_sign_in(url: &str) -> bool {
+    url::Url::parse(url)
+        .map(|u| login_wall::login_ish(&u))
+        .unwrap_or(false)
+}
+
 async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let text = |k: &str| {
         cmd.get(k)
@@ -18929,6 +18940,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     // A step after the login that this login cannot do (a 2FA code it has no
     // value for): reported, never guessed.
     let mut needs: Option<&'static str> = None;
+    // Nothing to sign in to: not a sign-in URL and no login field anywhere.
+    let mut already_signed_in = false;
 
     let outcome: Result<(), String> = async {
         // A step refused because a password manager's inline menu is open
@@ -18991,6 +19004,21 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 .copied()
                 .collect();
             let probe = format!("bwuprobe-{marker}");
+            // Already signed in? A page that isn't a sign-in URL and shows no
+            // login field after a short look has nothing to fill. Waiting the
+            // full timeout there and failing made agents believe the login
+            // itself had failed (#449 follow-up, App Store Connect).
+            if auto && !auth_url_is_sign_in(&current) {
+                let quick = timeout_ms.min(AUTH_BWU_SIGNED_IN_PROBE_MS);
+                if unblocked!(
+                    wait_for_auth_scope(&mgr.client, &session_id, &state.iframe_sessions, &current, pin, &any, &probe, quick, true).await
+                )
+                .is_err()
+                {
+                    already_signed_in = true;
+                    return Ok(());
+                }
+            }
             match unblocked!(
                 wait_for_auth_scope(&mgr.client, &session_id, &state.iframe_sessions, &current, pin, &any, &probe, timeout_ms, true).await
             ) {
@@ -19272,6 +19300,20 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             ))
         }
         (Ok(()), Ok(())) => {}
+    }
+    if already_signed_in {
+        let url = mgr.get_url().await.unwrap_or_default();
+        return Ok(json!({
+            "alreadySignedIn": true,
+            "item": item,
+            "filled": [],
+            "submitted": false,
+            "url": url,
+            "hint": "this page is not a sign-in page and shows no login field, so this \
+                     session already looks signed in; nothing was typed. Read the page to \
+                     confirm, or open the site's sign-in page first if you meant to switch \
+                     accounts.",
+        }));
     }
     if filled.is_empty() && passkey_state != "used" {
         return Err("auth login --bwu: found no login field on this page to fill".to_string());
@@ -22909,5 +22951,22 @@ mod near_text_hint_tests {
         let e = "Wait timed out after 5000ms".to_string();
         assert_eq!(near_text_hint(e.clone(), "Saved", None), e);
         assert_eq!(near_text_hint(e.clone(), "Saved", Some("Saved")), e);
+    }
+}
+
+#[cfg(test)]
+mod bwu_signed_in_tests {
+    use super::auth_url_is_sign_in;
+
+    #[test]
+    fn sign_in_urls_are_not_mistaken_for_signed_in_pages() {
+        assert!(auth_url_is_sign_in(
+            "https://github.com/login?return_to=%2F"
+        ));
+        assert!(auth_url_is_sign_in("https://dash.cloudflare.com/login"));
+        assert!(!auth_url_is_sign_in(
+            "https://appstoreconnect.apple.com/apps"
+        ));
+        assert!(!auth_url_is_sign_in("not a url"));
     }
 }
