@@ -78,7 +78,7 @@ pub async fn timed<F: Future>(f: F) -> (F::Output, Value) {
             let mut summary = summarize(total, &durations);
             let busy = interval_union(total, &spans);
             summary["cdpBusyMs"] = json!(ms(busy));
-            summary["nonCdpMs"] = json!(ms(total.saturating_sub(busy)));
+            summary["nonCdpMs"] = json!(ms(total).saturating_sub(ms(busy)));
             (out, summary)
         })
         .await
@@ -250,6 +250,10 @@ mod tests {
         assert!(t["cdpMs"].as_u64().unwrap() >= t["cdpBusyMs"].as_u64().unwrap() * 2);
         assert!(t["cdpBusyMs"].as_u64().unwrap() <= t["ms"].as_u64().unwrap());
         assert_eq!(t["cdpCalls"], 2);
+        assert_eq!(
+            t["cdpBusyMs"].as_u64().unwrap() + t["nonCdpMs"].as_u64().unwrap(),
+            t["ms"].as_u64().unwrap()
+        );
     }
 
     #[tokio::test]
