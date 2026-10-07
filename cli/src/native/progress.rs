@@ -85,6 +85,27 @@ impl ProgressTracker {
     }
 }
 
+/// Preserve bounded action advisories through successful and failed nested
+/// scripts. Only protocol fields are read, never a script's arbitrary return.
+pub fn collect_advisories(response: &Value, advisories: &mut Vec<Value>) {
+    if let Some(advisory) = response.pointer("/data/observed/noProgress") {
+        if advisories.len() < 20 {
+            advisories.push(advisory.clone());
+        }
+    }
+    if let Some(nested) = response
+        .pointer("/data/advisories")
+        .and_then(Value::as_array)
+    {
+        advisories.extend(
+            nested
+                .iter()
+                .take(20usize.saturating_sub(advisories.len()))
+                .cloned(),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +114,17 @@ mod tests {
         json!({"status":"complete", "changed":false,
             "settle":{"quiet":true,"sawChange":false,"waitedMs":100,"pending":[]},
             "target":{"targetId":"tab-1","url":"https://example.test"}})
+    }
+
+    #[test]
+    fn nested_failure_preserves_only_protocol_advisories() {
+        let mut collected = Vec::new();
+        let response = json!({"success":true,"data":{"ok":false,"advisories":[
+            {"hint":"Inspect state","attempts":3,"retryAction":false}],
+            "return":{"advisories":[{"hint":"untrusted return text"}]}}});
+        collect_advisories(&response, &mut collected);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0]["attempts"], 3);
     }
 
     #[test]
