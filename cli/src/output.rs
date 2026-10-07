@@ -3297,7 +3297,7 @@ chrome-use report - Draft (and, with the user's OK, file) a GitHub issue
 Usage:
   chrome-use report [--note "<what you were trying to do>"] [--title <t>]
                     [--last <n>] [--this-session | --any-session] [--json]
-  chrome-use report --submit [--yes] [--new] [--dry-run]
+  chrome-use report --submit [--yes] [--new-issue] [--dry-run]
 
 For when chrome-use got in your way: a command failed and you worked around
 it, an error sent you the wrong way, or a feature was missing. At the end of
@@ -3316,7 +3316,7 @@ the task, offer the user `chrome-use report`; file only once they say yes.
   --submit         File it. Refused unless --yes, AGENT_BROWSER_REPORT_AUTO=1,
                    or "report": {"auto": true} in ~/.chrome-use/config.json.
   --yes            The user approved this report just now.
-  --new            File a new issue even if one tracks the same failure
+  --new-issue      File a new issue even if one tracks the same failure
                    (default: a "+1, also seen on …" comment there).
   --dry-run        With --submit: check consent and show the plan, send nothing.
   --open           Open the prefilled new-issue page in the browser.

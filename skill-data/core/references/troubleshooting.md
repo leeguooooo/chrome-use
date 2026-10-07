@@ -206,7 +206,7 @@ chrome-use report --session <name> --note "…" --submit --yes
 - Duplicates: the draft carries a signature (`cu-sig-…`, the command plus the
   error's stable words). If an open issue already has it, `--submit` posts
   "+1, also seen on <version, platform, mode>" there instead of a new issue;
-  `--new` files a separate one. The search uses `gh`, else the public GitHub
+  `--new-issue` files a separate one. The search uses `gh`, else the public GitHub
   API, else `site github/issues` in the user's Chrome.
 - Filing uses `gh` when it is logged in, else the github.com new-issue form
   (or comment box, for a +1) in the user's logged-in Chrome, in a tab of its

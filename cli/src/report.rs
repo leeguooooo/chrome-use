@@ -884,7 +884,7 @@ pub enum Plan {
     Comment(u64),
 }
 
-/// New issue, or a `+1` on the exact match (unless `--new`).
+/// New issue, or a `+1` on the exact match (unless `--new-issue`).
 pub fn plan(hits: &[IssueHit], force_new: bool) -> Plan {
     match hits.iter().find(|h| h.exact) {
         Some(h) if !force_new => Plan::Comment(h.number),
@@ -1412,7 +1412,8 @@ pub struct Opts {
 
 pub fn parse_opts(args: &[String], raw_args: &[String]) -> Result<Opts, String> {
     let mut o = Opts {
-        // `--new` is also a global flag, so it is gone from the cleaned args.
+        // `--new` (old spelling) is also the global `--launch` alias, so it is
+        // gone from the cleaned args; `--new-issue` is the one to use.
         new: raw_args.iter().any(|a| a == "--new"),
         ..Default::default()
     };
@@ -1437,7 +1438,7 @@ pub fn parse_opts(args: &[String], raw_args: &[String]) -> Result<Opts, String> 
             "--note" => o.note = Some(value("--note")?),
             "--submit" => o.submit = true,
             "--yes" | "-y" => o.yes = true,
-            "--new" => o.new = true,
+            "--new" | "--new-issue" => o.new = true,
             "--dry-run" => o.dry_run = true,
             "--open" => o.open = true,
             "--this-session" => o.this_session = true,
@@ -1521,7 +1522,7 @@ pub fn run_report(args: &[String], raw_args: &[String], session: &str, json_out:
     let target = match &the_plan {
         Plan::Create => format!("new issue in {repo}"),
         Plan::Comment(n) => format!(
-            "+1 comment on {}/{n} (same failure; `--new` files a separate issue)",
+            "+1 comment on {}/{n} (same failure; `--new-issue` files a separate issue)",
             issues_url(&repo)
         ),
     };
@@ -1855,7 +1856,7 @@ mod tests {
         assert_eq!(
             plan(&hits, true),
             Plan::Create,
-            "--new files a separate issue"
+            "--new-issue files a separate issue"
         );
         assert_eq!(
             plan(&hits[1..], false),
@@ -1930,6 +1931,8 @@ mod tests {
         assert_eq!(o.last, Some(5));
         assert_eq!(o.note.as_deref(), Some("n"));
         assert!(o.submit && o.yes && o.new);
+        let o = parse_opts(&a(&["--submit", "--new-issue"]), &a(&["report"])).unwrap();
+        assert!(o.new);
         assert!(parse_opts(&a(&["--bogus"]), &[]).is_err());
         assert!(parse_opts(&a(&["--last"]), &[]).is_err());
     }
