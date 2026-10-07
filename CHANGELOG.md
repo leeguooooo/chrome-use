@@ -1,19 +1,34 @@
 # Changelog
 
-## 1.5.173
+## 1.5.174
 
 <!-- release:start -->
+### Bug Fixes
+
+- Fixed **repeated unchanged action hints across CLI calls** being reset by the CLI's browser readiness check. A successful launch reuse on the same connection, target and session keeps the observation streak; rebinding, failed checks and loading storage state still clear it.
+
+### Improvements
+
+- **Real CLI regression coverage** checks launch handshakes, actual button activations, batch postconditions, failed and nested script advisories, and cleanup against an explicitly selected binary.
+- **JSON output guides** distinguish ordinary command envelopes, batch arrays and bare script results so callers read the actual advisories and timing fields.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.173
+
 ### Improvements
 
 - **A repeated action that changes nothing is flagged.** When an action reports success but repeated complete, settled observations show no change (no requests, resources or frame changes), `--observe` adds `observed.noProgress`. It is advice only: it doesn't change `success` and nothing is replayed. A popup, a dialog or an incomplete observation resets it. (#444)
-- **Script and batch failures are no longer hidden.** A nested program that returns `ok:false` now fails its caller instead of passing on transport success alone. Failed and nested runs keep up to 20 advisories. (#444)
+- **Nested script failures are no longer hidden.** A nested program that returns `ok:false` now fails its caller instead of passing on transport success alone. Failed and nested runs keep up to 20 advisories. (#444)
 - **`timing` separates total Chrome time from wall-clock time.** It reports summed request time (`cdpMs`), the union of request intervals (`cdpBusyMs`) and the rest (`nonCdpMs`). The two independent snapshot enrichment reads now run concurrently. (#444)
 - **Static pages have search metadata and bilingual usage guides.** (#442, #445)
 
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.172
 
