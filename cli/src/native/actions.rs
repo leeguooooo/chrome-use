@@ -18787,7 +18787,7 @@ const AUTH_BWU_SIGNED_IN_PROBE_MS: u64 = 3_000;
 /// Whether `url` is itself a sign-in page (login path, accounts host, …).
 fn auth_url_is_sign_in(url: &str) -> bool {
     url::Url::parse(url)
-        .map(|u| login_wall::login_ish(&u))
+        .map(|u| super::login_wall::login_ish(&u))
         .unwrap_or(false)
 }
 
