@@ -60,6 +60,8 @@ def summarize(path, trace_path=None):
         "schema": 1, "run_id": meta.get("run_id"), "task": meta.get("task"),
         "boundary": "explicit_run" if meta.get("run_id") else "single_replay_file",
         "binary": meta.get("binary"), "version": meta.get("version"),
+        "machine_start": json.loads(meta["machine_start"]) if "machine_start" in meta else None,
+        "machine_end": json.loads(meta["machine_end"]) if "machine_end" in meta else None,
         "binary_source_verified": False,
         "binary_sha256": meta.get("binary_sha256"), "source_sha256": meta.get("source_sha256"),
         "temperature": meta.get("temperature", "legacy_warmup_requested" if meta.get("warm") == "true" else "unknown"),

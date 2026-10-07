@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
 
@@ -74,6 +75,16 @@ class TaskMetricsTests(unittest.TestCase):
         self.assertFalse(runner.classify_outcome({"success": True, "data": {"code": "action_outcome_unknown"}}))
         self.assertTrue(runner.contains_unknown({'error': {'code':'action_outcome_unknown'}}))
 
+    def test_machine_load_unavailable_remains_null(self):
+        with patch.object(runner.os, 'getloadavg', side_effect=OSError('unavailable')):
+            result = runner.machine_provenance()
+        self.assertIsNone(result['loadavg'])
+        with patch.object(runner.os, 'getloadavg', return_value=(1.0, 2.0, 3.0)):
+            self.assertEqual(runner.machine_provenance()['loadavg'], [1.0, 2.0, 3.0])
+        metrics_result = self.write('# machine_start\t{"loadavg":null}\n# machine_end\t{"loadavg":[1,2,3]}\nn\tms\tbytes\trc\tcmd\n')
+        self.assertIsNone(metrics_result['machine_start']['loadavg'])
+        self.assertEqual(metrics_result['machine_end']['loadavg'], [1, 2, 3])
+
     def test_batch_classification_requires_known_envelopes(self):
         self.assertFalse(runner.classify_outcome([{'success': True}, {'success': False, 'code': 'not_found'}]))
         self.assertTrue(runner.classify_outcome([{'success': True}, {'success': False, 'code': 'action_outcome_unknown'}]))
@@ -130,6 +141,8 @@ class TaskMetricsTests(unittest.TestCase):
         self.assertEqual(result['temperature'], 'warmup_succeeded')
         self.assertIsNotNone(result['binary_sha256'])
         self.assertIsNotNone(result['source_sha256'])
+        self.assertIn('loadavg', result['machine_start'])
+        self.assertIn('cpu_count', result['machine_end'])
         self.assertFalse(result['successful_task'])
         repeated = subprocess.run([sys.executable, str(ROOT / 'run-task.py'), str(task), '--binary', str(fake), '--output', str(self.path)], capture_output=True)
         self.assertNotEqual(repeated.returncode, 0)

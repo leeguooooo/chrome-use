@@ -95,7 +95,11 @@ python3 -m unittest discover -s bench -p test_task_metrics.py -v
 One TSV is one task run. The collector refuses to overwrite an existing file.
 It records the executable SHA-256, version output, tracked working-tree source
 SHA-256, call exit codes, exact output bytes including newlines, and task wall
-time including final assertions. Source hashing includes unstaged tracked edits;
+time including final assertions. `machine_start` and `machine_end` report
+machine architecture, OS, logical CPU count, and 1/5/15-minute load averages.
+Unavailable values remain null. Load is environmental evidence: high or changing
+load invalidates a wall-time speedup attribution even when task outcomes and
+response bytes are comparable. Source hashing includes unstaged tracked edits;
 use `git add -N` for new source files. This identifies the measured source, but
 does not prove that a binary was built from it. `source_sha256` is the collector
 checkout hash, and `binary_source_verified` is always false. Match the executable

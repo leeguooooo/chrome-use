@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import math
+import platform
 import signal
 from pathlib import Path
 import shlex
@@ -58,6 +59,20 @@ def safe_metadata(value):
     return value
 
 
+def machine_provenance():
+    """Environmental evidence only; missing platform capabilities remain null."""
+    try:
+        loadavg = list(os.getloadavg())
+    except (AttributeError, OSError):
+        loadavg = None
+    return {
+        "machine": platform.machine() or None,
+        "os": platform.platform() or None,
+        "cpu_count": os.cpu_count(),
+        "loadavg": loadavg,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task", type=Path)
@@ -94,11 +109,13 @@ def main():
     for check in checks:
         shlex.split(check)
     root = Path(__file__).resolve().parent.parent
+    machine_start = machine_provenance()
     _, version, _, version_timed_out = invoke(binary, ["--version"], args.timeout)
     warm_rc = None
     if not args.cold:
         _, _, warm_rc, _ = invoke(binary, ["eval", "1+1"], args.timeout)
     meta = {
+        "machine_start": json.dumps(machine_start, separators=(",", ":")),
         "run_id": args.run_id, "task": str(args.task), "binary": binary[0],
         "version": version.decode("utf-8", errors="replace").strip().replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"),
         "binary_sha256": hashlib.sha256(Path(binary[0]).read_bytes()).hexdigest(),
@@ -136,6 +153,7 @@ def main():
             handle.write(f"# assert\t{'pass' if rc == 0 else 'FAIL'}\t{check}\n")
         verdict = "pass" if passed and all(passed) else ("FAIL" if passed else "none")
         handle.write(f"# verdict\t{verdict}\n")
+        handle.write("# machine_end\t" + json.dumps(machine_provenance(), separators=(",", ":")) + "\n")
         handle.write(f"# task_wall_ms\t{(time.monotonic() - started) * 1000:.3f}\n")
     print(args.output)
     return 0 if passed and all(passed) else 1
