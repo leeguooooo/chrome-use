@@ -20,7 +20,7 @@
   <sub>Point it at a page in your <b>real</b> Chrome → get structured data in one command. <a href="assets/demo.tape">(regenerate: <code>vhs assets/demo.tape</code>)</a></sub>
 </p>
 
-**chrome-use** drives your real, logged-in Chrome from any AI agent. It shares your existing login sessions and is undetectable by anti-bot systems because it *is* your real browser. Part of the `*-use` family ([iphone-use](https://github.com/leeguooooo/iphone-use) drives your real iPhone; [bitwarden-use](https://github.com/leeguooooo/bitwarden-use) pulls passwords/2FA/passkeys from your Bitwarden vault so an agent can log in with credentials; chrome-use drives your real Chrome).
+**chrome-use** drives your real, logged-in Chrome from any AI agent. It shares your existing login sessions and uses your existing browser profile; public detector results are documented, not a guarantee for every website. Part of the `*-use` family ([iphone-use](https://github.com/leeguooooo/iphone-use) drives your real iPhone; [bitwarden-use](https://github.com/leeguooooo/bitwarden-use) pulls passwords/2FA/passkeys from your Bitwarden vault so an agent can log in with credentials; chrome-use drives your real Chrome).
 
 <sub>Originally based on [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0); now a standalone project. The stealth/extension-relay architecture, anti-detection, humanize, multi-agent isolation, and CLI have diverged substantially.</sub>
 
@@ -33,14 +33,14 @@
 
 **No fresh Chrome. No re-login. No "are you a robot?" walls.**
 
-chrome-use points **any** agent (Claude Code, Cursor, Codex, your own scripts) at the **Chrome you're already signed into everything on**. It clicks in *your* window, so you watch it work and grab the wheel the moment it hits a 2FA prompt or captcha. And because it's literally your real browser (over a one-click extension, native messaging, no debug port), sites read it as 100% human: **[CreepJS scores it 0% bot](#anti-detection).**
+chrome-use points **any** agent (Claude Code, Cursor, Codex, your own scripts) at the **Chrome you're already signed into everything on**. It clicks in *your* window, so you watch it work and grab the wheel the moment it hits a 2FA prompt or captcha. And because it's literally your real browser (over a one-click extension, native messaging, no debug port), the documented CreepJS test reported: **[CreepJS scores it 0% bot](#anti-detection).**
 
-**Typical browser automation** (Playwright, Puppeteer, or a fresh `--launch`) opens a brand-new browser with an empty profile. You have to log in again, and websites can tell it's automated. **chrome-use** connects to your existing Chrome. Your cookies, sessions, and browser fingerprint are all real, because it IS your real browser. Since **Chrome 136**, every raw `--remote-debugging-port` connection pops a blocking **"Allow remote debugging?"** consent dialog. Our extension uses native messaging instead: **install once, then zero per-use confirmation.**
+A **new browser context** starts without your existing login sessions. Playwright and Puppeteer also support persistent profiles and existing-browser connections; compare the actual configuration. **chrome-use** connects to your existing Chrome. Your cookies, sessions, and browser fingerprint are all real, because it IS your real browser. Chrome 136 restricts remote debugging of the default profile; prompts and requirements depend on Chrome version and connection mode. Our extension uses native messaging instead: **install once, then zero per-use confirmation.**
 
 | | Typical automation (Playwright · Puppeteer · browser-use) | web-access / raw CDP port | [Claude in Chrome](https://www.anthropic.com/claude/chrome) | **chrome-use** |
 |---|:---:|:---:|:---:|:---:|
 | Works with **any** agent / CLI (not one app) | ✅ | ✅ | ❌ Claude only | ✅ |
-| Drives your **real, logged-in** Chrome | ❌ fresh empty profile | ✅ | ✅ | ✅ |
+| Drives your **real, logged-in** Chrome | Configurable; fresh contexts start empty | ✅ | ✅ | ✅ |
 | Connect method / **"Allow remote debugging?" popup** | — (own browser) | `--remote-debugging-port` · **every connection** 🔴 | `chrome.debugger` · no | native messaging · **never** ✅ |
 | Real-browser fingerprint (CreepJS ~0%)¹ | ❌ automation markers / headless | ✅ | ✅ | ✅ **verified 0%** |
 | **No `Runtime.enable` CDP leak** (rebrowser)² | ❌ leaks | ❌ leaks | — | ✅ **off by default** |

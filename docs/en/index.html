@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>Overview · chrome-use docs</title>
-  <meta name="description" content="chrome-use lets any AI agent — Claude Code, Cursor, Codex, your own scripts — drive your real, logged-in Chrome. Undetectable by anti-bot systems (CreepJS 0% bot) because it is your real browser." />
+  <title>chrome-use: Automate Your Logged-in Chrome | AI Agent CLI &amp; MCP</title>
+  <meta name="description" content="chrome-use lets any AI agent — Claude Code, Cursor, Codex, your own scripts — drive your real, logged-in Chrome. Reuses existing sessions; CreepJS measurements are documented with their limitations." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="website" />
@@ -26,10 +26,9 @@
     "name": "chrome-use",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux, Windows",
-    "description": "chrome-use lets any AI agent — Claude Code, Cursor, Codex, your own scripts — drive your real, logged-in Chrome. Undetectable by anti-bot systems (CreepJS 0% bot) because it is your real browser.",
+    "description": "chrome-use lets any AI agent — Claude Code, Cursor, Codex, your own scripts — drive your real, logged-in Chrome. Reuses existing sessions; CreepJS measurements are documented with their limitations.",
     "url": "https://chrome-use.leeguoo.com",
     "downloadUrl": "https://github.com/leeguooooo/chrome-use/releases",
-    "softwareVersion": "1.5.66",
     "author": { "@id": "https://leeguoo.com/#person" },
     "creator": { "@id": "https://leeguoo.com/#person" }
   }
@@ -50,6 +49,11 @@
     ]
   }
   </script>
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/en/" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/" />
 </head>
 
 <body data-page="overview" data-lang="en">
@@ -60,7 +64,7 @@
 
     <nav id="du-sidebar"></nav>
 
-    <main class="du-main">
+    <main class="du-main"><nav aria-label="Documentation"><a href="/en/">chrome-use</a> · <a href="/en/install.html">Install</a> · <a href="/en/logged-in-browser.html">Logged-in browser guide</a> · <a href="/en/mcp.html">MCP</a> · <a href="/en/compare.html">Compare</a></nav>
 
       <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -81,7 +85,7 @@
       <p class="du-lede">
         chrome-use lets <span class="mark">any AI agent drive your real, logged-in Chrome</span> —
         Claude Code, Cursor, Codex, your own scripts. It shares your existing login sessions and is
-        <strong>undetectable by anti-bot systems because it <em>is</em> your real browser</strong>:
+        <strong>uses your existing browser profile, with documented detector measurements</strong>:
         <a href="/en/real-chrome.html">CreepJS scores it 0% bot</a>.
       </p>
 
@@ -116,7 +120,7 @@
       <div class="du-cards">
         <a class="du-card" href="/en/real-chrome.html">
           <div class="du-card-title"><span class="du-card-ico">🔒</span> Your real, logged-in Chrome</div>
-          <p>Your cookies, sessions, and fingerprint are all real — because it IS your real browser. Undetectable by anti-bot systems.</p>
+          <p>Your cookies, sessions, and fingerprint are all real — because it IS your real browser. See the detector measurements and their limitations.</p>
         </a>
         <a class="du-card" href="/en/install.html">
           <div class="du-card-title"><span class="du-card-ico">🧩</span> Extension, not a debug port</div>
@@ -136,9 +140,9 @@
 
       <h2>Why not just use…</h2>
       <ul>
-        <li><strong>Playwright / Puppeteer / browser-use?</strong> They boot an <em>empty</em> browser — you redo every login, fight every captcha, and still get flagged as automation. chrome-use uses the session you already have.</li>
+        <li><strong>Playwright / Puppeteer / browser-use?</strong> A new browser context starts without your existing sessions. Those tools can also use persistent contexts or existing browsers; compare connection setup and ownership for your workflow. chrome-use uses the session you already have.</li>
         <li><strong>Claude's Chrome extension?</strong> Great, but it only drives Claude. chrome-use drives <em>any</em> agent or CLI over the same real browser.</li>
-        <li><strong>A raw <code>--remote-debugging-port</code>?</strong> Chrome 136+ pops <span class="mark">"Allow remote debugging?"</span> on <em>every</em> connect. chrome-use never does — one-click Store extension, native messaging.</li>
+        <li><strong>A raw <code>--remote-debugging-port</code>?</strong> Chrome 136 restricts debugging of the default profile; connection requirements vary by Chrome version and mode. chrome-use never does — one-click Store extension, native messaging.</li>
       </ul>
 
       <div class="du-callout note">
@@ -150,14 +154,7 @@
 
       <hr class="du-divider" />
 
-      <h2>Why it doesn't get banned</h2>
-      <p>
-        Many sites actively ban browser automation, and tripping their anti-bot systems
-        <strong>takes your account down with it</strong>. chrome-use's answer is to treat
-        <strong>anti-detection as a first-class capability</strong>: it doesn't <em>simulate</em> a human —
-        it <em>is</em> your already-logged-in real browser, so sites read it as
-        <span class="mark">100% human</span> and there's nothing to ban.
-      </p>
+      <h2>What detector results mean</h2><p>The documented CreepJS run reported 0% bot and 0% headless. This is a measurement in a particular environment, not a promise of invisibility or account safety. Websites can also evaluate behavior, account history and network signals. Read the <a href="/en/stealth.html">test conditions</a>; hand login challenges to the user.</p>
 
       <div class="du-cards">
         <a class="du-card" href="/en/stealth.html">

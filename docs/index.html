@@ -4,11 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>概览 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 让任意 AI agent —— Claude Code、Cursor、Codex、你自己的脚本 —— 直接驱动你已登录的真实 Chrome。复用现成会话，对反爬完全不可检测，因为它就是你的真实浏览器（CreepJS 实测 0% 机器人）。" />
+  <title>chrome-use：让 AI 操作已登录 Chrome | CLI 与 MCP</title>
+  <meta name="description" content="chrome-use 让任意 AI agent —— Claude Code、Cursor、Codex、你自己的脚本 —— 直接驱动你已登录的真实 Chrome。复用现成会话，保留现有浏览器配置，公开检测结果及适用条件见文档。" />
 
   <meta name="keywords" content="chrome-use, AI agent 浏览器, 浏览器自动化, 真实 Chrome, 原生消息, native messaging, 反检测, CreepJS, Claude Code, Cursor, Codex, agent browser, *-use" />
-  <link rel="canonical" href="https://chrome-use.leeguoo.com/" />
 
   <meta name="theme-color" content="#fcfbf4" />
 
@@ -16,7 +15,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="chrome-use 文档" />
   <meta property="og:title" content="chrome-use — 让任意 AI agent 驱动你已登录的真实 Chrome（反检测 0% bot）" />
-  <meta property="og:description" content="一键浏览器扩展 + 原生消息，让任意 agent 驱动你现成的、已登录的真实 Chrome。对反爬完全不可检测，因为它就是你的真实浏览器。" />
+  <meta property="og:description" content="一键浏览器扩展 + 原生消息，让任意 agent 驱动你现成的、已登录的真实 Chrome。保留现有浏览器配置，公开检测结果及适用条件见文档。" />
   <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
   <meta property="og:url" content="https://chrome-use.leeguoo.com/" />
   <meta property="og:locale" content="zh_CN" />
@@ -42,10 +41,9 @@
     "name": "chrome-use",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux, Windows",
-    "description": "chrome-use 让任意 AI agent —— Claude Code、Cursor、Codex、你自己的脚本 —— 直接驱动你已登录的真实 Chrome。复用现成会话，对反爬完全不可检测，因为它就是你的真实浏览器（CreepJS 实测 0% 机器人）。",
+    "description": "chrome-use 让任意 AI agent —— Claude Code、Cursor、Codex、你自己的脚本 —— 直接驱动你已登录的真实 Chrome。复用现成会话，保留现有浏览器配置，公开检测结果及适用条件见文档。",
     "url": "https://chrome-use.leeguoo.com",
     "downloadUrl": "https://github.com/leeguooooo/chrome-use/releases",
-    "softwareVersion": "1.5.66",
     "author": { "@id": "https://leeguoo.com/#person" },
     "creator": { "@id": "https://leeguoo.com/#person" }
   }
@@ -66,6 +64,11 @@
     ]
   }
   </script>
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/" />
 </head>
 
 <body data-page="overview" data-lang="zh">
@@ -77,7 +80,7 @@
     <nav id="du-sidebar"></nav>
 
     <!-- ============================ PAGE CONTENT ============================ -->
-    <main class="du-main">
+    <main class="du-main"><nav aria-label="Documentation"><a href="/">chrome-use</a> · <a href="/install.html">安装</a> · <a href="/logged-in-browser.html">已登录浏览器指南</a> · <a href="/mcp.html">MCP</a> · <a href="/compare.html">选型</a></nav>
 
       <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -98,7 +101,7 @@
       <p class="du-lede">
         chrome-use 让<span class="mark">任意 AI agent 直接驱动你已登录的真实 Chrome</span>——
         Claude Code、Cursor、Codex、你自己的脚本。它复用你现成的登录会话，
-        <strong>对反爬完全不可检测，因为它<em>就是</em>你的真实浏览器</strong>：
+        <strong>保留现有浏览器配置，公开检测结果见文档</strong>：
         <a href="/real-chrome.html">CreepJS 实测 0% 机器人</a>。
       </p>
 
@@ -130,7 +133,7 @@
       <div class="du-cards">
         <a class="du-card" href="/real-chrome.html">
           <div class="du-card-title"><span class="du-card-ico">🔒</span> 你真实、已登录的 Chrome</div>
-          <p>cookies、登录态、指纹全是真的——因为它就是你的真实浏览器。对反爬系统完全不可检测。</p>
+          <p>cookies、登录态、指纹全是真的——因为它就是你的真实浏览器。检测结果仅代表已测环境，不保证所有网站都放行。</p>
         </a>
         <a class="du-card" href="/install.html">
           <div class="du-card-title"><span class="du-card-ico">🧩</span> 走扩展，不走调试端口</div>
@@ -150,9 +153,9 @@
 
       <h2>为什么不直接用……</h2>
       <ul>
-        <li><strong>Playwright / Puppeteer / browser-use？</strong>它们启动的是<em>空</em>浏览器——每个登录你重做、每个验证码你硬扛，最后还被识别为自动化。chrome-use 复用你已有的会话。</li>
+        <li><strong>Playwright / Puppeteer / browser-use？</strong>新建浏览器上下文没有现有登录态；这些工具也支持持久化上下文或连接已有浏览器，需要比较具体连接方式和会话管理。chrome-use 复用你已有的会话。</li>
         <li><strong>Claude 的 Chrome 插件？</strong>很好用，但只能给 Claude 用。chrome-use 给<em>任意</em> agent / CLI 用，同一套真实浏览器。</li>
-        <li><strong>裸 <code>--remote-debugging-port</code>（CDP）？</strong>Chrome 136+ 每次连接都弹 <span class="mark">「Allow remote debugging?」</span>。chrome-use 永远不弹——一键商店扩展，走原生消息。</li>
+        <li><strong>裸 <code>--remote-debugging-port</code>（CDP）？</strong>Chrome 136 限制默认配置文件的远程调试；具体要求随版本和连接模式而变。chrome-use 永远不弹——一键商店扩展，走原生消息。</li>
       </ul>
 
       <div class="du-callout note">
@@ -164,12 +167,7 @@
 
       <hr class="du-divider" />
 
-      <h2>为什么它不会被封</h2>
-      <p>
-        很多网站主动封禁浏览器自动化，踩中反爬系统<strong>连账号一起封</strong>。chrome-use 的答案是把
-        <strong>反检测当成一等能力</strong>：它不去<em>模拟</em>一个真人——它<em>就是</em>你已登录的真实浏览器，
-        所以网站读它为 <span class="mark">100% 真人</span>，也就无从封起。
-      </p>
+      <h2>检测结果能说明什么</h2><p>公开 CreepJS 测试报告为 0% bot、0% headless。这是特定环境的测量，不保证无法被检测或账号不会被封。网站还会判断操作行为、账号历史和网络信号。请查看<a href="/stealth.html">测试条件</a>；登录验证交给用户处理。</p>
 
       <div class="du-cards">
         <a class="du-card" href="/stealth.html">
@@ -219,6 +217,7 @@
 
       <hr class="du-divider" />
 
+      <p><a href="/logged-in-browser.html">让 Codex 或 Claude Code 操作已登录 Chrome</a></p>
       <h2>*-use 家族</h2>
       <p>
         同一个思路贯穿始终：不造模拟环境，直接接管你手里那台真实的、已经登录好的设备。
