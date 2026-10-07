@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Agent efficiency fixture</title>
+<h1>Agent efficiency fixture</h1>
+<button id="increment">Increment count</button>
+<output id="count" aria-live="polite">0</output>
+<script>
+  document.querySelector('#increment').addEventListener('click', () => {
+    const count = document.querySelector('#count');
+    count.value = String(Number(count.value) + 1);
+  });
+</script>
+</html>
