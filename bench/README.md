@@ -183,3 +183,24 @@ three times, and checks `#count` equals `3`. Repeat each variant with alternatin
 order and the same isolated session. These replays quantify CLI calls, response
 bytes and latency; they do not establish model round-trip savings without a
 caller trace. Coordinate live-browser ownership before running them.
+
+## Real CLI progress regression
+
+`progress-check.py` exercises an explicitly selected binary through repeated
+ordinary CLI launch handshakes, using its own daemon, session, headless Chrome
+and a synthetic loopback page. Supply the SHA-256 from a build receipt or release
+checksum and the exact version; it never selects a binary from PATH:
+
+```sh
+python3 bench/progress-check.py --binary /path/to/chrome-use \
+  --sha256 RECEIPT_SHA256 --version 1.5.173 --output /tmp/progress-result.json
+python3 -m unittest discover -s bench -p test_progress_check.py -v
+```
+
+The structured report verifies successful unchanged clicks retain `noProgress`
+across CLI invocations, that those clicks actually ran, batch reaches counter 3,
+failed and nested scripts preserve advisories with exit 1, and timing decomposes
+into CDP busy plus non-CDP time. Every invocation has a timeout. Failures exit
+nonzero; cleanup closes only the owned session. This is correctness acceptance,
+not a speed measurement or a model round-trip benchmark. Matching a binary hash
+does not independently establish its source provenance.
