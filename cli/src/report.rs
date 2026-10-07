@@ -1057,7 +1057,8 @@ const WEB_FORM_JS: &str = r#"(() => {
     for (const e of document.querySelectorAll('[id^="issuecomment-"]')) {
       for (let n = e, i = 0; n && i < 8; n = n.parentElement, i++) {
         if (n.querySelectorAll('[id^="issuecomment-"]').length > 1) break;
-        if (n.innerText.includes(P.needle)) { anchor = e.id; break; }
+        // A comment still being saved carries "issuecomment-null".
+        if (n.innerText.includes(P.needle)) { if (/^issuecomment-\d+$/.test(e.id)) anchor = e.id; break; }
       }
     }
   }
@@ -1200,8 +1201,8 @@ impl WebSession {
             .map(|_| ())
     }
 
-    /// Re-find the fields, check they hold what was meant, press the button.
-    fn verify_and_submit(
+    /// Re-find the fields and check they hold what was meant.
+    fn verify(
         &self,
         mode: &str,
         needle: &str,
@@ -1227,8 +1228,35 @@ impl WebSession {
         if !s.submit || s.submit_disabled {
             return Err("the submit button is missing or disabled".into());
         }
-        self.run(&["click", "[data-cu-report=\"submit\"]"], None, 30)
-            .map(|_| ())
+        Ok(())
+    }
+
+    /// Press the button and wait for `done`. When the page still shows the
+    /// unsent form afterwards (the text in the box, the button live), the
+    /// click did not register — press it once more.
+    fn press_until(
+        &self,
+        mode: &str,
+        needle: &str,
+        body: &str,
+        done: impl Fn(&FormState) -> bool,
+    ) -> Result<Option<FormState>, String> {
+        let press = || {
+            self.run(&["click", "[data-cu-report=\"submit\"]"], None, 30)
+                .map(|_| ())
+        };
+        press()?;
+        let s = self.wait(mode, needle, 12, &done);
+        if s.as_ref().is_some_and(&done) {
+            return Ok(s);
+        }
+        let unsent = s
+            .as_ref()
+            .is_some_and(|s| s.submit && !s.submit_disabled && same_text(s.body.as_deref(), body));
+        if unsent {
+            press()?;
+        }
+        Ok(self.wait(mode, needle, 20, &done))
     }
 
     fn create(&self, repo: &str, title: &str, body: &str) -> Result<String, String> {
@@ -1244,8 +1272,10 @@ impl WebSession {
         if !body_in_url || !same_text(s.body.as_deref(), body) {
             self.fill("body", body)?;
         }
-        self.verify_and_submit("issue", "", Some(title), body)?;
-        let s = self.wait("issue", "", 30, |s| issue_from_url(repo, &s.url).is_some());
+        self.verify("issue", "", Some(title), body)?;
+        let s = self.press_until("issue", "", body, |s| {
+            issue_from_url(repo, &s.url).is_some()
+        })?;
         match s.and_then(|s| issue_from_url(repo, &s.url)) {
             Some((_, url)) => Ok(url),
             None => Err("pressed Create, but the page did not move to the new issue".into()),
@@ -1259,8 +1289,8 @@ impl WebSession {
         let loaded = self.load("comment", &needle)?;
         let (before, old_anchor) = (loaded.needle_count, loaded.anchor);
         self.fill("body", comment)?;
-        self.verify_and_submit("comment", &needle, None, comment)?;
-        match self.wait("comment", &needle, 30, |s| s.needle_count > before) {
+        self.verify("comment", &needle, None, comment)?;
+        match self.press_until("comment", &needle, comment, |s| s.needle_count > before)? {
             Some(s) if s.needle_count > before => {
                 // The comment shows up before GitHub gives it an id; wait a
                 // little for the permalink, else link the issue.
