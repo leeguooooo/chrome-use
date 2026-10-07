@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shlex
 import socket
 import subprocess
 import tempfile
@@ -43,6 +44,30 @@ def require(condition, message):
 
 def verify_result(record, success=True):
     result = record['result']
+    if record.get('args', [])[:1] == ['batch']:
+        require(success and record['exitCode'] == 0, 'Batch command did not succeed')
+        require(isinstance(result, list) and len(result) == len(record['args']) - 1
+                and bool(result), 'Batch result count does not match requested commands')
+        for item, command in zip(result, record['args'][1:]):
+            require(isinstance(item, dict) and item.get('command') == shlex.split(command)
+                    and item.get('success') is True and item.get('error') is None
+                    and isinstance(item.get('result'), dict),
+                    'Batch item failed or did not match its requested command')
+        # CLI batch exposes each item's action data, without the envelope timing.
+        # Ordinary object responses below still require and validate timing.
+        record['timingAvailable'] = False
+        return result
+    if not success and record.get('args', [])[:1] == ['script']:
+        # The CLI intentionally prints script runtime failure data directly.
+        require(isinstance(result, dict) and record['exitCode'] == 1
+                and result.get('ok') is False and isinstance(result.get('error'), str)
+                and bool(result['error']), 'Failed script must report ok=false and exit 1')
+        advisories = result.get('advisories')
+        require(isinstance(advisories, list) and bool(advisories)
+                and all(isinstance(item, dict) and item.get('retryAction') is False
+                        for item in advisories), 'Failed script lost its progress advisories')
+        record['timingAvailable'] = False
+        return result
     require(isinstance(result, dict), 'CLI response is not a protocol object')
     require(isinstance(result.get('data'), dict), 'Missing protocol data object')
     if success:

@@ -17,6 +17,37 @@ def record(success=True, code=0, data=None):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_real_batch_array_shape(self):
+        item = {'command': ['click', '#increment'], 'success': True,
+                'error': None, 'result': {'clicked': '#increment', 'dispatch': 'pointer'}}
+        batch = {'args': ['batch', 'click #increment'], 'exitCode': 0, 'result': [item]}
+        self.assertEqual(check.verify_result(batch), [item])
+        self.assertFalse(batch['timingAvailable'])
+        for key, value in (('success', False), ('error', 'synthetic failure'),
+                           ('command', ['click', '#different']), ('result', None)):
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                check.verify_result(dict(batch, result=[dict(item, **{key: value})]))
+        for value in ([], [item, item], {'success': True}, [None]):
+            with self.subTest(result=value), self.assertRaises(AssertionError):
+                check.verify_result(dict(batch, result=value))
+
+    def test_array_is_rejected_for_non_batch_command(self):
+        with self.assertRaises(AssertionError):
+            check.verify_result({'args': ['click', '#noop'], 'exitCode': 0, 'result': []})
+
+    def test_real_failed_script_shape_is_preserved(self):
+        data = {'ok': False, 'error': 'script error: synthetic failure', 'logs': [],
+                'return': None, 'advisories': [{'attempts': 3, 'retryAction': False}]}
+        script = {'args': ['script', '/tmp/synthetic.js'], 'exitCode': 1, 'result': data}
+        self.assertEqual(check.verify_result(script, success=False), data)
+        self.assertFalse(script['timingAvailable'])
+        for key, value in (('ok', True), ('error', ''), ('advisories', []),
+                           ('advisories', [{'retryAction': True}])):
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                check.verify_result(dict(script, result=dict(data, **{key: value})), success=False)
+        with self.assertRaises(AssertionError):
+            check.verify_result(dict(script, exitCode=0), success=False)
+
     def test_advisory_does_not_make_success_a_failure(self):
         data = {'observed': {'noProgress': {'retryAction': False}}}
         self.assertEqual(check.verify_result(record(data=data)), data)

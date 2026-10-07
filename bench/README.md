@@ -200,7 +200,12 @@ python3 -m unittest discover -s bench -p test_progress_check.py -v
 The structured report verifies successful unchanged clicks retain `noProgress`
 across CLI invocations, that those clicks actually ran, batch reaches counter 3,
 failed and nested scripts preserve advisories with exit 1, and timing decomposes
-into CDP busy plus non-CDP time. Every invocation has a timeout. Failures exit
-nonzero; cleanup closes only the owned session. This is correctness acceptance,
+into CDP busy plus non-CDP time. Batch's JSON array is checked item by item
+against the requested commands;
+its CLI output omits envelope timing, which the report marks unavailable.
+Failed scripts likewise print their failure data directly without timing;
+the checker requires exit 1, `ok:false`, an error, and preserved advisories.
+Every invocation has a timeout. Failures exit nonzero; cleanup closes only the
+owned session. This is correctness acceptance,
 not a speed measurement or a model round-trip benchmark. Matching a binary hash
 does not independently establish its source provenance.
