@@ -5876,6 +5876,9 @@ Options:
                              data URL payloads omitted. Full capture: network requests --json
                              Observation status is separate from action success;
                              partial/unavailable results must not trigger action replay.
+                             Successful same-context connection reuse preserves the
+                             noProgress streak; new/rebound/failed connections or
+                             storage-state loads clear it.
   --settle-ms <ms>           Ceiling on the wait before an observation captures
                              (default 1000, or AGENT_BROWSER_SETTLE_MS). The wait
                              ends early on DOM quiet + no in-flight request; a

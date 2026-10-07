@@ -70,6 +70,8 @@ breaks the streak. The hint sets `retryAction:false`; it never changes success
 or runs another action. This detector only covers the evidence collected by
 observe: an unchanged tree does not establish that a server write failed.
 
+Ordinary CLI/MCP connection preparation preserves this streak only on successful reuse of the same browser connection, target and session, without loading storage state. A new browser, rebind, failed preparation or storage-state load still clears the count.
+
 **When `--observe` says `no change`, read the `why:` line under it.** The
 daemon probes the target after a quiet action and reports the first decisive
 finding: the control is disabled, it is not rendered, it sits outside the

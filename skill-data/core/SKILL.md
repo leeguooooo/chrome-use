@@ -84,6 +84,11 @@ It never changes success or retries. No visible change does not prove a
 write failed. See `core/waiting` for detection limits and `core/profiling`
 for command timing and task measurement.
 
+Successful CLI/MCP connection preparation that reuses the same browser
+connection, target and session without loading storage state preserves the
+observation streak. New browsers, rebinds, failed preparation and storage-state
+loads clear it.
+
 ## Sessions and tabs
 
 Use one session name per task and reuse it. After "session unresponsive",
