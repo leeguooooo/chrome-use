@@ -33,8 +33,18 @@ def summarize(path, trace_path=None):
     for index, call in enumerate(calls, 1):
         if len(rows[index - 1]) != len(header) or int(call["n"]) != index:
             raise ValueError("malformed or non-sequential replay row")
-        if float(call["ms"]) < 0 or int(call["bytes"]) < 0:
-            raise ValueError("negative elapsed time or bytes")
+        if not math.isfinite(float(call["ms"])) or float(call["ms"]) < 0 or int(call["bytes"]) < 0:
+            raise ValueError("nonfinite/negative elapsed time or negative bytes")
+        if "unknown" in call and call["unknown"] not in ("true", "false", "unclassified"):
+            raise ValueError("invalid unknown classification")
+        if "timed_out" in call and call["timed_out"] not in ("true", "false"):
+            raise ValueError("invalid timed_out classification")
+    if "task_wall_ms" in meta and (not math.isfinite(float(meta["task_wall_ms"])) or float(meta["task_wall_ms"]) < 0):
+        raise ValueError("task_wall_ms must be finite and nonnegative")
+    if any(character in value for key, value in meta.items() for character in ("\t", "\r", "\0")):
+        raise ValueError("invalid metadata control character")
+    if meta.get("binary_source_verified", "false") != "false":
+        raise ValueError("this collector has no build-receipt verification support")
     latencies = [float(call["ms"]) for call in calls]
     features = {name: 0 for name in ("batch", "script", "observe")}
     for call in calls:
@@ -50,6 +60,7 @@ def summarize(path, trace_path=None):
         "schema": 1, "run_id": meta.get("run_id"), "task": meta.get("task"),
         "boundary": "explicit_run" if meta.get("run_id") else "single_replay_file",
         "binary": meta.get("binary"), "version": meta.get("version"),
+        "binary_source_verified": False,
         "binary_sha256": meta.get("binary_sha256"), "source_sha256": meta.get("source_sha256"),
         "temperature": meta.get("temperature", "legacy_warmup_requested" if meta.get("warm") == "true" else "unknown"),
         "cli_calls": len(calls), "assertion_cli_calls": len(assertions),
@@ -60,6 +71,8 @@ def summarize(path, trace_path=None):
         "response_utf8_bytes": sum(int(call["bytes"]) for call in calls) if meta.get("bytes_encoding") == "utf-8" else None,
         "legacy_response_units": sum(int(call["bytes"]) for call in calls) if meta.get("bytes_encoding") != "utf-8" else None,
         "failed_cli_calls": failures,
+        "timed_out_cli_calls": sum(call["timed_out"] == "true" for call in calls) if "timed_out" in header else None,
+        "stopped_after_timeout": meta.get("stopped_after_timeout") == "true",
         "unknown_calls": sum(call["unknown"] == "true" for call in calls) if "unknown" in header else None,
         "unclassified_outcomes": sum(call["unknown"] == "unclassified" for call in calls) if "unknown" in header else len(calls),
         "feature_calls": features,

@@ -97,7 +97,18 @@ It records the executable SHA-256, version output, tracked working-tree source
 SHA-256, call exit codes, exact output bytes including newlines, and task wall
 time including final assertions. Source hashing includes unstaged tracked edits;
 use `git add -N` for new source files. This identifies the measured source, but
-does not prove that a binary was built from it: match a build receipt separately.
+does not prove that a binary was built from it. `source_sha256` is the collector
+checkout hash, and `binary_source_verified` is always false. Match the executable
+SHA-256 against a remote build receipt separately to establish its compiled source.
+`--timeout 60` is the default per-invocation limit, covering version, warmup,
+task commands and assertions. A timed-out process group is killed, its partial
+output bytes are preserved, and its row records exit code 124, timed_out=true
+and unknown=unclassified. Remaining task actions stop rather than continuing an
+interrupted action sequence, then all final assertions still run with the same
+timeout. A passed postcondition after a timeout retains the failure and warning.
+Run IDs and metadata paths cannot contain newline, tab or NUL; invalid or
+nonfinite timing values and unknown classifications are rejected.
+
 Stdout and stderr are combined, so the byte count is CLI response transport cost,
 not an exact model input or token count.
 
@@ -115,7 +126,9 @@ first argument is batch/script, or which have the `--observe` flag; `feature_rat
 nested browser actions or prove that an agent adopted a hint. Protocol
 `action_outcome_unknown`/`outcome_unknown` codes are counted only in structured
 JSON response status fields. Non-JSON output or JSON without the protocol success field is unclassified, and
-legacy files have unknown counts null. Page text is never an error classifier.
+legacy files have unknown counts null. Batch JSON arrays are classified recursively when they contain protocol
+envelopes; empty arrays or unrecognized entries remain unclassified unless an
+explicit unknown code is present. Page text is never an error classifier.
 
 `call_p50_ms` and `call_p95_ms` use nearest rank. `call_time_sum_ms` sums measured
 command subprocess durations, while `task_wall_ms` includes collector overhead

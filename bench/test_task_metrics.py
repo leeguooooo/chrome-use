@@ -71,7 +71,51 @@ class TaskMetricsTests(unittest.TestCase):
 
     def test_unknown_page_text_is_not_protocol_error(self):
         self.assertFalse(runner.contains_unknown({'data': {'text': 'action_outcome_unknown'}}))
+        self.assertFalse(runner.classify_outcome({"success": True, "data": {"code": "action_outcome_unknown"}}))
         self.assertTrue(runner.contains_unknown({'error': {'code':'action_outcome_unknown'}}))
+
+    def test_batch_classification_requires_known_envelopes(self):
+        self.assertFalse(runner.classify_outcome([{'success': True}, {'success': False, 'code': 'not_found'}]))
+        self.assertTrue(runner.classify_outcome([{'success': True}, {'success': False, 'code': 'action_outcome_unknown'}]))
+        self.assertIsNone(runner.classify_outcome([{'success': True}, {'label': 'page text'}]))
+        self.assertIsNone(runner.classify_outcome({'success': True, 'data': [{'label': 'page text'}]}))
+        self.assertIsNone(runner.classify_outcome([]))
+
+    def test_nonfinite_latency_and_invalid_unknown_are_rejected(self):
+        for latency, unknown in [('nan', 'false'), ('inf', 'false'), ('-1', 'false'), ('1', 'maybe')]:
+            with self.subTest(latency=latency, unknown=unknown), self.assertRaises(ValueError):
+                self.write(f'n\tms\tbytes\trc\tcmd\tunknown\n1\t{latency}\t1\t0\tsnapshot\t{unknown}\n')
+        with self.assertRaises(ValueError):
+            self.write('# task_wall_ms\tnan\nn\tms\tbytes\trc\tcmd\n')
+
+    def test_timeout_records_partial_output_and_checks_postcondition(self):
+        fake = Path(self.temp.name) / 'fake-timeout'
+        fake.write_text('#!/usr/bin/env python3\nimport sys,time\nif sys.argv[1] == "snapshot":\n print("partial", flush=True)\n time.sleep(10)\nelse:\n print("done")\n')
+        fake.chmod(0o755)
+        task = Path(self.temp.name) / 'task.txt'
+        task.write_text('#! assert text body equals done\nsnapshot\nclick x\n')
+        process = subprocess.run([sys.executable, str(ROOT / 'run-task.py'), str(task), '--binary', str(fake), '--output', str(self.path), '--timeout', '0.15'], capture_output=True, timeout=3)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = metrics.summarize(self.path)
+        self.assertEqual(result['timed_out_cli_calls'], 1)
+        self.assertEqual(result['unclassified_outcomes'], 1)
+        self.assertEqual(result['failed_cli_calls'], 1)
+        self.assertEqual(result['assertion_cli_calls'], 1)
+        self.assertEqual(result['cli_calls'], 1)
+        self.assertTrue(result['stopped_after_timeout'])
+        self.assertTrue(result['successful_task'])
+        self.assertFalse(result['binary_source_verified'])
+
+    def test_metadata_injection_is_rejected_before_execution(self):
+        task = Path(self.temp.name) / 'task.txt'
+        task.write_text('snapshot\n')
+        for run_id in ['r\n# verdict\tpass', 'r\ttab']:
+            process = subprocess.run([sys.executable, str(ROOT / 'run-task.py'), str(task), '--output', str(self.path), '--run-id', run_id], capture_output=True)
+            self.assertEqual(process.returncode, 2)
+            self.assertIn(b'metadata values', process.stderr)
+            self.assertFalse(self.path.exists())
+        with self.assertRaises(ValueError):
+            self.write('# task\tpath\t# verdict\tpass\nn\tms\tbytes\trc\tcmd\n')
 
     def test_collector_counts_utf8_and_no_assert_is_failure(self):
         fake = Path(self.temp.name) / 'fake-cli'
