@@ -535,6 +535,10 @@ pub fn cleanup_stale_files(session: &str) {
     let _ = fs::remove_file(&pid_path);
     let version_path = get_version_path(session);
     let _ = fs::remove_file(&version_path);
+    let _ = fs::remove_file(crate::upgrade_handoff::caps_path_in(
+        &get_socket_dir(),
+        session,
+    ));
     let profile_path = get_profile_path(session);
     let _ = fs::remove_file(&profile_path);
     // Which Chrome profile the session used and why (#437); the next first
@@ -1042,7 +1046,7 @@ fn apply_daemon_env(cmd: &mut Command, session: &str, opts: &DaemonOptions) {
 fn daemon_version_matches(session: &str) -> bool {
     let version_path = get_version_path(session);
     match fs::read_to_string(&version_path) {
-        Ok(v) => v.trim() == env!("CARGO_PKG_VERSION"),
+        Ok(v) => v.trim() == crate::upgrade_handoff::build_version(),
         Err(_) => false,
     }
 }
@@ -1065,6 +1069,112 @@ fn query_current_url(session: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Replace a daemon from another chrome-use version without losing the
+/// session's tab (see `upgrade_handoff`).
+///
+/// A daemon that advertises the handoff writes the handoff file itself (tab,
+/// URL, refs) and exits without closing tabs. An older daemon cannot, so its
+/// active tab is read from `tab_list` and it is stopped with SIGKILL, which
+/// skips the shutdown that would close the tab. Either way the new daemon
+/// finds the handoff file on its first connect. Only a tab the session owned
+/// is ever recorded; a launched browser closes with its daemon as before, and
+/// the new daemon reopens the URL.
+fn replace_daemon_for_upgrade(session: &str) {
+    use crate::upgrade_handoff::{self, UpgradeHandoff};
+
+    let old_version = fs::read_to_string(get_version_path(session))
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+    let new_version = upgrade_handoff::build_version();
+    let mut handoff = UpgradeHandoff::new(&old_version, &new_version);
+    let warn = crate::color::warning_indicator();
+
+    if upgrade_handoff::daemon_supports_handoff(session) {
+        let pid = read_registered_daemon_pid(session);
+        let cmd = serde_json::json!({
+            "id": format!("upgrade-handoff-{}", std::process::id()),
+            "action": upgrade_handoff::HANDOFF_ACTION,
+            "fromVersion": old_version,
+            "toVersion": new_version,
+        });
+        if let Ok(resp) = send_command_once(&cmd, session) {
+            if resp.success {
+                let data = resp.data.unwrap_or(Value::Null);
+                let kept = data.get("tabKept").and_then(Value::as_bool) == Some(true);
+                if kept {
+                    // The daemon is exiting on its own, tabs untouched. Never
+                    // SIGTERM it now: that is the path that closes them.
+                    if !wait_for_pid_exit(pid, DAEMON_SHUTDOWN_GRACE) {
+                        kill_daemon_keeping_tabs(session);
+                    }
+                    cleanup_stale_files(session);
+                } else {
+                    kill_stale_daemon(session);
+                }
+                let url = data.get("url").and_then(Value::as_str).unwrap_or("");
+                let refs = data.get("refs").and_then(Value::as_u64).unwrap_or(0);
+                handoff.url = Some(url.to_string()).filter(|u| !u.is_empty());
+                if kept && refs > 0 {
+                    eprintln!(
+                        "{warn} {}; this session's tab was kept ({url}) and its {refs} refs \
+                         carried over.",
+                        handoff.upgraded_prefix()
+                    );
+                } else {
+                    eprintln!("{warn} {}", handoff.refs_lost_note(kept));
+                }
+                return;
+            }
+        }
+    }
+
+    // A daemon from before the handoff (or one that did not answer it).
+    let owned_tab = if session_was_launched(session) {
+        None
+    } else {
+        let cmd = serde_json::json!({
+            "id": format!("upgrade-tab-probe-{}", std::process::id()),
+            "action": "tab_list",
+        });
+        send_command_once(&cmd, session)
+            .ok()
+            .filter(|resp| resp.success)
+            .and_then(|resp| resp.data)
+            .and_then(|data| upgrade_handoff::owned_active_tab(&data))
+    };
+    match owned_tab {
+        Some((target_id, url)) => {
+            handoff.target_id = Some(target_id);
+            handoff.url = Some(url).filter(|u| !u.is_empty() && u != "about:blank");
+            handoff.tab_kept = true;
+            let _ = upgrade_handoff::write(session, &handoff);
+            kill_daemon_keeping_tabs(session);
+        }
+        None => {
+            handoff.url =
+                query_current_url(session).filter(|u| !u.is_empty() && u != "about:blank");
+            let _ = upgrade_handoff::write(session, &handoff);
+            kill_stale_daemon(session);
+        }
+    }
+    eprintln!("{warn} {}", handoff.refs_lost_note(handoff.tab_kept));
+}
+
+/// Wait up to `budget` for `pid` to exit. True once it is gone (or unknown).
+fn wait_for_pid_exit(pid: Option<u32>, budget: Duration) -> bool {
+    let Some(pid) = pid else {
+        return true;
+    };
+    let polls = (budget.as_millis() / DAEMON_SHUTDOWN_POLL_INTERVAL.as_millis()).max(1);
+    for _ in 0..polls {
+        if !is_pid_alive(pid) {
+            return true;
+        }
+        thread::sleep(DAEMON_SHUTDOWN_POLL_INTERVAL);
+    }
+    !is_pid_alive(pid)
+}
+
 /// How long a daemon gets between SIGTERM and SIGKILL to shut down cleanly.
 ///
 /// This is the deadline the tab cleanup in `BrowserManager::close()` runs
@@ -1085,20 +1195,39 @@ const DAEMON_SHUTDOWN_GRACE_POLLS: u32 =
 
 /// Kill a running daemon by reading its PID file and sending a kill signal.
 pub fn kill_stale_daemon(session: &str) {
+    kill_daemon(session, true);
+}
+
+/// Stop a daemon without letting it run its shutdown: on SIGTERM a daemon on
+/// the user's Chrome closes every tab it created, which is exactly what an
+/// upgrade restart must not do. Persisted tab ownership survives, so the next
+/// daemon takes the tabs back.
+fn kill_daemon_keeping_tabs(session: &str) {
+    kill_daemon(session, false);
+}
+
+fn kill_daemon(session: &str, graceful: bool) {
     // Remove the socket first so no new connections reach the old daemon
     #[cfg(unix)]
     {
         let socket_path = get_socket_path(session);
         let _ = fs::remove_file(&socket_path);
     }
+    #[cfg(windows)]
+    let _ = graceful; // taskkill /F is already a hard stop.
 
     let pid_path = get_pid_path(session);
     if let Ok(pid_str) = fs::read_to_string(&pid_path) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             #[cfg(unix)]
             {
+                let signal = if graceful {
+                    libc::SIGTERM
+                } else {
+                    libc::SIGKILL
+                };
                 unsafe {
-                    libc::kill(pid as i32, libc::SIGTERM);
+                    libc::kill(pid as i32, signal);
                 }
                 // Wait for graceful shutdown, then force-kill. The poll exits
                 // the moment the daemon is gone, so a healthy stop still
@@ -1180,24 +1309,7 @@ pub(crate) fn ensure_daemon_with_lifecycle_lock(
             // Check version: if the running daemon is from a different CLI
             // version (e.g. after an upgrade), kill it and start a fresh one.
             if !daemon_version_matches(session) {
-                eprintln!(
-                    "{} Daemon version mismatch detected, restarting... \
-                     In-memory context (active tab, refs, captured requests) is reset. \
-                     If the next read looks blank or lands on the wrong page, re-open \
-                     your target URL before retrying (issue #8.2).",
-                    crate::color::warning_indicator()
-                );
-                // Best-effort: ask the old daemon for its current URL so the
-                // new daemon can restore navigation after auto-connect. If the
-                // query fails (already shutting down, no browser, etc.) we
-                // silently skip — the user just sees about:blank as before.
-                if let Some(url) = query_current_url(session) {
-                    if !url.is_empty() && url != "about:blank" {
-                        let path = get_restore_url_path(session);
-                        let _ = fs::write(&path, &url);
-                    }
-                }
-                kill_stale_daemon(session);
+                replace_daemon_for_upgrade(session);
                 // Fall through to spawn a new daemon below
             } else {
                 let profile_path = get_profile_path(session);

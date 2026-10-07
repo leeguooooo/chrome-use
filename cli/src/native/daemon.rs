@@ -192,7 +192,10 @@ pub async fn run_daemon(session: &str) {
     let _ = fs::write(&pid_path, process::id().to_string());
 
     let version_path = socket_dir.join(format!("{}.version", session));
-    let _ = fs::write(&version_path, env!("CARGO_PKG_VERSION"));
+    let _ = fs::write(&version_path, crate::upgrade_handoff::build_version());
+    // Tell a future CLI of another version that this daemon can hand its tab
+    // over instead of closing it (see `upgrade_handoff`).
+    crate::upgrade_handoff::advertise_capability(session);
 
     // On Unix the daemon listens on a Unix domain socket; on Windows it uses
     // TCP, so there is no .sock file — only a .port file written by the server.
@@ -273,6 +276,7 @@ pub async fn run_daemon(session: &str) {
     }
     let _ = fs::remove_file(&pid_path);
     let _ = fs::remove_file(&version_path);
+    let _ = fs::remove_file(crate::upgrade_handoff::caps_path_in(&socket_dir, session));
     let _ = fs::remove_file(&stream_path);
     let _ = fs::remove_file(socket_dir.join(format!("{}.engine", session)));
     let _ = fs::remove_file(socket_dir.join(format!("{}.provider", session)));
@@ -552,7 +556,9 @@ async fn handle_connection<S>(
                     let _ = tx.try_send(());
                 }
 
-                let is_close = cmd.get("action").and_then(|v| v.as_str()) == Some("close");
+                let is_handoff = cmd.get("action").and_then(|v| v.as_str())
+                    == Some(crate::upgrade_handoff::HANDOFF_ACTION);
+                let mut is_close = cmd.get("action").and_then(|v| v.as_str()) == Some("close");
 
                 let response = {
                     let mut s = state.lock().await;
@@ -566,6 +572,14 @@ async fn handle_connection<S>(
                     }
                     response
                 };
+                // An upgrade handoff that kept the tab exits like `close`, but
+                // the browser was never closed: the close_notify branch of the
+                // server loop breaks without the tab sweep that SIGTERM runs.
+                if is_handoff
+                    && response.pointer("/data/tabKept").and_then(|v| v.as_bool()) == Some(true)
+                {
+                    is_close = true;
+                }
 
                 let mut resp = serde_json::to_string(&response).unwrap_or_default();
                 resp.push('\n');

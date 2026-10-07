@@ -39,7 +39,8 @@ pub const ADAPTIVE_MIN_NAME: f64 = 0.50;
 /// attributes (those would need an N×`DOM.describeNode` storm per snapshot), so
 /// `tag` holds the AX **role** and `attrs` holds discriminating AX properties
 /// (value/url/level/checked), not DOM `id`/`class`.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ElementFingerprint {
     /// AX role, e.g. "button" (used where a DOM tag would otherwise go).
     pub tag: String,

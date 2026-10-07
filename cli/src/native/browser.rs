@@ -2832,6 +2832,56 @@ impl BrowserManager {
         Ok(true)
     }
 
+    /// The active tab, when it is one this session may hand to its successor
+    /// across an upgrade restart: on the user's Chrome (a launched browser
+    /// closes with the daemon), and created or adopted by this session.
+    pub fn handoff_target(&self) -> Option<String> {
+        if self.browser_process.is_some() {
+            return None;
+        }
+        let target_id = self.active_target_id().ok()?.to_string();
+        self.owned_targets()
+            .contains(&target_id)
+            .then_some(target_id)
+    }
+
+    /// After an upgrade restart, make `target_id` the active tab again — but
+    /// only a tab this session owns: one discovery found in its own relay group
+    /// (created, or adopted by it before), or one its persisted record says it
+    /// created. Never a foreign tab. Returns whether the tab is now active.
+    pub async fn resume_owned_target(&mut self, target_id: &str) -> Result<bool, String> {
+        if self.browser_process.is_some() {
+            return Ok(false);
+        }
+        let index = self.pages.iter().position(|p| p.target_id == target_id);
+        match index {
+            Some(index) if self.owned_targets().contains(target_id) => {
+                let already = self.active_target_id.as_deref() == Some(target_id);
+                if !already {
+                    self.tab_switch(index).await?;
+                }
+                self.close_leftover_blank_scratch(target_id).await;
+                Ok(true)
+            }
+            Some(_) => Ok(false),
+            // Discovery can miss a live tab in a flaky relay snapshot. Re-adopt
+            // it by exact id only when we hold the right to it.
+            None if self.created_targets.contains(target_id) => {
+                match self.adopt_existing_target(target_id).await {
+                    Ok(()) => {
+                        let session_id = self.active_session_id()?.to_string();
+                        self.enable_domains(&session_id).await?;
+                        // Discovery opened a scratch tab when it missed ours.
+                        self.close_leftover_blank_scratch(target_id).await;
+                        Ok(true)
+                    }
+                    Err(_) => Ok(false),
+                }
+            }
+            None => Ok(false),
+        }
+    }
+
     /// Returns true if this manager was connected via CDP (as opposed to local launch).
     pub fn is_cdp_connection(&self) -> bool {
         self.browser_process.is_none()

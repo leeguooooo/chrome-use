@@ -1841,6 +1841,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         action,
         "" | "launch"
             | "close"
+            | "upgrade_handoff"
             | "har_stop"
             | "credentials_set"
             | "credentials_get"
@@ -2104,6 +2105,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "script" => super::script::handle_script(cmd, state).await,
             "close" => handle_close(cmd, state).await,
             "keep" => handle_keep(cmd, state).await,
+            "upgrade_handoff" => handle_upgrade_handoff(cmd, state).await,
             "stealth_status" => handle_stealth_status(state).await,
             "snapshot" => handle_snapshot(cmd, state).await,
             "select_text" => handle_select_text(cmd, state).await,
@@ -3410,6 +3412,9 @@ async fn apply_session_setup(state: &mut DaemonState, session_id: &str) -> Resul
 /// of whether navigation succeeds, so a stale sidecar can't haunt later
 /// auto-launches.
 async fn try_restore_navigation(state: &mut DaemonState) {
+    if try_resume_after_upgrade(state).await {
+        return;
+    }
     let path = get_restore_url_path(&state.session_id);
     let url = match fs::read_to_string(&path) {
         Ok(s) => s.trim().to_string(),
@@ -3837,6 +3842,10 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                 load_storage_state_or_rollback(state, &storage_state_owned).await?;
                 apply_launch_init_scripts(state, SessionSetup::default()).await;
                 apply_stealth_to_browser(state).await;
+                // A daemon replaced by an upgrade is reconnected here, by the
+                // client's `launch`, before the agent's own command: take the
+                // session's tab and refs back now (see `upgrade_handoff`).
+                try_restore_navigation(state).await;
                 return Ok(json!({ "launched": true }));
             }
             Err(e) => {
@@ -3991,6 +4000,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     // FLAGS (e.g. --disable-blink-features) were applied, so the JS patches never
     // ran and navigator.userAgent kept the HeadlessChrome marker.
     apply_stealth_to_browser(state).await;
+    try_restore_navigation(state).await;
 
     Ok(json!({ "launched": true }))
 }
@@ -5498,6 +5508,120 @@ async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             "this session did not create this tab, so there was nothing to release: it was already              exempt from auto-close. No keep reason was recorded."
         },
     }))
+}
+
+/// `upgrade_handoff` — sent by a CLI of another version just before it
+/// replaces this daemon. Write the handoff file (active tab, URL, refs) for
+/// the successor. `tabKept: true` tells the connection loop to exit WITHOUT
+/// the shutdown tab sweep, so the tab is still there for the new daemon; a
+/// launched browser cannot outlive us, so then only the URL is carried.
+async fn handle_upgrade_handoff(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    use crate::upgrade_handoff::{self, UpgradeHandoff};
+
+    let to_version = cmd.get("toVersion").and_then(|v| v.as_str()).unwrap_or("");
+    let mut handoff = UpgradeHandoff::new(&upgrade_handoff::build_version(), to_version);
+    if let Some(mgr) = state.browser.as_ref() {
+        let url = match tokio::time::timeout(Duration::from_secs(3), mgr.get_url()).await {
+            Ok(Ok(url)) if !url.is_empty() => url,
+            _ => mgr.cached_active_url(),
+        };
+        handoff.url = Some(url).filter(|u| !u.is_empty() && u != "about:blank");
+        if let Some(target_id) = mgr.handoff_target() {
+            handoff.target_id = Some(target_id);
+            handoff.tab_kept = true;
+            handoff.refs = state.ref_map.export();
+        }
+    }
+    upgrade_handoff::write(&state.session_id, &handoff)?;
+    let refs = handoff.refs.as_ref().map(|r| r.entries.len()).unwrap_or(0);
+    Ok(json!({
+        "tabKept": handoff.tab_kept,
+        "targetId": handoff.target_id,
+        "url": handoff.url,
+        "refs": refs,
+    }))
+}
+
+/// First connect after an upgrade restart: take the handoff file the previous
+/// daemon (or the CLI, for a daemon too old to write one) left, select the
+/// same tab again and restore its refs. Whatever cannot be carried over is
+/// said by the first `@ref` command instead of "NO snapshot refs at all".
+/// Returns true when it handled the restart (the legacy `.restore-url`
+/// navigation is then skipped).
+async fn try_resume_after_upgrade(state: &mut DaemonState) -> bool {
+    let Some(handoff) = crate::upgrade_handoff::take(&state.session_id) else {
+        return false;
+    };
+    let _ = fs::remove_file(get_restore_url_path(&state.session_id));
+    let Some(mgr) = state.browser.as_mut() else {
+        return true;
+    };
+
+    let mut resumed = false;
+    if let (true, Some(target_id)) = (handoff.tab_kept, handoff.target_id.as_deref()) {
+        let old_target = mgr.active_target_id().ok().map(str::to_string);
+        resumed = mgr.resume_owned_target(target_id).await.unwrap_or(false);
+        if resumed {
+            state.switch_tab_context(old_target.as_deref(), target_id);
+        }
+    }
+
+    if resumed {
+        let label = env::var("AGENT_BROWSER_SESSION").ok();
+        let live_url = match state.browser.as_ref() {
+            Some(mgr) => tokio::time::timeout(Duration::from_secs(3), mgr.get_url())
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        // Refs name nodes of one document. Restore them only onto that same
+        // document; the existing stale-ref relocation handles nodes that
+        // changed since the snapshot.
+        let same_document = handoff.url.as_deref().is_some_and(|u| u == live_url);
+        match handoff.refs.clone() {
+            Some(refs) if same_document => {
+                state.ref_map = RefMap::import(refs, label.as_deref());
+            }
+            _ => {
+                let mut map = RefMap::with_session_label(label.as_deref());
+                map.set_restart_note(handoff.refs_lost_note(true));
+                state.ref_map = map;
+            }
+        }
+        return true;
+    }
+
+    // The tab is gone (or was never ours to keep): reopen its URL in the tab
+    // discovery gave us, as before, and say so on the first `@ref`.
+    state.ref_map.clear();
+    state.iframe_sessions.clear();
+    state.active_frame_id = None;
+    if let (Some(url), Some(mgr)) = (handoff.url.as_deref(), state.browser.as_mut()) {
+        // Reuse the scratch tab discovery opened, never another live tab of
+        // this session: navigating that would throw away its page.
+        let active_url = mgr.cached_active_url();
+        let reopened = if active_url.is_empty() || active_url == "about:blank" {
+            mgr.navigate(url, super::browser::WaitUntil::Load)
+                .await
+                .map(|_| ())
+        } else {
+            mgr.tab_new(Some(url), None).await.map(|_| ())
+        };
+        if let Err(e) = reopened {
+            eprintln!(
+                "{} Could not reopen previous URL ({}): {}",
+                crate::color::warning_indicator(),
+                url,
+                e
+            );
+        }
+    }
+    state
+        .ref_map
+        .set_restart_note(handoff.refs_lost_note(false));
+    true
 }
 
 async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {

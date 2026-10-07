@@ -104,7 +104,7 @@ pub(crate) fn read_editable_value_function() -> String {
     )
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RefEntry {
     pub backend_node_id: Option<i64>,
     pub role: String,
@@ -118,6 +118,7 @@ pub struct RefEntry {
     /// Minted by the DOM-walk fallback snapshot (issue #206), not the AX tree.
     /// Such a ref is verified against the DOM (the node still exists) rather
     /// than the accessibility tree, which on that page had nothing to compare.
+    #[serde(default)]
     pub dom_sourced: bool,
 }
 
@@ -137,6 +138,34 @@ pub struct RefMap {
     /// the current one dropped, so "Unknown ref" can suggest the closest
     /// current refs. Reset with the identities on navigation.
     retired: HashMap<String, (String, String)>,
+    /// Why this map is empty although the agent may hold refs: the daemon was
+    /// replaced by an upgrade and the previous one's refs could not be carried
+    /// over. Replaces the generic "no snapshot has run" text until the next
+    /// snapshot, which is the first moment refs exist again.
+    restart_note: Option<String>,
+}
+
+/// A ref map as it is written to disk for an upgrade restart: everything
+/// `@ref` resolution and stable numbering need, nothing tied to the process.
+/// The suggestions memory (`retired`) is left behind; it only names refs that
+/// were already gone before the restart.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PersistedRefMap {
+    pub snapshot_generation: u64,
+    pub next_ref: usize,
+    pub entries: Vec<(String, RefEntry)>,
+    #[serde(default)]
+    pub stable: Vec<PersistedStableRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PersistedStableRef {
+    pub backend_node_id: i64,
+    pub frame_id: Option<String>,
+    pub ref_id: String,
+    pub last_seen_generation: u64,
+    pub role: String,
+    pub name: String,
 }
 
 /// Bound on [`RefMap::retired`]; past it the memory starts over.
@@ -181,6 +210,7 @@ impl RefMap {
             snapshot_generation: 0,
             session_label: String::new(),
             retired: HashMap::new(),
+            restart_note: None,
         }
     }
 
@@ -204,6 +234,9 @@ impl RefMap {
             format!(" `{}`", self.session_label)
         };
         if self.map.is_empty() {
+            if let Some(note) = &self.restart_note {
+                return format!("Unknown ref: {ref_id} — {note}");
+            }
             return format!(
                 "Unknown ref: {ref_id} — session{session} has NO snapshot refs at all: no `snapshot` \
                  has run in this session yet (or the page navigated since). If you took the \
@@ -285,6 +318,7 @@ impl RefMap {
     /// keep the same `@ref` across modal/list churn (issue #155). Navigation and
     /// tab switches call [`Self::clear`] instead, which hard-resets identities.
     pub fn begin_snapshot(&mut self) {
+        self.restart_note = None;
         if self.retired.len() + self.map.len() > MAX_RETIRED_REFS {
             self.retired.clear();
         }
@@ -533,6 +567,70 @@ impl RefMap {
 
     pub fn set_next_ref_num(&mut self, n: usize) {
         self.next_ref = n;
+    }
+
+    /// Explain an empty map by an upgrade restart (see `restart_note`).
+    pub fn set_restart_note(&mut self, note: String) {
+        self.restart_note = Some(note);
+    }
+
+    /// The map in the form an upgrade restart carries to the next daemon.
+    /// `None` when no snapshot has run: there is nothing to carry.
+    pub fn export(&self) -> Option<PersistedRefMap> {
+        if !self.has_snapshot() || self.map.is_empty() {
+            return None;
+        }
+        let mut stable: Vec<PersistedStableRef> = self
+            .stable_refs
+            .iter()
+            .map(|(key, entry)| PersistedStableRef {
+                backend_node_id: key.backend_node_id,
+                frame_id: key.frame_id.clone(),
+                ref_id: entry.ref_id.clone(),
+                last_seen_generation: entry.last_seen_generation,
+                role: entry.role.clone(),
+                name: entry.name.clone(),
+            })
+            .collect();
+        stable.sort_by(|a, b| a.ref_id.cmp(&b.ref_id));
+        Some(PersistedRefMap {
+            snapshot_generation: self.snapshot_generation,
+            next_ref: self.next_ref,
+            entries: self.entries_sorted(),
+            stable,
+        })
+    }
+
+    /// Rebuild a map from [`Self::export`] output. The session label is the
+    /// new daemon's; everything else is what the previous daemon held.
+    pub fn import(persisted: PersistedRefMap, session: Option<&str>) -> Self {
+        let mut map = Self::with_session_label(session);
+        map.snapshot_generation = persisted.snapshot_generation.max(1);
+        map.next_ref = persisted.next_ref.max(1);
+        for (ref_id, entry) in persisted.entries {
+            if let Some(n) = ref_id
+                .strip_prefix('e')
+                .and_then(|n| n.parse::<usize>().ok())
+            {
+                map.next_ref = map.next_ref.max(n + 1);
+            }
+            map.map.insert(ref_id, entry);
+        }
+        for s in persisted.stable {
+            map.stable_refs.insert(
+                StableRefKey {
+                    backend_node_id: s.backend_node_id,
+                    frame_id: s.frame_id,
+                },
+                StableRefEntry {
+                    ref_id: s.ref_id,
+                    last_seen_generation: s.last_seen_generation,
+                    role: s.role,
+                    name: s.name,
+                },
+            );
+        }
+        map
     }
 }
 
@@ -3765,6 +3863,70 @@ mod tests {
         assert!(e.contains("snapshot -i"), "{e}");
         // Never seen, so nothing to compare against: no guesses offered.
         assert!(!e.contains("try @"), "{e}");
+    }
+
+    #[test]
+    fn an_upgrade_restart_note_replaces_the_no_refs_text_until_the_next_snapshot() {
+        let mut m = RefMap::with_session_label(Some("upg"));
+        m.set_restart_note(
+            "chrome-use was upgraded (1 → 2) and its daemon restarted; this session's tab \
+             was kept (https://example.com/), but refs from before the upgrade are gone — \
+             run `snapshot -i` and use its refs."
+                .to_string(),
+        );
+        let e = m.unknown_ref_error("e135");
+        assert!(
+            e.starts_with("Unknown ref: e135 — chrome-use was upgraded (1 → 2)"),
+            "{e}"
+        );
+        assert!(!e.contains("NO snapshot refs"), "{e}");
+
+        m.begin_snapshot();
+        let e = m.unknown_ref_error("e135");
+        assert!(!e.contains("upgraded"), "a snapshot ends the note: {e}");
+    }
+
+    #[test]
+    fn a_ref_map_survives_export_and_import_with_stable_numbering() {
+        let mut m = RefMap::new();
+        m.begin_snapshot();
+        let link = m.snapshot_ref(Some(10), None, "link", "More information...");
+        m.add(link.clone(), Some(10), "link", "More information...", None);
+        let btn = m.snapshot_ref(Some(11), Some("F1"), "button", "Go");
+        m.add_with_frame(btn.clone(), Some(11), "button", "Go", Some(1), Some("F1"));
+        m.set_fingerprint(
+            &btn,
+            ElementFingerprint {
+                tag: "button".into(),
+                text: "Go".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            RefMap::new().export(),
+            None,
+            "nothing to carry before a snapshot"
+        );
+
+        let persisted = m.export().expect("exported");
+        let json = serde_json::to_string(&persisted).unwrap();
+        let back: PersistedRefMap = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, persisted);
+
+        let mut restored = RefMap::import(back, Some("upg"));
+        assert!(restored.has_snapshot());
+        assert_eq!(restored.get(&link), m.get(&link));
+        assert_eq!(restored.get(&btn), m.get(&btn));
+        assert!(restored.ref_is_in_iframe(&format!("@{btn}")));
+
+        // The next snapshot of the same document keeps the numbers the agent
+        // already holds, and mints new ones past them.
+        restored.begin_snapshot();
+        assert_eq!(
+            restored.snapshot_ref(Some(10), None, "link", "More information..."),
+            link
+        );
+        assert_eq!(restored.snapshot_ref(Some(99), None, "link", "New"), "e3");
     }
 
     #[test]

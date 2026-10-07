@@ -30,6 +30,7 @@ mod test_runner;
 #[cfg(test)]
 mod test_utils;
 mod upgrade;
+mod upgrade_handoff;
 mod validation;
 
 use serde_json::{json, Value};
