@@ -17626,7 +17626,7 @@ async fn auth_frame_world(
 /// `Runtime.evaluate` in the scope's document. A child frame that loaded its
 /// next page (a separate password page) gets a new world once; the scripts
 /// themselves check the origin, so that never reaches another site.
-async fn auth_eval(
+async fn scope_eval(
     client: &super::cdp::client::CdpClient,
     scope: &AuthScope,
     expression: &str,
@@ -17675,7 +17675,7 @@ async fn auth_object(
         "document.querySelector({})",
         serde_json::to_string(sel).unwrap_or_default()
     );
-    let r = auth_eval(client, scope, &expression, false).await?;
+    let r = scope_eval(client, scope, &expression, false).await?;
     if r.exception_details.is_some() {
         return Err(format!("auth login: invalid selector {sel}"));
     }
@@ -17928,7 +17928,7 @@ async fn auth_submit(
     if scope.in_frame() {
         let submit_tag = format!("submit-{marker}");
         let found = marked
-            || auth_eval(
+            || scope_eval(
                 client,
                 scope,
                 &auth_submit_finder(field_tag, &submit_tag),
@@ -17940,7 +17940,7 @@ async fn auth_submit(
                 == Some(Value::Bool(true));
         if found {
             let tag_json = serde_json::to_string(&submit_tag).unwrap_or_default();
-            let ready = auth_eval(
+            let ready = scope_eval(
                 client,
                 scope,
                 &format!(
@@ -17960,7 +17960,7 @@ async fn auth_submit(
                 tokio::time::sleep(Duration::from_millis(150)).await;
             }
             // Not focused: no key went out, so the DOM click below is the only one.
-            let clicked = auth_eval(
+            let clicked = scope_eval(
                 client,
                 scope,
                 &format!(
@@ -17994,7 +17994,7 @@ async fn auth_submit(
     }
     if let Some(tag) = field_tag {
         let tag_json = serde_json::to_string(tag).unwrap_or_default();
-        auth_eval(
+        scope_eval(
             client,
             scope,
             &format!(
@@ -18093,7 +18093,7 @@ async fn mark_usable_auth_element(
         }})()"#
     );
     loop {
-        let result = auth_eval(client, scope, &expression, true).await?;
+        let result = scope_eval(client, scope, &expression, true).await?;
         match result.result.value.as_ref() {
             Some(Value::Bool(true)) => return Ok(format!("[data-cu-auth=\"{tag}\"]")),
             Some(Value::String(now)) => {
@@ -18445,7 +18445,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             user_tag = serde_json::to_string(&user_tag).unwrap_or_default(),
             pass_tag = serde_json::to_string(&pass_tag).unwrap_or_default(),
         );
-        let verdict = unblocked!(auth_eval(&mgr.client, &scope, &check, true).await)?;
+        let verdict = unblocked!(scope_eval(&mgr.client, &scope, &check, true).await)?;
         if let Some(problem) = verdict
             .result
             .value
@@ -18543,7 +18543,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
         )
         .await;
     if scope.in_frame() {
-        let _ = auth_eval(&mgr.client, &scope, &cleanup, true).await;
+        let _ = scope_eval(&mgr.client, &scope, &cleanup, true).await;
     }
 
     outcome?;
@@ -19090,7 +19090,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         )
         .await;
     if scope.in_frame() {
-        let _ = auth_eval(&mgr.client, &scope, &cleanup, true).await;
+        let _ = scope_eval(&mgr.client, &scope, &cleanup, true).await;
     }
 
     // The ceremony is over (check_passkey_accepted waited for its result):
@@ -19654,7 +19654,7 @@ async fn type_code_once(
     let sel_json = serde_json::to_string(sel).unwrap_or_default();
     let session_id = scope.session_id.as_str();
     let eval = |expression: String| async move {
-        let r = auth_eval(client, scope, &expression, true).await?;
+        let r = scope_eval(client, scope, &expression, true).await?;
         Ok::<Option<Value>, String>(r.result.value)
     };
     let focused = eval(format!(
@@ -19738,7 +19738,7 @@ async fn check_code_accepted(
         origin = serde_json::to_string(origin).unwrap_or_default(),
         sels = serde_json::to_string(AUTH_OTP_SELECTORS).unwrap_or_default(),
     );
-    let r = auth_eval(client, scope, &expression, true).await;
+    let r = scope_eval(client, scope, &expression, true).await;
     match r {
         Ok(r) => match r.result.value {
             Some(Value::String(alert)) => Err(format!(
@@ -19784,7 +19784,7 @@ async fn verify_auth_fields(
         origin = serde_json::to_string(origin).unwrap_or_default(),
         fields = serde_json::to_string(fields).unwrap_or_default(),
     );
-    let verdict = auth_eval(client, scope, &check, true).await?;
+    let verdict = scope_eval(client, scope, &check, true).await?;
     match verdict.result.value.as_ref().and_then(Value::as_str) {
         Some(problem) if !problem.is_empty() => Err(format!(
             "auth login --bwu stopped before submitting: {problem}. Nothing was submitted."
