@@ -5834,7 +5834,7 @@ Options:
                              name prefix, directory ("Profile 14"), email, or id
                              (or AGENT_BROWSER_PROFILE). `chrome-use browsers` lists them.
                              Sticky per session. Defaults: ~/.chrome-use/config.json
-                             "profiles": {"default": …, "routes": [{"match", "profile"}]}
+                             "profiles" key (default + per-site routes); see `browsers --help`
   --no-choosebrowser         Ignore ChooseBrowser's site rules for this command.
   --remember                 With an explicit --browser, ask ChooseBrowser to route this
                              site to that profile from now on. macOS + ChooseBrowser only.
