@@ -2728,9 +2728,11 @@ async fn probe_relay(url: &str, budget: std::time::Duration) -> bool {
 ///
 /// Each line also carries when, which process, and who started it (`ts=`,
 /// `pid=`, `proc=`, `by=`, plus `headless=` for a launch). Without them,
-/// thousands of `session=default mode=launched` lines could not be told apart
-/// from a user's agent: they turned out to be `cargo test` runs, which are
-/// in-process and so have no daemon session name.
+/// thousands of `session=default mode=launched` lines (real launches: the
+/// line is written after Chrome started) could not be attributed. `default`
+/// only says no daemon set a session name, i.e. the launch ran in-process;
+/// `cargo test` does that, but the old lines cannot prove it was the only
+/// source, nor whether each window was visible.
 pub fn log_connect_mode(ws_url: &str, launched: bool, session: &str, headless: Option<bool>) {
     let relay = relay_url();
     let relay_up = relay.is_some();

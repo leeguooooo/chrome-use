@@ -10,29 +10,39 @@
 // recovery flipped tabs in that window, so the user's view kept switching to
 // pages they never opened. Found on a real profile whose remembered agent
 // window was the user's only, full-screen window holding 96 tabs.
-
-/** Pages that do not make a window the user's: the window's own placeholder. */
-function isPlaceholderUrl(url) {
-  return !url || url === 'about:blank'
-}
+//
+// The rule refuses whenever it cannot prove the window is the agent's: an
+// unreadable tab list, a tab without an id, a tab that claims another window,
+// or any tab the agent neither owns nor opened. A blank tab is a user tab like
+// any other; the only exemption is the placeholder this agent window was
+// created with, identified by the tab and window ids recorded at creation,
+// never by its URL.
 
 /**
- * Decide whether `win` (from chrome.windows.get, with `tabs` from
- * chrome.tabs.query({windowId})) may keep receiving agent tabs.
+ * Decide whether `win` (from chrome.windows.get) may keep receiving agent tabs.
  *
- * Not an agent window any more when:
- * - it is full screen (the agent never makes its window full screen), or
- * - it holds a tab the agent neither owns nor opened: the user's own tab.
- *   A tab opened by an agent tab (a pop-up) still belongs to the agent.
+ * @param win          the window, or null if it is gone
+ * @param tabs         chrome.tabs.query({windowId}) result, or null if the
+ *                     query failed (unknown is not empty)
+ * @param isOwned      tabId -> whether the agent owns that tab
+ * @param placeholder  { windowId, tabId } recorded when this window was
+ *                     created, or null when no record exists
  */
-export function agentWindowStillOurs(win, tabs, isOwned) {
-  if (!win) return { ours: false, reason: 'gone' }
+export function agentWindowStillOurs(win, tabs, isOwned, placeholder = null) {
+  if (!win || win.id == null) return { ours: false, reason: 'gone' }
   if (win.state === 'fullscreen') return { ours: false, reason: 'fullscreen' }
-  for (const tab of tabs || []) {
-    if (tab == null || tab.id == null) continue
+  if (!Array.isArray(tabs)) return { ours: false, reason: 'tabs-unknown' }
+  for (const tab of tabs) {
+    if (tab == null || !Number.isInteger(tab.id)) return { ours: false, reason: 'tab-unknown' }
+    if (tab.windowId !== win.id) return { ours: false, reason: 'contradictory' }
     if (isOwned(tab.id)) continue
     if (tab.openerTabId != null && isOwned(tab.openerTabId)) continue
-    if (isPlaceholderUrl(tab.pendingUrl || tab.url)) continue
+    if (
+      placeholder != null &&
+      placeholder.windowId === win.id &&
+      placeholder.tabId === tab.id
+    )
+      continue
     return { ours: false, reason: 'user-tab' }
   }
   return { ours: true, reason: null }

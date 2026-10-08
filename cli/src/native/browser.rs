@@ -21,12 +21,13 @@ use super::element::{resolve_element_object_id, RefMap};
 pub static DAEMON_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Unit tests run `execute_command` on a bare `DaemonState`, and every one
-/// that needed a browser used to launch a real Chrome on the machine running
-/// `cargo test`: seven at a time, logged as `session=default
-/// mode=launched(debug-port)` in `~/.chrome-use/connect-mode.log` (5,987 of
-/// them on one developer laptop; the build box shows the same bursts). A
-/// parallel test that sets `AGENT_BROWSER_HEADED` could make some of them
-/// headed. Only the browser-backed e2e suite may launch.
+/// that needed a browser launched a real Chrome on the machine running
+/// `cargo test` (launches are headed unless AGENT_BROWSER_ALLOW_HEADLESS=1).
+/// On the build box a plain `cargo test` added bursts of `session=default
+/// mode=launched(debug-port)` lines to `~/.chrome-use/connect-mode.log`, and
+/// none once this refusal was in. In a build without the `e2e-tests` feature,
+/// nothing launches; with that feature, every test in the build (unit tests
+/// included) can still launch.
 #[cfg(all(test, not(feature = "e2e-tests")))]
 const UNIT_TEST_LAUNCH_REFUSAL: Option<&str> =
     Some("unit tests never launch a browser (only the e2e-tests feature does)");
@@ -636,21 +637,19 @@ pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
 const USER_WINDOW_MENU: &str = "the blocked tab is in a window with the user's own tabs, and \
 closing the menu from here would switch the tab in front of that window";
 
-/// Whether a `tabs.query` result holds a tab not in `owned` (a tab the user
-/// opened). A blank tab is not counted: the agent window's own placeholder.
+/// Whether a `tabs.query` result may hold a tab the user opened: any tab not
+/// in `owned`, whatever its URL (a user's blank tab is still theirs), and
+/// anything unreadable (no list, a tab without an id), because guessing
+/// "agent-only" is how a recovery ends up switching the user's tab.
 fn window_has_unowned_tab(tabs: &Value, owned: &HashSet<i64>) -> bool {
-    tabs.as_array().into_iter().flatten().any(|tab| {
-        let Some(id) = tab.get("id").and_then(Value::as_i64) else {
-            return false;
-        };
-        let url = tab
-            .get("pendingUrl")
-            .and_then(Value::as_str)
-            .filter(|u| !u.is_empty())
-            .or_else(|| tab.get("url").and_then(Value::as_str))
-            .unwrap_or("");
-        !owned.contains(&id) && !url.is_empty() && url != "about:blank"
-    })
+    let Some(tabs) = tabs.as_array() else {
+        return true;
+    };
+    tabs.iter()
+        .any(|tab| match tab.get("id").and_then(Value::as_i64) {
+            Some(id) => !owned.contains(&id),
+            None => true,
+        })
 }
 
 /// The recovery's error when the menu was open again after the tab was shown.
@@ -6599,8 +6598,7 @@ mod tests {
         let owned: HashSet<i64> = [1, 2].into_iter().collect();
         let agent_only = json!([
             { "id": 1, "url": "https://example.com/" },
-            { "id": 2, "url": "https://example.org/" },
-            { "id": 3, "url": "about:blank" }
+            { "id": 2, "url": "about:blank" }
         ]);
         assert!(!window_has_unowned_tab(&agent_only, &owned));
         let with_user_tab = json!([
@@ -6608,8 +6606,16 @@ mod tests {
             { "id": 9, "url": "https://mail.example.com/" }
         ]);
         assert!(window_has_unowned_tab(&with_user_tab, &owned));
-        let loading = json!([{ "id": 9, "url": "", "pendingUrl": "https://x.example/" }]);
-        assert!(window_has_unowned_tab(&loading, &owned));
+        // The user's own blank tab is theirs: never exempted by URL.
+        let user_blank =
+            json!([{ "id": 1, "url": "https://example.com/" }, { "id": 9, "url": "about:blank" }]);
+        assert!(window_has_unowned_tab(&user_blank, &owned));
+        // Unknown is not empty.
+        assert!(window_has_unowned_tab(&Value::Null, &owned));
+        assert!(window_has_unowned_tab(
+            &json!([{ "url": "https://x.example/" }]),
+            &owned
+        ));
         assert!(USER_WINDOW_MENU.contains("user's own tabs"));
     }
 

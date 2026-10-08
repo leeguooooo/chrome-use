@@ -168,17 +168,35 @@ let agentWindowPlaceholderTabId = null;
 // Why the last attempt to open the agent window failed (reported in
 // ABExt.state and in the createTarget refusal), or null.
 let agentWindowError = null;
+// { windowId, tabId } of the placeholder tab the agent window was created
+// with, persisted until that tab is removed. The only blank tab the agent
+// window check exempts: a blank tab is never assumed to be ours by its URL.
+const AGENT_PLACEHOLDER_KEY = 'ab_agent_window_placeholder';
+// Why the last remembered agent window was rejected (ABExt.state), or null.
+let agentWindowRejected = null;
+
+async function agentPlaceholderRecord() {
+  const got = await chrome.storage.local.get(AGENT_PLACEHOLDER_KEY).catch(() => null);
+  const rec = got && got[AGENT_PLACEHOLDER_KEY];
+  return rec && Number.isInteger(rec.windowId) && Number.isInteger(rec.tabId) ? rec : null;
+}
 
 // Whether window `id` still exists AND is still the agent's (see
 // agent-window.js): a remembered window the user has since started working in
 // must stop receiving agent tabs, or every agent tab lands in the window the
-// user is looking at.
+// user is looking at. Anything it cannot read counts as "not ours".
 async function isUsableAgentWindow(id) {
   const win = await chrome.windows.get(id).catch(() => null);
-  if (!win) return false;
   await loadOwnedTabs();
-  const tabs = await chrome.tabs.query({ windowId: id }).catch(() => []);
-  return agentWindowStillOurs(win, tabs, (tabId) => ownedTabs.has(tabId)).ours;
+  const tabs = win ? await chrome.tabs.query({ windowId: id }).catch(() => null) : null;
+  const verdict = agentWindowStillOurs(
+    win,
+    tabs,
+    (tabId) => ownedTabs.has(tabId),
+    await agentPlaceholderRecord(),
+  );
+  if (!verdict.ours) agentWindowRejected = { windowId: id, reason: verdict.reason };
+  return verdict.ours;
 }
 
 // Resolve the existing agent window (this SW's memory, then the persisted id),
@@ -189,7 +207,7 @@ async function resolveAgentWindow() {
     if (await isUsableAgentWindow(agentWindowId)) return agentWindowId;
     agentWindowId = null;
     agentWindowInit = null;
-    await chrome.storage.local.remove(AGENT_WINDOW_KEY).catch(() => {});
+    await chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
   }
   try {
     const got = await chrome.storage.local.get(AGENT_WINDOW_KEY);
@@ -199,7 +217,7 @@ async function resolveAgentWindow() {
         agentWindowId = persisted;
         return agentWindowId;
       }
-      await chrome.storage.local.remove(AGENT_WINDOW_KEY).catch(() => {});
+      await chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
     }
   } catch {}
   return null;
@@ -231,7 +249,13 @@ async function ensureAgentWindowId() {
       agentWindowId = win.id;
       agentWindowPlaceholderTabId = (win.tabs && win.tabs[0] && win.tabs[0].id) ?? null;
       try {
-        await chrome.storage.local.set({ [AGENT_WINDOW_KEY]: win.id });
+        await chrome.storage.local.set({
+          [AGENT_WINDOW_KEY]: win.id,
+          [AGENT_PLACEHOLDER_KEY]:
+            agentWindowPlaceholderTabId != null
+              ? { windowId: win.id, tabId: agentWindowPlaceholderTabId }
+              : null,
+        });
       } catch {}
       return win.id;
     })();
@@ -271,10 +295,16 @@ async function createAgentTabNow(url) {
   if (tab && tab.id != null) await markOwned(tab.id);
   // Drop the window's initial about:blank once a real agent tab exists (only the
   // first caller sees the id; it's cleared before the await so no double-remove).
+  // Awaited, and its record cleared only once it is gone: the next caller's
+  // agent-window check must not meet an unrecorded blank tab.
   if (agentWindowPlaceholderTabId != null) {
     const placeholder = agentWindowPlaceholderTabId;
     agentWindowPlaceholderTabId = null;
-    chrome.tabs.remove(placeholder).catch(() => {});
+    const removed = await chrome.tabs
+      .remove(placeholder)
+      .then(() => true)
+      .catch(() => false);
+    if (removed) await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
   }
   return tab;
 }
@@ -287,7 +317,7 @@ if (chrome.windows && chrome.windows.onRemoved) {
       agentWindowId = null;
       agentWindowInit = null;
       agentWindowPlaceholderTabId = null;
-      chrome.storage.local.remove(AGENT_WINDOW_KEY).catch(() => {});
+      chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
     }
   });
 }
@@ -1180,6 +1210,7 @@ async function handleForwardCdpCommand(msg) {
       groups: [...groupIdByName.entries()].map(([name, id]) => ({ name, id })),
       agentWindowId,
       agentWindowError,
+      agentWindowRejected,
       cursorEnabled,
       notifyEnabled,
       idleDetachMs,
