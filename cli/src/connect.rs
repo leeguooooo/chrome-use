@@ -3089,7 +3089,7 @@ pub fn list_relay_profiles() -> Vec<(String, Option<String>, String)> {
     out
 }
 
-// --- Strict profile <-> endpoint resolution (issue #472) ---------------------
+// --- Strict profile <-> endpoint resolution (issues #461, #472) --------------
 //
 // A session bound to a relay profile is bound to the profile's IDENTITY. The
 // native host binds a fresh port and guid every time it starts, so the ws URL
@@ -3154,7 +3154,17 @@ pub(crate) fn read_relay_sidecars_in(dir: &std::path::Path) -> Result<RelaySidec
         let entry =
             entry.map_err(|e| format!("cannot list the relay directory {}: {e}", dir.display()))?;
         let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
+        let Some(name) = name.to_str() else {
+            // A sidecar whose name can't be read can't be ruled out either.
+            let lossy = name.to_string_lossy();
+            if lossy.starts_with("relay-cdp-url-") || lossy.starts_with("relay-ext-profile-") {
+                return Err(format!(
+                    "the relay directory {} holds a sidecar with an unreadable name ({lossy})",
+                    dir.display()
+                ));
+            }
+            continue;
+        };
         let read = || std::fs::read_to_string(entry.path()).ok();
         if let Some(suffix) = name.strip_prefix("relay-cdp-url-") {
             out.endpoints
@@ -3247,6 +3257,11 @@ pub(crate) fn endpoint_for_profile_in(
                     "the relay endpoint relay-cdp-url-{s} cannot be read, so it can't be ruled out"
                 )))
             }
+            Some(o) if !o.starts_with("ws://") => {
+                return Err(Ambiguous(format!(
+                "the relay endpoint relay-cdp-url-{s} holds no ws:// URL, so it can't be ruled out"
+            )))
+            }
             Some(o) if normalize_ws(o) == normalize_ws(&ws) => {
                 return Err(Ambiguous(format!(
                 "relay endpoints relay-cdp-url-{own} and relay-cdp-url-{s} name the same address"
@@ -3270,9 +3285,15 @@ pub(crate) fn profile_for_endpoint_in(
     if want.is_empty() {
         return Ok(None);
     }
-    if let Some((s, _)) = sc.endpoints.iter().find(|(_, c)| c.is_none()) {
+    // Any endpoint sidecar that is unreadable, half-written or corrupt might
+    // name this endpoint, so nothing is known.
+    if let Some((s, _)) = sc
+        .endpoints
+        .iter()
+        .find(|(_, c)| !c.as_deref().is_some_and(|c| c.starts_with("ws://")))
+    {
         return Err(format!(
-            "the relay endpoint relay-cdp-url-{s} cannot be read, so the owner of {want} can't be determined"
+            "the relay endpoint relay-cdp-url-{s} cannot be read or holds no ws:// URL, so the owner of {want} can't be determined"
         ));
     }
     let matches: Vec<&String> = sc
@@ -3345,6 +3366,40 @@ pub fn relay_profile_for_endpoint(ws: &str) -> Result<Option<String>, String> {
     }
     let sc = read_relay_sidecars()?;
     profile_for_endpoint_in(&sc, ws)
+}
+
+/// The relay profile whose host is currently serving `endpoint`, if any.
+///
+/// The endpoint is a per-start `ws://127.0.0.1:<port>/<guid>`, so it changes on
+/// every relay host restart while the profile id does not. Tab ownership is
+/// keyed on this to survive that restart (issue #461). Only the per-profile
+/// sidecars are consulted: the generic `relay-cdp-url` and `relay-ext-profile`
+/// are written at different moments by whichever host ran last, so pairing
+/// them could name the wrong profile, and a wrong answer here hands one
+/// profile's recorded tabs to another. No match means no identity.
+pub fn relay_profile_id_for_endpoint(endpoint: &str) -> Option<String> {
+    let dir = relay_url_path().parent()?.to_path_buf();
+    profile_id_for_endpoint_in(&dir, endpoint)
+}
+
+/// [`relay_profile_id_for_endpoint`] over the sidecars in `dir`.
+///
+/// The same strict resolution the session binding uses
+/// ([`profile_for_endpoint_in`]): every `relay-cdp-url-<id>` in the directory
+/// is checked, not just the ones that pair with a readable profile sidecar
+/// ([`list_relay_profiles`] skips broken pairs, which would let one valid
+/// sidecar win while a broken one claims the same endpoint). Anything that
+/// cannot be ruled out refuses: an unreadable directory, entry or sidecar
+/// name, an endpoint sidecar that cannot be read or does not hold a `ws://`
+/// URL, two sidecars naming the endpoint, a matching sidecar whose profile
+/// record is missing, corrupt or names another id, or a second record
+/// claiming that id. A missing directory has no identity to offer either.
+fn profile_id_for_endpoint_in(dir: &Path, endpoint: &str) -> Option<String> {
+    let sc = match std::fs::metadata(dir) {
+        Ok(_) => read_relay_sidecars_in(dir).ok()?,
+        Err(_) => return None,
+    };
+    profile_for_endpoint_in(&sc, endpoint).ok().flatten()
 }
 
 /// Resolve a `--browser` selector to a profile's relay ws URL. Matches a
@@ -4125,6 +4180,126 @@ mod tests {
         assert_eq!(super::prefer_focused_profile(None, None), None);
     }
 
+    fn write_sidecars(dir: &Path, id: &str, ws: &str) {
+        std::fs::write(dir.join(format!("relay-cdp-url-{id}")), ws).unwrap();
+        std::fs::write(
+            dir.join(format!("relay-ext-profile-{id}")),
+            json!({ "id": id, "email": null }).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn relay_endpoint_resolves_to_its_profile_only_when_unambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        // The generic pair is never consulted, even when it names the endpoint.
+        std::fs::write(d.join("relay-cdp-url"), "ws://127.0.0.1:4002/guid-b").unwrap();
+        std::fs::write(d.join("relay-ext-profile"), r#"{"id":"profile-a"}"#).unwrap();
+        write_sidecars(d, "profile-a", "ws://127.0.0.1:4001/guid-a");
+        write_sidecars(d, "profile-b", "ws://127.0.0.1:4002/guid-b");
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4002/guid-b"),
+            Some("profile-b".to_string())
+        );
+        // A restarted host's old endpoint, a launched browser, or nothing at
+        // all has no relay identity.
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/old-guid"),
+            None
+        );
+        assert_eq!(super::profile_id_for_endpoint_in(d, ""), None);
+        // A missing directory is not "no other claims".
+        assert_eq!(
+            super::profile_id_for_endpoint_in(&d.join("missing"), "ws://127.0.0.1:4002/guid-b"),
+            None
+        );
+    }
+
+    #[test]
+    fn relay_endpoint_claimed_twice_resolves_to_nobody() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write_sidecars(d, "profile-a", "ws://127.0.0.1:4001/guid");
+        write_sidecars(d, "profile-b", "ws://127.0.0.1:4001/guid");
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_corrupt_profile_sidecar_does_not_let_the_other_claimant_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write_sidecars(d, "profile-a", "ws://127.0.0.1:4001/guid");
+        // profile-b claims the same endpoint but its profile record is corrupt,
+        // so list_relay_profiles drops it; the lookup must still see the claim.
+        std::fs::write(
+            d.join("relay-cdp-url-profile-b"),
+            "ws://127.0.0.1:4001/guid",
+        )
+        .unwrap();
+        std::fs::write(d.join("relay-ext-profile-profile-b"), "{not json").unwrap();
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid"),
+            None
+        );
+        // Same with the profile record missing entirely.
+        std::fs::remove_file(d.join("relay-ext-profile-profile-b")).unwrap();
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unknown_endpoint_sidecar_or_profile_record_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write_sidecars(d, "profile-a", "ws://127.0.0.1:4001/guid-a");
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid-a"),
+            Some("profile-a".to_string())
+        );
+        // Another endpoint sidecar is half-written or corrupt: it might name
+        // this endpoint, so nothing is known.
+        std::fs::write(d.join("relay-cdp-url-profile-b"), "").unwrap();
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid-a"),
+            None
+        );
+        std::fs::write(d.join("relay-cdp-url-profile-b"), "garbage").unwrap();
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid-a"),
+            None
+        );
+        // Unreadable (a directory in its place).
+        std::fs::remove_file(d.join("relay-cdp-url-profile-b")).unwrap();
+        std::fs::create_dir(d.join("relay-cdp-url-profile-b")).unwrap();
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid-a"),
+            None
+        );
+        std::fs::remove_dir(d.join("relay-cdp-url-profile-b")).unwrap();
+        // The matching sidecar's own profile record is corrupt, or names
+        // a different profile than its file name.
+        std::fs::write(d.join("relay-ext-profile-profile-a"), "{").unwrap();
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid-a"),
+            None
+        );
+        std::fs::write(
+            d.join("relay-ext-profile-profile-a"),
+            r#"{"id":"profile-z"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            super::profile_id_for_endpoint_in(d, "ws://127.0.0.1:4001/guid-a"),
+            None
+        );
+    }
+
     #[test]
     fn the_per_profile_version_sidecar_is_named_like_its_endpoint_sibling() {
         // This bug was exactly "the endpoint got per-profile treatment, the
@@ -4614,13 +4789,16 @@ mod tests {
             );
             assert!(ambiguous(&sc), "own endpoint {bad:?}");
         }
-        // Someone else's endpoint sidecar unreadable: it can't be ruled out.
-        let sc = sidecars(
-            &[("p1", Some("ws://127.0.0.1:3/c")), ("p2", None)],
-            &[("p1", Some(&p1)), ("p2", Some(&p2))],
-        );
-        assert!(ambiguous(&sc));
-        assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:3/c").is_err());
+        // Someone else's endpoint sidecar unreadable, empty or garbage: it
+        // can't be ruled out.
+        for bad in [None, Some(""), Some("garbage")] {
+            let sc = sidecars(
+                &[("p1", Some("ws://127.0.0.1:3/c")), ("p2", bad)],
+                &[("p1", Some(&p1)), ("p2", Some(&p2))],
+            );
+            assert!(ambiguous(&sc), "other endpoint {bad:?}");
+            assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:3/c").is_err());
+        }
         // An endpoint with no profile record has no owner we could name.
         let sc = sidecars(&[("p1", Some("ws://127.0.0.1:3/c"))], &[]);
         assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:3/c").is_err());

@@ -6,7 +6,7 @@ use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -577,6 +577,17 @@ pub fn has_created_targets(session: &str) -> bool {
 #[derive(Deserialize, Serialize)]
 struct CreatedTargetRegistry {
     endpoint_sha256: String,
+    /// Stable identity of the browser behind `endpoint_sha256` (issue #461).
+    ///
+    /// The relay native host binds a fresh `ws://127.0.0.1:<port>/<guid>` every
+    /// time it starts, so the endpoint alone forgets a session's tabs across a
+    /// host restart even though Chrome, and every target id in `target_ids`,
+    /// is unchanged. For a relay endpoint this holds the hash of the Chrome
+    /// profile's `profileId`, which survives the restart. `None` for anything
+    /// that is not a relay profile, and in records written before this field
+    /// existed; those still match by endpoint only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    browser_sha256: Option<String>,
     target_ids: Vec<String>,
 }
 
@@ -584,28 +595,182 @@ fn endpoint_sha256(endpoint: &str) -> String {
     format!("{:x}", Sha256::digest(endpoint.as_bytes()))
 }
 
-/// The target IDs a session has recorded as created, whatever endpoint it was
-/// on. Only for telling the user whose tab something is; never for permission.
-pub fn created_target_ids(session: &str) -> HashSet<String> {
+/// The stable key for the browser behind `endpoint`, if it has one: the relay
+/// profile the endpoint currently belongs to. A launched browser or a raw CDP
+/// port has no such identity and keeps the endpoint-only rule.
+fn browser_sha256(endpoint: &str) -> Option<String> {
+    crate::connect::relay_profile_id_for_endpoint(endpoint)
+        .map(|profile_id| endpoint_sha256(&format!("relay-profile:{profile_id}")))
+}
+
+fn read_created_target_registry(session: &str) -> Option<CreatedTargetRegistry> {
     fs::read_to_string(get_created_targets_path(session))
         .ok()
         .and_then(|value| serde_json::from_str::<CreatedTargetRegistry>(&value).ok())
+}
+
+/// How a session's record relates to the browser behind `endpoint`.
+#[derive(Debug, PartialEq, Eq)]
+enum RegistryOwnership {
+    /// Recorded on this endpoint: every recorded target.
+    SameEndpoint(HashSet<String>),
+    /// Recorded under the same relay profile on an earlier endpoint (the relay
+    /// host restarted): the recorded targets no other session claims. The
+    /// record must be rewritten to exactly this set before it grants anything.
+    Reassociated(HashSet<String>),
+    /// Another browser, or no way to tell: nothing.
+    Unrelated,
+}
+
+/// Which recorded targets a session may treat as its own on `endpoint`.
+///
+/// - Same endpoint: every recorded target, as before.
+/// - Different endpoint, same relay profile (the relay host restarted): the
+///   recorded targets, minus any another session's record also claims. Target
+///   ids come from Chrome and do not change when the relay does, so these are
+///   the same tabs; a tab some other session records is never taken over.
+/// - Anything else, including an old record with no browser identity: none.
+///   Unknown fails closed, because these ids carry deletion rights. If the
+///   other sessions' claims cannot be read in full, that is an error, never
+///   "no claims".
+fn owned_registry_targets(
+    registry: &CreatedTargetRegistry,
+    endpoint: &str,
+    browser: Option<&str>,
+    claimed_by_others: impl FnOnce() -> Result<HashSet<String>, String>,
+) -> Result<RegistryOwnership, String> {
+    if registry.endpoint_sha256 == endpoint_sha256(endpoint) {
+        return Ok(RegistryOwnership::SameEndpoint(
+            registry.target_ids.iter().cloned().collect(),
+        ));
+    }
+    match (registry.browser_sha256.as_deref(), browser) {
+        (Some(recorded), Some(current)) if recorded == current => {
+            let claimed = claimed_by_others()?;
+            Ok(RegistryOwnership::Reassociated(
+                registry
+                    .target_ids
+                    .iter()
+                    .filter(|target_id| !claimed.contains(*target_id))
+                    .cloned()
+                    .collect(),
+            ))
+        }
+        _ => Ok(RegistryOwnership::Unrelated),
+    }
+}
+
+const CREATED_TARGETS_SUFFIX: &str = ".created-targets.json";
+
+/// Target ids that any session other than `session` records as created.
+fn targets_claimed_by_other_sessions(session: &str) -> Result<HashSet<String>, String> {
+    targets_claimed_by_other_sessions_in(&get_socket_dir(), session)
+}
+
+/// Every other session's claims in `dir`. Fails if any of them cannot be
+/// known: the directory or an entry cannot be read, or another session's
+/// record is unreadable or corrupt. A record removed between listing and
+/// reading has dropped its claim and counts as none.
+fn targets_claimed_by_other_sessions_in(
+    dir: &Path,
+    session: &str,
+) -> Result<HashSet<String>, String> {
+    let own = format!("{session}{CREATED_TARGETS_SUFFIX}");
+    let entries = fs::read_dir(dir)
+        .map_err(|error| format!("cannot list other sessions in {}: {error}", dir.display()))?;
+    let mut claimed = HashSet::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("cannot list other sessions in {}: {error}", dir.display()))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            if name.to_string_lossy().ends_with(CREATED_TARGETS_SUFFIX) {
+                return Err(format!(
+                    "cannot read the session record {}",
+                    entry.path().display()
+                ));
+            }
+            continue;
+        };
+        if !name.ends_with(CREATED_TARGETS_SUFFIX) || name == own {
+            continue;
+        }
+        let text = match fs::read_to_string(entry.path()) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "cannot read the session record {}: {error}",
+                    entry.path().display()
+                ))
+            }
+        };
+        let registry = serde_json::from_str::<CreatedTargetRegistry>(&text).map_err(|error| {
+            format!(
+                "the session record {} is corrupt: {error}",
+                entry.path().display()
+            )
+        })?;
+        claimed.extend(registry.target_ids);
+    }
+    Ok(claimed)
+}
+
+/// The target IDs a session has recorded as created, whatever endpoint it was
+/// on. Only for telling the user whose tab something is; never for permission.
+pub fn created_target_ids(session: &str) -> HashSet<String> {
+    read_created_target_registry(session)
         .map(|registry| registry.target_ids.into_iter().collect())
         .unwrap_or_default()
 }
 
 /// Read the target IDs this named session created in an earlier daemon lifetime.
-/// Missing, malformed, or endpoint-mismatched state fails closed: no tab receives
-/// deletion rights.
+/// Missing, malformed, or mismatched state fails closed: no tab receives
+/// deletion rights. A record from the same relay profile on a restarted relay
+/// host still matches (issue #461); see [`owned_registry_targets`].
 pub fn read_created_targets(session: &str, endpoint: &str) -> HashSet<String> {
-    fs::read_to_string(get_created_targets_path(session))
-        .ok()
-        .and_then(|value| serde_json::from_str::<CreatedTargetRegistry>(&value).ok())
-        .filter(|registry| registry.endpoint_sha256 == endpoint_sha256(endpoint))
-        .map(|registry| registry.target_ids)
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+    read_created_targets_in(session, endpoint, browser_sha256(endpoint).as_deref()).unwrap_or_else(
+        |error| {
+            eprintln!("tab ownership for session {session} was not restored: {error}");
+            HashSet::new()
+        },
+    )
+}
+
+/// [`read_created_targets`] with the browser identity given. `Err` grants no
+/// rights and leaves the record as it was.
+fn read_created_targets_in(
+    session: &str,
+    endpoint: &str,
+    browser: Option<&str>,
+) -> Result<HashSet<String>, String> {
+    let Some(registry) = read_created_target_registry(session) else {
+        return Ok(HashSet::new());
+    };
+    match owned_registry_targets(&registry, endpoint, browser, || {
+        targets_claimed_by_other_sessions(session)
+    })? {
+        RegistryOwnership::SameEndpoint(targets) => {
+            // Migrate a record from before #461 to carry the profile key, so
+            // it survives the next relay restart.
+            if !targets.is_empty() && registry.browser_sha256.is_none() && browser.is_some() {
+                write_created_targets_in(session, endpoint, browser, &targets)
+                    .map_err(|error| format!("could not update the record: {error}"))?;
+            }
+            Ok(targets)
+        }
+        RegistryOwnership::Reassociated(targets) => {
+            // Re-key the record to the current endpoint holding exactly what
+            // re-association granted, before granting it. When another
+            // session's claim took every id, this removes the record: the
+            // rights are gone for good, and do not come back later once that
+            // other record is gone while the tab is still open.
+            write_created_targets_in(session, endpoint, browser, &targets)
+                .map_err(|error| format!("could not re-key the record: {error}"))?;
+            Ok(targets)
+        }
+        RegistryOwnership::Unrelated => Ok(HashSet::new()),
+    }
 }
 
 /// Persist deletion rights across daemon restarts. An empty set removes the
@@ -613,6 +778,20 @@ pub fn read_created_targets(session: &str, endpoint: &str) -> HashSet<String> {
 pub fn write_created_targets(
     session: &str,
     endpoint: &str,
+    targets: &HashSet<String>,
+) -> Result<(), String> {
+    let browser = if targets.is_empty() {
+        None
+    } else {
+        browser_sha256(endpoint)
+    };
+    write_created_targets_in(session, endpoint, browser.as_deref(), targets)
+}
+
+fn write_created_targets_in(
+    session: &str,
+    endpoint: &str,
+    browser: Option<&str>,
     targets: &HashSet<String>,
 ) -> Result<(), String> {
     let path = get_created_targets_path(session);
@@ -628,6 +807,7 @@ pub fn write_created_targets(
     target_ids.sort_unstable();
     let encoded = serde_json::to_vec(&CreatedTargetRegistry {
         endpoint_sha256: endpoint_sha256(endpoint),
+        browser_sha256: browser.map(str::to_string),
         target_ids,
     })
     .map_err(|error| error.to_string())?;
@@ -2346,6 +2526,278 @@ mod tests {
         assert_eq!(
             read_created_targets("restartable", "ws://relay/browser"),
             replacement
+        );
+    }
+
+    fn registry(endpoint: &str, browser: Option<&str>, ids: &[&str]) -> CreatedTargetRegistry {
+        CreatedTargetRegistry {
+            endpoint_sha256: endpoint_sha256(endpoint),
+            browser_sha256: browser.map(str::to_string),
+            target_ids: ids.iter().map(|id| id.to_string()).collect(),
+        }
+    }
+
+    fn ids(values: &[&str]) -> HashSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn no_claims() -> Result<HashSet<String>, String> {
+        Ok(HashSet::new())
+    }
+
+    #[test]
+    fn created_targets_follow_the_relay_profile_not_the_relay_address() {
+        let recorded = registry("ws://relay/old-guid", Some("profile-a"), &["t1", "t2"]);
+
+        assert_eq!(
+            owned_registry_targets(&recorded, "ws://relay/old-guid", None, || {
+                panic!("an endpoint match needs no cross-session check")
+            }),
+            Ok(RegistryOwnership::SameEndpoint(ids(&["t1", "t2"])))
+        );
+        // #461: the relay host restarted, so the address is new but the
+        // profile, and Chrome's target ids, are not.
+        assert_eq!(
+            owned_registry_targets(
+                &recorded,
+                "ws://relay/new-guid",
+                Some("profile-a"),
+                no_claims
+            ),
+            Ok(RegistryOwnership::Reassociated(ids(&["t1", "t2"])))
+        );
+        // A different profile, or a browser with no relay identity, gets nothing.
+        assert_eq!(
+            owned_registry_targets(
+                &recorded,
+                "ws://relay/new-guid",
+                Some("profile-b"),
+                no_claims
+            ),
+            Ok(RegistryOwnership::Unrelated)
+        );
+        assert_eq!(
+            owned_registry_targets(&recorded, "ws://127.0.0.1:9222/x", None, no_claims),
+            Ok(RegistryOwnership::Unrelated)
+        );
+    }
+
+    #[test]
+    fn a_record_from_before_the_profile_key_matches_by_endpoint_only() {
+        let old = registry("ws://relay/old-guid", None, &["t1"]);
+        assert_eq!(
+            owned_registry_targets(&old, "ws://relay/old-guid", Some("profile-a"), no_claims),
+            Ok(RegistryOwnership::SameEndpoint(ids(&["t1"])))
+        );
+        assert_eq!(
+            owned_registry_targets(&old, "ws://relay/new-guid", Some("profile-a"), no_claims),
+            Ok(RegistryOwnership::Unrelated)
+        );
+    }
+
+    #[test]
+    fn re_association_never_takes_a_tab_another_session_records() {
+        let recorded = registry("ws://relay/old-guid", Some("profile-a"), &["t1", "t2"]);
+        assert_eq!(
+            owned_registry_targets(&recorded, "ws://relay/new-guid", Some("profile-a"), || {
+                Ok(ids(&["t2"]))
+            }),
+            Ok(RegistryOwnership::Reassociated(ids(&["t1"])))
+        );
+        // Claims that cannot be read are not "no claims".
+        assert!(owned_registry_targets(
+            &recorded,
+            "ws://relay/new-guid",
+            Some("profile-a"),
+            || { Err("unreadable".to_string()) }
+        )
+        .is_err());
+    }
+
+    /// A socket dir for one test, set as `AGENT_BROWSER_SOCKET_DIR`.
+    fn socket_dir_for_test() -> (EnvGuard<'static>, tempfile::TempDir) {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        guard.set(
+            "AGENT_BROWSER_SOCKET_DIR",
+            dir.path().to_str().expect("utf-8 tempdir"),
+        );
+        guard.remove("XDG_RUNTIME_DIR");
+        (guard, dir)
+    }
+
+    #[test]
+    fn created_targets_survive_a_relay_host_restart_on_disk() {
+        let (_guard, _dir) = socket_dir_for_test();
+        let profile = Some("profile-a");
+
+        // A record written by a release before #461: endpoint only.
+        fs::write(
+            get_created_targets_path("mine"),
+            serde_json::json!({
+                "endpoint_sha256": endpoint_sha256("ws://relay/first"),
+                "target_ids": ["t1", "t2", "t3"],
+            })
+            .to_string(),
+        )
+        .expect("write legacy record");
+        // It cannot be re-associated: nothing says which browser it was on.
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/elsewhere", profile),
+            Ok(HashSet::new())
+        );
+        // Read on its own endpoint, it is migrated to carry the profile key...
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/first", profile),
+            Ok(ids(&["t1", "t2", "t3"]))
+        );
+
+        // ...so it survives the next restart. Meanwhile another session has
+        // recorded t3; that claim wins over a re-association.
+        write_created_targets_in("theirs", "ws://relay/first", profile, &ids(&["t3"]))
+            .expect("other session record");
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/second", profile),
+            Ok(ids(&["t1", "t2"]))
+        );
+        // The record now lives on the new endpoint without the disputed tab,
+        // so even an endpoint-only reader agrees.
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/second", None),
+            Ok(ids(&["t1", "t2"]))
+        );
+        assert!(!created_target_ids("mine").contains("t3"));
+        assert_eq!(created_target_ids("theirs"), ids(&["t3"]));
+
+        // A different profile's relay never inherits them.
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/third", Some("profile-b")),
+            Ok(HashSet::new())
+        );
+        assert_eq!(created_target_ids("mine"), ids(&["t1", "t2"]));
+    }
+
+    #[test]
+    fn a_fully_disputed_record_loses_its_rights_for_good() {
+        let (_guard, _dir) = socket_dir_for_test();
+        let profile = Some("profile-a");
+        write_created_targets_in("mine", "ws://relay/first", profile, &ids(&["t"]))
+            .expect("my record");
+        write_created_targets_in("theirs", "ws://relay/first", profile, &ids(&["t"]))
+            .expect("their record");
+
+        // After a restart their claim takes the only id: nothing for me, and
+        // my old record is gone rather than kept for later.
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/second", profile),
+            Ok(HashSet::new())
+        );
+        assert!(!get_created_targets_path("mine").exists());
+
+        // Their record goes away while tab t is still open. Another restart
+        // must not hand t back to me.
+        forget_created_targets("theirs").expect("drop their record");
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/third", profile),
+            Ok(HashSet::new())
+        );
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/first", profile),
+            Ok(HashSet::new())
+        );
+    }
+
+    #[test]
+    fn unreadable_claims_of_other_sessions_grant_nothing_and_keep_the_record() {
+        let (_guard, dir) = socket_dir_for_test();
+        let profile = Some("profile-a");
+        write_created_targets_in("mine", "ws://relay/first", profile, &ids(&["t1", "t2"]))
+            .expect("my record");
+        let before = fs::read_to_string(get_created_targets_path("mine")).unwrap();
+
+        // Another session's record is corrupt.
+        fs::write(dir.path().join("corrupt.created-targets.json"), "{not json").unwrap();
+        let error = read_created_targets_in("mine", "ws://relay/second", profile)
+            .expect_err("a corrupt claim is unknown, not empty");
+        assert!(error.contains("corrupt"), "{error}");
+        assert_eq!(
+            fs::read_to_string(get_created_targets_path("mine")).unwrap(),
+            before,
+            "an unknown result must not rewrite the record"
+        );
+        fs::remove_file(dir.path().join("corrupt.created-targets.json")).unwrap();
+
+        // Another session's record cannot be read (a directory in its place).
+        fs::create_dir(dir.path().join("unreadable.created-targets.json")).unwrap();
+        assert!(read_created_targets_in("mine", "ws://relay/second", profile).is_err());
+        assert_eq!(
+            fs::read_to_string(get_created_targets_path("mine")).unwrap(),
+            before
+        );
+        fs::remove_dir(dir.path().join("unreadable.created-targets.json")).unwrap();
+
+        // With every claim readable again, re-association works.
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/second", profile),
+            Ok(ids(&["t1", "t2"]))
+        );
+    }
+
+    #[test]
+    fn the_claims_scan_fails_when_the_directory_cannot_be_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing");
+        assert!(targets_claimed_by_other_sessions_in(&missing, "mine").is_err());
+        // A file where the directory should be.
+        let file = dir.path().join("file");
+        fs::write(&file, "").unwrap();
+        assert!(targets_claimed_by_other_sessions_in(&file, "mine").is_err());
+        // An empty, readable directory really has no claims.
+        assert_eq!(
+            targets_claimed_by_other_sessions_in(dir.path(), "mine"),
+            Ok(HashSet::new())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_re_key_grants_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_guard, dir) = socket_dir_for_test();
+        let profile = Some("profile-a");
+        write_created_targets_in("partial", "ws://relay/first", profile, &ids(&["t1", "t2"]))
+            .expect("partial record");
+        write_created_targets_in("all", "ws://relay/first", profile, &ids(&["t2"]))
+            .expect("fully disputed record");
+        write_created_targets_in("theirs", "ws://relay/first", profile, &ids(&["t2"]))
+            .expect("their record");
+        let partial_before = fs::read_to_string(get_created_targets_path("partial")).unwrap();
+        let all_before = fs::read_to_string(get_created_targets_path("all")).unwrap();
+
+        // A read-only socket dir: the record can be read but not rewritten
+        // (temp file for a partial set, removal for an empty one).
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = dir.path().join("probe");
+        if fs::write(&probe, "").is_ok() {
+            // Running as root: permissions are not enforced, nothing to test.
+            let _ = fs::remove_file(probe);
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        // "partial" would re-associate to [t1]; "all" to nothing.
+        let partial = read_created_targets_in("partial", "ws://relay/second", profile);
+        let all = read_created_targets_in("all", "ws://relay/second", profile);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(partial.is_err(), "{partial:?}");
+        assert!(all.is_err(), "{all:?}");
+        assert_eq!(
+            fs::read_to_string(get_created_targets_path("partial")).unwrap(),
+            partial_before
+        );
+        assert_eq!(
+            fs::read_to_string(get_created_targets_path("all")).unwrap(),
+            all_before
         );
     }
 
