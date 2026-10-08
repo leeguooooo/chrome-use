@@ -3817,7 +3817,8 @@ The existing MCP chrome_use_find (mcp --tools all) accepts within too;
 fill/type text is literal, including flag-looking text, and tool count is unchanged.
 Unknown semantic options and duplicate --within are refused. Use -- before
 literal fill/type text that looks like a flag. Detached targets fail safely;
-uncertain actions are never replayed.
+uncertain actions are never replayed. find retains its existing unsupported
+--observe warning; batch the find action and a known get text receipt instead.
 
 Text matches select the nearest clickable ancestor inside their scope. `click` on a text match clicks
 its nearest clickable ancestor (button, link, [role=button], ...), refuses a

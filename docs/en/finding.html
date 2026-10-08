@@ -254,6 +254,7 @@
 </p>
 
 <p>The existing <code>chrome_use_find</code> tool in <code>mcp --tools all</code> accepts <code>within</code> with the same unique-scope rules; tool count is unchanged. <code>text</code> for fill/type is passed literally, including <code>--name --observe</code>, rather than parsed as CLI options.</p>
+<p>Semantic find retains the existing <code>--observe</code> unsupported warning; use one <code>batch</code> containing the scoped find action and a task-specific <code>get text</code> receipt when both are known. The MCP find tool does not advertise an observe field.</p>
 </main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 

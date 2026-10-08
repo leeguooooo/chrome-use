@@ -14714,21 +14714,29 @@ async fn finish_located(
     retarget_to_clickable: bool,
 ) -> Result<Value, String> {
     let subaction = find_subaction(cmd);
-    let target = match state.browser.as_ref() {
-        Some(mgr) => match mgr.active_session_id() {
-            Ok(sid) => {
-                let sid = sid.to_string();
-                eval_main_by_value(
-                    &mgr.client,
-                    &sid,
-                    located_target_js(retarget_to_clickable && subaction == "click"),
-                )
-                .await
-                .filter(|v| v.is_object())
-            }
-            Err(_) => None,
-        },
-        None => None,
+    let target = if super::element::semantic_pin_active(selector) {
+        let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+        let sid = mgr.active_session_id()?;
+        let object = super::element::resolve_semantic_pin(&mgr.client, sid).await?;
+        let result=mgr.client.send_command("Runtime.callFunctionOn",Some(json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();return {tag:this.tagName.toLowerCase(),visible:true,role:this.getAttribute('role') || '',name:this.getAttribute('aria-label') || '',box:{x:r.x,y:r.y,width:r.width,height:r.height}}}","returnByValue":true})),Some(sid)).await?;
+        Some(result["result"]["value"].clone())
+    } else {
+        match state.browser.as_ref() {
+            Some(mgr) => match mgr.active_session_id() {
+                Ok(sid) => {
+                    let sid = sid.to_string();
+                    eval_main_by_value(
+                        &mgr.client,
+                        &sid,
+                        located_target_js(retarget_to_clickable && subaction == "click"),
+                    )
+                    .await
+                    .filter(|v| v.is_object())
+                }
+                Err(_) => None,
+            },
+            None => None,
+        }
     };
 
     if subaction == "locate" {
@@ -15019,8 +15027,20 @@ fn build_role_selector(role: &str, name: Option<&str>, exact: bool) -> String {
 }
 
 async fn handle_getbyrole(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
-    let extra = super::semantic_locator::locate(cmd, state).await?;
-    let result = finish_located(cmd, state, "[data-chrome-use-located='true']", extra, false).await;
+    let located = super::semantic_locator::locate(cmd, state).await?;
+    super::semantic_locator::revalidate(cmd, state, &located.pin).await?;
+    let result = super::element::SEMANTIC_PIN
+        .scope(
+            located.pin,
+            finish_located(
+                cmd,
+                state,
+                "[data-chrome-use-located='true']",
+                located.extra,
+                false,
+            ),
+        )
+        .await;
     clear_semantic_marker(state).await;
     result
 }
@@ -15092,10 +15112,7 @@ async fn handle_semantic_locator(
     _strategy: &str,
     _param_name: &str,
 ) -> Result<Value, String> {
-    let extra = super::semantic_locator::locate(cmd, state).await?;
-    let result = finish_located(cmd, state, "[data-chrome-use-located='true']", extra, true).await;
-    clear_semantic_marker(state).await;
-    result
+    handle_getbyrole(cmd, state).await
 }
 
 async fn handle_getbytext(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {

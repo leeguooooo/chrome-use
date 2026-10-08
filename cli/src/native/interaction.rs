@@ -347,6 +347,19 @@ pub async fn click_reporting(
                 humanize::active_level(),
                 humanize::next_seed(),
             );
+            if super::element::semantic_pin_active(selector_or_ref) {
+                let object =
+                    super::element::resolve_semantic_pin(client, &effective_session_id).await?;
+                let check = client.send_command("Runtime.callFunctionOn", Some(serde_json::json!({
+                    "objectId":object,"functionDeclaration":"function(x,y){const hit=this.ownerDocument.elementFromPoint(x,y);return hit===this || this.contains(hit);}",
+                    "arguments":[{"value":tx},{"value":ty}],"returnByValue":true
+                })),Some(&effective_session_id)).await?;
+                if check["result"]["value"] != true {
+                    return Err(
+                        "semantic target moved or is covered at dispatch; refusing click".into(),
+                    );
+                }
+            }
             dispatch_click(client, &effective_session_id, tx, ty, button, click_count).await?;
             Ok(ClickOutcome::trusted("pointer", warning))
         }
@@ -418,6 +431,17 @@ async fn point_misses_element(
     session_id: &str,
     selector: &str,
 ) -> Option<String> {
+    if super::element::semantic_pin_active(selector) {
+        let object = match super::element::resolve_semantic_pin(client, session_id).await {
+            Ok(o) => o,
+            Err(_) => return Some("semantic target changed".into()),
+        };
+        let reply=client.send_command("Runtime.callFunctionOn",Some(serde_json::json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();const hit=this.ownerDocument.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return hit===this || this.contains(hit);}","returnByValue":true})),Some(session_id)).await;
+        return match reply {
+            Ok(r) if r["result"]["value"] == true => None,
+            _ => Some("semantic target is covered".into()),
+        };
+    }
     let js = format!(
         r#"(() => {{
             const el = document.querySelector({sel});

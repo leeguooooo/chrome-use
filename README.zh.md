@@ -201,6 +201,8 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 现有 `mcp --tools all` 的 `chrome_use_find` 工具接受 `within`，使用相同的唯一范围规则，工具数量不变。fill/type 的 `text` 按文字原样传入，`--name --observe` 不会被当作 CLI 参数。
 
+语义 find 的 `--observe` 仍按已有行为提示不支持；已知范围和回执时可在同一个 `batch` 中执行范围内 find 动作及任务专属的 `get text` 核验。MCP find 工具不声明 observe 字段。
+
 先从页面发现范围：`find query "Beta account"` 返回候选的选择器锚点；选出对应标题的 article/容器，再执行 `find role button click --name Save --exact --within "<返回的选择器>"`。范围有歧义时用 `snapshot -s "<选择器>"` 查看并缩小范围，不取第一个。未知语义 find 参数和重复 `--within` 会被拒绝；输入像参数的文字可写 `find label Email fill -- --name`。`--exact false` 使用子串匹配。
 
 

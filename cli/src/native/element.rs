@@ -1,11 +1,63 @@
 use std::collections::HashMap;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::adaptive::{self, ElementFingerprint};
 use super::cdp::client::CdpClient;
 use super::cdp::types::*;
 use super::ref_hints::{self, RefRelocation, RelocationHow};
+
+/// Identity and boundary of a semantic command. This task-local only affects
+/// its internal selector; ordinary CSS and @ref operations keep their contract.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticPin {
+    pub session: String,
+    pub scope: i64,
+    pub target: i64,
+}
+tokio::task_local! { pub static SEMANTIC_PIN: SemanticPin; }
+pub fn semantic_pin_active(selector: &str) -> bool {
+    selector == "[data-chrome-use-located='true']" && SEMANTIC_PIN.try_with(|_| ()).is_ok()
+}
+
+pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<String, String> {
+    let pin = SEMANTIC_PIN
+        .try_with(Clone::clone)
+        .map_err(|_| "semantic identity missing")?;
+    if pin.session != session {
+        return Err("semantic target session changed; refusing dispatch".into());
+    }
+    let resolve = |backend| {
+        client.send_command(
+            "DOM.resolveNode",
+            Some(json!({"backendNodeId":backend,"objectGroup":"chrome-use-semantic-locator"})),
+            Some(session),
+        )
+    };
+    let scope = resolve(pin.scope)
+        .await
+        .map_err(|_| "semantic scope identity changed; refusing dispatch")?;
+    let target = resolve(pin.target)
+        .await
+        .map_err(|_| "semantic target identity changed; refusing dispatch")?;
+    let scope_id = scope["object"]["objectId"]
+        .as_str()
+        .ok_or("semantic scope unavailable")?;
+    let target_id = target["object"]["objectId"]
+        .as_str()
+        .ok_or("semantic target unavailable")?;
+    let checked = client.send_command("Runtime.callFunctionOn",Some(json!({
+        "objectId":scope_id,"functionDeclaration":"function(target){if(!this.isConnected || !target.isConnected || !this.contains(target))throw new Error('semantic target left scope');const r=target.getBoundingClientRect();if(!(r.width>0 && r.height>0) || (target.checkVisibility && !target.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})))throw new Error('semantic target hidden');return target;}",
+        "arguments":[{"objectId":target_id}],"returnByValue":false,"objectGroup":"chrome-use-semantic-locator"
+    })),Some(session)).await?;
+    if checked.get("exceptionDetails").is_some() {
+        return Err("semantic target changed or left its scope; refusing dispatch".into());
+    }
+    checked["result"]["objectId"]
+        .as_str()
+        .map(String::from)
+        .ok_or("semantic target unavailable; refusing dispatch".into())
+}
 
 /// Discover Monaco editor APIs exposed through the global object or AMD loader.
 ///
@@ -1666,6 +1718,18 @@ pub async fn resolve_element_center(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(f64, f64, f64, f64, String), String> {
+    if semantic_pin_active(selector_or_ref) {
+        let object = resolve_semantic_pin(client, session_id).await?;
+        let reply = client.send_command("Runtime.callFunctionOn", Some(json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,w:r.width,h:r.height}}","returnByValue":true})),Some(session_id)).await?;
+        let r = &reply["result"]["value"];
+        return Ok((
+            r["x"].as_f64().ok_or("semantic target has no box")?,
+            r["y"].as_f64().ok_or("semantic target has no box")?,
+            r["w"].as_f64().unwrap_or(0.0),
+            r["h"].as_f64().unwrap_or(0.0),
+            session_id.to_string(),
+        ));
+    }
     if let Some(ref_id) = parse_ref(selector_or_ref) {
         let entry = ref_map
             .get(&ref_id)
@@ -1764,6 +1828,12 @@ pub async fn resolve_element_object_id(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(String, String), String> {
+    if semantic_pin_active(selector_or_ref) {
+        return Ok((
+            resolve_semantic_pin(client, session_id).await?,
+            session_id.to_string(),
+        ));
+    }
     if let Some(ref_id) = parse_ref(selector_or_ref) {
         let entry = ref_map
             .get(&ref_id)

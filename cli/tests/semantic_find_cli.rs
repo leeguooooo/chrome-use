@@ -378,6 +378,62 @@ mod browser {
             &scope,
         ]);
         assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "custom");
+        // Hidden text leaves must not acquire visibility from their ancestor.
+        session.ok(&["eval", r##"document.querySelector('#account-b').innerHTML=`<button onclick="document.querySelector('#receipt').textContent='wrong'">Other<span hidden>Save</span></button>`;document.querySelector('#receipt').textContent='untouched'"##]);
+        session.refused(
+            &[
+                "find", "text", "Save", "click", "--exact", "--within", &scope,
+            ],
+            "No element found",
+        );
+        assert_eq!(
+            session.ok(&["get", "text", "#receipt"])["text"],
+            "untouched"
+        );
+        session.ok(&["eval", r##"document.querySelector('#account-b').insertAdjacentHTML('beforeend',`<button onclick="document.querySelector('#receipt').textContent='visible'">Save</button>`)"##]);
+        session.ok(&[
+            "find", "text", "Save", "click", "--exact", "--within", &scope,
+        ]);
+        assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "visible");
+        // Diagnostics must not print editable contents, including custom fields.
+        session.ok(&["eval", r##"document.querySelector('#account-b').innerHTML=`<div data-testid="dup" contenteditable>PRIVATE-EDITABLE</div><div data-testid="dup" role="textbox">PRIVATE-CUSTOM</div>`"##]);
+        let out = session.run(&["find", "testid", "dup", "--within", &scope]);
+        assert!(!out.status.success());
+        let diagnostic = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !diagnostic.contains("PRIVATE-EDITABLE") && !diagnostic.contains("PRIVATE-CUSTOM"),
+            "{diagnostic}"
+        );
+        // Marker observers run between discovery and dispatch. They may move or
+        // replace the selected node, but cannot redirect its pinned identity.
+        for mutation in [
+            "document.body.appendChild(target)",
+            "target.replaceWith(target.cloneNode(true))",
+            "target.parentElement.appendChild(target.cloneNode(true))",
+        ] {
+            session.ok(&["open", &format!("file://{}", page.display())]);
+            let script=format!("window.observer=new MutationObserver(ms=>{{const target=document.querySelector('#account-b [data-chrome-use-located]');if(target){{window.observer.disconnect();{mutation};}}}});window.observer.observe(document.querySelector('#account-b'),{{attributes:true,subtree:true}})");
+            session.ok(&["eval", &script]);
+            let out = session.run(&[
+                "find", "role", "button", "click", "--name", "Save", "--exact", "--within", &scope,
+            ]);
+            assert!(
+                !out.status.success(),
+                "moved or cloned target dispatched: {}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            assert_eq!(
+                session.ok(&["get", "text", "#receipt"])["text"],
+                "untouched"
+            );
+        }
+        // An outside clone is unrelated. The original target remains pinned.
+        session.ok(&["open", &format!("file://{}", page.display())]);
+        session.ok(&["eval", "window.observer=new MutationObserver(()=>{const target=document.querySelector('#account-b [data-chrome-use-located]');if(target){window.observer.disconnect();document.body.prepend(target.cloneNode(true));}});window.observer.observe(document.querySelector('#account-b'),{attributes:true,subtree:true})"]);
+        session.ok(&[
+            "find", "role", "button", "click", "--name", "Save", "--exact", "--within", &scope,
+        ]);
+        assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "beta");
         // Restore fixture for explicit first/nth compatibility checks.
         session.ok(&["open", &format!("file://{}", page.display())]);
 

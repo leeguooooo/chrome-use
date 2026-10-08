@@ -102,7 +102,12 @@ async fn objects_from_reply(
 /// Locate a unique visible node; read-only locate also reports ambiguity as an
 /// error with bounded candidates. No input values or supplied fill text appear
 /// in diagnostics. Hidden nodes are not a disambiguator for visible duplicates.
-pub async fn locate(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
+pub struct Located {
+    pub extra: Value,
+    pub pin: element::SemanticPin,
+}
+
+pub async fn locate(cmd: &Value, state: &DaemonState) -> Result<Located, String> {
     if state.active_frame_id.is_some() {
         return Err("semantic find currently supports the main document only; use the frame's direct @refs or frame main before locating; nothing was dispatched".into());
     }
@@ -116,7 +121,7 @@ pub async fn locate(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
             Some(&sid),
         )
         .await;
-    let result = locate_inner(cmd, state, &sid).await;
+    let result = locate_inner(cmd, state, &sid, true).await;
     let _ = mgr
         .client
         .send_command(
@@ -128,7 +133,12 @@ pub async fn locate(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
     result
 }
 
-async fn locate_inner(cmd: &Value, state: &DaemonState, sid: &str) -> Result<Value, String> {
+async fn locate_inner(
+    cmd: &Value,
+    state: &DaemonState,
+    sid: &str,
+    mark_target: bool,
+) -> Result<Located, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let client = &mgr.client;
     let scope = if let Some(within) = cmd["within"].as_str() {
@@ -297,7 +307,7 @@ async fn locate_inner(cmd: &Value, state: &DaemonState, sid: &str) -> Result<Val
             .collect();
         let reply = client.send_command("Runtime.callFunctionOn", Some(json!({
             "objectId": scope,
-            "functionDeclaration": "function(...elements){const targets=new Set();for(const element of elements){if(!element.isConnected || !this.contains(element))continue;const target=element.closest('a[href],button,summary,label,select,input,textarea,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]') || element;if(!this.contains(target))throw new Error('clickable ancestor outside scope');targets.add(target);}return Array.from(targets);}",
+            "functionDeclaration": "function(...elements){const targets=new Set();for(const element of elements){if(!element.isConnected || !this.contains(element))continue;const box=element.getBoundingClientRect();if(!(box.width>0 && box.height>0) || (element.checkVisibility && !element.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})))continue;const target=element.closest('a[href],button,summary,label,select,input,textarea,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]') || element;if(!this.contains(target))throw new Error('clickable ancestor outside scope');targets.add(target);}return Array.from(targets);}",
             "arguments": arguments, "objectGroup": GROUP, "returnByValue": false,
         })), Some(sid)).await?;
         candidates = objects_from_reply(client, sid, reply)
@@ -306,7 +316,7 @@ async fn locate_inner(cmd: &Value, state: &DaemonState, sid: &str) -> Result<Val
             .map(|object| (object, None))
             .collect();
     }
-    let inspect = r#"function(scope,label){ if(label && !(this.labels?.length || this.hasAttribute('aria-label') || this.hasAttribute('aria-labelledby'))) return null; if(!this.isConnected || !scope.isConnected || !scope.contains(this)) return null; const r=this.getBoundingClientRect(); const visible=r.width>0 && r.height>0 && (typeof this.checkVisibility!=='function' || this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})); return {tag:this.tagName.toLowerCase(), visible, role:this.getAttribute('role') || '', name:(this.getAttribute('aria-label') || this.getAttribute('title') || (['INPUT','TEXTAREA','SELECT'].includes(this.tagName) ? '' : this.textContent) || '').slice(0,80), selector:this.id ? '#' + CSS.escape(this.id) : this.tagName.toLowerCase(), context:(this.closest('article,section,fieldset,[role=group]')?.querySelector('h1,h2,h3,legend')?.textContent || '').trim().slice(0,80)}; }"#;
+    let inspect = r#"function(scope,label){ if(label && !(this.labels?.length || this.hasAttribute('aria-label') || this.hasAttribute('aria-labelledby'))) return null; if(!this.isConnected || !scope.isConnected || !scope.contains(this)) return null; const r=this.getBoundingClientRect(); const visible=r.width>0 && r.height>0 && (typeof this.checkVisibility!=='function' || this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})); return {tag:this.tagName.toLowerCase(), visible, role:this.getAttribute('role') || '', name:(this.getAttribute('aria-label') || this.getAttribute('title') || ((this.isContentEditable || ['textbox','searchbox'].includes(this.getAttribute('role')) || ['INPUT','TEXTAREA','SELECT'].includes(this.tagName)) ? '' : this.textContent) || '').slice(0,80), selector:this.id ? '#' + CSS.escape(this.id) : this.tagName.toLowerCase(), context:(()=>{const heading=this.closest('article,section,fieldset,[role=group]')?.querySelector('h1,h2,h3,legend');if(!heading || heading.isContentEditable || ['textbox','searchbox'].includes(heading.getAttribute('role')))return '';const copy=heading.cloneNode(true);copy.querySelectorAll('input,textarea,select,[contenteditable],[role=textbox],[role=searchbox]').forEach(e=>e.remove());return (copy.textContent || '').trim().slice(0,80);})()}; }"#;
     let mut visible = Vec::new();
     let mut matched_count = 0;
     let mut details = Vec::new();
@@ -340,10 +350,63 @@ async fn locate_inner(cmd: &Value, state: &DaemonState, sid: &str) -> Result<Val
     if visible.len() != 1 {
         return Err(format!("semantic locator matched {} visible elements; nothing was dispatched. Narrow --within or --name/--exact, or deliberately use find first/nth. Candidates (at most 8; values omitted): {}", visible.len(), json!(details)));
     }
-    let click = cmd["subaction"] == "click";
-    let mark = call(client, sid, &visible[0], r#"function(scope,click){if(!this.isConnected || !scope.isConnected || !scope.contains(this))return false; let target=this;if(click){const ancestor=this.closest('a[href],button,summary,label,select,input,textarea,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]');if(ancestor){if(!scope.contains(ancestor))return false;target=ancestor;}}document.querySelectorAll('[data-chrome-use-located]').forEach(e=>e.removeAttribute('data-chrome-use-located'));target.setAttribute('data-chrome-use-located','true');return true;}"#, json!([{"objectId": scope},{"value":click}])).await?;
-    if mark != true {
-        return Err("semantic target changed before dispatch; read the screen and retry discovery; nothing was dispatched".into());
+    let described = client
+        .send_command(
+            "DOM.describeNode",
+            Some(json!({"objectId":visible[0]})),
+            Some(sid),
+        )
+        .await?;
+    let scope_described = client
+        .send_command(
+            "DOM.describeNode",
+            Some(json!({"objectId":scope})),
+            Some(sid),
+        )
+        .await?;
+    let pin = element::SemanticPin {
+        session: sid.to_string(),
+        scope: scope_described["node"]["backendNodeId"]
+            .as_i64()
+            .ok_or("scope identity unavailable")?,
+        target: described["node"]["backendNodeId"]
+            .as_i64()
+            .ok_or("target identity unavailable")?,
+    };
+    if mark_target {
+        let click = cmd["subaction"] == "click";
+        let mark = call(client, sid, &visible[0], r#"function(scope,click){if(!this.isConnected || !scope.isConnected || !scope.contains(this))return false; let target=this;if(click){const ancestor=this.closest('a[href],button,summary,label,select,input,textarea,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]');if(ancestor){if(!scope.contains(ancestor))return false;target=ancestor;}}document.querySelectorAll('[data-chrome-use-located]').forEach(e=>e.removeAttribute('data-chrome-use-located'));target.setAttribute('data-chrome-use-located','true');return true;}"#, json!([{"objectId": scope},{"value":click}])).await?;
+        if mark != true {
+            return Err("semantic target changed before dispatch; read the screen and retry discovery; nothing was dispatched".into());
+        }
     }
-    Ok(json!({"count": matched_count, "visibleCount": 1}))
+    Ok(Located {
+        extra: json!({"count": matched_count, "visibleCount": 1}),
+        pin,
+    })
+}
+
+/// Reconfirm uniqueness after marker observers have run, without marking again.
+/// A replacement is not a continuation of the original target's identity.
+pub async fn revalidate(
+    cmd: &Value,
+    state: &DaemonState,
+    pin: &element::SemanticPin,
+) -> Result<(), String> {
+    let current = locate_inner(cmd, state, &pin.session, false)
+        .await
+        .map_err(|error| {
+            if error.starts_with("No element found") {
+                "semantic target changed after selection; refusing dispatch".to_string()
+            } else {
+                error
+            }
+        })?;
+    if current.pin != *pin {
+        return Err(
+            "semantic target or scope identity changed before dispatch; no action was resent"
+                .into(),
+        );
+    }
+    Ok(())
 }
