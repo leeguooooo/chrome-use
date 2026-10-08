@@ -27,7 +27,7 @@
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "npm run version:sync && npm run build:linux && npm run build:windows && npm run build:macos",
     "build:docker": "docker build -t chrome-use-builder -f docker/Dockerfile.build .",
-    "release": "npm run version:sync && npm run build:all-platforms && npm publish --tag fork",
+    "release": "npm run version:sync && npm run build:all-platforms",
     "postinstall": "node scripts/postinstall.js",
     "clawhub:sync": "clawhub sync --all --bump patch",
     "build:190": "python3 scripts/remote-cargo.py build",

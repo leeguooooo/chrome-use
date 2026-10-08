@@ -1,6 +1,6 @@
 ---
 name: real-chrome
-description: Drive the user's real, already-open logged-in Chrome via the chrome-use extension + native messaging relay (no debug port). Use for: connecting to the user's live Chrome, multi-profile selection (browsers/--browser), relay-drop recovery, OAuth/SSO cross-process handoff, strict multi-agent tab-group isolation, adopting an existing tab, anti-detection ranking, silent background operation, --humanize behavioural stealth, and Cloudflare cf-status. Load when the task needs the user's real session rather than a launched browser.
+description: Drive the user's real, already-open logged-in Chrome via the chrome-use extension + native messaging relay (no debug port). Use for connecting to the user's live Chrome, multi-profile selection (browsers/--browser), relay-drop recovery, OAuth/SSO cross-process handoff, strict multi-agent tab-group isolation, adopting an existing tab, anti-detection ranking, silent background operation, --humanize behavioural stealth, and Cloudflare cf-status. Load when the task needs the user's real session rather than a launched browser.
 allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
 ---
 

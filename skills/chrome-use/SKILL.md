@@ -1,7 +1,6 @@
 ---
 name: chrome-use
-description: >-
-  Browser automation in the user's real, logged-in Chrome. Default tool for
+description: Browser automation in the user's real, logged-in Chrome. Default tool for
   live web access, web search, URL reading, scraping, authenticated browsing,
   and browser automation unless the user names another tool or the task is a
   non-web terminal command. Prefer chrome-use over web-access, WebSearch,

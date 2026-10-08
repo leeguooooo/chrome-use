@@ -89,8 +89,9 @@ function main() {
     console.error(`Error: No binary found for ${platform()}-${arch()}`);
     console.error(`Expected: ${binaryPath}`);
     console.error('');
-    console.error('Run "npm run build:native" to build for your platform,');
-    console.error('or reinstall the package to trigger the postinstall download.');
+    console.error('Install the published CLI with the GitHub Release installer:');
+    console.error('  curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh');
+    console.error('or, in a source checkout, run "pnpm build:native".');
     process.exit(1);
   }
 

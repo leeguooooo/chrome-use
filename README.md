@@ -92,7 +92,6 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 - **Custom location:** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
 - **Windows, pin a version or location:** `$env:AGENT_BROWSER_VERSION = 'v1.5.139'` or `$env:AGENT_BROWSER_BIN_DIR = 'D:\tools'` before the `irm … | iex` line. It installs to `%LOCALAPPDATA%\Programs\chrome-use` by default and adds that to your user PATH, keeping the existing entries exactly as they were (opt out with `$env:AGENT_BROWSER_NO_PATH = 1`). No admin rights needed.
 - **Windows, by hand:** download `chrome-use-win32-x64.tar.gz` and its `.sha256` from the [Releases page](https://github.com/leeguooooo/chrome-use/releases), check that `(Get-FileHash chrome-use-win32-x64.tar.gz -Algorithm SHA256).Hash` matches the `.sha256` file, extract with `tar -xzf chrome-use-win32-x64.tar.gz`, and put `chrome-use.exe` on your PATH. Check the hash before running it: an interrupted download still extracts into an `.exe`, which then fails at launch with an access violation (exit code `-1073741819`, `0xC0000005`) rather than anything that says the download was incomplete.
-- **npm (legacy):** `npm install -g chrome-use`. Still published, but GitHub Releases is the primary channel now.
 </details>
 
 ### Install with Nix

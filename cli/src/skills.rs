@@ -1197,4 +1197,69 @@ mod tests {
         assert!(resolve_supplementary(tmp.path(), "nope").is_none());
         assert!(resolve_supplementary(tmp.path(), "").is_none());
     }
+
+    /// Every SKILL.md in the repo must be valid YAML frontmatter, and our own
+    /// line-based `parse_frontmatter` must read the same name and description a
+    /// real YAML parser does. Other skill loaders scan these files with a full
+    /// YAML parser: a plain-scalar description containing `: ` parsed here but
+    /// was a hard error there (issue #425), and a `>-` block scalar would parse
+    /// there but come out as `">- ..."` here.
+    #[test]
+    fn every_skill_md_frontmatter_is_valid_yaml_and_agrees_with_parse_frontmatter() {
+        fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect(&path, out);
+                } else if path.file_name().is_some_and(|n| n == "SKILL.md") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = Vec::new();
+        for dir in ["skills", "skill-data", "packaging"] {
+            collect(&root.join(dir), &mut files);
+        }
+        assert!(
+            files.len() > 5,
+            "expected to find the repo's SKILL.md files, found {files:?}"
+        );
+
+        for path in files {
+            let content = fs::read_to_string(&path).unwrap();
+            let body = content.trim_start();
+            assert!(
+                body.starts_with("---"),
+                "{}: no frontmatter",
+                path.display()
+            );
+            let after = &body[3..];
+            let end = after
+                .find("\n---")
+                .unwrap_or_else(|| panic!("{}: unterminated frontmatter", path.display()));
+            let yaml: serde_yaml::Value = serde_yaml::from_str(&after[..end]).unwrap_or_else(|e| {
+                panic!("{}: frontmatter is not valid YAML: {e}", path.display())
+            });
+            let field = |key: &str| {
+                yaml.get(key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| panic!("{}: `{key}` must be a string", path.display()))
+                    .to_string()
+            };
+            let (name, description, _) = parse_frontmatter(&content)
+                .unwrap_or_else(|| panic!("{}: parse_frontmatter failed", path.display()));
+            assert_eq!(name, field("name"), "{}: name", path.display());
+            assert_eq!(
+                description,
+                field("description"),
+                "{}: parse_frontmatter and YAML disagree on description",
+                path.display()
+            );
+        }
+    }
 }

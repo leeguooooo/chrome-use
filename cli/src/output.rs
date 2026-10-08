@@ -5997,7 +5997,9 @@ Environment:
   CODEX_THREAD_ID                Codex task id, recognized automatically for isolation
   AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
-  AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
+  AGENT_BROWSER_STATE_EXPIRE_DAYS Opt-in: daemon deletes saved states older than N days
+                                 on start. Unset: never auto-deleted; doctor only warns
+                                 about states older than 30 days
   CHROME_USE_RELAY_DIR          Isolated relay registry directory; set the same
                                absolute path in the native host and CLI
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path
@@ -6020,7 +6022,9 @@ Environment:
   AGENT_BROWSER_SPARSE_SCREENSHOT  0 = don't auto-attach a screenshot to a near-empty canvas snapshot
   AGENT_BROWSER_SETTLE_QUIET_MS  DOM-quiet window that ends the wait early in ms (default: 100)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
-  AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (default: 30)
+  AGENT_BROWSER_STATE_EXPIRE_DAYS Opt-in: daemon deletes saved states older than N days
+                                 on start. Unset: never auto-deleted; doctor only warns
+                                 about states older than 30 days
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM session encryption
   AGENT_BROWSER_STREAM_PORT      Override WebSocket streaming port (default: OS-assigned)
   AGENT_BROWSER_IDLE_TIMEOUT_MS  Auto-shutdown daemon after N ms of inactivity (disabled by default)

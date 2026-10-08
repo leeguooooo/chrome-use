@@ -847,7 +847,6 @@ AGENT_BROWSER_SPARSE_SCREENSHOT="0"          # Don't auto-attach a screenshot to
 AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
 AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS="ws.example.com"  # Extra hostnames the dashboard accepts (reverse proxy); only loopback names otherwise
-AGENT_BROWSER_HOME="/path/to/chrome-use"  # Custom install location
 AGENT_BROWSER_CLICK_MODE="dom"               # Click strategy: "" (default: scroll-in + coordinate
                                              #   click, DOM-dispatch fallback), "coord" (strict
                                              #   coordinate only), "dom" (always element.click())
