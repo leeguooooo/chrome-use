@@ -257,10 +257,10 @@ pub fn maybe_same_site(a: &str, b: &str) -> bool {
     if is_ip(&a) || is_ip(&b) {
         return false;
     }
-    let tail = |h: &str| {
+    fn tail(h: &str) -> Option<Vec<&str>> {
         let labels: Vec<&str> = h.rsplit('.').take(2).collect();
-        (labels.len() == 2).then(|| labels)
-    };
+        (labels.len() == 2).then_some(labels)
+    }
     matches!((tail(&a), tail(&b)), (Some(x), Some(y)) if x == y)
 }
 
