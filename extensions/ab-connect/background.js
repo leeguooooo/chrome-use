@@ -17,7 +17,12 @@
 // native messaging.
 
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
-import { agentWindowStillOurs, isUntouchedPlaceholder, placeholderCleanup } from './agent-window.js';
+import {
+  agentTabPredicate,
+  agentWindowStillOurs,
+  isUntouchedPlaceholder,
+  placeholderCleanup,
+} from './agent-window.js';
 import { attachTabById } from './attach-by-id.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
@@ -175,6 +180,35 @@ let agentWindowError = null;
 const AGENT_PLACEHOLDER_KEY = 'ab_agent_window_placeholder';
 // Why the last remembered agent window was rejected (ABExt.state), or null.
 let agentWindowRejected = null;
+// Pop-ups verified as the agent's (#456): adopted through ABExt.attachTabById,
+// which the daemon calls only for a tab its own click opened (session-owned
+// opener or group), or opened by an agent-created tab / such a pop-up. They are
+// not persisted into ownedTabs; they are kept in storage.session so a worker
+// restart does not turn them into "user tabs". User tabs adopted with
+// adopt/inspect are never added here.
+const AGENT_POPUPS_KEY = 'ab_agent_popups';
+const agentPopups = new Set();
+let agentPopupsLoaded = null;
+function loadAgentPopups() {
+  agentPopupsLoaded ??= chrome.storage.session
+    .get(AGENT_POPUPS_KEY)
+    .then((g) => {
+      for (const id of g[AGENT_POPUPS_KEY] || []) agentPopups.add(id);
+    })
+    .catch(() => {});
+  return agentPopupsLoaded;
+}
+async function markAgentPopup(tabId) {
+  await loadAgentPopups();
+  if (!Number.isInteger(tabId) || agentPopups.has(tabId)) return;
+  agentPopups.add(tabId);
+  await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
+}
+async function forgetAgentPopup(tabId) {
+  await loadAgentPopups();
+  if (agentPopups.delete(tabId))
+    await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
+}
 
 async function agentPlaceholderRecord() {
   const got = await chrome.storage.local.get(AGENT_PLACEHOLDER_KEY).catch(() => null);
@@ -191,11 +225,11 @@ async function isUsableAgentWindow(id) {
   await loadOwnedTabs();
   const winTabs = win ? await chrome.tabs.query({ windowId: id }).catch(() => null) : null;
   const record = await agentPlaceholderRecord();
-  // The agent's tabs: ones it created (ownedTabs) and ones the relay holds
-  // attached, which includes pop-ups adopted from the session's own tab
-  // (ABExt.attachTabById / the onCreated opener path, #456). Those are not
-  // persisted into ownedTabs, and they are the agent's, not the user's.
-  const isAgentTab = (tabId) => ownedTabs.has(tabId) || tabs.has(tabId);
+  // The agent's tabs: ones it created (ownedTabs) and pop-ups verified as the
+  // agent's (agentPopups). Not "anything attached": user tabs taken with
+  // adopt/inspect are attached too and stay the user's.
+  await loadAgentPopups();
+  const isAgentTab = agentTabPredicate(ownedTabs, agentPopups);
   const verdict = agentWindowStillOurs(win, winTabs, isAgentTab, record);
   if (!verdict.ours) agentWindowRejected = { windowId: id, reason: verdict.reason };
   // A record for this window whose tab is gone or no longer an untouched
@@ -1069,11 +1103,15 @@ async function handleForwardCdpCommand(msg) {
   // tab opened. No URL lookup, so no other tab can be attached in its place.
   // Not persisted into ownedTabs, like the onCreated pop-up path.
   if (method === 'ABExt.attachTabById') {
-    return await attachTabById(params, {
+    const result = await attachTabById(params, {
       getTab: (tabId) => chrome.tabs.get(tabId),
       eligible,
       attachTab: (tabId) => attachTab(tabId),
     });
+    // The daemon calls this only for a pop-up its own click opened (#456), so
+    // the tab is verified as the agent's for the agent-window check.
+    if (result && result.attached) await markAgentPopup(result.chromeTabId);
+    return result;
   }
 
   if (method === 'ABExt.adoptByUrl') {
@@ -1856,6 +1894,11 @@ chrome.tabs.onCreated.addListener(
       const opener = tab.openerTabId;
       if (typeof opener !== 'number') return;
       if (!ownedTabs.has(opener) && !tabs.has(opener)) return;
+      // Opened by an agent tab (created by the agent, or a verified agent
+      // pop-up): the agent's. Opened by a merely attached tab (a user tab taken
+      // with adopt/inspect): attached as before, but it keeps user identity.
+      await loadAgentPopups();
+      if (ownedTabs.has(opener) || agentPopups.has(opener)) await markAgentPopup(tab.id);
       if (tabs.has(tab.id)) return;
       // A fresh popup is often still at about:blank (no url yet) — that's fine to
       // attach; only bail on a clearly-restricted scheme. attachTab tolerates the
@@ -1914,6 +1957,7 @@ chrome.tabs.onRemoved.addListener(
   (tabId) =>
     void whenReady(() => {
       nativeDuplicateTabs.delete(tabId);
+      void forgetAgentPopup(tabId);
       // Keep a short tombstone for stable-target recovery after onRemoved.
       // Genuine closed tabs expire, while a replacement can transfer the state.
       const removedState = reloadStates.get(tabId);

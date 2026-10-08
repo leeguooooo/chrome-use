@@ -19,6 +19,17 @@
 // never by its URL.
 
 /**
+ * The agent-tab predicate for the agent-window check: tabs the agent created
+ * (`owned`) and pop-ups verified as the agent's (`agentPopups`: adopted through
+ * ABExt.attachTabById for a session-owned opener/group, or opened by an agent
+ * tab). Deliberately NOT "any tab the relay is attached to": that map also
+ * holds user tabs taken with `adopt` / `inspect`, which stay the user's.
+ */
+export function agentTabPredicate(owned, agentPopups) {
+  return (tabId) => owned.has(tabId) || agentPopups.has(tabId)
+}
+
+/**
  * Whether `tab` is still the untouched placeholder `record` describes: the
  * recorded tab in the recorded window, still on about:blank, with no
  * navigation pending. Once the user navigates it (or starts to), it is theirs.

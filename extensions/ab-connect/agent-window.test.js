@@ -1,7 +1,59 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { agentWindowStillOurs, isUntouchedPlaceholder, placeholderCleanup } from './agent-window.js'
+import {
+  agentTabPredicate,
+  agentWindowStillOurs,
+  isUntouchedPlaceholder,
+  placeholderCleanup,
+} from './agent-window.js'
+
+test('an adopted user tab (attached, not owned) inside the agent window rejects it', () => {
+  const owned = new Set([1])
+  const agentPopups = new Set()
+  // The relay is attached to 1 (agent) and 7 (a user tab taken with adopt).
+  const attached = new Set([1, 7])
+  const isAgent = agentTabPredicate(owned, agentPopups)
+  assert.equal(isAgent(7), false, 'attached is not agent identity')
+  assert.ok(attached.has(7))
+  const got = agentWindowStillOurs(
+    { id: 9, state: 'normal' },
+    [
+      { id: 1, windowId: 9, url: 'https://example.com/' },
+      { id: 7, windowId: 9, url: 'https://mail.example.com/' },
+    ],
+    isAgent,
+  )
+  assert.deepEqual(got, { ours: false, reason: 'user-tab' })
+})
+
+test('owned tabs plus a verified agent pop-up keep the agent window', () => {
+  const isAgent = agentTabPredicate(new Set([1]), new Set([5]))
+  const got = agentWindowStillOurs(
+    { id: 9, state: 'normal' },
+    [
+      { id: 1, windowId: 9, url: 'https://example.com/' },
+      // Chrome reported the window's front tab as opener, not ours: the
+      // pop-up is accepted because it is a verified agent pop-up.
+      { id: 5, windowId: 9, url: 'https://login.example.com/', openerTabId: 42 },
+    ],
+    isAgent,
+  )
+  assert.deepEqual(got, { ours: true, reason: null })
+})
+
+test("a tab opened by an adopted user tab is not the agent's", () => {
+  const isAgent = agentTabPredicate(new Set([1]), new Set())
+  const got = agentWindowStillOurs(
+    { id: 9, state: 'normal' },
+    [
+      { id: 1, windowId: 9, url: 'https://example.com/' },
+      { id: 8, windowId: 9, url: 'https://x.example/', openerTabId: 7 },
+    ],
+    isAgent,
+  )
+  assert.equal(got.ours, false)
+})
 
 const owned = new Set([1, 2])
 const isOwned = (id) => owned.has(id)
