@@ -10,7 +10,7 @@ chrome-use fill @e2 "hello" --observe       # replace the field value
 chrome-use type @e2 " world"               # append
 chrome-use press Enter --selector @e2      # focus this control before the key
 chrome-use select @e4 "option-value"       # native select
-chrome-use pick @e4 --option "Europe"      # custom combobox
+chrome-use pick @e4 --option "Europe" --observe  # custom combobox, with the delta it caused
 chrome-use pick @e6 --option "Kyoto"       # autocomplete field: types, clicks the suggestion
 chrome-use check @e5
 chrome-use uncheck @e5
@@ -43,6 +43,13 @@ warnings from `fill`, `click` and `keyboard type`: a Save still disabled after
 a fill, a `dispatch: dom` click, or a refused click on a disabled control all
 mean the edit did not register. A ref marked `toggles=checkbox(...)` is a
 switch, not a link. It can be destructive, so do not click it to navigate.
+
+If the page discards the element handle part-way through a `fill` (CDP
+"Could not find object with given id", seen on the extension relay), `fill`
+re-resolves the element once and reads it before doing anything else: a field
+that already holds the value is reported with a ⚠ note and not typed again; a
+field that does not is filled once more and says so. Do not repeat the fill
+yourself after either note.
 
 ## Before you write `eval`
 

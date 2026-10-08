@@ -267,6 +267,8 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use screenshot          <span class="du-cmt"># save to a temp directory</span>
 <span class="du-prompt">$</span> chrome-use screenshot path.png <span class="du-cmt"># save to a specific path</span>
+<span class="du-prompt">$</span> chrome-use screenshot main el.png <span class="du-cmt"># one element: selector, then path</span>
+<span class="du-prompt">$</span> chrome-use screenshot el.png <span class="du-flag">--selector</span> main <span class="du-cmt"># or --selector/-s, in any order</span>
 <span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--full</span>   <span class="du-cmt"># full-page screenshot</span>
 <span class="du-prompt">$</span> chrome-use pdf output.pdf      <span class="du-cmt"># save as PDF</span></code></pre>
       </div>
@@ -594,6 +596,7 @@ EOF</code></pre>
         <code>script</code> adds values between steps, loops, conditions, and asserts. See <a href="/en/script.html">Single-pass Scripting</a>.
       </p>
       <p>Ordinary CLI <code>--json</code> replies use a <code>success</code>/<code>data</code>/<code>timing</code> envelope. <code>batch --json</code> prints an array of <code>{command,success,result,error}</code> entries; <code>script --json</code> prints the bare program result (<code>ok</code>, <code>return</code>, <code>logs</code>, <code>error</code>, <code>advisories</code>, and other program fields). Batch and script CLI output have no top-level <code>timing</code>.</p>
+      <p>A batch step takes its own per-command flags (<code>--observe</code>, <code>--no-settle</code>, <code>--settle-ms</code>, <code>--with-screenshot</code>, <code>--if-present</code>, <code>--new-tab</code>, <code>--tab</code>): <code>batch "fill @e1 Ada" "click @e2 --observe"</code> puts <code>observed</code> in that step's <code>result</code>. Session-wide flags (<code>--headed</code>, <code>--profile</code>, ...) go before <code>batch</code>; a step carrying one is refused.</p>
       <p>Read program outcome separately from transport success: a nested <code>script</code> with daemon-envelope <code>data.ok:false</code> fails its parent even if <code>success:true</code>. JS failures retain <code>ok:false</code>, <code>return:null</code>, <code>error</code> and <code>logs</code>. Both script forms retain observed hints in <code>advisories</code> (top-level in CLI <code>script --json</code>; <code>data.advisories</code> in the daemon envelope) (at most 20), including nested and failed runs; JSON op-list <code>steps</code> also retain each action's <code>noProgress</code>. Text output prints the aggregate hints once. These hints neither change action success nor retry an action.</p>
       <div class="du-code">
         <div class="du-code-head">

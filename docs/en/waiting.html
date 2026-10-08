@@ -131,7 +131,14 @@
         <code>--observe</code> keeps watching for a <em>first</em> reaction for half the ceiling
         (500ms by default) before it is willing to report <code>changed:false</code> — otherwise a
         control that renders on a 300ms timer reads as "nothing happened". Only actions that really
-        change nothing pay that; anything that reacts ends the window at once.
+        change nothing pay that; anything that reacts ends the window at once, including a re-render
+        the action's own handler made while it was being dispatched (a click that redraws a list
+        synchronously settles in about the 100ms quiet window, not 500ms).
+      </p>
+      <p>
+        <code>observed.status: complete</code> means the capture is complete, not the task: a page
+        that shows <code>Loading</code> and renders its result on a timer is quiet at that moment.
+        Follow with <code>wait --text "Report ready"</code> (or the page's own final signal).
       </p>
 
       <div class="du-code">

@@ -181,6 +181,8 @@ chrome-use is checked @e1      # Check if checked
 ```bash
 chrome-use screenshot          # Save to temporary directory
 chrome-use screenshot path.png # Save to specific path
+chrome-use screenshot main el.png             # One element: selector then path
+chrome-use screenshot el.png --selector main  # Or --selector/-s, in any order
 chrome-use screenshot --full   # Full page
 chrome-use screenshot --tab t2 shot.png  # Capture a specific tab (ref from `tab list`) instead of the active one
 chrome-use pdf output.pdf      # Save as PDF
@@ -549,7 +551,7 @@ EOF
 
 ### Script results
 
-Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`.
+Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`. A batch step takes its own per-command flags (`--observe`, `--no-settle`, `--settle-ms`, `--with-screenshot`, `--if-present`, `--new-tab`, `--tab`): `batch "fill @e1 Ada" "click @e2 --observe"` puts `observed` in that step's `result`. Session-wide flags (`--headed`, `--profile`, ...) go before `batch`; a step carrying one is refused.
 
 For `script` JSON op-lists or JS programs, inspect program outcome separately
 from transport `success`. Nested daemon-envelope `data.ok:false` fails the parent script even

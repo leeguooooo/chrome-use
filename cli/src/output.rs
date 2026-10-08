@@ -3382,6 +3382,7 @@ Returns { filled:[{key,ok,type}], submitted, errors:[...] } — use --json for i
 chrome-use screenshot - Take a screenshot
 
 Usage: chrome-use screenshot [selector] [path]
+       chrome-use screenshot [path] --selector <selector|@ref>
 
 Captures a screenshot of the current page. If no path is provided,
 saves to a temporary directory with a generated filename.
@@ -3398,6 +3399,12 @@ Options:
   --full, -f           Capture full page (not just viewport)
   -b, --base64         Include base64-encoded image directly in output (ideal for agents)
   [selector]           Capture just an element (CSS or @ref), e.g. `screenshot ".header" h.png`
+  --selector, -s <sel> Name the element explicitly; the remaining positional is
+                       the path, in any order: `screenshot h.png --selector main`.
+                       An image path given before a bare selector
+                       (`screenshot h.png main`) is also placed correctly.
+                       Unknown options are refused rather than read as a
+                       selector or path.
   --clip <x,y,w,h>     Capture a pixel region, e.g. `screenshot --clip 0,0,200,40 corner.png`
   --max-width <px>     Downscale so the image's width ≤ px (preserves aspect)
   --max-height <px>    Downscale so the image's height ≤ px
@@ -5095,6 +5102,18 @@ Options:
   --bail               Stop on first error (default: continue all commands)
   --json               Output results as a JSON array
 
+Per-step flags:
+  A step may carry the per-command flags it would take on its own command
+  line, and they apply to that step only: --observe, --no-settle,
+  --settle-ms <ms>, --with-screenshot <path>, --if-present/--optional,
+  --new-tab, --tab <t>, --tab-label <l>. With --json, an observed step's
+  "result" carries its "observed" payload.
+    chrome-use batch "fill @e1 Ada" "click @e2 --observe" "get text body"
+  Flags that configure the whole session (--headed, --profile, --session, ...)
+  cannot change mid-batch; a step carrying one is refused. Put them before
+  `batch`. A flag before `batch` (e.g. `batch --observe ...`) applies to
+  every step.
+
 Argument Mode:
   Each quoted argument is a full command string:
   chrome-use batch "open https://example.com" "snapshot -i" "screenshot"
@@ -5508,7 +5527,8 @@ Core Commands:
                              drive) — local only, never uploaded
   report [--note <t>] [--submit --yes]  Draft a redacted GitHub issue from it;
                              files (or +1s an existing one) only with the user's OK
-  screenshot [path]          Take screenshot (auto-downscaled to ≤1200px long edge;
+  screenshot [path]          Take screenshot (element: [selector] [path], or
+                             [path] --selector <sel> in any order; auto-downscaled to ≤1200px long edge;
                              --max-width/--max-height/--scale to override; --annotate
                              refreshes labels without invalidating existing refs)
   pdf <path>                 Save as PDF
@@ -5877,15 +5897,22 @@ Options:
                              (a11y delta + url + requests) — skip act→snapshot→diff
                              Requests: at most 20 summaries, 256 UTF-8 bytes each;
                              data URL payloads omitted. Full capture: network requests --json
+                             Applies to click, dblclick, fill, type, press, select,
+                             pick, check, uncheck, evaluate (delta) and navigate,
+                             reload, back, forward (fresh tree); also per batch step.
                              Observation status is separate from action success;
                              partial/unavailable results must not trigger action replay.
+                             status=complete means the capture is complete, not that
+                             the task is: wait for the page's own final signal.
                              Successful same-context connection reuse preserves the
                              noProgress streak; new/rebound/failed connections or
                              storage-state loads clear it.
   --settle-ms <ms>           Ceiling on the wait before an observation captures
                              (default 1000, or AGENT_BROWSER_SETTLE_MS). The wait
                              ends early on DOM quiet + no in-flight request; a
-                             capture that hit the ceiling says so.
+                             capture that hit the ceiling says so. A mutation the
+                             action made while being dispatched counts as its
+                             reaction, so the wait then only owes the quiet window.
   --no-settle                Capture immediately, without waiting for the page
                              to stop changing
   --with-screenshot <path>   Save the pixels alongside a structural observation

@@ -42,7 +42,10 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    renumber them. Navigation and tab switches reset refs. When a ref errors
    or a control is newly rendered, discover it again.
 2. Pair actions with `--observe` and read `observed.status`. A separate
-   snapshot after every click is unnecessary.
+   snapshot after every click is unnecessary. Inside `batch`, write it on the
+   step: `batch "fill @e1 Ada" "click @e2 --observe"`. `status: complete`
+   means the capture is complete, not that the task is: a page still showing
+   `Loading` needs `wait --text` for its final signal.
 3. Follow the error's instructions: its last line says what to do next.
    Do not pipe output through `tail` or drop stderr.
 4. An action that changed nothing: read its `why:` note and ⚠ warnings, fix

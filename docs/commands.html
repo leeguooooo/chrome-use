@@ -255,6 +255,8 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use screenshot          <span class="du-cmt"># 保存到临时目录</span>
 <span class="du-prompt">$</span> chrome-use screenshot path.png <span class="du-cmt"># 保存到指定路径</span>
+<span class="du-prompt">$</span> chrome-use screenshot main el.png <span class="du-cmt"># 单个元素：先选择器后路径</span>
+<span class="du-prompt">$</span> chrome-use screenshot el.png <span class="du-flag">--selector</span> main <span class="du-cmt"># 或用 --selector/-s，顺序不限</span>
 <span class="du-prompt">$</span> chrome-use screenshot <span class="du-flag">--full</span>   <span class="du-cmt"># 整页截图</span>
 <span class="du-prompt">$</span> chrome-use pdf output.pdf      <span class="du-cmt"># 保存为 PDF</span></code></pre>
       </div>
@@ -573,6 +575,7 @@ EOF</code></pre>
         步骤间传值、循环、条件、断言。详见 <a href="/script.html">单次成型脚本</a>。
       </p>
       <p>普通 CLI <code>--json</code> 返回 <code>success</code>/<code>data</code>/<code>timing</code> envelope。<code>batch --json</code> 打印 <code>{command,success,result,error}</code> 条目的数组；<code>script --json</code> 打印程序结果本身（<code>ok</code>、<code>return</code>、<code>logs</code>、<code>error</code>、<code>advisories</code> 等）。batch 和 script 的 CLI 输出没有顶层 <code>timing</code>。</p>
+      <p>batch 的每一步可以带自己的单命令参数（<code>--observe</code>、<code>--no-settle</code>、<code>--settle-ms</code>、<code>--with-screenshot</code>、<code>--if-present</code>、<code>--new-tab</code>、<code>--tab</code>）：<code>batch "fill @e1 Ada" "click @e2 --observe"</code> 会把 <code>observed</code> 放进这一步的 <code>result</code>。作用于整个会话的参数（<code>--headed</code>、<code>--profile</code> 等）写在 <code>batch</code> 前面；写在某一步里会被拒绝。</p>
       <p>程序结果与传输成功分开判断：daemon envelope 中嵌套 <code>script</code> 的 <code>data.ok:false</code> 会使父脚本失败，即使 <code>success:true</code>。JS 失败仍保留 <code>ok:false</code>、<code>return:null</code>、<code>error</code> 和 <code>logs</code>。两种脚本都在 <code>advisories</code>（CLI <code>script --json</code> 顶层；daemon envelope 中为 <code>data.advisories</code>） 中保留观察提示，最多 20 条，嵌套和失败运行也保留；JSON op-list 的 <code>steps</code> 另带对应动作的 <code>noProgress</code>。文字输出只打印汇总提示一次。这些提示不改变动作 success，也不重试动作。</p>
       <div class="du-code">
         <div class="du-code-head">

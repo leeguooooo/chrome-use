@@ -50,7 +50,9 @@ mutating action, `--observe` keeps watching for a *first* reaction for half the
 ceiling (500ms by default) before it is willing to report `changed:false` —
 otherwise a control that renders on a 300ms timer reads as "nothing happened".
 Only actions that really change nothing pay that; anything that reacts ends the
-window at once. Spinners that loop forever are ignored on purpose; they never end. Tune
+window at once, including a re-render the action's own handler made while it was
+being dispatched (a click that redraws a list synchronously settles in about the
+100ms quiet window, not 500ms). Spinners that loop forever are ignored on purpose; they never end. Tune
 with `--settle-ms <ms>` (or `AGENT_BROWSER_SETTLE_MS`) and switch it off with
 `--no-settle` when you deliberately want the page mid-flight. Since the wait
 already happened, `--with-screenshot <path>` saves the pixels from that same
@@ -58,7 +60,10 @@ settled moment (`snapshot -i --with-screenshot ./page.png`, or an action with
 `--observe`) — the tree is still what you read the page from; the image is an
 output to look at or attach, and never a substitute for the structural read. Waiting for
 something *specific* is still `wait`'s job — the settle only knows that the
-page stopped, not that what you wanted appeared.
+page stopped, not that what you wanted appeared. `observed.status: complete`
+means the capture is complete, not the task: a page that shows `Loading` and
+renders its result on a timer is quiet at that moment, so follow with
+`wait --text "Report ready"` (or the page's own final signal).
 
 **Repeated unchanged attempts are advisory.** `observed.noProgress` appears
 from the third identical observed `click`, `dblclick`, or `press` on the same
