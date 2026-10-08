@@ -7460,8 +7460,8 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // Armed but unreadable for an unknown reason: the guard may have cancelled
     // a link nobody will open. Say so; the click is never repeated. (A
     // document that is gone navigated, so no link was cancelled.)
-    if read == Some(popup_guard::ReadOutcome::Failed) {
-        out["openedTabWarning"] = json!(popup_guard::UNREAD_NOTE);
+    if let Some(popup_guard::ReadOutcome::Failed(why)) = &read {
+        out["openedTabWarning"] = json!(format!("{} ({why})", popup_guard::UNREAD_NOTE));
     }
     let pending = DeferredClickTabCheck {
         before,

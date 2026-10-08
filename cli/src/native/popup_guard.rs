@@ -362,6 +362,9 @@ pub const READ_SCRIPT: &str = r#"(() => {
 pub struct ArmedGuard {
     pub session_id: String,
     pub context_id: i64,
+    /// The frame the guard is in, and its URL when armed.
+    pub frame_id: String,
+    pub frame_url: String,
 }
 
 /// A link the guard took over: open `url` in a background tab.
@@ -608,6 +611,8 @@ pub async fn arm(
     Some(ArmedGuard {
         session_id: session_id.to_string(),
         context_id: ctx,
+        frame_id,
+        frame_url,
     })
 }
 
@@ -645,7 +650,7 @@ fn frame_url(node: &Value, id: &str) -> Option<String> {
 /// Read (and disarm) the guard after the click. `None` when its document is
 /// gone (the click navigated the tab) or it cannot be read.
 pub async fn read(client: &CdpClient, guard: &ArmedGuard) -> ReadOutcome {
-    let v = match client
+    let failure = match client
         .send_command(
             "Runtime.evaluate",
             Some(json!({
@@ -657,13 +662,36 @@ pub async fn read(client: &CdpClient, guard: &ArmedGuard) -> ReadOutcome {
         )
         .await
     {
-        Ok(v) => v,
+        Ok(v) => match v.pointer("/result/value").and_then(GuardReport::parse) {
+            Some(r) => return ReadOutcome::Report(r),
+            None => "the guard was no longer there".to_string(),
+        },
         Err(e) if document_gone(&e) => return ReadOutcome::Gone,
-        Err(_) => return ReadOutcome::Failed,
+        Err(e) => e,
     };
-    match v.pointer("/result/value").and_then(GuardReport::parse) {
-        Some(r) => ReadOutcome::Report(r),
-        None => ReadOutcome::Failed,
+    // A frame that is gone or now shows another URL navigated: the click
+    // went through as a navigation, so no link was cancelled by the guard.
+    let now = client
+        .send_command("Page.getFrameTree", None, Some(&guard.session_id))
+        .await
+        .ok()
+        .and_then(|t| {
+            t.get("frameTree")
+                .and_then(|r| frame_url(r, &guard.frame_id))
+        });
+    if frame_navigated(&guard.frame_url, now.as_deref()) {
+        return ReadOutcome::Gone;
+    }
+    ReadOutcome::Failed(failure)
+}
+
+/// Whether a frame armed on `armed_url` has navigated, given its URL now
+/// (`None`: the frame is gone). A fragment-only change is not a navigation.
+pub fn frame_navigated(armed_url: &str, now: Option<&str>) -> bool {
+    let strip = |u: &str| u.split('#').next().unwrap_or("").to_string();
+    match now {
+        None => true,
+        Some(now) => strip(now) != strip(armed_url),
     }
 }
 
@@ -676,7 +704,7 @@ pub enum ReadOutcome {
     /// navigate because of it.
     Gone,
     /// Unknown: the guard may have taken a link over and nobody opens it.
-    Failed,
+    Failed(String),
 }
 
 /// Whether a CDP error says the execution context no longer exists.
@@ -1043,6 +1071,14 @@ mod tests {
         assert!(document_gone("Cannot find context with specified id"));
         assert!(document_gone("Execution context was destroyed."));
         assert!(!document_gone("command timed out"));
+        // Read failed for another reason: decide by the frame's URL.
+        assert!(frame_navigated("https://a.com/p", Some("https://a.com/q")));
+        assert!(frame_navigated("https://a.com/p", None));
+        assert!(!frame_navigated("https://a.com/p", Some("https://a.com/p")));
+        assert!(!frame_navigated(
+            "https://a.com/p#x",
+            Some("https://a.com/p#y")
+        ));
     }
 
     #[test]
