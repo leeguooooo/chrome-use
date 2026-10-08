@@ -1675,85 +1675,170 @@ fn kill_daemon_keeping_tabs(session: &str) {
 }
 
 fn kill_daemon(session: &str, graceful: bool) {
-    signal_daemon(session, graceful, false);
+    // Remove the socket first so no new connections reach the old daemon
+    #[cfg(unix)]
+    {
+        let _ = fs::remove_file(get_socket_path(session));
+    }
+    if let Some(pid) = fs::read_to_string(get_pid_path(session))
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    {
+        stop_pid(pid, graceful);
+    }
     // Clean up leftover files regardless
     cleanup_stale_files(session);
+}
+
+// --- The binding gate (#472) ---------------------------------------------------
+//
+// A daemon clears the session's binding records (`.profile`, `.relay-profile`)
+// when it exits, but only while it is still the session's registered daemon.
+// A relay recovery deregisters it and stops it, and must keep the binding.
+// "Am I registered?" followed by "delete" is a check-then-act, so both sides go
+// through one per-session lock, `<session>.binding.lock`:
+//   - recovery takes it (blocking) and holds it from deregistration until the
+//     daemon is dead;
+//   - the daemon only TRY-locks it, re-checks its registration under it, and
+//     clears nothing if it can't get the lock or isn't registered.
+// The daemon never waits on the gate, so a CLI that holds it (and the session
+// lifecycle lock) while waiting for the daemon to exit cannot deadlock.
+
+fn binding_gate_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{session}.binding.lock"))
+}
+
+/// Whether the session's pid file names `pid`. Unreadable or garbage: no.
+pub(crate) fn registered_as(pid_path: &std::path::Path, pid: u32) -> bool {
+    fs::read_to_string(pid_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        == Some(pid)
+}
+
+/// Daemon exit: clear the session's binding records if, under the binding
+/// gate, this daemon (`pid`) is still the registered one. Returns whether it
+/// cleared them. Must run before the daemon removes its own pid file.
+pub fn clear_binding_at_daemon_exit(session: &str, pid: u32) -> bool {
+    clear_binding_at_exit_with(session, pid, || {})
+}
+
+/// [`clear_binding_at_daemon_exit`] with a hook between the daemon's first
+/// (unlocked, untrusted) look at its registration and the gated check, so a
+/// test can run a recovery in exactly that window.
+fn clear_binding_at_exit_with(session: &str, pid: u32, after_first_look: impl FnOnce()) -> bool {
+    let pid_path = get_pid_path(session);
+    if !registered_as(&pid_path, pid) {
+        return false;
+    }
+    after_first_look();
+    let Ok(file) = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(binding_gate_path(session))
+    else {
+        return false;
+    };
+    // A recovery holds the gate: it is deregistering or has deregistered us.
+    if file.try_lock().is_err() {
+        return false;
+    }
+    let _gate = FileLockGuard { file };
+    if !registered_as(&pid_path, pid) {
+        return false;
+    }
+    let _ = fs::remove_file(get_profile_path(session));
+    let _ = fs::remove_file(get_relay_profile_path(session));
+    true
 }
 
 /// Stop a session's daemon for relay recovery, leaving what the session is
 /// bound to untouched (#472).
 ///
-/// Only the runtime files (socket, pid, version, ...) are cleaned: the
-/// binding records (`.profile`, `.relay-profile`, `.browser-profile`) are not
-/// deleted and rewritten, they are never touched, so no failed write can lose
-/// the pin and the next command stays on the same profile. The daemon is
-/// deregistered (pid file removed) before it is signalled, and a daemon only
-/// deletes binding records at exit while it is still the registered one, so
-/// its own exit cleanup can't delete the pin late either. It is stopped hard
-/// (like an upgrade restart): a graceful stop would try to close its tabs
-/// over the dead relay; persisted tab ownership lets the next daemon take
-/// them back. Only `session stop` / `close` clear the pin.
-pub fn stop_daemon_for_recovery(session: &str) {
-    signal_daemon(session, false, true);
-    cleanup_stale_runtime_files(session);
-}
-
-/// Signal the session's registered daemon and wait for it to go. With
-/// `deregister_first`, its pid file is removed before the signal.
-fn signal_daemon(session: &str, graceful: bool, deregister_first: bool) {
-    // Remove the socket first so no new connections reach the old daemon
+/// Under the binding gate: the daemon is deregistered (its pid file removed;
+/// any error other than "already gone" aborts, the daemon is left running
+/// and nothing is cleaned), stopped hard and waited for, and only then is the
+/// gate released. Only runtime files are cleaned; `.profile`, `.relay-profile`
+/// and `.browser-profile` are never touched. A hard stop (like an upgrade
+/// restart) because a graceful one would try to close tabs over the dead
+/// relay; persisted tab ownership lets the next daemon take them back. Only
+/// `session stop` / `close` clear the pin.
+pub fn stop_daemon_for_recovery(session: &str) -> Result<(), String> {
+    let _gate = acquire_file_lock(&binding_gate_path(session), "session binding")?;
+    let pid_path = get_pid_path(session);
+    let pid = match fs::read_to_string(&pid_path) {
+        Ok(s) => s.trim().parse::<u32>().ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(format!(
+                "Cannot read session '{session}' daemon registration {}: {e}; not stopping it.",
+                pid_path.display()
+            ))
+        }
+    };
+    match fs::remove_file(&pid_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(format!(
+                "Cannot deregister session '{session}' daemon ({}: {e}); not stopping it, its profile binding is unchanged.",
+                pid_path.display()
+            ))
+        }
+    }
     #[cfg(unix)]
     {
-        let socket_path = get_socket_path(session);
-        let _ = fs::remove_file(&socket_path);
+        let _ = fs::remove_file(get_socket_path(session));
     }
+    if let Some(pid) = pid {
+        stop_pid(pid, false);
+    }
+    cleanup_stale_runtime_files(session);
+    Ok(())
+}
+
+/// Signal a daemon process and wait for it to go (SIGTERM with a grace period
+/// then SIGKILL, or SIGKILL straight away).
+fn stop_pid(pid: u32, graceful: bool) {
     #[cfg(windows)]
     let _ = graceful; // taskkill /F is already a hard stop.
-
-    let pid_path = get_pid_path(session);
-    if let Ok(pid_str) = fs::read_to_string(&pid_path) {
-        if deregister_first {
-            let _ = fs::remove_file(&pid_path);
+    #[cfg(unix)]
+    {
+        let signal = if graceful {
+            libc::SIGTERM
+        } else {
+            libc::SIGKILL
+        };
+        unsafe {
+            libc::kill(pid as i32, signal);
         }
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            #[cfg(unix)]
-            {
-                let signal = if graceful {
-                    libc::SIGTERM
-                } else {
-                    libc::SIGKILL
-                };
-                unsafe {
-                    libc::kill(pid as i32, signal);
-                }
-                // Wait for graceful shutdown, then force-kill. The poll exits
-                // the moment the daemon is gone, so a healthy stop still
-                // returns in well under a second — the budget only gets spent
-                // when the daemon is genuinely still working.
-                for _ in 0..DAEMON_SHUTDOWN_GRACE_POLLS {
-                    thread::sleep(DAEMON_SHUTDOWN_POLL_INTERVAL);
-                    if unsafe { libc::kill(pid as i32, 0) } != 0 {
-                        break;
-                    }
-                }
-                // Force-kill if still alive
-                if unsafe { libc::kill(pid as i32, 0) } == 0 {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGKILL);
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-            #[cfg(windows)]
-            {
-                let _ = Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/F"])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-                thread::sleep(Duration::from_millis(500));
+        // Wait for graceful shutdown, then force-kill. The poll exits the
+        // moment the daemon is gone, so a healthy stop still returns in well
+        // under a second — the budget only gets spent when the daemon is
+        // genuinely still working.
+        for _ in 0..DAEMON_SHUTDOWN_GRACE_POLLS {
+            thread::sleep(DAEMON_SHUTDOWN_POLL_INTERVAL);
+            if unsafe { libc::kill(pid as i32, 0) } != 0 {
+                break;
             }
         }
+        // Force-kill if still alive
+        if unsafe { libc::kill(pid as i32, 0) } == 0 {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        thread::sleep(Duration::from_millis(500));
     }
 }
 
@@ -3768,7 +3853,7 @@ mod tests {
         let pid = fake_daemon(dir.path(), session);
         let before = binding_snapshot(dir.path(), session);
 
-        stop_daemon_for_recovery(session);
+        stop_daemon_for_recovery(session).unwrap();
 
         assert!(gone(pid), "the daemon process must be stopped");
         for ext in ["pid", "version"] {
@@ -3804,7 +3889,7 @@ mod tests {
         }
         let before = binding_snapshot(dir.path(), session);
 
-        stop_daemon_for_recovery(session);
+        stop_daemon_for_recovery(session).unwrap();
 
         assert!(gone(pid));
         assert_eq!(binding_snapshot(dir.path(), session), before);
@@ -3828,5 +3913,108 @@ mod tests {
             );
         }
         assert_eq!(session_relay_profile(session).unwrap(), None);
+    }
+
+    /// The TOCTOU the binding gate closes: the exiting daemon has seen itself
+    /// registered and is paused right there when a recovery deregisters and
+    /// stops it. When the daemon's exit carries on, it must not clear the pin.
+    #[cfg(unix)]
+    #[test]
+    fn an_exiting_daemon_paused_after_seeing_itself_registered_keeps_the_pin_through_a_recovery() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        let session = "race-a";
+        let pid = fake_daemon(dir.path(), session);
+        let before = binding_snapshot(dir.path(), session);
+
+        let (paused_tx, paused_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        let s = session.to_string();
+        let daemon_exit = thread::spawn(move || {
+            clear_binding_at_exit_with(&s, pid, || {
+                paused_tx.send(()).unwrap();
+                resume_rx.recv().unwrap();
+            })
+        });
+        // The daemon has read its registration (it is registered) and paused.
+        paused_rx.recv().unwrap();
+        stop_daemon_for_recovery(session).unwrap();
+        assert!(gone(pid), "recovery stopped the daemon process");
+        assert!(!dir.path().join(format!("{session}.pid")).exists());
+        // The daemon's exit continues past its stale observation.
+        resume_tx.send(()).unwrap();
+        assert!(
+            !daemon_exit.join().unwrap(),
+            "a deregistered daemon must not clear the binding"
+        );
+        assert_eq!(binding_snapshot(dir.path(), session), before);
+        assert_eq!(session_relay_profile(session).unwrap(), some("p1"));
+    }
+
+    /// The other interleaving: the daemon carries on while a recovery holds
+    /// the gate (before it has deregistered anything). The daemon never waits
+    /// on the gate and clears nothing; with the gate free and still
+    /// registered, a normal exit does clear.
+    #[cfg(unix)]
+    #[test]
+    fn an_exiting_daemon_never_waits_on_a_held_gate_and_clears_nothing() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        let session = "race-b";
+        let pid = fake_daemon(dir.path(), session);
+        let before = binding_snapshot(dir.path(), session);
+
+        let gate = acquire_file_lock(&binding_gate_path(session), "test").unwrap();
+        let s = session.to_string();
+        let started = std::time::Instant::now();
+        let cleared = thread::spawn(move || clear_binding_at_daemon_exit(&s, pid))
+            .join()
+            .unwrap();
+        assert!(!cleared, "a held gate means: clear nothing");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the daemon must not block"
+        );
+        assert_eq!(binding_snapshot(dir.path(), session), before);
+        drop(gate);
+
+        // Gate free, still registered: this is an ordinary end of session.
+        assert!(clear_binding_at_daemon_exit(session, pid));
+        assert_eq!(session_relay_profile(session).unwrap(), None);
+        stop_pid(pid, false);
+        assert!(gone(pid));
+    }
+
+    /// A deregistration that fails is not a deregistration: the recovery
+    /// refuses, the daemon is left running and the binding is unchanged.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_deregistration_stops_nothing_and_keeps_the_binding() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        let session = "race-c";
+        let pid = fake_daemon(dir.path(), session);
+        fs::write(binding_gate_path(session), "").unwrap();
+        let before = binding_snapshot(dir.path(), session);
+        {
+            let Some(_ro) = read_only(dir.path()) else {
+                stop_pid(pid, false);
+                return;
+            };
+            let err = stop_daemon_for_recovery(session).unwrap_err();
+            assert!(err.contains("Cannot deregister"), "{err}");
+            assert_eq!(
+                unsafe { libc::kill(pid as i32, 0) },
+                0,
+                "daemon left running"
+            );
+            assert!(dir.path().join(format!("{session}.pid")).exists());
+        }
+        assert_eq!(binding_snapshot(dir.path(), session), before);
+        stop_pid(pid, false);
+        assert!(gone(pid));
     }
 }

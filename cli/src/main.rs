@@ -130,7 +130,9 @@ fn recover_pinned_relay(flags: &mut Flags, id: &str) {
         Err(E::NotConnected(_)) => {}
     }
     // Runtime files only: the pin is never deleted or rewritten here.
-    connection::stop_daemon_for_recovery(&session);
+    if let Err(e) = connection::stop_daemon_for_recovery(&session) {
+        fail_command(flags, &e);
+    }
     eprint!(
         "{} Chrome relay of profile {id} dropped — waiting for it to reconnect…",
         color::success_indicator()

@@ -270,10 +270,11 @@ pub async fn run_daemon(session: &str) {
     .await;
 
     // The binding records (#472) are only this daemon's to delete while it is
-    // still the session's registered daemon. A relay recovery deregisters it
-    // (removes the pid file) before stopping it and keeps the profile pin;
-    // a late exit here must not delete that pin out from under the recovery.
-    let still_registered = registered_as(&pid_path, process::id());
+    // still the session's registered daemon, decided under the binding gate
+    // a relay recovery holds while it deregisters and stops us (see
+    // `connection::clear_binding_at_daemon_exit`). Done first, while our pid
+    // file is still ours to be checked against.
+    crate::connection::clear_binding_at_daemon_exit(session, process::id());
 
     #[cfg(unix)]
     {
@@ -290,23 +291,11 @@ pub async fn run_daemon(session: &str) {
     let _ = fs::remove_file(socket_dir.join(format!("{}.engine", session)));
     let _ = fs::remove_file(socket_dir.join(format!("{}.provider", session)));
     let _ = fs::remove_file(socket_dir.join(format!("{}.extensions", session)));
-    if still_registered {
-        let _ = fs::remove_file(socket_dir.join(format!("{}.profile", session)));
-        let _ = fs::remove_file(socket_dir.join(format!("{}.relay-profile", session)));
-    }
 
     if let Err(e) = result {
         let _ = writeln!(std::io::stderr(), "Daemon error: {}", e);
         process::exit(1);
     }
-}
-
-/// Whether the session's pid file still names this daemon (`pid`).
-fn registered_as(pid_path: &std::path::Path, pid: u32) -> bool {
-    fs::read_to_string(pid_path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        == Some(pid)
 }
 
 #[cfg(unix)]
@@ -800,15 +789,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pid_path = dir.path().join("s.pid");
         assert!(
-            !registered_as(&pid_path, 4242),
+            !crate::connection::registered_as(&pid_path, 4242),
             "deregistered (no pid file)"
         );
         fs::write(&pid_path, "999999").unwrap();
-        assert!(!registered_as(&pid_path, 4242), "another daemon registered");
+        assert!(
+            !crate::connection::registered_as(&pid_path, 4242),
+            "another daemon registered"
+        );
         fs::write(&pid_path, "4242\n").unwrap();
-        assert!(registered_as(&pid_path, 4242));
+        assert!(crate::connection::registered_as(&pid_path, 4242));
         fs::write(&pid_path, "garbage").unwrap();
-        assert!(!registered_as(&pid_path, 4242));
+        assert!(!crate::connection::registered_as(&pid_path, 4242));
     }
 
     #[test]
