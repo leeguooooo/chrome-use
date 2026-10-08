@@ -183,6 +183,24 @@ cd cli && cargo test --features e2e-tests --release e2e -- --ignored --test-thre
 E2E tests launch real Chrome and are `#[ignore]` by default. They run in CI on
 push, **not on pull requests** — a green PR does not mean the E2E suite passed.
 
+### Live browser tests never run on the maintainer's machine
+
+Live checks — relay runs against fixture pages, `--launch` / `--cdp` runs, popup
+and focus probes, A/B timing — run on the SSH build host, not on the machine the
+maintainer is working on. The build host has a logged-in GUI session, Google
+Chrome with the chrome-use extension and a working relay, so the relay path is
+testable there over SSH: copy the test binary to a new path on the host, serve
+fixtures there, and drive it with `ssh <host> 'AGENT_BROWSER_SESSION=<name>
+<binary> …'`.
+
+On the maintainer's machine, do not launch a browser (headless included), do not
+open, activate or reorder tabs or windows in their Chrome, and do not use
+`--activate`, `bringtofront` or `adopt` there. Use their Chrome only when the
+task needs their own logged-in session and they asked for it, and then only in
+the background agent window. Subagent prompts must state these rules: a
+subagent told to "verify the launch path" without them opened browser windows
+on the maintainer's screen.
+
 When a fixture page needs `href="#..."`, write the Rust raw string as
 `r##"..."##`. Inside `r#"..."#` the sequence `"#` closes the literal early, and
 the compiler reports it as a syntax error nowhere near the real cause.
@@ -205,7 +223,8 @@ into pages, run `scripts/stealth-bench.sh` locally first. It re-runs the public
 detectors that `docs/stealth.html` quotes (sannysoft, CreepJS, incolumitas,
 BrowserScan, a Cloudflare managed challenge) against real headed Chrome, in
 both `--launch` and relay mode, and exits non-zero on a regression. It needs a
-real browser, so neither CI nor the build box can run it. `--launch` regressed
+real headed browser, so CI can't run it; run it on the build host, whose GUI
+session has Chrome and the relay. `--launch` regressed
 unnoticed for several releases before this existed.
 
 After the release PR merges and required checks pass, create and push the matching
