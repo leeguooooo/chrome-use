@@ -1768,7 +1768,18 @@ pub fn stop_daemon_for_recovery(session: &str) -> Result<(), String> {
     let _gate = acquire_file_lock(&binding_gate_path(session), "session binding")?;
     let pid_path = get_pid_path(session);
     let pid = match fs::read_to_string(&pid_path) {
-        Ok(s) => s.trim().parse::<u32>().ok(),
+        // A registration that exists but names no stoppable process: the
+        // daemon it stands for can't be stopped, so nothing is touched.
+        Ok(s) => match parse_daemon_pid(&s) {
+            Some(pid) => Some(pid),
+            None => {
+                return Err(format!(
+                    "Session '{session}' daemon registration {} holds no valid pid ({:?}); not stopping anything, its profile binding is unchanged. Stop it with `chrome-use session stop {session}`.",
+                    pid_path.display(),
+                    s.trim()
+                ))
+            }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
             return Err(format!(
@@ -1796,6 +1807,24 @@ pub fn stop_daemon_for_recovery(session: &str) -> Result<(), String> {
     }
     cleanup_stale_runtime_files(session);
     Ok(())
+}
+
+/// A daemon pid that may be signalled: strictly positive (never 0, which
+/// `kill` takes as "the whole process group") and within the platform's pid
+/// range (never a value that wraps to a negative `pid_t`, which `kill` takes
+/// as a process group or "every process").
+fn parse_daemon_pid(s: &str) -> Option<u32> {
+    let pid = s.trim().parse::<u32>().ok()?;
+    if pid == 0 {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        if libc::pid_t::try_from(pid).is_err() {
+            return None;
+        }
+    }
+    Some(pid)
 }
 
 /// Signal a daemon process and wait for it to go (SIGTERM with a grace period
@@ -4016,5 +4045,60 @@ mod tests {
         assert_eq!(binding_snapshot(dir.path(), session), before);
         stop_pid(pid, false);
         assert!(gone(pid));
+    }
+
+    #[test]
+    fn only_a_positive_in_range_pid_may_be_signalled() {
+        assert_eq!(parse_daemon_pid("4242\n"), Some(4242));
+        for bad in ["", "  ", "garbage", "0", "-1", "12x", "4294967296"] {
+            assert_eq!(parse_daemon_pid(bad), None, "{bad:?}");
+        }
+        #[cfg(unix)]
+        {
+            for overflow in ["2147483648", "4294967295"] {
+                // Would wrap to a negative pid_t: a process group, or -1 = all.
+                assert_eq!(parse_daemon_pid(overflow), None, "{overflow}");
+            }
+        }
+    }
+
+    /// A registration that is there but names no stoppable process: the
+    /// recovery refuses, signals nothing and cleans nothing. (No process is
+    /// involved; these values are never passed to `kill`.)
+    #[cfg(unix)]
+    #[test]
+    fn a_registration_without_a_valid_pid_stops_and_cleans_nothing() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        for (i, bad) in ["", "garbage", "0", "-1", "2147483648", "4294967295"]
+            .iter()
+            .enumerate()
+        {
+            let session = format!("badpid-{i}");
+            let d = dir.path();
+            fs::write(d.join(format!("{session}.pid")), bad).unwrap();
+            fs::write(d.join(format!("{session}.sock")), "").unwrap();
+            fs::write(d.join(format!("{session}.version")), "x").unwrap();
+            fs::write(d.join(format!("{session}.profile")), OLD).unwrap();
+            fs::write(d.join(format!("{session}.relay-profile")), "p1").unwrap();
+            fs::write(d.join(format!("{session}.browser-profile")), "{}").unwrap();
+            let binding = binding_snapshot(d, &session);
+
+            let err = stop_daemon_for_recovery(&session).unwrap_err();
+            assert!(err.contains("holds no valid pid"), "{bad:?}: {err}");
+            assert_eq!(
+                fs::read_to_string(d.join(format!("{session}.pid"))).unwrap(),
+                *bad,
+                "{bad:?}: the registration is kept"
+            );
+            for ext in ["sock", "version"] {
+                assert!(
+                    d.join(format!("{session}.{ext}")).exists(),
+                    "{bad:?}: runtime file {ext} is kept"
+                );
+            }
+            assert_eq!(binding_snapshot(d, &session), binding, "{bad:?}");
+        }
     }
 }
