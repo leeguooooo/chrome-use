@@ -516,7 +516,12 @@ pub fn host_table(
         match classify_link(page_site, url) {
             Some(Ok(host)) => {
                 let verdict = match refuse(url) {
-                    Some(why) => format!("a ChooseBrowser rule applies to the link ({why})"),
+                    // Pre-excluded: the link keeps Chrome's own click (it is
+                    // NOT refused; Chrome opens it). `why` is the rule check's
+                    // message for a chrome-use navigation, so it is not shown.
+                    Some(_) => "a ChooseBrowser rule applies to the link, so chrome-use left it \
+                                to Chrome's own click"
+                        .to_string(),
                     None => "cross".to_string(),
                 };
                 hosts.insert(host, verdict);
@@ -650,7 +655,7 @@ fn frame_url(node: &Value, id: &str) -> Option<String> {
 /// Read (and disarm) the guard after the click. `None` when its document is
 /// gone (the click navigated the tab) or it cannot be read.
 pub async fn read(client: &CdpClient, guard: &ArmedGuard) -> ReadOutcome {
-    let failure = match client
+    let reply = client
         .send_command(
             "Runtime.evaluate",
             Some(json!({
@@ -660,39 +665,107 @@ pub async fn read(client: &CdpClient, guard: &ArmedGuard) -> ReadOutcome {
             })),
             Some(&guard.session_id),
         )
-        .await
-    {
-        Ok(v) => match v.pointer("/result/value").and_then(GuardReport::parse) {
-            Some(r) => return ReadOutcome::Report(r),
-            None => "the guard was no longer there".to_string(),
-        },
-        Err(e) if document_gone(&e) => return ReadOutcome::Gone,
-        Err(e) => e,
+        .await;
+    let tree = match read_first_pass(&reply) {
+        Ok(outcome) => return outcome,
+        Err(_) => {
+            client
+                .send_command("Page.getFrameTree", None, Some(&guard.session_id))
+                .await
+        }
     };
-    // A frame that is gone or now shows another URL navigated: the click
-    // went through as a navigation, so no link was cancelled by the guard.
-    let now = client
-        .send_command("Page.getFrameTree", None, Some(&guard.session_id))
-        .await
-        .ok()
-        .and_then(|t| {
-            t.get("frameTree")
-                .and_then(|r| frame_url(r, &guard.frame_id))
-        });
-    if frame_navigated(&guard.frame_url, now.as_deref()) {
-        return ReadOutcome::Gone;
-    }
-    ReadOutcome::Failed(failure)
+    read_outcome(&reply, &tree, guard)
 }
 
-/// Whether a frame armed on `armed_url` has navigated, given its URL now
-/// (`None`: the frame is gone). A fragment-only change is not a navigation.
-pub fn frame_navigated(armed_url: &str, now: Option<&str>) -> bool {
-    let strip = |u: &str| u.split('#').next().unwrap_or("").to_string();
-    match now {
-        None => true,
-        Some(now) => strip(now) != strip(armed_url),
+/// The guard's reply alone: `Ok` when it decides (a report, or a context
+/// that no longer exists), `Err(why)` when the frame tree has to tell.
+fn read_first_pass(reply: &Result<Value, String>) -> Result<ReadOutcome, String> {
+    match reply {
+        Ok(v) => match v.pointer("/result/value").and_then(GuardReport::parse) {
+            Some(r) => Ok(ReadOutcome::Report(r)),
+            None => Err("the guard was no longer there".to_string()),
+        },
+        Err(e) if document_gone(e) => Ok(ReadOutcome::Gone),
+        Err(e) => Err(e.clone()),
     }
+}
+
+/// Pure decision from the two CDP replies: the guard's (`Runtime.evaluate`)
+/// and, when that does not decide, the frame tree's. A frame a valid tree
+/// shows gone or on another URL navigated: the click went through as a
+/// navigation, so no link was cancelled by the guard. A failed or malformed
+/// tree leaves the outcome unknown (`Failed`), which the click reports.
+pub fn read_outcome(
+    reply: &Result<Value, String>,
+    tree: &Result<Value, String>,
+    guard: &ArmedGuard,
+) -> ReadOutcome {
+    let why = match read_first_pass(reply) {
+        Ok(outcome) => return outcome,
+        Err(why) => why,
+    };
+    if frame_state(tree, &guard.frame_id).navigated_from(&guard.frame_url) {
+        return ReadOutcome::Gone;
+    }
+    ReadOutcome::Failed(why)
+}
+
+/// Where the guard's frame is now, from a `Page.getFrameTree` reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrameState {
+    /// A valid frame tree shows the frame with this URL.
+    At(String),
+    /// A valid frame tree does not contain the frame.
+    Gone,
+    /// The reply failed or was malformed: nothing can be said.
+    Unknown,
+}
+
+impl FrameState {
+    /// Whether the frame clearly navigated away from `armed_url` (a
+    /// fragment-only change is not a navigation). `Unknown` never is.
+    pub fn navigated_from(&self, armed_url: &str) -> bool {
+        let strip = |u: &str| u.split('#').next().unwrap_or("").to_string();
+        match self {
+            FrameState::Gone => true,
+            FrameState::At(now) => strip(now) != strip(armed_url),
+            FrameState::Unknown => false,
+        }
+    }
+}
+
+/// [`FrameState`] of `frame_id` from a `Page.getFrameTree` reply. Only a
+/// reply with a well-formed `frameTree` (a root frame with an id) can say
+/// the frame is gone or elsewhere.
+pub fn frame_state(reply: &Result<Value, String>, frame_id: &str) -> FrameState {
+    let Ok(v) = reply else {
+        return FrameState::Unknown;
+    };
+    let Some(root) = v.get("frameTree") else {
+        return FrameState::Unknown;
+    };
+    if root.pointer("/frame/id").and_then(Value::as_str).is_none() {
+        return FrameState::Unknown;
+    }
+    match find_frame(root, frame_id) {
+        Some(frame) => match frame.get("url").and_then(Value::as_str) {
+            Some(url) => FrameState::At(url.to_string()),
+            None => FrameState::Unknown,
+        },
+        None => FrameState::Gone,
+    }
+}
+
+/// The `frame` object of `id` in a `Page.getFrameTree` node.
+fn find_frame<'a>(node: &'a Value, id: &str) -> Option<&'a Value> {
+    let frame = node.get("frame")?;
+    if frame.get("id").and_then(Value::as_str) == Some(id) {
+        return Some(frame);
+    }
+    node.get("childFrames")?
+        .as_array()?
+        .iter()
+        .find_map(|c| find_frame(c, id))
 }
 
 /// The result of reading the guard back.
@@ -719,6 +792,13 @@ pub fn document_gone(error: &str) -> bool {
 /// navigated). Only a known failure may suggest opening the link again.
 pub fn navigation_failure_is_known(error: &str) -> bool {
     error.starts_with("Navigation failed:")
+}
+
+/// `followed` for a link chrome-use opened with `--follow`: true only when
+/// the session is known to be pinned to that very tab. An unknown pin, or a
+/// pin on any other tab, is not success.
+pub fn followed_link_tab(pinned_tab: Option<&str>, link_tab: Option<&str>) -> bool {
+    matches!((pinned_tab, link_tab), (Some(p), Some(l)) if p == l)
 }
 
 /// The warning after trying to put the session back on the clicked tab.
@@ -976,6 +1056,10 @@ mod tests {
         let t = host_table(Some("example.com"), &links, &refuse);
         assert_eq!(t["x.other.org"], "cross");
         assert!(t["ruled.example.net"].contains("ChooseBrowser"));
+        // Pre-excluded links keep Chrome's own click; the wording must not
+        // say the rule refused or that nothing was opened.
+        assert!(t["ruled.example.net"].contains("Chrome's own click"));
+        assert!(!t["ruled.example.net"].contains("nothing was opened"));
         assert!(t["b.example.com"].contains("same site"));
     }
 
@@ -1053,6 +1137,19 @@ mod tests {
     }
 
     #[test]
+    fn followed_only_when_pinned_to_the_links_own_tab() {
+        assert!(followed_link_tab(Some("t2"), Some("t2")));
+        // The pin is unknown (target gone): not followed.
+        assert!(!followed_link_tab(None, Some("t2")));
+        // Pinned on some other tab (the clicked one, or a third): not followed.
+        assert!(!followed_link_tab(Some("t1"), Some("t2")));
+        assert!(!followed_link_tab(Some("t3"), Some("t2")));
+        // The link's tab id is unknown: not followed.
+        assert!(!followed_link_tab(Some("t2"), None));
+        assert!(!followed_link_tab(None, None));
+    }
+
+    #[test]
     fn returning_to_the_clicked_tab_reports_the_actual_pin() {
         assert_eq!(return_warning(Ok(()), true, "t1"), None);
         // The switch said yes but the pin is elsewhere: say where.
@@ -1071,14 +1168,104 @@ mod tests {
         assert!(document_gone("Cannot find context with specified id"));
         assert!(document_gone("Execution context was destroyed."));
         assert!(!document_gone("command timed out"));
-        // Read failed for another reason: decide by the frame's URL.
-        assert!(frame_navigated("https://a.com/p", Some("https://a.com/q")));
-        assert!(frame_navigated("https://a.com/p", None));
-        assert!(!frame_navigated("https://a.com/p", Some("https://a.com/p")));
-        assert!(!frame_navigated(
-            "https://a.com/p#x",
-            Some("https://a.com/p#y")
+    }
+
+    #[test]
+    fn a_failed_read_is_unknown_unless_a_valid_tree_shows_navigation() {
+        let guard = ArmedGuard {
+            session_id: "s".into(),
+            context_id: 7,
+            frame_id: "top".into(),
+            frame_url: "https://a.com/p".into(),
+        };
+        let report = Ok(json!({ "result": { "value":
+            r#"{"result":null,"seen":null,"skipped":null,"pagePrevented":false,"late":false}"# } }));
+        let timeout: Result<Value, String> = Err("relay timeout after 8000ms".into());
+        let valid_same =
+            Ok(json!({ "frameTree": { "frame": { "id": "top", "url": "https://a.com/p" } } }));
+        let valid_moved =
+            Ok(json!({ "frameTree": { "frame": { "id": "top", "url": "https://a.com/next" } } }));
+        // The guard answered: its report, whatever the tree says.
+        assert!(matches!(
+            read_outcome(&report, &timeout, &guard),
+            ReadOutcome::Report(_)
         ));
+        // The context is gone: the frame navigated.
+        assert_eq!(
+            read_outcome(
+                &Err("Cannot find context with specified id".into()),
+                &timeout,
+                &guard
+            ),
+            ReadOutcome::Gone
+        );
+        // Both CDP calls fail: unknown, reported, never "gone".
+        assert_eq!(
+            read_outcome(&timeout, &timeout, &guard),
+            ReadOutcome::Failed("relay timeout after 8000ms".into())
+        );
+        // The guard failed and the tree is malformed: unknown.
+        for bad in [json!({}), json!({ "frameTree": {} }), json!(null)] {
+            assert!(matches!(
+                read_outcome(&timeout, &Ok(bad), &guard),
+                ReadOutcome::Failed(_)
+            ));
+        }
+        // A missing guard (null reply) on a frame still on its URL: unknown.
+        let missing = Ok(json!({ "result": { "value": null } }));
+        assert!(matches!(
+            read_outcome(&missing, &valid_same, &guard),
+            ReadOutcome::Failed(_)
+        ));
+        // Only a valid tree showing the frame elsewhere makes it "gone".
+        assert_eq!(
+            read_outcome(&timeout, &valid_moved, &guard),
+            ReadOutcome::Gone
+        );
+        assert!(matches!(
+            read_outcome(&timeout, &valid_same, &guard),
+            ReadOutcome::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn only_a_valid_frame_tree_can_say_the_frame_navigated() {
+        let armed = "https://a.com/p#x";
+        let tree = |frames: Value| -> Result<Value, String> { Ok(json!({ "frameTree": frames })) };
+        let top = |url: &str| json!({ "frame": { "id": "top", "url": url } });
+        // A valid tree: the frame elsewhere, gone, or still there.
+        let s = frame_state(&tree(top("https://a.com/q")), "top");
+        assert_eq!(s, FrameState::At("https://a.com/q".into()));
+        assert!(s.navigated_from(armed));
+        let gone = frame_state(&tree(top("https://a.com/p")), "child");
+        assert_eq!(gone, FrameState::Gone);
+        assert!(gone.navigated_from(armed));
+        let same = frame_state(&tree(top("https://a.com/p#y")), "top");
+        assert!(!same.navigated_from(armed));
+        let child = json!({ "frame": { "id": "top", "url": "https://a.com/" },
+            "childFrames": [{ "frame": { "id": "c", "url": "https://b.com/f" } }] });
+        assert_eq!(
+            frame_state(&tree(child), "c"),
+            FrameState::At("https://b.com/f".into())
+        );
+        // The CDP call failed (as when the guard read failed too): unknown,
+        // never "gone", so the click reports that the outcome is unknown.
+        let failed = frame_state(&Err("relay timeout after 8000ms".into()), "top");
+        assert_eq!(failed, FrameState::Unknown);
+        assert!(!failed.navigated_from(armed));
+        // Malformed replies: unknown too.
+        for bad in [
+            json!({}),
+            json!({ "frameTree": null }),
+            json!({ "frameTree": {} }),
+            json!({ "frameTree": { "frame": { "url": "https://x/" } } }),
+            json!({ "frameTree": { "frame": { "id": "top" } } }),
+            json!("garbage"),
+        ] {
+            let s = frame_state(&Ok(bad.clone()), "top");
+            assert_eq!(s, FrameState::Unknown, "{bad}");
+            assert!(!s.navigated_from(armed), "{bad}");
+        }
     }
 
     #[test]

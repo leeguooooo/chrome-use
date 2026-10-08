@@ -7662,7 +7662,7 @@ async fn open_link_in_background(
                 .unwrap_or(&link.url)
                 .to_string();
             let title = nav.get("title").and_then(Value::as_str).unwrap_or("");
-            out["openedTab"] = json!({ "tabId": tab_id, "url": url, "title": title });
+            out["openedTab"] = json!({ "tabId": tab_id.clone(), "url": url, "title": title });
             if let Some(w) = nav.get("warning") {
                 out["openedTab"]["warning"] = w.clone();
             }
@@ -7677,7 +7677,7 @@ async fn open_link_in_background(
             };
             let known = popup_guard::navigation_failure_is_known(&e);
             out["openedTabStatus"] = json!(if known { "failed" } else { "unknown" });
-            out["openedTab"] = json!({ "tabId": tab_id, "url": landed, "title": "" });
+            out["openedTab"] = json!({ "tabId": tab_id.clone(), "url": landed, "title": "" });
             out["openedTabWarning"] = json!(if known {
                 format!(
                     "the click's target=_blank link ({}) did not load in its background tab \
@@ -7702,14 +7702,17 @@ async fn open_link_in_background(
         }
     }
     if follow {
-        // `tab new` already moved the session to the link's tab.
-        let on_new = state
-            .browser
-            .as_ref()
-            .and_then(|m| m.active_target_id().ok())
-            .map(ToString::to_string)
-            != clicked_target;
-        out["followed"] = json!(on_new);
+        // `tab new` moved the session to the link's tab; `followed` says so
+        // only when the actual pin is that tab, never on an unknown pin.
+        let pinned_tab = state.browser.as_ref().and_then(|m| {
+            let target = m.active_target_id().ok()?;
+            m.tab_id_for_target(target)
+                .map(super::browser::format_tab_id)
+        });
+        out["followed"] = json!(popup_guard::followed_link_tab(
+            pinned_tab.as_deref(),
+            tab_id.as_str()
+        ));
     } else if let Some(w) =
         return_to_clicked_tab(state, clicked_tab, clicked_target.as_deref()).await
     {
