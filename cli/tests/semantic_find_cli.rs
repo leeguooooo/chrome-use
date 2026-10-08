@@ -404,6 +404,11 @@ mod browser {
             !diagnostic.contains("PRIVATE-EDITABLE") && !diagnostic.contains("PRIVATE-CUSTOM"),
             "{diagnostic}"
         );
+        session.ok(&["eval", r##"document.querySelector('#account-b').innerHTML=`<div data-testid="dup"><div contenteditable>PRIVATE-NESTED-EDITABLE</div></div><div data-testid="dup"><div role="textbox">PRIVATE-NESTED-CUSTOM</div><textarea>PRIVATE-NESTED-TEXTAREA</textarea></div>`"##]);
+        let out = session.run(&["find", "testid", "dup", "--within", &scope]);
+        assert!(!out.status.success());
+        let diagnostic = String::from_utf8_lossy(&out.stdout);
+        assert!(!diagnostic.contains("PRIVATE-NESTED"), "{diagnostic}");
         // Marker observers run between discovery and dispatch. They may move or
         // replace the selected node, but cannot redirect its pinned identity.
         for mutation in [
