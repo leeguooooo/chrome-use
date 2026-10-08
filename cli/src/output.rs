@@ -553,6 +553,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 color::dim(url)
             );
         }
+        // A tab the click opened but could not adopt (relay, #456): say so
+        // rather than let the unchanged page read as a click that did nothing.
+        if let Some(w) = data.get("openedTabWarning").and_then(|v| v.as_str()) {
+            eprintln!("{} {}", color::yellow("⚠"), w);
+        }
 
         // `current`: the active tab's stable handle (#26).
         if data

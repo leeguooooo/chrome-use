@@ -454,6 +454,15 @@ onto the new tab before its first document loads: user agent, `set headers`,
 `set credentials`, init scripts, routes, origin-scoped `--headers`, media,
 timezone, locale, geolocation, and offline mode.
 
+A tab that a plain `click` opens (`target=_blank`, `window.open`) is reported as
+`openedTab` and becomes one of the session's tabs: listed by `tab list`, closed
+by `tab close` and by `close`. `--follow` switches to it, and with `--observe`
+the settle and snapshot then describe the new tab. In your own Chrome only a tab
+opened by one of the session's tabs is taken; a tab that you or another session
+opens meanwhile is left alone. When such a tab cannot be identified yet (still
+blank, or its URL matches another tab), the click says so in `openedTabWarning`
+instead of staying silent; `tab adopt <url>` picks it up once it has loaded.
+
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization
 or the liveness probe, and leaves it in the foreground. It changes the visible

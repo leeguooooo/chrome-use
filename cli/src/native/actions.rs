@@ -7196,6 +7196,9 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // (issue #24-A).
     let before: std::collections::HashSet<String> =
         mgr.pages_list().into_iter().map(|p| p.target_id).collect();
+    // Over the relay a pop-up from our tab is found in chrome.tabs, so record
+    // which Chrome tabs exist before the click (#456).
+    let relay_before = mgr.relay_tab_baseline().await;
 
     let dialog_events = mgr.client.subscribe();
     let mut outcome: Option<interaction::ClickOutcome> = None;
@@ -7241,6 +7244,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     }
     let pending = DeferredClickTabCheck {
         before,
+        relay_before,
         follow,
         clicked_at: std::time::Instant::now(),
     };
@@ -7260,6 +7264,8 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
 pub(crate) struct DeferredClickTabCheck {
     /// Targets that existed before the click.
     before: std::collections::HashSet<String>,
+    /// Over the relay, the Chrome tabs that existed before the click.
+    relay_before: Option<super::browser::RelayTabBaseline>,
     /// `--follow`: switch to the opened tab.
     follow: bool,
     /// When the click was delivered: the check waits until
@@ -7283,7 +7289,13 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
     let Some(mgr) = state.browser.as_mut() else {
         return out;
     };
-    let opened = mgr.adopt_newly_opened(&pending.before).await;
+    let check = mgr
+        .adopt_newly_opened(&pending.before, pending.relay_before.as_ref())
+        .await;
+    if let Some(w) = check.warning {
+        out["openedTabWarning"] = json!(w);
+    }
+    let opened = check.opened;
     // A popup the page opened is ours (adopt_newly_opened only returns tabs
     // it can attribute to this session), but its first document loaded before
     // we could attach. Replay the session's setup anyway so its overrides hold
