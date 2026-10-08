@@ -92,7 +92,6 @@ Downloads the prebuilt binary for your platform from the latest [GitHub Release]
 - **Custom location:** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
 - **Windows, pin a version or location:** `$env:AGENT_BROWSER_VERSION = 'v1.5.139'` or `$env:AGENT_BROWSER_BIN_DIR = 'D:\tools'` before the `irm … | iex` line. It installs to `%LOCALAPPDATA%\Programs\chrome-use` by default and adds that to your user PATH, keeping the existing entries exactly as they were (opt out with `$env:AGENT_BROWSER_NO_PATH = 1`). No admin rights needed.
 - **Windows, by hand:** download `chrome-use-win32-x64.tar.gz` and its `.sha256` from the [Releases page](https://github.com/leeguooooo/chrome-use/releases), check that `(Get-FileHash chrome-use-win32-x64.tar.gz -Algorithm SHA256).Hash` matches the `.sha256` file, extract with `tar -xzf chrome-use-win32-x64.tar.gz`, and put `chrome-use.exe` on your PATH. Check the hash before running it: an interrupted download still extracts into an `.exe`, which then fails at launch with an access violation (exit code `-1073741819`, `0xC0000005`) rather than anything that says the download was incomplete.
-- **npm (legacy):** `npm install -g chrome-use`. Still published, but GitHub Releases is the primary channel now.
 </details>
 
 ### Install with Nix
@@ -175,7 +174,7 @@ $ chrome-use open https://github.com/my-org/repo
   --no-choosebrowser.
 ```
 
-Read-only, and invisible if you do not use it: no rules file means no behaviour change and no message. A rule naming a profile that is not running the extension falls back to the normal profile choice. That fallback does not verify the site account; check its identity or pin `--browser` when a specific account is required. Add `--remember` to an explicit `--browser` and chrome-use asks ChooseBrowser to write the rule back, behind its own confirmation dialog.
+Read-only, and invisible if you do not use it: no rules file means no behaviour change and no message. A rule is binding: chrome-use never opens the site in a different profile. If the rule's profile is not connected, the command fails and names `chrome-use connect --browser <profile>`. If the session is already bound to another profile, it fails and suggests a new `--session` or `--no-choosebrowser`. `--browser` and config routes still win. The check covers `batch` steps, MCP tool calls and script steps as well as direct commands. A rule whose profile no longer exists only warns. `chrome-use doctor` lists each rule and whether its profile is connected. Add `--remember` to an explicit `--browser` and chrome-use asks ChooseBrowser to write the rule back, behind its own confirmation dialog.
 
 <a href="https://choosebrowser.leeguoo.com"><img src="docs/assets/choosebrowser-profiles-en.jpg" alt="ChooseBrowser: every Chrome profile gets a row" width="640" align="right"></a>
 
@@ -261,9 +260,11 @@ that wraps a checkbox as `[toggles=checkbox(checked=true)]`, because clicking
 it flips a setting (in LinkedIn's profile-language dialog, it deletes that
 language's profile).
 
-Tab creation, selection, and adoption stay in the background by default. Add
-`--activate` (alias `--front`) when a background tab is not responding; it
-changes the visible tab and leaves it in the foreground. If new-tab initialization
+Tab creation, selection, and adoption stay in the background by default, and
+no default command raises Chrome or changes the tab you are looking at.
+`--activate` (alias `--front`) and `bringToFront` are the explicit exceptions:
+they change the visible tab, focus that Chrome window and leave the tab in the
+foreground, so agents are told to use them only when you ask. If new-tab initialization
 fails, chrome-use retains the target and reports its ID. Use
 `chrome-use tab select <targetId> --activate`, then `chrome-use snapshot -i`
 to verify recovery, keeping the same session and connection endpoint. Do not

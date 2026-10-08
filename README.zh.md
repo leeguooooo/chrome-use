@@ -82,7 +82,6 @@ irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | i
 - **自定义路径：** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
 - **Windows 锁定版本或安装位置：** 在 `irm … | iex` 前先设置 `$env:AGENT_BROWSER_VERSION = 'v1.5.139'` 或 `$env:AGENT_BROWSER_BIN_DIR = 'D:\tools'`。默认装到 `%LOCALAPPDATA%\Programs\chrome-use` 并加入用户 PATH，原有条目原样保留（不想改 PATH 就设 `$env:AGENT_BROWSER_NO_PATH = 1`）。不需要管理员权限。
 - **Windows 手动安装：** 从 [Releases 页](https://github.com/leeguooooo/chrome-use/releases) 下载 `chrome-use-win32-x64.tar.gz` 和对应的 `.sha256`，确认 `(Get-FileHash chrome-use-win32-x64.tar.gz -Algorithm SHA256).Hash` 与 `.sha256` 文件一致，用 `tar -xzf chrome-use-win32-x64.tar.gz` 解压，再把 `chrome-use.exe` 放进 PATH。运行前一定先对哈希：下载中断的包照样能解压出 `.exe`，它会在启动时报访问违规（退出码 `-1073741819`，即 `0xC0000005`），而不会提示下载不完整。
-- **npm（旧渠道）：** `npm install -g chrome-use`。仍在发布，但 GitHub Releases 现在是主渠道。
 </details>
 
 ### 用 Nix 安装
@@ -163,7 +162,7 @@ $ chrome-use open https://github.com/my-org/repo
   --no-choosebrowser.
 ```
 
-只读，没装的话完全无感：没有规则文件就不改变任何行为、也不打任何提示。规则指向的 profile 如果没在跑扩展，会退回正常的 profile 选择逻辑。该回退不保证网站账号正确；需要特定账号时，应检查身份或显式指定 `--browser`。在显式 `--browser` 后面加 `--remember`，chrome-use 会请 ChooseBrowser 把规则写回去，由它自己的确认弹窗把关。
+只读，没装的话完全无感：没有规则文件就不改变任何行为、也不打任何提示。规则是硬约束：chrome-use 不会把这个站点开到别的 profile 里。规则指向的 profile 没连上时，命令直接失败，并给出 `chrome-use connect --browser <profile>`；当前 session 已经绑定在另一个 profile 上时，命令同样失败，提示换一个新的 `--session` 或加 `--no-choosebrowser`。显式 `--browser` 和配置文件里的路由仍然优先。这条检查同样覆盖 `batch` 的每一步、MCP 工具调用和 script 步骤。规则指向的 profile 在本机已不存在时只给警告，不拦截。`chrome-use doctor` 会逐条列出规则，以及它指向的 profile 现在是否已连接。在显式 `--browser` 后面加 `--remember`，chrome-use 会请 ChooseBrowser 把规则写回去，由它自己的确认弹窗把关。
 
 <a href="https://choosebrowser.leeguoo.com"><img src="docs/assets/choosebrowser-profiles-zh.jpg" alt="ChooseBrowser：每个 Chrome profile 一行" width="640" align="right"></a>
 
@@ -248,8 +247,9 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 `snapshot` 会把内嵌勾选框的按钮标成 `[toggles=checkbox(checked=true)]`，因为点它会切换设置
 （在 LinkedIn 的档案语言弹窗里，这会删除该语言的档案）。
 
-新建、选择与接管标签默认在后台进行。后台标签不响应时，可加上 `--activate`
-（别名 `--front`）；这会切换可见标签，并让目标保持在前台。新标签初始化失败后，
+新建、选择与接管标签默认在后台进行，默认命令不会把 Chrome 提到前台，也不会切换你正在看的标签。
+`--activate`（别名 `--front`）和 `bringToFront` 是显式的例外：它们会切换可见标签、
+聚焦那个 Chrome 窗口并让目标保持在前台，所以 agent 只在你要求时才用。新标签初始化失败后，
 chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接端点，执行
 `chrome-use tab select <targetId> --activate`，再用 `chrome-use snapshot -i`
 验证恢复。不要反复执行 `tab new`，也不要自动重放结果未知的动作。

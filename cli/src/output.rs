@@ -4155,7 +4155,8 @@ can be selected. Adopted and foreign tabs cannot be closed by the session.
 
 Tab options:
   --activate, --front  Raise new/select/adopt targets before renderer initialization
-                       or the liveness probe. Leaves the tab in the foreground.
+                       or the liveness probe. Leaves the tab in the foreground
+                       and focuses its Chrome window: only when the user asks.
 
 Without --activate, tabs stay in the background. If new-tab initialization
 fails, the error retains the target ID: recover that same tab with
@@ -4768,7 +4769,8 @@ Usage: chrome-use doctor [options]
 
 Runs a battery of checks across environment, Chrome install, daemon state,
 config files, encryption key, providers, network reachability, and a live
-headless browser launch test.
+check: with the extension relay up it probes the relay and launches nothing;
+otherwise it runs a headless browser launch test (no window).
 
 Auto-cleans stale daemon socket/pid/version sidecar files. Destructive
 repairs (reinstalling Chrome, purging old state files, generating a missing
@@ -4776,7 +4778,7 @@ encryption key) are gated behind --fix.
 
 Options:
   --offline            Skip network probes
-  --quick              Skip the live headless launch test
+  --quick              Skip the live relay probe / headless launch test
   --fix                Also run destructive repairs
   --json               JSON output
 
@@ -4866,6 +4868,21 @@ Defaults (~/.chrome-use/config.json):
   first `open` URL, then a ChooseBrowser rule, then "default", then the most
   recently used profile. The session stays on that profile afterwards.
   The choice is printed once: `profile: Davian (Profile 14, …) — <rule>`.
+
+ChooseBrowser rules are binding (macOS, when that app is installed):
+  If the rule's profile is not connected, `open` fails naming the rule and
+  `chrome-use connect --browser <profile>` (opens a window in that profile, so
+  ask the user first) instead of using another profile.
+  If the session is already bound to a different profile, `open`/`goto`/
+  `navigate`/`tab new <url>` of the rule's site fails: use a new --session
+  (it picks the rule's profile) or pass --no-choosebrowser to open it in the
+  bound profile anyway. --browser and config routes still win over the rule.
+  A rule naming a profile that no longer exists on this machine is ignored
+  with a warning line (`warning` in --json); the command still runs. A rule
+  whose key fits several profiles is refused. batch steps, MCP tool calls and
+  script steps are checked the same way; a batch whose sites need different
+  profiles is refused before any step runs.
+  `chrome-use doctor` lists each rule and whether its profile is connected.
 
 Examples:
   chrome-use browsers
@@ -5550,7 +5567,9 @@ Core Commands:
   bringToFront               Surface the active tab in the user's window. Tabs are
                              driven in the background, where document.visibilityState
                              stays 'hidden' — this is the way to make a page that
-                             gates its UI on visibility render for real
+                             gates its UI on visibility render for real. It also
+                             brings Chrome to the front over the user's work:
+                             use it only when the user asked to see the tab
   scroll <dir> [px]          Scroll (up/down/left/right)
   scroll <dir> --until <sel> Scroll step by step until <sel>/@ref/text= is in view
   scrollintoview <sel>       Scroll element into view
@@ -5915,10 +5934,14 @@ Options:
                              site to that profile from now on. macOS + ChooseBrowser only.
                              Asks — ChooseBrowser shows a dialog and nothing is saved
                              until you confirm there.
-                             When that app is installed, `open <url>` without an
-                             explicit --browser follows the rule the user already
-                             wrote for that site. Nothing happens either way if
-                             it isn't installed.
+                             When that app is installed, `open <url>` (also goto,
+                             navigate, tab new <url>) without an explicit --browser
+                             follows the rule the user already wrote for that site.
+                             The rule is binding: if its profile is not connected,
+                             or the session is already bound to another profile,
+                             the command fails and names the fix instead of opening
+                             the site in a different profile. Nothing happens either
+                             way if it isn't installed.
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
@@ -5997,7 +6020,7 @@ Environment:
   CODEX_THREAD_ID                Codex task id, recognized automatically for isolation
   AGENT_BROWSER_SESSION_NAME     Auto-save/restore state persistence name
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
-  AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
+  AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (opt-in; unset: never)
   CHROME_USE_RELAY_DIR          Isolated relay registry directory; set the same
                                absolute path in the native host and CLI
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path
@@ -6020,7 +6043,7 @@ Environment:
   AGENT_BROWSER_SPARSE_SCREENSHOT  0 = don't auto-attach a screenshot to a near-empty canvas snapshot
   AGENT_BROWSER_SETTLE_QUIET_MS  DOM-quiet window that ends the wait early in ms (default: 100)
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
-  AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (default: 30)
+  AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (opt-in; unset: never)
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM session encryption
   AGENT_BROWSER_STREAM_PORT      Override WebSocket streaming port (default: OS-assigned)
   AGENT_BROWSER_IDLE_TIMEOUT_MS  Auto-shutdown daemon after N ms of inactivity (disabled by default)

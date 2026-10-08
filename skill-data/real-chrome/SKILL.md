@@ -1,6 +1,6 @@
 ---
 name: real-chrome
-description: Drive the user's real, already-open logged-in Chrome via the chrome-use extension + native messaging relay (no debug port). Use for: connecting to the user's live Chrome, multi-profile selection (browsers/--browser), relay-drop recovery, OAuth/SSO cross-process handoff, strict multi-agent tab-group isolation, adopting an existing tab, anti-detection ranking, silent background operation, --humanize behavioural stealth, and Cloudflare cf-status. Load when the task needs the user's real session rather than a launched browser.
+description: Drive the user's real, already-open logged-in Chrome via the chrome-use extension + native messaging relay (no debug port). Use for connecting to the user's live Chrome, multi-profile selection (browsers/--browser), relay-drop recovery, OAuth/SSO cross-process handoff, strict multi-agent tab-group isolation, adopting an existing tab, anti-detection ranking, silent background operation, --humanize behavioural stealth, and Cloudflare cf-status. Load when the task needs the user's real session rather than a launched browser.
 allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
 ---
 
@@ -31,11 +31,16 @@ One-time setup:
 
 ## Site rules and profile selection
 
-On macOS, `open` / `goto` / `navigate` can consult existing ChooseBrowser site rules when no explicit connection or browser is selected. The rule must resolve to a connected relay profile. `--browser <id|email>` takes precedence; `--no-choosebrowser` skips rule lookup. Reads are local and do not modify the rules.
+On macOS, `open` / `goto` / `navigate` / `tab new <url>` consult existing ChooseBrowser site rules when no explicit connection or browser is selected. `--browser <id|email>` takes precedence; `--no-choosebrowser` skips rule lookup. Reads are local and do not modify the rules.
 
 To write one back, add `--remember` alongside an explicit `--browser`: after the navigation succeeds it asks ChooseBrowser to route that domain to that profile from now on. It is a request, not a save — ChooseBrowser shows its own dialog and reports no result back, so never tell the user a rule was saved. If `--remember` cannot produce a valid request it refuses before navigating and says why. It needs ChooseBrowser ≥ 0.2.1 (the version that registers the `choosebrowser://` scheme; `chrome-use doctor` reports what is installed); on an older one nothing handles the url and chrome-use says so — no rule is proposed.
 
-If the rule target is unavailable, normal profile selection applies. This fallback does not verify the website account. Check `browsers` and the site's identity, or pin `--browser`, when the task requires a specific account. `click` and `snapshot` do not consult routing rules to move an existing session.
+A matching rule is binding; chrome-use never substitutes another profile for the one it names. `open` / `goto` / `navigate` / `tab new <url>` fail with the fix when:
+
+- the rule's profile is not connected — the error names the rule and `chrome-use connect --browser <profile>`. That opens a window in the user's Chrome, so **ask the user first**.
+- the session is already bound to a different profile — sessions never switch profiles. Use a new `--session <name>` (it picks the rule's profile), or pass `--no-choosebrowser` if the user wants the site in the bound profile anyway.
+
+An explicit `--browser` or a config route still wins over the rule. A rule whose profile no longer exists on this machine is ignored with a warning (`warning` in `--json`); tell the user the rule is stale rather than assuming the account is right. A rule whose key fits several profiles is refused. The check applies to `batch` steps (a batch needing two profiles is refused before anything runs), MCP tool calls and script steps too. `chrome-use doctor` lists each rule and whether its profile is connected. `click` and `snapshot` do not consult routing rules.
 
 Once installed, plain `chrome-use open <url>` auto-connects through the
 extension relay — `auto_connect_cdp` **prefers the live relay over a raw

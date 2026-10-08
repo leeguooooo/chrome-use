@@ -93,18 +93,6 @@
   .btn:active { transform: translateY(1px); }
   .btn.ghost { background: #fff; color: var(--gold-deep); border: 1.5px solid var(--gold-soft); box-shadow: none; }
 
-  /* approved sites */
-  .sites { margin-top: 6px; }
-  .site { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 11px;
-    background: #fffaf0; border: 1px solid #f3e7c9; margin-top: 8px; }
-  .site .host { flex: 1; font-weight: 600; font-size: 13px; }
-  .site .x { cursor: pointer; color: var(--muted); font-weight: 700; padding: 2px 6px; border-radius: 6px; }
-  .site .x:hover { color: #c0392b; background: #fdecea; }
-  .addrow { display: flex; gap: 9px; margin-top: 12px; }
-  .addrow input { flex: 1; font: inherit; font-size: 13px; padding: 9px 12px;
-    border: 1.5px solid var(--border); border-radius: 11px; background: #fff; outline: none; }
-  .addrow input:focus { border-color: var(--gold); }
-  .empty { color: var(--muted); font-size: 12.5px; padding: 6px 2px; }
 
   footer { display: flex; justify-content: space-between; align-items: center;
     margin-top: 26px; padding-top: 16px; border-top: 1.5px solid var(--border); }
@@ -193,17 +181,6 @@
     </div>
   </section>
 
-  <!-- Approved sites -->
-  <section class="card">
-    <h2>Approved sites</h2>
-    <p class="lead">An optional allowlist of hosts chrome-use may drive. Empty = no
-      restriction (the CLI drives whatever you point it at).</p>
-    <div class="sites" id="sites"></div>
-    <div class="addrow">
-      <input type="text" id="siteInput" placeholder="example.com" />
-      <button class="btn ghost" id="addSite">Add</button>
-    </div>
-  </section>
 
   <footer>
     <span class="privacy">🔒 local only · no tracking · no cloud</span>

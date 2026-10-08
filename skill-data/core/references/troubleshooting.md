@@ -66,11 +66,13 @@ not a success:
   confirmed. The tab printed under it is what was *asked for*, not what
   answered. Do not treat the title/URL as a read of the live page.
 
-An unconfirmed switch is not fixed by blindly repeating it. For a background
-tab, try `tab select <targetId> --activate` once, then `snapshot -i` to verify
-recovery. For a foreign tab use `tab adopt <targetId> --activate` first.
-Activation happens before renderer initialization or the liveness probe and
-leaves the tab in the foreground. Keep the same session and connection endpoint.
+An unconfirmed switch is not fixed by blindly repeating it. Re-read with
+`snapshot -i` first; a background tab usually answers. Only when the user has
+agreed to have their browser brought forward, try
+`tab select <targetId> --activate` once (for a foreign tab,
+`tab adopt <targetId> --activate`). Activation raises the user's Chrome window
+and changes the tab in front of it; it happens before renderer initialization or
+the liveness probe and leaves the tab in the foreground. Keep the same session and connection endpoint.
 If new-tab initialization fails, use the retained target ID reported in the
 error instead of repeating `tab new`. If reads still fail, preserve the target
 and inspect it; do not automatically replay clicks or reload the page.
@@ -146,7 +148,7 @@ stale daemons, version mismatches after `upgrade`, missing Chrome, etc.)
 run `doctor` before anything else:
 
 ```bash
-chrome-use doctor                     # full diagnosis (env, Chrome, daemons, config, providers, network, launch test)
+chrome-use doctor                     # full diagnosis (env, Chrome, daemons, config, providers, network, relay check or headless launch test)
 chrome-use doctor --offline --quick   # fast, local-only
 chrome-use doctor --fix               # also run destructive repairs (reinstall Chrome, purge old state, ...)
 chrome-use doctor --json              # structured output for programmatic consumption

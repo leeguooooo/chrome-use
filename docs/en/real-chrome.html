@@ -201,14 +201,22 @@
 
       <p>
         Read-only, and invisible if you do not use it: no rules file means no behaviour change and
-        no message. A rule naming a profile that is not running the extension falls back to the
-        normal profile choice. This fallback does not verify site account identity; check it or
-        pin <code>--browser</code> when a specific account is required.
+        no message. A rule is binding: chrome-use never opens its site in a different profile.
+        If the rule's profile is not connected, the command fails and names
+        <code>chrome-use connect --browser &lt;profile&gt;</code> (it opens a window in that profile,
+        so ask the user first). If the session is already bound to another profile, the command
+        also fails: use a new <code>--session</code> (it picks the rule's profile), or pass
+        <code>--no-choosebrowser</code> to open it in the bound profile anyway. An explicit
+        <code>--browser</code> or a config route still wins. The check covers every
+        <code>batch</code> step (a batch that needs two profiles runs no step at all), MCP tool calls
+        and script steps. A rule whose key fits several profiles is refused; a rule whose profile
+        no longer exists only warns. <code>chrome-use doctor</code> lists each rule and whether its
+        profile is connected.
       </p>
       <p>
         Rules are consulted before the "most recently focused window" guess, because a rule is
         something you wrote down and the focus is something we infer. Only navigating commands
-        (<code>open</code> / <code>goto</code> / <code>navigate</code>) consult them;
+        (<code>open</code> / <code>goto</code> / <code>navigate</code> / <code>tab new &lt;url&gt;</code>) consult them;
         <code>snapshot</code> and <code>click</code> act on what the session already has open.
       </p>
 

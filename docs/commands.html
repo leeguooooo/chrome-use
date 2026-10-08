@@ -485,7 +485,8 @@
       <p>
         <code>tab new</code>、<code>tab select</code> 和 <code>tab adopt</code> 默认在后台进行。
         加上 <code>--activate</code>（别名 <code>--front</code>）会在 renderer 初始化或存活探针
-        <strong>之前</strong>激活目标，并将标签保持在前台。这会切换可见标签；激活本身不代表页面已可读。
+        <strong>之前</strong>激活目标，并将标签保持在前台。这会切换可见标签，并把那个 Chrome 窗口提到用户正在用的程序之上，
+        所以只在用户要求时使用；激活本身不代表页面已可读。
         新标签初始化失败后，错误会报告保留的目标 ID。保持相同 session 和连接端点，执行
         <code>tab select &lt;targetId&gt; --activate</code>，然后用 <code>snapshot -i</code> 验证恢复。
         不要反复新建标签，也不要自动重放结果未知的点击。
@@ -847,7 +848,6 @@ AGENT_BROWSER_HIDE_SCROLLBARS=<span class="du-str">"false"</span>        <span c
 AGENT_BROWSER_PROVIDER=<span class="du-str">"browserbase"</span>         <span class="du-cmt"># 云浏览器提供商</span>
 AGENT_BROWSER_STREAM_PORT=<span class="du-str">"9223"</span>             <span class="du-cmt"># 覆盖 WebSocket 流端口</span>
 AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS=<span class="du-str">"ws.example.com"</span>  <span class="du-cmt"># dashboard 额外允许的主机名（反向代理用）；默认只接受本机回环地址</span>
-AGENT_BROWSER_HOME=<span class="du-str">"/path/to/chrome-use"</span>     <span class="du-cmt"># 自定义安装位置</span>
 AGENT_BROWSER_CLICK_MODE=<span class="du-str">"dom"</span>               <span class="du-cmt"># 点击策略：""(默认) / "coord" / "dom"</span></code></pre>
       </div>
 

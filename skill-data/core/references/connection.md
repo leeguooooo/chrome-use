@@ -123,6 +123,29 @@ A session's first connect without `--browser` goes through these in order:
 
 The profile line names the rule that chose.
 
+**A ChooseBrowser rule is binding.** chrome-use never opens a rule's site in
+a different profile:
+
+- If the rule's profile is not connected, the command fails, naming the rule
+  and `chrome-use connect --browser <profile>` (opens a window in that
+  profile, so ask the user first). It does not fall through to `default` or
+  the focused profile.
+- A running session never switches profiles. If it is bound to profile X and
+  `open` / `goto` / `navigate` / `tab new <url>` targets a site whose rule
+  names profile Y, the command fails. Use a new `--session` (it picks Y), or
+  pass `--no-choosebrowser` to open it in X anyway.
+
+`--browser` and config routes still win over a rule. A rule naming a profile
+that no longer exists on this machine does not block anything: the command
+runs with normal selection and prints one warning (`warning` in `--json`).
+A rule whose key fits several profiles (one account signed in to two of
+them) is refused, since picking one would be a guess.
+
+The check covers every navigation, not just direct commands: each `batch`
+step (a batch whose sites need different profiles is refused before any step
+runs), MCP tool calls, and script steps. `chrome-use doctor`
+lists each rule and whether its profile is connected.
+
 **Every profile at once (opt-in).** Chrome's `ExtensionInstallForcelist`
 policy installs the extension into every profile. `chrome-use extension
 install` can write that policy. It needs a macOS configuration profile

@@ -483,8 +483,10 @@ it. `tab adopt <url>` picks such a tab up later.
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization
 or the liveness probe, and leaves it in the foreground. It changes the visible
-tab and may help a background tab respond; activation alone is not evidence
-that page reads work. Read the page again to verify recovery.
+tab, focuses that Chrome window (bringing Chrome over the user's other apps),
+and may help a background tab respond; activation alone is not evidence that
+page reads work. Read the page again to verify recovery. Use it, and
+`bringToFront`, only when the user asked to see the tab.
 
 A background tab does not need activating to be driven: clicks and typing reach
 it, and a hidden page only runs its timers late (about once a second), so a
@@ -713,7 +715,11 @@ dialog and nothing is saved until the user confirms there, and the command
 reports which of the four outcomes happened (saved, declined, no app, app
 too old). Without ChooseBrowser installed the flag does nothing. Once a rule
 exists, a plain `open <url>` follows it, so you stop passing `--browser` for
-that site. `--no-choosebrowser` ignores the rules for one command.
+that site. `--no-choosebrowser` ignores the rules for one command. A rule is
+binding: when its profile is not connected, or the session is already bound
+to another profile, the command fails and names the fix (`connect --browser`,
+a new `--session`, or `--no-choosebrowser`) instead of opening the site in a
+different profile.
 
 ## Debugging
 
@@ -847,7 +853,6 @@ AGENT_BROWSER_SPARSE_SCREENSHOT="0"          # Don't auto-attach a screenshot to
 AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider
 AGENT_BROWSER_STREAM_PORT="9223"             # Override WebSocket streaming port (default: OS-assigned)
 AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS="ws.example.com"  # Extra hostnames the dashboard accepts (reverse proxy); only loopback names otherwise
-AGENT_BROWSER_HOME="/path/to/chrome-use"  # Custom install location
 AGENT_BROWSER_CLICK_MODE="dom"               # Click strategy: "" (default: scroll-in + coordinate
                                              #   click, DOM-dispatch fallback), "coord" (strict
                                              #   coordinate only), "dom" (always element.click())

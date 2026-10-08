@@ -4,19 +4,18 @@
 // Opens standalone (file://) too, with a friendly demo state, so the design is
 // viewable without the extension context.
 
-const DEFAULTS = { ab_notify: false, ab_cursor: false, ab_sites: [], ab_idle_detach_secs: 0 }
+const DEFAULTS = { ab_notify: false, ab_cursor: false, ab_idle_detach_secs: 0 }
 const hasChrome = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync
 
 // ---- elements ----
 const el = (id) => document.getElementById(id)
 const dot = el('dot'), statusLabel = el('statusLabel'), statusSub = el('statusSub'), tabPill = el('tabPill')
 const optNotify = el('optNotify'), optCursor = el('optCursor'), optIdleSecs = el('optIdleSecs')
-const sitesBox = el('sites'), siteInput = el('siteInput')
 const saved = el('saved')
 
 // ---- settings ----
 function loadSettings(cb) {
-  if (!hasChrome) { cb({ ...DEFAULTS, ab_notify: true, ab_cursor: true, ab_sites: ['github.com', 'mail.google.com'] }); return }
+  if (!hasChrome) { cb({ ...DEFAULTS, ab_notify: true, ab_cursor: true }); return }
   chrome.storage.sync.get(DEFAULTS, (s) => cb(s))
 }
 function save(patch) {
@@ -30,33 +29,6 @@ function flashSaved() {
   savedTimer = setTimeout(() => saved.classList.remove('show'), 1400)
 }
 
-// ---- approved sites ----
-let sites = []
-function renderSites() {
-  sitesBox.innerHTML = ''
-  if (!sites.length) {
-    const e = document.createElement('div')
-    e.className = 'empty'
-    e.textContent = 'No sites added — chrome-use isn’t restricted.'
-    sitesBox.appendChild(e)
-    return
-  }
-  for (const host of sites) {
-    const row = document.createElement('div')
-    row.className = 'site'
-    const h = document.createElement('span'); h.className = 'host'; h.textContent = host
-    const x = document.createElement('span'); x.className = 'x'; x.textContent = '✕'; x.title = 'Remove'
-    x.addEventListener('click', () => { sites = sites.filter((s) => s !== host); save({ ab_sites: sites }); renderSites() })
-    row.append(h, x)
-    sitesBox.appendChild(row)
-  }
-}
-function addSite() {
-  const raw = (siteInput.value || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
-  if (!raw || sites.includes(raw)) { siteInput.value = ''; return }
-  sites.push(raw); sites.sort()
-  save({ ab_sites: sites }); siteInput.value = ''; renderSites()
-}
 
 // ---- connection status ----
 function renderStatus(state) {
@@ -92,8 +64,6 @@ loadSettings((s) => {
   optNotify.checked = !!s.ab_notify
   optCursor.checked = !!s.ab_cursor
   optIdleSecs.value = Number.isFinite(Number(s.ab_idle_detach_secs)) ? Number(s.ab_idle_detach_secs) : 0
-  sites = Array.isArray(s.ab_sites) ? s.ab_sites.slice() : []
-  renderSites()
 })
 
 optNotify.addEventListener('change', () => save({ ab_notify: optNotify.checked }))
@@ -103,8 +73,6 @@ optIdleSecs.addEventListener('change', () => {
   optIdleSecs.value = n
   save({ ab_idle_detach_secs: n })
 })
-el('addSite').addEventListener('click', addSite)
-siteInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSite() })
 
 el('copyCmd').addEventListener('click', () => {
   const cmd = el('silentCmd').textContent

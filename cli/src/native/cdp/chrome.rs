@@ -11,6 +11,9 @@ pub struct ChromeProcess {
     child: Child,
     pub ws_url: String,
     temp_user_data_dir: Option<PathBuf>,
+    /// Whether the argv this process was spawned with carried `--headless`
+    /// (no window). Read from the real arguments, not the requested option.
+    pub headless: bool,
     /// On Unix, the process group ID used to kill the entire Chrome process tree.
     #[cfg(unix)]
     pgid: Option<i32>,
@@ -156,6 +159,28 @@ fn launch_headless() -> bool {
     std::env::var("AGENT_BROWSER_ALLOW_HEADLESS")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// The exact Chrome arguments `launch_chrome(options)` would use, for tests
+/// elsewhere in the crate that must assert on real launch arguments.
+#[cfg(test)]
+pub(crate) fn launch_args_for_test(options: &LaunchOptions) -> Vec<String> {
+    let built = build_chrome_args(options).expect("build_chrome_args");
+    if let Some(dir) = built.temp_user_data_dir {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    built.args
+}
+
+/// Whether `launch_chrome(options)` will really start Chrome headless, i.e.
+/// with no window. Usually `false`: the `headless` option is ignored (see
+/// [`launch_headless`]), so a launched Chrome opens a visible window.
+pub fn launches_headless(options: &LaunchOptions) -> bool {
+    launch_headless()
+        && !options
+            .extensions
+            .as_ref()
+            .is_some_and(|exts| !exts.is_empty())
 }
 
 /// Decide the `--force-webrtc-ip-handling-policy` value, if any, for a launched
@@ -533,6 +558,7 @@ fn try_launch_chrome(chrome_path: &Path, options: &LaunchOptions) -> Result<Chro
         }
     };
 
+    let spawned_headless = args.iter().any(|a| a.starts_with("--headless"));
     let mut cmd = Command::new(chrome_path);
     cmd.args(&args)
         .stdin(Stdio::null())
@@ -618,6 +644,7 @@ fn try_launch_chrome(chrome_path: &Path, options: &LaunchOptions) -> Result<Chro
         child,
         ws_url,
         temp_user_data_dir,
+        headless: spawned_headless,
         #[cfg(unix)]
         pgid,
     })
@@ -2089,6 +2116,7 @@ mod tests {
                 child,
                 ws_url: String::new(),
                 temp_user_data_dir: Some(dir.clone()),
+                headless: false,
                 #[cfg(unix)]
                 pgid: None,
             };

@@ -1,8 +1,31 @@
 # Changelog
 
-## 1.5.177
+## 1.5.178
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.30 (published on the Chrome Web Store; Chrome updates it automatically).
+
+### Bug Fixes
+
+- **chrome-use no longer pops up browsers or grabs your tabs.**
+  - The extension used the user's own window as its "agent window", and new agent tab groups were created in the last-focused window. That moved agent tabs next to the user's tabs, so the user's visible tab jumped when one closed. Agent tabs now stay in a background agent window that holds nothing else, and the extension never falls back to the user's window.
+  - Unit tests and `doctor` launched visible browsers: unit tests no longer launch one, and with the relay up `doctor` checks the relay instead.
+  - `screenshot --tab`, `tab duplicate`, `state save` and the password-manager menu recovery no longer touch the user's foreground or tabs.
+  - `--activate`, `bringtofront` and `adopt` still work when asked for, and agents are told not to use them otherwise.
+  - Known gap: a page that opens a pop-up in response to an agent click can still bring Chrome forward (#468). (#460)
+- **A pop-up opened by the session's own tab is adopted over the relay.** It used to go unreported, unfollowed and left open after `close`. It is now attached by its exact Chrome tab id, reported as `openedTab`, followed with `--follow` (and settled on), and closed with the session. A tab that can't be confirmed as the session's is reported as `unadopted` and left alone; user tabs and other sessions' tabs are never taken. (#457, fixes #456)
+- **A ChooseBrowser rule is binding.** A site the rule assigns to a profile is never opened in another profile without notice. If that profile isn't connected, the command says so and gives `chrome-use connect --browser <profile>`. A session bound to another profile refuses the site and suggests a new `--session` or `--no-choosebrowser`. This covers `open`, `goto`, `navigate`, `tab new`, `batch`, scripts and MCP. `doctor` lists each rule and whether its profile is connected. (#466)
+- **`find` refuses ambiguous actions.** `find role button click --name Save` with two Save buttons used to click the first; it now refuses and lists the candidates. A unique scope (`--within`) narrows the search, and `first`/`nth` stay available for an explicit choice. (#459)
+- npm postinstall no longer downloads from the wrong repository; it points to the installer (#467, fixes #423). Removed the unused "Approved sites" option card (#465, fixes #424). Fixed the real-chrome skill's frontmatter and added a YAML check in CI (#464, fixes #425). `AGENT_BROWSER_STATE_EXPIRE_DAYS` is documented as opt-in (#463, fixes #426), and the unused `AGENT_BROWSER_HOME` was removed from the docs (#462, fixes #427).
+
+### Contributors
+
+- @AmeerAliAnwar
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.177
+
 ### Improvements
 
 - **An observed click no longer waits half a second for nothing.** The page-change watcher used by `--observe` was attached after the click, so it missed the page's immediate re-render and always sat out the 500 ms first-reaction window. It is now attached just before the action. The settle rules are unchanged: 100 ms of DOM quiet, no running animation, no request in flight, a 1 s ceiling. On a three-page catalog task, each `click --observe` went from about 740 ms to about 220 ms, and the whole task from about 3.5 s to about 1.4 s (median of 6 alternating rounds against 1.5.176, same timing boundary; form and delayed-load tasks unchanged). With `--follow`, the opened tab is settled on its own, never reported quiet from the opener. (#455)
@@ -18,7 +41,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.176
 

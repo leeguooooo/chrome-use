@@ -58,20 +58,50 @@ impl Stub {
         }
     }
 
+    /// The temp `$HOME` the CLI runs with.
+    pub fn home(&self) -> &std::path::Path {
+        self.home.path()
+    }
+
+    /// The socket dir, where per-session sidecars live.
+    pub fn sock_dir(&self) -> &std::path::Path {
+        self.sock.path()
+    }
+
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+
     /// Run the CLI with `--session <session> --json` plus `args`.
     pub fn run(&self, args: &[&str]) -> Output {
-        Command::new(BIN)
+        self.run_env(args, &[])
+    }
+
+    /// [`Stub::run`] with extra environment variables.
+    pub fn run_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
+        self.command(envs)
             .args(["--session", &self.session, "--json"])
             .args(args)
-            .env("AGENT_BROWSER_SOCKET_DIR", self.sock.path())
+            .output()
+            .expect("run chrome-use")
+    }
+
+    /// The CLI with this stub's environment and no arguments yet.
+    pub fn command(&self, envs: &[(&str, &str)]) -> Command {
+        let mut c = Command::new(BIN);
+        c.env("AGENT_BROWSER_SOCKET_DIR", self.sock.path())
             .env("HOME", self.home.path())
             .env("USERPROFILE", self.home.path())
             .env("AGENT_BROWSER_NO_AUTO_RECONNECT", "1")
             .env_remove("AGENT_BROWSER_CDP")
             .env_remove("AGENT_BROWSER_PROVIDER")
-            .env("NO_COLOR", "1")
-            .output()
-            .expect("run chrome-use")
+            .env_remove("AGENT_BROWSER_SESSION")
+            .env_remove("CHROME_USE_CHOOSEBROWSER_RULES_FILE")
+            .env("NO_COLOR", "1");
+        for (k, v) in envs {
+            c.env(k, v);
+        }
+        c
     }
 
     /// Run and require success.

@@ -525,6 +525,10 @@ pub struct DaemonState {
     pub event_tracker: EventTracker,
     pub session_name: Option<String>,
     pub session_id: String,
+    /// The current invocation chose its browser explicitly (`_cbSkip`), so
+    /// ChooseBrowser rules do not bind its navigations. Kept across the
+    /// nested commands one top-level command runs (script steps).
+    pub cb_skip: bool,
     pub tracing_state: TracingState,
     pub recording_state: RecordingState,
     event_rx: Option<broadcast::Receiver<CdpEvent>>,
@@ -654,6 +658,7 @@ impl DaemonState {
             event_tracker: EventTracker::new(),
             session_name: env::var("AGENT_BROWSER_SESSION_NAME").ok(),
             session_id: env::var("AGENT_BROWSER_SESSION").unwrap_or_else(|_| "default".to_string()),
+            cb_skip: false,
             tracing_state: TracingState::new(),
             recording_state: RecordingState::new(),
             event_rx: None,
@@ -1709,6 +1714,12 @@ impl Drop for DaemonState {
 /// Clear advisory streaks when an operation has no complete observation.
 /// The CLI sends launch readiness checks before ordinary commands; a successful
 /// reuse on the same connection/target/session is not a new user operation.
+/// The ChooseBrowser skip a top-level command asks for: only an explicit
+/// `_cbSkip: true` skips the rule check.
+pub fn cb_skip_of(cmd: &Value) -> bool {
+    cmd.get("_cbSkip").and_then(Value::as_bool).unwrap_or(false)
+}
+
 pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     fn context(state: &DaemonState) -> Option<(String, String, String)> {
         let manager = state.browser.as_ref()?;
@@ -1718,8 +1729,47 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             manager.active_session_id().ok()?.to_string(),
         ))
     }
+    // ChooseBrowser guard: the one point every navigation passes through,
+    // whichever client sent it (a direct command, a batch step, an MCP tool
+    // call, a script step). A top-level command carries `_cbSkip`; nested
+    // steps inherit the value of the command that runs them.
+    // `state.cb_skip` is set per top-level command by the daemon's socket
+    // handler (absent field = false). A nested step that names its own value
+    // uses it; one that does not inherits its parent's.
+    if let Some(skip) = cmd.get("_cbSkip").and_then(Value::as_bool) {
+        state.cb_skip = skip;
+    }
+    let mut rule_warning: Option<String> = None;
+    let nav_url = match cmd.get("action").and_then(Value::as_str) {
+        Some("navigate") | Some("tab_new") | Some("a11y") => {
+            cmd.get("url").and_then(Value::as_str).map(str::to_string)
+        }
+        _ => None,
+    };
+    if let Some(url) = nav_url {
+        // Not `on_relay()`: that only recognises the generic relay endpoint,
+        // and a session bound to one profile drives that profile's own
+        // endpoint. The guard matches the endpoint against the relay rows.
+        let bound_ws = state.browser.as_ref().map(|m| m.ws_url().to_string());
+        match crate::profiles::guard_navigation(
+            &url,
+            state.cb_skip,
+            bound_ws.as_deref(),
+            &state.session_id,
+        ) {
+            Ok(w) => rule_warning = w,
+            Err(msg) => {
+                let id = cmd.get("id").and_then(Value::as_str).unwrap_or("");
+                return error_response(id, &msg);
+            }
+        }
+    }
     let before = context(state);
-    let response = Box::pin(execute_command_inner(cmd, state)).await;
+    let mut response = Box::pin(execute_command_inner(cmd, state)).await;
+    if let (Some(w), Some(obj)) = (rule_warning, response.as_object_mut()) {
+        let merged = crate::profiles::merge_warning(obj.get("warning").and_then(Value::as_str), &w);
+        obj.insert("warning".to_string(), json!(merged));
+    }
     let unchanged_launch = cmd["action"] == "launch"
         && response["success"] == true
         && response.pointer("/data/reused").and_then(Value::as_bool) == Some(true)
@@ -2911,6 +2961,14 @@ async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
 /// reconnect guidance. This is what lets a dropped relay self-heal invisibly
 /// instead of erroring or launching a throwaway Chrome. `connect_auto_with_fresh_tab`
 /// only opens a tab on success, so the retries cost nothing while the relay is down.
+/// The extension refused to create an agent tab because no background agent
+/// window could be opened (it never falls back to the user's window). The
+/// relay is fine, so waiting for it to "come back" only turns a clear refusal
+/// into a timeout ("session unresponsive", observed on the build box).
+fn is_agent_window_refusal(error: &str) -> bool {
+    error.contains("could not open the background agent window")
+}
+
 async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserManager, String> {
     let budget = env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
         .ok()
@@ -2985,6 +3043,7 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
         // erroring or (worse) tearing down and launching a throwaway Chrome.
         let conn = match connect_auto_with_fresh_tab().await {
             Ok(mgr) => Ok(mgr),
+            Err(e) if is_agent_window_refusal(&e) => Err(e),
             Err(e) if crate::connect::host_installed() => retry_relay_connect_after_wait(e).await,
             Err(e) => Err(e),
         };
@@ -3015,6 +3074,9 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
                 }
                 // Host installed but the relay never came back within the wait —
                 // point at the cheap reconnect, not a Chrome restart (#54).
+                if is_agent_window_refusal(&e) {
+                    return Err(e);
+                }
                 return Err(auto_connect_failure_message(&e, true));
             }
         }
@@ -3903,6 +3965,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         // host is registered, wait for the keepalive to revive it and retry once.
         let conn = match connect_auto_with_fresh_tab().await {
             Ok(mgr) => Ok(mgr),
+            Err(e) if is_agent_window_refusal(&e) => Err(e),
             Err(e) if crate::connect::host_installed() => retry_relay_connect_after_wait(e).await,
             Err(e) => Err(e),
         };
@@ -3930,6 +3993,9 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                     crate::connect::ensure_host_installed();
                     crate::connect::open_url(crate::connect::STORE_INSTALL_URL);
                     return Err(crate::connect::extension_not_installed_message());
+                }
+                if is_agent_window_refusal(&e) {
+                    return Err(e);
                 }
                 return Err(auto_connect_failure_message(&e, true));
             }
@@ -4077,7 +4143,12 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     apply_stealth_to_browser(state).await;
     try_restore_navigation(state).await;
 
-    Ok(json!({ "launched": true }))
+    // Whether the browser really started with no window: read from the argv
+    // it was spawned with (new headless Chrome reports a plain `Chrome/…`
+    // product, so the version string cannot tell). `doctor` refuses to pass
+    // its launch test without `true` here.
+    let headless = state.browser.as_ref().and_then(|m| m.launched_headless());
+    Ok(json!({ "launched": true, "headless": headless }))
 }
 
 async fn launch_ios(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -5766,6 +5837,7 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                     Some(session_name.as_str()),
                     &state.session_id,
                     mgr.visited_origins(),
+                    mgr.on_relay(),
                 )
                 .await;
             }
@@ -6685,9 +6757,17 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // pointing at the already-active tab) steals the foreground on each shot, so
     // concurrent sessions would fight over which tab is frontmost — the opposite
     // of the multi-tab isolation this path is meant to preserve.
+    //
+    // Never on the extension relay: there `Page.bringToFront` raises the
+    // user's own Chrome window and switches the tab they are looking at, so a
+    // `screenshot --tab` popped the browser over whatever the user was doing.
+    // Relay captures do not need it: background-tab screenshots are taken
+    // `fromSurface` and return in ~50-250ms on the relay (timing.jsonl).
     if switched_to_inactive_tab {
         if let Some(mgr) = state.browser.as_mut() {
-            let _ = mgr.bring_to_front().await;
+            if !mgr.on_relay() {
+                let _ = mgr.bring_to_front().await;
+            }
         }
     }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
@@ -10645,6 +10725,7 @@ async fn handle_state_save(cmd: &Value, state: &DaemonState) -> Result<Value, St
         state.session_name.as_deref(),
         &state.session_id,
         mgr.visited_origins(),
+        mgr.on_relay(),
     )
     .await?;
 

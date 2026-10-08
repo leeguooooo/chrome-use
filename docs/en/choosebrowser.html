@@ -112,7 +112,11 @@
         </div>
         <div class="du-card">
           <div class="du-card-title"><span class="du-card-ico">🔍</span> doctor knows about it</div>
-          <p><code>chrome-use doctor</code> reports which version is installed and whether the rules are readable. Needs ChooseBrowser 0.2.1 or later.</p>
+          <p><code>chrome-use doctor</code> reports which version is installed, whether the rules are readable, and for each rule whether its profile is connected. Needs ChooseBrowser 0.2.1 or later.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title">Never the wrong account</div>
+          <p>When a rule's profile is not connected, or the session is bound to another profile, the command fails and names the fix (<code>connect --browser</code>, a new <code>--session</code>, or <code>--no-choosebrowser</code>) instead of quietly opening the site in a different profile.</p>
         </div>
       </div>
 
@@ -133,7 +137,7 @@
           <p>Keep choosing the same browser for a site and it moves to the front, with the reason shown. <code>⌘1</code>–<code>⌘9</code> opens instantly; <code>⌘C</code> copies the link without opening anything.</p>
         </div>
         <div class="du-card">
-          <div class="du-card-title"><span class="du-card-ico">🔒</span> No accounts, no tracking, no analytics</div>
+          <div class="du-card-title">No accounts, no tracking, no analytics</div>
           <p>Rules and preferences stay on your Mac. Optional sync to your other Macs goes through your own iCloud.</p>
         </div>
       </div>

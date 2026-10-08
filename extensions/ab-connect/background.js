@@ -17,6 +17,15 @@
 // native messaging.
 
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
+import {
+  agentTabPredicate,
+  agentWindowStillOurs,
+  confirmAttachedPopup,
+  isVerifiedAgentPopup,
+  migratePopupRecord,
+  isUntouchedPlaceholder,
+  placeholderCleanup,
+} from './agent-window.js';
 import { attachTabById } from './attach-by-id.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
@@ -162,39 +171,111 @@ let agentWindowId = null;
 // In-flight window-creation promise: serializes first use so concurrent
 // `Target.createTarget` calls share ONE window instead of each creating their own.
 let agentWindowInit = null;
-// The placeholder tab a freshly-created window opens with; removed once the first
-// real agent tab lands in the window.
-let agentWindowPlaceholderTabId = null;
+// Why the last attempt to open the agent window failed (reported in
+// ABExt.state and in the createTarget refusal), or null.
+let agentWindowError = null;
+// { windowId, tabId } of the placeholder tab the agent window was created
+// with. The only blank tab the agent window check exempts (a blank tab is
+// never assumed to be ours by its URL), and only while it is still untouched
+// (see isUntouchedPlaceholder). Kept in chrome.storage.local only, never in a
+// worker variable, so a service-worker restart neither trusts a stale copy nor
+// loses the record it needs to clean up.
+const AGENT_PLACEHOLDER_KEY = 'ab_agent_window_placeholder';
+// Why the last remembered agent window was rejected (ABExt.state), or null.
+let agentWindowRejected = null;
+// Pop-ups verified as the agent's (#456): adopted through ABExt.attachTabById,
+// which the daemon calls only for a tab its own click opened (session-owned
+// opener or group), or opened by an agent-created tab / such a pop-up. They are
+// not persisted into ownedTabs; they are kept in storage.session so a worker
+// restart does not turn them into "user tabs". User tabs adopted with
+// adopt/inspect are never added here.
+const AGENT_POPUPS_KEY = 'ab_agent_popups';
+const agentPopups = new Set();
+let agentPopupsLoaded = null;
+function loadAgentPopups() {
+  agentPopupsLoaded ??= chrome.storage.session
+    .get(AGENT_POPUPS_KEY)
+    .then((g) => {
+      for (const id of g[AGENT_POPUPS_KEY] || []) agentPopups.add(id);
+    })
+    .catch(() => {});
+  return agentPopupsLoaded;
+}
+async function markAgentPopup(tabId) {
+  await loadAgentPopups();
+  if (!Number.isInteger(tabId) || agentPopups.has(tabId)) return;
+  agentPopups.add(tabId);
+  await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
+}
+// Pop-ups whose onRemoved fired in the last few seconds: onReplaced (a
+// discard or prerender swap) may arrive after it and must carry the record
+// over to the new tab id, like ownedTabs.
+const recentlyRemovedPopups = new Set();
+async function forgetAgentPopup(tabId) {
+  await loadAgentPopups();
+  if (agentPopups.delete(tabId)) {
+    recentlyRemovedPopups.add(tabId);
+    setTimeout(() => recentlyRemovedPopups.delete(tabId), 5000);
+    await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
+  }
+}
+async function migrateAgentPopup(removedTabId, addedTabId) {
+  await loadAgentPopups();
+  if (migratePopupRecord(agentPopups, recentlyRemovedPopups, removedTabId, addedTabId))
+    await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
+}
+
+async function agentPlaceholderRecord() {
+  const got = await chrome.storage.local.get(AGENT_PLACEHOLDER_KEY).catch(() => null);
+  const rec = got && got[AGENT_PLACEHOLDER_KEY];
+  return rec && Number.isInteger(rec.windowId) && Number.isInteger(rec.tabId) ? rec : null;
+}
+
+// Whether window `id` still exists AND is still the agent's (see
+// agent-window.js): a remembered window the user has since started working in
+// must stop receiving agent tabs, or every agent tab lands in the window the
+// user is looking at. Anything it cannot read counts as "not ours".
+async function isUsableAgentWindow(id) {
+  const win = await chrome.windows.get(id).catch(() => null);
+  await loadOwnedTabs();
+  const winTabs = win ? await chrome.tabs.query({ windowId: id }).catch(() => null) : null;
+  const record = await agentPlaceholderRecord();
+  // The agent's tabs: ones it created (ownedTabs) and pop-ups verified as the
+  // agent's (agentPopups). Not "anything attached": user tabs taken with
+  // adopt/inspect are attached too and stay the user's.
+  await loadAgentPopups();
+  const isAgentTab = agentTabPredicate(ownedTabs, agentPopups);
+  const verdict = agentWindowStillOurs(win, winTabs, isAgentTab, record);
+  if (!verdict.ours) agentWindowRejected = { windowId: id, reason: verdict.reason };
+  // A record for this window whose tab is gone or no longer an untouched
+  // placeholder is stale: drop it (never the tab).
+  if (record && record.windowId === id && Array.isArray(winTabs)) {
+    const tab = winTabs.find((t) => t && t.id === record.tabId);
+    if (!isUntouchedPlaceholder(tab, record))
+      await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
+  }
+  return verdict.ours;
+}
 
 // Resolve the existing agent window (this SW's memory, then the persisted id),
-// validating it still exists. Returns its id, or null if there is no live agent
-// window yet.
+// validating it still exists and is still the agent's. Returns its id, or null
+// if there is no usable agent window yet.
 async function resolveAgentWindow() {
   if (agentWindowId != null) {
-    if (
-      await chrome.windows
-        .get(agentWindowId)
-        .then(() => true)
-        .catch(() => false)
-    ) {
-      return agentWindowId;
-    }
+    if (await isUsableAgentWindow(agentWindowId)) return agentWindowId;
     agentWindowId = null;
+    agentWindowInit = null;
+    await chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
   }
   try {
     const got = await chrome.storage.local.get(AGENT_WINDOW_KEY);
     const persisted = got && got[AGENT_WINDOW_KEY];
     if (persisted != null) {
-      if (
-        await chrome.windows
-          .get(persisted)
-          .then(() => true)
-          .catch(() => false)
-      ) {
+      if (await isUsableAgentWindow(persisted)) {
         agentWindowId = persisted;
         return agentWindowId;
       }
-      await chrome.storage.local.remove(AGENT_WINDOW_KEY).catch(() => {});
+      await chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
     }
   } catch {}
   return null;
@@ -206,17 +287,32 @@ async function resolveAgentWindow() {
 async function ensureAgentWindowId() {
   const existing = await resolveAgentWindow();
   if (existing != null) return existing;
-  if (!(chrome.windows && chrome.windows.create)) return null;
+  if (!(chrome.windows && chrome.windows.create)) {
+    agentWindowError = 'the chrome.windows API is unavailable';
+    return null;
+  }
   if (!agentWindowInit) {
     agentWindowInit = (async () => {
       const win = await chrome.windows
         .create({ focused: false, url: 'about:blank' })
-        .catch(() => null);
-      if (!win || win.id == null) return null;
+        .catch((e) => {
+          agentWindowError = String((e && e.message) || e);
+          return null;
+        });
+      if (!win || win.id == null) {
+        agentWindowError ??= 'chrome.windows.create returned no window';
+        return null;
+      }
+      agentWindowError = null;
       agentWindowId = win.id;
-      agentWindowPlaceholderTabId = (win.tabs && win.tabs[0] && win.tabs[0].id) ?? null;
+      const placeholderId = win.tabs && win.tabs[0] && win.tabs[0].id;
       try {
-        await chrome.storage.local.set({ [AGENT_WINDOW_KEY]: win.id });
+        await chrome.storage.local.set({
+          [AGENT_WINDOW_KEY]: win.id,
+          [AGENT_PLACEHOLDER_KEY]: Number.isInteger(placeholderId)
+            ? { windowId: win.id, tabId: placeholderId }
+            : null,
+        });
       } catch {}
       return win.id;
     })();
@@ -227,20 +323,50 @@ async function ensureAgentWindowId() {
 }
 
 // Create an agent tab in the shared agent window (created in the background,
-// `focused: false`, so it never steals the user's foreground). Falls back to the
-// user's active window if the windows API is unavailable, so tab creation never
-// hard-fails.
-async function createAgentTab(url) {
-  const winId = await ensureAgentWindowId();
-  if (winId == null) return await chrome.tabs.create({ url, active: false });
-  const tab = await chrome.tabs.create({ url, active: false, windowId: winId });
-  // Drop the window's initial about:blank once a real agent tab exists (only the
-  // first caller sees the id; it's cleared before the await so no double-remove).
-  if (agentWindowPlaceholderTabId != null) {
-    const placeholder = agentWindowPlaceholderTabId;
-    agentWindowPlaceholderTabId = null;
-    chrome.tabs.remove(placeholder).catch(() => {});
+// `focused: false`, so it never steals the user's foreground). Fails, rather
+// than falling back to the user's active window, when no agent window can be
+// opened.
+//
+// Serialized, and the tab is marked owned before the next caller runs: the
+// agent-window check (isUsableAgentWindow) treats an unowned tab as the user's,
+// so a concurrent caller must never see another session's brand-new tab before
+// it is owned.
+let agentTabChain = Promise.resolve();
+
+// Once a real agent tab exists in window `winId`, close the window's initial
+// placeholder, but only if it is still untouched, re-read right before the
+// removal. If the user navigated it (say tabs.create failed earlier and the
+// window sat with just that blank tab), it is theirs: forget the record and
+// leave the tab. Runs inside the serialized chain, so no concurrent caller
+// sees the record half-updated.
+async function cleanUpPlaceholder(winId) {
+  const record = await agentPlaceholderRecord();
+  if (!record || record.windowId !== winId) return;
+  const tab = await chrome.tabs.get(record.tabId).catch(() => null);
+  if (placeholderCleanup(tab, record, winId) === 'remove') {
+    await chrome.tabs.remove(record.tabId).catch(() => {});
   }
+  await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
+}
+function createAgentTab(url) {
+  const run = agentTabChain.then(() => createAgentTabNow(url));
+  agentTabChain = run.catch(() => {});
+  return run;
+}
+
+async function createAgentTabNow(url) {
+  const winId = await ensureAgentWindowId();
+  // No agent window: refuse rather than put the agent's tab in the window the
+  // user is working in (that used to be the fallback here).
+  if (winId == null)
+    throw new Error(
+      `createTarget: could not open the background agent window (${agentWindowError || 'unknown error'}), ` +
+        "and agent tabs never go into the user's window. To use the user's window on purpose, " +
+        'run with `--window user` (AGENT_BROWSER_DEDICATED_WINDOW=user).',
+    );
+  const tab = await chrome.tabs.create({ url, active: false, windowId: winId });
+  if (tab && tab.id != null) await markOwned(tab.id);
+  await cleanUpPlaceholder(winId);
   return tab;
 }
 
@@ -251,8 +377,7 @@ if (chrome.windows && chrome.windows.onRemoved) {
     if (windowId === agentWindowId) {
       agentWindowId = null;
       agentWindowInit = null;
-      agentWindowPlaceholderTabId = null;
-      chrome.storage.local.remove(AGENT_WINDOW_KEY).catch(() => {});
+      chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
     }
   });
 }
@@ -372,9 +497,13 @@ async function groupTabInto(tabId, name) {
   if (!tab) throw new Error(`groupTabInto: tab ${tabId} is unavailable`);
   let gid = groupIdByName.get(name);
   if (gid != null) {
+    // Only a group in the tab's own window: `tabs.group({groupId})` MOVES the
+    // tab into the group's window, and a session's old group may sit in the
+    // user's window (from before the agent window was validated), which would
+    // drag a background agent tab into the window the user is working in.
     const ok = await chrome.tabGroups
       .get(gid)
-      .then(() => true)
+      .then((g) => g.windowId === tab.windowId)
       .catch(() => false);
     if (!ok) {
       gid = null;
@@ -389,7 +518,13 @@ async function groupTabInto(tabId, name) {
     if (found && found[0]) gid = found[0].id;
   }
   if (gid == null) {
-    gid = await chrome.tabs.group({ tabIds: tabId });
+    // createProperties.windowId is load-bearing: without it Chrome creates the
+    // group in the *current* (last focused) window and MOVES the tab there,
+    // which pulled every new agent tab out of the background agent window into
+    // the window the user was working in (observed live: tabs.onAttached into
+    // the user's window right after creation, then the emptied agent window
+    // closed).
+    gid = await chrome.tabs.group({ tabIds: tabId, createProperties: { windowId: tab.windowId } });
     await chrome.tabGroups.update(gid, { title: name, color: colorForName(name) });
   } else {
     await chrome.tabs.group({ groupId: gid, tabIds: tabId });
@@ -983,10 +1118,22 @@ async function handleForwardCdpCommand(msg) {
   // tab opened. No URL lookup, so no other tab can be attached in its place.
   // Not persisted into ownedTabs, like the onCreated pop-up path.
   if (method === 'ABExt.attachTabById') {
-    return await attachTabById(params, {
+    const result = await attachTabById(params, {
       getTab: (tabId) => chrome.tabs.get(tabId),
       eligible,
       attachTab: (tabId) => attachTab(tabId),
+    });
+    // Recorded as an agent pop-up only when the tab itself shows it is one:
+    // opened by an agent tab, or in a group that holds an agent tab. The
+    // daemon's request names a tab id, which proves nothing about whose it is.
+    // A failed read is unknown: agentPopup false, nothing recorded.
+    await loadOwnedTabs();
+    await loadAgentPopups();
+    return await confirmAttachedPopup(result, {
+      getTab: (tabId) => chrome.tabs.get(tabId),
+      queryAll: () => chrome.tabs.query({}),
+      isAgentTab: agentTabPredicate(ownedTabs, agentPopups),
+      mark: (tabId) => markAgentPopup(tabId),
     });
   }
 
@@ -1159,6 +1306,8 @@ async function handleForwardCdpCommand(msg) {
       ownedTabs: [...ownedTabs],
       groups: [...groupIdByName.entries()].map(([name, id]) => ({ name, id })),
       agentWindowId,
+      agentWindowError,
+      agentWindowRejected,
       cursorEnabled,
       notifyEnabled,
       idleDetachMs,
@@ -1768,6 +1917,14 @@ chrome.tabs.onCreated.addListener(
       const opener = tab.openerTabId;
       if (typeof opener !== 'number') return;
       if (!ownedTabs.has(opener) && !tabs.has(opener)) return;
+      // Opened by an agent tab (created by the agent, or a verified agent
+      // pop-up): the agent's. Opened by a merely attached tab (a user tab taken
+      // with adopt/inspect): attached as before, but it keeps user identity.
+      await loadAgentPopups();
+      // A failed query is unknown (null), never an empty list.
+      const all = await chrome.tabs.query({}).catch(() => null);
+      if (isVerifiedAgentPopup(tab, all, agentTabPredicate(ownedTabs, agentPopups)))
+        await markAgentPopup(tab.id);
       if (tabs.has(tab.id)) return;
       // A fresh popup is often still at about:blank (no url yet) — that's fine to
       // attach; only bail on a clearly-restricted scheme. attachTab tolerates the
@@ -1811,6 +1968,8 @@ chrome.tabs.onReplaced.addListener(
         recordReplacement(replacedTabs, removedTabId, addedTabId);
         saveReplacedTabs();
       }
+      // A confirmed agent pop-up stays one under its new id.
+      await migrateAgentPopup(removedTabId, addedTabId);
       // Ownership follows the tab, so the session may still drive (and close)
       // it under its new id.
       if (ownedTabs.has(removedTabId) || recentlyRemovedOwned.has(removedTabId)) {
@@ -1826,6 +1985,7 @@ chrome.tabs.onRemoved.addListener(
   (tabId) =>
     void whenReady(() => {
       nativeDuplicateTabs.delete(tabId);
+      void forgetAgentPopup(tabId);
       // Keep a short tombstone for stable-target recovery after onRemoved.
       // Genuine closed tabs expire, while a replacement can transfer the state.
       const removedState = reloadStates.get(tabId);

@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, Mutex};
 
-use super::cdp::chrome::{auto_connect_cdp, launch_chrome, ChromeProcess, LaunchOptions};
+use super::cdp::chrome::{
+    auto_connect_cdp, launch_chrome, launches_headless, ChromeProcess, LaunchOptions,
+};
 use super::cdp::client::CdpClient;
 use super::cdp::discovery::discover_cdp_url;
 use super::cdp::lightpanda::{launch_lightpanda, LightpandaLaunchOptions, LightpandaProcess};
@@ -17,6 +19,20 @@ use super::element::{resolve_element_object_id, RefMap};
 /// group that abs-created tabs land in when driving the user's real Chrome via
 /// the `ab-connect` extension, so each agent/session gets its own group.
 pub static DAEMON_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Unit tests run `execute_command` on a bare `DaemonState`, and every one
+/// that needed a browser launched a real Chrome on the machine running
+/// `cargo test` (launches are headed unless AGENT_BROWSER_ALLOW_HEADLESS=1).
+/// On the build box a plain `cargo test` added bursts of `session=default
+/// mode=launched(debug-port)` lines to `~/.chrome-use/connect-mode.log`, and
+/// none once this refusal was in. In a build without the `e2e-tests` feature,
+/// nothing launches; with that feature, every test in the build (unit tests
+/// included) can still launch.
+#[cfg(all(test, not(feature = "e2e-tests")))]
+const UNIT_TEST_LAUNCH_REFUSAL: Option<&str> =
+    Some("unit tests never launch a browser (only the e2e-tests feature does)");
+#[cfg(not(all(test, not(feature = "e2e-tests"))))]
+const UNIT_TEST_LAUNCH_REFUSAL: Option<&str> = None;
 
 /// How long `close()` may spend closing the tabs this session created before it
 /// gives up and lets the process exit (issue #192).
@@ -615,6 +631,27 @@ pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
             && lower.contains("different extension"))
 }
 
+/// The recovery's error when the blocked tab shares a window with the user's
+/// own tabs: hiding it there means switching the user's tab, which chrome-use
+/// never does.
+const USER_WINDOW_MENU: &str = "the blocked tab is in a window with the user's own tabs, and \
+closing the menu from here would switch the tab in front of that window";
+
+/// Whether a `tabs.query` result may hold a tab the user opened: any tab not
+/// in `owned`, whatever its URL (a user's blank tab is still theirs), and
+/// anything unreadable (no list, a tab without an id), because guessing
+/// "agent-only" is how a recovery ends up switching the user's tab.
+fn window_has_unowned_tab(tabs: &Value, owned: &HashSet<i64>) -> bool {
+    let Some(tabs) = tabs.as_array() else {
+        return true;
+    };
+    tabs.iter()
+        .any(|tab| match tab.get("id").and_then(Value::as_i64) {
+            Some(id) => !owned.contains(&id),
+            None => true,
+        })
+}
+
 /// The recovery's error when the menu was open again after the tab was shown.
 const MENU_STILL_OPEN: &str = "the menu was still open after chrome-use hid the tab for a moment";
 /// [`MENU_STILL_OPEN`] for a tab in front, which gets a second try.
@@ -971,6 +1008,37 @@ impl NewTabCheck {
     }
 }
 
+/// How `ABExt.attachTabById`'s answer decides a click's pop-up.
+#[derive(Debug, PartialEq, Eq)]
+enum RelayPopupVerdict {
+    /// Attached, the right tab, and the extension confirmed it as an agent
+    /// pop-up (`agentPopup: true`): the session may own it.
+    Confirmed(String),
+    /// Attached, but not confirmed (`agentPopup` false, missing or not a bool).
+    Unconfirmed,
+    /// Not attached, another tab, or no target id.
+    NotAttached,
+}
+
+/// Only an explicit `agentPopup: true` upgrades a pop-up to session-created
+/// (closed with `close`, followed by `--follow`). Anything else keeps the
+/// tab's unconfirmed identity (#460 review).
+fn relay_popup_attach_verdict(resp: &Value, tab_id: i64) -> RelayPopupVerdict {
+    let target_id = resp.get("targetId").and_then(Value::as_str);
+    let same_tab = resp.get("chromeTabId").and_then(Value::as_i64) == Some(tab_id);
+    let attached = resp.get("attached").and_then(Value::as_bool) == Some(true);
+    match (target_id, same_tab, attached) {
+        (Some(t), true, true) => {
+            if resp.get("agentPopup").and_then(Value::as_bool) == Some(true) {
+                RelayPopupVerdict::Confirmed(t.to_string())
+            } else {
+                RelayPopupVerdict::Unconfirmed
+            }
+        }
+        _ => RelayPopupVerdict::NotAttached,
+    }
+}
+
 /// Chrome tab ids that existed before a click over the relay (#456).
 #[derive(Debug, Clone, Default)]
 pub struct RelayTabBaseline {
@@ -998,6 +1066,31 @@ pub(crate) static FAIL_NEXT_TAB_SWITCH_AFTER_PIN: std::sync::atomic::AtomicBool 
 /// The Chrome tab id a relay session id (`cb-tab-<tabId>`) belongs to.
 fn relay_chrome_tab_id(session_id: &str) -> Option<i64> {
     session_id.strip_prefix("cb-tab-")?.parse().ok()
+}
+
+/// Whether a click's new tabs may be adopted by diffing the target list (each
+/// new target becomes session-created). Only for a launched browser.
+fn adopts_new_targets_by_diff(launched: bool) -> bool {
+    launched
+}
+
+/// Whether the tab a click was dispatched to is one the session created (or a
+/// pop-up adopted from one). `None` (unknown) is not.
+fn clicked_tab_is_created(active: Option<&str>, created: &HashSet<String>) -> bool {
+    active.is_some_and(|t| created.contains(t))
+}
+
+/// The Chrome tab ids of the session's pages that it genuinely created (its
+/// own tabs and the pop-ups it adopted from them, which are recorded as
+/// created). A user tab taken with `tab adopt` is a session page too, but not
+/// the session's: a pop-up it opens stays the user's, so it must not count as
+/// an opener or group anchor when picking a click's pop-up (#460 review).
+fn relay_created_chrome_tabs(pages: &[PageInfo], created: &HashSet<String>) -> HashSet<i64> {
+    pages
+        .iter()
+        .filter(|p| created.contains(&p.target_id))
+        .filter_map(|p| relay_chrome_tab_id(&p.session_id))
+        .collect()
 }
 
 /// The first tab in `tabs` (chrome.tabs.Tab objects) that a click on one of
@@ -1205,6 +1298,15 @@ impl BrowserProcess {
         }
     }
 
+    /// Whether this browser was spawned with no window (`--headless` in its
+    /// real argv; Lightpanda never has one).
+    pub fn spawned_headless(&self) -> bool {
+        match self {
+            BrowserProcess::Chrome(p) => p.headless,
+            BrowserProcess::Lightpanda(_) => true,
+        }
+    }
+
     pub fn wait_or_kill(&mut self, timeout: std::time::Duration) {
         match self {
             BrowserProcess::Chrome(p) => p.wait_or_kill(timeout),
@@ -1397,6 +1499,9 @@ pub(crate) fn foreground_conflict_warning(owner: &str, title: &str) -> String {
 
 impl BrowserManager {
     pub async fn launch(options: LaunchOptions, engine: Option<&str>) -> Result<Self, String> {
+        if let Some(refusal) = UNIT_TEST_LAUNCH_REFUSAL {
+            return Err(refusal.to_string());
+        }
         let engine = engine.unwrap_or("chrome");
 
         match engine {
@@ -1425,6 +1530,9 @@ impl BrowserManager {
         let user_agent = options.user_agent.clone();
         let color_scheme = options.color_scheme.clone();
         let download_path = options.download_path.clone();
+        // What the window will really be, not what was asked for: the
+        // `headless` option is ignored unless AGENT_BROWSER_ALLOW_HEADLESS=1.
+        let headless = engine == "lightpanda" || launches_headless(&options);
 
         let (ws_url, process) = match engine {
             "lightpanda" => {
@@ -1455,6 +1563,7 @@ impl BrowserManager {
                 .get()
                 .map(String::as_str)
                 .unwrap_or("default"),
+            Some(headless),
         );
         let manager = if engine == "lightpanda" {
             initialize_lightpanda_manager(ws_url, process).await?
@@ -1563,6 +1672,7 @@ impl BrowserManager {
                 .get()
                 .map(String::as_str)
                 .unwrap_or("default"),
+            None,
         );
         let client = Arc::new(CdpClient::connect_with_headers(&ws_url, headers).await?);
         let mut manager = Self {
@@ -2259,6 +2369,14 @@ impl BrowserManager {
     /// mirror of the relay gate used internally (`agent_group().is_some()`), so the
     /// daemon dispatcher can scope relay-only recovery (the stale-session retry)
     /// without reaching into private internals.
+    /// For a browser this daemon launched: whether its real argv had
+    /// `--headless`. `None` when the browser was not launched here.
+    pub fn launched_headless(&self) -> Option<bool> {
+        self.browser_process
+            .as_ref()
+            .map(BrowserProcess::spawned_headless)
+    }
+
     pub fn on_relay(&self) -> bool {
         self.agent_group().is_some()
     }
@@ -3123,6 +3241,27 @@ impl BrowserManager {
 
     /// One allow-listed `chrome.*` call through the relay (`ABExt.call`),
     /// returning Chrome's result. Needs no debugger access.
+    /// Whether Chrome window `window_id` holds a tab the relay does not own
+    /// (the user's own tab). `true` when it cannot tell: guessing "agent-only"
+    /// is how a recovery ends up switching the user's tab.
+    async fn window_holds_user_tabs(&self, window_id: i64) -> bool {
+        let Ok(tabs) = self
+            .chrome_call("tabs", "query", json!([{ "windowId": window_id }]))
+            .await
+        else {
+            return true;
+        };
+        let Ok(ext_state) = self.client.send_command("ABExt.state", None, None).await else {
+            return true;
+        };
+        let owned: HashSet<i64> = ext_state
+            .get("ownedTabs")
+            .and_then(Value::as_array)
+            .map(|ids| ids.iter().filter_map(Value::as_i64).collect())
+            .unwrap_or_default();
+        window_has_unowned_tab(&tabs, &owned)
+    }
+
     async fn chrome_call(
         &self,
         namespace: &str,
@@ -3274,6 +3413,14 @@ impl BrowserManager {
                 "its window is minimized, so switching tabs in it hides nothing".to_string(),
             );
         }
+        // The flip below inserts a blank tab next to the user's front tab and
+        // switches tabs in this window. That is only acceptable in a window that
+        // holds nothing but agent tabs (the background agent window). In a
+        // window with the user's own tabs it would grab their tab, even for
+        // 150ms, so leave it to the user.
+        if self.window_holds_user_tabs(window_id).await {
+            return Err(USER_WINDOW_MENU.to_string());
+        }
         let front = self
             .chrome_call(
                 "tabs",
@@ -3308,7 +3455,9 @@ impl BrowserManager {
             .client
             .send_command(
                 "Target.createTarget",
-                Some(json!({ "url": "about:blank", "background": false })),
+                // In the agent window, never the user's active window: the
+                // extension otherwise creates it wherever the user is.
+                Some(json!({ "url": "about:blank", "background": false, "dedicatedWindow": true })),
                 None,
             )
             .await?;
@@ -3773,8 +3922,22 @@ impl BrowserManager {
         if self.browser_process.is_none() && !on_relay {
             return NewTabCheck::default();
         }
+        // A click in a user tab taken with `tab adopt` opens the USER's tab.
+        // Chrome's metadata cannot tell: for a click in a background tab it
+        // names the window's front tab (possibly ours) as opener and puts the
+        // pop-up in that tab's group. So on the relay only a click in a tab
+        // this session created can yield a tab the session adopts.
+        if on_relay && !clicked_tab_is_created(self.active_target_id().ok(), &self.created_targets)
+        {
+            return NewTabCheck::default();
+        }
         let mut check = NewTabCheck::default();
-        if self.browser_process.is_some() || self.relay_scoped {
+        // The target-list diff upgrades every new target to created, so it is
+        // only for a browser this daemon launched (every tab in it is ours).
+        // Over the relay a target that merely appeared after the click (the
+        // group-scoped list included) proves nothing about whose it is; the
+        // relay path below adopts only a pop-up the extension confirmed.
+        if adopts_new_targets_by_diff(self.browser_process.is_some()) {
             check.opened = self.adopt_new_targets(before).await;
         }
         // The extension announces a pop-up only when Chrome names one of our tabs
@@ -3811,10 +3974,7 @@ impl BrowserManager {
     /// Chrome tab ids of the tabs this session drives over the relay, read
     /// from their `cb-tab-<tabId>` relay sessions.
     fn relay_own_chrome_tabs(&self) -> HashSet<i64> {
-        self.pages
-            .iter()
-            .filter_map(|p| relay_chrome_tab_id(&p.session_id))
-            .collect()
+        relay_created_chrome_tabs(&self.pages, &self.created_targets)
     }
 
     /// Adopt the tab a click on one of this session's tabs opened, found in
@@ -3919,20 +4079,25 @@ impl BrowserManager {
                 ))
             }
         };
-        let target_id = resp
-            .get("targetId")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let same_tab = resp.get("chromeTabId").and_then(Value::as_i64) == Some(tab_id);
-        let (Some(target_id), true, true) = (
-            target_id,
-            same_tab,
-            resp.get("attached").and_then(Value::as_bool) == Some(true),
-        ) else {
-            return NewTabCheck::unadopted(format!(
-                "the click opened a tab (Chrome tab {tab_id}, {url}) but the extension did \
-                 not attach it (it answered {resp})."
-            ));
+        let target_id = match relay_popup_attach_verdict(&resp, tab_id) {
+            RelayPopupVerdict::Confirmed(target_id) => target_id,
+            RelayPopupVerdict::NotAttached => {
+                return NewTabCheck::unadopted(format!(
+                    "the click opened a tab (Chrome tab {tab_id}, {url}) but the extension did \
+                     not attach it (it answered {resp})."
+                ))
+            }
+            // Attached, but the extension could not confirm the tab is the
+            // agent's (e.g. a user tab shares its window, where Chrome's opener
+            // and group metadata cannot be trusted). It keeps its unconfirmed
+            // identity: not created, not followed, never closed by `close`.
+            RelayPopupVerdict::Unconfirmed => {
+                return NewTabCheck::unadopted(format!(
+                    "a tab opened (Chrome tab {tab_id}, {url}) but the extension could not \
+                     confirm it came from this session's tab, so it was not adopted, followed \
+                     or closed with the session. If it is yours, run `tab adopt <url>`."
+                ))
+            }
         };
         if let Some(page) = self
             .pages
@@ -4289,7 +4454,7 @@ impl BrowserManager {
     /// the native-messaging host published. Used to avoid relay-unsafe CDP that
     /// would disturb the user's window (e.g. Browser.setContentsSize, issue #47).
     fn via_relay(&self) -> bool {
-        crate::connect::relay_url().as_deref() == Some(self.ws_url.as_str())
+        crate::connect::is_relay_url(&self.ws_url)
     }
 
     /// The label this session's tabs are grouped under in the user's Chrome.
@@ -6191,9 +6356,65 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod relay_popup_tests {
-    use super::{relay_chrome_tab_id, relay_popup_candidate, relay_url_is_attachable};
+    use super::{
+        adopts_new_targets_by_diff, relay_chrome_tab_id, relay_popup_attach_verdict,
+        relay_popup_candidate, relay_url_is_attachable, RelayPopupVerdict,
+    };
     use serde_json::{json, Value};
     use std::collections::HashSet;
+
+    /// The session's close list (created targets) after a pop-up's attach
+    /// answer is applied, the way `adopt_relay_popup` applies it on both its
+    /// "already tracked" and "newly attached" paths.
+    fn close_list_after(resp: Value) -> HashSet<String> {
+        let mut created: HashSet<String> = ["SRC".to_string()].into();
+        if let RelayPopupVerdict::Confirmed(t) = relay_popup_attach_verdict(&resp, 77) {
+            created.insert(t);
+        }
+        created
+    }
+
+    #[test]
+    fn only_an_explicit_agent_popup_true_puts_a_popup_on_the_close_list() {
+        let base = json!({ "attached": true, "chromeTabId": 77, "targetId": "POP" });
+        let with = |v: Value| {
+            let mut r = base.clone();
+            r["agentPopup"] = v;
+            r
+        };
+        let confirmed: HashSet<String> = ["SRC".to_string(), "POP".to_string()].into();
+        let unchanged: HashSet<String> = ["SRC".to_string()].into();
+        assert_eq!(close_list_after(with(json!(true))), confirmed);
+        // false, missing, and non-bool keep the unconfirmed identity.
+        assert_eq!(close_list_after(with(json!(false))), unchanged);
+        assert_eq!(close_list_after(base.clone()), unchanged);
+        assert_eq!(close_list_after(with(json!("true"))), unchanged);
+        assert_eq!(close_list_after(with(json!(1))), unchanged);
+        assert_eq!(close_list_after(with(Value::Null)), unchanged);
+        assert_eq!(
+            relay_popup_attach_verdict(&with(json!(false)), 77),
+            RelayPopupVerdict::Unconfirmed
+        );
+        // Another tab, not attached, or no target id: never on the list.
+        let mut other = with(json!(true));
+        other["chromeTabId"] = json!(78);
+        assert_eq!(close_list_after(other), unchanged);
+        let mut detached = with(json!(true));
+        detached["attached"] = json!(false);
+        assert_eq!(close_list_after(detached), unchanged);
+        let mut no_target = with(json!(true));
+        no_target.as_object_mut().unwrap().remove("targetId");
+        assert_eq!(close_list_after(no_target), unchanged);
+    }
+
+    #[test]
+    fn a_target_that_merely_appeared_is_never_upgraded_over_the_relay() {
+        // The target-list diff (which puts every new target on the close list)
+        // runs only for a browser this daemon launched; over the relay, the
+        // scoped list included, it does not run.
+        assert!(adopts_new_targets_by_diff(true));
+        assert!(!adopts_new_targets_by_diff(false));
+    }
 
     const OURS: i64 = 344;
     const OUR_GROUP: i64 = 2124;
@@ -6871,6 +7092,32 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_user_tab_taken_with_adopt_is_not_an_own_tab_for_popup_picking() {
+        let mut created_page = page("CREATED");
+        created_page.session_id = "cb-tab-11".to_string();
+        let mut adopted_page = page("ADOPTED");
+        adopted_page.session_id = "cb-tab-22".to_string();
+        let created: HashSet<String> = ["CREATED".to_string()].into_iter().collect();
+        let own = relay_created_chrome_tabs(&[created_page, adopted_page], &created);
+        assert_eq!(own, [11].into_iter().collect::<HashSet<i64>>());
+        // So a child the adopted user tab opens is not picked as the session's
+        // pop-up: its opener (22) is not ours, and it has no group.
+        let tabs = json!([
+            { "id": 11, "groupId": -1 },
+            { "id": 22, "groupId": -1 },
+            { "id": 33, "groupId": -1, "openerTabId": 22, "url": "https://x.example/" }
+        ]);
+        let before: HashSet<i64> = [11, 22].into_iter().collect();
+        let tabs = tabs.as_array().cloned().unwrap();
+        assert!(relay_popup_candidate(&tabs, &before, &own).is_none());
+        // And a click dispatched to the adopted user tab yields no adoption at
+        // all, even when Chrome names our tab as opener and uses our group.
+        assert!(clicked_tab_is_created(Some("CREATED"), &created));
+        assert!(!clicked_tab_is_created(Some("ADOPTED"), &created));
+        assert!(!clicked_tab_is_created(None, &created));
+    }
+
     fn page(target_id: &str) -> PageInfo {
         PageInfo {
             tab_id: 1,
@@ -7022,6 +7269,32 @@ mod tests {
         );
         assert!(!msg.contains("--adopt"), "{msg}");
         assert!(!msg.contains("adopt t1"), "{msg}");
+    }
+
+    #[test]
+    fn a_window_with_a_user_tab_is_not_the_agent_window() {
+        let owned: HashSet<i64> = [1, 2].into_iter().collect();
+        let agent_only = json!([
+            { "id": 1, "url": "https://example.com/" },
+            { "id": 2, "url": "about:blank" }
+        ]);
+        assert!(!window_has_unowned_tab(&agent_only, &owned));
+        let with_user_tab = json!([
+            { "id": 1, "url": "https://example.com/" },
+            { "id": 9, "url": "https://mail.example.com/" }
+        ]);
+        assert!(window_has_unowned_tab(&with_user_tab, &owned));
+        // The user's own blank tab is theirs: never exempted by URL.
+        let user_blank =
+            json!([{ "id": 1, "url": "https://example.com/" }, { "id": 9, "url": "about:blank" }]);
+        assert!(window_has_unowned_tab(&user_blank, &owned));
+        // Unknown is not empty.
+        assert!(window_has_unowned_tab(&Value::Null, &owned));
+        assert!(window_has_unowned_tab(
+            &json!([{ "url": "https://x.example/" }]),
+            &owned
+        ));
+        assert!(USER_WINDOW_MENU.contains("user's own tabs"));
     }
 
     #[test]

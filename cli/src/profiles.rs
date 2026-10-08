@@ -96,6 +96,7 @@ impl ProfileRow {
         json!({
             "name": self.name,
             "dir": self.dir,
+            "root": self.root,
             "email": self.account(),
             "gaiaName": self.gaia_name,
             "id": self.relay_id,
@@ -552,6 +553,514 @@ pub fn configured_default(cfg: &ProfilesConfig) -> Option<(String, String)> {
         .as_ref()
         .filter(|d| !d.trim().is_empty())
         .map(|d| (d.clone(), "config profiles.default".to_string()))
+}
+
+// --- ChooseBrowser rules vs. the session's profile ---------------------------
+//
+// A rule the user wrote in ChooseBrowser says which account a site belongs to.
+// Opening that site in a different profile because the named one happened not
+// to be connected — or because this session was bound to another one earlier —
+// is the wrong account with no message, which is how claude.ai ended up in the
+// wrong profile. So a matching rule is binding: use its profile or refuse with
+// the fix. Explicit choices (`--browser`, `--cdp`, `--provider`, a config
+// route, `--no-choosebrowser`) still win, because those were also stated by
+// the user.
+//
+// Two places enforce it: the CLI when it picks a new session's profile (before
+// any daemon exists), and the daemon right before it sends any navigation —
+// whichever client asked for it (a direct command, a `batch` step, an MCP
+// tool call, a script).
+
+/// A ChooseBrowser rule that covers the url being opened, resolved against this
+/// machine's `Local State` (so `dir` is this machine's directory name).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleHit {
+    pub host: String,
+    pub rule_id: Option<String>,
+    /// The portable key the rule stores (gaia id, email, name).
+    pub key: String,
+    /// Chrome data root the directory lives under.
+    pub root: Option<String>,
+    /// Empty when the key is ambiguous.
+    pub dir: String,
+    pub email: Option<String>,
+    /// Directories the key matched when it matched more than one. Non-empty
+    /// means the rule cannot be followed: which account it means is a guess.
+    pub ambiguous: Vec<String>,
+}
+
+impl RuleHit {
+    fn rule(&self) -> String {
+        match &self.rule_id {
+            Some(id) => format!("A ChooseBrowser rule ({id})"),
+            None => "A ChooseBrowser rule".to_string(),
+        }
+    }
+
+    /// The profile identity the rule resolves to, for comparing two hits.
+    fn target(&self) -> (Option<&str>, &str, &str) {
+        (self.root.as_deref(), self.dir.as_str(), self.key.as_str())
+    }
+}
+
+/// What the rules say about one url being opened.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleOutcome {
+    None,
+    Hit(RuleHit),
+    /// The rule's profile no longer exists here: a warning, never a refusal.
+    Stale(String),
+}
+
+/// The warning for a rule whose profile key matches nothing in `Local State`.
+/// Not a refusal: a stale rule must not block every visit to its site, but the
+/// user should learn that the rule they rely on is doing nothing.
+pub fn stale_rule_warning(host: &str, choice: &crate::choosebrowser::ProfileChoice) -> String {
+    let rule = match &choice.rule_id {
+        Some(id) => format!("ChooseBrowser rule ({id})"),
+        None => "ChooseBrowser rule".to_string(),
+    };
+    format!(
+        "the {rule} for {host} names Chrome profile \"{}\", which no longer exists on this \
+         machine — the rule is ignored and normal profile selection applies. Update or \
+         delete it in ChooseBrowser.",
+        choice.key
+    )
+}
+
+/// Pure: turn a [`crate::choosebrowser::RuleLookup`] for `url` into what the
+/// guard acts on. `chrome_root` is the data root `Local State` was read from.
+pub fn rule_outcome(
+    lookup: crate::choosebrowser::RuleLookup,
+    url: &str,
+    chrome_root: Option<&str>,
+) -> RuleOutcome {
+    use crate::choosebrowser::RuleLookup;
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_else(|| url.to_string());
+    match lookup {
+        RuleLookup::NoRule => RuleOutcome::None,
+        RuleLookup::Stale(choice) => RuleOutcome::Stale(stale_rule_warning(&host, &choice)),
+        RuleLookup::Resolved(profile, choice) => RuleOutcome::Hit(RuleHit {
+            host,
+            rule_id: choice.rule_id,
+            key: choice.key,
+            root: chrome_root.map(str::to_string),
+            dir: profile.directory,
+            email: profile.email,
+            ambiguous: Vec::new(),
+        }),
+        RuleLookup::Ambiguous(choice, dirs) => RuleOutcome::Hit(RuleHit {
+            host,
+            rule_id: choice.rule_id,
+            key: choice.key,
+            root: chrome_root.map(str::to_string),
+            dir: String::new(),
+            email: None,
+            ambiguous: dirs,
+        }),
+    }
+}
+
+/// The rule covering `url`, against the real files.
+pub fn rule_outcome_for_url(url: &str) -> RuleOutcome {
+    let root = crate::choosebrowser::chrome_root().map(|p| p.display().to_string());
+    rule_outcome(crate::choosebrowser::lookup_url(url), url, root.as_deref())
+}
+
+/// The inventory row a rule's profile is: the same directory under the same
+/// data root, nothing else. The directory is the identity `Local State` gave
+/// us, and it is the only one that tells apart several profiles signed in to
+/// the same account — so a known directory is never swapped for an email
+/// match to another profile, and a directory under another root (Chrome Beta's
+/// `Default`) is a different profile.
+pub fn row_for_rule(rows: &[ProfileRow], hit: &RuleHit) -> Option<usize> {
+    if !hit.ambiguous.is_empty() || hit.dir.is_empty() || hit.root.is_none() {
+        return None;
+    }
+    rows.iter()
+        .position(|r| r.dir.as_deref() == Some(hit.dir.as_str()) && r.root == hit.root)
+}
+
+/// Who a running session is bound to, from its live relay row or its record.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BoundProfile {
+    pub relay_id: Option<String>,
+    pub root: Option<String>,
+    pub dir: Option<String>,
+    pub label: String,
+}
+
+impl BoundProfile {
+    pub fn from_row(row: &ProfileRow) -> Self {
+        Self {
+            relay_id: row.relay_id.clone(),
+            root: row.root.clone(),
+            dir: row.dir.clone(),
+            label: row.label(),
+        }
+    }
+
+    pub fn from_record(record: &Value) -> Self {
+        let s = |k: &str| record.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        Self {
+            relay_id: s("id"),
+            root: s("root"),
+            dir: s("dir"),
+            label: s("label").unwrap_or_else(|| "another profile".to_string()),
+        }
+    }
+
+    /// Is this `row`? `None` when there is not enough identity to tell — an
+    /// old record without the data root, a relay-only row — and the caller
+    /// refuses rather than guesses.
+    fn is_row(&self, row: &ProfileRow) -> Option<bool> {
+        if let (Some(a), Some(b)) = (self.relay_id.as_deref(), row.relay_id.as_deref()) {
+            return Some(a == b);
+        }
+        match (&self.root, &self.dir, &row.root, &row.dir) {
+            (Some(r1), Some(d1), Some(r2), Some(d2)) => Some(r1 == r2 && d1 == d2),
+            _ => None,
+        }
+    }
+}
+
+/// Where the session stands when the rule is consulted.
+#[derive(Debug, Clone, Copy)]
+pub enum SessionBinding<'a> {
+    /// No daemon yet: this command picks the session's profile.
+    New,
+    /// Running on the relay, bound to this profile. `None`: it is on the
+    /// relay but which profile is unknown — refused, never treated as "not
+    /// subject to rules". (Sessions off the relay never get here; see
+    /// [`decide_bound`].)
+    Bound(Option<&'a BoundProfile>),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum RuleDecision {
+    /// No rule applies, or the user chose explicitly; carry on as before.
+    NotApplicable,
+    /// Bind the new session to this (connected) row.
+    Use(usize),
+    /// The running session is already on the rule's profile.
+    AlreadyThere,
+    /// Stop: the rule's profile cannot be used here, and using another one
+    /// would be the wrong account.
+    Refuse(String),
+}
+
+const OVERRIDE_HINT: &str = "To open it somewhere else on purpose, pass --browser <profile> \
+                             or --no-choosebrowser.";
+
+/// The decision for one navigation. `explicit` is true when the user already
+/// named the profile some other way (`--browser`, `--profile`, `--cdp`,
+/// `--provider`, a config route) — those win over the rule, as before.
+pub fn decide_rule(
+    rows: &[ProfileRow],
+    hit: Option<&RuleHit>,
+    no_choosebrowser: bool,
+    explicit: bool,
+    binding: SessionBinding,
+    session: &str,
+) -> RuleDecision {
+    let Some(hit) = hit else {
+        return RuleDecision::NotApplicable;
+    };
+    if no_choosebrowser || explicit {
+        return RuleDecision::NotApplicable;
+    }
+    if !hit.ambiguous.is_empty() {
+        return RuleDecision::Refuse(format!(
+            "{} routes {} to Chrome profile key \"{}\", which matches {} profiles on this \
+             machine ({}), so nothing was opened — picking one would be a guess about which \
+             account the rule means. Point the rule at one profile in ChooseBrowser. \
+             {OVERRIDE_HINT}",
+            hit.rule(),
+            hit.host,
+            hit.key,
+            hit.ambiguous.len(),
+            hit.ambiguous.join(", "),
+        ));
+    }
+    let Some(i) = row_for_rule(rows, hit) else {
+        return RuleDecision::Refuse(format!(
+            "{} routes {} to Chrome profile directory \"{}\", which chrome-use cannot find \
+             among this machine's profiles, so nothing was opened (chrome-use does not \
+             substitute a different profile for the one a rule names). Check \
+             `chrome-use browsers`. {OVERRIDE_HINT}",
+            hit.rule(),
+            hit.host,
+            hit.dir
+        ));
+    };
+    let row = &rows[i];
+    let selector = suggested_selector(rows, i);
+    match binding {
+        SessionBinding::New => {
+            if row.connected() {
+                RuleDecision::Use(i)
+            } else {
+                RuleDecision::Refuse(format!(
+                    "{} routes {} to Chrome profile {}, which is not connected to chrome-use, \
+                     so nothing was opened (chrome-use does not substitute a different profile \
+                     for the one a rule names). Fix: {} {OVERRIDE_HINT}",
+                    hit.rule(),
+                    hit.host,
+                    row.label(),
+                    not_connected_message(&selector, row)
+                ))
+            }
+        }
+        SessionBinding::Bound(bound) => {
+            let same = bound.and_then(|b| b.is_row(row));
+            if same == Some(true) {
+                return RuleDecision::AlreadyThere;
+            }
+            let connect_first = if row.connected() {
+                String::new()
+            } else {
+                format!(
+                    " That profile is not connected yet either: {}",
+                    not_connected_message(&selector, row)
+                )
+            };
+            let Some(bound) = bound.filter(|_| same.is_some()) else {
+                return RuleDecision::Refuse(format!(
+                    "{} routes {} to Chrome profile {}, but chrome-use cannot tell which \
+                     profile session \"{session}\" is bound to, so nothing was opened. Open it \
+                     in a new session, which picks the rule's profile: add --session \
+                     <new-name>.{connect_first} Or pass --no-choosebrowser to open it in this \
+                     session anyway.",
+                    hit.rule(),
+                    hit.host,
+                    row.label(),
+                ));
+            };
+            RuleDecision::Refuse(format!(
+                "{} routes {} to Chrome profile {}, but session \"{session}\" is bound to {}, \
+                 so nothing was opened (a running session does not switch profiles). Open it in \
+                 a new session, which picks the rule's profile: add --session <new-name>.\
+                 {connect_first} Or pass --no-choosebrowser to open it in {} anyway.",
+                hit.rule(),
+                hit.host,
+                row.label(),
+                bound.label,
+                bound.label,
+            ))
+        }
+    }
+}
+
+/// One command (a `batch`) whose navigations fall under rules naming
+/// different profiles cannot run in one session without opening some of them
+/// in the wrong account. Refused up front, before anything opens.
+pub fn conflicting_rules(hits: &[RuleHit]) -> Option<String> {
+    let first = hits.first()?;
+    if hits.iter().all(|h| h.target() == first.target()) {
+        return None;
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for h in hits {
+        let target = if h.ambiguous.is_empty() {
+            h.dir.clone()
+        } else {
+            format!("key \"{}\"", h.key)
+        };
+        let rule = h
+            .rule_id
+            .as_deref()
+            .map(|r| format!(" (rule {r})"))
+            .unwrap_or_default();
+        let line = format!("{}{rule} → {target}", h.host);
+        if !seen.contains(&line) {
+            seen.push(line);
+        }
+    }
+    Some(format!(
+        "this command opens sites that ChooseBrowser rules send to different Chrome profiles \
+         ({}), and one session is bound to one profile, so nothing was run. Split it into one \
+         --session per profile, or pass --no-choosebrowser to run it all in one profile.",
+        seen.join("; ")
+    ))
+}
+
+/// Join a note onto a response's `warning` without dropping one already there
+/// (the newline-joined shape the daemon uses).
+pub fn merge_warning(existing: Option<&str>, note: &str) -> String {
+    match existing.filter(|e| !e.is_empty()) {
+        Some(e) => format!("{note}\n{e}"),
+        None => note.to_string(),
+    }
+}
+
+/// The http(s) url a navigation target means, for the rule lookup; `None` for
+/// anything a site rule cannot be about (`about:`, `data:`, `file:`, …). A
+/// bare host gets `https://`, the way `open` treats it, so `claude.ai`,
+/// `localhost:8080` and `[::1]:3000` are all looked up as sites.
+pub fn guard_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let lower = raw.to_ascii_lowercase();
+    let candidate = if lower.starts_with("http://") || lower.starts_with("https://") {
+        raw.to_string()
+    } else if lower.contains("://")
+        || [
+            "about:",
+            "data:",
+            "file:",
+            "javascript:",
+            "blob:",
+            "chrome:",
+        ]
+        .iter()
+        .any(|p| lower.starts_with(p))
+    {
+        return None;
+    } else {
+        format!("https://{raw}")
+    };
+    let u = url::Url::parse(&candidate).ok()?;
+    u.host_str()?;
+    Some(u.to_string())
+}
+
+/// What the daemon knows about the profile its session drives.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BoundState {
+    /// The live relay row for its endpoint, or the session record.
+    Known(BoundProfile),
+    /// It drives a relay endpoint, but no row or record says which profile.
+    /// Rules still apply — and refuse, since the profile cannot be matched.
+    UnknownRelay,
+    /// Not a relay endpoint (a `--launch` or `--cdp` browser), or no browser
+    /// yet. No ChooseBrowser rule is about it.
+    NotRelay,
+}
+
+/// Pure: classify the session from its endpoint, the relay rows, its record
+/// and every endpoint the relay has published.
+pub fn bound_state(
+    rows: &[ProfileRow],
+    bound_ws: Option<&str>,
+    record: Option<&Value>,
+    relay_endpoints: &[String],
+) -> BoundState {
+    if let Some(row) = bound_ws.and_then(|ws| rows.iter().find(|r| r.ws.as_deref() == Some(ws))) {
+        return BoundState::Known(BoundProfile::from_row(row));
+    }
+    if let Some(record) = record {
+        return BoundState::Known(BoundProfile::from_record(record));
+    }
+    match bound_ws {
+        Some(ws) if relay_endpoints.iter().any(|e| e == ws) => BoundState::UnknownRelay,
+        _ => BoundState::NotRelay,
+    }
+}
+
+/// The daemon-side guard: right before a navigation is sent, whatever asked
+/// for it. `Err` refuses with the message; `Ok(Some)` is a warning to attach.
+/// `bound_ws` is the endpoint the session's browser is connected to (`None`
+/// before any browser).
+pub fn guard_navigation(
+    url: &str,
+    skip: bool,
+    bound_ws: Option<&str>,
+    session: &str,
+) -> Result<Option<String>, String> {
+    if skip {
+        return Ok(None);
+    }
+    check_bound_navigation(url, session, |rows| {
+        bound_state(
+            rows,
+            bound_ws,
+            session_profile(session).as_ref(),
+            &crate::connect::relay_endpoints(),
+        )
+    })
+}
+
+/// The url a command sent to the daemon navigates to, if it navigates.
+pub fn navigation_target(cmd: &Value) -> Option<&str> {
+    match cmd.get("action")?.as_str()? {
+        "navigate" | "tab_new" | "a11y" => cmd.get("url")?.as_str(),
+        _ => None,
+    }
+}
+
+/// The client-side guard, in `send_command`: the same check, run before the
+/// command leaves the CLI, against the session's recorded profile. A session
+/// with no record (a `--launch` or `--cdp` session, or one whose profile the
+/// CLI could not place) is left to the daemon, which knows its live endpoint.
+/// Stale-rule warnings are left to the daemon too, so they are said once.
+pub fn guard_outgoing(cmd: &Value, session: &str, skip: bool) -> Result<(), String> {
+    if skip {
+        return Ok(());
+    }
+    let Some(url) = navigation_target(cmd) else {
+        return Ok(());
+    };
+    let Some(record) = session_profile(session) else {
+        return Ok(());
+    };
+    check_bound_navigation(url, session, |_| {
+        BoundState::Known(BoundProfile::from_record(&record))
+    })
+    .map(|_| ())
+}
+
+/// Shared by both guards: does a running session's profile match the rule
+/// covering `url`? `Err` refuses; `Ok(Some)` warns.
+fn check_bound_navigation(
+    url: &str,
+    session: &str,
+    bound: impl FnOnce(&[ProfileRow]) -> BoundState,
+) -> Result<Option<String>, String> {
+    let Some(url) = guard_url(url) else {
+        return Ok(None);
+    };
+    if load_profiles_config()
+        .and_then(|cfg| choose_route(&cfg, &url))
+        .is_some()
+    {
+        return Ok(None);
+    }
+    let hit = match rule_outcome_for_url(&url) {
+        RuleOutcome::None => return Ok(None),
+        RuleOutcome::Stale(w) => return Ok(Some(w)),
+        RuleOutcome::Hit(h) => h,
+    };
+    let rows = load_rows();
+    match decide_bound(&rows, &hit, bound(&rows), session) {
+        RuleDecision::Refuse(msg) => Err(msg),
+        _ => Ok(None),
+    }
+}
+
+/// Pure: the decision for a running session in `state`. A relay session
+/// whose profile is unknown goes in as `Bound(None)` and is refused; only a
+/// session that is not on the relay at all is outside the rules.
+pub fn decide_bound(
+    rows: &[ProfileRow],
+    hit: &RuleHit,
+    state: BoundState,
+    session: &str,
+) -> RuleDecision {
+    let bound = match state {
+        BoundState::NotRelay => return RuleDecision::NotApplicable,
+        BoundState::UnknownRelay => None,
+        BoundState::Known(b) => Some(b),
+    };
+    decide_rule(
+        rows,
+        Some(hit),
+        false,
+        false,
+        SessionBinding::Bound(bound.as_ref()),
+        session,
+    )
 }
 
 // --- Per-session record ------------------------------------------------------
@@ -1509,5 +2018,429 @@ mod tests {
             profile_line(&v),
             "profile: Davian (Profile 14, davian@gmail.com) — --browser"
         );
+    }
+
+    // --- ChooseBrowser rule decisions --------------------------------------
+
+    fn hit(dir: &str, email: Option<&str>) -> RuleHit {
+        RuleHit {
+            host: "claude.ai".to_string(),
+            rule_id: Some("rule-7".to_string()),
+            key: "gaia-x".to_string(),
+            root: Some("/root".to_string()),
+            dir: dir.to_string(),
+            email: email.map(str::to_string),
+            ambiguous: Vec::new(),
+        }
+    }
+
+    fn at(rows: &[ProfileRow], dir: &str) -> usize {
+        rows.iter()
+            .position(|r| r.dir.as_deref() == Some(dir))
+            .unwrap()
+    }
+
+    fn record(row: &ProfileRow) -> Value {
+        let mut v = row.to_json();
+        v["label"] = json!(row.label());
+        v
+    }
+
+    fn refusal(d: RuleDecision) -> String {
+        match d {
+            RuleDecision::Refuse(msg) => msg,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_stale_rule_warning_names_the_rule_and_says_the_profile_is_gone() {
+        let w = stale_rule_warning(
+            "claude.ai",
+            &crate::choosebrowser::ProfileChoice {
+                key: "1234567890".to_string(),
+                rule_id: Some("rule-7".to_string()),
+            },
+        );
+        for want in [
+            "ChooseBrowser rule (rule-7)",
+            "claude.ai",
+            "\"1234567890\"",
+            "no longer exists on this machine",
+            "ignored",
+        ] {
+            assert!(w.contains(want), "missing {want:?} in: {w}");
+        }
+    }
+
+    #[test]
+    fn a_rule_whose_profile_is_connected_binds_a_new_session_to_it() {
+        let r = rows();
+        let d = decide_rule(
+            &r,
+            Some(&hit("Profile 14", Some("davian@gmail.com"))),
+            false,
+            false,
+            SessionBinding::New,
+            "s",
+        );
+        assert_eq!(d, RuleDecision::Use(at(&r, "Profile 14")));
+    }
+
+    /// The reported bug: the rule's profile was not connected and the url
+    /// quietly opened in another one. Now it refuses and names the fix.
+    #[test]
+    fn a_rule_whose_profile_is_not_connected_refuses_instead_of_substituting() {
+        let r = rows();
+        let msg = refusal(decide_rule(
+            &r,
+            Some(&hit("Profile 13", Some("dora@gmail.com"))),
+            false,
+            false,
+            SessionBinding::New,
+            "s",
+        ));
+        for want in [
+            "rule-7",
+            "claude.ai",
+            "dora",
+            "not connected",
+            "chrome-use connect --browser dora",
+            "ask the user",
+            "--browser <profile>",
+            "--no-choosebrowser",
+        ] {
+            assert!(msg.contains(want), "missing {want:?} in: {msg}");
+        }
+    }
+
+    #[test]
+    fn explicit_choices_and_no_choosebrowser_and_no_rule_leave_selection_alone() {
+        let r = rows();
+        let h = hit("Profile 13", Some("dora@gmail.com"));
+        for (no_cb, explicit) in [(true, false), (false, true), (true, true)] {
+            assert_eq!(
+                decide_rule(&r, Some(&h), no_cb, explicit, SessionBinding::New, "s"),
+                RuleDecision::NotApplicable
+            );
+        }
+        let leo = BoundProfile::from_row(&r[at(&r, "Default")]);
+        assert_eq!(
+            decide_rule(
+                &r,
+                Some(&h),
+                true,
+                false,
+                SessionBinding::Bound(Some(&leo)),
+                "s"
+            ),
+            RuleDecision::NotApplicable
+        );
+        assert_eq!(
+            decide_rule(&r, None, false, false, SessionBinding::New, "s"),
+            RuleDecision::NotApplicable
+        );
+    }
+
+    #[test]
+    fn a_session_bound_to_another_profile_refuses_the_rules_site() {
+        let r = rows();
+        let leo = BoundProfile::from_row(&r[at(&r, "Default")]);
+        let msg = refusal(decide_rule(
+            &r,
+            Some(&hit("Profile 14", Some("davian@gmail.com"))),
+            false,
+            false,
+            SessionBinding::Bound(Some(&leo)),
+            "work",
+        ));
+        for want in [
+            "Davian",
+            "session \"work\" is bound to Leo",
+            "--session <new-name>",
+            "--no-choosebrowser to open it in Leo",
+        ] {
+            assert!(msg.contains(want), "missing {want:?} in: {msg}");
+        }
+        // Davian is connected, so there is nothing to connect first.
+        assert!(!msg.contains("chrome-use connect"), "{msg}");
+    }
+
+    #[test]
+    fn a_bound_session_on_an_unconnected_rule_profile_also_says_to_connect_it() {
+        let r = rows();
+        let leo = BoundProfile::from_record(&record(&r[at(&r, "Default")]));
+        let msg = refusal(decide_rule(
+            &r,
+            Some(&hit("Profile 13", None)),
+            false,
+            false,
+            SessionBinding::Bound(Some(&leo)),
+            "s",
+        ));
+        assert!(msg.contains("chrome-use connect --browser dora"), "{msg}");
+        assert!(msg.contains("--session"), "{msg}");
+    }
+
+    #[test]
+    fn a_session_already_on_the_rules_profile_proceeds() {
+        let r = rows();
+        let h = hit("Profile 14", None);
+        let live = BoundProfile::from_row(&r[at(&r, "Profile 14")]);
+        assert_eq!(
+            decide_rule(
+                &r,
+                Some(&h),
+                false,
+                false,
+                SessionBinding::Bound(Some(&live)),
+                "s"
+            ),
+            RuleDecision::AlreadyThere
+        );
+        // The session record carries the data root, so it identifies the
+        // profile even without a relay id.
+        let rec = BoundProfile::from_record(&record(&r[at(&r, "Profile 14")]));
+        assert_eq!(rec.root.as_deref(), Some("/root"));
+        let by_dir = BoundProfile {
+            relay_id: None,
+            ..rec
+        };
+        assert_eq!(
+            decide_rule(
+                &r,
+                Some(&h),
+                false,
+                false,
+                SessionBinding::Bound(Some(&by_dir)),
+                "s"
+            ),
+            RuleDecision::AlreadyThere
+        );
+    }
+
+    /// Too little identity to tell is a refusal, never a guess: a pre-root
+    /// record (directory only), or no record at all on a relay session.
+    #[test]
+    fn a_session_whose_profile_cannot_be_identified_refuses() {
+        let r = rows();
+        let h = hit("Profile 14", None);
+        let old = BoundProfile::from_record(&json!({"dir": "Profile 14", "label": "Davian"}));
+        // Davian's row has a relay id but the old record has none, and the
+        // record has no root to compare by directory.
+        let msg = refusal(decide_rule(
+            &r,
+            Some(&h),
+            false,
+            false,
+            SessionBinding::Bound(Some(&old)),
+            "s",
+        ));
+        assert!(msg.contains("cannot tell which profile"), "{msg}");
+        let msg = refusal(decide_rule(
+            &r,
+            Some(&h),
+            false,
+            false,
+            SessionBinding::Bound(None),
+            "s",
+        ));
+        assert!(msg.contains("cannot tell which profile"), "{msg}");
+    }
+
+    /// The review's example: a session bound to Chrome Beta's `Default` must
+    /// not count as being on Stable's `Default` just because the directory
+    /// names agree.
+    #[test]
+    fn the_same_directory_under_another_data_root_is_another_profile() {
+        let stable = ProfileRow {
+            name: Some("Leo".into()),
+            dir: Some("Default".into()),
+            root: Some("/stable".into()),
+            has_extension: true,
+            ..Default::default()
+        };
+        let beta = ProfileRow {
+            name: Some("Beta".into()),
+            dir: Some("Default".into()),
+            root: Some("/beta".into()),
+            relay_id: Some("beta-id".into()),
+            ws: Some("ws://beta".into()),
+            has_extension: true,
+            ..Default::default()
+        };
+        let rows = vec![stable, beta.clone()];
+        let mut h = hit("Default", None);
+        h.root = Some("/stable".into());
+        assert_eq!(row_for_rule(&rows, &h), Some(0));
+        for bound in [
+            BoundProfile::from_row(&beta),
+            BoundProfile::from_record(&record(&beta)),
+        ] {
+            let msg = refusal(decide_rule(
+                &rows,
+                Some(&h),
+                false,
+                false,
+                SessionBinding::Bound(Some(&bound)),
+                "s",
+            ));
+            assert!(msg.contains("is bound to Beta"), "{msg}");
+        }
+    }
+
+    /// The rule names a directory under one data root; nothing else stands
+    /// in for it — not an email match to another directory, not the same
+    /// directory under another root.
+    #[test]
+    fn the_rules_profile_is_matched_by_directory_and_root_only() {
+        let r = rows();
+        assert_eq!(
+            row_for_rule(&r, &hit("Profile 7", Some("wind@gmail.com"))),
+            Some(at(&r, "Profile 7"))
+        );
+        assert_eq!(
+            row_for_rule(&r, &hit("Profile 12", Some("wind@gmail.com"))),
+            Some(at(&r, "Profile 12"))
+        );
+        // A unique email elsewhere does not substitute for a missing dir.
+        let elsewhere = hit("Profile 99", Some("dora@gmail.com"));
+        assert_eq!(row_for_rule(&r, &elsewhere), None);
+        let msg = refusal(decide_rule(
+            &r,
+            Some(&elsewhere),
+            false,
+            false,
+            SessionBinding::New,
+            "s",
+        ));
+        assert!(msg.contains("cannot find"), "{msg}");
+        let mut beta = hit("Profile 14", None);
+        beta.root = Some("/beta-root".to_string());
+        assert_eq!(row_for_rule(&r, &beta), None);
+        let mut no_root = hit("Profile 14", None);
+        no_root.root = None;
+        assert_eq!(row_for_rule(&r, &no_root), None);
+    }
+
+    /// The whole chain — rules file → portable key → Local State → RuleHit →
+    /// decision — with keys that fit one profile and keys that fit several.
+    #[test]
+    fn the_chain_from_portable_key_refuses_an_ambiguous_key() {
+        use crate::choosebrowser::lookup_in;
+        let rules = r#"{"version":2,"rules":[
+            {"ruleId":"by-gaia","match":{"domain":"claude.ai"},
+             "action":{"bundleIdentifier":"com.google.Chrome::profile::555"}},
+            {"ruleId":"by-name","match":{"domain":"x.com"},
+             "action":{"bundleIdentifier":"com.google.Chrome::profile::Twin"}},
+            {"ruleId":"unique","match":{"domain":"github.com"},
+             "action":{"bundleIdentifier":"com.google.Chrome::profile::777"}}]}"#;
+        // One account signed in to two profiles (same gaia id), and two
+        // profiles with the same display name.
+        let ls = r#"{"profile":{"info_cache":{
+            "Profile 1":{"gaia_id":"555","user_name":"a@x.com","name":"Twin"},
+            "Profile 2":{"gaia_id":"555","user_name":"a@x.com","name":"Twin"},
+            "Profile 3":{"gaia_id":"777","user_name":"b@x.com","name":"Solo"}}}}"#;
+        let outcome =
+            |url: &str| rule_outcome(lookup_in(Some(rules), Some(ls), url), url, Some("/root"));
+
+        for url in ["https://claude.ai/new", "https://x.com/home"] {
+            let RuleOutcome::Hit(h) = outcome(url) else {
+                panic!("expected a hit for {url}");
+            };
+            assert_eq!(h.ambiguous, vec!["Profile 1", "Profile 2"], "{url}");
+            let msg = refusal(decide_rule(
+                &[],
+                Some(&h),
+                false,
+                false,
+                SessionBinding::New,
+                "s",
+            ));
+            assert!(msg.contains("matches 2 profiles"), "{msg}");
+            assert!(msg.contains("Profile 1, Profile 2"), "{msg}");
+        }
+
+        let RuleOutcome::Hit(h) = outcome("https://github.com/x") else {
+            panic!("expected a hit");
+        };
+        assert!(h.ambiguous.is_empty());
+        assert_eq!(h.dir, "Profile 3");
+        assert_eq!(h.root.as_deref(), Some("/root"));
+        assert_eq!(h.email.as_deref(), Some("b@x.com"));
+
+        assert_eq!(outcome("https://example.org/"), RuleOutcome::None);
+        let stale_rules = r#"{"version":2,"rules":[{"ruleId":"gone","match":{"domain":"a.io"},
+             "action":{"bundleIdentifier":"com.google.Chrome::profile::999"}}]}"#;
+        let url = "https://a.io/";
+        assert!(matches!(
+            rule_outcome(lookup_in(Some(stale_rules), Some(ls), url), url, Some("/root")),
+            RuleOutcome::Stale(ref w) if w.contains("(gone)")
+        ));
+    }
+
+    /// A known relay endpoint with no identity is not "off the relay": it is
+    /// refused. Only an endpoint the relay never published is outside rules.
+    #[test]
+    fn a_known_relay_with_unknown_identity_is_refused_not_skipped() {
+        let r = rows();
+        let relays = vec!["ws://generic".to_string()];
+        let h = hit("Profile 14", None);
+
+        let state = bound_state(&r, Some("ws://generic"), None, &relays);
+        assert_eq!(state, BoundState::UnknownRelay);
+        let msg = refusal(decide_bound(&r, &h, state, "s"));
+        assert!(msg.contains("cannot tell which profile"), "{msg}");
+        let mut amb = hit("", None);
+        amb.ambiguous = vec!["Profile 3".into(), "Profile 4".into()];
+        let msg = refusal(decide_bound(&r, &amb, BoundState::UnknownRelay, "s"));
+        assert!(msg.contains("matches 2 profiles"), "{msg}");
+
+        // Not published by the relay (a --launch / --cdp browser), or no
+        // browser yet: outside the rules.
+        assert_eq!(
+            bound_state(&r, Some("ws://launched"), None, &relays),
+            BoundState::NotRelay
+        );
+        assert_eq!(bound_state(&r, None, None, &relays), BoundState::NotRelay);
+        assert_eq!(
+            decide_bound(&r, &h, BoundState::NotRelay, "s"),
+            RuleDecision::NotApplicable
+        );
+
+        // A relay row for the endpoint identifies it; failing that, a record.
+        let live = bound_state(&r, Some("ws://b"), None, &relays);
+        assert_eq!(decide_bound(&r, &h, live, "s"), RuleDecision::AlreadyThere);
+        let rec = record(&r[at(&r, "Default")]);
+        let from_rec = bound_state(&r, Some("ws://generic"), Some(&rec), &relays);
+        assert!(
+            matches!(from_rec, BoundState::Known(ref b) if b.dir.as_deref() == Some("Default"))
+        );
+    }
+
+    #[test]
+    fn a_batch_whose_sites_need_different_profiles_is_refused() {
+        let a = hit("Profile 14", None);
+        let mut b = hit("Profile 13", None);
+        b.host = "github.com".into();
+        assert_eq!(conflicting_rules(&[]), None);
+        assert_eq!(conflicting_rules(&[a.clone(), a.clone()]), None);
+        let msg = conflicting_rules(&[a, b]).unwrap();
+        assert!(
+            msg.contains("claude.ai (rule rule-7) → Profile 14"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("github.com (rule rule-7) → Profile 13"),
+            "{msg}"
+        );
+        assert!(msg.contains("--session"), "{msg}");
+    }
+
+    #[test]
+    fn merge_warning_keeps_an_existing_warning() {
+        assert_eq!(merge_warning(None, "a"), "a");
+        assert_eq!(merge_warning(Some(""), "a"), "a");
+        assert_eq!(merge_warning(Some("b"), "a"), "a\nb");
     }
 }

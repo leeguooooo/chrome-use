@@ -109,7 +109,11 @@
         </div>
         <div class="du-card">
           <div class="du-card-title"><span class="du-card-ico">🔍</span> doctor 认得它</div>
-          <p><code>chrome-use doctor</code> 报告装的是哪个版本，以及规则是否可读。需要 ChooseBrowser 0.2.1 或更高。</p>
+          <p><code>chrome-use doctor</code> 报告装的是哪个版本、规则是否可读，并逐条列出每条规则指向的 profile 是否已连接。需要 ChooseBrowser 0.2.1 或更高。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title">不会开错账号</div>
+          <p>规则指向的 profile 没连上，或当前 session 绑在别的 profile 上时，命令直接失败并给出修法（<code>connect --browser</code>、新的 <code>--session</code> 或 <code>--no-choosebrowser</code>），不会悄悄换一个 profile 打开。</p>
         </div>
       </div>
 
@@ -130,7 +134,7 @@
           <p>同一网站反复选同一个浏览器，它就排到最前，并显示原因。<code>⌘1</code>–<code>⌘9</code> 直接开，<code>⌘C</code> 只复制链接。</p>
         </div>
         <div class="du-card">
-          <div class="du-card-title"><span class="du-card-ico">🔒</span> 无账号、无跟踪、无统计</div>
+          <div class="du-card-title">无账号、无跟踪、无统计</div>
           <p>规则和偏好只在这台 Mac 上。想要多台同步，走你自己的 iCloud，可选。</p>
         </div>
       </div>

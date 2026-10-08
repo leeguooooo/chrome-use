@@ -3,17 +3,17 @@
 /**
  * Postinstall script for chrome-use
  * 
- * Downloads the platform-specific native binary if not present.
+ * Verifies that the platform-specific native binary is present.
+ * If missing, outputs installer guidance.
  * On global installs, patches npm's bin entry to use the native binary directly:
  * - Windows: Overwrites .cmd/.ps1 shims
  * - Mac/Linux: Replaces symlink to point to native binary
  */
 
-import { existsSync, mkdirSync, chmodSync, createWriteStream, unlinkSync, writeFileSync, symlinkSync, lstatSync } from 'fs';
+import { existsSync, mkdirSync, chmodSync, writeFileSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, arch } from 'os';
-import { get } from 'https';
 import { execSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -38,48 +38,6 @@ const ext = platform() === 'win32' ? '.exe' : '';
 const binaryName = `chrome-use-${platformKey}${ext}`;
 const binaryPath = join(binDir, binaryName);
 
-// Package info
-const packageJson = JSON.parse(
-  (await import('fs')).readFileSync(join(projectRoot, 'package.json'), 'utf8')
-);
-const version = packageJson.version;
-
-// GitHub release URL
-const GITHUB_REPO = 'vercel-labs/agent-browser';
-const DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${binaryName}`;
-
-async function downloadFile(url, dest) {
-  return new Promise((resolve, reject) => {
-    const file = createWriteStream(dest);
-    
-    const request = (url) => {
-      get(url, (response) => {
-        // Handle redirects
-        if (response.statusCode === 301 || response.statusCode === 302) {
-          request(response.headers.location);
-          return;
-        }
-        
-        if (response.statusCode !== 200) {
-          reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
-          return;
-        }
-        
-        response.pipe(file);
-        file.on('finish', () => {
-          file.close();
-          resolve();
-        });
-      }).on('error', (err) => {
-        unlinkSync(dest);
-        reject(err);
-      });
-    };
-    
-    request(url);
-  });
-}
-
 /**
  * Detect which package manager ran this postinstall and write a marker file
  * next to the binary so `chrome-use upgrade` can use the correct one
@@ -98,6 +56,9 @@ function writeInstallMethod() {
 
   if (method) {
     try {
+      if (!existsSync(binDir)) {
+        mkdirSync(binDir, { recursive: true });
+      }
       writeFileSync(join(binDir, '.install-method'), method);
     } catch {
       // Non-critical — upgrade will fall back to heuristics
@@ -123,35 +84,19 @@ async function main() {
     return;
   }
 
-  // Ensure bin directory exists
-  if (!existsSync(binDir)) {
-    mkdirSync(binDir, { recursive: true });
-  }
-
-  console.log(`Downloading native binary for ${platformKey}...`);
-  console.log(`URL: ${DOWNLOAD_URL}`);
-
-  try {
-    await downloadFile(DOWNLOAD_URL, binaryPath);
-
-    // Make executable on Unix
-    if (platform() !== 'win32') {
-      chmodSync(binaryPath, 0o755);
-    }
-
-    console.log(`✓ Downloaded native binary: ${binaryName}`);
-  } catch (err) {
-    console.log(`Could not download native binary: ${err.message}`);
-    console.log('');
-    console.log('Install the published CLI with the GitHub Release installer:');
-    console.log('  curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh');
-    console.log('For a source checkout, configure an SSH build host and run pnpm build:native.');
-  }
+  console.log(`Native binary not found for ${platformKey} (${binaryName}).`);
+  console.log('');
+  console.log('Install the published CLI with the GitHub Release installer:');
+  console.log('  curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh');
+  console.log('');
+  console.log('On Windows (PowerShell):');
+  console.log('  irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex');
+  console.log('');
+  console.log('For a source checkout, configure an SSH build host and run pnpm build:native.');
 
   writeInstallMethod();
 
   // On global installs, fix npm's bin entry to use native binary directly
-  // This avoids the /bin/sh error on Windows and provides zero-overhead execution
   await fixGlobalInstallBin();
 
   showInstallReminder();
@@ -250,6 +195,10 @@ async function fixUnixSymlink() {
     }
   } catch {
     return; // Symlink doesn't exist, not a global install
+  }
+
+  if (!existsSync(binaryPath)) {
+    return;
   }
 
   // Replace symlink to point directly to native binary

@@ -1,5 +1,8 @@
 //! Live launch test: spawn a scratch daemon session, launch headless
 //! Chrome, navigate to `about:blank`, then close. Skipped under `--quick`.
+//! When the extension relay is up it probes the relay instead and launches
+//! nothing: that is the path chrome-use takes, and doctor must not start a
+//! browser the user did not ask for.
 //!
 //! A `LaunchGuard` Drop impl ensures the scratch session is closed and its
 //! sidecar files cleaned even on panic or early return.
@@ -32,6 +35,35 @@ pub(super) fn check(checks: &mut Vec<Check>) {
             Status::Info,
             "Skipped (AGENT_BROWSER_CDP is set; would attach to a real browser)",
         ));
+        return;
+    }
+
+    // With the extension relay up, chrome-use drives the user's own Chrome
+    // and never launches one, so a launch test would exercise a path the user
+    // does not take, and start a browser they never asked for (54 doctor
+    // launches with the relay up in one user's connect-mode.log). Check the
+    // path they do take instead: does the relay answer?
+    if crate::connect::relay_url().is_some() {
+        if crate::connect::relay_is_responsive() {
+            checks.push(Check::new(
+                "launch.relay",
+                category,
+                Status::Pass,
+                "Extension relay answered; chrome-use drives your own Chrome through it \
+                 (no browser launched for this check)",
+            ));
+        } else {
+            checks.push(
+                Check::new(
+                    "launch.relay",
+                    category,
+                    Status::Warn,
+                    "Extension relay is registered but did not answer within 10s \
+                     (no browser launched for this check)",
+                )
+                .with_fix("chrome-use extension connect   # or reload the ab-connect extension"),
+            );
+        }
         return;
     }
 
@@ -91,6 +123,15 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         no_auto_dialog: false,
     };
 
+    // `"headless": true` below is ignored unless the daemon has
+    // AGENT_BROWSER_ALLOW_HEADLESS (launches are headed by default for
+    // stealth), so this check used to open a visible Chrome window on the
+    // user's screen. Force the scratch daemon's environment to a windowless
+    // launch, overriding whatever the shell set (see `isolate_launch_env`).
+    // The daemon inherits this process's environment; every other check has
+    // finished by now, so nothing reads it concurrently.
+    apply_isolated_launch_env();
+
     let started = Instant::now();
     if let Err(e) = ensure_daemon(&session, &opts) {
         checks.push(
@@ -113,15 +154,42 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         "action": "launch",
         "headless": true,
     });
-    if let Err(e) = send_json(launch_cmd, &session) {
+    let headless = match send_command(launch_cmd, &session) {
+        Ok(resp) if resp.success => resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("headless"))
+            .and_then(Value::as_bool),
+        Ok(resp) => {
+            launch_failed(checks, resp.error.unwrap_or_else(|| "unknown error".into()));
+            return;
+        }
+        Err(e) => {
+            launch_failed(checks, e);
+            return;
+        }
+    };
+    // Verify the effect, not the request: the browser must have been spawned
+    // with `--headless` (its real argv, reported by the daemon). A visible
+    // window here is the bug this check used to be; the guard closes it.
+    if headless != Some(true) {
         checks.push(
             Check::new(
-                "launch.launch",
+                "launch.headless",
                 category,
                 Status::Fail,
-                format!("Browser launch failed: {}", e),
+                match headless {
+                    Some(false) => {
+                        "The test browser was started WITH a window (no --headless in its \
+                                    arguments); it was closed at once"
+                            .to_string()
+                    }
+                    _ => "Could not confirm the test browser was started headless; it was closed \
+                          at once"
+                        .to_string(),
+                },
             )
-            .with_fix("chrome-use install   # or check --debug output"),
+            .with_fix("chrome-use report --note \"doctor launch was not headless\""),
         );
         return;
     }
@@ -168,6 +236,18 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     }
 }
 
+fn launch_failed(checks: &mut Vec<Check>, e: String) {
+    checks.push(
+        Check::new(
+            "launch.launch",
+            "Launch test",
+            Status::Fail,
+            format!("Browser launch failed: {}", e),
+        )
+        .with_fix("chrome-use install   # or check --debug output"),
+    );
+}
+
 fn send_json(cmd: Value, session: &str) -> Result<(), String> {
     match send_command(cmd, session) {
         Ok(resp) => {
@@ -194,6 +274,28 @@ impl Drop for LaunchGuard {
     }
 }
 
+/// The environment the scratch daemon needs for a launch with no window:
+/// `Some(v)` to set, `None` to remove. Inherited values must not win:
+/// `AGENT_BROWSER_ALLOW_HEADLESS=0`, `AGENT_BROWSER_HEADED=1` or any
+/// `AGENT_BROWSER_EXTENSIONS` (extensions force a headed launch) would each
+/// put a visible window on the user's screen.
+fn isolate_launch_env() -> [(&'static str, Option<&'static str>); 3] {
+    [
+        ("AGENT_BROWSER_ALLOW_HEADLESS", Some("1")),
+        ("AGENT_BROWSER_HEADED", None),
+        ("AGENT_BROWSER_EXTENSIONS", None),
+    ]
+}
+
+fn apply_isolated_launch_env() {
+    for (key, value) in isolate_launch_env() {
+        match value {
+            Some(v) => env::set_var(key, v),
+            None => env::remove_var(key),
+        }
+    }
+}
+
 /// Lowercase base-36, for keeping generated session names short.
 fn to_base36(mut n: u128) -> String {
     const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
@@ -207,4 +309,68 @@ fn to_base36(mut n: u128) -> String {
     }
     out.reverse();
     String::from_utf8(out).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::cdp::chrome::{launch_args_for_test, launches_headless, LaunchOptions};
+    use crate::test_utils::EnvGuard;
+
+    /// The launch options the scratch daemon builds for doctor's
+    /// `{"action":"launch","headless":true}` (no extensions in the command),
+    /// plus any extensions the environment would still contribute.
+    fn doctor_launch_options() -> LaunchOptions {
+        LaunchOptions {
+            headless: true,
+            extensions: env::var("AGENT_BROWSER_EXTENSIONS")
+                .ok()
+                .map(|v| v.split(',').map(str::to_string).collect()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn doctor_launch_is_headless_whatever_the_shell_inherited() {
+        let vars = [
+            "AGENT_BROWSER_ALLOW_HEADLESS",
+            "AGENT_BROWSER_HEADED",
+            "AGENT_BROWSER_EXTENSIONS",
+        ];
+        let inherited: &[&[(&str, &str)]] = &[
+            &[],
+            &[("AGENT_BROWSER_ALLOW_HEADLESS", "0")],
+            &[("AGENT_BROWSER_ALLOW_HEADLESS", "false")],
+            &[("AGENT_BROWSER_HEADED", "1")],
+            &[("AGENT_BROWSER_EXTENSIONS", "/tmp/some-extension")],
+            &[
+                ("AGENT_BROWSER_ALLOW_HEADLESS", "0"),
+                ("AGENT_BROWSER_HEADED", "true"),
+                ("AGENT_BROWSER_EXTENSIONS", "/tmp/a,/tmp/b"),
+            ],
+        ];
+        for case in inherited {
+            let guard = EnvGuard::new(&vars);
+            for v in vars {
+                guard.remove(v);
+            }
+            for (k, v) in *case {
+                guard.set(k, v);
+            }
+            apply_isolated_launch_env();
+            let opts = doctor_launch_options();
+            let args = launch_args_for_test(&opts);
+            assert!(
+                args.iter().any(|a| a == "--headless=new"),
+                "{case:?}: doctor's launch must carry --headless=new, got {args:?}"
+            );
+            assert!(launches_headless(&opts), "{case:?}");
+            assert!(
+                env::var_os("AGENT_BROWSER_EXTENSIONS").is_none(),
+                "{case:?}"
+            );
+            assert!(env::var_os("AGENT_BROWSER_HEADED").is_none(), "{case:?}");
+            drop(guard);
+        }
+    }
 }
