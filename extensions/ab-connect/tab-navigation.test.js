@@ -49,6 +49,21 @@ test('browser fallback is limited to top-level navigation', () => {
   assert.equal(canUseBrowserNavigationFallback('Runtime.evaluate', {}, null), false)
 })
 
+test('a navigation with a referrer stays on CDP, which can send it (#468)', () => {
+  assert.equal(
+    canUseBrowserNavigationFallback(
+      'Page.navigate',
+      { url: 'https://b.test/', referrer: 'https://a.test/', referrerPolicy: 'origin' },
+      null,
+    ),
+    false,
+  )
+  assert.equal(
+    canUseBrowserNavigationFallback('Page.navigate', { url: 'https://b.test/', referrer: '' }, null),
+    true,
+  )
+})
+
 test('browser API rejection falls back to Page.navigate', async () => {
   const { calls, deps } = fixture({
     updateTab: async () => {

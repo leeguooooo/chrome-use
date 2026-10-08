@@ -1,9 +1,15 @@
 // Testable navigation recovery for the extension relay. The service worker
 // supplies Chrome adapters; tests supply deterministic fakes at the same edge.
 
-/** Return whether a Page.navigate request targets the top-level Chrome tab. */
+/**
+ * Return whether a Page.navigate request targets the top-level Chrome tab and
+ * can go through `chrome.tabs.update`. A navigation that carries a referrer
+ * (chrome-use opening a `target=_blank` link in a background tab, #468) keeps
+ * CDP: `chrome.tabs.update` has no way to send one.
+ */
 export function canUseBrowserNavigationFallback(method, params, childSessionId) {
-  return method === 'Page.navigate' && !childSessionId && params?.frameId == null
+  const hasReferrer = typeof params?.referrer === 'string' && params.referrer !== ''
+  return method === 'Page.navigate' && !childSessionId && params?.frameId == null && !hasReferrer
 }
 
 /**

@@ -2381,6 +2381,16 @@ impl BrowserManager {
         self.agent_group().is_some()
     }
 
+    /// Whether a click here may take over a `target=_blank` link and open it
+    /// in a background tab of this session (#468): only on the relay (the
+    /// user's own Chrome), and only in a tab the session created. A link in a
+    /// user tab taken with `tab adopt` opens the user's tab, as before (#460).
+    pub fn click_may_open_links_itself(&self) -> bool {
+        self.browser_process.is_none()
+            && self.on_relay()
+            && clicked_tab_is_created(self.active_target_id().ok(), &self.created_targets)
+    }
+
     /// Non-destructive recovery for a stale relay session (OAuth-popup logins,
     /// issue #58). On the extension relay a cross-process navigation (an OAuth/SSO
     /// redirect, `display=popup` + `response_mode=form_post`) can swap the renderer
@@ -2437,6 +2447,26 @@ impl BrowserManager {
     }
 
     pub async fn navigate(&mut self, url: &str, wait_until: WaitUntil) -> Result<Value, String> {
+        self.navigate_from(url, wait_until, None).await
+    }
+
+    /// [`navigate`](Self::navigate) as if a link on `referrer.0` had been
+    /// followed: `Page.navigate` carries the referrer, its policy and the
+    /// `link` transition. Over the relay a navigation with a referrer goes
+    /// through CDP rather than `chrome.tabs.update`, which has no referrer
+    /// (ab-connect 0.5.31; an older extension drops the referrer).
+    pub async fn navigate_from(
+        &mut self,
+        url: &str,
+        wait_until: WaitUntil,
+        referrer: Option<(String, &'static str)>,
+    ) -> Result<Value, String> {
+        let nav_params = || PageNavigateParams {
+            url: url.to_string(),
+            referrer: referrer.as_ref().map(|r| r.0.clone()),
+            referrer_policy: referrer.as_ref().map(|r| r.1.to_string()),
+            transition_type: referrer.as_ref().map(|_| "link".to_string()),
+        };
         // Refuse privileged Chrome pages on the relay BEFORE navigating (#213).
         // The extension cannot attach a debugger to chrome:// / chrome-extension://
         // / devtools://, so driving the session tab there did not fail — it
@@ -2476,14 +2506,7 @@ impl BrowserManager {
 
         let nav_result: PageNavigateResult = match self
             .client
-            .send_command_typed(
-                "Page.navigate",
-                &PageNavigateParams {
-                    url: url.to_string(),
-                    referrer: None,
-                },
-                Some(&session_id),
-            )
+            .send_command_typed("Page.navigate", &nav_params(), Some(&session_id))
             .await
         {
             Ok(r) => r,
@@ -2519,14 +2542,7 @@ impl BrowserManager {
                 }
                 lifecycle_rx = self.client.subscribe();
                 self.client
-                    .send_command_typed(
-                        "Page.navigate",
-                        &PageNavigateParams {
-                            url: url.to_string(),
-                            referrer: None,
-                        },
-                        Some(&session_id),
-                    )
+                    .send_command_typed("Page.navigate", &nav_params(), Some(&session_id))
                     .await?
             }
             // The `Page.navigate` CDP command itself timed out (issue #126). On a

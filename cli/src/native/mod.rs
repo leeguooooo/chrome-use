@@ -32,6 +32,7 @@ pub mod network;
 mod observation;
 #[allow(dead_code)]
 pub mod policy;
+pub mod popup_guard;
 pub mod progress;
 #[allow(dead_code)]
 pub mod providers;
