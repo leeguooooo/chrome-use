@@ -51,18 +51,47 @@ export function migratePopupRecord(popups, recentlyRemoved, removedTabId, addedT
  * tab as the opener). `allTabs` is chrome.tabs.query({}).
  */
 export function isVerifiedAgentPopup(tab, allTabs, isAgentTab) {
-  if (!tab || !Number.isInteger(tab.id)) return false
+  // Unknown is never "no user tabs": a tab list that could not be read, or
+  // tab data with holes or contradictions, refuses.
+  if (!tab || !Number.isInteger(tab.id) || !Number.isInteger(tab.windowId)) return false
+  if (!Array.isArray(allTabs)) return false
+  for (const t of allTabs) {
+    if (!t || !Number.isInteger(t.id) || !Number.isInteger(t.windowId)) return false
+  }
+  const self = allTabs.filter((t) => t.id === tab.id)
+  if (self.length !== 1 || self[0].windowId !== tab.windowId) return false
+  if (tab.groupId != null && self[0].groupId != null && self[0].groupId !== tab.groupId) return false
   // Chrome names the window's FRONT tab as opener (and uses its group) when
   // the click landed in a background tab. In a window that also holds a user
   // tab, a pop-up the user's tab opened therefore looks like ours. Only a
   // window holding nothing but agent tabs makes opener and group trustworthy.
-  const sameWindow = (allTabs || []).filter((t) => t && t.id !== tab.id && t.windowId === tab.windowId)
+  const sameWindow = allTabs.filter((t) => t.id !== tab.id && t.windowId === tab.windowId)
   if (sameWindow.some((t) => !isAgentTab(t.id))) return false
   if (tab.openerTabId != null && isAgentTab(tab.openerTabId)) return true
   if (!Number.isInteger(tab.groupId) || tab.groupId === -1) return false
-  return (allTabs || []).some(
-    (t) => t && t.id !== tab.id && t.groupId === tab.groupId && isAgentTab(t.id),
-  )
+  return allTabs.some((t) => t.id !== tab.id && t.groupId === tab.groupId && isAgentTab(t.id))
+}
+
+/**
+ * After ABExt.attachTabById attached a tab, decide whether it is recorded as an
+ * agent pop-up and say so in `result.agentPopup` (the daemon upgrades the tab
+ * to session-created only on `true`). A failed read is unknown: `false`, and
+ * nothing is recorded.
+ *
+ * deps: { getTab(id), queryAll(), isAgentTab(id), mark(id) }
+ */
+export async function confirmAttachedPopup(result, deps) {
+  if (!result || result.attached !== true) return result
+  const tab = await Promise.resolve()
+    .then(() => deps.getTab(result.chromeTabId))
+    .catch(() => null)
+  const all = await Promise.resolve()
+    .then(() => deps.queryAll())
+    .catch(() => null)
+  const verified = isVerifiedAgentPopup(tab, all, deps.isAgentTab)
+  if (verified) await deps.mark(result.chromeTabId)
+  result.agentPopup = verified
+  return result
 }
 
 /**

@@ -1008,6 +1008,37 @@ impl NewTabCheck {
     }
 }
 
+/// How `ABExt.attachTabById`'s answer decides a click's pop-up.
+#[derive(Debug, PartialEq, Eq)]
+enum RelayPopupVerdict {
+    /// Attached, the right tab, and the extension confirmed it as an agent
+    /// pop-up (`agentPopup: true`): the session may own it.
+    Confirmed(String),
+    /// Attached, but not confirmed (`agentPopup` false, missing or not a bool).
+    Unconfirmed,
+    /// Not attached, another tab, or no target id.
+    NotAttached,
+}
+
+/// Only an explicit `agentPopup: true` upgrades a pop-up to session-created
+/// (closed with `close`, followed by `--follow`). Anything else keeps the
+/// tab's unconfirmed identity (#460 review).
+fn relay_popup_attach_verdict(resp: &Value, tab_id: i64) -> RelayPopupVerdict {
+    let target_id = resp.get("targetId").and_then(Value::as_str);
+    let same_tab = resp.get("chromeTabId").and_then(Value::as_i64) == Some(tab_id);
+    let attached = resp.get("attached").and_then(Value::as_bool) == Some(true);
+    match (target_id, same_tab, attached) {
+        (Some(t), true, true) => {
+            if resp.get("agentPopup").and_then(Value::as_bool) == Some(true) {
+                RelayPopupVerdict::Confirmed(t.to_string())
+            } else {
+                RelayPopupVerdict::Unconfirmed
+            }
+        }
+        _ => RelayPopupVerdict::NotAttached,
+    }
+}
+
 /// Chrome tab ids that existed before a click over the relay (#456).
 #[derive(Debug, Clone, Default)]
 pub struct RelayTabBaseline {
@@ -1035,6 +1066,12 @@ pub(crate) static FAIL_NEXT_TAB_SWITCH_AFTER_PIN: std::sync::atomic::AtomicBool 
 /// The Chrome tab id a relay session id (`cb-tab-<tabId>`) belongs to.
 fn relay_chrome_tab_id(session_id: &str) -> Option<i64> {
     session_id.strip_prefix("cb-tab-")?.parse().ok()
+}
+
+/// Whether a click's new tabs may be adopted by diffing the target list (each
+/// new target becomes session-created). Only for a launched browser.
+fn adopts_new_targets_by_diff(launched: bool) -> bool {
+    launched
 }
 
 /// Whether the tab a click was dispatched to is one the session created (or a
@@ -3895,7 +3932,12 @@ impl BrowserManager {
             return NewTabCheck::default();
         }
         let mut check = NewTabCheck::default();
-        if self.browser_process.is_some() || self.relay_scoped {
+        // The target-list diff upgrades every new target to created, so it is
+        // only for a browser this daemon launched (every tab in it is ours).
+        // Over the relay a target that merely appeared after the click (the
+        // group-scoped list included) proves nothing about whose it is; the
+        // relay path below adopts only a pop-up the extension confirmed.
+        if adopts_new_targets_by_diff(self.browser_process.is_some()) {
             check.opened = self.adopt_new_targets(before).await;
         }
         // The extension announces a pop-up only when Chrome names one of our tabs
@@ -4037,20 +4079,25 @@ impl BrowserManager {
                 ))
             }
         };
-        let target_id = resp
-            .get("targetId")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let same_tab = resp.get("chromeTabId").and_then(Value::as_i64) == Some(tab_id);
-        let (Some(target_id), true, true) = (
-            target_id,
-            same_tab,
-            resp.get("attached").and_then(Value::as_bool) == Some(true),
-        ) else {
-            return NewTabCheck::unadopted(format!(
-                "the click opened a tab (Chrome tab {tab_id}, {url}) but the extension did \
-                 not attach it (it answered {resp})."
-            ));
+        let target_id = match relay_popup_attach_verdict(&resp, tab_id) {
+            RelayPopupVerdict::Confirmed(target_id) => target_id,
+            RelayPopupVerdict::NotAttached => {
+                return NewTabCheck::unadopted(format!(
+                    "the click opened a tab (Chrome tab {tab_id}, {url}) but the extension did \
+                     not attach it (it answered {resp})."
+                ))
+            }
+            // Attached, but the extension could not confirm the tab is the
+            // agent's (e.g. a user tab shares its window, where Chrome's opener
+            // and group metadata cannot be trusted). It keeps its unconfirmed
+            // identity: not created, not followed, never closed by `close`.
+            RelayPopupVerdict::Unconfirmed => {
+                return NewTabCheck::unadopted(format!(
+                    "a tab opened (Chrome tab {tab_id}, {url}) but the extension could not \
+                     confirm it came from this session's tab, so it was not adopted, followed \
+                     or closed with the session. If it is yours, run `tab adopt <url>`."
+                ))
+            }
         };
         if let Some(page) = self
             .pages
@@ -6309,9 +6356,65 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod relay_popup_tests {
-    use super::{relay_chrome_tab_id, relay_popup_candidate, relay_url_is_attachable};
+    use super::{
+        adopts_new_targets_by_diff, relay_chrome_tab_id, relay_popup_attach_verdict,
+        relay_popup_candidate, relay_url_is_attachable, RelayPopupVerdict,
+    };
     use serde_json::{json, Value};
     use std::collections::HashSet;
+
+    /// The session's close list (created targets) after a pop-up's attach
+    /// answer is applied, the way `adopt_relay_popup` applies it on both its
+    /// "already tracked" and "newly attached" paths.
+    fn close_list_after(resp: Value) -> HashSet<String> {
+        let mut created: HashSet<String> = ["SRC".to_string()].into();
+        if let RelayPopupVerdict::Confirmed(t) = relay_popup_attach_verdict(&resp, 77) {
+            created.insert(t);
+        }
+        created
+    }
+
+    #[test]
+    fn only_an_explicit_agent_popup_true_puts_a_popup_on_the_close_list() {
+        let base = json!({ "attached": true, "chromeTabId": 77, "targetId": "POP" });
+        let with = |v: Value| {
+            let mut r = base.clone();
+            r["agentPopup"] = v;
+            r
+        };
+        let confirmed: HashSet<String> = ["SRC".to_string(), "POP".to_string()].into();
+        let unchanged: HashSet<String> = ["SRC".to_string()].into();
+        assert_eq!(close_list_after(with(json!(true))), confirmed);
+        // false, missing, and non-bool keep the unconfirmed identity.
+        assert_eq!(close_list_after(with(json!(false))), unchanged);
+        assert_eq!(close_list_after(base.clone()), unchanged);
+        assert_eq!(close_list_after(with(json!("true"))), unchanged);
+        assert_eq!(close_list_after(with(json!(1))), unchanged);
+        assert_eq!(close_list_after(with(Value::Null)), unchanged);
+        assert_eq!(
+            relay_popup_attach_verdict(&with(json!(false)), 77),
+            RelayPopupVerdict::Unconfirmed
+        );
+        // Another tab, not attached, or no target id: never on the list.
+        let mut other = with(json!(true));
+        other["chromeTabId"] = json!(78);
+        assert_eq!(close_list_after(other), unchanged);
+        let mut detached = with(json!(true));
+        detached["attached"] = json!(false);
+        assert_eq!(close_list_after(detached), unchanged);
+        let mut no_target = with(json!(true));
+        no_target.as_object_mut().unwrap().remove("targetId");
+        assert_eq!(close_list_after(no_target), unchanged);
+    }
+
+    #[test]
+    fn a_target_that_merely_appeared_is_never_upgraded_over_the_relay() {
+        // The target-list diff (which puts every new target on the close list)
+        // runs only for a browser this daemon launched; over the relay, the
+        // scoped list included, it does not run.
+        assert!(adopts_new_targets_by_diff(true));
+        assert!(!adopts_new_targets_by_diff(false));
+    }
 
     const OURS: i64 = 344;
     const OUR_GROUP: i64 = 2124;

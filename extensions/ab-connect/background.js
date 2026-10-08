@@ -20,6 +20,7 @@ import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import {
   agentTabPredicate,
   agentWindowStillOurs,
+  confirmAttachedPopup,
   isVerifiedAgentPopup,
   migratePopupRecord,
   isUntouchedPlaceholder,
@@ -1125,16 +1126,15 @@ async function handleForwardCdpCommand(msg) {
     // Recorded as an agent pop-up only when the tab itself shows it is one:
     // opened by an agent tab, or in a group that holds an agent tab. The
     // daemon's request names a tab id, which proves nothing about whose it is.
-    if (result && result.attached) {
-      await loadOwnedTabs();
-      await loadAgentPopups();
-      const tab = await chrome.tabs.get(result.chromeTabId).catch(() => null);
-      const all = await chrome.tabs.query({}).catch(() => []);
-      const verified = isVerifiedAgentPopup(tab, all, agentTabPredicate(ownedTabs, agentPopups));
-      if (verified) await markAgentPopup(result.chromeTabId);
-      result.agentPopup = verified;
-    }
-    return result;
+    // A failed read is unknown: agentPopup false, nothing recorded.
+    await loadOwnedTabs();
+    await loadAgentPopups();
+    return await confirmAttachedPopup(result, {
+      getTab: (tabId) => chrome.tabs.get(tabId),
+      queryAll: () => chrome.tabs.query({}),
+      isAgentTab: agentTabPredicate(ownedTabs, agentPopups),
+      mark: (tabId) => markAgentPopup(tabId),
+    });
   }
 
   if (method === 'ABExt.adoptByUrl') {
@@ -1921,7 +1921,8 @@ chrome.tabs.onCreated.addListener(
       // pop-up): the agent's. Opened by a merely attached tab (a user tab taken
       // with adopt/inspect): attached as before, but it keeps user identity.
       await loadAgentPopups();
-      const all = await chrome.tabs.query({}).catch(() => []);
+      // A failed query is unknown (null), never an empty list.
+      const all = await chrome.tabs.query({}).catch(() => null);
       if (isVerifiedAgentPopup(tab, all, agentTabPredicate(ownedTabs, agentPopups)))
         await markAgentPopup(tab.id);
       if (tabs.has(tab.id)) return;
