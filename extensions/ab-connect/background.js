@@ -20,6 +20,8 @@ import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import {
   agentTabPredicate,
   agentWindowStillOurs,
+  isVerifiedAgentPopup,
+  migratePopupRecord,
   isUntouchedPlaceholder,
   placeholderCleanup,
 } from './agent-window.js';
@@ -204,9 +206,21 @@ async function markAgentPopup(tabId) {
   agentPopups.add(tabId);
   await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
 }
+// Pop-ups whose onRemoved fired in the last few seconds: onReplaced (a
+// discard or prerender swap) may arrive after it and must carry the record
+// over to the new tab id, like ownedTabs.
+const recentlyRemovedPopups = new Set();
 async function forgetAgentPopup(tabId) {
   await loadAgentPopups();
-  if (agentPopups.delete(tabId))
+  if (agentPopups.delete(tabId)) {
+    recentlyRemovedPopups.add(tabId);
+    setTimeout(() => recentlyRemovedPopups.delete(tabId), 5000);
+    await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
+  }
+}
+async function migrateAgentPopup(removedTabId, addedTabId) {
+  await loadAgentPopups();
+  if (migratePopupRecord(agentPopups, recentlyRemovedPopups, removedTabId, addedTabId))
     await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
 }
 
@@ -1108,9 +1122,18 @@ async function handleForwardCdpCommand(msg) {
       eligible,
       attachTab: (tabId) => attachTab(tabId),
     });
-    // The daemon calls this only for a pop-up its own click opened (#456), so
-    // the tab is verified as the agent's for the agent-window check.
-    if (result && result.attached) await markAgentPopup(result.chromeTabId);
+    // Recorded as an agent pop-up only when the tab itself shows it is one:
+    // opened by an agent tab, or in a group that holds an agent tab. The
+    // daemon's request names a tab id, which proves nothing about whose it is.
+    if (result && result.attached) {
+      await loadOwnedTabs();
+      await loadAgentPopups();
+      const tab = await chrome.tabs.get(result.chromeTabId).catch(() => null);
+      const all = await chrome.tabs.query({}).catch(() => []);
+      const verified = isVerifiedAgentPopup(tab, all, agentTabPredicate(ownedTabs, agentPopups));
+      if (verified) await markAgentPopup(result.chromeTabId);
+      result.agentPopup = verified;
+    }
     return result;
   }
 
@@ -1942,6 +1965,8 @@ chrome.tabs.onReplaced.addListener(
         recordReplacement(replacedTabs, removedTabId, addedTabId);
         saveReplacedTabs();
       }
+      // A confirmed agent pop-up stays one under its new id.
+      await migrateAgentPopup(removedTabId, addedTabId);
       // Ownership follows the tab, so the session may still drive (and close)
       // it under its new id.
       if (ownedTabs.has(removedTabId) || recentlyRemovedOwned.has(removedTabId)) {

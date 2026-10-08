@@ -5,6 +5,8 @@ import {
   agentTabPredicate,
   agentWindowStillOurs,
   isUntouchedPlaceholder,
+  isVerifiedAgentPopup,
+  migratePopupRecord,
   placeholderCleanup,
 } from './agent-window.js'
 
@@ -193,4 +195,40 @@ test('only an untouched placeholder in its own window is removed', () => {
   assert.equal(placeholderCleanup({ ...untouched, windowId: 5 }, record, 9), 'forget')
   assert.equal(placeholderCleanup(untouched, record, 5), 'keep')
   assert.equal(placeholderCleanup(untouched, null, 9), 'keep')
+})
+
+test('a tab id alone does not verify an agent pop-up', () => {
+  const isAgent = agentTabPredicate(new Set([1]), new Set())
+  // Child of a user tab (7) taken with adopt: opener not an agent tab, no group.
+  const child = { id: 33, groupId: -1, openerTabId: 7 }
+  assert.equal(isVerifiedAgentPopup(child, [{ id: 1, groupId: -1 }, { id: 7, groupId: -1 }, child], isAgent), false)
+  // Same, but the user's tab sits in a group with no agent tab in it.
+  const grouped = { id: 34, groupId: 50, openerTabId: 7 }
+  assert.equal(isVerifiedAgentPopup(grouped, [{ id: 7, groupId: 50 }, grouped], isAgent), false)
+  assert.equal(isVerifiedAgentPopup(null, [], isAgent), false)
+})
+
+test('a pop-up opened by an agent tab, or in an agent tab group, is verified', () => {
+  const isAgent = agentTabPredicate(new Set([1]), new Set([5]))
+  assert.equal(isVerifiedAgentPopup({ id: 9, groupId: -1, openerTabId: 1 }, [], isAgent), true)
+  assert.equal(isVerifiedAgentPopup({ id: 10, groupId: -1, openerTabId: 5 }, [], isAgent), true)
+  // Chrome reported the window's front tab (42) as opener; the group holds tab 1.
+  const popup = { id: 11, groupId: 60, openerTabId: 42 }
+  assert.equal(isVerifiedAgentPopup(popup, [{ id: 1, groupId: 60 }, popup], isAgent), true)
+})
+
+test('a replaced pop-up keeps its record under the new id, also after onRemoved', () => {
+  const popups = new Set([5])
+  const recent = new Set()
+  assert.equal(migratePopupRecord(popups, recent, 5, 6), true)
+  assert.deepEqual([...popups], [6])
+  // onRemoved first: the id moved to the recently-removed set.
+  popups.delete(6)
+  recent.add(6)
+  assert.equal(migratePopupRecord(popups, recent, 6, 7), true)
+  assert.deepEqual([...popups], [7])
+  assert.equal(recent.has(6), false)
+  // A tab that never was a pop-up is not upgraded by a replacement.
+  assert.equal(migratePopupRecord(popups, recent, 8, 9), false)
+  assert.equal(popups.has(9), false)
 })

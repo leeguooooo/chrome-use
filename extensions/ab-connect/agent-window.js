@@ -30,6 +30,36 @@ export function agentTabPredicate(owned, agentPopups) {
 }
 
 /**
+ * Carry a confirmed agent pop-up over to its replacement tab id (a discard or
+ * prerender swap fires onReplaced, sometimes after onRemoved already dropped
+ * the old id into `recentlyRemoved`). Mutates `popups`; returns whether the
+ * record moved.
+ */
+export function migratePopupRecord(popups, recentlyRemoved, removedTabId, addedTabId) {
+  if (!popups.has(removedTabId) && !recentlyRemoved.has(removedTabId)) return false
+  recentlyRemoved.delete(removedTabId)
+  popups.delete(removedTabId)
+  popups.add(addedTabId)
+  return true
+}
+
+/**
+ * Whether `tab` (a chrome.tabs.Tab just attached by tab id) may be recorded as
+ * an agent pop-up. A tab id alone is not verification: the tab must have been
+ * opened by an agent tab, or sit in a tab group that holds an agent tab (Chrome
+ * puts a pop-up in its opener's group, and often reports the window's front
+ * tab as the opener). `allTabs` is chrome.tabs.query({}).
+ */
+export function isVerifiedAgentPopup(tab, allTabs, isAgentTab) {
+  if (!tab || !Number.isInteger(tab.id)) return false
+  if (tab.openerTabId != null && isAgentTab(tab.openerTabId)) return true
+  if (!Number.isInteger(tab.groupId) || tab.groupId === -1) return false
+  return (allTabs || []).some(
+    (t) => t && t.id !== tab.id && t.groupId === tab.groupId && isAgentTab(t.id),
+  )
+}
+
+/**
  * Whether `tab` is still the untouched placeholder `record` describes: the
  * recorded tab in the recorded window, still on about:blank, with no
  * navigation pending. Once the user navigates it (or starts to), it is theirs.

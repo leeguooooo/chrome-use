@@ -1037,6 +1037,19 @@ fn relay_chrome_tab_id(session_id: &str) -> Option<i64> {
     session_id.strip_prefix("cb-tab-")?.parse().ok()
 }
 
+/// The Chrome tab ids of the session's pages that it genuinely created (its
+/// own tabs and the pop-ups it adopted from them, which are recorded as
+/// created). A user tab taken with `tab adopt` is a session page too, but not
+/// the session's: a pop-up it opens stays the user's, so it must not count as
+/// an opener or group anchor when picking a click's pop-up (#460 review).
+fn relay_created_chrome_tabs(pages: &[PageInfo], created: &HashSet<String>) -> HashSet<i64> {
+    pages
+        .iter()
+        .filter(|p| created.contains(&p.target_id))
+        .filter_map(|p| relay_chrome_tab_id(&p.session_id))
+        .collect()
+}
+
 /// The first tab in `tabs` (chrome.tabs.Tab objects) that a click on one of
 /// `ours` opened (#456): absent from `before`, not ours, and
 ///
@@ -3904,10 +3917,7 @@ impl BrowserManager {
     /// Chrome tab ids of the tabs this session drives over the relay, read
     /// from their `cb-tab-<tabId>` relay sessions.
     fn relay_own_chrome_tabs(&self) -> HashSet<i64> {
-        self.pages
-            .iter()
-            .filter_map(|p| relay_chrome_tab_id(&p.session_id))
-            .collect()
+        relay_created_chrome_tabs(&self.pages, &self.created_targets)
     }
 
     /// Adopt the tab a click on one of this session's tabs opened, found in
@@ -6962,6 +6972,27 @@ mod tests {
             "https://example.com/",
             "https://sg-git.pwtk.cc/x"
         ));
+    }
+
+    #[test]
+    fn a_user_tab_taken_with_adopt_is_not_an_own_tab_for_popup_picking() {
+        let mut created_page = page("CREATED");
+        created_page.session_id = "cb-tab-11".to_string();
+        let mut adopted_page = page("ADOPTED");
+        adopted_page.session_id = "cb-tab-22".to_string();
+        let created: HashSet<String> = ["CREATED".to_string()].into_iter().collect();
+        let own = relay_created_chrome_tabs(&[created_page, adopted_page], &created);
+        assert_eq!(own, [11].into_iter().collect::<HashSet<i64>>());
+        // So a child the adopted user tab opens is not picked as the session's
+        // pop-up: its opener (22) is not ours, and it has no group.
+        let tabs = json!([
+            { "id": 11, "groupId": -1 },
+            { "id": 22, "groupId": -1 },
+            { "id": 33, "groupId": -1, "openerTabId": 22, "url": "https://x.example/" }
+        ]);
+        let before: HashSet<i64> = [11, 22].into_iter().collect();
+        let tabs = tabs.as_array().cloned().unwrap();
+        assert!(relay_popup_candidate(&tabs, &before, &own).is_none());
     }
 
     fn page(target_id: &str) -> PageInfo {
