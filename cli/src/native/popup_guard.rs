@@ -22,13 +22,16 @@
 //!   daemon saw that document's response.
 //!
 //! So by default ([`LinkMode::CrossSite`]) only links to another
-//! registrable domain (eTLD+1 by the Public Suffix List, from the clicking
-//! frame's URL) are taken over: for those the request matches Chrome's own
-//! click except for `history.length`. Same registrable domain (subdomains,
-//! another scheme), IP addresses, unclassifiable pages, and a page whose
-//! header referrer policy the daemon did not see keep Chrome's click, which
-//! raises Chrome; the click says so. [`BACKGROUND_LINKS_ENV`] `=all` also
-//! takes same-site links, `=off` none.
+//! registrable domain are taken over: the daemon classifies, before the
+//! click, the clicking frame's URL and each link the click may follow, and
+//! both must have a registrable domain (eTLD+1 by the Public Suffix List)
+//! and differ. For those the request matches Chrome's own click except for
+//! `history.length`. Same registrable domain (subdomains, another scheme),
+//! IP addresses, `localhost`, hosts outside the list, a link the page
+//! changes during the click to a host not classified, a link a ChooseBrowser
+//! rule applies to, and a page whose header referrer policy the daemon did
+//! not see keep Chrome's click, which raises Chrome; the click says so.
+//! [`BACKGROUND_LINKS_ENV`] `=all` also takes same-site links, `=off` none.
 //!
 //! The click's default action is taken over only for a plain left
 //! click on an `<a>`/`<area>` whose effective target is `_blank`, with an
@@ -164,21 +167,38 @@ pub fn document_referrer_policy(params: &Value) -> Option<(String, String)> {
 }
 
 /// Installed right before the click. Returns `true` once armed.
-/// `header_policy` is the policy the guard's document got from its response
-/// header (`Some("")` for none), `None` when the daemon did not see it.
-/// `page_site` is the frame's registrable domain ([`page_site`]); with
-/// [`LinkMode::CrossSite`] only links outside it are taken over.
-pub fn arm_script(header_policy: Option<&str>, mode: LinkMode, page_site: Option<&str>) -> String {
+/// - `header_policy`: the policy the guard's document got from its response
+///   header (`Some("")` for none), `None` when the daemon did not see it.
+/// - `hosts`: for each link host the daemon classified before the click
+///   ([`classify_link`]), `"cross"` when the link may be taken over, else the
+///   reason it keeps Chrome's click. A host not in the map (the page changed
+///   the link during the click) keeps Chrome's click.
+///
+/// The decision is made as late as the DOM allows. The guard follows the
+/// event along its path: from each of its listeners it adds the next one, on
+/// the next node and phase of the path, so that each is added after every
+/// page listener that could still be added there and runs after all of them.
+/// The last one, on `window` in the bubble phase, re-reads the link (href,
+/// target, rel, referrer policy, as the page left them) and only then, if
+/// no page listener cancelled the click, cancels Chrome's own action.
+/// A listener that stops propagation means the last one never runs: the
+/// click stays Chrome's.
+pub fn arm_script(
+    header_policy: Option<&str>,
+    mode: LinkMode,
+    hosts: &HashMap<String, String>,
+) -> String {
     format!(
         r#"(() => {{
   const KEY = '__chromeUsePopupGuard';
   const HEADER_POLICY = {header};
   const ALL = {all};
-  const PAGE_SITE = {site};
+  const HOSTS = {hosts};
   const prev = globalThis[KEY];
   if (prev && typeof prev.disarm === 'function') prev.disarm();
   const armedAt = Date.now();
-  const st = {{ result: null, seen: null, skipped: null, pagePrevented: false, late: false }};
+  const st = {{ result: null, seen: null, skipped: null, pagePrevented: false, late: false, reached: false, done: false }};
+  const added = [];
   const VALID = {valid};
   const LEGACY = {{ never: 'no-referrer', default: 'strict-origin-when-cross-origin',
     always: 'unsafe-url', 'origin-when-crossorigin': 'origin-when-cross-origin' }};
@@ -201,22 +221,29 @@ pub fn arm_script(header_policy: Option<&str>, mode: LinkMode, page_site: Option
     if (HEADER_POLICY !== null) return {{ policy: HEADER_POLICY, source: 'header' }};
     return {{ policy: '', source: 'unknown' }};
   }};
-  const candidate = (e) => {{
+  const linkOf = (e) => {{
     if (e.type !== 'click' || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return null;
-    let link = null;
     for (const n of e.composedPath()) {{
-      if (n instanceof HTMLAnchorElement || n instanceof HTMLAreaElement) {{ link = n; break; }}
+      if (n instanceof HTMLAnchorElement || n instanceof HTMLAreaElement) return n;
       if (interactive(n)) return null;
     }}
+    return null;
+  }};
+  const effectiveTarget = (link) => {{
+    let target = link.getAttribute('target');
+    if (target === null) {{
+      const base = link.ownerDocument.querySelector('base[target]');
+      target = base ? base.getAttribute('target') : '';
+    }}
+    return (target || '').trim().toLowerCase();
+  }};
+  // Read the link as it is NOW: called once, at the very end of dispatch.
+  const candidate = (e) => {{
+    const link = linkOf(e);
     if (!link || !link.hasAttribute('href')) return null;
     const doc = link.ownerDocument;
     if (doc !== document) return null;
-    let target = link.getAttribute('target');
-    if (target === null) {{
-      const base = doc.querySelector('base[target]');
-      target = base ? base.getAttribute('target') : '';
-    }}
-    if ((target || '').trim().toLowerCase() !== '_blank') return null;
+    if (effectiveTarget(link) !== '_blank') return null;
     const rel = (link.getAttribute('rel') || '').toLowerCase().split(/\s+/).filter(Boolean);
     if (rel.includes('opener')) return {{ skip: 'the link has rel=opener' }};
     if (link.hasAttribute('download')) return {{ skip: 'the link has download' }};
@@ -225,15 +252,10 @@ pub fn arm_script(header_policy: Option<&str>, mode: LinkMode, page_site: Option
     try {{ url = new URL(link.href); }} catch (_) {{ return {{ skip: 'the link has no valid href' }}; }}
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return {{ skip: 'the link is ' + url.protocol }};
     if (!ALL) {{
-      // Cross-site only: the registrable domains (eTLD+1, worked out by the
-      // daemon from this frame's URL) must differ. Same registrable domain
-      // with another scheme, subdomains, IP addresses, or a page whose site
-      // the daemon could not tell: Chrome's own click.
-      if (!PAGE_SITE) return {{ skip: "chrome-use could not tell the page's site" }};
       const h = url.hostname.toLowerCase().replace(/\.$/, '');
-      if (!h || h.startsWith('[') || /^[0-9.]+$/.test(h)) return {{ skip: 'the link goes to an IP address' }};
-      if (h === PAGE_SITE || h.endsWith('.' + PAGE_SITE)) {{
-        return {{ skip: 'the link stays on the same site, so it keeps Chrome\'s own click and its SameSite cookies' }};
+      const cls = Object.prototype.hasOwnProperty.call(HOSTS, h) ? HOSTS[h] : null;
+      if (cls !== 'cross') {{
+        return {{ skip: cls || "the page changed the link during the click, so chrome-use could not classify its site" }};
       }}
     }}
     let p;
@@ -250,29 +272,54 @@ pub fn arm_script(header_policy: Option<&str>, mode: LinkMode, page_site: Option
       policySource: p.source,
     }};
   }};
+  const listen = (node, capture, fn) => {{
+    node.addEventListener('click', fn, capture);
+    added.push([node, fn, capture]);
+  }};
   const onCapture = (e) => {{
-    if (st.result || st.seen || Date.now() - armedAt > {ttl}) return;
-    const c = candidate(e);
-    if (!c) return;
-    if (c.skip) {{ st.skipped = c.skip; return; }}
-    st.seen = c.url;
+    if (st.done || Date.now() - armedAt > {ttl}) return;
+    const first = linkOf(e);
+    if (!first) return;
+    st.done = true;
+    st.seen = first.href || true;
+    st.blankAtCapture = effectiveTarget(first) === '_blank';
     const capturedAt = Date.now();
-    const onBubble = (ev) => {{
-      if (ev !== e) return;
-      window.removeEventListener('click', onBubble, false);
-      if (st.result) return;
+    // The stages the event still goes through: the capture pass down the
+    // path (window first, where we are now), then the bubble pass back up.
+    const path = e.composedPath();
+    const stages = [];
+    for (let i = path.length - 1; i >= 0; i--) stages.push([path[i], true]);
+    for (let i = 0; i < path.length; i++) stages.push([path[i], false]);
+    const decide = () => {{
+      st.reached = true;
       if (e.defaultPrevented) {{ st.pagePrevented = true; return; }}
       if (Date.now() - capturedAt > {max_dispatch}) {{ st.late = true; return; }}
+      const c = candidate(e);
+      if (!c) return;
+      if (c.skip) {{ st.skipped = c.skip; return; }}
       e.preventDefault();
       st.result = c;
-      st.disarm();
     }};
-    window.addEventListener('click', onBubble, false);
+    const stage = (k) => {{
+      const [node, capture] = stages[k];
+      const fn = (ev) => {{
+        if (ev !== e) return;
+        node.removeEventListener('click', fn, capture);
+        if (k === stages.length - 1) {{ decide(); st.disarm(); return; }}
+        const [nn, nc] = stages[k + 1];
+        listen(nn, nc, stage(k + 1));
+      }};
+      return fn;
+    }};
+    // Stage 0 is this window capture listener itself; arm stage 1.
+    if (stages.length > 1) listen(stages[1][0], stages[1][1], stage(1));
   }};
   window.addEventListener('click', onCapture, true);
   const timer = setTimeout(() => st.disarm(), {ttl});
   st.disarm = () => {{
     window.removeEventListener('click', onCapture, true);
+    for (const [node, fn, capture] of added) node.removeEventListener('click', fn, capture);
+    added.length = 0;
     clearTimeout(timer);
   }};
   globalThis[KEY] = st;
@@ -280,12 +327,22 @@ pub fn arm_script(header_policy: Option<&str>, mode: LinkMode, page_site: Option
 }})()"#,
         header = serde_json::to_string(&header_policy).unwrap_or_else(|_| "null".into()),
         all = mode == LinkMode::All,
-        site = serde_json::to_string(&page_site).unwrap_or_else(|_| "null".into()),
+        hosts = serde_json::to_string(hosts).unwrap_or_else(|_| "{}".into()),
         valid = serde_json::to_string(&POLICIES).unwrap_or_else(|_| "[]".into()),
         ttl = ARM_TTL_MS,
         max_dispatch = MAX_DISPATCH_MS,
     )
 }
+
+/// Disarm without reading: the click failed or stopped early (a pending
+/// dialog), so nothing must keep acting on later clicks.
+pub const DISARM_SCRIPT: &str = r#"(() => {
+  const KEY = '__chromeUsePopupGuard';
+  const st = globalThis[KEY];
+  if (st && typeof st.disarm === 'function') st.disarm();
+  delete globalThis[KEY];
+  return true;
+})()"#;
 
 /// Read once after the click; also disarms the guard.
 pub const READ_SCRIPT: &str = r#"(() => {
@@ -295,11 +352,11 @@ pub const READ_SCRIPT: &str = r#"(() => {
   st.disarm();
   delete globalThis[KEY];
   return JSON.stringify({
-    result: st.result, seen: st.seen, skipped: st.skipped,
-    pagePrevented: st.pagePrevented, late: st.late,
+    result: st.result, seen: st.seen ? String(st.seen) : null, skipped: st.skipped,
+    pagePrevented: st.pagePrevented, late: st.late, reached: st.reached,
+    blankAtCapture: !!st.blankAtCapture,
   });
 })()"#;
-
 /// Where an armed guard lives, so the same context is read after the click.
 #[derive(Debug, Clone)]
 pub struct ArmedGuard {
@@ -342,15 +399,20 @@ impl InterceptedLink {
 #[serde(rename_all = "camelCase")]
 pub struct GuardReport {
     pub result: Option<InterceptedLink>,
-    /// URL of a `_blank` link the click reached but the guard did not take
-    /// over (a listener stopped propagation, or the dispatch was too slow).
+    /// The href of the link the click event went through, if any.
     pub seen: Option<String>,
-    /// Why a `_blank` link was left to Chrome (`rel=opener`, `download`...).
+    /// Why a `_blank` link was left to Chrome (same site, `rel=opener`...).
     pub skipped: Option<String>,
     #[serde(default)]
     pub page_prevented: bool,
     #[serde(default)]
     pub late: bool,
+    /// The guard's last listener ran: the event got to the end of its path.
+    #[serde(default)]
+    pub reached: bool,
+    /// The link targeted `_blank` when the click started.
+    #[serde(default)]
+    pub blank_at_capture: bool,
 }
 
 impl GuardReport {
@@ -372,9 +434,8 @@ impl GuardReport {
                 "the page's click handlers took over {MAX_DISPATCH_MS} ms"
             ));
         }
-        self.seen
-            .as_ref()
-            .map(|_| "a page listener stopped the click before it reached the window".to_string())
+        (self.seen.is_some() && self.blank_at_capture && !self.reached)
+            .then(|| "a page listener stopped the click before it reached the window".to_string())
     }
 }
 
@@ -394,16 +455,107 @@ pub fn cdp_referrer_policy(html: &str) -> &'static str {
     }
 }
 
+/// Why a link keeps Chrome's own click although it targets `_blank`, or
+/// `Ok(host)` when it may be opened in the background ([`LinkMode::CrossSite`]):
+/// only when BOTH the page and the link have a registrable domain by the
+/// Public Suffix List and the two differ. `Err((host, reason))`; `None` for a
+/// URL that is not http(s) (the guard leaves those to Chrome anyway).
+pub fn classify_link(
+    page_site: Option<&str>,
+    link_url: &str,
+) -> Option<Result<String, (String, String)>> {
+    let u = url::Url::parse(link_url).ok()?;
+    if u.scheme() != "http" && u.scheme() != "https" {
+        return None;
+    }
+    let host = u.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    let Some(page) = page_site else {
+        return Some(Err((
+            host,
+            "chrome-use could not classify the page's site".to_string(),
+        )));
+    };
+    let Some(link) = page_site_of_host(&host) else {
+        return Some(Err((
+            host,
+            "chrome-use could not classify the link's site (an IP address, localhost, or a \
+             host outside the Public Suffix List)"
+                .to_string(),
+        )));
+    };
+    if link == page {
+        return Some(Err((
+            host,
+            "the link stays on the same site, so it keeps Chrome's own click and its SameSite \
+             cookies"
+                .to_string(),
+        )));
+    }
+    Some(Ok(host))
+}
+
+/// [`page_site`] for a bare host.
+fn page_site_of_host(host: &str) -> Option<String> {
+    page_site(&format!("https://{host}/"))
+}
+
+/// The guard's host table: each candidate link URL's host mapped to `"cross"`
+/// (may be taken over) or the reason it keeps Chrome's click. `refuse` is
+/// the ChooseBrowser check for a URL (`Some(reason)` when a rule would send
+/// it elsewhere); such a link keeps Chrome's click too.
+pub fn host_table(
+    page_site: Option<&str>,
+    link_urls: &[String],
+    refuse: &dyn Fn(&str) -> Option<String>,
+) -> HashMap<String, String> {
+    let mut hosts = HashMap::new();
+    for url in link_urls {
+        match classify_link(page_site, url) {
+            Some(Ok(host)) => {
+                let verdict = match refuse(url) {
+                    Some(why) => format!("a ChooseBrowser rule applies to the link ({why})"),
+                    None => "cross".to_string(),
+                };
+                hosts.insert(host, verdict);
+            }
+            Some(Err((host, why))) => {
+                hosts.insert(host, why);
+            }
+            None => {}
+        }
+    }
+    hosts
+}
+
+/// The links a click on an element may follow, read before the click: the
+/// element's own link (`closest('a[href],area[href]')`) and links inside it.
+pub const CANDIDATE_LINKS_FUNCTION: &str = r#"function() {
+  const out = [];
+  const own = this.closest && this.closest('a[href],area[href]');
+  if (own) out.push(own.href);
+  if (this.querySelectorAll) {
+    for (const a of this.querySelectorAll('a[href],area[href]')) {
+      if (out.length >= 20) break;
+      out.push(a.href);
+    }
+  }
+  return out;
+}"#;
+
 /// Arm the guard in `frame_id` (the top frame when `None`) of `session_id`.
 /// `header_policies` maps frame ids to the policy their document's response
-/// header set, as seen by the daemon. `None` when it could not be armed; the
-/// click then goes ahead as before (once — it is never repeated).
+/// header set, as seen by the daemon. `link_urls` are the links the click may
+/// follow ([`CANDIDATE_LINKS_FUNCTION`]); `refuse` is the ChooseBrowser check.
+/// `None` when it could not be armed; the click then goes ahead as before
+/// (once — it is never repeated).
 pub async fn arm(
     client: &CdpClient,
     session_id: &str,
     frame_id: Option<&str>,
     header_policies: &HashMap<String, String>,
     mode: LinkMode,
+    link_urls: &[String],
+    refuse: &dyn Fn(&str) -> Option<String>,
 ) -> Option<ArmedGuard> {
     if mode == LinkMode::Off {
         return None;
@@ -423,12 +575,7 @@ pub async fn arm(
             )
         }
     };
-    // Cross-site mode needs the frame's site; without it the click stays
-    // Chrome's own (the guard is not armed at all).
-    let site = page_site(&frame_url);
-    if mode == LinkMode::CrossSite && site.is_none() {
-        return None;
-    }
+    let hosts = host_table(page_site(&frame_url).as_deref(), link_urls, refuse);
     let ctx = client
         .send_command(
             "Page.createIsolatedWorld",
@@ -446,7 +593,7 @@ pub async fn arm(
                 "expression": arm_script(
                     header_policies.get(&frame_id).map(String::as_str),
                     mode,
-                    site.as_deref(),
+                    &hosts,
                 ),
                 "contextId": ctx,
                 "returnByValue": true,
@@ -462,6 +609,25 @@ pub async fn arm(
         session_id: session_id.to_string(),
         context_id: ctx,
     })
+}
+
+/// Make an armed guard inert without reading it (the click failed, or
+/// stopped at a pending dialog). Bounded: a renderer that does not answer is
+/// left to the guard's own TTL.
+pub async fn disarm(client: &CdpClient, guard: &ArmedGuard) {
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        client.send_command(
+            "Runtime.evaluate",
+            Some(json!({
+                "expression": DISARM_SCRIPT,
+                "contextId": guard.context_id,
+                "returnByValue": true,
+            })),
+            Some(&guard.session_id),
+        ),
+    )
+    .await;
 }
 
 /// The URL of frame `id` in a `Page.getFrameTree` node.
@@ -517,6 +683,32 @@ pub enum ReadOutcome {
 pub fn document_gone(error: &str) -> bool {
     let e = error.to_ascii_lowercase();
     e.contains("cannot find context") || e.contains("execution context was destroyed")
+}
+
+/// How a failed navigation of the link's tab is reported: `true` when Chrome
+/// said it failed (the tab did not load the link), `false` when the outcome
+/// is unknown (a timeout or a lost reply, after which the tab may well have
+/// navigated). Only a known failure may suggest opening the link again.
+pub fn navigation_failure_is_known(error: &str) -> bool {
+    error.starts_with("Navigation failed:")
+}
+
+/// The warning after trying to put the session back on the clicked tab.
+/// `switched` is the switch's result, `back` whether the session's pin is
+/// now the clicked tab, `at` the tab it is actually pinned to.
+pub fn return_warning(switched: Result<(), String>, back: bool, at: &str) -> Option<String> {
+    match switched {
+        Ok(()) if back => None,
+        result => {
+            let why = result
+                .err()
+                .unwrap_or_else(|| "the session moved elsewhere".to_string());
+            Some(format!(
+                "the session could not return to the clicked tab ({why}); it is on {at}. Run \
+                 `tab list`."
+            ))
+        }
+    }
 }
 
 /// What the click says when a guard was armed but could not be read back.
@@ -631,13 +823,19 @@ mod tests {
         assert_eq!(taken.left_to_chrome(), None);
 
         let stopped = GuardReport::parse(&json!(
-            r#"{"result":null,"seen":"https://b.test/","skipped":null,"pagePrevented":false,"late":false}"#
+            r#"{"result":null,"seen":"https://b.test/","skipped":null,"pagePrevented":false,"late":false,"reached":false,"blankAtCapture":true}"#
         ))
         .unwrap();
         assert!(stopped
             .left_to_chrome()
             .unwrap()
             .contains("stopped the click"));
+        // The click went through a same-tab link and got to the end: no note.
+        let same_tab = GuardReport::parse(&json!(
+            r#"{"result":null,"seen":"https://b.test/","skipped":null,"pagePrevented":false,"late":false,"reached":true,"blankAtCapture":false}"#
+        ))
+        .unwrap();
+        assert_eq!(same_tab.left_to_chrome(), None);
 
         let opener = GuardReport::parse(&json!(
             r#"{"result":null,"seen":null,"skipped":"the link has rel=opener","pagePrevented":false,"late":false}"#
@@ -668,23 +866,89 @@ mod tests {
 
     #[test]
     fn arm_script_carries_its_limits_and_the_header_policy() {
-        let s = arm_script(None, LinkMode::CrossSite, Some("example.com"));
+        let mut hosts = HashMap::new();
+        hosts.insert("b.example.org".to_string(), "cross".to_string());
+        let s = arm_script(None, LinkMode::CrossSite, &hosts);
         assert!(s.contains(&format!("> {ARM_TTL_MS}")));
         assert!(s.contains(&format!("> {MAX_DISPATCH_MS}")));
         assert!(s.contains("'the link has rel=opener'"));
         assert!(s.contains("const HEADER_POLICY = null;"));
         assert!(s.contains("const ALL = false;"));
-        assert!(s.contains("const PAGE_SITE = \"example.com\";"));
+        assert!(s.contains("const HOSTS = {\"b.example.org\":\"cross\"};"));
         assert!(s.contains("if (doc !== document) return null;"));
         // Cross-site mode never guesses a header policy it did not see.
         assert!(s.contains("if (!ALL && p.source === 'unknown')"));
+        // The decision is made by the last stage, from the link as it is then.
+        assert!(s.contains("if (k === stages.length - 1) { decide(); st.disarm(); return; }"));
+        assert!(s.contains("const c = candidate(e);"));
         assert!(!s.contains("{{"));
-        let all = arm_script(Some("no-referrer"), LinkMode::All, None);
+        let all = arm_script(Some("no-referrer"), LinkMode::All, &HashMap::new());
         assert!(all.contains("const HEADER_POLICY = \"no-referrer\";"));
         assert!(all.contains("const ALL = true;"));
-        assert!(all.contains("const PAGE_SITE = null;"));
-        assert!(arm_script(Some(""), LinkMode::CrossSite, Some("a.b"))
+        assert!(all.contains("const HOSTS = {};"));
+        assert!(arm_script(Some(""), LinkMode::CrossSite, &HashMap::new())
             .contains("const HEADER_POLICY = \"\";"));
+        assert!(DISARM_SCRIPT.contains("st.disarm()"));
+    }
+
+    #[test]
+    fn both_ends_must_have_a_registrable_domain_for_a_takeover() {
+        let page = page_site("https://a.example.com/");
+        let p = page.as_deref();
+        assert_eq!(
+            classify_link(p, "https://x.other.org/p"),
+            Some(Ok("x.other.org".into()))
+        );
+        assert_eq!(
+            classify_link(Some("cu468.co.uk"), "https://x.cu469.co.uk/"),
+            Some(Ok("x.cu469.co.uk".into()))
+        );
+        assert_eq!(
+            classify_link(Some("u1.github.io"), "https://u2.github.io/"),
+            Some(Ok("u2.github.io".into()))
+        );
+        let reason = |page: Option<&str>, url: &str| match classify_link(page, url) {
+            Some(Err((_, why))) => why,
+            other => panic!("{url}: {other:?}"),
+        };
+        // Same registrable domain, whatever the scheme or subdomain.
+        assert!(reason(p, "https://b.example.com/").contains("same site"));
+        assert!(reason(p, "http://example.com/").contains("same site"));
+        assert!(reason(Some("cu468.co.uk"), "https://b.cu468.co.uk/").contains("same site"));
+        assert!(reason(Some("u1.github.io"), "https://v.u1.github.io/").contains("same site"));
+        // The link's site cannot be classified: Chrome's click.
+        for url in [
+            "http://localhost:3000/",
+            "https://intranet/",
+            "https://a.cu468.test/",
+            "https://co.uk/",
+            "https://github.io/",
+            "http://127.0.0.1/",
+            "http://[::1]/",
+        ] {
+            assert!(
+                reason(p, url).contains("could not classify the link"),
+                "{url}"
+            );
+        }
+        // The page's site cannot be classified.
+        assert!(reason(None, "https://x.other.org/").contains("could not classify the page"));
+        // Not http(s): not in the table at all.
+        assert_eq!(classify_link(p, "mailto:a@b.c"), None);
+    }
+
+    #[test]
+    fn host_table_applies_the_choosebrowser_check_to_takeovers() {
+        let links = vec![
+            "https://x.other.org/a".to_string(),
+            "https://ruled.example.net/".to_string(),
+            "https://b.example.com/".to_string(),
+        ];
+        let refuse = |url: &str| url.contains("ruled").then(|| "profile Work".to_string());
+        let t = host_table(Some("example.com"), &links, &refuse);
+        assert_eq!(t["x.other.org"], "cross");
+        assert!(t["ruled.example.net"].contains("ChooseBrowser"));
+        assert!(t["b.example.com"].contains("same site"));
     }
 
     #[test]
@@ -742,6 +1006,36 @@ mod tests {
         assert_eq!(frame_url(&tree, "top").as_deref(), Some("https://a.com/"));
         assert_eq!(frame_url(&tree, "c2").as_deref(), Some("about:srcdoc"));
         assert_eq!(frame_url(&tree, "nope"), None);
+    }
+
+    #[test]
+    fn only_a_failure_chrome_reported_is_known() {
+        assert!(navigation_failure_is_known(
+            "Navigation failed: net::ERR_NAME_NOT_RESOLVED"
+        ));
+        // Faults where the tab may already have navigated: unknown.
+        for e in [
+            "CDP command timed out: Page.navigate",
+            "the tab this command was driving is gone",
+            "Browser not launched",
+            "relay connection closed",
+        ] {
+            assert!(!navigation_failure_is_known(e), "{e}");
+        }
+    }
+
+    #[test]
+    fn returning_to_the_clicked_tab_reports_the_actual_pin() {
+        assert_eq!(return_warning(Ok(()), true, "t1"), None);
+        // The switch said yes but the pin is elsewhere: say where.
+        let moved = return_warning(Ok(()), false, "t3").unwrap();
+        assert!(moved.contains("it is on t3"));
+        // The switch failed: the reason and the real pin, not a guess.
+        let failed = return_warning(Err("Tab ID 1 not found".into()), false, "t2").unwrap();
+        assert!(failed.contains("Tab ID 1 not found"));
+        assert!(failed.contains("it is on t2"));
+        let none = return_warning(Err("x".into()), false, "no tab").unwrap();
+        assert!(none.contains("it is on no tab"));
     }
 
     #[test]

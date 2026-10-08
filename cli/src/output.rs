@@ -2570,9 +2570,12 @@ cookies.
 
 Everything else goes through Chrome, which comes to the front, and the click
 says so in openedTabWarning: same-site links (subdomains, http<->https of the
-same site), IP addresses, pages chrome-use cannot classify or whose header
-referrer policy it did not see, window.open, rel=opener, named targets, forms,
-handlers that stop the click, and pop-ups opened later.
+same site), IP addresses, localhost and hosts outside the Public Suffix List
+(on either end), links a page handler changes to another host during the
+click, links a ChooseBrowser rule applies to, pages whose header referrer
+policy chrome-use did not see, window.open, rel=opener, named targets, forms,
+handlers that stop the click, and pop-ups opened later. The decision is made
+after every page listener ran, with the link as the page left it.
 
 AGENT_BROWSER_BACKGROUND_LINKS: unset or `cross-site` (default) as above;
 `1`/`all` also opens same-site links in the background (they then lose

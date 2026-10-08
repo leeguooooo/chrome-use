@@ -557,6 +557,9 @@ pub struct DaemonState {
     /// (`""` for none), from `Network.responseReceived`. The opt-in link
     /// guard (#468) uses it; a frame missing here has an unknown header policy.
     document_referrer_policies: HashMap<String, String>,
+    /// A link guard armed by a click that stopped at a pending dialog: made
+    /// inert once the dialog is handled, before any later command.
+    stale_popup_guard: Option<popup_guard::ArmedGuard>,
     /// Newly created tabs whose domain initialization failed before session setup.
     pending_new_tab_setup: std::collections::HashSet<String>,
     /// Named persistent `script` JS contexts (#289). Each holds a resident boa
@@ -681,6 +684,7 @@ impl DaemonState {
             defer_click_tab_check: false,
             deferred_click_tab_check: None,
             document_referrer_policies: HashMap::new(),
+            stale_popup_guard: None,
             pending_new_tab_setup: std::collections::HashSet::new(),
             script_contexts: Default::default(),
             in_flight_requests: Vec::new(),
@@ -1782,8 +1786,17 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             }
         }
     }
+    // A link guard left armed by a click that stopped at a dialog (#468):
+    // once the dialog is gone, make it inert before this command runs.
+    if state.pending_dialog.is_none() {
+        disarm_stale_popup_guard(state).await;
+    }
     let before = context(state);
     let mut response = Box::pin(execute_command_inner(cmd, state)).await;
+    if cmd.get("action").and_then(Value::as_str) == Some("dialog") && state.pending_dialog.is_none()
+    {
+        disarm_stale_popup_guard(state).await;
+    }
     if let (Some(w), Some(obj)) = (rule_warning, response.as_object_mut()) {
         let merged = crate::profiles::merge_warning(obj.get("warning").and_then(Value::as_str), &w);
         obj.insert("warning".to_string(), json!(merged));
@@ -2156,6 +2169,13 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // BY the action starts before the settle does, so anchoring on "now" here
     // is what lets the wait see it (#228).
     let action_started_at = std::time::Instant::now();
+    // Which tab the session is on before the action, so an observation can
+    // tell when the action itself moved it (#468).
+    let target_before_action = state
+        .browser
+        .as_ref()
+        .and_then(|m| m.active_target_id().ok())
+        .map(ToString::to_string);
     // Frames known before the action, so the ones it opened can be named (#218).
     let frames_before: std::collections::HashSet<String> =
         state.iframe_sessions.keys().cloned().collect();
@@ -2548,13 +2568,16 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 }
             }
         }
-        // A `target=_blank` link chrome-use opened itself (#468) and followed:
-        // the click already moved the session, so the arm (on the clicked tab)
-        // describes the wrong tab, as after a follow above.
-        let followed_own_link = resp.get("data").is_some_and(|d| {
-            d.get("openedTabMode").is_some() && d.get("followed") == Some(&json!(true))
-        });
-        if followed_own_link {
+        // Whenever the action itself left the session on another tab (a
+        // `target=_blank` link chrome-use opened and followed, or one it could
+        // not return from, #468), the arm watched the old tab: drop it, as
+        // after a follow above.
+        let target_now = state
+            .browser
+            .as_ref()
+            .and_then(|m| m.active_target_id().ok())
+            .map(ToString::to_string);
+        if target_now != target_before_action {
             if let Some(a) = arm.take() {
                 super::settle::release_arm(state, &a).await;
             }
@@ -7336,12 +7359,30 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
             &session_id,
             &state.iframe_sessions,
         );
+        // The links the click may follow, classified by the daemon before
+        // the click; a link the page changes during the click to a host not
+        // classified here keeps Chrome's click.
+        let link_urls = click_candidate_links(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            selector,
+            &state.iframe_sessions,
+        )
+        .await;
+        let bound_ws = mgr.ws_url().to_string();
+        let (cb_skip, sid) = (state.cb_skip, state.session_id.clone());
+        let refuse = |url: &str| {
+            crate::profiles::guard_navigation(url, cb_skip, Some(&bound_ws), &sid).err()
+        };
         popup_guard::arm(
             &mgr.client,
             &guard_session,
             guard_frame.as_deref(),
             &state.document_referrer_policies,
             link_mode,
+            &link_urls,
+            &refuse,
         )
         .await
     } else {
@@ -7366,17 +7407,30 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         );
         Ok(())
     };
-    if let Some(dialog) =
-        wait_for_click_or_dialog(click_future, dialog_events, state.auto_dialog, &session_id)
-            .await?
-    {
-        let dialog_type = dialog.dialog_type.clone();
-        let message = dialog.message.clone();
-        state.pending_dialog = Some(dialog);
-        return Ok(json!({
-            "clicked": selector,
-            "dialog": { "type": dialog_type, "message": message, "pending": true },
-        }));
+    let clicked =
+        wait_for_click_or_dialog(click_future, dialog_events, state.auto_dialog, &session_id).await;
+    match clicked {
+        // The click failed: its guard must not act on a later click.
+        Err(e) => {
+            if let (Some(g), Some(mgr)) = (popup_guard.as_ref(), state.browser.as_ref()) {
+                popup_guard::disarm(&mgr.client, g).await;
+            }
+            return Err(e);
+        }
+        Ok(Some(dialog)) => {
+            // The page is blocked on the dialog, so the guard cannot be
+            // reached now; it is disarmed once the dialog is handled (and it
+            // leaves a click whose handlers outlast the dialog to Chrome).
+            state.stale_popup_guard = popup_guard;
+            let dialog_type = dialog.dialog_type.clone();
+            let message = dialog.message.clone();
+            state.pending_dialog = Some(dialog);
+            return Ok(json!({
+                "clicked": selector,
+                "dialog": { "type": dialog_type, "message": message, "pending": true },
+            }));
+        }
+        Ok(None) => {}
     }
 
     let mut out = json!({ "clicked": selector });
@@ -7478,6 +7532,53 @@ fn popup_guard_location(
     }
 }
 
+/// Make a link guard left by a click that stopped at a dialog inert (#468).
+async fn disarm_stale_popup_guard(state: &mut DaemonState) {
+    if let Some(g) = state.stale_popup_guard.take() {
+        if let Some(mgr) = state.browser.as_ref() {
+            popup_guard::disarm(&mgr.client, &g).await;
+        }
+    }
+}
+
+/// The links a click on `selector` may follow, read before the click so the
+/// daemon can classify their sites (#468). Empty when the element cannot be
+/// resolved; every link then keeps Chrome's click.
+async fn click_candidate_links(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Vec<String> {
+    let Ok((object_id, eff_session)) = super::element::resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector,
+        iframe_sessions,
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    let res = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object_id,
+                "functionDeclaration": popup_guard::CANDIDATE_LINKS_FUNCTION,
+                "returnByValue": true,
+            })),
+            Some(&eff_session),
+        )
+        .await;
+    res.ok()
+        .and_then(|v| v.pointer("/result/value").cloned())
+        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default()
+}
+
 /// Open a `target=_blank` link the click's guard took over (#468) the way
 /// `tab new` opens a tab — in the background, owned by the session, with its
 /// setup — then load the link with the clicked page as referrer. Reported
@@ -7489,6 +7590,30 @@ async fn open_link_in_background(
     follow: bool,
 ) -> Value {
     let mut out = json!({ "openedTabMode": "background" });
+    // The ChooseBrowser guard every navigation goes through (#466): the
+    // daemon sends this one itself, so it is checked here. Refused: nothing
+    // is opened, and the click (already cancelled) is not replayed.
+    let bound_ws = state.browser.as_ref().map(|m| m.ws_url().to_string());
+    match crate::profiles::guard_navigation(
+        &link.url,
+        state.cb_skip,
+        bound_ws.as_deref(),
+        &state.session_id,
+    ) {
+        Ok(Some(w)) => out["warning"] = json!(w),
+        Ok(None) => {}
+        Err(msg) => {
+            return json!({
+                "openedTabMode": "background",
+                "openedTabStatus": "refused",
+                "openedTabWarning": format!(
+                    "the click's target=_blank link ({}) was not opened: {msg} The click's own \
+                     action was cancelled and is not repeated.",
+                    link.url
+                ),
+            });
+        }
+    }
     let clicked_target = state
         .browser
         .as_ref()
@@ -7498,24 +7623,27 @@ async fn open_link_in_background(
         (Some(m), Some(t)) => m.tab_id_for_target(t),
         _ => None,
     };
-    let not_opened = |why: String| {
-        json!({
-            "openedTabMode": "background",
-            "openedTabStatus": "failed",
-            "openedTabWarning": format!(
-                "the click's link was not opened ({why}). chrome-use opens a target=_blank link \
-                 itself so Chrome does not come to the front; run `tab new {}` to open it.",
-                link.url
-            ),
-        })
-    };
     let created = match handle_tab_new(&json!({}), state).await {
         Ok(v) => v,
         Err(e) => {
-            return_to_clicked_tab(state, clicked_tab, clicked_target.as_deref()).await;
-            return not_opened(e);
+            let mut failed = json!({
+                "openedTabMode": "background",
+                "openedTabStatus": "failed",
+                "openedTabWarning": format!(
+                    "the click's target=_blank link ({}) was not opened: chrome-use could not \
+                     create its tab ({e}). The click's own action was cancelled.",
+                    link.url
+                ),
+            });
+            if let Some(w) =
+                return_to_clicked_tab(state, clicked_tab, clicked_target.as_deref()).await
+            {
+                failed["sessionWarning"] = json!(w);
+            }
+            return failed;
         }
     };
+    let tab_id = created.get("tabId").cloned().unwrap_or(Value::Null);
     let wait = if follow {
         WaitUntil::Load
     } else {
@@ -7525,71 +7653,110 @@ async fn open_link_in_background(
         Some(mgr) => mgr.navigate_from(&link.url, wait, link.referrer()).await,
         None => Err("Browser not launched".to_string()),
     };
-    let tab_id = created.get("tabId").cloned().unwrap_or(Value::Null);
-    let nav = match nav {
-        Ok(v) => v,
-        Err(e) => {
-            if !follow {
-                return_to_clicked_tab(state, clicked_tab, clicked_target.as_deref()).await;
+    match nav {
+        Ok(nav) => {
+            let url = nav
+                .get("url")
+                .and_then(Value::as_str)
+                .filter(|u| !u.is_empty() && *u != "about:blank")
+                .unwrap_or(&link.url)
+                .to_string();
+            let title = nav.get("title").and_then(Value::as_str).unwrap_or("");
+            out["openedTab"] = json!({ "tabId": tab_id, "url": url, "title": title });
+            if let Some(w) = nav.get("warning") {
+                out["openedTab"]["warning"] = w.clone();
             }
-            let mut failed = not_opened(e);
-            failed["openedTab"] = json!({ "tabId": tab_id, "url": "about:blank", "title": "" });
-            return failed;
         }
-    };
-    let url = nav
-        .get("url")
-        .and_then(Value::as_str)
-        .filter(|u| !u.is_empty() && *u != "about:blank")
-        .unwrap_or(&link.url)
-        .to_string();
-    let title = nav.get("title").and_then(Value::as_str).unwrap_or("");
-    out["openedTab"] = json!({ "tabId": tab_id, "url": url, "title": title });
-    if let Some(w) = nav.get("warning") {
-        out["openedTab"]["warning"] = w.clone();
+        Err(e) => {
+            // Read back where the tab really is: a timeout may well have
+            // navigated. Only a failure Chrome reported is "failed"; anything
+            // else is "unknown", and nothing suggests opening it again.
+            let landed = match state.browser.as_ref() {
+                Some(mgr) => mgr.get_url().await,
+                None => String::new(),
+            };
+            let known = popup_guard::navigation_failure_is_known(&e);
+            out["openedTabStatus"] = json!(if known { "failed" } else { "unknown" });
+            out["openedTab"] = json!({ "tabId": tab_id, "url": landed, "title": "" });
+            out["openedTabWarning"] = json!(if known {
+                format!(
+                    "the click's target=_blank link ({}) did not load in its background tab \
+                     {}: {e}",
+                    link.url,
+                    tab_id.as_str().unwrap_or("?")
+                )
+            } else {
+                format!(
+                    "it is unknown whether the click's target=_blank link ({}) loaded in its \
+                     background tab {} ({e}); the tab is now on {}. Look at that tab before \
+                     doing anything else; do not open the link again.",
+                    link.url,
+                    tab_id.as_str().unwrap_or("?"),
+                    if landed.is_empty() {
+                        "an unknown page"
+                    } else {
+                        &landed
+                    }
+                )
+            });
+        }
     }
     if follow {
-        out["followed"] = json!(true);
+        // `tab new` already moved the session to the link's tab.
+        let on_new = state
+            .browser
+            .as_ref()
+            .and_then(|m| m.active_target_id().ok())
+            .map(ToString::to_string)
+            != clicked_target;
+        out["followed"] = json!(on_new);
     } else if let Some(w) =
         return_to_clicked_tab(state, clicked_tab, clicked_target.as_deref()).await
     {
-        out["openedTabWarning"] = json!(w);
+        out["sessionWarning"] = json!(w);
     }
     out
 }
 
 /// Put the session back on the tab that was clicked after `tab new` moved it
-/// to the link's tab. `Some(warning)` when it could not.
+/// to the link's tab. `Some(warning)` naming where the session really is
+/// when it could not; the ref context follows the actual pin either way.
 async fn return_to_clicked_tab(
     state: &mut DaemonState,
     clicked_tab: Option<u32>,
     clicked_target: Option<&str>,
 ) -> Option<String> {
-    let now = state
-        .browser
-        .as_ref()
-        .and_then(|m| m.active_target_id().ok())
-        .map(ToString::to_string);
+    let active = |state: &DaemonState| {
+        state
+            .browser
+            .as_ref()
+            .and_then(|m| m.active_target_id().ok())
+            .map(ToString::to_string)
+    };
+    let now = active(state);
     if now.as_deref() == clicked_target {
         return None;
     }
-    let (Some(tab), Some(target)) = (clicked_tab, clicked_target) else {
-        return Some("the session could not return to the clicked tab. Run `tab list`.".into());
+    let switched = match (clicked_tab, state.browser.as_mut()) {
+        (Some(tab), Some(mgr)) => mgr.tab_switch_by_id(tab).await.map(|_| ()),
+        _ => Err("the clicked tab is not known".to_string()),
     };
-    let switched = match state.browser.as_mut() {
-        Some(mgr) => mgr.tab_switch_by_id(tab).await,
-        None => Err("Browser not launched".to_string()),
-    };
-    match switched {
-        Ok(_) => {
-            state.switch_tab_context(now.as_deref(), target);
-            None
+    // Sync the ref context with wherever the session is pinned now.
+    let pinned = active(state);
+    match pinned.as_deref() {
+        Some(p) => state.switch_tab_context(now.as_deref(), p),
+        None => {
+            state.ref_map.clear();
+            state.iframe_sessions.clear();
+            state.active_frame_id = None;
         }
-        Err(e) => Some(format!(
-            "the session could not return to the clicked tab ({e}); it is on the link's tab. \
-             Run `tab list`."
-        )),
     }
+    let at = pinned
+        .as_deref()
+        .and_then(|t| state.browser.as_ref()?.tab_id_for_target(t))
+        .map(super::browser::format_tab_id)
+        .unwrap_or_else(|| "no tab".to_string());
+    popup_guard::return_warning(switched, pinned.as_deref() == clicked_target, &at)
 }
 
 /// The tail of a click: give a just-opened tab its grace period (only what is

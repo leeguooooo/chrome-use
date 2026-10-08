@@ -510,7 +510,9 @@
         extra <code>about:blank</code> history entry, and a cross-site link that redirects back to the page's site
         arrives without <code>SameSite=Strict</code> cookies. Everything else goes through Chrome and the click says so
         in <code>openedTabWarning</code>: same-site links (subdomains, http↔https of the same site), IP addresses,
-        unclassifiable pages, <code>window.open</code>, <code>rel=opener</code>, named targets, forms, handlers that
+        <code>localhost</code> and hosts outside the Public Suffix List (on either end), links a handler changes to
+        another host during the click, links a ChooseBrowser rule applies to, unclassifiable pages,
+        <code>window.open</code>, <code>rel=opener</code>, named targets, forms, handlers that
         stop the click, and pop-ups opened later. <code>AGENT_BROWSER_BACKGROUND_LINKS</code>: unset or
         <code>cross-site</code> (default); <code>1</code>/<code>all</code> also takes same-site links, which then lose
         their <code>SameSite=Strict</code> cookies; <code>0</code>/<code>off</code> never. The daemon reads it when it

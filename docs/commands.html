@@ -489,7 +489,8 @@
         没有被取消时，链接在本会话的后台标签里打开（<code>openedTabMode: "background"</code>），并带上当前页作为 referrer（需要 ab-connect 0.5.31+）。
         请求头、cookie 和 referrer 与 Chrome 自己的点击一致；新标签多一条 <code>about:blank</code> 历史记录；跨站链接重定向回当前站点时，
         最后一跳收不到 <code>SameSite=Strict</code> cookie。其余情况仍由 Chrome 打开，Chrome 会跑到前面，click 会在 <code>openedTabWarning</code>
-        里说明：同站链接（子域名、同一站点的 http↔https）、IP 地址、无法判断站点的页面、<code>window.open</code>、<code>rel=opener</code>、具名窗口、
+        里说明：同站链接（子域名、同一站点的 http↔https）、IP 地址、<code>localhost</code> 和不在公共后缀列表里的主机（页面或链接任一端）、
+        点击过程中被处理函数改到另一个主机的链接、受 ChooseBrowser 规则约束的链接、无法判断站点的页面、<code>window.open</code>、<code>rel=opener</code>、具名窗口、
         表单、阻止了点击传播的处理函数，以及稍后才弹出的页面。<code>AGENT_BROWSER_BACKGROUND_LINKS</code>：不设或 <code>cross-site</code>（默认）如上；
         <code>1</code>/<code>all</code> 连同站链接也在后台打开，但它们会收不到 <code>SameSite=Strict</code> cookie；<code>0</code>/<code>off</code> 完全不接管。
         daemon 启动时读取这个变量：请在会话的第一条命令之前设置，或先 <code>close</code> 再重新开始。
