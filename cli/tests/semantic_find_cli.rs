@@ -289,7 +289,7 @@ mod browser {
             "untouched"
         );
         session.ok(&["eval", "Element.prototype.setAttribute=window.oldSet"]);
-        session.ok(&["eval", "document.querySelector('#account-b').innerHTML='<h2>Beta account</h2><button onclick=\"document.querySelector(\'#receipt\').textContent=\'nested\'\"><span>Commit</span><span>Commit</span></button><div role=\"button\" onclick=\"document.querySelector(\'#receipt\').textContent=\'custom\'\"><span id=\"inner-leaf\">Custom Save</span></div>'"]);
+        session.ok(&["eval", r##"document.querySelector('#account-b').innerHTML=`<h2>Beta account</h2><button onclick="document.querySelector('#receipt').textContent='nested'"><span>Commit</span><span>Commit</span></button><div role="button" onclick="document.querySelector('#receipt').textContent='custom'"><span id="inner-leaf">Custom Save</span></div>`"##]);
         session.ok(&[
             "find", "text", "Commit", "click", "--exact", "--within", &scope,
         ]);
