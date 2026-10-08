@@ -553,6 +553,10 @@ pub struct DaemonState {
     /// and the observation runs the check after its settle.
     defer_click_tab_check: bool,
     deferred_click_tab_check: Option<DeferredClickTabCheck>,
+    /// Frame id → the `Referrer-Policy` its document's response header set
+    /// (`""` for none), from `Network.responseReceived`. The opt-in link
+    /// guard (#468) uses it; a frame missing here has an unknown header policy.
+    document_referrer_policies: HashMap<String, String>,
     /// Newly created tabs whose domain initialization failed before session setup.
     pending_new_tab_setup: std::collections::HashSet<String>,
     /// Named persistent `script` JS contexts (#289). Each holds a resident boa
@@ -676,6 +680,7 @@ impl DaemonState {
             last_unconfirmed_tab_switch: None,
             defer_click_tab_check: false,
             deferred_click_tab_check: None,
+            document_referrer_policies: HashMap::new(),
             pending_new_tab_setup: std::collections::HashSet::new(),
             script_contexts: Default::default(),
             in_flight_requests: Vec::new(),
@@ -1216,6 +1221,18 @@ impl DaemonState {
         loop {
             match rx.try_recv() {
                 Ok(event) => {
+                    // A document's header referrer policy, for the opt-in link
+                    // guard (#468). Recorded whatever else handles the event.
+                    if event.method == "Network.responseReceived" {
+                        if let Some((frame, policy)) =
+                            popup_guard::document_referrer_policy(&event.params)
+                        {
+                            if self.document_referrer_policies.len() > 512 {
+                                self.document_referrer_policies.clear();
+                            }
+                            self.document_referrer_policies.insert(frame, policy);
+                        }
+                    }
                     // Target events are not session-scoped; handle them first
                     match event.method.as_str() {
                         "Target.targetCreated" => {
@@ -7302,18 +7319,26 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // Over the relay a pop-up from our tab is found in chrome.tabs, so record
     // which Chrome tabs exist before the click (#456).
     let relay_before = mgr.relay_tab_baseline().await;
-    // A tab the page opens raises Chrome over the user's app, so on the relay a
-    // plain `target=_blank` link is opened by us in a background tab instead
-    // (#468). The guard is armed in the clicked element's frame.
+    // A tab the page opens raises Chrome over the user's app (#468). With
+    // AGENT_BROWSER_BACKGROUND_LINKS on, a plain `target=_blank` link is opened
+    // by us in a background tab instead; the guard is armed in the clicked
+    // element's frame. Off by default: that is not identical to Chrome's click.
     let may_open_links = mgr.click_may_open_links_itself();
-    let popup_guard = if may_open_links && button == "left" && click_count == 1 {
+    let opted_in = popup_guard::background_links_opt_in();
+    let popup_guard = if opted_in && may_open_links && button == "left" && click_count == 1 {
         let (guard_session, guard_frame) = popup_guard_location(
             &state.ref_map,
             selector,
             &session_id,
             &state.iframe_sessions,
         );
-        popup_guard::arm(&mgr.client, &guard_session, guard_frame.as_deref()).await
+        popup_guard::arm(
+            &mgr.client,
+            &guard_session,
+            guard_frame.as_deref(),
+            &state.document_referrer_policies,
+        )
+        .await
     } else {
         None
     };
@@ -7369,6 +7394,11 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         merge_object(&mut out, extra);
         return Ok(out);
     }
+    // Armed but unreadable: the guard may have cancelled a link nobody will
+    // open. Say so; the click is never repeated.
+    if popup_guard.is_some() && guard_report.is_none() {
+        out["openedTabWarning"] = json!(popup_guard::UNREAD_NOTE);
+    }
     let pending = DeferredClickTabCheck {
         before,
         relay_before,
@@ -7380,6 +7410,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                     .as_ref()
                     .and_then(|r| r.left_to_chrome())
                     .as_deref(),
+                opted_in,
             )
         }),
     };
@@ -7407,8 +7438,9 @@ pub(crate) struct DeferredClickTabCheck {
     /// [`CLICK_NEW_TAB_GRACE_MS`] after it, never less.
     clicked_at: std::time::Instant,
     /// Added to `openedTabWarning` when the page opened a tab through Chrome,
-    /// which raises its window (#468). Set only where chrome-use would have
-    /// opened a plain link itself (the relay, a tab the session created).
+    /// which raises its window (#468). Set only where chrome-use could open a
+    /// plain link itself (the relay, a tab the session created), whether or
+    /// not AGENT_BROWSER_BACKGROUND_LINKS is on.
     raised_note: Option<String>,
 }
 

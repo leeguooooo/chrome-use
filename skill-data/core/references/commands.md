@@ -480,18 +480,28 @@ did not answer within the check's budget, so it may be attached but is not
 tracked). The check is bounded: about 2 s to find the tab plus 3 s to attach
 it. `tab adopt <url>` picks such a tab up later.
 
-A tab a page opens itself brings Chrome to the front over whatever app the user
-is in (Chrome activates the window it opens a tab in, background tabs
-included). So in your own Chrome, in a tab the session created, chrome-use
-opens a plain `target=_blank` link itself: a left click without modifiers on an
-`<a>`/`<area>` with an http(s) href and no `rel=opener`, `download` or `ping`.
-The click is delivered as usual and the page's click handlers all run; if none
-of them cancelled it, chrome-use cancels Chrome's own navigation and opens the
-link in a background tab of the session (`openedTabMode: "background"`), with
-the page as referrer under the link's referrer policy (ab-connect 0.5.31+).
-`window.open`,
-`rel=opener`, named targets and forms still go through Chrome, and the click
-then says in `openedTabWarning` that Chrome may have come to the front.
+A tab a page opens itself (`target=_blank`, `window.open`) brings Chrome to the
+front over whatever app the user is in: Chrome activates the window it opens a
+tab in, background tabs included. In your own Chrome the click then says so in
+`openedTabWarning` (#468).
+
+`AGENT_BROWSER_BACKGROUND_LINKS=1` (opt-in, per daemon) makes chrome-use open
+plain `target=_blank` links itself, in a tab the session created: a left click
+without modifiers on an `<a>`/`<area>` with an http(s) href and no
+`rel=opener`, `download` or `ping`. The click is delivered as usual and the
+page's click handlers all run; if none of them cancelled it, chrome-use cancels
+Chrome's own navigation and opens the link in a background tab of the session
+(`openedTabMode: "background"`), with the page as referrer under the effective
+referrer policy (ab-connect 0.5.31+). This is not identical to Chrome's click:
+- the new tab has an extra `about:blank` history entry;
+- the request counts as cross-site, also for same-site and same-origin links,
+  so `SameSite=Strict` cookies are not sent (also after a redirect back to the
+  page's site);
+- a `Referrer-Policy` set by HTTP header is honoured only when chrome-use saw
+  that document's response; otherwise the default policy is used.
+
+`window.open`, `rel=opener`, named targets, forms and links whose handlers stop
+the click always go through Chrome.
 
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization

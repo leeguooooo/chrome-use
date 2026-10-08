@@ -2557,13 +2557,18 @@ but not taken sets openedTabWarning and openedTabStatus: `unadopted` (left
 alone on purpose) or `unknown` (no answer within about 2 s to find plus 3 s to
 attach; it may be attached but is not tracked).
 
-A tab a page opens itself brings Chrome to the front over whatever app the
-user is in. So in your own Chrome, in a tab the session created, a plain left
-click on a target=_blank link (http/https, no rel=opener, download or ping) is
-taken over after the page's own click handlers ran: chrome-use opens the link
-in a background tab of the session instead (openedTabMode: `background`), with
-the page as referrer. window.open and other
-pop-ups still go through Chrome; the click then says so in openedTabWarning.
+A tab a page opens itself (target=_blank, window.open) brings Chrome to the
+front over whatever app the user is in; in your own Chrome the click then says
+so in openedTabWarning (#468). With AGENT_BROWSER_BACKGROUND_LINKS=1, in a tab
+the session created, a plain left click on a target=_blank link (http/https,
+no rel=opener, download or ping) is taken over after the page's own click
+handlers ran, and chrome-use opens the link in a background tab of the session
+(openedTabMode: `background`), with the page as referrer. That differs from
+Chrome's click: the new tab has an extra about:blank history entry, the
+request counts as cross-site (no SameSite=Strict cookies, also for same-site
+links), and a header referrer policy chrome-use did not see is replaced by the
+default. window.open, rel=opener and handlers that stop the click always go
+through Chrome.
 
 Global Options:
   --json               Output as JSON

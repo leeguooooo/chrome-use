@@ -2382,7 +2382,8 @@ impl BrowserManager {
     }
 
     /// Whether a click here may take over a `target=_blank` link and open it
-    /// in a background tab of this session (#468): only on the relay (the
+    /// in a background tab of this session (#468, opt-in with
+    /// AGENT_BROWSER_BACKGROUND_LINKS): only on the relay (the
     /// user's own Chrome), and only in a tab the session created. A link in a
     /// user tab taken with `tab adopt` opens the user's tab, as before (#460).
     pub fn click_may_open_links_itself(&self) -> bool {

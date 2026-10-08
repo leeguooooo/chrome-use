@@ -500,14 +500,17 @@
         it up later.
       </p>
       <p>
-        A tab a page opens itself brings Chrome to the front over whatever app you are in. So in your own Chrome, in a
-        tab the session created, chrome-use opens a plain <code>target=_blank</code> link itself (left click, no
-        modifiers, http(s) href, no <code>rel=opener</code>, <code>download</code> or <code>ping</code>): the page's
-        click handlers all run first, and if none cancelled the click the link opens in a background tab of the
-        session (<code>openedTabMode: "background"</code>), with the page as referrer under the link's referrer policy
-        (ab-connect 0.5.31+).
-        <code>window.open</code>, <code>rel=opener</code>, named targets and forms still go through Chrome, and the
-        click then says in <code>openedTabWarning</code> that Chrome may have come to the front.
+        A tab a page opens itself (<code>target=_blank</code>, <code>window.open</code>) brings Chrome to the front over
+        whatever app you are in; in your own Chrome the click then says so in <code>openedTabWarning</code> (#468).
+        With <code>AGENT_BROWSER_BACKGROUND_LINKS=1</code> (opt-in), in a tab the session created, chrome-use opens a
+        plain <code>target=_blank</code> link itself (left click, no modifiers, http(s) href, no
+        <code>rel=opener</code>, <code>download</code> or <code>ping</code>): the page's click handlers all run first,
+        and if none cancelled the click the link opens in a background tab of the session
+        (<code>openedTabMode: "background"</code>), with the page as referrer (ab-connect 0.5.31+). That differs from
+        Chrome's click: an extra <code>about:blank</code> history entry, the request counts as cross-site (no
+        <code>SameSite=Strict</code> cookies, also for same-site links), and a header referrer policy chrome-use did
+        not see is replaced by the default. <code>window.open</code>, <code>rel=opener</code>, named targets, forms
+        and handlers that stop the click always go through Chrome.
       </p>
       <p>
         <code>tab new</code>, <code>tab select</code>, and <code>tab adopt</code> stay in the background by default.
