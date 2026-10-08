@@ -431,27 +431,53 @@ pub fn diagnose() -> Diagnosis {
     d
 }
 
-/// The whole lookup, against the real files. `None` for every ordinary reason:
-/// ChooseBrowser is not installed, the format is newer than we understand, no
-/// rule covers this url, or the profile it names is not on this machine.
+/// What the rules say about one url, keeping apart "no rule" and "a rule
+/// whose profile is gone": the second is a stale rule the user should hear
+/// about, even though it does not block anything.
+#[derive(Debug, PartialEq, Clone)]
+pub enum RuleLookup {
+    NoRule,
+    Resolved(ResolvedProfile, ProfileChoice),
+    /// A rule covers the url, but its key names no profile in `Local State`.
+    Stale(ProfileChoice),
+}
+
+/// Pure half of [`lookup_url`]. An unreadable `Local State` (Chrome never ran
+/// here) says nothing about the rule, so it is `NoRule`, not `Stale`.
+pub fn resolve_choice(choice: Option<ProfileChoice>, local_state: Option<&str>) -> RuleLookup {
+    let (Some(choice), Some(local_state)) = (choice, local_state) else {
+        return RuleLookup::NoRule;
+    };
+    // A key that resolves to nothing means no profile from the rule. Falling
+    // back to *some other* profile by guessing would open the link as the
+    // wrong identity.
+    match resolve_profile_directory(local_state, &choice.key) {
+        Some(profile) => RuleLookup::Resolved(profile, choice),
+        None => RuleLookup::Stale(choice),
+    }
+}
+
+/// The whole lookup against the real files. `NoRule` for every ordinary
+/// reason: ChooseBrowser is not installed, the format is newer than we
+/// understand, or no rule covers this url.
 ///
-/// A `Some` is binding: the caller either opens the url in that profile or
+/// `Resolved` is binding: the caller either opens the url in that profile or
 /// refuses with the reason. It never substitutes another profile because the
-/// named one is not connected (see `profiles::decide_rule`).
-pub fn profile_for_url(url: &str) -> Option<(ResolvedProfile, ProfileChoice)> {
+/// named one is not connected (see `profiles::decide_rule`). `Stale` is only a
+/// warning: a rule naming a profile that no longer exists must not block its
+/// site.
+pub fn lookup_url(url: &str) -> RuleLookup {
     // First path that both exists and yields a decision. A file that parses to
     // "no rule covers this url" is a real answer, so keep looking only while
     // nothing has answered at all.
     let choice = rules_paths().into_iter().find_map(|p| {
         let body = std::fs::read_to_string(p).ok()?;
         choose_for_url(&body, url)
-    })?;
-    let local_state = read_local_state()?;
-    // A key that resolves to nothing means launching with no profile argument.
-    // Falling back to *some other* profile would open the link as the wrong
-    // identity, which is worse than opening it as the default one.
-    let profile = resolve_profile_directory(&local_state, &choice.key)?;
-    Some((profile, choice))
+    });
+    if choice.is_none() {
+        return RuleLookup::NoRule;
+    }
+    resolve_choice(choice, read_local_state().as_deref())
 }
 
 /// Chrome's profile registry, as text. `None` when Chrome has never run here.
@@ -689,6 +715,32 @@ mod tests {
 
     fn rules(body: &str) -> String {
         format!(r#"{{"version":2,"rules":[{body}]}}"#)
+    }
+
+    /// A rule whose key names no profile here is a stale rule, not "no rule":
+    /// the caller warns about it. Without a readable Local State nothing can
+    /// be said, so that stays "no rule".
+    #[test]
+    fn a_rule_naming_a_profile_that_is_gone_is_stale_not_absent() {
+        let ls = r#"{"profile":{"info_cache":{
+            "Profile 14":{"name":"Davian","user_name":"d@x.com","gaia_id":"222"}}}}"#;
+        let choice = |key: &str| ProfileChoice {
+            key: key.to_string(),
+            rule_id: Some("r9".to_string()),
+        };
+        assert_eq!(
+            resolve_choice(Some(choice("999")), Some(ls)),
+            RuleLookup::Stale(choice("999"))
+        );
+        assert!(matches!(
+            resolve_choice(Some(choice("222")), Some(ls)),
+            RuleLookup::Resolved(ref p, _) if p.directory == "Profile 14"
+        ));
+        assert_eq!(
+            resolve_choice(Some(choice("999")), None),
+            RuleLookup::NoRule
+        );
+        assert_eq!(resolve_choice(None, Some(ls)), RuleLookup::NoRule);
     }
 
     /// `doctor` lists each rule in the shape ChooseBrowser shows it, and only

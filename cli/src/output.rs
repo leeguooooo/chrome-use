@@ -4875,6 +4875,8 @@ ChooseBrowser rules are binding (macOS, when that app is installed):
   `navigate`/`tab new <url>` of the rule's site fails: use a new --session
   (it picks the rule's profile) or pass --no-choosebrowser to open it in the
   bound profile anyway. --browser and config routes still win over the rule.
+  A rule naming a profile that no longer exists on this machine is ignored
+  with a warning line (`warning` in --json); the command still runs.
   `chrome-use doctor` lists each rule and whether its profile is connected.
 
 Examples:

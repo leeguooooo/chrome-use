@@ -135,7 +135,9 @@ a different profile:
   names profile Y, the command fails. Use a new `--session` (it picks Y), or
   pass `--no-choosebrowser` to open it in X anyway.
 
-`--browser` and config routes still win over a rule. `chrome-use doctor`
+`--browser` and config routes still win over a rule. A rule naming a profile
+that no longer exists on this machine does not block anything: the command
+runs with normal selection and prints one warning (`warning` in `--json`). `chrome-use doctor`
 lists each rule and whether its profile is connected.
 
 **Every profile at once (opt-in).** Chrome's `ExtensionInstallForcelist`

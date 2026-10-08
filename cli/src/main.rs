@@ -204,6 +204,15 @@ fn configured_profile_ws(selector: &str, why: &str) -> String {
     }
 }
 
+/// Add a CLI-side note to the response's `warning` without dropping one the
+/// daemon already set (same newline-joined shape the daemon uses).
+fn merge_warning(existing: Option<String>, note: &str) -> String {
+    match existing.filter(|e| !e.is_empty()) {
+        Some(e) => format!("{note}\n{e}"),
+        None => note.to_string(),
+    }
+}
+
 fn target_url_for_choosebrowser(argv: &[String]) -> Option<String> {
     const NAVIGATES: &[&str] = &["open", "goto", "navigate"];
     let verb = argv.first()?.as_str();
@@ -2405,6 +2414,10 @@ fn main() {
     // Which relay endpoint this invocation picked for the session, and why —
     // for the one-line "profile: …" note (#437).
     let mut profile_choice: Option<(String, String)> = None;
+    // A ChooseBrowser rule covering this url whose profile no longer exists on
+    // this machine: not a refusal, but said once (stderr, or `warning` in
+    // --json) so a rule that silently does nothing is visible.
+    let mut stale_rule_warning: Option<String> = None;
     let first_attach = !connection::daemon_ready(&flags.session);
     // `--profile` / AGENT_BROWSER_PROFILE doubles as a profile selector when it
     // names a Chrome profile (display name, directory, email, id). A path or
@@ -2485,7 +2498,12 @@ fn main() {
         let rule_hit = if flags.no_choosebrowser || flags.cdp.is_some() {
             None
         } else {
-            target_url.as_deref().and_then(profiles::rule_hit_for_url)
+            let (hit, stale) = target_url
+                .as_deref()
+                .map(profiles::rule_hit_for_url)
+                .unwrap_or((None, None));
+            stale_rule_warning = stale;
+            hit
         };
         if rule_hit.is_some() {
             let rows = profiles::load_rows();
@@ -2580,7 +2598,9 @@ fn main() {
             let hit = if routed_by_config {
                 None
             } else {
-                profiles::rule_hit_for_url(&url)
+                let (hit, stale) = profiles::rule_hit_for_url(&url);
+                stale_rule_warning = stale;
+                hit
             };
             if hit.is_some() {
                 let record = profiles::session_profile(&flags.session);
@@ -2989,6 +3009,9 @@ fn main() {
         if !flags.json {
             eprintln!("{}", color::dim(&profiles::profile_line(note)));
         }
+    }
+    if let (false, Some(w)) = (flags.json, &stale_rule_warning) {
+        eprintln!("{} {w}", color::warning_indicator());
     }
     if flags.force_launch && flags.cdp.is_none() && flags.provider.is_none() {
         connection::mark_session_launched(&flags.session);
@@ -3795,6 +3818,9 @@ fn main() {
                     _ => {}
                 }
             }
+            if let (true, Some(w)) = (flags.json, &stale_rule_warning) {
+                resp.warning = Some(merge_warning(resp.warning.take(), w));
+            }
             print_response_with_opts(&resp, action, &output_opts);
             // `expect` is an assertion: map to a 3-way exit code so it composes in
             // shells/CI — 0 pass, 1 condition false, 2 un-evaluable (transport
@@ -4487,6 +4513,15 @@ mod tests {
     /// `tab new <url>` opens a site as much as `open` does, so a ChooseBrowser
     /// rule has to see it — otherwise a bound session could open the site in
     /// the wrong profile through the side door.
+    /// The stale-rule note joins a warning the daemon already set instead of
+    /// replacing it.
+    #[test]
+    fn merge_warning_keeps_the_daemons_warning() {
+        assert_eq!(merge_warning(None, "a"), "a");
+        assert_eq!(merge_warning(Some(String::new()), "a"), "a");
+        assert_eq!(merge_warning(Some("b".into()), "a"), "a\nb");
+    }
+
     #[test]
     fn tab_new_with_a_url_is_a_navigation_for_the_rule_lookup() {
         let t = |a: &[&str]| target_url_for_choosebrowser(&argv(a));

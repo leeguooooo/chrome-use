@@ -723,20 +723,45 @@ pub fn decide_rule(
     }
 }
 
-/// Resolve the rule covering `url` (if any) against the real files.
-pub fn rule_hit_for_url(url: &str) -> Option<RuleHit> {
-    let (profile, choice) = crate::choosebrowser::profile_for_url(url)?;
+/// The warning for a rule whose profile key matches nothing in `Local State`.
+/// Not a refusal: a stale rule must not block every visit to its site, but the
+/// user should learn that the rule they rely on is doing nothing.
+pub fn stale_rule_warning(host: &str, choice: &crate::choosebrowser::ProfileChoice) -> String {
+    let rule = match &choice.rule_id {
+        Some(id) => format!("ChooseBrowser rule ({id})"),
+        None => "ChooseBrowser rule".to_string(),
+    };
+    format!(
+        "the {rule} for {host} names Chrome profile \"{}\", which no longer exists on this \
+         machine — the rule is ignored and normal profile selection applies. Update or \
+         delete it in ChooseBrowser.",
+        choice.key
+    )
+}
+
+/// The rule covering `url`, resolved against the real files: a hit, or the
+/// warning for a stale rule, or neither.
+pub fn rule_hit_for_url(url: &str) -> (Option<RuleHit>, Option<String>) {
     let host = url::Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(str::to_string))
         .unwrap_or_else(|| url.to_string());
-    Some(RuleHit {
-        host,
-        rule_id: choice.rule_id,
-        root: crate::choosebrowser::chrome_root().map(|p| p.display().to_string()),
-        dir: profile.directory,
-        email: profile.email,
-    })
+    match crate::choosebrowser::lookup_url(url) {
+        crate::choosebrowser::RuleLookup::NoRule => (None, None),
+        crate::choosebrowser::RuleLookup::Stale(choice) => {
+            (None, Some(stale_rule_warning(&host, &choice)))
+        }
+        crate::choosebrowser::RuleLookup::Resolved(profile, choice) => (
+            Some(RuleHit {
+                host,
+                rule_id: choice.rule_id,
+                root: crate::choosebrowser::chrome_root().map(|p| p.display().to_string()),
+                dir: profile.directory,
+                email: profile.email,
+            }),
+            None,
+        ),
+    }
 }
 
 // --- Per-session record ------------------------------------------------------
@@ -1718,6 +1743,26 @@ mod tests {
         let mut v = row.to_json();
         v["label"] = json!(row.label());
         v
+    }
+
+    #[test]
+    fn a_stale_rule_warning_names_the_rule_and_says_the_profile_is_gone() {
+        let w = stale_rule_warning(
+            "claude.ai",
+            &crate::choosebrowser::ProfileChoice {
+                key: "1234567890".to_string(),
+                rule_id: Some("rule-7".to_string()),
+            },
+        );
+        for want in [
+            "ChooseBrowser rule (rule-7)",
+            "claude.ai",
+            "\"1234567890\"",
+            "no longer exists on this machine",
+            "ignored",
+        ] {
+            assert!(w.contains(want), "missing {want:?} in: {w}");
+        }
     }
 
     #[test]

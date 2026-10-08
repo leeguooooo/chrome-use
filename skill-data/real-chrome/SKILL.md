@@ -40,7 +40,7 @@ A matching rule is binding; chrome-use never substitutes another profile for the
 - the rule's profile is not connected — the error names the rule and `chrome-use connect --browser <profile>`. That opens a window in the user's Chrome, so **ask the user first**.
 - the session is already bound to a different profile — sessions never switch profiles. Use a new `--session <name>` (it picks the rule's profile), or pass `--no-choosebrowser` if the user wants the site in the bound profile anyway.
 
-An explicit `--browser` or a config route still wins over the rule. `chrome-use doctor` lists each rule and whether its profile is connected. `click` and `snapshot` do not consult routing rules.
+An explicit `--browser` or a config route still wins over the rule. A rule whose profile no longer exists on this machine is ignored with a warning (`warning` in `--json`); tell the user the rule is stale rather than assuming the account is right. `chrome-use doctor` lists each rule and whether its profile is connected. `click` and `snapshot` do not consult routing rules.
 
 Once installed, plain `chrome-use open <url>` auto-connects through the
 extension relay — `auto_connect_cdp` **prefers the live relay over a raw
