@@ -5601,7 +5601,7 @@ mod stale_fill_tests {
                             let f = p["functionDeclaration"].as_str().unwrap_or("");
                             if stale_now {
                                 Err("Could not find object with given id")
-                            } else if f.contains("monacoCandidates") {
+                            } else if f.contains("const v = ") {
                                 // The page-side half of fill: focused + selected.
                                 Ok(
                                     json!({ "result": { "type": "string", "value": "input-trusted" } }),
