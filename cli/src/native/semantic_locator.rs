@@ -194,6 +194,7 @@ async fn locate_inner(
     let action = cmd["action"].as_str().unwrap_or("");
     let exact = cmd["exact"].as_bool().unwrap_or(false);
     let mut candidates: Vec<(String, Option<(String, String)>)> = Vec::new();
+    let mut ax_descriptions = std::collections::HashMap::new();
     if action == "getbyrole" || action == "getbylabel" {
         let described = client
             .send_command(
@@ -254,6 +255,7 @@ async fn locate_inner(
                     "too many semantic candidates; narrow --within; nothing was dispatched".into(),
                 );
             }
+            ax_descriptions.insert(backend, (role.to_string(), name.to_string()));
             let resolved = client
                 .send_command(
                     "DOM.resolveNode",
@@ -316,10 +318,11 @@ async fn locate_inner(
             .map(|object| (object, None))
             .collect();
     }
-    let inspect = r#"function(scope,label){ if(label && !(this.labels?.length || this.hasAttribute('aria-label') || this.hasAttribute('aria-labelledby'))) return null; if(!this.isConnected || !scope.isConnected || !scope.contains(this)) return null; const safeText=element=>{if(element.isContentEditable || ['textbox','searchbox'].includes(element.getAttribute('role')) || ['INPUT','TEXTAREA','SELECT'].includes(element.tagName))return '';const copy=element.cloneNode(true);copy.querySelectorAll('input,textarea,select,[contenteditable],[role=textbox],[role=searchbox]').forEach(e=>e.remove());return copy.textContent || '';}; const r=this.getBoundingClientRect(); const visible=r.width>0 && r.height>0 && (typeof this.checkVisibility!=='function' || this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})); return {tag:this.tagName.toLowerCase(), visible, role:this.getAttribute('role') || '', name:(this.getAttribute('aria-label') || this.getAttribute('title') || (safeText(this)) || '').slice(0,80), selector:this.id ? '#' + CSS.escape(this.id) : this.tagName.toLowerCase(), context:(()=>{const heading=this.closest('article,section,fieldset,[role=group]')?.querySelector('h1,h2,h3,legend');if(!heading || heading.isContentEditable || ['textbox','searchbox'].includes(heading.getAttribute('role')))return '';return safeText(heading).trim().slice(0,80);})()}; }"#;
+    let inspect = r#"function(scope,label){ if(label && !(this.labels?.length || this.hasAttribute('aria-label') || this.hasAttribute('aria-labelledby'))) return null; if(!this.isConnected || !scope.isConnected || !scope.contains(this)) return null; const safeText=element=>{if(element.isContentEditable || ['textbox','searchbox'].includes(element.getAttribute('role')) || ['INPUT','TEXTAREA','SELECT'].includes(element.tagName))return '';const copy=element.cloneNode(true);copy.querySelectorAll('input,textarea,select,[contenteditable],[role=textbox],[role=searchbox]').forEach(e=>e.remove());return copy.textContent || '';}; const r=this.getBoundingClientRect(); const visible=r.width>0 && r.height>0 && (typeof this.checkVisibility!=='function' || this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})); return {_editableDescendants:!!this.querySelector('input,textarea,select,[contenteditable],[role=textbox],[role=searchbox]'), tag:this.tagName.toLowerCase(), visible, role:this.getAttribute('role') || (this.tagName==='BUTTON' ? 'button' : ''), name:(this.getAttribute('aria-label') || this.getAttribute('title') || (safeText(this)) || '').slice(0,80), selector:this.id ? '#' + CSS.escape(this.id) : this.tagName.toLowerCase(), context:(()=>{const heading=this.closest('article,section,fieldset,[role=group]')?.querySelector('h1,h2,h3,legend');if(!heading || heading.isContentEditable || ['textbox','searchbox'].includes(heading.getAttribute('role')))return '';return safeText(heading).trim().slice(0,80);})()}; }"#;
     let mut visible = Vec::new();
     let mut matched_count = 0;
     let mut details = Vec::new();
+    let mut selected_description = None;
     for (object, ax) in candidates {
         let mut info = call(
             client,
@@ -335,11 +338,15 @@ async fn locate_inner(
         matched_count += 1;
         if let Some((role, name)) = ax {
             info["role"] = json!(role);
-            info["name"] = json!(name.chars().take(80).collect::<String>());
+            if info["_editableDescendants"] != true {
+                info["name"] = json!(name.chars().take(80).collect::<String>());
+            }
         }
         if info["visible"] == true {
             visible.push(object.clone());
+            selected_description = Some(info.clone());
         }
+        info.as_object_mut().unwrap().remove("_editableDescendants");
         if details.len() < 8 {
             details.push(info);
         }
@@ -373,6 +380,17 @@ async fn locate_inner(
             .as_i64()
             .ok_or("target identity unavailable")?,
     };
+    let mut description = selected_description.ok_or("visible target description unavailable")?;
+    if let Some((role, name)) = ax_descriptions.get(&pin.target) {
+        description["role"] = json!(role);
+        if description["_editableDescendants"] != true {
+            description["name"] = json!(name.chars().take(80).collect::<String>());
+        }
+    }
+    description
+        .as_object_mut()
+        .unwrap()
+        .remove("_editableDescendants");
     if mark_target {
         let click = cmd["subaction"] == "click";
         let mark = call(client, sid, &visible[0], r#"function(scope,click){if(!this.isConnected || !scope.isConnected || !scope.contains(this))return false; let target=this;if(click){const ancestor=this.closest('a[href],button,summary,label,select,input,textarea,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]');if(ancestor){if(!scope.contains(ancestor))return false;target=ancestor;}}document.querySelectorAll('[data-chrome-use-located]').forEach(e=>e.removeAttribute('data-chrome-use-located'));target.setAttribute('data-chrome-use-located','true');return true;}"#, json!([{"objectId": scope},{"value":click}])).await?;
@@ -381,7 +399,7 @@ async fn locate_inner(
         }
     }
     Ok(Located {
-        extra: json!({"count": matched_count, "visibleCount": 1}),
+        extra: json!({"count": matched_count, "visibleCount": 1, "selectedDescription":description}),
         pin,
     })
 }

@@ -14719,7 +14719,13 @@ async fn finish_located(
         let sid = mgr.active_session_id()?;
         let object = super::element::resolve_semantic_pin(&mgr.client, sid).await?;
         let result=mgr.client.send_command("Runtime.callFunctionOn",Some(json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();return {tag:this.tagName.toLowerCase(),visible:true,role:this.getAttribute('role') || '',name:this.getAttribute('aria-label') || '',box:{x:r.x,y:r.y,width:r.width,height:r.height}}}","returnByValue":true})),Some(sid)).await?;
-        Some(result["result"]["value"].clone())
+        let mut description = locate_extra
+            .get("selectedDescription")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        description["box"] = result["result"]["value"]["box"].clone();
+        description["visible"] = result["result"]["value"]["visible"].clone();
+        Some(description)
     } else {
         match state.browser.as_ref() {
             Some(mgr) => match mgr.active_session_id() {
@@ -14743,6 +14749,9 @@ async fn finish_located(
         let mut out = json!({ "located": target.clone().unwrap_or(Value::Null) });
         if let Some(extra) = locate_extra.as_object() {
             for (k, v) in extra {
+                if k == "selectedDescription" {
+                    continue;
+                }
                 out[k.as_str()] = v.clone();
             }
         }

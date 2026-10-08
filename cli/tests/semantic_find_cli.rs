@@ -230,12 +230,45 @@ mod browser {
             !mcp.to_string().contains("was ignored"),
             "literal --observe was parsed as a flag: {mcp}"
         );
+        let located = session.ok(&[
+            "find", "role", "button", "--name", "Save", "--exact", "--within", &scope,
+        ]);
+        assert_eq!(located["located"]["name"], "Save");
+        assert_eq!(located["located"]["role"], "button");
+        assert_eq!(located["located"]["context"], "Beta account");
+        let region = session.ok(&[
+            "find",
+            "role",
+            "region",
+            "--name",
+            "Beta account",
+            "--exact",
+        ]);
+        assert_eq!(region["located"]["name"], "Beta account");
+        let mcp=session.mcp_find(serde_json::json!({"locator":"role","value":"button","action":"locate","name":"Save","exact":true,"within":scope,"session":session.name}));
+        assert_eq!(mcp["isError"], false);
+        assert_eq!(
+            mcp["structuredContent"]["response"]["data"]["located"]["name"], "Save",
+            "{mcp}"
+        );
+        let region_mcp=session.mcp_find(serde_json::json!({"locator":"role","value":"region","name":"Beta account","exact":true,"session":session.name}));
+        assert_eq!(
+            region_mcp["structuredContent"]["response"]["data"]["located"]["name"],
+            "Beta account"
+        );
+        session.ok(&["eval", r##"document.querySelector('#account-b').insertAdjacentHTML('afterbegin',`<div id="many">${'<button data-testid="descriptor" hidden>Hidden descriptor</button>'.repeat(10)}<button data-testid="descriptor">Actual descriptor</button></div>`)"##]);
+        let descriptor = session.ok(&["find", "testid", "descriptor", "--within", &scope]);
+        assert_eq!(descriptor["located"]["name"], "Actual descriptor");
+        assert_eq!(descriptor["visibleCount"], 1);
+        session.ok(&["eval", "document.querySelector('#many').remove()"]);
         let mut timings = Vec::new();
         for _ in 0..5 {
             let started = Instant::now();
-            session.ok(&[
+            let saved = session.ok(&[
                 "find", "role", "button", "click", "--name", "Save", "--exact", "--within", &scope,
             ]);
+            assert_eq!(saved["target"]["name"], "Save");
+            assert_eq!(saved["target"]["role"], "button");
             timings.push(started.elapsed().as_millis());
             assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "beta");
         }
@@ -409,6 +442,16 @@ mod browser {
         assert!(!out.status.success());
         let diagnostic = String::from_utf8_lossy(&out.stdout);
         assert!(!diagnostic.contains("PRIVATE-NESTED"), "{diagnostic}");
+        session.ok(&["eval", r##"document.querySelector('#account-b').innerHTML=`<div data-testid="unique"><span>Editable container</span><div contenteditable>PRIVATE-NESTED-EDITABLE</div><textarea>PRIVATE-NESTED-TEXTAREA</textarea></div>`"##]);
+        let safe = session.ok(&["find", "testid", "unique", "--within", &scope]);
+        assert_eq!(safe["located"]["name"], "Editable container");
+        assert!(!safe.to_string().contains("PRIVATE-NESTED"));
+        let safe_mcp=session.mcp_find(serde_json::json!({"locator":"testid","value":"unique","within":scope,"session":session.name}));
+        assert_eq!(
+            safe_mcp["structuredContent"]["response"]["data"]["located"]["name"],
+            "Editable container"
+        );
+        assert!(!safe_mcp.to_string().contains("PRIVATE-NESTED"));
         // Marker observers run between discovery and dispatch. They may move or
         // replace the selected node, but cannot redirect its pinned identity.
         for mutation in [
