@@ -30,6 +30,9 @@ use std::path::PathBuf;
 /// link ends up in the wrong account.
 const SUPPORTED_VERSION: u32 = 2;
 
+/// Testing-only override for the rules file location (see [`rules_paths`]).
+pub const RULES_FILE_ENV: &str = "CHROME_USE_CHOOSEBROWSER_RULES_FILE";
+
 /// Where the rules can live, newest location first.
 ///
 /// The App Group container is where both builds are converging, but the
@@ -38,6 +41,12 @@ const SUPPORTED_VERSION: u32 = 2;
 /// nothing for everyone using a released version today, so all three are
 /// tried and the first that parses wins.
 pub fn rules_paths() -> Vec<PathBuf> {
+    // Testing only: point the lookup at one fixture file instead of the app's
+    // locations, so the routing can be exercised on a machine whose real rules
+    // must not be touched. Not a supported configuration surface.
+    if let Some(p) = std::env::var_os(RULES_FILE_ENV).filter(|p| !p.is_empty()) {
+        return vec![PathBuf::from(p)];
+    }
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
@@ -239,6 +248,67 @@ pub fn choose_for_url(rules_json: &str, url: &str) -> Option<ProfileChoice> {
     })
 }
 
+/// One routing rule as `doctor` lists it: what it covers and which Chrome
+/// profile key it sends there.
+#[derive(Debug, PartialEq, Clone)]
+pub struct ProfileRule {
+    pub rule_id: Option<String>,
+    /// `claude.ai`, `github.com/leeguooooo*`, `*.bilibili.com`, or `*` for a
+    /// catch-all — the same shape ChooseBrowser shows.
+    pub pattern: String,
+    pub key: String,
+}
+
+/// Every "always open in a Chrome profile" rule in a rules file, in file
+/// order. Empty for a file this build does not read, for the same reason
+/// [`choose_for_url`] ignores it.
+pub fn profile_rules(rules_json: &str) -> Vec<ProfileRule> {
+    let Ok(parsed) = serde_json::from_str::<RulesFile>(rules_json) else {
+        return Vec::new();
+    };
+    if parsed.version != SUPPORTED_VERSION {
+        return Vec::new();
+    }
+    parsed
+        .rules
+        .iter()
+        .filter(|r| {
+            r.action
+                .kind
+                .as_deref()
+                .is_none_or(|k| k.eq_ignore_ascii_case("always_open_in"))
+        })
+        .filter_map(|r| {
+            let key = parse_chrome_profile_key(r.action.bundle_identifier.as_deref()?)?;
+            let m = &r.r#match;
+            let mut pattern = m.domain.clone().unwrap_or_default();
+            if let Some(path) = &m.path {
+                pattern.push_str(path);
+            }
+            if pattern.is_empty() {
+                pattern = "*".to_string();
+            }
+            if let Some(scheme) = &m.scheme {
+                pattern = format!("{scheme}://{pattern}");
+            }
+            Some(ProfileRule {
+                rule_id: r.rule_id.clone(),
+                pattern,
+                key,
+            })
+        })
+        .collect()
+}
+
+/// The rules of the first file that exists, as [`profile_rules`] reads them.
+pub fn load_profile_rules() -> Vec<ProfileRule> {
+    rules_paths()
+        .into_iter()
+        .find_map(|p| std::fs::read_to_string(p).ok())
+        .map(|body| profile_rules(&body))
+        .unwrap_or_default()
+}
+
 /// Order two `createdAt` values without caring whether they are numbers or
 /// strings. Numbers compare numerically, everything else by its text; a missing
 /// value sorts last so a rule that records its age wins the tie over one that
@@ -364,6 +434,10 @@ pub fn diagnose() -> Diagnosis {
 /// The whole lookup, against the real files. `None` for every ordinary reason:
 /// ChooseBrowser is not installed, the format is newer than we understand, no
 /// rule covers this url, or the profile it names is not on this machine.
+///
+/// A `Some` is binding: the caller either opens the url in that profile or
+/// refuses with the reason. It never substitutes another profile because the
+/// named one is not connected (see `profiles::decide_rule`).
 pub fn profile_for_url(url: &str) -> Option<(ResolvedProfile, ProfileChoice)> {
     // First path that both exists and yields a decision. A file that parses to
     // "no rule covers this url" is a real answer, so keep looking only while
@@ -382,9 +456,16 @@ pub fn profile_for_url(url: &str) -> Option<(ResolvedProfile, ProfileChoice)> {
 
 /// Chrome's profile registry, as text. `None` when Chrome has never run here.
 pub fn read_local_state() -> Option<String> {
-    dirs::home_dir()
-        .map(|h| h.join("Library/Application Support/Google/Chrome/Local State"))
+    chrome_root()
+        .map(|r| r.join("Local State"))
         .and_then(|p| std::fs::read_to_string(p).ok())
+}
+
+/// The Chrome data root whose `Local State` resolves rule keys. A rule's
+/// directory is only meaningful under this root, so matching it against the
+/// profile inventory compares both.
+pub fn chrome_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join("Library/Application Support/Google/Chrome"))
 }
 
 // --- Writing a rule back (`--remember`) --------------------------------------
@@ -608,6 +689,37 @@ mod tests {
 
     fn rules(body: &str) -> String {
         format!(r#"{{"version":2,"rules":[{body}]}}"#)
+    }
+
+    /// `doctor` lists each rule in the shape ChooseBrowser shows it, and only
+    /// the ones that name a Chrome profile.
+    #[test]
+    fn profile_rules_lists_chrome_profile_rules_with_their_pattern() {
+        let f = rules(
+            r#"{"ruleId":"r1","match":{"domain":"claude.ai"},
+                "action":{"type":"always_open_in","bundleIdentifier":"com.google.Chrome::profile::111"}},
+               {"ruleId":"r2","match":{"domain":"github.com","path":"/leeguooooo*"},
+                "action":{"bundleIdentifier":"com.google.Chrome::profile::222"}},
+               {"ruleId":"r3","match":{"domain":"*.bilibili.com"},
+                "action":{"bundleIdentifier":"com.apple.Safari"}},
+               {"ruleId":"r4","match":{},
+                "action":{"bundleIdentifier":"com.google.Chrome::profile::333"}}"#,
+        );
+        let got = profile_rules(&f);
+        let summary: Vec<(&str, &str)> = got
+            .iter()
+            .map(|r| (r.pattern.as_str(), r.key.as_str()))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("claude.ai", "111"),
+                ("github.com/leeguooooo*", "222"),
+                ("*", "333"),
+            ]
+        );
+        assert_eq!(got[0].rule_id.as_deref(), Some("r1"));
+        assert!(profile_rules(r#"{"version":3,"rules":[]}"#).is_empty());
     }
 
     /// A version we have not seen means a shape we have not seen. Guessing at

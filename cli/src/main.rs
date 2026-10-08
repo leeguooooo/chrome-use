@@ -207,13 +207,37 @@ fn configured_profile_ws(selector: &str, why: &str) -> String {
 fn target_url_for_choosebrowser(argv: &[String]) -> Option<String> {
     const NAVIGATES: &[&str] = &["open", "goto", "navigate"];
     let verb = argv.first()?.as_str();
-    if !NAVIGATES.contains(&verb) {
+    let candidate = if NAVIGATES.contains(&verb) {
+        argv.iter()
+            .skip(1)
+            .find(|a| !a.starts_with('-') && a.contains('.'))?
+    } else if verb == "tab" || verb == "tabs" {
+        // `tab new [--label <name>] [url]`: the url is the first plain word
+        // after `new` that is not the label's value.
+        let rest = &argv[1..];
+        let new_at = rest.iter().position(|a| !a.starts_with("--"))?;
+        if rest[new_at] != "new" {
+            return None;
+        }
+        let mut found = None;
+        let mut i = 0;
+        while i < rest.len() {
+            let a = &rest[i];
+            if i == new_at {
+                i += 1;
+            } else if a == "--label" {
+                i += 2;
+            } else if !a.starts_with('-') && a.contains('.') {
+                found = Some(a);
+                break;
+            } else {
+                i += 1;
+            }
+        }
+        found?
+    } else {
         return None;
-    }
-    let candidate = argv
-        .iter()
-        .skip(1)
-        .find(|a| !a.starts_with('-') && a.contains('.'))?;
+    };
     // Accept what the user typed the way `open` does, so a bare host still
     // routes: `open github.com` is the common shape.
     let normalized = if candidate.contains("://") {
@@ -271,7 +295,7 @@ fn remember_request(
     let verb = argv.first().map(String::as_str).unwrap_or("");
     let Some(url) = target_url_for_choosebrowser(argv) else {
         return Err(format!(
-            "--remember applies to a command that opens a url — `open`, `goto` or `navigate`. \
+            "--remember applies to a command that opens a url — `open`, `goto`, `navigate` or `tab new <url>`. \
              `{verb}` acts on whatever the session already has open, so there is no site to \
              write a rule for."
         ));
@@ -2452,49 +2476,51 @@ fn main() {
         // down which account this site belongs to. ChooseBrowser stores exactly
         // that mapping, and a rule they authored beats any inference we make
         // from which window they happen to be looking at (issue #244).
-        let cb_pick = if flags.no_choosebrowser || flags.cdp.is_some() {
+        //
+        // The rule is binding, not advice: when the profile it names has no
+        // relay endpoint, stop with the fix instead of falling through to the
+        // default or the focused profile — that fall-through opened claude.ai
+        // in the wrong account with no message. A config route chosen above
+        // (flags.cdp set) and --no-choosebrowser still win.
+        let rule_hit = if flags.no_choosebrowser || flags.cdp.is_some() {
             None
         } else {
-            target_url
-                .clone()
-                .and_then(|u| choosebrowser::profile_for_url(&u))
+            target_url.as_deref().and_then(profiles::rule_hit_for_url)
         };
-        if let Some((profile, choice)) = cb_pick {
-            // A rule naming a profile the relay has no endpoint for means that
-            // profile is not running the extension. Fall through to the
-            // existing behaviour rather than failing: the rule is advice about
-            // which account the site belongs to, not a requirement that it be
-            // reachable right now.
-            // Select by email, not by directory name. The relay knows a profile
-            // by its own id or by the signed-in address; a directory name is
-            // not a dimension it has, so selecting with one matched nothing —
-            // silently, because a miss here is a legitimate "that profile isn't
-            // running the extension". The rules parsed correctly the whole time
-            // and the conclusion was simply never usable.
-            // A profile with no signed-in account gives the relay nothing to
-            // match on either, so there is nothing to try — fall through to the
-            // existing behaviour rather than inventing a selector.
-            let relay_url = profile
-                .email
-                .as_deref()
-                .and_then(|email| connect::relay_url_for_browser(email).ok());
-            if let Some(url) = relay_url {
-                // Say where the choice came from (in the profile line). Without
-                // this the user sees a different account open than the window
-                // they were looking at, with nothing to explain it.
-                profile_choice = Some((
-                    url.clone(),
-                    format!(
-                        "a ChooseBrowser rule routes this site there{} (skip with --no-choosebrowser)",
-                        choice
-                            .rule_id
-                            .as_deref()
-                            .map(|r| format!(" ({r})"))
-                            .unwrap_or_default(),
-                    ),
-                ));
-                flags.cdp = Some(url);
-                flags.auto_connect = false;
+        if rule_hit.is_some() {
+            let rows = profiles::load_rows();
+            match profiles::decide_rule(
+                &rows,
+                rule_hit.as_ref(),
+                flags.no_choosebrowser,
+                flags.cdp.is_some(),
+                profiles::SessionBinding::New,
+                &flags.session,
+            ) {
+                profiles::RuleDecision::Use(i) => {
+                    let url = rows[i].ws.clone().unwrap_or_default();
+                    // Say where the choice came from (in the profile line).
+                    // Without this the user sees a different account open than
+                    // the window they were looking at, with nothing to explain it.
+                    profile_choice = Some((
+                        url.clone(),
+                        format!(
+                            "a ChooseBrowser rule routes this site there{} (skip with --no-choosebrowser)",
+                            rule_hit
+                                .as_ref()
+                                .and_then(|h| h.rule_id.as_deref())
+                                .map(|r| format!(" ({r})"))
+                                .unwrap_or_default(),
+                        ),
+                    ));
+                    flags.cdp = Some(url);
+                    flags.auto_connect = false;
+                }
+                profiles::RuleDecision::Refuse(msg) => {
+                    eprintln!("{} {msg}", color::error_indicator());
+                    exit(1);
+                }
+                profiles::RuleDecision::NotApplicable | profiles::RuleDecision::AlreadyThere => {}
             }
         }
 
@@ -2530,6 +2556,45 @@ fn main() {
                     for (id, email, _) in &relay_profiles {
                         eprintln!("    {}", connect::profile_label(id, email.as_deref()));
                     }
+                }
+            }
+        }
+    }
+
+    // A session that is already running keeps its profile (it is never
+    // re-resolved mid-task). That made a ChooseBrowser rule silently not apply
+    // to it: the site opened in whatever profile the session was bound to
+    // earlier. Check the rule on every navigation of a running session and
+    // refuse a mismatch instead of switching or substituting.
+    if !first_attach
+        && browser_selector.is_none()
+        && flags.cdp.is_none()
+        && !flags.force_launch
+        && flags.provider.is_none()
+        && !flags.no_choosebrowser
+    {
+        if let Some(url) = target_url_for_choosebrowser(&clean) {
+            let routed_by_config = profiles::load_profiles_config()
+                .and_then(|cfg| profiles::choose_route(&cfg, &url))
+                .is_some();
+            let hit = if routed_by_config {
+                None
+            } else {
+                profiles::rule_hit_for_url(&url)
+            };
+            if hit.is_some() {
+                let record = profiles::session_profile(&flags.session);
+                let rows = profiles::load_rows();
+                if let profiles::RuleDecision::Refuse(msg) = profiles::decide_rule(
+                    &rows,
+                    hit.as_ref(),
+                    flags.no_choosebrowser,
+                    routed_by_config,
+                    profiles::SessionBinding::Bound(record.as_ref()),
+                    &flags.session,
+                ) {
+                    eprintln!("{} {msg}", color::error_indicator());
+                    exit(1);
                 }
             }
         }
@@ -4417,6 +4482,30 @@ mod tests {
             target_url_for_choosebrowser(&clean).as_deref(),
             Some("https://github.com/leeguooooo")
         );
+    }
+
+    /// `tab new <url>` opens a site as much as `open` does, so a ChooseBrowser
+    /// rule has to see it — otherwise a bound session could open the site in
+    /// the wrong profile through the side door.
+    #[test]
+    fn tab_new_with_a_url_is_a_navigation_for_the_rule_lookup() {
+        let t = |a: &[&str]| target_url_for_choosebrowser(&argv(a));
+        assert_eq!(
+            t(&["tab", "new", "claude.ai"]).as_deref(),
+            Some("https://claude.ai/")
+        );
+        assert_eq!(
+            t(&["tab", "new", "--label", "x.y", "https://claude.ai/new"]).as_deref(),
+            Some("https://claude.ai/new")
+        );
+        assert_eq!(
+            t(&["tab", "new", "https://claude.ai/", "--label", "a"]).as_deref(),
+            Some("https://claude.ai/")
+        );
+        assert_eq!(t(&["tab", "new"]), None);
+        assert_eq!(t(&["tab", "list"]), None);
+        assert_eq!(t(&["tab", "2"]), None);
+        assert_eq!(t(&["click", "a.b"]), None);
     }
 
     // --- session stop wording (#256) ------------------------------------------

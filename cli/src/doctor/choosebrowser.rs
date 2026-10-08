@@ -12,6 +12,84 @@
 
 use super::{Check, Status};
 use crate::choosebrowser;
+use crate::profiles::{self, ProfileRow, RuleHit};
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const RULE_CATEGORY: &str = "ChooseBrowser rules";
+
+/// One line per profile rule: `claude.ai → Davian (Profile 14, …): connected`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn rule_target_checks(
+    rules: &[choosebrowser::ProfileRule],
+    local_state: Option<&str>,
+    rows: &[ProfileRow],
+    chrome_root: Option<&str>,
+) -> Vec<Check> {
+    rules
+        .iter()
+        .enumerate()
+        .map(|(n, rule)| {
+            let id = format!("choosebrowser.rule.{}", n + 1);
+            let name = match &rule.rule_id {
+                Some(r) => format!("{} ({r})", rule.pattern),
+                None => rule.pattern.clone(),
+            };
+            let Some(resolved) =
+                local_state.and_then(|ls| choosebrowser::resolve_profile_directory(ls, &rule.key))
+            else {
+                return Check::new(
+                    id,
+                    RULE_CATEGORY,
+                    Status::Warn,
+                    format!(
+                        "{name} → profile key {}: no such Chrome profile on this machine — \
+                         the rule is ignored here",
+                        rule.key
+                    ),
+                );
+            };
+            let hit = RuleHit {
+                host: rule.pattern.clone(),
+                rule_id: rule.rule_id.clone(),
+                root: chrome_root.map(str::to_string),
+                dir: resolved.directory.clone(),
+                email: resolved.email.clone(),
+            };
+            match profiles::row_for_rule(rows, &hit) {
+                None => Check::new(
+                    id,
+                    RULE_CATEGORY,
+                    Status::Warn,
+                    format!(
+                        "{name} → {}: not in chrome-use's profile list — opening these urls \
+                         is refused",
+                        resolved.directory
+                    ),
+                )
+                .with_fix("run `chrome-use browsers` to see the profiles chrome-use knows"),
+                Some(i) if rows[i].connected() => Check::new(
+                    id,
+                    RULE_CATEGORY,
+                    Status::Pass,
+                    format!("{name} → {}: connected", rows[i].label()),
+                ),
+                Some(i) => Check::new(
+                    id,
+                    RULE_CATEGORY,
+                    Status::Info,
+                    format!(
+                        "{name} → {}: not connected — opening these urls is refused until it is",
+                        rows[i].label()
+                    ),
+                )
+                .with_fix(format!(
+                    "`{}` (opens a window in that profile — ask the user first)",
+                    profiles::connect_command(&profiles::suggested_selector(rows, i))
+                )),
+            }
+        })
+        .collect()
+}
 
 pub(super) fn check(checks: &mut Vec<Check>) {
     // ChooseBrowser's app and rule locations are macOS-specific. Reporting
@@ -59,6 +137,18 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 // location, so "found, but in the one you thought was
                 // retired" is a real and confusing state.
                 format!("{n} rule(s) loaded from {}", source.display()),
+            ));
+            // Per rule: is the profile it names usable right now? A rule
+            // whose profile is not connected makes `open` of its sites fail
+            // (chrome-use will not substitute another profile), so this is
+            // the line that explains such a refusal before it happens.
+            checks.extend(rule_target_checks(
+                &choosebrowser::load_profile_rules(),
+                choosebrowser::read_local_state().as_deref(),
+                &profiles::load_rows(),
+                choosebrowser::chrome_root()
+                    .map(|p| p.display().to_string())
+                    .as_deref(),
             ));
         }
         // Parsed as JSON, but not a version this build reads. Guessing at an
@@ -215,3 +305,72 @@ fn check_app(checks: &mut Vec<Check>) {
 
 #[cfg(not(target_os = "macos"))]
 fn check_app(_checks: &mut Vec<Check>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(dir: &str, name: &str, ws: Option<&str>) -> ProfileRow {
+        ProfileRow {
+            name: Some(name.to_string()),
+            dir: Some(dir.to_string()),
+            root: Some("/chrome".to_string()),
+            ws: ws.map(str::to_string),
+            relay_id: ws.map(|_| format!("id-{dir}")),
+            has_extension: true,
+            ..Default::default()
+        }
+    }
+
+    /// The user's question was "does my claude.ai rule apply?" — each rule
+    /// gets a line saying whether its profile is connected right now.
+    #[test]
+    fn each_rule_says_whether_its_profile_is_connected() {
+        let local_state = r#"{"profile":{"info_cache":{
+            "Default":{"name":"Leo","user_name":"leo@x.com","gaia_id":"111"},
+            "Profile 14":{"name":"Davian","user_name":"d@x.com","gaia_id":"222"}}}}"#;
+        let rules = vec![
+            choosebrowser::ProfileRule {
+                rule_id: Some("r1".into()),
+                pattern: "claude.ai".into(),
+                key: "222".into(),
+            },
+            choosebrowser::ProfileRule {
+                rule_id: None,
+                pattern: "example.com/team*".into(),
+                key: "111".into(),
+            },
+            choosebrowser::ProfileRule {
+                rule_id: None,
+                pattern: "*.bilibili.com".into(),
+                key: "999".into(),
+            },
+        ];
+        let rows = vec![
+            row("Default", "Leo", Some("ws://leo")),
+            row("Profile 14", "Davian", None),
+        ];
+        let checks = rule_target_checks(&rules, Some(local_state), &rows, Some("/chrome"));
+        assert_eq!(checks.len(), 3);
+        assert_eq!(checks[0].status, Status::Info);
+        assert!(
+            checks[0]
+                .message
+                .starts_with("claude.ai (r1) → Davian (Profile 14"),
+            "{}",
+            checks[0].message
+        );
+        assert!(checks[0].message.contains("not connected"));
+        let fix = checks[0].fix.as_deref().unwrap();
+        assert!(fix.contains("chrome-use connect --browser Davian"), "{fix}");
+        assert!(fix.contains("ask the user"), "{fix}");
+        assert_eq!(checks[1].status, Status::Pass);
+        assert!(
+            checks[1].message.ends_with(": connected"),
+            "{}",
+            checks[1].message
+        );
+        assert_eq!(checks[2].status, Status::Warn);
+        assert!(checks[2].message.contains("999"), "{}", checks[2].message);
+    }
+}

@@ -4867,6 +4867,16 @@ Defaults (~/.chrome-use/config.json):
   recently used profile. The session stays on that profile afterwards.
   The choice is printed once: `profile: Davian (Profile 14, …) — <rule>`.
 
+ChooseBrowser rules are binding (macOS, when that app is installed):
+  If the rule's profile is not connected, `open` fails naming the rule and
+  `chrome-use connect --browser <profile>` (opens a window in that profile, so
+  ask the user first) instead of using another profile.
+  If the session is already bound to a different profile, `open`/`goto`/
+  `navigate`/`tab new <url>` of the rule's site fails: use a new --session
+  (it picks the rule's profile) or pass --no-choosebrowser to open it in the
+  bound profile anyway. --browser and config routes still win over the rule.
+  `chrome-use doctor` lists each rule and whether its profile is connected.
+
 Examples:
   chrome-use browsers
   chrome-use browsers --who github.com
@@ -5915,10 +5925,14 @@ Options:
                              site to that profile from now on. macOS + ChooseBrowser only.
                              Asks — ChooseBrowser shows a dialog and nothing is saved
                              until you confirm there.
-                             When that app is installed, `open <url>` without an
-                             explicit --browser follows the rule the user already
-                             wrote for that site. Nothing happens either way if
-                             it isn't installed.
+                             When that app is installed, `open <url>` (also goto,
+                             navigate, tab new <url>) without an explicit --browser
+                             follows the rule the user already wrote for that site.
+                             The rule is binding: if its profile is not connected,
+                             or the session is already bound to another profile,
+                             the command fails and names the fix instead of opening
+                             the site in a different profile. Nothing happens either
+                             way if it isn't installed.
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)

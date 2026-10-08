@@ -112,7 +112,11 @@
         </div>
         <div class="du-card">
           <div class="du-card-title"><span class="du-card-ico">🔍</span> doctor knows about it</div>
-          <p><code>chrome-use doctor</code> reports which version is installed and whether the rules are readable. Needs ChooseBrowser 0.2.1 or later.</p>
+          <p><code>chrome-use doctor</code> reports which version is installed, whether the rules are readable, and for each rule whether its profile is connected. Needs ChooseBrowser 0.2.1 or later.</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔒</span> Never the wrong account</div>
+          <p>When a rule's profile is not connected, or the session is bound to another profile, the command fails and names the fix (<code>connect --browser</code>, a new <code>--session</code>, or <code>--no-choosebrowser</code>) instead of quietly opening the site in a different profile.</p>
         </div>
       </div>
 

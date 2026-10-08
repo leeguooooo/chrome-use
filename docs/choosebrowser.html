@@ -109,7 +109,11 @@
         </div>
         <div class="du-card">
           <div class="du-card-title"><span class="du-card-ico">🔍</span> doctor 认得它</div>
-          <p><code>chrome-use doctor</code> 报告装的是哪个版本，以及规则是否可读。需要 ChooseBrowser 0.2.1 或更高。</p>
+          <p><code>chrome-use doctor</code> 报告装的是哪个版本、规则是否可读，并逐条列出每条规则指向的 profile 是否已连接。需要 ChooseBrowser 0.2.1 或更高。</p>
+        </div>
+        <div class="du-card">
+          <div class="du-card-title"><span class="du-card-ico">🔒</span> 不会开错账号</div>
+          <p>规则指向的 profile 没连上，或当前 session 绑在别的 profile 上时，命令直接失败并给出修法（<code>connect --browser</code>、新的 <code>--session</code> 或 <code>--no-choosebrowser</code>），不会悄悄换一个 profile 打开。</p>
         </div>
       </div>
 

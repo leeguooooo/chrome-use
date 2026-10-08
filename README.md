@@ -175,7 +175,7 @@ $ chrome-use open https://github.com/my-org/repo
   --no-choosebrowser.
 ```
 
-Read-only, and invisible if you do not use it: no rules file means no behaviour change and no message. A rule naming a profile that is not running the extension falls back to the normal profile choice. That fallback does not verify the site account; check its identity or pin `--browser` when a specific account is required. Add `--remember` to an explicit `--browser` and chrome-use asks ChooseBrowser to write the rule back, behind its own confirmation dialog.
+Read-only, and invisible if you do not use it: no rules file means no behaviour change and no message. A rule is binding: chrome-use never opens the site in a different profile. If the rule's profile is not connected, the command fails and names `chrome-use connect --browser <profile>`. If the session is already bound to another profile, it fails and suggests a new `--session` or `--no-choosebrowser`. `--browser` and config routes still win. `chrome-use doctor` lists each rule and whether its profile is connected. Add `--remember` to an explicit `--browser` and chrome-use asks ChooseBrowser to write the rule back, behind its own confirmation dialog.
 
 <a href="https://choosebrowser.leeguoo.com"><img src="docs/assets/choosebrowser-profiles-en.jpg" alt="ChooseBrowser: every Chrome profile gets a row" width="640" align="right"></a>
 

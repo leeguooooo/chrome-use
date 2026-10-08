@@ -713,7 +713,11 @@ dialog and nothing is saved until the user confirms there, and the command
 reports which of the four outcomes happened (saved, declined, no app, app
 too old). Without ChooseBrowser installed the flag does nothing. Once a rule
 exists, a plain `open <url>` follows it, so you stop passing `--browser` for
-that site. `--no-choosebrowser` ignores the rules for one command.
+that site. `--no-choosebrowser` ignores the rules for one command. A rule is
+binding: when its profile is not connected, or the session is already bound
+to another profile, the command fails and names the fix (`connect --browser`,
+a new `--session`, or `--no-choosebrowser`) instead of opening the site in a
+different profile.
 
 ## Debugging
 
