@@ -486,8 +486,7 @@
         网页自己打开的标签会让 Chrome 跑到你正在用的应用前面。所以在你自己的 Chrome 里、本会话创建的标签上，普通的
         <code>target=_blank</code> 链接（左键、无修饰键、http(s) 地址、没有 <code>rel=opener</code>、<code>download</code>
         或 <code>ping</code>）由 chrome-use 自己打开：网页的点击处理函数照常全部执行，没有被取消时，链接在本会话的后台标签里打开
-        （<code>openedTabMode: "background"</code>）。跨站链接带上当前页作为 referrer（需要 ab-connect 0.5.31+）；同站链接不带
-        referrer，从而保留 <code>SameSite=Strict</code> cookie。<code>window.open</code>、<code>rel=opener</code>、具名窗口和表单仍由
+        （<code>openedTabMode: "background"</code>），并按链接的 referrer 策略带上当前页作为 referrer（需要 ab-connect 0.5.31+）。<code>window.open</code>、<code>rel=opener</code>、具名窗口和表单仍由
         Chrome 打开，这时 click 会在 <code>openedTabWarning</code> 里说明 Chrome 可能已经跑到前面。
       </p>
       <p>

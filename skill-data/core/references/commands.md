@@ -487,9 +487,9 @@ opens a plain `target=_blank` link itself: a left click without modifiers on an
 `<a>`/`<area>` with an http(s) href and no `rel=opener`, `download` or `ping`.
 The click is delivered as usual and the page's click handlers all run; if none
 of them cancelled it, chrome-use cancels Chrome's own navigation and opens the
-link in a background tab of the session (`openedTabMode: "background"`). A
-cross-site link carries the page as referrer (ab-connect 0.5.31+); a same-site
-one carries none, so it keeps its `SameSite=Strict` cookies. `window.open`,
+link in a background tab of the session (`openedTabMode: "background"`), with
+the page as referrer under the link's referrer policy (ab-connect 0.5.31+).
+`window.open`,
 `rel=opener`, named targets and forms still go through Chrome, and the click
 then says in `openedTabWarning` that Chrome may have come to the front.
 

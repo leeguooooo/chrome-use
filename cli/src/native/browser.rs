@@ -2451,10 +2451,10 @@ impl BrowserManager {
     }
 
     /// [`navigate`](Self::navigate) as if a link on `referrer.0` had been
-    /// followed: `Page.navigate` carries the referrer, its policy and the
-    /// `link` transition. Over the relay a navigation with a referrer goes
-    /// through CDP rather than `chrome.tabs.update`, which has no referrer
-    /// (ab-connect 0.5.31; an older extension drops the referrer).
+    /// followed: `Page.navigate` carries the referrer and its policy. Over the
+    /// relay a navigation with a referrer goes through CDP rather than
+    /// `chrome.tabs.update`, which cannot send one (ab-connect 0.5.31; an
+    /// older extension drops the referrer).
     pub async fn navigate_from(
         &mut self,
         url: &str,
@@ -2465,7 +2465,6 @@ impl BrowserManager {
             url: url.to_string(),
             referrer: referrer.as_ref().map(|r| r.0.clone()),
             referrer_policy: referrer.as_ref().map(|r| r.1.to_string()),
-            transition_type: referrer.as_ref().map(|_| "link".to_string()),
         };
         // Refuse privileged Chrome pages on the relay BEFORE navigating (#213).
         // The extension cannot attach a debugger to chrome:// / chrome-extension://

@@ -2562,7 +2562,7 @@ user is in. So in your own Chrome, in a tab the session created, a plain left
 click on a target=_blank link (http/https, no rel=opener, download or ping) is
 taken over after the page's own click handlers ran: chrome-use opens the link
 in a background tab of the session instead (openedTabMode: `background`), with
-the page as referrer when the link is cross-site. window.open and other
+the page as referrer. window.open and other
 pop-ups still go through Chrome; the click then says so in openedTabWarning.
 
 Global Options:

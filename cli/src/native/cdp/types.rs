@@ -219,8 +219,6 @@ pub struct PageNavigateParams {
     pub referrer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub referrer_policy: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transition_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
