@@ -2956,6 +2956,37 @@ pub fn list_relay_profiles() -> Vec<(String, Option<String>, String)> {
     out
 }
 
+/// The relay profile whose host is currently serving `endpoint`, if any.
+///
+/// The endpoint is a per-start `ws://127.0.0.1:<port>/<guid>`, so it changes on
+/// every relay host restart while the profile id does not. Tab ownership is
+/// keyed on this to survive that restart (issue #461). Only the per-profile
+/// sidecars are consulted: the generic `relay-cdp-url` and `relay-ext-profile`
+/// are written at different moments by whichever host ran last, so pairing
+/// them could name the wrong profile, and a wrong answer here hands one
+/// profile's recorded tabs to another. No match means no identity.
+pub fn relay_profile_id_for_endpoint(endpoint: &str) -> Option<String> {
+    profile_id_for_endpoint(list_relay_profiles(), endpoint)
+}
+
+fn profile_id_for_endpoint(
+    profiles: Vec<(String, Option<String>, String)>,
+    endpoint: &str,
+) -> Option<String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return None;
+    }
+    let mut matches = profiles
+        .into_iter()
+        .filter(|(_, _, ws)| ws == endpoint)
+        .map(|(id, _, _)| id);
+    let id = matches.next()?;
+    // Two profiles claiming one endpoint means the sidecars are stale or
+    // corrupt; refuse rather than pick one.
+    matches.next().is_none().then_some(id)
+}
+
 /// Resolve a `--browser` selector to a profile's relay ws URL. Matches a
 /// profileId (exact or prefix) or an email substring (case-insensitive).
 /// Returns `Err` with the available list when nothing/ambiguous matches.
@@ -3705,6 +3736,35 @@ mod tests {
             Some("last-hello".to_string())
         );
         assert_eq!(super::prefer_focused_profile(None, None), None);
+    }
+
+    #[test]
+    fn relay_endpoint_resolves_to_its_profile_only_when_unambiguous() {
+        let profile = |id: &str, ws: &str| (id.to_string(), None, ws.to_string());
+        let profiles = vec![
+            profile("profile-a", "ws://127.0.0.1:4001/guid-a"),
+            profile("profile-b", "ws://127.0.0.1:4002/guid-b"),
+        ];
+        assert_eq!(
+            super::profile_id_for_endpoint(profiles.clone(), "ws://127.0.0.1:4002/guid-b"),
+            Some("profile-b".to_string())
+        );
+        // A restarted host's old endpoint, a launched browser, or nothing at
+        // all has no relay identity.
+        assert_eq!(
+            super::profile_id_for_endpoint(profiles.clone(), "ws://127.0.0.1:4001/old-guid"),
+            None
+        );
+        assert_eq!(super::profile_id_for_endpoint(profiles, ""), None);
+        // Stale sidecars naming one endpoint for two profiles must not pick one.
+        let conflicting = vec![
+            profile("profile-a", "ws://127.0.0.1:4001/guid"),
+            profile("profile-b", "ws://127.0.0.1:4001/guid"),
+        ];
+        assert_eq!(
+            super::profile_id_for_endpoint(conflicting, "ws://127.0.0.1:4001/guid"),
+            None
+        );
     }
 
     #[test]

@@ -454,6 +454,17 @@ pub fn has_created_targets(session: &str) -> bool {
 #[derive(Deserialize, Serialize)]
 struct CreatedTargetRegistry {
     endpoint_sha256: String,
+    /// Stable identity of the browser behind `endpoint_sha256` (issue #461).
+    ///
+    /// The relay native host binds a fresh `ws://127.0.0.1:<port>/<guid>` every
+    /// time it starts, so the endpoint alone forgets a session's tabs across a
+    /// host restart even though Chrome, and every target id in `target_ids`,
+    /// is unchanged. For a relay endpoint this holds the hash of the Chrome
+    /// profile's `profileId`, which survives the restart. `None` for anything
+    /// that is not a relay profile, and in records written before this field
+    /// existed; those still match by endpoint only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    browser_sha256: Option<String>,
     target_ids: Vec<String>,
 }
 
@@ -461,28 +472,107 @@ fn endpoint_sha256(endpoint: &str) -> String {
     format!("{:x}", Sha256::digest(endpoint.as_bytes()))
 }
 
-/// The target IDs a session has recorded as created, whatever endpoint it was
-/// on. Only for telling the user whose tab something is; never for permission.
-pub fn created_target_ids(session: &str) -> HashSet<String> {
+/// The stable key for the browser behind `endpoint`, if it has one: the relay
+/// profile the endpoint currently belongs to. A launched browser or a raw CDP
+/// port has no such identity and keeps the endpoint-only rule.
+fn browser_sha256(endpoint: &str) -> Option<String> {
+    crate::connect::relay_profile_id_for_endpoint(endpoint)
+        .map(|profile_id| endpoint_sha256(&format!("relay-profile:{profile_id}")))
+}
+
+fn read_created_target_registry(session: &str) -> Option<CreatedTargetRegistry> {
     fs::read_to_string(get_created_targets_path(session))
         .ok()
         .and_then(|value| serde_json::from_str::<CreatedTargetRegistry>(&value).ok())
+}
+
+/// Which recorded targets a session may treat as its own on `endpoint`.
+///
+/// - Same endpoint: every recorded target, as before.
+/// - Different endpoint, same relay profile (the relay host restarted): the
+///   recorded targets, minus any another session's record also claims. Target
+///   ids come from Chrome and do not change when the relay does, so these are
+///   the same tabs; a tab some other session records is never taken over.
+/// - Anything else, including an old record with no browser identity: none.
+///   Unknown fails closed, because these ids carry deletion rights.
+fn owned_registry_targets(
+    registry: &CreatedTargetRegistry,
+    endpoint: &str,
+    browser: Option<&str>,
+    claimed_by_others: impl FnOnce() -> HashSet<String>,
+) -> HashSet<String> {
+    if registry.endpoint_sha256 == endpoint_sha256(endpoint) {
+        return registry.target_ids.iter().cloned().collect();
+    }
+    match (registry.browser_sha256.as_deref(), browser) {
+        (Some(recorded), Some(current)) if recorded == current => {
+            let claimed = claimed_by_others();
+            registry
+                .target_ids
+                .iter()
+                .filter(|target_id| !claimed.contains(*target_id))
+                .cloned()
+                .collect()
+        }
+        _ => HashSet::new(),
+    }
+}
+
+/// Target ids that any session other than `session` records as created.
+fn targets_claimed_by_other_sessions(session: &str) -> HashSet<String> {
+    let own = format!("{session}.created-targets.json");
+    let Ok(entries) = fs::read_dir(get_socket_dir()) else {
+        return HashSet::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let other = name.strip_suffix(".created-targets.json")?;
+            (name != own).then(|| other.to_string())
+        })
+        .flat_map(|other| created_target_ids(&other))
+        .collect()
+}
+
+/// The target IDs a session has recorded as created, whatever endpoint it was
+/// on. Only for telling the user whose tab something is; never for permission.
+pub fn created_target_ids(session: &str) -> HashSet<String> {
+    read_created_target_registry(session)
         .map(|registry| registry.target_ids.into_iter().collect())
         .unwrap_or_default()
 }
 
 /// Read the target IDs this named session created in an earlier daemon lifetime.
-/// Missing, malformed, or endpoint-mismatched state fails closed: no tab receives
-/// deletion rights.
+/// Missing, malformed, or mismatched state fails closed: no tab receives
+/// deletion rights. A record from the same relay profile on a restarted relay
+/// host still matches (issue #461); see [`owned_registry_targets`].
 pub fn read_created_targets(session: &str, endpoint: &str) -> HashSet<String> {
-    fs::read_to_string(get_created_targets_path(session))
-        .ok()
-        .and_then(|value| serde_json::from_str::<CreatedTargetRegistry>(&value).ok())
-        .filter(|registry| registry.endpoint_sha256 == endpoint_sha256(endpoint))
-        .map(|registry| registry.target_ids)
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+    read_created_targets_in(session, endpoint, browser_sha256(endpoint).as_deref())
+}
+
+fn read_created_targets_in(
+    session: &str,
+    endpoint: &str,
+    browser: Option<&str>,
+) -> HashSet<String> {
+    let Some(registry) = read_created_target_registry(session) else {
+        return HashSet::new();
+    };
+    let targets = owned_registry_targets(&registry, endpoint, browser, || {
+        targets_claimed_by_other_sessions(session)
+    });
+    // Re-key the record to where it now lives: the current endpoint, and the
+    // browser identity a record from before #461 lacks. Without this an old
+    // record would still be lost at the next relay restart, and a re-associated
+    // one would drop any target another session claims only on the next write.
+    let rekey = !targets.is_empty()
+        && (registry.endpoint_sha256 != endpoint_sha256(endpoint)
+            || (registry.browser_sha256.is_none() && browser.is_some()));
+    if rekey {
+        let _ = write_created_targets_in(session, endpoint, browser, &targets);
+    }
+    targets
 }
 
 /// Persist deletion rights across daemon restarts. An empty set removes the
@@ -490,6 +580,20 @@ pub fn read_created_targets(session: &str, endpoint: &str) -> HashSet<String> {
 pub fn write_created_targets(
     session: &str,
     endpoint: &str,
+    targets: &HashSet<String>,
+) -> Result<(), String> {
+    let browser = if targets.is_empty() {
+        None
+    } else {
+        browser_sha256(endpoint)
+    };
+    write_created_targets_in(session, endpoint, browser.as_deref(), targets)
+}
+
+fn write_created_targets_in(
+    session: &str,
+    endpoint: &str,
+    browser: Option<&str>,
     targets: &HashSet<String>,
 ) -> Result<(), String> {
     let path = get_created_targets_path(session);
@@ -505,6 +609,7 @@ pub fn write_created_targets(
     target_ids.sort_unstable();
     let encoded = serde_json::to_vec(&CreatedTargetRegistry {
         endpoint_sha256: endpoint_sha256(endpoint),
+        browser_sha256: browser.map(str::to_string),
         target_ids,
     })
     .map_err(|error| error.to_string())?;
@@ -2170,6 +2275,132 @@ mod tests {
             read_created_targets("restartable", "ws://relay/browser"),
             replacement
         );
+    }
+
+    fn registry(endpoint: &str, browser: Option<&str>, ids: &[&str]) -> CreatedTargetRegistry {
+        CreatedTargetRegistry {
+            endpoint_sha256: endpoint_sha256(endpoint),
+            browser_sha256: browser.map(str::to_string),
+            target_ids: ids.iter().map(|id| id.to_string()).collect(),
+        }
+    }
+
+    fn ids(values: &[&str]) -> HashSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn created_targets_follow_the_relay_profile_not_the_relay_address() {
+        let recorded = registry("ws://relay/old-guid", Some("profile-a"), &["t1", "t2"]);
+        let nobody_else = || HashSet::new();
+
+        assert_eq!(
+            owned_registry_targets(&recorded, "ws://relay/old-guid", None, || {
+                panic!("an endpoint match needs no cross-session check")
+            }),
+            ids(&["t1", "t2"])
+        );
+        // #461: the relay host restarted, so the address is new but the
+        // profile, and Chrome's target ids, are not.
+        assert_eq!(
+            owned_registry_targets(
+                &recorded,
+                "ws://relay/new-guid",
+                Some("profile-a"),
+                nobody_else
+            ),
+            ids(&["t1", "t2"])
+        );
+        // A different profile, or a browser with no relay identity, gets nothing.
+        assert!(owned_registry_targets(
+            &recorded,
+            "ws://relay/new-guid",
+            Some("profile-b"),
+            nobody_else
+        )
+        .is_empty());
+        assert!(
+            owned_registry_targets(&recorded, "ws://127.0.0.1:9222/x", None, nobody_else)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_record_from_before_the_profile_key_matches_by_endpoint_only() {
+        let old = registry("ws://relay/old-guid", None, &["t1"]);
+        assert_eq!(
+            owned_registry_targets(&old, "ws://relay/old-guid", Some("profile-a"), HashSet::new),
+            ids(&["t1"])
+        );
+        assert!(owned_registry_targets(
+            &old,
+            "ws://relay/new-guid",
+            Some("profile-a"),
+            HashSet::new
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn re_association_never_takes_a_tab_another_session_records() {
+        let recorded = registry("ws://relay/old-guid", Some("profile-a"), &["t1", "t2"]);
+        assert_eq!(
+            owned_registry_targets(&recorded, "ws://relay/new-guid", Some("profile-a"), || {
+                ids(&["t2"])
+            }),
+            ids(&["t1"])
+        );
+    }
+
+    #[test]
+    fn created_targets_survive_a_relay_host_restart_on_disk() {
+        let _guard = EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR", "XDG_RUNTIME_DIR"]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        _guard.set(
+            "AGENT_BROWSER_SOCKET_DIR",
+            dir.path().to_str().expect("utf-8 tempdir"),
+        );
+        _guard.remove("XDG_RUNTIME_DIR");
+        let profile = Some("profile-a");
+
+        // A record written by a release before #461: endpoint only.
+        fs::write(
+            get_created_targets_path("mine"),
+            serde_json::json!({
+                "endpoint_sha256": endpoint_sha256("ws://relay/first"),
+                "target_ids": ["t1", "t2", "t3"],
+            })
+            .to_string(),
+        )
+        .expect("write legacy record");
+        // It cannot be re-associated: nothing says which browser it was on.
+        assert!(read_created_targets_in("mine", "ws://relay/elsewhere", profile).is_empty());
+        // Read on its own endpoint, it is migrated to carry the profile key...
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/first", profile),
+            ids(&["t1", "t2", "t3"])
+        );
+
+        // ...so it survives the next restart. Meanwhile another session has
+        // recorded t3; that claim wins over a re-association.
+        write_created_targets_in("theirs", "ws://relay/first", profile, &ids(&["t3"]))
+            .expect("other session record");
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/second", profile),
+            ids(&["t1", "t2"])
+        );
+        // The record now lives on the new endpoint without the disputed tab,
+        // so even an endpoint-only reader agrees.
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/second", None),
+            ids(&["t1", "t2"])
+        );
+        assert!(!created_target_ids("mine").contains("t3"));
+        assert_eq!(created_target_ids("theirs"), ids(&["t3"]));
+
+        // A different profile's relay never inherits them.
+        assert!(read_created_targets_in("mine", "ws://relay/third", Some("profile-b")).is_empty());
+        assert_eq!(created_target_ids("mine"), ids(&["t1", "t2"]));
     }
 
     #[test]
