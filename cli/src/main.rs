@@ -69,6 +69,94 @@ fn print_json_error(message: impl AsRef<str>) {
     print_json_value(error_envelope::error_value(message.as_ref()));
 }
 
+/// Print a command error (JSON or text, per `--json`) and exit 1.
+fn fail_command(flags: &flags::Flags, msg: &str) -> ! {
+    if flags.json {
+        print_json_error(msg);
+    } else {
+        eprintln!("{} {msg}", color::error_indicator());
+    }
+    exit(1);
+}
+
+/// A pinned session whose profile's endpoint can't be resolved (#472).
+fn pinned_profile_unresolvable(session: &str, id: &str, e: &impl std::fmt::Display) -> String {
+    format!(
+        "Session '{session}' is bound to Chrome profile {id}, but that profile's relay endpoint can't be determined: {e}. Not connecting to any other profile. Check `chrome-use browsers`, then retry, or start a new session with --session <name>."
+    )
+}
+
+/// Relay recovery for a session pinned to a relay profile (#472).
+///
+/// Only that profile is waited for. Its sidecars being ambiguous (duplicate,
+/// corrupt, unreadable) is refused at once rather than treated as "down", and
+/// nothing is killed but this session's own stale daemon: no `pkill` of
+/// native hosts (other profiles' hosts are healthy and in use) and no Chrome
+/// launch (which profile directory a relay id lives in is not known here).
+/// The pin survives the daemon being stopped, so if the profile does not come
+/// back the next command is refused the same way instead of re-choosing.
+fn recover_pinned_relay(flags: &mut Flags, id: &str) {
+    use connect::ProfileEndpointError as E;
+    let session = flags.session.clone();
+    let probe = || connection::probe_daemon_healthy(&session, std::time::Duration::from_secs(3));
+    match connect::relay_endpoint_for_profile(id) {
+        Ok(_) => return,
+        // A daemon still holding a live connection keeps it; otherwise refuse.
+        Err(E::Ambiguous(e)) => {
+            if probe() {
+                return;
+            }
+            fail_command(flags, &pinned_profile_unresolvable(&session, id, &e));
+        }
+        Err(E::NotConnected(_)) => {}
+    }
+    // Without automatic recovery the daemon waits for the profile itself and
+    // fails closed; a healthy daemon is left alone.
+    if !flags.auto_connect
+        || flags.force_launch
+        || std::env::var("AGENT_BROWSER_NO_AUTO_RECONNECT").is_ok()
+        || !connect::host_installed()
+        || probe()
+    {
+        return;
+    }
+    let _relay_recovery_lock = match connection::lock_relay_recovery() {
+        Ok(lock) => lock,
+        Err(e) => fail_command(flags, &e),
+    };
+    match connect::relay_endpoint_for_profile(id) {
+        Ok(_) => return,
+        Err(E::Ambiguous(e)) => fail_command(flags, &pinned_profile_unresolvable(&session, id, &e)),
+        Err(E::NotConnected(_)) => {}
+    }
+    if let Err(e) = connection::kill_stale_daemon_keeping_pin(&session) {
+        fail_command(flags, &e);
+    }
+    eprint!(
+        "{} Chrome relay of profile {id} dropped — waiting for it to reconnect…",
+        color::success_indicator()
+    );
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    loop {
+        match connect::relay_endpoint_for_profile(id) {
+            Ok(ws) => {
+                eprintln!();
+                flags.cdp = Some(ws);
+                flags.auto_connect = false;
+                return;
+            }
+            Err(E::NotConnected(_)) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            Err(e) => {
+                eprintln!();
+                fail_command(flags, &pinned_profile_unresolvable(&session, id, &e));
+            }
+        }
+    }
+}
+
 fn print_json_error_with_type(message: impl AsRef<str>, error_type: &str) {
     print_json_value(json!({
         "success": false,
@@ -2477,6 +2565,39 @@ fn main() {
         exit(1);
     }
 
+    // #472: a session pinned to a relay profile stays on it, also across a
+    // daemon that died or was stopped by a relay recovery. With nothing
+    // explicit on this command, the pin is the choice: no config route,
+    // ChooseBrowser rule, default or focus guess may pick another profile.
+    // (An explicit --browser / --cdp is checked against the pin when the
+    // daemon is ensured.) An unreadable pin is an unknown binding: refuse.
+    let pinned_profile: Option<String> =
+        if browser_selector.is_none() && !user_chose_cdp && !flags.force_launch {
+            match connection::session_relay_profile(&flags.session) {
+                Ok(pin) => pin,
+                Err(e) => fail_command(&flags, &e),
+            }
+        } else {
+            None
+        };
+    if let Some(id) = pinned_profile.as_deref() {
+        if first_attach && flags.auto_connect && flags.cdp.is_none() {
+            match connect::relay_endpoint_for_profile(id) {
+                Ok(ws) => {
+                    profile_choice = Some((ws.clone(), "this session is bound to it".to_string()));
+                    flags.cdp = Some(ws);
+                    flags.auto_connect = false;
+                }
+                // Not connected right now: the relay recovery below waits for
+                // it (or the daemon does), never for anything else.
+                Err(connect::ProfileEndpointError::NotConnected(_)) => {}
+                Err(e) => {
+                    fail_command(&flags, &pinned_profile_unresolvable(&flags.session, id, &e))
+                }
+            }
+        }
+    }
+
     if let Some(sel) = browser_selector.as_ref() {
         match connect::relay_profile_for_browser(sel) {
             Ok((_, email, url)) => {
@@ -2503,6 +2624,8 @@ fn main() {
         // re-resolving on every invocation would silently hop the session to a
         // different profile as the user changes window focus mid-task.
         && first_attach
+        // A pinned session never re-chooses, even when its daemon is gone.
+        && pinned_profile.is_none()
     {
         // No explicit `--browser`. With several Chrome profiles each running the
         // extension, the relay's generic endpoint is whichever host connected
@@ -2641,7 +2764,11 @@ fn main() {
                     profile_record = Some((row, why.clone()));
                 }
             }
-        } else if first_attach && flags.auto_connect && flags.cdp.is_none() {
+        } else if first_attach
+            && flags.auto_connect
+            && flags.cdp.is_none()
+            && pinned_profile.is_none()
+        {
             // The generic endpoint: whichever profile's host connected last.
             if let Some((id, _)) = connect::relay_ext_profile() {
                 if let Some(row) = profiles::row_for_relay_id(&id) {
@@ -2862,33 +2989,26 @@ fn main() {
     // worker to republish the relay — the fresh daemon then connects clean. Opt
     // out with AGENT_BROWSER_NO_AUTO_RECONNECT. Skipped for --launch/--cdp.
     //
-    // A running session bound to a relay profile (#472) is healed toward THAT
-    // profile: the generic endpoint belongs to whichever host wrote it last,
-    // and recovering through it could hop the session to another profile.
-    let bound_relay_profile = if flags.cdp.is_none() && browser_selector.is_none() {
-        match connection::session_relay_profile(&flags.session) {
-            Ok(id) => id,
-            Err(e) => {
-                if flags.json {
-                    print_json_error(&e);
-                } else {
-                    eprintln!("{} {e}", color::error_indicator());
-                }
-                exit(1);
-            }
-        }
+    // A session pinned to a relay profile (#472) is healed toward THAT profile
+    // only (`recover_pinned_relay`): the generic endpoint belongs to whichever
+    // host wrote it last, and recovering through it could hop the session to
+    // another profile. That path never kills a native host either: every
+    // other profile's host is healthy and in use.
+    let bound_relay_profile = if flags.cdp.is_none() {
+        pinned_profile.clone()
     } else {
         None
     };
-    let target_browser = bound_relay_profile
-        .as_deref()
-        .or(flags.browser.as_deref())
-        .or(flags.profile.as_deref());
+    if let Some(id) = bound_relay_profile.as_deref() {
+        recover_pinned_relay(&mut flags, id);
+    }
+    let target_browser = flags.browser.as_deref().or(flags.profile.as_deref());
     let relay_target_up = connect::relay_url_for_selector_or_default(target_browser)
         .ok()
         .flatten()
         .is_some();
-    if flags.auto_connect
+    if bound_relay_profile.is_none()
+        && flags.auto_connect
         && flags.cdp.is_none()
         && !flags.force_launch
         && std::env::var("AGENT_BROWSER_NO_AUTO_RECONNECT").is_err()
@@ -2966,28 +3086,6 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(300));
             }
             eprintln!();
-            // The stale daemon (and its binding record) is gone. Bind the
-            // replacement to the same profile's new endpoint, or refuse.
-            if let Some(id) = bound_relay_profile.as_deref() {
-                match connect::relay_endpoint_for_profile(id) {
-                    Ok(ws) => {
-                        flags.cdp = Some(ws);
-                        flags.auto_connect = false;
-                    }
-                    Err(e) => {
-                        let msg = format!(
-                            "Session '{}' is bound to Chrome profile {id}, but that profile's relay endpoint can't be determined: {e}. Not connecting to any other profile. Check `chrome-use browsers`, then retry, or start a new session with --session <name>.",
-                            flags.session
-                        );
-                        if flags.json {
-                            print_json_error(&msg);
-                        } else {
-                            eprintln!("{} {msg}", color::error_indicator());
-                        }
-                        exit(1);
-                    }
-                }
-            }
         }
     }
 

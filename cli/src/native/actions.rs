@@ -3805,6 +3805,19 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         .get("autoConnect")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // A plain auto-connect on a session pinned to a relay profile (#472) is a
+    // connect to THAT profile's current endpoint, never to whichever relay
+    // the generic/focus choice would pick. Unknown or unresolvable: refuse.
+    let pinned_cdp = if auto_connect && cdp_url.is_none() && cdp_port.is_none() {
+        match crate::connection::session_relay_profile(&state.session_id)? {
+            Some(id) => Some(bound_relay_endpoint(&id).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let cdp_url = cdp_url.or(pinned_cdp.as_deref());
+    let auto_connect = auto_connect && pinned_cdp.is_none();
 
     let extensions: Option<Vec<String>> =
         cmd.get("extensions").and_then(|v| v.as_array()).map(|arr| {

@@ -342,31 +342,128 @@ fn read_relay_profile_file(
     path: &std::path::Path,
     session: &str,
 ) -> Result<Option<String>, String> {
+    read_binding_file(path, session, "profile binding")
+}
+
+/// Read one binding record strictly. `Ok(None)` only when the file does not
+/// exist. Empty or unreadable is an unknown binding, which callers refuse on:
+/// it is never "not bound", and it is never overwritten.
+fn read_binding_file(
+    path: &std::path::Path,
+    session: &str,
+    what: &str,
+) -> Result<Option<String>, String> {
     match fs::read_to_string(path) {
         Ok(s) if !s.trim().is_empty() => Ok(Some(s.trim().to_string())),
         Ok(_) => Err(format!(
-            "Session '{session}' has an empty profile binding record ({}).",
+            "Session '{session}' has an empty {what} record ({}), so what it is bound to is unknown. Stop it with `chrome-use session stop {session}` or use another --session.",
             path.display()
         )),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!(
-            "Session '{session}' profile binding record ({}) cannot be read: {e}",
+            "Session '{session}' {what} record ({}) cannot be read: {e}. What it is bound to is unknown; stop it with `chrome-use session stop {session}` or use another --session.",
             path.display()
         )),
     }
 }
 
 /// Record what this session is bound to: the endpoint, and the relay profile
-/// that owns it when there is one.
-fn write_session_binding(session: &str, endpoint: &str, relay_profile: Option<&str>) {
-    let _ = fs::write(get_profile_path(session), endpoint);
-    match relay_profile {
-        Some(id) => {
-            let _ = fs::write(get_relay_profile_path(session), id);
+/// that owns it. See [`commit_binding_at`].
+fn write_session_binding(
+    session: &str,
+    endpoint: Option<&str>,
+    relay_profile: Option<&str>,
+) -> Result<(), String> {
+    commit_binding_at(
+        &get_profile_path(session),
+        &get_relay_profile_path(session),
+        endpoint,
+        relay_profile,
+    )
+    .map_err(|e| format!("Could not record session '{session}' binding: {e}"))
+}
+
+fn staging_path(path: &std::path::Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".tmp-{}", std::process::id()));
+    path.with_file_name(name)
+}
+
+/// Replace a file atomically with `contents`, or remove it for `None`.
+fn put_or_remove(path: &std::path::Path, contents: Option<&[u8]>) -> std::io::Result<()> {
+    match contents {
+        Some(bytes) => {
+            let tmp = staging_path(path);
+            if let Err(e) = fs::write(&tmp, bytes).and_then(|_| fs::rename(&tmp, path)) {
+                let _ = fs::remove_file(&tmp);
+                return Err(e);
+            }
+            Ok(())
         }
-        None => {
-            let _ = fs::remove_file(get_relay_profile_path(session));
+        None => match fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        },
+    }
+}
+
+/// Commit a binding pair (endpoint record, profile pin) all or nothing.
+///
+/// The pin is what constrains the session, so it is changed first and each
+/// file is replaced atomically. If the pin can't be changed nothing has been;
+/// if the endpoint then can't be, the pin is put back as it was. `Err` means
+/// the previous binding is still in place (or, if even the roll-back failed,
+/// says so).
+fn commit_binding_at(
+    endpoint_path: &std::path::Path,
+    pin_path: &std::path::Path,
+    endpoint: Option<&str>,
+    pin: Option<&str>,
+) -> Result<(), String> {
+    let old_pin = match fs::read(pin_path) {
+        Ok(b) => Some(b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(format!(
+                "the profile pin {} cannot be read: {e}",
+                pin_path.display()
+            ))
         }
+    };
+    put_or_remove(pin_path, pin.map(str::as_bytes)).map_err(|e| {
+        format!(
+            "the profile pin {} cannot be written: {e}; the previous binding is unchanged",
+            pin_path.display()
+        )
+    })?;
+    if let Err(e) = put_or_remove(endpoint_path, endpoint.map(str::as_bytes)) {
+        let restored = put_or_remove(pin_path, old_pin.as_deref());
+        return Err(match restored {
+            Ok(()) => format!(
+                "the endpoint record {} cannot be written: {e}; the previous binding is unchanged",
+                endpoint_path.display()
+            ),
+            Err(re) => format!(
+                "the endpoint record {} cannot be written ({e}) and the previous profile pin could not be put back ({re}); the binding is inconsistent, stop the session with `chrome-use session stop`",
+                endpoint_path.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Stop a session's daemon (relay recovery) without losing its profile pin.
+///
+/// Stopping a daemon clears its sidecars, the pin with them. A recovery that
+/// then fails would leave the next command free to bind another profile, so
+/// the pin is put back on its own: the session stays constrained to its
+/// profile until it is explicitly stopped or closed.
+pub fn kill_stale_daemon_keeping_pin(session: &str) -> Result<(), String> {
+    let pin = session_relay_profile(session)?;
+    kill_stale_daemon(session);
+    match pin {
+        Some(id) => write_session_binding(session, None, Some(&id)),
+        None => Ok(()),
     }
 }
 
@@ -377,70 +474,135 @@ fn requested_relay_profile(requested: &str) -> Result<Option<String>, String> {
     crate::connect::relay_profile_for_endpoint(requested)
 }
 
-/// [`requested_relay_profile`] for a session about to be bound: an endpoint
-/// whose owner can't be determined is not bound at all.
-fn relay_profile_to_bind(session: &str, requested: &str) -> Result<Option<String>, String> {
-    requested_relay_profile(requested).map_err(|e| {
-        format!(
-            "Cannot bind session '{session}' to '{}': {e}. Refusing rather than guessing which Chrome profile it is; check `chrome-use browsers` and retry.",
-            requested.trim()
-        )
-    })
-}
-
-/// What a running session does with an endpoint asked for on this command.
+/// What a session does with an endpoint asked for on this command.
 #[derive(Debug, PartialEq)]
 enum BindingDecision {
     /// Same endpoint, or nothing to compare.
     Keep,
-    /// Same Chrome profile, new relay endpoint (its host restarted): not a
-    /// switch. Re-record the binding on the new endpoint.
-    Rebind {
+    /// Record this binding: a first binding, or the same Chrome profile on a
+    /// new relay endpoint (its host restarted), which is not a switch.
+    Bind {
         endpoint: String,
-        profile: String,
+        profile: Option<String>,
     },
     Refuse(String),
 }
 
-/// Pure decision for an already-running session. `requested_profile` is only
-/// consulted when the endpoint differs and the session has a relay profile.
+/// Pure binding decision. `bound` is the endpoint record, `bound_profile` the
+/// profile pin; either being unknown (`Err`) refuses. An existing pin always
+/// constrains the request, whether or not an endpoint record is there.
+/// `requested_profile` is only consulted when the endpoint differs.
 fn decide_binding(
     session: &str,
-    bound: &str,
+    bound: Result<Option<String>, String>,
     bound_profile: Result<Option<String>, String>,
     requested: &str,
     requested_profile: impl FnOnce() -> Result<Option<String>, String>,
 ) -> BindingDecision {
-    let (bound, req) = (bound.trim(), requested.trim());
-    if req.is_empty() || req.trim_end_matches('/') == bound.trim_end_matches('/') {
+    let req = requested.trim();
+    if req.is_empty() {
         return BindingDecision::Keep;
     }
-    let refuse = |extra: &str| {
-        BindingDecision::Refuse(format!(
-            "Session '{session}' is already bound to profile/endpoint '{bound}'{extra}. Cannot switch to '{req}' on an existing session. Start a new session with --session <name>.",
-        ))
+    let unknown =
+        |e: String| BindingDecision::Refuse(format!("{e} Refusing to bind it to '{req}'."));
+    let bound = match bound {
+        Ok(b) => b,
+        Err(e) => return unknown(e),
     };
     let bound_id = match bound_profile {
-        Ok(Some(id)) => id,
-        Ok(None) => return refuse(""),
-        Err(e) => {
-            return BindingDecision::Refuse(format!(
-                "{e} Refusing to rebind it to '{req}'. Stop it with `chrome-use session stop` or start a new session with --session <name>."
-            ))
-        }
+        Ok(p) => p,
+        Err(e) => return unknown(e),
     };
-    match requested_profile() {
-        Ok(Some(id)) if id == bound_id => BindingDecision::Rebind {
-            endpoint: req.to_string(),
-            profile: id,
+    if bound
+        .as_deref()
+        .is_some_and(|b| b.trim_end_matches('/') == req.trim_end_matches('/'))
+    {
+        return BindingDecision::Keep;
+    }
+    let shown = bound.as_deref().unwrap_or("(no live endpoint)");
+    let refuse = |extra: &str| {
+        BindingDecision::Refuse(format!(
+            "Session '{session}' is already bound to profile/endpoint '{shown}'{extra}. Cannot switch to '{req}' on an existing session. Start a new session with --session <name>.",
+        ))
+    };
+    match (bound_id, bound.as_deref()) {
+        (Some(bound_id), _) => match requested_profile() {
+            Ok(Some(id)) if id == bound_id => BindingDecision::Bind {
+                endpoint: req.to_string(),
+                profile: Some(id),
+            },
+            Ok(Some(id)) => refuse(&format!(
+                " (Chrome profile {bound_id}); '{req}' is Chrome profile {id}"
+            )),
+            Ok(None) => refuse(&format!(" (Chrome profile {bound_id})")),
+            Err(e) => BindingDecision::Refuse(format!(
+                "Session '{session}' is bound to Chrome profile {bound_id}, and the profile behind '{req}' can't be determined: {e}. Refusing to rebind. Start a new session with --session <name> once the relay has settled.",
+            )),
         },
-        Ok(Some(id)) => refuse(&format!(
-            " (Chrome profile {bound_id}); '{req}' is Chrome profile {id}"
-        )),
-        Ok(None) => refuse(&format!(" (Chrome profile {bound_id})")),
-        Err(e) => BindingDecision::Refuse(format!(
-            "Session '{session}' is bound to Chrome profile {bound_id}, and the profile behind '{req}' can't be determined: {e}. Refusing to rebind. Start a new session with --session <name> once the relay has settled.",
-        )),
+        // Bound before profile identity existed: the old endpoint rule.
+        (None, Some(_)) => refuse(""),
+        // Not bound yet.
+        (None, None) => match requested_profile() {
+            Ok(profile) => BindingDecision::Bind {
+                endpoint: req.to_string(),
+                profile,
+            },
+            Err(e) => BindingDecision::Refuse(format!(
+                "Cannot bind session '{session}' to '{req}': {e}. Refusing rather than guessing which Chrome profile it is; check `chrome-use browsers` and retry.",
+            )),
+        },
+    }
+}
+
+/// A running session asked for `requested` (`--browser`, `--cdp`, a profile
+/// path): check it against the recorded binding and commit any change.
+/// Nothing asked: nothing to check here (the daemon enforces the pin itself
+/// when it reconnects).
+fn reconcile_running_binding(
+    session: &str,
+    endpoint_path: &std::path::Path,
+    pin_path: &std::path::Path,
+    requested: Option<&str>,
+    lookup: impl FnOnce(&str) -> Result<Option<String>, String>,
+) -> Result<(), String> {
+    let Some(req) = requested.map(str::trim).filter(|r| !r.is_empty()) else {
+        return Ok(());
+    };
+    match decide_binding(
+        session,
+        read_binding_file(endpoint_path, session, "endpoint binding"),
+        read_relay_profile_file(pin_path, session),
+        req,
+        || lookup(req),
+    ) {
+        BindingDecision::Keep => Ok(()),
+        BindingDecision::Bind { endpoint, profile } => {
+            commit_binding_at(endpoint_path, pin_path, Some(&endpoint), profile.as_deref())
+                .map_err(|e| format!("Could not record session '{session}' binding: {e}"))
+        }
+        BindingDecision::Refuse(msg) => Err(msg),
+    }
+}
+
+/// The binding a daemon about to be spawned gets, decided BEFORE anything
+/// starts. The endpoint record of a dead daemon is stale and doesn't
+/// constrain anything, but a profile pin does: it survives a failed recovery
+/// so the next command can't land on another profile. Nothing requested keeps
+/// the pin as it is, for the daemon to reconnect to.
+fn spawn_binding(
+    session: &str,
+    pin_path: &std::path::Path,
+    requested: Option<&str>,
+    lookup: impl FnOnce(&str) -> Result<Option<String>, String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    let pin = read_relay_profile_file(pin_path, session)?;
+    let Some(req) = requested.map(str::trim).filter(|r| !r.is_empty()) else {
+        return Ok((None, pin));
+    };
+    match decide_binding(session, Ok(None), Ok(pin.clone()), req, || lookup(req)) {
+        BindingDecision::Keep => Ok((None, pin)),
+        BindingDecision::Bind { endpoint, profile } => Ok((Some(endpoint), profile)),
+        BindingDecision::Refuse(msg) => Err(msg),
     }
 }
 
@@ -834,6 +996,14 @@ fn write_created_targets_in(
 
 /// Clean up stale socket and PID files for a session
 pub fn cleanup_stale_files(session: &str) {
+    cleanup_stale_runtime_files(session);
+    let _ = fs::remove_file(get_profile_path(session));
+    let _ = fs::remove_file(get_relay_profile_path(session));
+}
+
+/// [`cleanup_stale_files`] minus the binding records (`.profile`,
+/// `.relay-profile`), for the spawn path, which replaces those itself.
+fn cleanup_stale_runtime_files(session: &str) {
     let pid_path = get_pid_path(session);
     let _ = fs::remove_file(&pid_path);
     let version_path = get_version_path(session);
@@ -842,9 +1012,6 @@ pub fn cleanup_stale_files(session: &str) {
         &get_socket_dir(),
         session,
     ));
-    let profile_path = get_profile_path(session);
-    let _ = fs::remove_file(&profile_path);
-    let _ = fs::remove_file(get_relay_profile_path(session));
     // Which Chrome profile the session used and why (#437); the next first
     // attach decides again.
     let _ = fs::remove_file(get_socket_dir().join(format!("{}.browser-profile", session)));
@@ -1622,38 +1789,17 @@ pub(crate) fn ensure_daemon_with_lifecycle_lock(
                 replace_daemon_for_upgrade(session);
                 // Fall through to spawn a new daemon below
             } else {
-                let profile_path = get_profile_path(session);
-                if let Ok(bound) = fs::read_to_string(&profile_path) {
-                    let bound = bound.trim();
-                    if !bound.is_empty() {
-                        let requested = opts.cdp.or(opts.profile);
-                        if let Some(req) = requested {
-                            // Bound to a relay PROFILE, not to the address its
-                            // host had at bind time (#472): the same profile on
-                            // a new endpoint is a reconnect; another profile is
-                            // still a switch and refused (#422).
-                            match decide_binding(
-                                session,
-                                bound,
-                                session_relay_profile(session),
-                                req,
-                                || requested_relay_profile(req),
-                            ) {
-                                BindingDecision::Keep => {}
-                                BindingDecision::Rebind { endpoint, profile } => {
-                                    write_session_binding(session, &endpoint, Some(&profile));
-                                }
-                                BindingDecision::Refuse(msg) => return Err(msg),
-                            }
-                        }
-                    }
-                } else if let Some(req) = opts.cdp.or(opts.profile) {
-                    let req = req.trim();
-                    if !req.is_empty() {
-                        let profile = relay_profile_to_bind(session, req)?;
-                        write_session_binding(session, req, profile.as_deref());
-                    }
-                }
+                // Bound to a relay PROFILE, not to the address its host had
+                // at bind time (#472): the same profile on a new endpoint is a
+                // reconnect; another profile is still a switch and refused
+                // (#422); an unknown binding is refused, never overwritten.
+                reconcile_running_binding(
+                    session,
+                    &get_profile_path(session),
+                    &get_relay_profile_path(session),
+                    opts.cdp.or(opts.profile),
+                    requested_relay_profile,
+                )?;
                 return Ok(DaemonResult {
                     already_running: true,
                 });
@@ -1663,13 +1809,18 @@ pub(crate) fn ensure_daemon_with_lifecycle_lock(
 
     // Which relay profile the new daemon is bound to, decided before anything
     // starts: an endpoint whose owner is ambiguous is refused, not bound.
-    let bind_profile = match opts.cdp.or(opts.profile).map(str::trim) {
-        Some(req) if !req.is_empty() => relay_profile_to_bind(session, req)?,
-        _ => None,
-    };
+    let (bind_endpoint, bind_profile) = spawn_binding(
+        session,
+        &get_relay_profile_path(session),
+        opts.cdp.or(opts.profile),
+        requested_relay_profile,
+    )?;
 
-    // Clean up any stale socket/pid files before starting fresh
-    cleanup_stale_files(session);
+    // Clean up any stale socket/pid files before starting fresh. The binding
+    // records are replaced by the commit below instead, so a failed write
+    // leaves the previous pin in force rather than nothing.
+    cleanup_stale_runtime_files(session);
+    write_session_binding(session, bind_endpoint.as_deref(), bind_profile.as_deref())?;
 
     // Ensure socket directory exists
     let socket_dir = get_socket_dir();
@@ -1763,12 +1914,6 @@ pub(crate) fn ensure_daemon_with_lifecycle_lock(
 
     for _ in 0..50 {
         if daemon_ready(session) {
-            if let Some(bound) = opts.cdp.or(opts.profile) {
-                let bound = bound.trim();
-                if !bound.is_empty() {
-                    write_session_binding(session, bound, bind_profile.as_deref());
-                }
-            }
             return Ok(DaemonResult {
                 already_running: false,
             });
@@ -3227,55 +3372,78 @@ mod tests {
     const OLD: &str = "ws://127.0.0.1:50001/old-guid";
     const NEW: &str = "ws://127.0.0.1:50002/new-guid";
 
+    fn p(id: &str) -> Result<Option<String>, String> {
+        Ok(Some(id.to_string()))
+    }
+
+    fn refused(d: BindingDecision) -> String {
+        match d {
+            BindingDecision::Refuse(msg) => msg,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
     #[test]
     fn same_profile_on_a_new_endpoint_is_a_rebind_not_a_switch() {
-        let d = decide_binding("s", OLD, Ok(Some("p1".into())), NEW, || {
-            Ok(Some("p1".into()))
-        });
+        let d = decide_binding("s", p(OLD), p("p1"), NEW, || p("p1"));
         assert_eq!(
             d,
-            BindingDecision::Rebind {
+            BindingDecision::Bind {
                 endpoint: NEW.into(),
-                profile: "p1".into()
+                profile: Some("p1".into())
             }
         );
     }
 
     #[test]
     fn another_profile_is_still_a_switch_and_refused() {
-        let d = decide_binding("s", OLD, Ok(Some("p1".into())), NEW, || {
-            Ok(Some("p2".into()))
-        });
-        let BindingDecision::Refuse(msg) = d else {
-            panic!("{d:?}")
-        };
+        let msg = refused(decide_binding("s", p(OLD), p("p1"), NEW, || p("p2")));
         assert!(msg.contains("Cannot switch"), "{msg}");
         assert!(msg.contains("p1") && msg.contains("p2"), "{msg}");
         // Not a relay profile at all (a raw CDP endpoint): refused too.
-        let d = decide_binding("s", OLD, Ok(Some("p1".into())), "9222", || Ok(None));
-        assert!(matches!(d, BindingDecision::Refuse(_)), "{d:?}");
+        refused(decide_binding("s", p(OLD), p("p1"), "9222", || Ok(None)));
+    }
+
+    #[test]
+    fn a_pin_constrains_even_without_an_endpoint_record() {
+        // The endpoint record is gone (a recovery, a crashed daemon) but the
+        // pin says p1: a request for p2 is a switch, p1 is a bind.
+        let msg = refused(decide_binding("s", Ok(None), p("p1"), NEW, || p("p2")));
+        assert!(msg.contains("p1") && msg.contains("p2"), "{msg}");
+        refused(decide_binding("s", Ok(None), p("p1"), NEW, || Ok(None)));
+        assert_eq!(
+            decide_binding("s", Ok(None), p("p1"), NEW, || p("p1")),
+            BindingDecision::Bind {
+                endpoint: NEW.into(),
+                profile: Some("p1".into())
+            }
+        );
     }
 
     #[test]
     fn an_unknown_owner_or_binding_refuses() {
         // The requested endpoint's owner is ambiguous: refuse, never rebind.
-        let d = decide_binding("s", OLD, Ok(Some("p1".into())), NEW, || {
+        let msg = refused(decide_binding("s", p(OLD), p("p1"), NEW, || {
             Err("two relay endpoint records name it".into())
-        });
-        let BindingDecision::Refuse(msg) = d else {
-            panic!("{d:?}")
-        };
+        }));
         assert!(msg.contains("can't be determined"), "{msg}");
-        // The session's own binding record can't be read: refuse.
-        let d = decide_binding("s", OLD, Err("unreadable".into()), NEW, || {
-            Ok(Some("p1".into()))
-        });
-        assert!(matches!(d, BindingDecision::Refuse(_)), "{d:?}");
+        // Not bound yet and the owner is ambiguous: not bound at all.
+        let msg = refused(decide_binding("s", Ok(None), Ok(None), NEW, || {
+            Err("duplicate".into())
+        }));
+        assert!(msg.contains("Cannot bind"), "{msg}");
+        // Either record unknown: refuse, even for the same endpoint.
+        for (bound, pin) in [
+            (Err("unreadable endpoint".to_string()), p("p1")),
+            (p(OLD), Err("unreadable pin".to_string())),
+        ] {
+            let msg = refused(decide_binding("s", bound, pin, OLD, || {
+                panic!("must not look the endpoint up")
+            }));
+            assert!(msg.contains("unreadable"), "{msg}");
+        }
         // A session bound before profile identity existed keeps the old rule.
-        let d = decide_binding("s", OLD, Ok(None), NEW, || Ok(Some("p1".into())));
-        let BindingDecision::Refuse(msg) = d else {
-            panic!("{d:?}")
-        };
+        let msg = refused(decide_binding("s", p(OLD), Ok(None), NEW, || p("p1")));
         assert!(
             msg.contains("is already bound to profile/endpoint"),
             "{msg}"
@@ -3284,15 +3452,11 @@ mod tests {
 
     #[test]
     fn the_same_endpoint_needs_no_lookup() {
-        let d = decide_binding(
-            "s",
-            OLD,
-            Err("never read".into()),
-            &format!("{OLD}/"),
-            || panic!("must not look the endpoint up"),
-        );
+        let d = decide_binding("s", p(OLD), p("p1"), &format!("{OLD}/"), || {
+            panic!("must not look the endpoint up")
+        });
         assert_eq!(d, BindingDecision::Keep);
-        let d = decide_binding("s", OLD, Ok(Some("p1".into())), "  ", || {
+        let d = decide_binding("s", Err("x".into()), Err("y".into()), "  ", || {
             panic!("must not look the endpoint up")
         });
         assert_eq!(d, BindingDecision::Keep);
@@ -3314,5 +3478,212 @@ mod tests {
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
         assert!(read_relay_profile_file(&path, "s").is_err());
+    }
+
+    /// A tempdir holding a session's two binding records.
+    struct Records {
+        _dir: tempfile::TempDir,
+        endpoint: PathBuf,
+        pin: PathBuf,
+    }
+
+    impl Records {
+        fn new(endpoint: Option<&str>, pin: Option<&str>) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let r = Records {
+                endpoint: dir.path().join("s.profile"),
+                pin: dir.path().join("s.relay-profile"),
+                _dir: dir,
+            };
+            if let Some(e) = endpoint {
+                fs::write(&r.endpoint, e).unwrap();
+            }
+            if let Some(p) = pin {
+                fs::write(&r.pin, p).unwrap();
+            }
+            r
+        }
+        fn read(&self) -> (Option<String>, Option<String>) {
+            (
+                fs::read_to_string(&self.endpoint).ok(),
+                fs::read_to_string(&self.pin).ok(),
+            )
+        }
+        /// Put a non-empty directory where `path` is, so writing or removing
+        /// it fails.
+        fn block(path: &std::path::Path) {
+            let _ = fs::remove_file(path);
+            fs::create_dir(path).unwrap();
+            fs::write(path.join("x"), "x").unwrap();
+        }
+    }
+
+    fn some(s: &str) -> Option<String> {
+        Some(s.to_string())
+    }
+
+    #[test]
+    fn a_running_session_with_a_pin_is_constrained_whatever_its_endpoint_record() {
+        // Endpoint record missing, empty or unreadable; pin says p1. A request
+        // for p2 is refused and nothing is written.
+        for setup in ["missing", "empty", "unreadable"] {
+            let r = Records::new(None, Some("p1"));
+            match setup {
+                "empty" => fs::write(&r.endpoint, "").unwrap(),
+                "unreadable" => Records::block(&r.endpoint),
+                _ => {}
+            }
+            let before = r.read();
+            let err = reconcile_running_binding("s", &r.endpoint, &r.pin, Some(NEW), |_| p("p2"))
+                .unwrap_err();
+            assert!(!err.is_empty(), "{setup}");
+            assert_eq!(r.read(), before, "{setup}: nothing may be overwritten");
+        }
+        // Missing endpoint record, same profile: bound on the new endpoint.
+        let r = Records::new(None, Some("p1"));
+        reconcile_running_binding("s", &r.endpoint, &r.pin, Some(NEW), |_| p("p1")).unwrap();
+        assert_eq!(r.read(), (some(NEW), some("p1")));
+    }
+
+    #[test]
+    fn a_running_session_with_an_unknown_pin_refuses_and_keeps_it() {
+        for setup in ["empty", "unreadable"] {
+            let r = Records::new(Some(OLD), None);
+            match setup {
+                "empty" => fs::write(&r.pin, " ").unwrap(),
+                _ => Records::block(&r.pin),
+            }
+            for req in [OLD, NEW] {
+                let err =
+                    reconcile_running_binding("s", &r.endpoint, &r.pin, Some(req), |_| p("p1"))
+                        .unwrap_err();
+                assert!(
+                    err.contains("unknown") || err.contains("cannot be read"),
+                    "{err}"
+                );
+            }
+            assert_eq!(fs::read_to_string(&r.endpoint).unwrap(), OLD);
+        }
+        // Nothing requested: nothing checked, nothing written.
+        let r = Records::new(Some(OLD), Some("p1"));
+        reconcile_running_binding("s", &r.endpoint, &r.pin, None, |_| panic!("no lookup")).unwrap();
+        assert_eq!(r.read(), (some(OLD), some("p1")));
+    }
+
+    /// Make a directory read-only for the test (and writable again after).
+    /// `None` when running as root, where permissions are not enforced.
+    #[cfg(unix)]
+    fn read_only(dir: &std::path::Path) -> Option<impl Drop> {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return None;
+        }
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o555)).unwrap();
+        Some(Restore(dir.to_path_buf()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_running_rebind_that_cannot_be_recorded_fails_and_keeps_the_old_binding() {
+        // The real ensure branch: same profile on a new endpoint, but the
+        // socket dir can't be written. The command fails; the pair is intact.
+        let r = Records::new(Some(OLD), Some("p1"));
+        let Some(_guard) = read_only(r.endpoint.parent().unwrap()) else {
+            return;
+        };
+        let err = reconcile_running_binding("s", &r.endpoint, &r.pin, Some(NEW), |_| p("p1"))
+            .unwrap_err();
+        assert!(
+            err.contains("Could not record session 's' binding"),
+            "{err}"
+        );
+        assert!(err.contains("previous binding is unchanged"), "{err}");
+        assert_eq!(r.read(), (some(OLD), some("p1")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_binding_commit_is_all_or_nothing() {
+        // The pin write fails (its directory is gone): the endpoint, which
+        // would have been written next, is not touched.
+        let r = Records::new(Some(OLD), None);
+        let missing = r.pin.with_file_name("missing").join("s.relay-profile");
+        let err = commit_binding_at(&r.endpoint, &missing, Some(NEW), Some("p1")).unwrap_err();
+        assert!(
+            err.contains("profile pin") && err.contains("cannot be written"),
+            "{err}"
+        );
+        assert_eq!(fs::read_to_string(&r.endpoint).unwrap(), OLD);
+        // Clearing the pin fails (read-only dir): the endpoint, kept in
+        // another dir here, is not replaced either.
+        let pins = tempfile::tempdir().unwrap();
+        let pin = pins.path().join("s.relay-profile");
+        fs::write(&pin, "p1").unwrap();
+        let r = Records::new(Some(OLD), None);
+        if let Some(_guard) = read_only(pins.path()) {
+            let err = commit_binding_at(&r.endpoint, &pin, Some(NEW), None).unwrap_err();
+            assert!(err.contains("cannot be written"), "{err}");
+            assert_eq!(fs::read_to_string(&r.endpoint).unwrap(), OLD);
+            assert_eq!(fs::read_to_string(&pin).unwrap(), "p1");
+        }
+        // Rebind: the endpoint write fails after the pin changed; the old pin
+        // is restored.
+        let r = Records::new(Some(OLD), Some("p1"));
+        Records::block(&r.endpoint);
+        let err = commit_binding_at(&r.endpoint, &r.pin, Some(NEW), Some("p2")).unwrap_err();
+        assert!(err.contains("previous binding is unchanged"), "{err}");
+        assert_eq!(fs::read_to_string(&r.pin).unwrap(), "p1");
+        // Clear (pin-only binding after a recovery) where the old pin did not
+        // exist: the new pin is removed again.
+        let r = Records::new(None, None);
+        Records::block(&r.endpoint);
+        commit_binding_at(&r.endpoint, &r.pin, Some(NEW), Some("p1")).unwrap_err();
+        assert!(!r.pin.exists());
+        // And the happy paths, including a pin-only record and a full clear.
+        let r = Records::new(Some(OLD), Some("p1"));
+        commit_binding_at(&r.endpoint, &r.pin, None, Some("p1")).unwrap();
+        assert_eq!(r.read(), (None, some("p1")));
+        commit_binding_at(&r.endpoint, &r.pin, Some(NEW), None).unwrap();
+        assert_eq!(r.read(), (some(NEW), None));
+        commit_binding_at(&r.endpoint, &r.pin, None, None).unwrap();
+        assert_eq!(r.read(), (None, None));
+    }
+
+    #[test]
+    fn a_new_daemon_inherits_the_pin_of_a_failed_recovery() {
+        // Pin-only record left behind: nothing requested keeps it for the
+        // daemon; another profile is refused; the same profile binds.
+        let r = Records::new(None, Some("p1"));
+        assert_eq!(
+            spawn_binding("s", &r.pin, None, |_| panic!("no lookup")).unwrap(),
+            (None, some("p1"))
+        );
+        let err = spawn_binding("s", &r.pin, Some(NEW), |_| p("p2")).unwrap_err();
+        assert!(err.contains("Cannot switch"), "{err}");
+        assert_eq!(
+            spawn_binding("s", &r.pin, Some(NEW), |_| p("p1")).unwrap(),
+            (some(NEW), some("p1"))
+        );
+        // An unknown pin refuses before anything starts.
+        fs::write(&r.pin, "").unwrap();
+        assert!(spawn_binding("s", &r.pin, None, |_| p("p1")).is_err());
+        // No pin: a first bind, with the owner looked up strictly.
+        let r = Records::new(None, None);
+        assert_eq!(
+            spawn_binding("s", &r.pin, Some(NEW), |_| p("p2")).unwrap(),
+            (some(NEW), some("p2"))
+        );
+        assert!(spawn_binding("s", &r.pin, Some(NEW), |_| Err("dup".into())).is_err());
+        // A launch-mode profile path is recorded with no pin.
+        assert_eq!(
+            spawn_binding("s", &r.pin, Some("/tmp/prof"), |_| Ok(None)).unwrap(),
+            (some("/tmp/prof"), None)
+        );
     }
 }
