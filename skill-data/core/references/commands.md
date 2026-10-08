@@ -417,7 +417,9 @@ chrome-use window new                       # New window
 
 Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused
 within a session, so the same id keeps referring to the same tab across
-commands. Positional integers are **not** accepted — `tab 2` errors with a
+commands. That holds across a reconnect (a relay restart, for example): ids are
+re-bound by Chrome tab, not by list order, and an id whose tab cannot be found
+again is refused with an error rather than given to another tab. Positional integers are **not** accepted — `tab 2` errors with a
 teaching message; use `t2`.
 
 User-assigned labels (`docs`, `app`, `admin`) are interchangeable with ids

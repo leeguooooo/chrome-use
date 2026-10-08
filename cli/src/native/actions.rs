@@ -1919,6 +1919,10 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // previous one, so the reply can say so instead of describing the fresh
     // `about:blank` as if it were the page they left (issue #216).
     let mut replaced_browser: Option<String> = None;
+    // Set instead of `replaced_browser` when the replaced connection's tabs were
+    // looked up again by Chrome target id: the note then says which were found
+    // and which were not, rather than that all of them are gone (#473).
+    let mut reconnect_note: Option<String> = None;
     // A fresh daemon on the relay is connected by the client's `launch`, which
     // comes before the agent's own command and whose reply nobody reads. Take
     // the marker there and report it on the command that follows.
@@ -1975,6 +1979,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         };
 
         if needs_launch {
+            let mut carried_tabs: Option<super::browser::TabRefSnapshot> = None;
             // A replacement browser is not the browser the caller was using.
             // Whatever was open in the old one — a half-filled form a human was
             // about to finish by hand — is gone, and saying nothing about that
@@ -1993,6 +1998,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     })
                     .unwrap_or("its browser was gone");
                 replaced_browser = Some(why.to_string());
+                // The tab refs the agent holds (`t1`, `t2`, labels), so the new
+                // connection can bind them to the same Chrome tabs (#473).
+                carried_tabs = state.browser.as_ref().map(|mgr| mgr.tab_ref_snapshot());
                 if let Some(ref mut mgr) = state.browser {
                     let _ = mgr.close().await;
                 }
@@ -2012,6 +2020,23 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             }
             if let Err(e) = auto_launch(state).await {
                 return error_response(&id, &format!("Auto-launch failed: {}", e));
+            }
+            if let (Some(snapshot), Some(mgr)) = (carried_tabs.as_ref(), state.browser.as_mut()) {
+                let rebind = mgr.restore_tab_refs(snapshot);
+                let on_relay = mgr.on_relay();
+                let landed = mgr
+                    .active_tab_brief()
+                    .filter(|(tab_id, _)| rebind.fresh.contains(tab_id));
+                let driving = mgr.active_tab_id();
+                let why = replaced_browser.take().unwrap_or_default();
+                reconnect_note = Some(reconnected_browser_note(
+                    &why,
+                    on_relay,
+                    &rebind,
+                    landed.as_ref().map(|(tab_id, url)| (*tab_id, url.as_str())),
+                    snapshot.active_tab_id(),
+                    driving,
+                ));
             }
         }
 
@@ -2785,10 +2810,14 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // rides on every reply, success or failure: an agent that reads `about:blank`
     // without this line concludes the page navigated away, and a human who left
     // a form half-filled is told nothing at all.
-    if let Some(why) = replaced_browser {
-        let on_relay = state.browser.as_ref().is_some_and(|m| m.on_relay());
+    let replaced_note = reconnect_note.or_else(|| {
+        replaced_browser.map(|why| {
+            let on_relay = state.browser.as_ref().is_some_and(|m| m.on_relay());
+            replaced_browser_note(&why, on_relay, None)
+        })
+    });
+    if let Some(note) = replaced_note {
         if let Some(obj) = resp.as_object_mut() {
-            let note = replaced_browser_note(&why, on_relay);
             match obj.get("warning").and_then(|v| v.as_str()) {
                 Some(existing) => {
                     let merged = format!("{note}\n{existing}");
@@ -13405,11 +13434,16 @@ fn closed_by_other_session_reason(cmd: &Value, own_session: &str) -> Option<Stri
 /// matters most, because several agents share that Chrome, and one of them
 /// closing everything otherwise looks exactly like the page resetting itself:
 /// the agent fills the form again and submits it twice.
-fn replaced_browser_note(why: &str, on_relay: bool) -> String {
+///
+/// `ran_in` names the tab the command ran in when that is known; `None` keeps
+/// the wording for the usual case, a new blank tab opened because the session
+/// had none left.
+fn replaced_browser_note(why: &str, on_relay: bool, ran_in: Option<&str>) -> String {
+    let ran_in = ran_in.unwrap_or("a new blank tab");
     let mut note = if on_relay {
         format!(
-            "This session's previous tabs are gone ({why}); this command ran in a new blank \
-             tab. Anything open there, including typed input, is not here. If you were partway \
+            "This session's previous tabs are gone ({why}); this command ran in {ran_in}. \
+             Anything open there, including typed input, is not here. If you were partway \
              through a form or had just submitted one, check whether it already went through \
              before doing it again."
         )
@@ -13426,6 +13460,73 @@ fn replaced_browser_note(why: &str, on_relay: bool) -> String {
              (AGENT_BROWSER_IDLE_TIMEOUT_MS, default 600000ms; set 0 to keep it). While a \
              human is working in the window, `session handoff` also holds it open.",
         );
+    }
+    note
+}
+
+/// The warning on the first reply after this session's browser connection was
+/// replaced and its tabs were looked up again by Chrome target id (#473). Pure
+/// so the decision is testable.
+///
+/// A relay restart drops the connection but not the tabs. Saying they are gone
+/// when they are not sends the agent to redo work that is still on screen, so
+/// the "gone" wording is kept for the case where none of them was found.
+/// `landed` is the tab the command ran in when it is not one the session had;
+/// `was_driving` and `now_driving` are the active tab before and after.
+fn reconnected_browser_note(
+    why: &str,
+    on_relay: bool,
+    rebind: &super::browser::TabRebind,
+    landed: Option<(u32, &str)>,
+    was_driving: Option<u32>,
+    now_driving: Option<u32>,
+) -> String {
+    use super::browser::format_tab_id;
+    let list =
+        |ids: &mut dyn Iterator<Item = u32>| ids.map(format_tab_id).collect::<Vec<_>>().join(", ");
+    if rebind.kept.is_empty() {
+        let ran_in = landed.map(|(tab_id, url)| {
+            if url.is_empty() || url == "about:blank" {
+                format!("a new blank tab ({})", format_tab_id(tab_id))
+            } else {
+                format!(
+                    "tab {} ({url}), which this session did not have before",
+                    format_tab_id(tab_id)
+                )
+            }
+        });
+        let mut note = replaced_browser_note(why, on_relay, ran_in.as_deref());
+        if !rebind.lost.is_empty() {
+            note.push_str(&format!(
+                " The old tab ids ({}) are refused from now on.",
+                list(&mut rebind.lost.iter().map(|t| t.tab_id))
+            ));
+        }
+        return note;
+    }
+    let mut kept = rebind.kept.clone();
+    kept.sort_unstable();
+    let mut note = format!(
+        "This session's browser connection was re-established ({why}). Its tabs {} were \
+         found again by their Chrome tab and keep the same ids.",
+        list(&mut kept.into_iter())
+    );
+    if !rebind.lost.is_empty() {
+        note.push_str(&format!(
+            " Tabs {} could not be found again (they may have been closed); those ids are \
+             refused from now on rather than reassigned.",
+            list(&mut rebind.lost.iter().map(|t| t.tab_id))
+        ));
+    }
+    if let (Some(was), Some(now)) = (was_driving, now_driving) {
+        if was != now {
+            note.push_str(&format!(
+                " The tab this session was driving ({}) is not among them; this command ran \
+                 in {}.",
+                format_tab_id(was),
+                format_tab_id(now)
+            ));
+        }
     }
     note
 }
@@ -21294,6 +21395,7 @@ mod tests {
         let relay = replaced_browser_note(
             "`chrome-use close --all` run from session `ab-hn1` closed it at 09:41:15",
             true,
+            None,
         );
         assert!(relay.contains("previous tabs are gone"), "{relay}");
         assert!(relay.contains("`ab-hn1`"), "{relay}");
@@ -21304,9 +21406,101 @@ mod tests {
         let idle = replaced_browser_note(
             "the idle timeout closed it after 600000ms with no commands",
             false,
+            None,
         );
         assert!(idle.contains("fresh one was launched"), "{idle}");
         assert!(idle.contains("AGENT_BROWSER_IDLE_TIMEOUT_MS"), "{idle}");
+    }
+
+    fn carried(tab_id: u32, target_id: &str) -> super::super::browser::CarriedTabRef {
+        super::super::browser::CarriedTabRef {
+            tab_id,
+            label: None,
+            target_id: target_id.to_string(),
+        }
+    }
+
+    /// A relay restart keeps every tab. The first reply must not say they are
+    /// gone or that it ran in a new blank tab: neither happened (#473).
+    #[test]
+    fn a_reconnect_that_found_every_tab_does_not_say_they_are_gone() {
+        let rebind = super::super::browser::TabRebind {
+            kept: vec![2, 1],
+            lost: vec![],
+            fresh: vec![],
+        };
+        let note = reconnected_browser_note(
+            "its browser connection was dead",
+            true,
+            &rebind,
+            None,
+            Some(2),
+            Some(2),
+        );
+        assert!(!note.contains("gone"), "{note}");
+        assert!(!note.contains("blank tab"), "{note}");
+        assert!(note.contains("re-established"), "{note}");
+        assert!(note.contains("t1, t2"), "{note}");
+        assert!(note.contains("keep the same ids"), "{note}");
+    }
+
+    /// Some tabs found, some not: the note names both, and says the missing
+    /// ids are refused rather than reassigned.
+    #[test]
+    fn a_reconnect_that_lost_some_tabs_names_them() {
+        let rebind = super::super::browser::TabRebind {
+            kept: vec![1],
+            lost: vec![carried(2, "T-B")],
+            fresh: vec![],
+        };
+        let note = reconnected_browser_note(
+            "its browser connection was dead",
+            true,
+            &rebind,
+            None,
+            Some(2),
+            Some(1),
+        );
+        assert!(!note.contains("previous tabs are gone"), "{note}");
+        assert!(note.contains("was driving (t2)"), "{note}");
+        assert!(note.contains("ran in t1"), "{note}");
+        assert!(note.contains("Its tabs t1 were"), "{note}");
+        assert!(note.contains("Tabs t2 could not be found"), "{note}");
+        assert!(note.contains("refused"), "{note}");
+    }
+
+    /// Only when no tab was found again is it "gone", and the tab it ran in is
+    /// described as it really is: a blank tab only if it is blank.
+    #[test]
+    fn a_reconnect_that_found_no_tab_says_gone_and_where_it_ran() {
+        let rebind = super::super::browser::TabRebind {
+            kept: vec![],
+            lost: vec![carried(1, "T-A"), carried(2, "T-B")],
+            fresh: vec![3],
+        };
+        let blank = reconnected_browser_note(
+            "its browser connection was dead",
+            true,
+            &rebind,
+            Some((3, "about:blank")),
+            Some(1),
+            Some(3),
+        );
+        assert!(blank.contains("previous tabs are gone"), "{blank}");
+        assert!(blank.contains("a new blank tab (t3)"), "{blank}");
+        assert!(blank.contains("(t1, t2) are refused"), "{blank}");
+
+        let other = reconnected_browser_note(
+            "its browser connection was dead",
+            true,
+            &rebind,
+            Some((3, "https://example.com/")),
+            Some(1),
+            Some(3),
+        );
+        assert!(other.contains("previous tabs are gone"), "{other}");
+        assert!(!other.contains("blank tab"), "{other}");
+        assert!(other.contains("tab t3 (https://example.com/)"), "{other}");
     }
 
     /// An empty tree has two very different causes, and the output cannot tell

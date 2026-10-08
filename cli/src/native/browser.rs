@@ -1176,6 +1176,145 @@ pub fn format_tab_id(tab_id: u32) -> String {
     format!("t{}", tab_id)
 }
 
+/// One tab ref held by a session, carried across a reconnect of its browser
+/// connection (#473). The Chrome target id is the identity; `tab_id` and
+/// `label` are what the agent typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CarriedTabRef {
+    pub tab_id: u32,
+    pub label: Option<String>,
+    pub target_id: String,
+}
+
+/// The session's tab refs just before its browser connection was replaced.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TabRefSnapshot {
+    pub tabs: Vec<CarriedTabRef>,
+    pub next_tab_id: u32,
+    pub active_target_id: Option<String>,
+}
+
+impl TabRefSnapshot {
+    /// The id of the tab the session was driving, if it had one.
+    pub fn active_tab_id(&self) -> Option<u32> {
+        let active = self.active_target_id.as_deref()?;
+        self.tabs
+            .iter()
+            .find(|t| t.target_id == active)
+            .map(|t| t.tab_id)
+    }
+}
+
+/// What became of a [`TabRefSnapshot`] on the new connection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TabRebind {
+    /// Refs whose Chrome tab was found again; they keep their id and label.
+    pub kept: Vec<u32>,
+    /// Refs whose Chrome tab was not among the new connection's tabs.
+    pub lost: Vec<CarriedTabRef>,
+    /// Tabs the new connection has that the snapshot did not; they get ids
+    /// above every id the session has handed out, so no old ref names them.
+    pub fresh: Vec<u32>,
+}
+
+/// Re-bind tab refs after a reconnect by Chrome target id, never by the order
+/// the new connection enumerated the tabs in (#473). A relay restart lists the
+/// same tabs, possibly in a different order; assigning `t1, t2, ...` in that
+/// order swapped refs, so `tab close t2` closed the other tab.
+///
+/// Pure: rewrites `pages` in place (sorted by tab id) and returns the next free
+/// tab id together with what was kept, lost and newly numbered.
+pub fn rebind_tab_refs(pages: &mut [PageInfo], snapshot: &TabRefSnapshot) -> (u32, TabRebind) {
+    let mut next = snapshot
+        .tabs
+        .iter()
+        .map(|t| t.tab_id.saturating_add(1))
+        .chain(std::iter::once(snapshot.next_tab_id))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let mut rebind = TabRebind::default();
+    for page in pages.iter_mut() {
+        match snapshot.tabs.iter().find(|t| t.target_id == page.target_id) {
+            Some(old) => {
+                page.tab_id = old.tab_id;
+                page.label = old.label.clone();
+                rebind.kept.push(old.tab_id);
+            }
+            None => {
+                page.tab_id = next;
+                page.label = None;
+                rebind.fresh.push(next);
+                next += 1;
+            }
+        }
+    }
+    rebind.lost = snapshot
+        .tabs
+        .iter()
+        .filter(|t| !pages.iter().any(|p| p.target_id == t.target_id))
+        .cloned()
+        .collect();
+    pages.sort_by_key(|p| p.tab_id);
+    (next, rebind)
+}
+
+/// The refusal for a ref whose tab could not be re-identified after a
+/// reconnect. It names what happened instead of the generic "not found", so
+/// the caller does not retry the same ref or guess another one.
+fn lost_tab_ref_message(lost: &CarriedTabRef) -> String {
+    let name = match &lost.label {
+        Some(label) => format!("{} (`{}`)", format_tab_id(lost.tab_id), label),
+        None => format_tab_id(lost.tab_id),
+    };
+    format!(
+        "Tab {name} could not be re-identified after this session's browser connection was \
+         re-established: its Chrome tab (target {}) is not among the session's tabs any more. \
+         Refusing to act on it rather than guess; run `chrome-use tab` to list the current tab ids",
+        lost.target_id
+    )
+}
+
+/// Resolve a `TabRef` against the session's tabs. A ref whose tab could not be
+/// re-identified after a reconnect is refused with [`lost_tab_ref_message`]
+/// (#473); it is never matched to another tab.
+fn resolve_tab_ref_in(
+    pages: &[PageInfo],
+    lost_tab_refs: &[CarriedTabRef],
+    tab_ref: &TabRef,
+) -> Result<u32, String> {
+    match tab_ref {
+        TabRef::Id(id) => {
+            if pages.iter().any(|p| p.tab_id == *id) {
+                Ok(*id)
+            } else if let Some(lost) = lost_tab_refs.iter().find(|t| t.tab_id == *id) {
+                Err(lost_tab_ref_message(lost))
+            } else {
+                Err(format!(
+                    "Tab {} not found; run `chrome-use tab` to list open tabs",
+                    format_tab_id(*id)
+                ))
+            }
+        }
+        TabRef::Label(name) => pages
+            .iter()
+            .find(|p| p.label.as_deref() == Some(name.as_str()))
+            .map(|p| p.tab_id)
+            .ok_or_else(|| {
+                match lost_tab_refs
+                    .iter()
+                    .find(|t| t.label.as_deref() == Some(name.as_str()))
+                {
+                    Some(lost) => lost_tab_ref_message(lost),
+                    None => format!(
+                        "No tab with label `{}`; run `chrome-use tab` to list open tabs",
+                        name
+                    ),
+                }
+            }),
+    }
+}
+
 /// A tab reference as parsed from CLI/JSON input. Either a stable id like
 /// `t2` or a user-assigned label like `docs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1371,6 +1510,10 @@ pub struct BrowserManager {
     /// announce) the daemon keeps strict daemon-side isolation.
     relay_scoped: bool,
     next_tab_id: u32,
+    /// Tab refs this session held before its browser connection was
+    /// re-established whose Chrome tab could not be found again (#473). A ref
+    /// listed here is refused with an error naming that, never reassigned.
+    lost_tab_refs: Vec<CarriedTabRef>,
     /// Whether to enable the CDP `Runtime` domain (console / error / exception capture).
     /// OFF by default for stealth: a live `Runtime.enable` is a detectable CDP signal
     /// (the patchright / rebrowser "runtime leak") — even when attached to the user's
@@ -1585,6 +1728,7 @@ impl BrowserManager {
                 relay_target_misses: HashMap::new(),
                 relay_scoped: false,
                 next_tab_id: 1,
+                lost_tab_refs: Vec::new(),
                 capture_console: console_capture_enabled(),
             };
             manager.discover_and_attach_targets().await?;
@@ -1694,6 +1838,7 @@ impl BrowserManager {
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
             next_tab_id: 1,
+            lost_tab_refs: Vec::new(),
             capture_console: console_capture_enabled(),
         };
 
@@ -4426,29 +4571,7 @@ impl BrowserManager {
     /// Resolve a user-supplied `TabRef` (either `t<N>` or a label) to the
     /// stable numeric `tab_id`. Returns a teaching error for unknown tabs.
     pub fn resolve_tab_ref(&self, tab_ref: &TabRef) -> Result<u32, String> {
-        match tab_ref {
-            TabRef::Id(id) => {
-                if self.has_tab_id(*id) {
-                    Ok(*id)
-                } else {
-                    Err(format!(
-                        "Tab {} not found; run `chrome-use tab` to list open tabs",
-                        format_tab_id(*id)
-                    ))
-                }
-            }
-            TabRef::Label(name) => self
-                .pages
-                .iter()
-                .find(|p| p.label.as_deref() == Some(name.as_str()))
-                .map(|p| p.tab_id)
-                .ok_or_else(|| {
-                    format!(
-                        "No tab with label `{}`; run `chrome-use tab` to list open tabs",
-                        name
-                    )
-                }),
-        }
+        resolve_tab_ref_in(&self.pages, &self.lost_tab_refs, tab_ref)
     }
 
     /// Returns true iff a tab already carries the given label.
@@ -6034,6 +6157,74 @@ impl BrowserManager {
         self.tab_close(index).await
     }
 
+    /// The session's tab refs, for carrying across a reconnect (#473). Refs
+    /// already lost on an earlier reconnect are included, so one whose tab
+    /// shows up again gets its own id back rather than a new one.
+    pub fn tab_ref_snapshot(&self) -> TabRefSnapshot {
+        let mut tabs: Vec<CarriedTabRef> = self
+            .pages
+            .iter()
+            .map(|p| CarriedTabRef {
+                tab_id: p.tab_id,
+                label: p.label.clone(),
+                target_id: p.target_id.clone(),
+            })
+            .collect();
+        for lost in &self.lost_tab_refs {
+            if !tabs.iter().any(|t| t.target_id == lost.target_id) {
+                tabs.push(lost.clone());
+            }
+        }
+        TabRefSnapshot {
+            tabs,
+            next_tab_id: self.next_tab_id,
+            active_target_id: self.active_target_id.clone().or_else(|| {
+                self.pages
+                    .get(self.active_page_index)
+                    .map(|p| p.target_id.clone())
+            }),
+        }
+    }
+
+    /// Bind this freshly connected manager's tabs to the refs the session held
+    /// on its previous connection, by Chrome target id (#473). The tab the
+    /// session was driving stays the active one when it is still there. Refs
+    /// whose tab is not found are kept aside so using them is refused.
+    pub fn restore_tab_refs(&mut self, snapshot: &TabRefSnapshot) -> TabRebind {
+        let current_active = self.active_target_id.clone().or_else(|| {
+            self.pages
+                .get(self.active_page_index)
+                .map(|p| p.target_id.clone())
+        });
+        let (next, rebind) = rebind_tab_refs(&mut self.pages, snapshot);
+        self.next_tab_id = next;
+        self.lost_tab_refs = rebind.lost.clone();
+        let active = snapshot
+            .active_target_id
+            .as_deref()
+            .and_then(|t| self.pages.iter().position(|p| p.target_id == t))
+            .or_else(|| {
+                current_active
+                    .as_deref()
+                    .and_then(|t| self.pages.iter().position(|p| p.target_id == t))
+            });
+        if let Some(index) = active {
+            self.active_page_index = index;
+            self.pin_active_target();
+        } else if self.active_page_index >= self.pages.len() {
+            self.active_page_index = 0;
+            self.pin_active_target();
+        }
+        rebind
+    }
+
+    /// The active tab's id and url.
+    pub fn active_tab_brief(&self) -> Option<(u32, String)> {
+        self.pages
+            .get(self.active_page_index)
+            .map(|p| (p.tab_id, p.url.clone()))
+    }
+
     pub fn assign_tab_id(&mut self) -> u32 {
         let id = self.next_tab_id;
         self.next_tab_id += 1;
@@ -6269,6 +6460,7 @@ async fn initialize_lightpanda_manager(
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
             next_tab_id: 1,
+            lost_tab_refs: Vec::new(),
             capture_console: console_capture_enabled(),
         };
 
@@ -7144,6 +7336,102 @@ mod tests {
             title: String::new(),
             target_type: "page".to_string(),
         }
+    }
+
+    // --- issue #473: tab refs survive a reconnect by target id, not order ---
+
+    fn carried(tab_id: u32, label: Option<&str>, target_id: &str) -> CarriedTabRef {
+        CarriedTabRef {
+            tab_id,
+            label: label.map(str::to_string),
+            target_id: target_id.to_string(),
+        }
+    }
+
+    fn snapshot_ab() -> TabRefSnapshot {
+        TabRefSnapshot {
+            tabs: vec![carried(1, None, "T-A"), carried(2, Some("docs"), "T-B")],
+            next_tab_id: 3,
+            active_target_id: Some("T-B".to_string()),
+        }
+    }
+
+    /// The relay lists the same tabs in the opposite order after a restart.
+    /// Each ref still names its own Chrome tab, label included.
+    #[test]
+    fn tab_refs_follow_the_target_id_when_the_order_changes() {
+        let mut pages = vec![page("T-B"), page("T-A")];
+        let (next, rebind) = rebind_tab_refs(&mut pages, &snapshot_ab());
+        assert_eq!(next, 3);
+        assert!(rebind.lost.is_empty());
+        assert!(rebind.fresh.is_empty());
+        let by_target = |t: &str| pages.iter().find(|p| p.target_id == t).unwrap().clone();
+        assert_eq!(by_target("T-A").tab_id, 1);
+        assert_eq!(by_target("T-B").tab_id, 2);
+        assert_eq!(by_target("T-B").label.as_deref(), Some("docs"));
+        // Listed in id order, not enumeration order.
+        assert_eq!(pages[0].target_id, "T-A");
+        // `tab close t2` resolves to T-B, the tab that was t2 before.
+        let t2 = resolve_tab_ref_in(&pages, &rebind.lost, &TabRef::Id(2)).unwrap();
+        assert_eq!(
+            pages.iter().find(|p| p.tab_id == t2).unwrap().target_id,
+            "T-B"
+        );
+    }
+
+    /// A tab the new connection has that the session did not is numbered
+    /// above every id handed out before, so no old ref can land on it.
+    #[test]
+    fn a_new_tab_after_a_reconnect_never_reuses_an_old_id() {
+        let mut pages = vec![page("T-C"), page("T-A")];
+        let (next, rebind) = rebind_tab_refs(&mut pages, &snapshot_ab());
+        assert_eq!(rebind.kept, vec![1]);
+        assert_eq!(rebind.fresh, vec![3]);
+        assert_eq!(rebind.lost, vec![carried(2, Some("docs"), "T-B")]);
+        assert_eq!(next, 4);
+        let c = pages.iter().find(|p| p.target_id == "T-C").unwrap();
+        assert_eq!(c.tab_id, 3);
+        assert_eq!(c.label, None);
+    }
+
+    /// A ref whose tab was not found is refused with an error that says why,
+    /// by id and by label. It is never matched to another tab.
+    #[test]
+    fn a_ref_whose_tab_was_not_found_is_refused() {
+        let mut pages = vec![page("T-C"), page("T-A")];
+        let (_, rebind) = rebind_tab_refs(&mut pages, &snapshot_ab());
+        let by_id = resolve_tab_ref_in(&pages, &rebind.lost, &TabRef::Id(2)).unwrap_err();
+        assert!(by_id.contains("could not be re-identified"), "{by_id}");
+        assert!(by_id.contains("T-B"), "{by_id}");
+        assert!(by_id.contains("Refusing"), "{by_id}");
+        let by_label = resolve_tab_ref_in(&pages, &rebind.lost, &TabRef::Label("docs".to_string()))
+            .unwrap_err();
+        assert!(by_label.contains("t2 (`docs`)"), "{by_label}");
+        // An id never handed out keeps the plain not-found error.
+        let unknown = resolve_tab_ref_in(&pages, &rebind.lost, &TabRef::Id(9)).unwrap_err();
+        assert!(unknown.contains("not found"), "{unknown}");
+        // The refs that were found still resolve.
+        assert_eq!(
+            resolve_tab_ref_in(&pages, &rebind.lost, &TabRef::Id(1)),
+            Ok(1)
+        );
+    }
+
+    /// A lost ref whose tab shows up again on a later reconnect gets its own
+    /// id back (the snapshot keeps lost refs for exactly that).
+    #[test]
+    fn a_lost_ref_whose_tab_returns_gets_its_id_back() {
+        let snapshot = TabRefSnapshot {
+            tabs: vec![carried(1, None, "T-A"), carried(2, None, "T-B")],
+            next_tab_id: 4,
+            active_target_id: None,
+        };
+        let mut pages = vec![page("T-B"), page("T-A")];
+        let (next, rebind) = rebind_tab_refs(&mut pages, &snapshot);
+        assert_eq!(next, 4);
+        let mut kept = rebind.kept.clone();
+        kept.sort_unstable();
+        assert_eq!(kept, vec![1, 2]);
     }
 
     // --- issue #21: --reuse-tab URL matching ignores query/fragment ---
