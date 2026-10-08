@@ -98,8 +98,7 @@ pub fn header_referrer_policy(value: &str) -> String {
     value
         .split(',')
         .map(|t| t.trim().to_ascii_lowercase())
-        .filter(|t| POLICIES.contains(&t.as_str()))
-        .next_back()
+        .rfind(|t| POLICIES.contains(&t.as_str()))
         .unwrap_or_default()
 }
 
@@ -116,8 +115,7 @@ pub fn document_referrer_policy(params: &Value) -> Option<(String, String)> {
         .filter(|(k, _)| k.eq_ignore_ascii_case("referrer-policy"))
         .filter_map(|(_, v)| v.as_str())
         .map(header_referrer_policy)
-        .filter(|p| !p.is_empty())
-        .next_back()
+        .rfind(|p| !p.is_empty())
         .unwrap_or_default();
     Some((frame, policy))
 }
