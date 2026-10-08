@@ -2460,7 +2460,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         {
             if let Some(pending) = state.deferred_click_tab_check.take() {
                 let extra = finish_click_tab_check(state, pending).await;
-                let followed = extra.get("followed").is_some();
+                let followed = extra.get("followed").and_then(Value::as_bool) == Some(true);
                 merge_into_data(&mut resp, extra);
                 if followed {
                     if let Some(a) = arm.take() {
@@ -7319,15 +7319,29 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
         if pending.follow {
             let old_target = mgr.active_target_id().ok().map(ToString::to_string);
             let new_target = mgr.target_id_for_tab(page.tab_id).map(ToString::to_string);
-            let _ = mgr.tab_switch_by_id(page.tab_id).await;
-            if let Some(ref new_t) = new_target {
-                state.switch_tab_context(old_target.as_deref(), new_t);
-            } else {
-                state.ref_map.clear();
-                state.iframe_sessions.clear();
-                state.active_frame_id = None;
+            // Report `followed` only when the session really is on the new tab:
+            // a pop-up can be gone again (or replaced) before the switch, and a
+            // `followed: true` beside a settle and snapshot of the old tab is a
+            // silent success.
+            match mgr.tab_switch_by_id(page.tab_id).await {
+                Ok(_) => {
+                    if let Some(ref new_t) = new_target {
+                        state.switch_tab_context(old_target.as_deref(), new_t);
+                    } else {
+                        state.ref_map.clear();
+                        state.iframe_sessions.clear();
+                        state.active_frame_id = None;
+                    }
+                    out["followed"] = json!(true);
+                }
+                Err(e) => {
+                    out["followed"] = json!(false);
+                    out["openedTabWarning"] = json!(format!(
+                        "--follow could not switch to {tab_id} ({e}); the session stays on \
+                         the tab that was clicked. Run `tab list`."
+                    ));
+                }
             }
-            out["followed"] = json!(true);
         }
     }
     out
