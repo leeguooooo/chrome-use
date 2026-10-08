@@ -158,7 +158,7 @@ mod browser {
         let page = session.home.path().join("fixture.html");
         std::fs::write(&page,r##"<!doctype html><article id="account-a"><h2>Alpha account</h2><button onclick="document.querySelector('#receipt').textContent='alpha'">Save</button><h3>Email</h3><label>Email<input></label><input placeholder="Address"><input data-testid="secret" title="Private" value="fixture-secret"></article>
 <section id="account-b" role="region" aria-labelledby="beta-title"><h2 id="beta-title">Beta account</h2><button aria-labelledby="save-label" onclick="document.querySelector('#receipt').textContent='beta'"><span id="save-label">Save</span></button><label>Email<input></label><input placeholder="Address"><input data-testid="secret" title="Private" value="fixture-secret"></section>
-<button style="display:none">Save</button><p id="receipt" role="status">untouched</p><iframe id="embedded" srcdoc="<p>Frame receipt</p><button onclick=&quot;parent.document.querySelector('#receipt').textContent='frame'&quot;>Frame action</button>"></iframe>"##).unwrap();
+<img alt="Benchmark logo" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='16' height='16'/%3E%3C/svg%3E"><button style="display:none">Save</button><p id="receipt" role="status">untouched</p><iframe id="embedded" srcdoc="<p>Frame receipt</p><button onclick=&quot;parent.document.querySelector('#receipt').textContent='frame'&quot;>Frame action</button>"></iframe>"##).unwrap();
         session.ok(&["open", &format!("file://{}", page.display())]);
         for strategy in ["role", "text"] {
             let args = if strategy == "role" {
@@ -261,6 +261,14 @@ mod browser {
         assert_eq!(descriptor["located"]["name"], "Actual descriptor");
         assert_eq!(descriptor["visibleCount"], 1);
         session.ok(&["eval", "document.querySelector('#many').remove()"]);
+        let image = session.ok(&["find", "role", "img", "--name", "Benchmark logo", "--exact"]);
+        assert_eq!(image["located"]["name"], "Benchmark logo");
+        let image_mcp=session.mcp_find(serde_json::json!({"locator":"role","value":"img","name":"Benchmark logo","exact":true,"session":session.name}));
+        assert_eq!(image_mcp["isError"], false, "{image_mcp}");
+        assert_eq!(
+            image_mcp["structuredContent"]["response"]["data"]["located"]["name"],
+            "Benchmark logo"
+        );
         let mut timings = Vec::new();
         for _ in 0..5 {
             let started = Instant::now();
