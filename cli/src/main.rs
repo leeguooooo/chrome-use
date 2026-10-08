@@ -129,9 +129,8 @@ fn recover_pinned_relay(flags: &mut Flags, id: &str) {
         Err(E::Ambiguous(e)) => fail_command(flags, &pinned_profile_unresolvable(&session, id, &e)),
         Err(E::NotConnected(_)) => {}
     }
-    if let Err(e) = connection::kill_stale_daemon_keeping_pin(&session) {
-        fail_command(flags, &e);
-    }
+    // Runtime files only: the pin is never deleted or rewritten here.
+    connection::stop_daemon_for_recovery(&session);
     eprint!(
         "{} Chrome relay of profile {id} dropped — waiting for it to reconnect…",
         color::success_indicator()

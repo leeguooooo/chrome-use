@@ -452,21 +452,6 @@ fn commit_binding_at(
     Ok(())
 }
 
-/// Stop a session's daemon (relay recovery) without losing its profile pin.
-///
-/// Stopping a daemon clears its sidecars, the pin with them. A recovery that
-/// then fails would leave the next command free to bind another profile, so
-/// the pin is put back on its own: the session stays constrained to its
-/// profile until it is explicitly stopped or closed.
-pub fn kill_stale_daemon_keeping_pin(session: &str) -> Result<(), String> {
-    let pin = session_relay_profile(session)?;
-    kill_stale_daemon(session);
-    match pin {
-        Some(id) => write_session_binding(session, None, Some(&id)),
-        None => Ok(()),
-    }
-}
-
 /// The relay profile behind a requested endpoint, if any. `opts.profile` may
 /// be a launch-mode path rather than an endpoint; only `ws://` URLs are looked
 /// up.
@@ -997,12 +982,21 @@ fn write_created_targets_in(
 /// Clean up stale socket and PID files for a session
 pub fn cleanup_stale_files(session: &str) {
     cleanup_stale_runtime_files(session);
+    remove_browser_profile_record(session);
     let _ = fs::remove_file(get_profile_path(session));
     let _ = fs::remove_file(get_relay_profile_path(session));
 }
 
-/// [`cleanup_stale_files`] minus the binding records (`.profile`,
-/// `.relay-profile`), for the spawn path, which replaces those itself.
+/// Which Chrome profile the session used and why (#437); the next first
+/// attach decides again.
+fn remove_browser_profile_record(session: &str) {
+    let _ = fs::remove_file(get_socket_dir().join(format!("{}.browser-profile", session)));
+}
+
+/// [`cleanup_stale_files`] minus everything that records what the session is
+/// bound to (`.profile`, `.relay-profile`, `.browser-profile`): only the
+/// daemon's runtime files. Used by the spawn path, which replaces the binding
+/// itself, and by relay recovery, which must leave it untouched.
 fn cleanup_stale_runtime_files(session: &str) {
     let pid_path = get_pid_path(session);
     let _ = fs::remove_file(&pid_path);
@@ -1012,9 +1006,6 @@ fn cleanup_stale_runtime_files(session: &str) {
         &get_socket_dir(),
         session,
     ));
-    // Which Chrome profile the session used and why (#437); the next first
-    // attach decides again.
-    let _ = fs::remove_file(get_socket_dir().join(format!("{}.browser-profile", session)));
     let stream_path = get_socket_dir().join(format!("{}.stream", session));
     let _ = fs::remove_file(&stream_path);
     // Drop the ownership sidecar too (issue #89): a dead session's handoff
@@ -1684,6 +1675,32 @@ fn kill_daemon_keeping_tabs(session: &str) {
 }
 
 fn kill_daemon(session: &str, graceful: bool) {
+    signal_daemon(session, graceful, false);
+    // Clean up leftover files regardless
+    cleanup_stale_files(session);
+}
+
+/// Stop a session's daemon for relay recovery, leaving what the session is
+/// bound to untouched (#472).
+///
+/// Only the runtime files (socket, pid, version, ...) are cleaned: the
+/// binding records (`.profile`, `.relay-profile`, `.browser-profile`) are not
+/// deleted and rewritten, they are never touched, so no failed write can lose
+/// the pin and the next command stays on the same profile. The daemon is
+/// deregistered (pid file removed) before it is signalled, and a daemon only
+/// deletes binding records at exit while it is still the registered one, so
+/// its own exit cleanup can't delete the pin late either. It is stopped hard
+/// (like an upgrade restart): a graceful stop would try to close its tabs
+/// over the dead relay; persisted tab ownership lets the next daemon take
+/// them back. Only `session stop` / `close` clear the pin.
+pub fn stop_daemon_for_recovery(session: &str) {
+    signal_daemon(session, false, true);
+    cleanup_stale_runtime_files(session);
+}
+
+/// Signal the session's registered daemon and wait for it to go. With
+/// `deregister_first`, its pid file is removed before the signal.
+fn signal_daemon(session: &str, graceful: bool, deregister_first: bool) {
     // Remove the socket first so no new connections reach the old daemon
     #[cfg(unix)]
     {
@@ -1695,6 +1712,9 @@ fn kill_daemon(session: &str, graceful: bool) {
 
     let pid_path = get_pid_path(session);
     if let Ok(pid_str) = fs::read_to_string(&pid_path) {
+        if deregister_first {
+            let _ = fs::remove_file(&pid_path);
+        }
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             #[cfg(unix)]
             {
@@ -1735,9 +1755,6 @@ fn kill_daemon(session: &str, graceful: bool) {
             }
         }
     }
-
-    // Clean up leftover files regardless
-    cleanup_stale_files(session);
 }
 
 /// Kill every per-session daemon worker (SIGTERM→SIGKILL + sidecar cleanup),
@@ -1820,6 +1837,7 @@ pub(crate) fn ensure_daemon_with_lifecycle_lock(
     // records are replaced by the commit below instead, so a failed write
     // leaves the previous pin in force rather than nothing.
     cleanup_stale_runtime_files(session);
+    remove_browser_profile_record(session);
     write_session_binding(session, bind_endpoint.as_deref(), bind_profile.as_deref())?;
 
     // Ensure socket directory exists
@@ -3685,5 +3703,130 @@ mod tests {
             spawn_binding("s", &r.pin, Some("/tmp/prof"), |_| Ok(None)).unwrap(),
             (some("/tmp/prof"), None)
         );
+    }
+
+    /// A real process standing in for a session's daemon: an orphaned
+    /// `sleep` (so init reaps it once killed), registered in `dir` the way a
+    /// daemon registers itself, with the session's binding records next to it.
+    #[cfg(unix)]
+    fn fake_daemon(dir: &std::path::Path, session: &str) -> u32 {
+        let out = Command::new("sh")
+            .args(["-c", "sleep 60 >/dev/null 2>&1 & echo $!"])
+            .output()
+            .expect("spawn sleep");
+        let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+        fs::write(dir.join(format!("{session}.pid")), pid.to_string()).unwrap();
+        fs::write(dir.join(format!("{session}.sock")), "").unwrap();
+        fs::write(dir.join(format!("{session}.version")), "x").unwrap();
+        fs::write(dir.join(format!("{session}.profile")), OLD).unwrap();
+        fs::write(dir.join(format!("{session}.relay-profile")), "p1").unwrap();
+        fs::write(
+            dir.join(format!("{session}.browser-profile")),
+            r#"{"id":"p1"}"#,
+        )
+        .unwrap();
+        pid
+    }
+
+    #[cfg(unix)]
+    fn gone(pid: u32) -> bool {
+        for _ in 0..50 {
+            if unsafe { libc::kill(pid as i32, 0) } != 0 {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    fn binding_snapshot(
+        dir: &std::path::Path,
+        session: &str,
+    ) -> Vec<(String, Vec<u8>, std::time::SystemTime)> {
+        ["profile", "relay-profile", "browser-profile"]
+            .iter()
+            .map(|ext| {
+                let path = dir.join(format!("{session}.{ext}"));
+                let meta = fs::metadata(&path).expect("binding record must still exist");
+                (
+                    ext.to_string(),
+                    fs::read(&path).unwrap(),
+                    meta.modified().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recovery_stop_kills_the_daemon_and_leaves_the_binding_untouched() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        let session = "rec-a";
+        let pid = fake_daemon(dir.path(), session);
+        let before = binding_snapshot(dir.path(), session);
+
+        stop_daemon_for_recovery(session);
+
+        assert!(gone(pid), "the daemon process must be stopped");
+        for ext in ["pid", "version"] {
+            assert!(
+                !dir.path().join(format!("{session}.{ext}")).exists(),
+                "{ext} is runtime state and goes"
+            );
+        }
+        // Not deleted and rewritten: the very same bytes and mtimes.
+        assert_eq!(binding_snapshot(dir.path(), session), before);
+        assert_eq!(session_relay_profile(session).unwrap(), some("p1"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recovery_stop_keeps_the_pin_even_where_a_rewrite_would_fail() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        let session = "rec-b";
+        let pid = fake_daemon(dir.path(), session);
+        // A directory occupies both staging paths: any delete-then-rewrite of
+        // the binding would fail here and lose it.
+        for ext in ["profile", "relay-profile"] {
+            let staging = staging_path(&dir.path().join(format!("{session}.{ext}")));
+            fs::create_dir(&staging).unwrap();
+            fs::write(staging.join("x"), "x").unwrap();
+            assert!(put_or_remove(
+                &staging.with_file_name(format!("{session}.{ext}")),
+                Some(&b"y"[..])
+            )
+            .is_err());
+        }
+        let before = binding_snapshot(dir.path(), session);
+
+        stop_daemon_for_recovery(session);
+
+        assert!(gone(pid));
+        assert_eq!(binding_snapshot(dir.path(), session), before);
+        assert_eq!(session_relay_profile(session).unwrap(), some("p1"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_an_explicit_stop_clears_the_pin() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let dir = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", dir.path().to_str().unwrap());
+        let session = "rec-c";
+        let pid = fake_daemon(dir.path(), session);
+        kill_stale_daemon(session);
+        assert!(gone(pid));
+        for ext in ["profile", "relay-profile", "browser-profile"] {
+            assert!(
+                !dir.path().join(format!("{session}.{ext}")).exists(),
+                "{ext}"
+            );
+        }
+        assert_eq!(session_relay_profile(session).unwrap(), None);
     }
 }
