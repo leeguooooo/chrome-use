@@ -5041,12 +5041,28 @@ fn parse_find(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     let Some(strategy) = rest.first().copied() else {
         return parse_find_legacy(rest, id);
     };
-    if !["role", "text", "label", "placeholder", "alt", "title", "testid"].contains(&strategy) {
+    if ![
+        "role",
+        "text",
+        "label",
+        "placeholder",
+        "alt",
+        "title",
+        "testid",
+    ]
+    .contains(&strategy)
+    {
         return parse_find_legacy(rest, id);
     }
     let usage = "find <role|text|label|placeholder|alt|title|testid> <value> [action] [text] [--name <name>] [--exact] [--within <CSS|@ref>]";
-    let invalid = |message: &str| ParseError::InvalidValue { message: message.to_string(), usage };
-    let value = rest.get(1).ok_or(ParseError::MissingArguments { context: "find".into(), usage })?;
+    let invalid = |message: &str| ParseError::InvalidValue {
+        message: message.to_string(),
+        usage,
+    };
+    let value = rest.get(1).ok_or(ParseError::MissingArguments {
+        context: "find".into(),
+        usage,
+    })?;
     let mut within = None;
     let mut name = None;
     let mut exact = false;
@@ -5054,32 +5070,55 @@ fn parse_find(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     let mut i = 2;
     while i < rest.len() {
         match rest[i] {
-            "--" => { positionals.extend_from_slice(&rest[i + 1..]); break; }
+            "--" => {
+                positionals.extend_from_slice(&rest[i + 1..]);
+                break;
+            }
             "--within" | "--name" => {
                 let opt = rest[i];
-                let v = rest.get(i + 1).filter(|v| !v.is_empty() && !v.starts_with("--"))
+                let v = rest
+                    .get(i + 1)
+                    .filter(|v| !v.is_empty() && !v.starts_with("--"))
                     .ok_or_else(|| invalid("find option needs a nonempty value"))?;
                 if opt == "--within" {
-                    if within.replace(*v).is_some() { return Err(invalid("find --within given twice")); }
+                    if within.replace(*v).is_some() {
+                        return Err(invalid("find --within given twice"));
+                    }
                 } else {
-                    if strategy != "role" { return Err(invalid("find --name applies only to role")); }
-                    if name.replace(*v).is_some() { return Err(invalid("find --name given twice")); }
+                    if strategy != "role" {
+                        return Err(invalid("find --name applies only to role"));
+                    }
+                    if name.replace(*v).is_some() {
+                        return Err(invalid("find --name given twice"));
+                    }
                 }
                 i += 2;
             }
             "--exact" => {
                 exact = true;
                 if let Some(v) = rest.get(i + 1).filter(|v| matches!(**v, "true" | "false")) {
-                    exact = *v == "true"; i += 1;
+                    exact = *v == "true";
+                    i += 1;
                 }
                 i += 1;
             }
-            opt if opt.starts_with('-') => return Err(invalid("unknown find option; use --within, --name, --exact, or -- before literal text")),
-            arg => { positionals.push(arg); i += 1; }
+            opt if opt.starts_with('-') => {
+                return Err(invalid(
+                    "unknown find option; use --within, --name, --exact, or -- before literal text",
+                ))
+            }
+            arg => {
+                positionals.push(arg);
+                i += 1;
+            }
         }
     }
     let action = positionals.first().copied().unwrap_or("locate");
-    if !["locate", "click", "fill", "type", "focus", "check", "uncheck", "hover", "text"].contains(&action) {
+    if ![
+        "locate", "click", "fill", "type", "focus", "check", "uncheck", "hover", "text",
+    ]
+    .contains(&action)
+    {
         return Err(invalid("unsupported find action"));
     }
     let text = positionals.get(1..).unwrap_or_default();
@@ -5090,15 +5129,30 @@ fn parse_find(rest: &[&str], id: &str) -> Result<Value, ParseError> {
         return Err(invalid("unexpected find positional arguments"));
     }
     let daemon_action = match strategy {
-        "role" => "getbyrole", "text" => "getbytext", "label" => "getbylabel",
-        "placeholder" => "getbyplaceholder", "alt" => "getbyalttext", "title" => "getbytitle", _ => "getbytestid",
+        "role" => "getbyrole",
+        "text" => "getbytext",
+        "label" => "getbylabel",
+        "placeholder" => "getbyplaceholder",
+        "alt" => "getbyalttext",
+        "title" => "getbytitle",
+        _ => "getbytestid",
     };
-    let parameter = match strategy { "alt" | "title" => "text", "testid" => "testId", other => other };
+    let parameter = match strategy {
+        "alt" | "title" => "text",
+        "testid" => "testId",
+        other => other,
+    };
     let mut cmd = json!({ "id": id, "action": daemon_action, "subaction": action, "exact": exact });
     cmd[parameter] = json!(value);
-    if let Some(scope) = within { cmd["within"] = json!(scope); }
-    if let Some(n) = name { cmd["name"] = json!(n); }
-    if !text.is_empty() { cmd["value"] = json!(text.join(" ")); }
+    if let Some(scope) = within {
+        cmd["within"] = json!(scope);
+    }
+    if let Some(n) = name {
+        cmd["name"] = json!(n);
+    }
+    if !text.is_empty() {
+        cmd["value"] = json!(text.join(" "));
+    }
     Ok(cmd)
 }
 

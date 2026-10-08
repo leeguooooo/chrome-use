@@ -150,3 +150,5 @@ Run `chrome-use skills get <name>` with one name below.
 | Electron or Slack | `electron` or `slack` |
 | Exploratory QA or reusable test suites | `dogfood` or `test` |
 | Cloud browsers | `vercel-sandbox` or `agentcore` |
+
+For repeated control names, discover the container with `find query`, then use semantic `find ... --within <CSS|@ref>`. Semantic queries refuse multiple visible matches; see core/interacting for bounded candidate diagnostics and explicit first/nth selection.

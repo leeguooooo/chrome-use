@@ -15019,88 +15019,16 @@ fn build_role_selector(role: &str, name: Option<&str>, exact: bool) -> String {
 }
 
 async fn handle_getbyrole(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
-    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
-    let session_id = mgr.active_session_id()?.to_string();
-    let role = cmd
-        .get("role")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing 'role' parameter")?;
-    let name = cmd.get("name").and_then(|v| v.as_str());
-    let exact = cmd.get("exact").and_then(|v| v.as_bool()).unwrap_or(false);
-
-    // Accessible-name approximation: aria-label, then title/alt/value, then the
-    // element's text. Covers links (text), input buttons (value), images (alt).
-    let name_match = name
-        .map(|n| {
-            let nj = serde_json::to_string(n).unwrap_or_default();
-            if exact {
-                format!("__an === {nj}")
-            } else {
-                format!("__an.includes({nj})")
-            }
-        })
-        .unwrap_or_else(|| "true".to_string());
-
-    // Prefer a match the user can see: the first node in document order is
-    // often a hidden duplicate (a collapsed menu, an off-screen template).
-    let js = format!(
-        r#"(() => {{
-            const els = document.querySelectorAll({selector});
-            const matches = [];
-            for (const el of els) {{
-                const __an = (el.getAttribute('aria-label') || el.getAttribute('title')
-                    || el.getAttribute('alt') || el.value || el.textContent || '').trim();
-                if ({name_match}) matches.push(el);
-            }}
-            if (!matches.length) return false;
-            const visible = el => {{
-                const r = el.getBoundingClientRect();
-                if (!(r.width > 0 && r.height > 0)) return false;
-                return typeof el.checkVisibility !== 'function'
-                    || el.checkVisibility({{ checkOpacity: true, checkVisibilityCSS: true }});
-            }};
-            const shown = matches.filter(visible);
-            (shown[0] || matches[0]).setAttribute('data-chrome-use-located', 'true');
-            return {{ found: true, count: matches.length, visibleCount: shown.length }};
-        }})()"#,
-        selector = serde_json::to_string(&role_to_query(role)).unwrap_or_default(),
-        name_match = name_match,
-    );
-
-    let result: super::cdp::types::EvaluateResult = mgr
-        .client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &super::cdp::types::EvaluateParams {
-                expression: with_located_marker_reset(&js),
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(&session_id),
-        )
-        .await?;
-
-    let Some(extra) = located_outcome(result.result.value.as_ref()) else {
-        let desc = build_role_selector(role, name, exact);
-        return Err(format!("No element found: {}", desc));
-    };
-
-    let selector = "[data-chrome-use-located='true']";
-    let result = finish_located(cmd, state, selector, extra, true).await;
-
-    // Clean up the marker attribute
-    if let Some(ref browser) = state.browser {
-        if browser.active_session_id().is_ok() {
-            let _ = browser
-                .evaluate(
-                    "document.querySelector('[data-chrome-use-located]')?.removeAttribute('data-chrome-use-located')",
-                    None,
-                )
-                .await;
-        }
-    }
-
+    let extra = super::semantic_locator::locate(cmd, state).await?;
+    let result = finish_located(cmd, state, "[data-chrome-use-located='true']", extra, false).await;
+    clear_semantic_marker(state).await;
     result
+}
+
+async fn clear_semantic_marker(state: &DaemonState) {
+    if let Some(browser) = state.browser.as_ref() {
+        let _ = browser.evaluate("document.querySelectorAll('[data-chrome-use-located]').forEach(e=>e.removeAttribute('data-chrome-use-located'))", None).await;
+    }
 }
 
 /// Locate script for `find text`. The old version took the first *leaf* in
@@ -15161,115 +15089,13 @@ fn text_locate_js(value: &str, exact: bool) -> String {
 async fn handle_semantic_locator(
     cmd: &Value,
     state: &mut DaemonState,
-    strategy: &str,
-    param_name: &str,
+    _strategy: &str,
+    _param_name: &str,
 ) -> Result<Value, String> {
-    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
-    let session_id = mgr.active_session_id()?.to_string();
-    let value = cmd
-        .get(param_name)
-        .and_then(|v| v.as_str())
-        .ok_or(format!("Missing '{}' parameter", param_name))?;
-    let exact = cmd.get("exact").and_then(|v| v.as_bool()).unwrap_or(false);
-
-    let query = match strategy {
-        // Like Playwright's getByLabel: match <label> associations AND
-        // aria-label / aria-labelledby. Icon buttons and custom controls are
-        // often labelled via aria-label only. (Ported from
-        // vercel-labs/agent-browser #1432.)
-        "label" => format!(
-            r#"(() => {{
-                const __want = {want};
-                const matches = (t) => {cmp};
-                const label = Array.from(document.querySelectorAll('label')).find(el => matches(el.textContent));
-                if (label) {{
-                    const forId = label.getAttribute('for');
-                    const target = forId ? document.getElementById(forId) : label.querySelector('input,select,textarea');
-                    if (target) {{ target.setAttribute('data-chrome-use-located', 'true'); return true; }}
-                }}
-                const aria = Array.from(document.querySelectorAll('[aria-label]')).find(el => matches(el.getAttribute('aria-label')));
-                if (aria) {{ aria.setAttribute('data-chrome-use-located', 'true'); return true; }}
-                const referenced = Array.from(document.querySelectorAll('[aria-labelledby]')).find(el => {{
-                    const text = el.getAttribute('aria-labelledby').split(/\s+/)
-                        .map(id => {{ const r = document.getElementById(id); return r ? r.textContent : ''; }})
-                        .join(' ');
-                    return matches(text);
-                }});
-                if (referenced) {{ referenced.setAttribute('data-chrome-use-located', 'true'); return true; }}
-                return false;
-            }})()"#,
-            want = serde_json::to_string(value).unwrap_or_default(),
-            cmp = if exact {
-                "(t != null && String(t).trim() === __want)"
-            } else {
-                "(t != null && String(t).includes(__want))"
-            },
-        ),
-        "placeholder" => format!(
-            r#"(() => {{
-                const el = document.querySelector('input[placeholder={val}], textarea[placeholder={val}]');
-                if (el) {{ el.setAttribute('data-chrome-use-located', 'true'); return true; }}
-                return false;
-            }})()"#,
-            val = serde_json::to_string(value).unwrap_or_default(),
-        ),
-        "alttext" => format!(
-            r#"(() => {{
-                const el = document.querySelector('img[alt={val}], [alt={val}]');
-                if (el) {{ el.setAttribute('data-chrome-use-located', 'true'); return true; }}
-                return false;
-            }})()"#,
-            val = serde_json::to_string(value).unwrap_or_default(),
-        ),
-        "title" => format!(
-            r#"(() => {{
-                const el = document.querySelector('[title={val}]');
-                if (el) {{ el.setAttribute('data-chrome-use-located', 'true'); return true; }}
-                return false;
-            }})()"#,
-            val = serde_json::to_string(value).unwrap_or_default(),
-        ),
-        "testid" => format!(
-            r#"(() => {{
-                const el = document.querySelector('[data-testid={val}]');
-                if (el) {{ el.setAttribute('data-chrome-use-located', 'true'); return true; }}
-                return false;
-            }})()"#,
-            val = serde_json::to_string(value).unwrap_or_default(),
-        ),
-        _ => text_locate_js(value, exact),
-    };
-
-    let result: super::cdp::types::EvaluateResult = mgr
-        .client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &super::cdp::types::EvaluateParams {
-                expression: with_located_marker_reset(&query),
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(&session_id),
-        )
-        .await?;
-
-    let Some(extra) = located_outcome(result.result.value.as_ref()) else {
-        return Err(format!("No element found by {} '{}'", strategy, value));
-    };
-
-    let selector = "[data-chrome-use-located='true']";
-    let action_result = finish_located(cmd, state, selector, extra, true).await;
-
-    if let Some(ref browser) = state.browser {
-        let _ = browser
-            .evaluate(
-                "document.querySelector('[data-chrome-use-located]')?.removeAttribute('data-chrome-use-located')",
-                None,
-            )
-            .await;
-    }
-
-    action_result
+    let extra = super::semantic_locator::locate(cmd, state).await?;
+    let result = finish_located(cmd, state, "[data-chrome-use-located='true']", extra, true).await;
+    clear_semantic_marker(state).await;
+    result
 }
 
 async fn handle_getbytext(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {

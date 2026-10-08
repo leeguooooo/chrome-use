@@ -44,6 +44,7 @@ pub mod ref_hints;
 pub mod relay;
 #[allow(dead_code)]
 pub mod screenshot;
+pub mod semantic_locator;
 pub mod sensitive;
 
 pub mod script;

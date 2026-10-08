@@ -3808,7 +3808,16 @@ to act on it. With a bare description (or `query <description>`), returns
 ranked candidates without acting. Candidates include role/name/text, cursor
 and selector anchors.
 
-Text/role matches prefer a visible element. `click` on a text match clicks
+Semantic locators require exactly one visible match (even locate-only).
+Ambiguity reports up to eight candidates and acts on nothing. Use --within
+<CSS|@ref> for exactly one container in the active tab main document, --name/--exact,
+or deliberately select with first/last/nth. Role and label names come from
+Chrome accessibility data; ordinary CSS actions keep their existing behavior.
+Unknown semantic options and duplicate --within are refused. Use -- before
+literal fill/type text that looks like a flag. Detached targets fail safely;
+uncertain actions are never replayed.
+
+Text matches select the nearest clickable ancestor inside their scope. `click` on a text match clicks
 its nearest clickable ancestor (button, link, [role=button], ...), refuses a
 match that is not visible, and warns when the page did not react.
 
@@ -3830,7 +3839,8 @@ Actions (default: none — locate only):
 
 Options:
   --name <name>        Filter role by accessible name
-  --exact              Require exact text match
+  --exact [true|false] Require exact text match (false: substring)
+  --within <CSS|@ref>   Restrict semantic query to exactly one container
 
 Global Options:
   --json               Output as JSON
@@ -3841,6 +3851,8 @@ Examples:
   chrome-use find query "编辑 Web服务规则 设置按钮"
   chrome-use find text "Sign In"              # where is it? (no click)
   chrome-use find role button click --name Submit
+  chrome-use find query "Beta account"       # discover its container selector
+  chrome-use find role button click --name Save --exact --within "<returned-selector>"
   chrome-use find text "Sign In" click
   chrome-use find label "Email" fill "user@example.com"
   chrome-use find placeholder "Search..." type "query"

@@ -1500,6 +1500,12 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
         // overrides that would otherwise be swallowed by a global flag of the
         // same name (issue #125): `site demo/pr-list -- --state closed`.
         if arg == "--" {
+            // Semantic find parses its own options and must distinguish literal
+            // fill text after the boundary. Other subcommands keep their legacy
+            // forwarding contract (notably site adapter overrides).
+            if result.first().is_some_and(|s: &String| s == "find") {
+                result.push("--".to_string());
+            }
             result.extend(args[i + 1..].iter().cloned());
             break;
         }
