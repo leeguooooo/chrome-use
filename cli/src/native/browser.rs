@@ -4004,7 +4004,7 @@ impl BrowserManager {
     /// the native-messaging host published. Used to avoid relay-unsafe CDP that
     /// would disturb the user's window (e.g. Browser.setContentsSize, issue #47).
     fn via_relay(&self) -> bool {
-        crate::connect::relay_url().as_deref() == Some(self.ws_url.as_str())
+        crate::connect::is_relay_url(&self.ws_url)
     }
 
     /// The label this session's tabs are grouped under in the user's Chrome.

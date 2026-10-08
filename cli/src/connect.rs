@@ -2636,6 +2636,16 @@ pub fn validate_relay_configuration() -> Result<(), String> {
 /// The live relay CDP WebSocket URL, if the native-messaging host is running
 /// (it writes the file on connect and removes it on exit). Used by
 /// `chrome-use extension connect` to attach without the user copying a URL.
+/// Whether `ws` is an extension relay endpoint: the generic one or any
+/// connected profile's. Comparing with [`relay_url`] alone missed every
+/// session bound to a profile other than the default (`--browser`, or the
+/// most-recently-focused pick with several profiles). Such a session was then
+/// not "on the relay": its tabs got no group and no agent-window hint, so the
+/// extension created them in the user's active window.
+pub fn is_relay_url(ws: &str) -> bool {
+    relay_url().as_deref() == Some(ws) || list_relay_profiles().iter().any(|(_, _, u)| u == ws)
+}
+
 pub fn relay_url() -> Option<String> {
     if let Ok(s) = std::fs::read_to_string(relay_url_path()) {
         let s = s.trim().to_string();
@@ -2726,7 +2736,7 @@ pub fn log_connect_mode(ws_url: &str, launched: bool, session: &str, headless: O
     let relay_up = relay.is_some();
     let mode = if launched {
         "launched(debug-port)"
-    } else if relay.as_deref() == Some(ws_url) {
+    } else if is_relay_url(ws_url) {
         "relay"
     } else if ws_url.contains("127.0.0.1") || ws_url.contains("localhost") {
         "raw-port-attach"
