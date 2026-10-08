@@ -5531,3 +5531,149 @@ mod hidden_page_tests {
         assert_eq!(methods, ["Runtime.evaluate"]);
     }
 }
+
+#[cfg(test)]
+mod stale_fill_tests {
+    use super::fill_reporting;
+    use crate::native::cdp::client::CdpClient;
+    use crate::native::element::RefMap;
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
+
+    /// When the first element handle (`obj-1`) stops resolving.
+    #[derive(Clone, Copy)]
+    enum Stale {
+        /// After the trusted insert landed: the case the comparison run hit.
+        AfterInsert,
+        /// Before anything was written.
+        FromTheStart,
+    }
+
+    #[derive(Default)]
+    struct Page {
+        value: String,
+        inserts: usize,
+        resolves: usize,
+    }
+
+    /// A fake page with one text field. Each selector lookup mints a fresh
+    /// handle (`obj-1`, `obj-2`, ...); `obj-1` goes stale as `stale` says,
+    /// answering the way Chrome does: "Could not find object with given id".
+    async fn fake_page(stale: Stale) -> (CdpClient, Arc<Mutex<Page>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let page = Arc::new(Mutex::new(Page::default()));
+        let state = page.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(text) = msg else { continue };
+                let cmd: Value = serde_json::from_str(&text).unwrap();
+                let method = cmd["method"].as_str().unwrap_or("");
+                let p = &cmd["params"];
+                let mut s = state.lock().unwrap();
+                let reply: Result<Value, &str> = match method {
+                    "Runtime.evaluate" if p["returnByValue"] == json!(false) => {
+                        s.resolves += 1;
+                        Ok(json!({ "result": { "type": "object",
+                            "objectId": format!("obj-{}", s.resolves) } }))
+                    }
+                    "Runtime.evaluate" => {
+                        Ok(json!({ "result": { "type": "boolean", "value": true } }))
+                    }
+                    "Input.insertText" => {
+                        s.value = p["text"].as_str().unwrap_or("").to_string();
+                        s.inserts += 1;
+                        Ok(json!({}))
+                    }
+                    "Runtime.callFunctionOn" => {
+                        let stale_now = p["objectId"] == json!("obj-1")
+                            && match stale {
+                                Stale::AfterInsert => s.inserts > 0,
+                                Stale::FromTheStart => true,
+                            };
+                        let f = p["functionDeclaration"].as_str().unwrap_or("");
+                        if stale_now {
+                            Err("Could not find object with given id")
+                        } else if f.contains("monacoCandidates") {
+                            // The page-side half of fill: focused + selected.
+                            Ok(json!({ "result": { "type": "string", "value": "input-trusted" } }))
+                        } else {
+                            // Reads (and the blur tail, whose answer is ignored).
+                            Ok(json!({ "result": { "type": "object",
+                                "value": { "ok": true, "value": s.value } } }))
+                        }
+                    }
+                    _ => Ok(json!({})),
+                };
+                drop(s);
+                let msg = match reply {
+                    Ok(result) => {
+                        json!({ "id": cmd["id"], "result": result, "sessionId": cmd["sessionId"] })
+                    }
+                    Err(e) => json!({ "id": cmd["id"], "error": { "code": -32000, "message": e },
+                        "sessionId": cmd["sessionId"] }),
+                };
+                ws.send(Message::Text(msg.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        (client, page)
+    }
+
+    /// The handle died after the text went in: the field already holds the
+    /// value, so it is reported, not typed a second time.
+    #[tokio::test]
+    async fn a_handle_lost_after_the_insert_is_not_typed_twice() {
+        let (client, page) = fake_page(Stale::AfterInsert).await;
+        let out = fill_reporting(
+            &client,
+            "S1",
+            &RefMap::new(),
+            "#email",
+            "alex@example.invalid",
+            &HashMap::new(),
+        )
+        .await
+        .expect("a field that holds the value is a success");
+        let p = page.lock().unwrap();
+        assert_eq!(p.inserts, 1, "must not re-type");
+        assert_eq!(p.value, "alex@example.invalid");
+        assert_eq!(p.resolves, 2, "re-resolved exactly once");
+        assert_eq!(out.engine, "reread");
+        let w = out.warning.expect("the stale handle must be reported");
+        assert!(w.contains("not re-typed"), "{w}");
+    }
+
+    /// The handle died before anything was written: re-resolve, see the field
+    /// does not hold the value, and fill exactly once.
+    #[tokio::test]
+    async fn a_handle_lost_before_the_insert_is_filled_once() {
+        let (client, page) = fake_page(Stale::FromTheStart).await;
+        let out = fill_reporting(
+            &client,
+            "S1",
+            &RefMap::new(),
+            "#email",
+            "alex@example.invalid",
+            &HashMap::new(),
+        )
+        .await
+        .expect("the second handle works");
+        let p = page.lock().unwrap();
+        assert_eq!(p.inserts, 1);
+        assert_eq!(p.value, "alex@example.invalid");
+        assert_eq!(p.resolves, 2);
+        let w = out.warning.expect("the retry must be reported");
+        assert!(w.contains("filled once more"), "{w}");
+    }
+}
