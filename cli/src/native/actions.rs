@@ -2446,6 +2446,29 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // wrong in both directions: too short on a slow page, where the delta
         // described a tree that no longer existed by the time the agent read
         // it, and pure overhead on a static one.
+        let mut arm = arm;
+        // `click --follow` may switch the session to a tab the click opened,
+        // and the settle must then be about THAT tab: settle and capture have
+        // to describe the same target, or an unsettled popup is labelled
+        // quiet. So a following click runs its tab check first (as before
+        // the deferral existed) and, when it did switch, drops the arm (it
+        // watched the old tab) and settles the new tab unarmed.
+        if state
+            .deferred_click_tab_check
+            .as_ref()
+            .is_some_and(|p| p.follow)
+        {
+            if let Some(pending) = state.deferred_click_tab_check.take() {
+                let extra = finish_click_tab_check(state, pending).await;
+                let followed = extra.get("followed").is_some();
+                merge_into_data(&mut resp, extra);
+                if followed {
+                    if let Some(a) = arm.take() {
+                        super::settle::release_arm(state, &a).await;
+                    }
+                }
+            }
+        }
         let settled = super::settle::settle_armed(
             state,
             super::settle::max_ms_for(cmd),
@@ -2454,8 +2477,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             arm.as_ref(),
         )
         .await;
-        // A click defers its new-tab check while observing, so the check's
-        // fixed wait overlaps the settle instead of adding to it.
+        // Without `--follow` the session stays on this tab, so the new-tab
+        // check can wait out its grace after the settle instead of before it.
         if let Some(pending) = state.deferred_click_tab_check.take() {
             let extra = finish_click_tab_check(state, pending).await;
             merge_into_data(&mut resp, extra);

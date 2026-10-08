@@ -450,7 +450,10 @@ fn page_quiet_promise(quiet_ms: u64, budget_ms: u64, reaction_ms: u64, seeded: b
       arm.obs.disconnect();
     }
     if (arm && arm.timer) clearTimeout(arm.timer);
-    if (arm && arm.saw) { sawChange = true; lastChange = arm.last; }
+    // An expired arm stopped watching at some unknown point: its `last`
+    // can predate later mutations, so it proves nothing. Seed only from a
+    // live one; otherwise this is the plain wait with its full rules.
+    if (arm && arm.saw && !arm.expired) { sawChange = true; lastChange = arm.last; }
   } catch (e) {}"#
     } else {
         ""
@@ -528,11 +531,11 @@ const ARM_LIFETIME_MS: u64 = 30_000;
 pub fn arm_script() -> String {
     format!(
         r#"(() => {{
-  const arm = {{ saw: false, last: 0, obs: null, timer: 0 }};
+  const arm = {{ saw: false, last: 0, obs: null, timer: 0, expired: false }};
   try {{
     arm.obs = new MutationObserver(() => {{ arm.saw = true; arm.last = performance.now(); }});
     arm.obs.observe(document, {{ subtree: true, childList: true, attributes: true, characterData: true }});
-    arm.timer = setTimeout(() => {{ try {{ arm.obs.disconnect(); }} catch (e) {{}} }}, {ARM_LIFETIME_MS});
+    arm.timer = setTimeout(() => {{ arm.expired = true; try {{ arm.obs.disconnect(); }} catch (e) {{}} }}, {ARM_LIFETIME_MS});
   }} catch (e) {{}}
   return arm;
 }})()"#
@@ -792,6 +795,7 @@ mod tests {
         // Queued-but-undelivered records count as seen.
         assert!(js.contains("takeRecords()"), "{js}");
         assert!(js.contains("lastChange = arm.last"), "{js}");
+        assert!(js.contains("!arm.expired"), "{js}");
         // The unseeded form carries none of it.
         let plain = page_quiet_script(100, 900, 500);
         assert!(!plain.contains("arm"), "{plain}");
@@ -803,6 +807,8 @@ mod tests {
         assert!(!js.contains("window."), "{js}");
         assert!(!js.contains("globalThis"), "{js}");
         assert!(js.contains(&ARM_LIFETIME_MS.to_string()), "{js}");
+        // Timing out marks the arm, so a stale seed is never trusted.
+        assert!(js.contains("arm.expired = true"), "{js}");
     }
 
     /// Run a settle script under node with a stub DOM: no mutation ever
@@ -866,5 +872,17 @@ mod tests {
         let (waited, saw) = run_wait(&idle).expect("node ran once already");
         assert!(!saw);
         assert!(waited >= 500.0, "idle arm waited {waited}");
+
+        // An arm that timed out (its observer was disconnected mid-action)
+        // saw a mutation at some point before: it must not seed the wait,
+        // which then keeps the full first-reaction rule.
+        let expired = format!(
+            "({}).call({{ saw: true, last: performance.now() - 30, expired: true, \
+             obs: new MutationObserver(() => {{}}), timer: 0 }})",
+            page_quiet_seeded_function(100, 900, 500)
+        );
+        let (waited, saw) = run_wait(&expired).expect("node ran once already");
+        assert!(!saw, "an expired arm's mutation must not count");
+        assert!(waited >= 500.0, "expired arm waited {waited}");
     }
 }

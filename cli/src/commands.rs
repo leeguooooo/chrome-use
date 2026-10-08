@@ -83,22 +83,24 @@ const SCREENSHOT_USAGE: &str = "screenshot [selector|@ref] [path] | screenshot [
      --selector <selector|@ref>  [--full] [--clip x,y,w,h] [--tab <t>] [--max-width <px>] \
      [--max-height <px>] [--scale <0..1>] [--full-res] [--base64]";
 
-/// Whether a screenshot positional can only be an output image path: it ends
-/// in an image extension or starts like a filesystem path, and does not start
-/// like a selector (`.`, `#`, `@`, `[`). Used to accept a path given before
-/// the selector; a bare word stays a selector, as it always was.
+/// Whether a screenshot positional can only be an output image path, so it
+/// may be taken as the path even when it comes first (`screenshot out.png
+/// main`). Deliberately narrow: it must end in an image extension and must
+/// not be shaped like a selector. CSS starts with `.`, `#`, `@` or carries
+/// `[`; XPath starts with `/` too, so `//main` and anything with `(` or
+/// `[` stays a selector. Everything else keeps the old selector-first order.
 fn screenshot_arg_is_image_path(s: &str) -> bool {
     let relative = s.starts_with("./") || s.starts_with("../");
-    if !relative
-        && (s.starts_with('.') || s.starts_with('#') || s.starts_with('@') || s.contains('['))
-    {
+    if !relative && (s.starts_with('.') || s.starts_with('#') || s.starts_with('@')) {
+        return false;
+    }
+    if s.starts_with("//") || s.contains('[') || s.contains('(') {
         return false;
     }
     let lower = s.to_ascii_lowercase();
-    let image_ext = [".png", ".jpg", ".jpeg", ".webp"]
+    [".png", ".jpg", ".jpeg", ".webp"]
         .iter()
-        .any(|e| lower.ends_with(e));
-    relative || s.starts_with('/') || s.starts_with('~') || image_ext
+        .any(|e| lower.ends_with(e))
 }
 
 /// Top-level commands an agent is likely to mistype, used for "did you mean"
@@ -505,7 +507,12 @@ fn parse_cookie_header(header: &str) -> Result<Vec<Value>, String> {
 
 pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError> {
     let mut result = parse_command_inner(args, flags)?;
+    stamp_command_flags(&mut result, flags);
+    Ok(result)
+}
 
+/// The per-command global flags `parse_command` stamps onto a parsed action.
+fn stamp_command_flags(result: &mut Value, flags: &Flags) {
     // Inject AGENT_BROWSER_DEFAULT_TIMEOUT into any wait-family command that
     // doesn't already carry an explicit timeout. Centralised here so that new
     // wait variants automatically inherit the default without per-variant wiring.
@@ -568,8 +575,6 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
             }
         }
     }
-
-    Ok(result)
 }
 
 const BATCH_STEP_USAGE: &str = "batch \"<command> [args] [--observe] [--no-settle] \
@@ -587,8 +592,11 @@ const BATCH_STEP_USAGE: &str = "batch \"<command> [args] [--observe] [--no-settl
 /// are refused with a pointer to put them before `batch`. `--json` is accepted
 /// and has no per-step meaning: output mode belongs to the batch.
 pub fn parse_batch_step(step: &[String], flags: &Flags) -> Result<Value, ParseError> {
-    let mut observe = false;
-    let mut if_present = false;
+    // `None` inherits the batch's own flag; an explicit `false` in the step
+    // overrides it (`--if-present batch "click #x --if-present false"` must
+    // fail on a missing element, not skip it).
+    let mut observe: Option<bool> = None;
+    let mut if_present: Option<bool> = None;
     let mut settle_ms: Option<u64> = None;
     let mut with_screenshot: Option<String> = None;
     let mut new_tab: Option<bool> = None;
@@ -616,9 +624,9 @@ pub fn parse_batch_step(step: &[String], flags: &Flags) -> Result<Value, ParseEr
             break;
         }
         match arg {
-            "--observe" => observe = bool_value(i).inspect(|_| i += 1).unwrap_or(true),
+            "--observe" => observe = Some(bool_value(i).inspect(|_| i += 1).unwrap_or(true)),
             "--if-present" | "--optional" => {
-                if_present = bool_value(i).inspect(|_| i += 1).unwrap_or(true)
+                if_present = Some(bool_value(i).inspect(|_| i += 1).unwrap_or(true))
             }
             "--no-settle" => settle_ms = Some(0),
             "--settle-ms" => {
@@ -661,13 +669,42 @@ pub fn parse_batch_step(step: &[String], flags: &Flags) -> Result<Value, ParseEr
     }
 
     let clean = crate::flags::clean_args(step);
-    let mut cmd = parse_command(&clean, flags)?;
-    if let Some(obj) = cmd.as_object_mut() {
-        if observe {
-            obj.insert("observe".to_string(), json!(true));
+    let mut cmd = parse_command_inner(&clean, flags)?;
+    // A step's `--tab` may replace the tab the batch inherited, never the
+    // command's own target: `tab close t1 --tab t2` must not close t2. Same
+    // value is fine; a different one is refused rather than guessed between.
+    if let (Some(t), Some(obj)) = (tab.as_ref(), cmd.as_object_mut()) {
+        let own = obj
+            .get("tabId")
+            .or_else(|| obj.get("tab"))
+            .filter(|v| !v.is_null())
+            .map(|v| {
+                v.as_str()
+                    .map(String::from)
+                    .unwrap_or_else(|| v.to_string())
+            });
+        match own {
+            Some(own) if own != *t => {
+                return Err(ParseError::InvalidValue {
+                    message: format!(
+                        "this step names tab {own} and also --tab {t}; drop one of them"
+                    ),
+                    usage: BATCH_STEP_USAGE,
+                });
+            }
+            Some(_) => {}
+            None => {
+                obj.insert("tabId".to_string(), json!(t));
+            }
         }
-        if if_present {
-            obj.insert("ifPresent".to_string(), json!(true));
+    }
+    stamp_command_flags(&mut cmd, flags);
+    if let Some(obj) = cmd.as_object_mut() {
+        if let Some(o) = observe {
+            obj.insert("observe".to_string(), json!(o));
+        }
+        if let Some(p) = if_present {
+            obj.insert("ifPresent".to_string(), json!(p));
         }
         if let Some(ms) = settle_ms {
             obj.insert("settleMs".to_string(), json!(ms));
@@ -677,11 +714,6 @@ pub fn parse_batch_step(step: &[String], flags: &Flags) -> Result<Value, ParseEr
         }
         if let Some(nt) = new_tab {
             obj.insert("newTab".to_string(), json!(nt));
-        }
-        if let Some(t) = tab {
-            if !obj.contains_key("tab") {
-                obj.insert("tabId".to_string(), json!(t));
-            }
         }
         if let Some(l) = tab_label {
             obj.insert("label".to_string(), json!(l));
@@ -7656,6 +7688,25 @@ mod tests {
         let cmd = parse_command(&args("screenshot --selector @e3"), &default_flags()).unwrap();
         assert_eq!(cmd["selector"], "@e3");
         assert_eq!(cmd["path"], serde_json::Value::Null);
+        // XPath starts with `/` too: selector-first order is kept.
+        let cmd = parse_command(&args("screenshot //main shot"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "//main");
+        assert_eq!(cmd["path"], "shot");
+        let cmd = parse_command(&args("screenshot //main shot.png"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "//main");
+        assert_eq!(cmd["path"], "shot.png");
+        let cmd = parse_command(&args("screenshot /html/body shot"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "/html/body");
+        assert_eq!(cmd["path"], "shot");
+        // An explicit --selector beats every positional guess.
+        let cmd =
+            parse_command(&args("screenshot shot --selector //main"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "//main");
+        assert_eq!(cmd["path"], "shot");
+        let cmd =
+            parse_command(&args("screenshot #a.png --selector main"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "main");
+        assert_eq!(cmd["path"], "#a.png");
         // A path-looking selector stays where it was put.
         let cmd = parse_command(&args("screenshot .logo.png out.png"), &default_flags()).unwrap();
         assert_eq!(cmd["selector"], ".logo.png");

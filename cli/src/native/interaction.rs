@@ -1044,7 +1044,14 @@ pub async fn fill_reporting(
                  Confirm any page state that depends on the input events before relying on it"
             )),
         }),
-        _ => {
+        // Unknown is not "different": a field that cannot be read back may
+        // already hold the value, and writing again could type it twice.
+        None => Err(format!(
+            "{err} (the element handle went stale mid-fill; the field's value is unknown: it \
+             could not be read back after the element was re-resolved, so nothing was written \
+             again. Check it with `get value {selector_or_ref}` before repeating the fill)"
+        )),
+        Some(_) => {
             let mut outcome = fill_object(client, &fresh_session, &fresh_id, value)
                 .await
                 .map_err(|e2| format!("{err} (re-resolved once and filled again: {e2})"))?;
@@ -5553,17 +5560,38 @@ mod stale_fill_tests {
         FromTheStart,
     }
 
+    /// How reads on the re-resolved handle (`obj-2`) answer.
+    #[derive(Clone, Copy, Debug)]
+    enum FreshRead {
+        Works,
+        /// The read itself fails at the CDP level.
+        CdpError,
+        /// The page-side read reports it could not read the field.
+        NotOk,
+        /// The read answers without a value.
+        Missing,
+    }
+
     #[derive(Default)]
     struct Page {
         value: String,
         inserts: usize,
         resolves: usize,
+        /// Calls of the page-side fill function on any handle.
+        fills: usize,
     }
 
     /// A fake page with one text field. Each selector lookup mints a fresh
     /// handle (`obj-1`, `obj-2`, ...); `obj-1` goes stale as `stale` says,
     /// answering the way Chrome does: "Could not find object with given id".
     async fn fake_page(stale: Stale) -> (CdpClient, Arc<Mutex<Page>>) {
+        fake_page_reading(stale, FreshRead::Works).await
+    }
+
+    async fn fake_page_reading(
+        stale: Stale,
+        fresh_read: FreshRead,
+    ) -> (CdpClient, Arc<Mutex<Page>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let page = Arc::new(Mutex::new(Page::default()));
@@ -5603,9 +5631,20 @@ mod stale_fill_tests {
                                 Err("Could not find object with given id")
                             } else if f.contains("const v = ") {
                                 // The page-side half of fill: focused + selected.
+                                s.fills += 1;
                                 Ok(
                                     json!({ "result": { "type": "string", "value": "input-trusted" } }),
                                 )
+                            } else if p["objectId"] == json!("obj-2") {
+                                match fresh_read {
+                                    FreshRead::Works => Ok(json!({ "result": { "type": "object",
+                                        "value": { "ok": true, "value": s.value } } })),
+                                    FreshRead::CdpError => Err("Execution context was destroyed."),
+                                    FreshRead::NotOk => Ok(json!({ "result": { "type": "object",
+                                        "value": { "ok": false } } })),
+                                    FreshRead::Missing => Ok(json!({ "result": { "type": "object",
+                                        "value": { "ok": true } } })),
+                                }
                             } else {
                                 // Reads (and the blur tail, whose answer is ignored).
                                 Ok(json!({ "result": { "type": "object",
@@ -5678,5 +5717,39 @@ mod stale_fill_tests {
         assert_eq!(p.resolves, 2);
         let w = out.warning.expect("the retry must be reported");
         assert!(w.contains("filled once more"), "{w}");
+    }
+
+    /// A re-resolved field whose value cannot be read is unknown, not
+    /// different: nothing is written again and the command fails, saying how
+    /// to check. Covers a CDP error on the read, `ok:false`, and a missing value,
+    /// whether or not the first attempt had already inserted the text.
+    #[tokio::test]
+    async fn an_unreadable_field_after_a_stale_handle_is_never_written_again() {
+        for stale in [Stale::AfterInsert, Stale::FromTheStart] {
+            for read in [FreshRead::CdpError, FreshRead::NotOk, FreshRead::Missing] {
+                let (client, page) = fake_page_reading(stale, read).await;
+                let err = fill_reporting(
+                    &client,
+                    "S1",
+                    &RefMap::new(),
+                    "#email",
+                    "alex@example.invalid",
+                    &HashMap::new(),
+                )
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{read:?}: an unknown value must fail"));
+                let p = page.lock().unwrap();
+                let (inserts, fills) = match stale {
+                    Stale::AfterInsert => (1, 1),
+                    Stale::FromTheStart => (0, 0),
+                };
+                assert_eq!(p.inserts, inserts, "{read:?}: no second insert");
+                assert_eq!(p.fills, fills, "{read:?}: no fill on the fresh handle");
+                assert_eq!(p.resolves, 2, "{read:?}: re-resolved exactly once");
+                assert!(err.contains("value is unknown"), "{read:?}: {err}");
+                assert!(err.contains("get value #email"), "{read:?}: {err}");
+            }
+        }
     }
 }

@@ -11933,3 +11933,114 @@ async fn e2e_efficiency_repeated_observations_and_script_advisories() {
     assert_success(&closed);
     server.abort();
 }
+
+/// `click --observe --follow` must settle the tab it follows to, not the one
+/// it left. The opener mutates synchronously on the click (so a watcher on the
+/// opener sees its reaction at once and goes quiet in ~100ms) while the popup
+/// keeps mutating for ~800ms after it opens and only then renders "Popup
+/// ready". Settling the opener and capturing the popup labelled a still-moving
+/// popup quiet; the observation must say quiet only once "Popup ready" is in
+/// the captured tree. Without `--follow` the session stays on the opener and
+/// observes it as before.
+#[tokio::test]
+#[ignore]
+async fn e2e_click_observe_follow_settles_the_followed_popup() {
+    let popup = r##"<!doctype html><meta charset="utf-8"><title>popup</title>
+<p>popup</p>
+<script>
+let n = 0;
+const t = setInterval(() => {
+  const d = document.createElement('div');
+  d.textContent = 'tick ' + n;
+  document.body.appendChild(d);
+  if (++n >= 20) {
+    clearInterval(t);
+    const b = document.createElement('button');
+    b.textContent = 'Popup ready';
+    document.body.appendChild(b);
+  }
+}, 40);
+</script>"##
+        .to_string();
+    let (popup_port, popup_server) = spawn_html_server(popup).await;
+    let opener = format!(
+        r##"<!doctype html><meta charset="utf-8"><title>opener</title>
+<button id="open">Open</button>
+<script>
+document.getElementById('open').addEventListener('click', () => {{
+  window.open('http://127.0.0.1:{popup_port}/popup', '_blank');
+  const b = document.createElement('button');
+  b.textContent = 'Opened';
+  document.body.appendChild(b);
+}});
+</script>"##
+    );
+    let (port, server) = spawn_html_server(opener).await;
+    let mut state = DaemonState::new();
+    launch_headless(
+        &mut state,
+        json!({ "args": ["--no-sandbox", "--disable-dev-shm-usage"] }),
+    )
+    .await;
+
+    // Without --follow: the observation is the opener's, unchanged.
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "2", "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+    )
+    .await;
+    assert_success(&resp);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "click", "selector": "#open",
+                "observe": true, "settleMs": 3000 }),
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert!(data["openedTab"].is_object(), "popup reported: {resp}");
+    assert!(data.get("followed").is_none(), "{resp}");
+    let observed = &data["observed"];
+    assert_eq!(observed["settle"]["quiet"], json!(true), "{observed}");
+    let delta = observed["delta"].as_str().unwrap_or_default();
+    assert!(delta.contains("Opened"), "opener's own change: {observed}");
+    assert!(!delta.contains("Popup ready"), "{observed}");
+
+    // With --follow: settle and capture are both the popup's.
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+    )
+    .await;
+    assert_success(&resp);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "5", "action": "click", "selector": "#open",
+                "observe": true, "settleMs": 3000, "follow": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["followed"], json!(true), "{resp}");
+    let observed = &data["observed"];
+    assert_eq!(
+        observed["settle"]["quiet"],
+        json!(true),
+        "3s is ample for an 800ms popup: {observed}"
+    );
+    assert!(
+        observed["delta"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Popup ready"),
+        "a popup reported quiet must have finished mutating: {observed}"
+    );
+    assert!(
+        observed["settle"]["waitedMs"].as_u64().unwrap_or(0) >= 300,
+        "the wait must have covered the popup's mutations: {observed}"
+    );
+
+    close_state(&mut state).await;
+    server.abort();
+    popup_server.abort();
+}
