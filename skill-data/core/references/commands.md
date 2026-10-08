@@ -27,6 +27,15 @@ command reports a warning and preserves the session instead of requiring a
 restart. On macOS, `--launch` also disables `MacAppCodeSignClone` so a killed
 automation browser does not leave an APFS code-sign clone behind.
 
+Semantic `find role/text/label/placeholder/alt/title/testid` requires exactly one visible match, including locate-only queries. Ambiguity returns up to eight candidates with visible state and selector/context hints; no action is dispatched and input values are omitted. Narrow `--name`/`--exact`, or use `--within <CSS|@ref>` to restrict the query to exactly one container. A scope must belong to the active tab's main document; cross-frame refs and an explicitly selected iframe are refused; use direct frame refs or `frame main`. `find first/last/nth` explicitly selects an order and keeps its existing behavior. Plain CSS actions are unchanged. Roles and label names use Chrome accessibility data, including `aria-labelledby`; a semantic query re-resolves on each call. A detached target before dispatch fails safely; uncertain actions are never replayed.
+
+The existing `chrome_use_find` tool in `mcp --tools all` accepts `within` with the same unique-scope rules; tool count is unchanged. `text` for fill/type is passed literally, including `--name --observe`, rather than parsed as CLI options.
+
+Semantic find retains the existing `--observe` unsupported warning; use one `batch` containing the scoped find action and a task-specific `get text` receipt when both are known. The MCP find tool does not advertise an observe field.
+
+Discover a scope from the page first: `find query "Beta account"` returns candidate selector anchors; choose the article/container corresponding to that heading, then use `find role button click --name Save --exact --within "<returned-selector>"`. Inspect an ambiguous scope with `snapshot -s "<selector>"` and narrow it rather than accepting the first container. Unknown semantic-find options and duplicate `--within` are refused; use `find label Email fill -- --name` to enter literal flag-looking text. `--exact false` requests substring matching.
+
+
 ### Pre-navigation setup (one-turn batch)
 
 ```bash
@@ -454,6 +463,23 @@ onto the new tab before its first document loads: user agent, `set headers`,
 `set credentials`, init scripts, routes, origin-scoped `--headers`, media,
 timezone, locale, geolocation, and offline mode.
 
+A tab that a plain `click` opens (`target=_blank`, `window.open`) is reported as
+`openedTab` and becomes one of the session's tabs: listed by `tab list`, closed
+by `tab close` and by `close`. `--follow` switches to it, and with `--observe`
+the settle and snapshot then describe the new tab. If the switch fails, the
+click reports `followed: false` and the session stays on the clicked tab.
+
+In your own Chrome only a tab opened by one of the session's tabs is taken: one
+in the session's tab group, or in no group with a session tab as its opener. A
+tab in another group (another session's), or one you open, is left alone. It is
+attached by its Chrome tab id, which needs ab-connect 0.5.30 or newer; an older
+extension gets the tab reported, not attached. When a tab is seen but not taken
+the click sets `openedTabWarning` and `openedTabStatus`: `unadopted` (left alone
+on purpose, e.g. still blank after 2 s) or `unknown` (Chrome or the extension
+did not answer within the check's budget, so it may be attached but is not
+tracked). The check is bounded: about 2 s to find the tab plus 3 s to attach
+it. `tab adopt <url>` picks such a tab up later.
+
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization
 or the liveness probe, and leaves it in the foreground. It changes the visible
@@ -495,7 +521,9 @@ chrome-use frame main          # Back to main frame
 
 ### Iframe support
 
-Iframes are detected automatically during snapshots. When the main-frame snapshot runs, `Iframe` nodes are resolved and their content is inlined beneath the iframe element in the output (one level of nesting; iframes within iframes are not expanded).
+For plain receipt text, `get text` without a selector reads across frames by default. A full snapshot (without `-i`) includes noninteractive static text and inline frame contents; the interactive view may omit ordinary paragraphs.
+
+Iframes are detected automatically during snapshots. When the main-frame snapshot runs, `Iframe` nodes are resolved and their content is inlined beneath the iframe element in the output (up to three nested iframe levels).
 
 ```bash
 chrome-use snapshot -i

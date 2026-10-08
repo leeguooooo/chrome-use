@@ -553,6 +553,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 color::dim(url)
             );
         }
+        // A tab the click opened but could not adopt (relay, #456): say so
+        // rather than let the unchanged page read as a click that did nothing.
+        if let Some(w) = data.get("openedTabWarning").and_then(|v| v.as_str()) {
+            eprintln!("{} {}", color::yellow("⚠"), w);
+        }
 
         // `current`: the active tab's stable handle (#26).
         if data
@@ -2539,6 +2544,18 @@ Options:
   --new-tab            Open link in a new tab instead of navigating current tab.
                        The new tab inherits session setup before its first load.
                        Only works on elements with an href attribute.
+  --follow             Move to a tab the click opened (target=_blank,
+                       window.open). Without it the tab is still reported as
+                       openedTab and joins the session (tab list, tab close,
+                       close). With --observe, settle and snapshot then describe
+                       the new tab. A failed switch reports followed: false and
+                       the session stays on the clicked tab.
+
+In your own Chrome (extension relay) only a tab opened by one of the session's
+tabs is taken, attached by its Chrome tab id (ab-connect 0.5.30+). A tab seen
+but not taken sets openedTabWarning and openedTabStatus: `unadopted` (left
+alone on purpose) or `unknown` (no answer within about 2 s to find plus 3 s to
+attach; it may be attached but is not tracked).
 
 Global Options:
   --json               Output as JSON
@@ -2546,6 +2563,7 @@ Global Options:
 
 Examples:
   chrome-use click "#submit-button"
+  chrome-use click @e2 --observe --follow
   chrome-use click @e1
   chrome-use click "button.primary"
   chrome-use click "//button[@type='submit']"
@@ -3808,7 +3826,19 @@ to act on it. With a bare description (or `query <description>`), returns
 ranked candidates without acting. Candidates include role/name/text, cursor
 and selector anchors.
 
-Text/role matches prefer a visible element. `click` on a text match clicks
+Semantic locators require exactly one visible match (even locate-only).
+Ambiguity reports up to eight candidates and acts on nothing. Use --within
+<CSS|@ref> for exactly one container in the active tab main document, --name/--exact,
+or deliberately select with first/last/nth. Role and label names come from
+Chrome accessibility data; ordinary CSS actions keep their existing behavior.
+The existing MCP chrome_use_find (mcp --tools all) accepts within too;
+fill/type text is literal, including flag-looking text, and tool count is unchanged.
+Unknown semantic options and duplicate --within are refused. Use -- before
+literal fill/type text that looks like a flag. Detached targets fail safely;
+uncertain actions are never replayed. find retains its existing unsupported
+--observe warning; batch the find action and a known get text receipt instead.
+
+Text matches select the nearest clickable ancestor inside their scope. `click` on a text match clicks
 its nearest clickable ancestor (button, link, [role=button], ...), refuses a
 match that is not visible, and warns when the page did not react.
 
@@ -3830,7 +3860,8 @@ Actions (default: none — locate only):
 
 Options:
   --name <name>        Filter role by accessible name
-  --exact              Require exact text match
+  --exact [true|false] Require exact text match (false: substring)
+  --within <CSS|@ref>   Restrict semantic query to exactly one container
 
 Global Options:
   --json               Output as JSON
@@ -3841,6 +3872,8 @@ Examples:
   chrome-use find query "编辑 Web服务规则 设置按钮"
   chrome-use find text "Sign In"              # where is it? (no click)
   chrome-use find role button click --name Submit
+  chrome-use find query "Beta account"       # discover its container selector
+  chrome-use find role button click --name Save --exact --within "<returned-selector>"
   chrome-use find text "Sign In" click
   chrome-use find label "Email" fill "user@example.com"
   chrome-use find placeholder "Search..." type "query"

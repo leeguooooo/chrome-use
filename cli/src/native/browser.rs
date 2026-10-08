@@ -977,6 +977,125 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     error.to_string()
 }
 
+/// What a click's new-tab check found: the tab it adopted, or why a tab the
+/// click opened was not adopted (reported, never dropped silently).
+#[derive(Debug, Default)]
+pub struct NewTabCheck {
+    pub opened: Option<PageInfo>,
+    pub warning: Option<String>,
+    /// `"unadopted"`: a tab the click opened was seen and deliberately left
+    /// alone. `"unknown"`: the check ran out of its budget waiting for Chrome
+    /// or the extension, so whether a tab opened, or got attached, is not
+    /// known. `None` when nothing needs saying.
+    pub status: Option<&'static str>,
+}
+
+impl NewTabCheck {
+    fn unadopted(warning: String) -> Self {
+        Self {
+            opened: None,
+            warning: Some(warning),
+            status: Some("unadopted"),
+        }
+    }
+
+    fn unknown(warning: String) -> Self {
+        Self {
+            opened: None,
+            warning: Some(warning),
+            status: Some("unknown"),
+        }
+    }
+}
+
+/// Chrome tab ids that existed before a click over the relay (#456).
+#[derive(Debug, Clone, Default)]
+pub struct RelayTabBaseline {
+    tab_ids: HashSet<i64>,
+}
+
+/// Budget for finding a relay pop-up in chrome.tabs and waiting for it to
+/// leave about:blank. Every chrome.tabs read inside it is cut off at the
+/// deadline, so this phase never runs past it.
+const RELAY_POPUP_FIND_BUDGET: Duration = Duration::from_millis(2_000);
+/// Budget for the attach that follows (capability check, attach by tab id,
+/// relay session). When it runs out the outcome is reported as unknown: the
+/// extension may still attach the tab.
+const RELAY_POPUP_ATTACH_BUDGET: Duration = Duration::from_millis(3_000);
+/// Extension capability that attaches one tab by Chrome tab id (ab-connect
+/// 0.5.30). Without it a relay pop-up is reported, never attached by URL.
+const ATTACH_TAB_BY_ID_CAPABILITY: &str = "attachTabById";
+
+/// E2E fail injection: the next `tab_switch` fails right after it moved the
+/// pin (see `follow_tab`).
+#[cfg(feature = "e2e-tests")]
+pub(crate) static FAIL_NEXT_TAB_SWITCH_AFTER_PIN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The Chrome tab id a relay session id (`cb-tab-<tabId>`) belongs to.
+fn relay_chrome_tab_id(session_id: &str) -> Option<i64> {
+    session_id.strip_prefix("cb-tab-")?.parse().ok()
+}
+
+/// The first tab in `tabs` (chrome.tabs.Tab objects) that a click on one of
+/// `ours` opened (#456): absent from `before`, not ours, and
+///
+/// - in the tab group of one of our tabs, or
+/// - in no group at all, with one of our tabs as its `openerTabId`.
+///
+/// A tab in any OTHER group is never ours, whatever its opener says: the group
+/// is an explicit ownership claim by another session (or the user), and on a
+/// conflict that claim wins. The group is also the signal that holds for a
+/// background tab: Chrome adds a link's or `window.open`'s new tab to its
+/// source tab's group, while it reports the window's FRONT tab as
+/// `openerTabId`. A tab the user opens has no group and an opener that is not
+/// ours, so it is never picked either.
+fn relay_popup_candidate<'a>(
+    tabs: &'a [Value],
+    before: &HashSet<i64>,
+    ours: &HashSet<i64>,
+) -> Option<&'a Value> {
+    let id = |t: &Value| t.get("id").and_then(Value::as_i64);
+    let group = |t: &Value| t.get("groupId").and_then(Value::as_i64).filter(|g| *g >= 0);
+    let our_groups: HashSet<i64> = tabs
+        .iter()
+        .filter(|t| id(t).is_some_and(|i| ours.contains(&i)))
+        .filter_map(group)
+        .collect();
+    tabs.iter().find(|t| {
+        let Some(tab_id) = id(t) else {
+            return false;
+        };
+        if before.contains(&tab_id) || ours.contains(&tab_id) {
+            return false;
+        }
+        match group(t) {
+            Some(g) => our_groups.contains(&g),
+            None => t
+                .get("openerTabId")
+                .and_then(Value::as_i64)
+                .is_some_and(|o| ours.contains(&o)),
+        }
+    })
+}
+
+/// Whether the extension can attach a tab showing `url` (it refuses blank and
+/// privileged pages, so a pop-up still on about:blank is waited for).
+fn relay_url_is_attachable(url: &str) -> bool {
+    let l = url.to_ascii_lowercase();
+    !url.is_empty()
+        && ![
+            "chrome:",
+            "chrome-extension:",
+            "devtools:",
+            "chrome-untrusted:",
+            "edge:",
+            "about:",
+        ]
+        .iter()
+        .any(|s| l.starts_with(s))
+}
+
 #[derive(Debug, Clone)]
 pub struct PageInfo {
     pub tab_id: u32,
@@ -3730,23 +3849,266 @@ impl BrowserManager {
     /// after every click. The new tab is added in the background (never steals
     /// the active tab, per #7/#8.1); the caller surfaces it so the agent knows a
     /// tab opened instead of seeing the old page (issue #24-A).
-    pub async fn adopt_newly_opened(&mut self, before: &HashSet<String>) -> Option<PageInfo> {
+    pub async fn adopt_newly_opened(
+        &mut self,
+        before: &HashSet<String>,
+        relay_before: Option<&RelayTabBaseline>,
+    ) -> NewTabCheck {
         // STRICT MULTI-AGENT ISOLATION: on the relay this session's `before` set is
         // only its OWN tabs, so EVERY foreign tab (the user's, other agents') looks
-        // "new" relative to it and would be adopted here — exactly the leak where a
-        // concurrent agent's tabs (github/Lark/iphone-use) showed up in this
-        // session mid-flow. A tab the agent itself opened (a pop-up) can't be
-        // distinguished from a foreign tab over the relay (no opener/window/group
-        // in the synthesized targetInfo), so don't adopt anything: the agent drives
-        // only tabs it explicitly created, and pop-ups (e.g. an OAuth/login window)
-        // are the user's. A launched browser (every tab ours) still follows pop-ups.
-        // Strict isolation only when on the relay WITHOUT group scoping: there a
-        // pop-up can't be told apart from a foreign tab, so adopt nothing. When the
-        // relay IS scoping (#40), getTargets returns only our group, so a tab that
-        // appeared after our own action is genuinely ours (a pop-up) — adopt it.
-        if self.browser_process.is_none() && (self.agent_group().is_none() || !self.relay_scoped) {
+        // "new" relative to it and would be adopted by a plain diff — exactly the
+        // leak where a concurrent agent's tabs (github/Lark/iphone-use) showed up
+        // in this session mid-flow. So on the relay a new tab is adopted only when
+        // it can be attributed to this session: through the relay's group-scoped
+        // getTargets (#40), or through Chrome's own tab metadata (#456, below).
+        // A direct CDP connection to someone else's browser adopts nothing.
+        let on_relay = self.browser_process.is_none() && self.agent_group().is_some();
+        if self.browser_process.is_none() && !on_relay {
+            return NewTabCheck::default();
+        }
+        let mut check = NewTabCheck::default();
+        if self.browser_process.is_some() || self.relay_scoped {
+            check.opened = self.adopt_new_targets(before).await;
+        }
+        // The extension announces a pop-up only when Chrome names one of our tabs
+        // as its opener, and Chrome names the window's FRONT tab instead when the
+        // click landed in a background tab — which is where the relay's tabs
+        // live. So a pop-up from our tab reached neither getTargets nor the
+        // event stream (#456). Find it in chrome.tabs instead.
+        if check.opened.is_none() && on_relay {
+            if let Some(baseline) = relay_before {
+                check = self.adopt_relay_popup(baseline).await;
+            }
+        }
+        check
+    }
+
+    /// Over the relay, the Chrome tab ids that exist right before a click, so
+    /// the click's tab check can tell a tab it opened from one that was already
+    /// there (#456). `None` off the relay, or when the extension cannot answer
+    /// `chrome.tabs.query` (before ab-connect 0.5.25) — the check then falls
+    /// back to the relay's scoped target list alone.
+    pub async fn relay_tab_baseline(&self) -> Option<RelayTabBaseline> {
+        if self.browser_process.is_some() || self.agent_group().is_none() {
             return None;
         }
+        let tabs = self.chrome_call("tabs", "query", json!([{}])).await.ok()?;
+        let tab_ids = tabs
+            .as_array()?
+            .iter()
+            .filter_map(|t| t.get("id").and_then(Value::as_i64))
+            .collect();
+        Some(RelayTabBaseline { tab_ids })
+    }
+
+    /// Chrome tab ids of the tabs this session drives over the relay, read
+    /// from their `cb-tab-<tabId>` relay sessions.
+    fn relay_own_chrome_tabs(&self) -> HashSet<i64> {
+        self.pages
+            .iter()
+            .filter_map(|p| relay_chrome_tab_id(&p.session_id))
+            .collect()
+    }
+
+    /// Adopt the tab a click on one of this session's tabs opened, found in
+    /// chrome.tabs (see [`relay_popup_candidate`] for what counts as ours).
+    ///
+    /// The tab is attached by its Chrome tab id (`ABExt.attachTabById`,
+    /// ab-connect 0.5.30), never by URL: a URL lookup attaches whichever tab
+    /// shows that URL first — possibly the user's — and announces it to every
+    /// relay client before anything could be checked. An extension without
+    /// that capability gets the pop-up reported, not attached.
+    ///
+    /// Bounded: finding the pop-up takes at most [`RELAY_POPUP_FIND_BUDGET`]
+    /// and attaching it at most [`RELAY_POPUP_ATTACH_BUDGET`], each including
+    /// the calls in flight. Running out while finding means nothing is known
+    /// about a pop-up; running out while attaching means it may be attached
+    /// but is not tracked. Both are reported as `unknown`.
+    async fn adopt_relay_popup(&mut self, baseline: &RelayTabBaseline) -> NewTabCheck {
+        let find_deadline = tokio::time::Instant::now() + RELAY_POPUP_FIND_BUDGET;
+        let (tab_id, url, title) = loop {
+            let read = tokio::time::timeout_at(
+                find_deadline,
+                self.chrome_call("tabs", "query", json!([{}])),
+            )
+            .await;
+            let tabs = match read {
+                Ok(Ok(v)) => v.as_array().cloned().unwrap_or_default(),
+                // The extension cannot list tabs (older than 0.5.25): the
+                // scoped target list was the only check, as before.
+                Ok(Err(_)) => return NewTabCheck::default(),
+                Err(_) => {
+                    return NewTabCheck::unknown(format!(
+                        "could not read Chrome's tabs within {} ms, so whether the click \
+                         opened a tab is unknown. Run `tab list`.",
+                        RELAY_POPUP_FIND_BUDGET.as_millis()
+                    ))
+                }
+            };
+            let ours = self.relay_own_chrome_tabs();
+            let Some(popup) = relay_popup_candidate(&tabs, &baseline.tab_ids, &ours) else {
+                return NewTabCheck::default();
+            };
+            let tab_id = popup.get("id").and_then(Value::as_i64).unwrap_or(-1);
+            let url = popup
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let title = popup
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if relay_url_is_attachable(&url) {
+                break (tab_id, url, title);
+            }
+            if tokio::time::Instant::now() + Duration::from_millis(100) >= find_deadline {
+                let shown = if url.is_empty() { "about:blank" } else { &url };
+                return NewTabCheck::unadopted(format!(
+                    "the click opened a tab (Chrome tab {tab_id}, still on {shown}) and it was \
+                     not adopted within {} ms. Run `tab adopt <url-substring>` once it has loaded.",
+                    RELAY_POPUP_FIND_BUDGET.as_millis()
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        let attach_deadline = tokio::time::Instant::now() + RELAY_POPUP_ATTACH_BUDGET;
+        let capable = tokio::time::timeout_at(attach_deadline, self.relay_capabilities())
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|c| c == ATTACH_TAB_BY_ID_CAPABILITY);
+        if !capable {
+            return NewTabCheck::unadopted(format!(
+                "the click opened a tab (Chrome tab {tab_id}, {url}) but it was not adopted: \
+                 this ab-connect cannot attach a tab by its id (needs 0.5.30), and attaching \
+                 by URL could take another tab. Update the extension, or run `tab adopt <url>`."
+            ));
+        }
+        let attached = tokio::time::timeout_at(
+            attach_deadline,
+            self.client.send_command_typed::<_, Value>(
+                "ABExt.attachTabById",
+                &json!({ "chromeTabId": tab_id }),
+                None,
+            ),
+        )
+        .await;
+        let resp = match attached {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                return NewTabCheck::unadopted(format!(
+                    "the click opened a tab (Chrome tab {tab_id}, {url}) but the extension \
+                     did not attach it ({e})."
+                ))
+            }
+            Err(_) => {
+                return NewTabCheck::unknown(format!(
+                    "the click opened a tab (Chrome tab {tab_id}, {url}); the extension did not \
+                     answer within {} ms, so it may be attached but is not tracked. Run \
+                     `tab list`, or `tab adopt <url>`.",
+                    RELAY_POPUP_ATTACH_BUDGET.as_millis()
+                ))
+            }
+        };
+        let target_id = resp
+            .get("targetId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let same_tab = resp.get("chromeTabId").and_then(Value::as_i64) == Some(tab_id);
+        let (Some(target_id), true, true) = (
+            target_id,
+            same_tab,
+            resp.get("attached").and_then(Value::as_bool) == Some(true),
+        ) else {
+            return NewTabCheck::unadopted(format!(
+                "the click opened a tab (Chrome tab {tab_id}, {url}) but the extension did \
+                 not attach it (it answered {resp})."
+            ));
+        };
+        if let Some(page) = self
+            .pages
+            .iter()
+            .find(|p| p.target_id == target_id)
+            .cloned()
+        {
+            self.remember_created_target(&target_id);
+            return NewTabCheck {
+                opened: Some(page),
+                ..NewTabCheck::default()
+            };
+        }
+        let attach = tokio::time::timeout_at(
+            attach_deadline,
+            self.client.send_command_typed::<_, AttachToTargetResult>(
+                "Target.attachToTarget",
+                &AttachToTargetParams {
+                    target_id: target_id.clone(),
+                    flatten: true,
+                },
+                None,
+            ),
+        )
+        .await;
+        let attach = match attach {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                return NewTabCheck::unadopted(format!(
+                    "the click opened a tab (Chrome tab {tab_id}, {url}); the extension attached \
+                     it but the relay session failed ({e}). Run `tab adopt {target_id}`."
+                ))
+            }
+            Err(_) => {
+                return NewTabCheck::unknown(format!(
+                    "the click opened a tab (Chrome tab {tab_id}, {url}); the extension attached \
+                     it but the relay did not answer within {} ms. Run `tab adopt {target_id}`.",
+                    RELAY_POPUP_ATTACH_BUDGET.as_millis()
+                ))
+            }
+        };
+        let page = PageInfo {
+            tab_id: self.assign_tab_id(),
+            label: None,
+            target_id: target_id.clone(),
+            session_id: attach.session_id.clone(),
+            url,
+            title: sanitize_title(&title),
+            target_type: "page".to_string(),
+        };
+        // Opened by our own tab, so it is this session's: closed with it, and
+        // closable with `tab close`.
+        self.remember_created_target(&target_id);
+        self.add_background_page(page.clone());
+        // Domain setup is the caller's next step's business; bounded so the
+        // click's budget holds even when the renderer is slow.
+        let _ =
+            tokio::time::timeout_at(attach_deadline, self.enable_domains(&attach.session_id)).await;
+        NewTabCheck {
+            opened: Some(page),
+            ..NewTabCheck::default()
+        }
+    }
+
+    /// The capabilities the connected extension advertised in its hello.
+    async fn relay_capabilities(&self) -> Vec<String> {
+        self.client
+            .send_command_typed::<_, Value>("ABRelay.getCapabilities", &json!({}), None)
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("capabilities").and_then(Value::as_array).map(|a| {
+                    a.iter()
+                        .filter_map(|c| c.as_str().map(str::to_string))
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    /// The target-list half of [`adopt_newly_opened`]: every target that is
+    /// not in `before`, attached and tracked; the first one is returned.
+    async fn adopt_new_targets(&mut self, before: &HashSet<String>) -> Option<PageInfo> {
         let result: GetTargetsResult = self
             .client
             .send_command_typed("Target.getTargets", &json!({}), None)
@@ -4477,6 +4839,12 @@ impl BrowserManager {
 
         self.active_page_index = index;
         self.pin_active_target();
+        // Fail injection for the follow-failure E2E tests: fail exactly here,
+        // after the pin moved and before the new tab is set up.
+        #[cfg(feature = "e2e-tests")]
+        if FAIL_NEXT_TAB_SWITCH_AFTER_PIN.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err("injected tab switch failure".to_string());
+        }
         let on_relay = self.agent_group().is_some();
         if on_relay {
             // Refresh the stable session binding without requiring any response
@@ -5451,6 +5819,24 @@ impl BrowserManager {
             .await
     }
 
+    /// Switch to `tab_id` for `click --follow`, all or nothing: when the switch
+    /// fails after the pin has already moved (reattach or domain setup on the
+    /// new tab), the session is pinned back on the tab it was driving, so no
+    /// later command or observation lands on a half-switched tab.
+    pub async fn follow_tab(&mut self, tab_id: u32) -> Result<Value, String> {
+        let prev_target = self.active_target_id.clone();
+        let prev_index = self.active_page_index;
+        match self.tab_switch_by_id(tab_id).await {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.active_target_id = prev_target;
+                self.active_page_index = prev_index;
+                self.active_page_index = self.resolved_active_index();
+                Err(e)
+            }
+        }
+    }
+
     /// Check ownership before activation, then initialize the requested renderer.
     pub async fn tab_switch_by_id_with_activation(
         &mut self,
@@ -5894,6 +6280,127 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
         "Invalid CDP target: {}. Use ws://, http://, or a port number.",
         input
     ))
+}
+
+#[cfg(test)]
+mod relay_popup_tests {
+    use super::{relay_chrome_tab_id, relay_popup_candidate, relay_url_is_attachable};
+    use serde_json::{json, Value};
+    use std::collections::HashSet;
+
+    const OURS: i64 = 344;
+    const OUR_GROUP: i64 = 2124;
+
+    /// Our source tab, in our group, in the background; the user's front tab.
+    fn base() -> Vec<Value> {
+        vec![
+            json!({ "id": 326, "groupId": -1, "active": true,
+                    "url": "https://example.com/?probe=helper-v2" }),
+            json!({ "id": OURS, "groupId": OUR_GROUP, "active": false,
+                    "url": "http://127.0.0.1:59080/popup-launch.html" }),
+        ]
+    }
+
+    fn pick(extra: Vec<Value>) -> Option<i64> {
+        let mut tabs = base();
+        tabs.extend(extra);
+        let before: HashSet<i64> = [326, OURS].into();
+        let ours: HashSet<i64> = [OURS].into();
+        relay_popup_candidate(&tabs, &before, &ours).map(|t| t["id"].as_i64().unwrap())
+    }
+
+    /// The chrome.tabs view recorded in #456: the pop-up our click opened is
+    /// in our group, but Chrome names the FRONT tab as its openerTabId. No
+    /// targetCreated and no attachedToTarget ever reached the daemon for it.
+    #[test]
+    fn a_popup_in_our_group_is_ours_even_when_chrome_names_the_front_tab_as_opener() {
+        let popup = json!({ "id": 347, "groupId": OUR_GROUP, "openerTabId": 326,
+                            "url": "http://127.0.0.1:59080/popup-busy.html" });
+        assert_eq!(pick(vec![popup]), Some(347));
+    }
+
+    /// An ungrouped tab whose opener is ours (e.g. our tabs are the front tab
+    /// and grouping failed, or a pop-up window) is ours.
+    #[test]
+    fn an_ungrouped_tab_opened_by_our_tab_is_ours() {
+        let popup = json!({ "id": 500, "groupId": -1, "openerTabId": OURS, "url": "http://h/p" });
+        assert_eq!(pick(vec![popup]), Some(500));
+        let no_field = json!({ "id": 501, "openerTabId": OURS, "url": "http://h/p" });
+        assert_eq!(pick(vec![no_field]), Some(501));
+    }
+
+    /// Conflicting ownership: a tab in ANOTHER session's group whose opener is
+    /// our tab. The foreign group is an explicit claim and wins — refuse.
+    #[test]
+    fn a_foreign_group_wins_over_an_opener_that_is_ours() {
+        let contested = json!({ "id": 600, "groupId": 9999, "openerTabId": OURS,
+                                "url": "http://h/other-session.html" });
+        assert_eq!(pick(vec![contested]), None);
+    }
+
+    #[test]
+    fn tabs_that_existed_before_the_click_are_never_picked() {
+        let mut tabs = base();
+        tabs.push(json!({ "id": 347, "groupId": OUR_GROUP, "url": "http://h/p" }));
+        let before: HashSet<i64> = [326, OURS, 347].into();
+        let ours: HashSet<i64> = [OURS].into();
+        assert!(relay_popup_candidate(&tabs, &before, &ours).is_none());
+    }
+
+    /// The full negative chain at once: every way a new tab can belong to
+    /// someone else. None of them is picked.
+    #[test]
+    fn no_tab_that_belongs_to_someone_else_is_picked() {
+        let foreign = vec![
+            // the user's: no group, opener is the user's front tab
+            json!({ "id": 400, "groupId": -1, "openerTabId": 326, "url": "http://h/manual.html" }),
+            // the user's: no group, no opener at all
+            json!({ "id": 401, "url": "http://h/typed.html" }),
+            // another session's: its own group, its own opener
+            json!({ "id": 402, "groupId": 9999, "openerTabId": 326, "url": "http://h/b.html" }),
+            // another session's group, but opener names our tab
+            json!({ "id": 403, "groupId": 9999, "openerTabId": OURS, "url": "http://h/c.html" }),
+            // another session's group, no opener
+            json!({ "id": 404, "groupId": 8888, "url": "http://h/d.html" }),
+            // no id at all
+            json!({ "groupId": OUR_GROUP, "url": "http://h/e.html" }),
+        ];
+        assert_eq!(pick(foreign.clone()), None);
+        // ...and with our real pop-up among them, exactly that one is picked.
+        let mut mixed = foreign;
+        mixed.push(json!({ "id": 700, "groupId": OUR_GROUP, "url": "http://h/popup-busy.html" }));
+        assert_eq!(pick(mixed), Some(700));
+    }
+
+    /// Our tabs not grouped at all: a group-less candidate needs an opener of
+    /// ours, and "no group" on both sides is not a shared group.
+    #[test]
+    fn ungrouped_tabs_do_not_share_a_group() {
+        let tabs = vec![
+            json!({ "id": OURS, "groupId": -1, "url": "http://h/src" }),
+            json!({ "id": 800, "groupId": -1, "openerTabId": 326, "url": "http://h/user" }),
+        ];
+        let before: HashSet<i64> = [OURS].into();
+        let ours: HashSet<i64> = [OURS].into();
+        assert!(relay_popup_candidate(&tabs, &before, &ours).is_none());
+    }
+
+    #[test]
+    fn blank_and_privileged_pages_are_not_attachable_yet() {
+        assert!(relay_url_is_attachable(
+            "http://127.0.0.1:59080/popup-busy.html"
+        ));
+        assert!(!relay_url_is_attachable("about:blank"));
+        assert!(!relay_url_is_attachable(""));
+        assert!(!relay_url_is_attachable("chrome://newtab/"));
+    }
+
+    #[test]
+    fn relay_sessions_carry_their_chrome_tab_id() {
+        assert_eq!(relay_chrome_tab_id("cb-tab-1655536344"), Some(1655536344));
+        assert_eq!(relay_chrome_tab_id("8F3A..."), None);
+        assert_eq!(relay_chrome_tab_id("cb-tab-"), None);
+    }
 }
 
 #[cfg(test)]

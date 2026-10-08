@@ -487,6 +487,19 @@
         <code>chrome://extensions</code>, then retry.
       </p>
       <p>
+        A tab that a plain <code>click</code> opens (<code>target=_blank</code>, <code>window.open</code>) is reported as
+        <code>openedTab</code> and becomes one of the session's tabs: listed by <code>tab list</code>, closed by
+        <code>tab close</code> and by <code>close</code>. <code>--follow</code> switches to it, and with <code>--observe</code>
+        the settle and snapshot then describe the new tab; if the switch fails, <code>followed</code> is
+        <code>false</code> and the session stays on the clicked tab. In your own Chrome only a tab opened by one of the
+        session's tabs is taken (in the session's tab group, or ungrouped with a session tab as opener); a tab in another
+        group, or one you open, is left alone. It is attached by Chrome tab id, which needs ab-connect 0.5.30 or newer.
+        A tab seen but not taken sets <code>openedTabWarning</code> and <code>openedTabStatus</code>:
+        <code>unadopted</code> (left alone on purpose) or <code>unknown</code> (Chrome or the extension did not answer
+        within the check's budget of about 2 s to find plus 3 s to attach). <code>tab adopt &lt;url&gt;</code> picks
+        it up later.
+      </p>
+      <p>
         <code>tab new</code>, <code>tab select</code>, and <code>tab adopt</code> stay in the background by default.
         Add <code>--activate</code> (alias <code>--front</code>) to raise the target <strong>before</strong>
         renderer initialization or the liveness probe and leave it in the foreground. This changes the visible
@@ -893,7 +906,11 @@ AGENT_BROWSER_ADAPTIVE_REF=<span class="du-str">"0"</span>        <span class="d
         <a href="/en/troubleshooting.html">Troubleshooting</a>.
       </div>
 
-    </main>
+    <p>Semantic <code>find role/text/label/placeholder/alt/title/testid</code> requires exactly one visible match, including locate-only queries. Ambiguity returns up to eight candidates with visible state and selector/context hints; no action is dispatched and input values are omitted. Narrow <code>--name</code>/<code>--exact</code>, or use <code>--within &lt;CSS|@ref&gt;</code> to restrict the query to exactly one container. A scope must belong to the active tab's main document; cross-frame refs and an explicitly selected iframe are refused; use direct frame refs or `frame main`. <code>find first/last/nth</code> explicitly selects an order and keeps its existing behavior. Plain CSS actions are unchanged. Roles and label names use Chrome accessibility data, including <code>aria-labelledby</code>; a semantic query re-resolves on each call. A detached target before dispatch fails safely; uncertain actions are never replayed.</p><p>Discover a scope from the page first: <code>find query "Beta account"</code> returns candidate selector anchors; choose the article/container corresponding to that heading, then use <code>find role button click --name Save --exact --within "&lt;returned-selector&gt;"</code>. Inspect an ambiguous scope with <code>snapshot -s "&lt;selector&gt;"</code> and narrow it rather than accepting the first container. Unknown semantic-find options and duplicate <code>--within</code> are refused; use <code>find label Email fill -- --name</code> to enter literal flag-looking text. <code>--exact false</code> requests substring matching.
+</p>
+<p>The existing <code>chrome_use_find</code> tool in <code>mcp --tools all</code> accepts <code>within</code> with the same unique-scope rules; tool count is unchanged. <code>text</code> for fill/type is passed literally, including <code>--name --observe</code>, rather than parsed as CLI options.</p>
+<p>Semantic find retains the existing <code>--observe</code> unsupported warning; use one <code>batch</code> containing the scoped find action and a task-specific <code>get text</code> receipt when both are known. The MCP find tool does not advertise an observe field.</p>
+</main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 
     <!-- injected: right on-this-page TOC -->

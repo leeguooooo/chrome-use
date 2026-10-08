@@ -18,6 +18,7 @@
 
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import { agentWindowStillOurs, isUntouchedPlaceholder, placeholderCleanup } from './agent-window.js';
+import { attachTabById } from './attach-by-id.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js';
@@ -188,14 +189,19 @@ async function agentPlaceholderRecord() {
 async function isUsableAgentWindow(id) {
   const win = await chrome.windows.get(id).catch(() => null);
   await loadOwnedTabs();
-  const tabs = win ? await chrome.tabs.query({ windowId: id }).catch(() => null) : null;
+  const winTabs = win ? await chrome.tabs.query({ windowId: id }).catch(() => null) : null;
   const record = await agentPlaceholderRecord();
-  const verdict = agentWindowStillOurs(win, tabs, (tabId) => ownedTabs.has(tabId), record);
+  // The agent's tabs: ones it created (ownedTabs) and ones the relay holds
+  // attached, which includes pop-ups adopted from the session's own tab
+  // (ABExt.attachTabById / the onCreated opener path, #456). Those are not
+  // persisted into ownedTabs, and they are the agent's, not the user's.
+  const isAgentTab = (tabId) => ownedTabs.has(tabId) || tabs.has(tabId);
+  const verdict = agentWindowStillOurs(win, winTabs, isAgentTab, record);
   if (!verdict.ours) agentWindowRejected = { windowId: id, reason: verdict.reason };
   // A record for this window whose tab is gone or no longer an untouched
   // placeholder is stale: drop it (never the tab).
-  if (record && record.windowId === id && Array.isArray(tabs)) {
-    const tab = tabs.find((t) => t && t.id === record.tabId);
+  if (record && record.windowId === id && Array.isArray(winTabs)) {
+    const tab = winTabs.find((t) => t && t.id === record.tabId);
     if (!isUntouchedPlaceholder(tab, record))
       await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
   }
@@ -737,7 +743,15 @@ function connectHost() {
         // state read (0.5.25). The daemon feature-detects on these names, so a
         // CLI that wants them on an older extension says "update" instead of
         // sending a method Chrome answers with "wasn't found".
-        capabilities: ['nativeTabDuplicate', 'downloadsApi', `call:${POLICY_VERSION}`, 'state', 'batchCommands'],
+        // `attachTabById` (0.5.30): attach one tab by Chrome tab id (#456).
+        capabilities: [
+          'nativeTabDuplicate',
+          'downloadsApi',
+          `call:${POLICY_VERSION}`,
+          'state',
+          'batchCommands',
+          'attachTabById',
+        ],
         ...extra,
       });
     } catch {}
@@ -1051,6 +1065,17 @@ async function handleForwardCdpCommand(msg) {
   // (which announces it to the daemon and makes it ours). `spec` is a targetId or
   // a URL substring. On no match, return the candidate URLs so the daemon can
   // print a useful error.
+  // Attach exactly one tab by Chrome tab id (#456): a pop-up the session's own
+  // tab opened. No URL lookup, so no other tab can be attached in its place.
+  // Not persisted into ownedTabs, like the onCreated pop-up path.
+  if (method === 'ABExt.attachTabById') {
+    return await attachTabById(params, {
+      getTab: (tabId) => chrome.tabs.get(tabId),
+      eligible,
+      attachTab: (tabId) => attachTab(tabId),
+    });
+  }
+
   if (method === 'ABExt.adoptByUrl') {
     const spec = String(params?.spec || '').trim();
     const specL = spec.toLowerCase();

@@ -550,7 +550,7 @@ fn extended_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_FIND,
-            "description": "Find an element by a semantic locator and optionally act on it, or use locator=query to return ranked natural-language candidates without acting.",
+            "description": "Find exactly one visible semantic target and optionally act; ambiguity returns bounded diagnostics without dispatch. Use within to scope to one main-document container, or locator=query to discover candidate anchors.",
             "inputSchema": build_schema(obj(&[
                 ("locator", json!({ "type": "string", "enum": ["query", "role", "text", "label", "placeholder", "alt", "title", "testid", "first", "last", "nth"], "description": "Locator kind. query performs a safe natural-language candidate search and does not act." })),
                 ("value", json!({ "type": "string", "description": "Natural-language description for query, locator value for semantic locators, or CSS selector for first/last/nth." })),
@@ -558,7 +558,8 @@ fn extended_tools() -> Vec<Value> {
                 ("action", json!({ "type": "string", "enum": ["locate", "click", "fill", "type", "hover", "focus", "check", "uncheck", "text"], "description": "Action to perform on the match. Default: locate — report what matched (tag, role, name, box, visibility, match count) without acting." })),
                 ("text", json!({ "type": "string", "description": "With action=fill/type: the text to enter." })),
                 ("name", json!({ "type": "string", "description": "With locator=role: filter by accessible name (--name)." })),
-                ("exact", json!({ "type": "boolean", "description": "Require an exact (not substring) match (--exact); supported for text/label/placeholder/alt/title." })),
+                ("within", json!({ "type": "string", "description": "For semantic locators: CSS selector or @ref of exactly one main-document scope. Ambiguous scopes and multiple visible targets are refused before dispatch." })),
+                ("exact", json!({ "type": "boolean", "description": "Require an exact (not substring) match (--exact); supported for role/text/label/placeholder/alt/title." })),
             ]), &["locator", "value"]),
         }),
         json!({
@@ -1411,12 +1412,23 @@ fn call_find(arguments: &Value) -> Result<Value, ProtocolError> {
     let mut args = vec!["find".to_string()];
 
     if locator == "query" {
+        if optional_string(arguments, "within")?.is_some() {
+            return Err(ProtocolError::invalid_params(
+                "within applies only to semantic locators",
+            ));
+        }
         args.push("query".to_string());
         args.push(required_string(arguments, "value")?);
         return run_tool(arguments, args);
     }
 
     let action = optional_string(arguments, "action")?.unwrap_or_else(|| "locate".to_string());
+    let within = optional_string(arguments, "within")?;
+    if within.is_some() && ["first", "last", "nth"].contains(&locator.as_str()) {
+        return Err(ProtocolError::invalid_params(
+            "within applies only to semantic locators",
+        ));
+    }
     if locator == "nth" {
         let index = required_u64(arguments, "index")?;
         let selector = required_string(arguments, "value")?;
@@ -1433,17 +1445,25 @@ fn call_find(arguments: &Value) -> Result<Value, ProtocolError> {
     }
 
     let value = required_string(arguments, "value")?;
-    args.push(locator);
+    args.push(locator.clone());
     args.push(value);
     args.push(action);
     if let Some(name) = optional_string(arguments, "name")? {
         args.push("--name".to_string());
         args.push(name);
     }
-    if optional_bool(arguments, "exact")?.unwrap_or(false) {
+    if let Some(exact) = optional_bool(arguments, "exact")? {
         args.push("--exact".to_string());
+        args.push(exact.to_string());
+    }
+    if let Some(scope) = within {
+        args.push("--within".to_string());
+        args.push(scope);
     }
     if let Some(text) = optional_string(arguments, "text")? {
+        if !["first", "last"].contains(&locator.as_str()) {
+            args.push("--".to_string());
+        }
         args.push(text);
     }
     run_tool(arguments, args)
@@ -1607,8 +1627,14 @@ fn call_downloads(arguments: &Value) -> Result<Value, ProtocolError> {
 /// Build the final argv (command args + `--session`/global flags + `--json`)
 /// and run it as a child `chrome-use` process.
 fn run_tool(arguments: &Value, mut args: Vec<String>) -> Result<Value, ProtocolError> {
-    append_common_args(&mut args, arguments)?;
-    args.push("--json".to_string());
+    let mut common = Vec::new();
+    append_common_args(&mut common, arguments)?;
+    common.push("--json".to_string());
+    if let Some(boundary) = args.iter().position(|arg| arg == "--") {
+        args.splice(boundary..boundary, common);
+    } else {
+        args.extend(common);
+    }
     let timeout_ms = optional_u64(arguments, "timeoutMs")?.unwrap_or(DEFAULT_TIMEOUT_MS);
 
     let run = run_cli(&args, timeout_ms)

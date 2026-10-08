@@ -247,7 +247,12 @@
         </a>
       </div>
 
-    </main>
+    <p>语义 <code>find role/text/label/placeholder/alt/title/testid</code> 要求恰好一个可见匹配，只定位不操作时也一样。多个匹配会返回最多八个候选及可见状态、选择器和上下文提示，不派发动作，也不输出输入框的值。用 <code>--name</code>/<code>--exact</code> 消歧，或用 <code>--within &lt;CSS|@ref&gt;</code> 限定到唯一容器。范围必须属于当前标签页的主文档，跨 iframe 的 ref 和已选中的 iframe 上下文会被拒绝；可用 iframe 内的直接 ref 动作，或先 `frame main`。<code>find first/last/nth</code> 保留显式按序选择；普通 CSS 动作行为不变。role 和 label 名称来自 Chrome 无障碍数据，包含 <code>aria-labelledby</code>；每次语义调用重新定位。派发前目标已脱离时安全失败，结果不确定的动作不会重放。</p><p>先从页面发现范围：<code>find query "Beta account"</code> 返回候选的选择器锚点；选出对应标题的 article/容器，再执行 <code>find role button click --name Save --exact --within "&lt;返回的选择器&gt;"</code>。范围有歧义时用 <code>snapshot -s "&lt;选择器&gt;"</code> 查看并缩小范围，不取第一个。未知语义 find 参数和重复 <code>--within</code> 会被拒绝；输入像参数的文字可写 <code>find label Email fill -- --name</code>。<code>--exact false</code> 使用子串匹配。
+</p>
+
+<p>现有 <code>mcp --tools all</code> 的 <code>chrome_use_find</code> 工具接受 <code>within</code>，使用相同的唯一范围规则，工具数量不变。fill/type 的 <code>text</code> 按文字原样传入，<code>--name --observe</code> 不会被当作 CLI 参数。</p>
+<p>语义 find 的 <code>--observe</code> 仍按已有行为提示不支持；已知范围和回执时可在同一个 <code>batch</code> 中执行范围内 find 动作及任务专属的 <code>get text</code> 核验。MCP find 工具不声明 observe 字段。</p>
+</main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 
     <aside id="du-toc"></aside>

@@ -250,7 +250,12 @@
         </a>
       </div>
 
-    </main>
+    <p>Semantic <code>find role/text/label/placeholder/alt/title/testid</code> requires exactly one visible match, including locate-only queries. Ambiguity returns up to eight candidates with visible state and selector/context hints; no action is dispatched and input values are omitted. Narrow <code>--name</code>/<code>--exact</code>, or use <code>--within &lt;CSS|@ref&gt;</code> to restrict the query to exactly one container. A scope must belong to the active tab's main document; cross-frame refs and an explicitly selected iframe are refused; use direct frame refs or `frame main`. <code>find first/last/nth</code> explicitly selects an order and keeps its existing behavior. Plain CSS actions are unchanged. Roles and label names use Chrome accessibility data, including <code>aria-labelledby</code>; a semantic query re-resolves on each call. A detached target before dispatch fails safely; uncertain actions are never replayed.</p><p>Discover a scope from the page first: <code>find query "Beta account"</code> returns candidate selector anchors; choose the article/container corresponding to that heading, then use <code>find role button click --name Save --exact --within "&lt;returned-selector&gt;"</code>. Inspect an ambiguous scope with <code>snapshot -s "&lt;selector&gt;"</code> and narrow it rather than accepting the first container. Unknown semantic-find options and duplicate <code>--within</code> are refused; use <code>find label Email fill -- --name</code> to enter literal flag-looking text. <code>--exact false</code> requests substring matching.
+</p>
+
+<p>The existing <code>chrome_use_find</code> tool in <code>mcp --tools all</code> accepts <code>within</code> with the same unique-scope rules; tool count is unchanged. <code>text</code> for fill/type is passed literally, including <code>--name --observe</code>, rather than parsed as CLI options.</p>
+<p>Semantic find retains the existing <code>--observe</code> unsupported warning; use one <code>batch</code> containing the scoped find action and a task-specific <code>get text</code> receipt when both are known. The MCP find tool does not advertise an observe field.</p>
+</main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 
     <aside id="du-toc"></aside>
