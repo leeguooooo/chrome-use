@@ -79,6 +79,28 @@ fn parse_pick_args(rest: &[&str]) -> Result<(String, String), ParseError> {
 const SCROLL_UNTIL_USAGE: &str = "scroll [direction] [amount] --until <selector|@ref|text=…> \
      [--until-text <text>] [--max-steps <n>] [--timeout <ms>] [--selector <container>]";
 
+const SCREENSHOT_USAGE: &str = "screenshot [selector|@ref] [path] | screenshot [path] \
+     --selector <selector|@ref>  [--full] [--clip x,y,w,h] [--tab <t>] [--max-width <px>] \
+     [--max-height <px>] [--scale <0..1>] [--full-res] [--base64]";
+
+/// Whether a screenshot positional can only be an output image path: it ends
+/// in an image extension or starts like a filesystem path, and does not start
+/// like a selector (`.`, `#`, `@`, `[`). Used to accept a path given before
+/// the selector; a bare word stays a selector, as it always was.
+fn screenshot_arg_is_image_path(s: &str) -> bool {
+    let relative = s.starts_with("./") || s.starts_with("../");
+    if !relative
+        && (s.starts_with('.') || s.starts_with('#') || s.starts_with('@') || s.contains('['))
+    {
+        return false;
+    }
+    let lower = s.to_ascii_lowercase();
+    let image_ext = [".png", ".jpg", ".jpeg", ".webp"]
+        .iter()
+        .any(|e| lower.ends_with(e));
+    relative || s.starts_with('/') || s.starts_with('~') || image_ext
+}
+
 /// Top-level commands an agent is likely to mistype, used for "did you mean"
 /// suggestions on an unknown command (issue #29). Not exhaustive — just the
 /// common verbs plus a few known wrong-guesses mapped to the real command.
@@ -548,6 +570,124 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
     }
 
     Ok(result)
+}
+
+const BATCH_STEP_USAGE: &str = "batch \"<command> [args] [--observe] [--no-settle] \
+     [--settle-ms <ms>] [--with-screenshot <path>] [--if-present] [--new-tab] [--tab <t>]\" ...";
+
+/// Parse one `batch` step the way the same words would parse as their own
+/// command line.
+///
+/// A step used to go straight to `parse_command` with the batch's flags and
+/// its words uncleaned, so a per-step `--observe` (`batch "click @e8
+/// --observe"`) was never recognised as a flag: the subcommand parser ignored
+/// it and the step returned without an observation, silently. Per-command
+/// flags written inside a step now apply to that step; flags that configure
+/// the whole session (`--headed`, `--profile`, ...) cannot change mid-batch and
+/// are refused with a pointer to put them before `batch`. `--json` is accepted
+/// and has no per-step meaning: output mode belongs to the batch.
+pub fn parse_batch_step(step: &[String], flags: &Flags) -> Result<Value, ParseError> {
+    let mut observe = false;
+    let mut if_present = false;
+    let mut settle_ms: Option<u64> = None;
+    let mut with_screenshot: Option<String> = None;
+    let mut new_tab: Option<bool> = None;
+    let mut tab: Option<String> = None;
+    let mut tab_label: Option<String> = None;
+    let bool_value = |i: usize| -> Option<bool> {
+        match step.get(i + 1).map(String::as_str) {
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            _ => None,
+        }
+    };
+    let value = |i: usize, flag: &str| -> Result<String, ParseError> {
+        step.get(i + 1)
+            .cloned()
+            .ok_or_else(|| ParseError::InvalidValue {
+                message: format!("{flag} in a batch step needs a value"),
+                usage: BATCH_STEP_USAGE,
+            })
+    };
+    let mut i = 0;
+    while i < step.len() {
+        let arg = step[i].as_str();
+        if arg == "--" {
+            break;
+        }
+        match arg {
+            "--observe" => observe = bool_value(i).inspect(|_| i += 1).unwrap_or(true),
+            "--if-present" | "--optional" => {
+                if_present = bool_value(i).inspect(|_| i += 1).unwrap_or(true)
+            }
+            "--no-settle" => settle_ms = Some(0),
+            "--settle-ms" => {
+                let v = value(i, arg)?;
+                settle_ms = Some(v.parse().map_err(|_| ParseError::InvalidValue {
+                    message: format!("--settle-ms expects milliseconds, got '{v}'"),
+                    usage: BATCH_STEP_USAGE,
+                })?);
+                i += 1;
+            }
+            "--with-screenshot" => {
+                with_screenshot = Some(value(i, arg)?);
+                i += 1;
+            }
+            "--new-tab" => new_tab = Some(bool_value(i).inspect(|_| i += 1).unwrap_or(true)),
+            "--tab" => {
+                tab = Some(value(i, arg)?);
+                i += 1;
+            }
+            "--tab-label" => {
+                tab_label = Some(value(i, arg)?);
+                i += 1;
+            }
+            "--json" => {}
+            other
+                if crate::flags::GLOBAL_BOOL_FLAGS.contains(&other)
+                    || crate::flags::GLOBAL_FLAGS_WITH_VALUE.contains(&other) =>
+            {
+                return Err(ParseError::InvalidValue {
+                    message: format!(
+                        "`{other}` configures the whole session and cannot change inside a \
+                         batch step; pass it before `batch`"
+                    ),
+                    usage: BATCH_STEP_USAGE,
+                });
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let clean = crate::flags::clean_args(step);
+    let mut cmd = parse_command(&clean, flags)?;
+    if let Some(obj) = cmd.as_object_mut() {
+        if observe {
+            obj.insert("observe".to_string(), json!(true));
+        }
+        if if_present {
+            obj.insert("ifPresent".to_string(), json!(true));
+        }
+        if let Some(ms) = settle_ms {
+            obj.insert("settleMs".to_string(), json!(ms));
+        }
+        if let Some(path) = with_screenshot {
+            obj.insert("withScreenshot".to_string(), json!(path));
+        }
+        if let Some(nt) = new_tab {
+            obj.insert("newTab".to_string(), json!(nt));
+        }
+        if let Some(t) = tab {
+            if !obj.contains_key("tab") {
+                obj.insert("tabId".to_string(), json!(t));
+            }
+        }
+        if let Some(l) = tab_label {
+            obj.insert("label".to_string(), json!(l));
+        }
+    }
+    Ok(cmd)
 }
 
 fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseError> {
@@ -1513,6 +1653,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let mut full_res = false;
             let mut tab: Option<String> = None;
             let mut positional: Vec<&str> = Vec::new();
+            let mut selector_flag: Option<&str> = None;
             let mut i = 0;
             // Parse a numeric value for a downscale flag (issue #42).
             let parse_num = |i: &mut usize, flag: &str| -> Result<String, ParseError> {
@@ -1599,16 +1740,73 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         }));
                         i += 1;
                     }
+                    // `--selector <sel>` names the element explicitly, so a
+                    // lone positional is unambiguously the path, in any order:
+                    // `screenshot out.png --selector main` used to read the
+                    // path as the selector and fail with "Element not found".
+                    "--selector" | "-s" => {
+                        let v =
+                            rest.get(i + 1)
+                                .filter(|v| !v.starts_with('-'))
+                                .ok_or_else(|| ParseError::MissingArguments {
+                                    context: "screenshot --selector".to_string(),
+                                    usage: "screenshot [path] --selector <selector|@ref>",
+                                })?;
+                        if selector_flag.is_some() {
+                            return Err(ParseError::InvalidValue {
+                                message: "screenshot: --selector given twice".to_string(),
+                                usage: "screenshot [path] --selector <selector|@ref>",
+                            });
+                        }
+                        selector_flag = Some(*v);
+                        i += 1;
+                    }
+                    // An option we do not know must not fall through as a
+                    // selector or a path: that is how a typo becomes a
+                    // confusing "Element not found".
+                    other if other.starts_with('-') && other.len() > 1 => {
+                        return Err(ParseError::InvalidValue {
+                            message: format!("screenshot: unknown option '{other}'"),
+                            usage: SCREENSHOT_USAGE,
+                        });
+                    }
                     other => positional.push(other),
                 }
                 i += 1;
             }
-            let (selector, path) = match (positional.first(), positional.get(1)) {
-                (Some(first), Some(second)) => {
-                    // Two args: first is selector, second is path
-                    (Some(*first), Some(*second))
+            if positional.len() > 2 {
+                return Err(ParseError::InvalidValue {
+                    message: format!(
+                        "screenshot takes at most a selector and a path; got {}",
+                        positional.join(" ")
+                    ),
+                    usage: SCREENSHOT_USAGE,
+                });
+            }
+            let (selector, path) = match (selector_flag, positional.first(), positional.get(1)) {
+                (Some(_), Some(_), Some(_)) => {
+                    return Err(ParseError::InvalidValue {
+                        message: format!(
+                            "screenshot: with --selector, only one positional (the path) is \
+                             allowed; got {}",
+                            positional.join(" ")
+                        ),
+                        usage: SCREENSHOT_USAGE,
+                    });
                 }
-                (Some(first), None) => {
+                (Some(sel), first, None) => (Some(sel), first.copied()),
+                (None, Some(first), Some(second)) => {
+                    // Two args: selector then path, or a path given first
+                    // (`screenshot out.png main`), which only an image path
+                    // can be mistaken for.
+                    if screenshot_arg_is_image_path(first) && !screenshot_arg_is_image_path(second)
+                    {
+                        (Some(*second), Some(*first))
+                    } else {
+                        (Some(*first), Some(*second))
+                    }
+                }
+                (None, Some(first), None) => {
                     // One arg: determine if it's a selector or a path
                     let is_relative_path = first.starts_with("./") || first.starts_with("../");
                     let is_selector = !is_relative_path
@@ -7436,6 +7634,79 @@ mod tests {
         assert_eq!(cmd["action"], "screenshot");
         assert_eq!(cmd["selector"], ".btn");
         assert_eq!(cmd["path"], "./button.png");
+    }
+
+    /// `screenshot <path> --selector <sel>` read the path as the selector and
+    /// failed with "Element not found: <path>". Every order must land the
+    /// same command.
+    #[test]
+    fn screenshot_selector_flag_works_in_any_order() {
+        for line in [
+            "screenshot /tmp/x/out.png --selector main",
+            "screenshot --selector main /tmp/x/out.png",
+            "screenshot -s main /tmp/x/out.png",
+            "screenshot main /tmp/x/out.png",
+            "screenshot /tmp/x/out.png main",
+            "screenshot --full /tmp/x/out.png --selector main",
+        ] {
+            let cmd = parse_command(&args(line), &default_flags()).unwrap();
+            assert_eq!(cmd["selector"], "main", "{line}");
+            assert_eq!(cmd["path"], "/tmp/x/out.png", "{line}");
+        }
+        let cmd = parse_command(&args("screenshot --selector @e3"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "@e3");
+        assert_eq!(cmd["path"], serde_json::Value::Null);
+        // A path-looking selector stays where it was put.
+        let cmd = parse_command(&args("screenshot .logo.png out.png"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], ".logo.png");
+        assert_eq!(cmd["path"], "out.png");
+    }
+
+    /// `batch "click @e8 --observe"` returned success with no `observed`: the
+    /// step's `--observe` never reached the command. Per-step flags apply to
+    /// their step and only that step.
+    #[test]
+    fn batch_step_flags_apply_to_their_step() {
+        let flags = default_flags();
+        let step = |s: &str| parse_batch_step(&args(s), &flags);
+        let c = step("click @e8 --observe").unwrap();
+        assert_eq!(c["action"], "click");
+        assert_eq!(c["selector"], "@e8");
+        assert_eq!(c["observe"], true);
+        let c = step("pick @e5 --option Workshop --observe --settle-ms 2000").unwrap();
+        assert_eq!(c["action"], "pick");
+        assert_eq!(c["option"], "Workshop");
+        assert_eq!(c["observe"], true);
+        assert_eq!(c["settleMs"], 2000);
+        let c = step("click @e2 --no-settle --if-present").unwrap();
+        assert_eq!(c["settleMs"], 0);
+        assert_eq!(c["ifPresent"], true);
+        // Not stamped on a step that did not ask.
+        let c = step("click @e2").unwrap();
+        assert!(c.get("observe").is_none());
+        // `--json` inside a step is harmless.
+        assert_eq!(step("get url --json").unwrap()["action"], "url");
+        // Session-wide flags cannot change mid-batch: refused, not dropped.
+        for bad in ["click @e2 --headed", "open https://x.test --profile Work"] {
+            let err = step(bad).expect_err(bad).format();
+            assert!(err.contains("before `batch`"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn screenshot_refuses_what_it_cannot_place() {
+        for line in [
+            "screenshot a.png --selector",
+            "screenshot a.png --selector main b.png",
+            "screenshot --selector main --selector nav",
+            "screenshot main a.png extra",
+            "screenshot a.png --sel main",
+        ] {
+            assert!(
+                parse_command(&args(line), &default_flags()).is_err(),
+                "{line} should be refused"
+            );
+        }
     }
 
     // === Snapshot ===

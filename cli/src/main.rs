@@ -3975,7 +3975,7 @@ fn run_batch(flags: &Flags, bail: bool, arg_commands: Option<Vec<Vec<String>>>) 
             continue;
         }
 
-        let parsed = match parse_command(cmd_args, flags) {
+        let parsed = match commands::parse_batch_step(cmd_args, flags) {
             Ok(c) => c,
             Err(e) => {
                 had_error = true;

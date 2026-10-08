@@ -32,7 +32,7 @@
 
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::actions::DaemonState;
 
@@ -73,8 +73,9 @@ pub struct SettleOutcome {
     /// honest form of "that did nothing": the wait watched for a reaction and
     /// none came, rather than never having looked.
     ///
-    /// It only covers what happened *while waiting*: a mutation the action made
-    /// synchronously, before this observer existed, is invisible here. The
+    /// Without a [`SettleArm`] it only covers what happened *while waiting*: a
+    /// mutation the action made synchronously, before this observer existed,
+    /// is invisible here (with an arm it is seen; see [`settle_armed`]). The
     /// caller that has a before/after diff knows better, and `--observe` folds
     /// that in (see `mark_changed`) so the reported flag never contradicts the
     /// delta printed beside it.
@@ -212,7 +213,36 @@ pub async fn settle(
     since: Instant,
     expect_change: bool,
 ) -> SettleOutcome {
+    settle_armed(state, max_ms, since, expect_change, None).await
+}
+
+/// [`settle`] seeded by a [`SettleArm`] installed just before the action.
+///
+/// Without an arm, a mutation the action made synchronously (a click handler
+/// that re-renders a list before the dispatch returns) happens before the
+/// page-side observer exists, so the wait sees a still page and spends the
+/// whole reaction window (half the ceiling, 500ms by default) looking for a
+/// reaction that has already happened. The arm was watching during dispatch:
+/// when it saw a mutation, that IS the first reaction, and the quiet window is
+/// measured from the last mutation it saw. The guarantee is unchanged: the
+/// DOM must still have been still for the full quiet window, with no finite
+/// animation running and no request in flight. The wait just stops pretending
+/// it did not see the change.
+///
+/// An arm that cannot be read (the action navigated and the document that
+/// owned it is gone) falls back to the unseeded wait.
+pub async fn settle_armed(
+    state: &mut DaemonState,
+    max_ms: u64,
+    since: Instant,
+    expect_change: bool,
+    arm: Option<&SettleArm>,
+) -> SettleOutcome {
+    let mut arm = arm;
     if max_ms == 0 {
+        if let Some(a) = arm {
+            release_arm(state, a).await;
+        }
         return SettleOutcome::skipped();
     }
     let quiet_ms = env_ms(ENV_QUIET_MS, DEFAULT_QUIET_MS).min(max_ms);
@@ -261,7 +291,33 @@ pub async fn settle(
             continue;
         }
 
-        match page_quiet(state, quiet_ms.min(remaining), remaining, reaction_left).await {
+        let seeded = match arm.take() {
+            Some(a) => {
+                let r =
+                    page_quiet_seeded(state, a, quiet_ms.min(remaining), remaining, reaction_left)
+                        .await;
+                release_arm(state, a).await;
+                // An error means the arm's document or handle is gone (the
+                // action navigated): fall through and wait the old way.
+                r.ok()
+            }
+            None => None,
+        };
+        let probe = match seeded {
+            Some(p) => Ok(p),
+            None => {
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let remaining = (deadline - now).as_millis() as u64;
+                if remaining <= ROUND_TRIP_ALLOWANCE_MS {
+                    continue;
+                }
+                page_quiet(state, quiet_ms.min(remaining), remaining, reaction_left).await
+            }
+        };
+        match probe {
             Ok(page) if page.pending.is_empty() => {
                 saw_change |= page.saw_change;
                 // The page went quiet; re-check the network, because it may have
@@ -292,6 +348,11 @@ pub async fn settle(
         }
     }
 
+    // The ceiling hit before the page was ever probed (a request held the
+    // whole wait): the arm was never consumed.
+    if let Some(a) = arm {
+        release_arm(state, a).await;
+    }
     if last_pending.is_empty() {
         last_pending.push("dom".to_string());
     }
@@ -342,24 +403,7 @@ async fn page_quiet(
     .await
     .map_err(|_| "settle wait timed out".to_string())??;
 
-    let pending = value
-        .get("pending")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
-    let saw_change = value
-        .get("sawChange")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    Ok(PageQuiet {
-        pending,
-        saw_change,
-    })
+    Ok(parse_page_quiet(&value))
 }
 
 /// The injected wait. Kept as a builder (rather than a format! at the call
@@ -376,7 +420,44 @@ async fn page_quiet(
 /// render scheduled on a timer visible instead of reported as "no change".
 pub fn page_quiet_script(quiet_ms: u64, budget_ms: u64, reaction_ms: u64) -> String {
     format!(
-        r#"(() => new Promise((resolve) => {{
+        "(() => {})()",
+        page_quiet_promise(quiet_ms, budget_ms, reaction_ms, false)
+    )
+}
+
+/// The same wait as [`page_quiet_script`], as a function called ON a
+/// [`SettleArm`] (`this` is the arm). Before its first check it takes over from
+/// the arm: whatever the arm saw since it was installed, in particular the
+/// mutations the action made while it was being dispatched, counts as seen,
+/// with the quiet window measured from the arm's last mutation.
+pub fn page_quiet_seeded_function(quiet_ms: u64, budget_ms: u64, reaction_ms: u64) -> String {
+    format!(
+        "function() {{ return {}; }}",
+        page_quiet_promise(quiet_ms, budget_ms, reaction_ms, true)
+    )
+}
+
+fn page_quiet_promise(quiet_ms: u64, budget_ms: u64, reaction_ms: u64, seeded: bool) -> String {
+    // The hand-over runs AFTER this wait's own observer is installed, so no
+    // mutation can fall between the two. `takeRecords` collects anything the
+    // arm had queued but not yet delivered. `this` is captured before the
+    // Promise executor, whose own `this` is not the arm.
+    let seed = if seeded {
+        r#"
+  try {
+    if (arm && arm.obs) {
+      if (arm.obs.takeRecords().length) { arm.saw = true; arm.last = performance.now(); }
+      arm.obs.disconnect();
+    }
+    if (arm && arm.timer) clearTimeout(arm.timer);
+    if (arm && arm.saw) { sawChange = true; lastChange = arm.last; }
+  } catch (e) {}"#
+    } else {
+        ""
+    };
+    let capture = if seeded { "const arm = this;\n  " } else { "" };
+    format!(
+        r#"(() => {{ {capture}return new Promise((resolve) => {{
   const QUIET = {quiet_ms};
   const REACTION = {reaction_ms};
   const t0 = performance.now();
@@ -387,7 +468,7 @@ pub fn page_quiet_script(quiet_ms: u64, budget_ms: u64, reaction_ms: u64) -> Str
   try {{
     observer = new MutationObserver(() => {{ lastChange = performance.now(); sawChange = true; }});
     observer.observe(document, {{ subtree: true, childList: true, attributes: true, characterData: true }});
-  }} catch (e) {{}}
+  }} catch (e) {{}}{seed}
   const animating = () => {{
     try {{
       if (typeof document.getAnimations !== 'function') return false;
@@ -421,8 +502,151 @@ pub fn page_quiet_script(quiet_ms: u64, budget_ms: u64, reaction_ms: u64) -> Str
     setTimeout(tick, 16);
   }};
   tick();
-}}))()"#
+}}); }}).call(this)"#
     )
+}
+
+/// A mutation observer installed in the page just before an action, so the
+/// settle that follows knows about mutations the action made while it was
+/// being dispatched (see [`settle_armed`]).
+///
+/// It is held by a CDP remote-object handle, not stored on `window`: nothing
+/// the page can enumerate changes, and the handle dies with the document. An
+/// arm nobody reads (the action failed) is released by the caller, and in any
+/// case disconnects itself after [`ARM_LIFETIME_MS`].
+pub struct SettleArm {
+    object_id: String,
+    session_id: String,
+}
+
+/// How long an arm that nobody reads keeps observing before it disconnects
+/// itself.
+const ARM_LIFETIME_MS: u64 = 30_000;
+
+/// The arm itself: an object holding its observer, when it last fired, and
+/// whether it fired at all.
+pub fn arm_script() -> String {
+    format!(
+        r#"(() => {{
+  const arm = {{ saw: false, last: 0, obs: null, timer: 0 }};
+  try {{
+    arm.obs = new MutationObserver(() => {{ arm.saw = true; arm.last = performance.now(); }});
+    arm.obs.observe(document, {{ subtree: true, childList: true, attributes: true, characterData: true }});
+    arm.timer = setTimeout(() => {{ try {{ arm.obs.disconnect(); }} catch (e) {{}} }}, {ARM_LIFETIME_MS});
+  }} catch (e) {{}}
+  return arm;
+}})()"#
+    )
+}
+
+/// Install a [`SettleArm`] on the active page. `None` when it could not be
+/// installed; the settle then waits exactly as it did before arms existed.
+pub async fn arm(state: &DaemonState) -> Option<SettleArm> {
+    let mgr = state.browser.as_ref()?;
+    let session_id = mgr.active_session_id().ok()?.to_string();
+    let v = mgr
+        .client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": arm_script(), "returnByValue": false })),
+            Some(&session_id),
+        )
+        .await
+        .ok()?;
+    if v.get("exceptionDetails").is_some() {
+        return None;
+    }
+    let object_id = v.pointer("/result/objectId")?.as_str()?.to_string();
+    Some(SettleArm {
+        object_id,
+        session_id,
+    })
+}
+
+/// Let go of an arm: stop its observer and release the handle. Best-effort,
+/// one round trip: a document that already went away took the object with it.
+pub async fn release_arm(state: &DaemonState, arm: &SettleArm) {
+    if let Some(mgr) = state.browser.as_ref() {
+        let _ = mgr
+            .client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": arm.object_id,
+                    "functionDeclaration": "function() { try { if (this.obs) this.obs.disconnect(); clearTimeout(this.timer); } catch (e) {} }",
+                    "returnByValue": true,
+                    "objectGroup": "chrome-use-settle-release",
+                })),
+                Some(&arm.session_id),
+            )
+            .await;
+        let _ = mgr
+            .client
+            .send_command(
+                "Runtime.releaseObject",
+                Some(json!({ "objectId": arm.object_id })),
+                Some(&arm.session_id),
+            )
+            .await;
+    }
+}
+
+/// [`page_quiet`] run on an arm.
+async fn page_quiet_seeded(
+    state: &DaemonState,
+    arm: &SettleArm,
+    quiet_ms: u64,
+    budget_ms: u64,
+    reaction_ms: u64,
+) -> Result<PageQuiet, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let page_budget = budget_ms.saturating_sub(ROUND_TRIP_ALLOWANCE_MS);
+    if page_budget == 0 {
+        return Err("no budget left for a settle probe".to_string());
+    }
+    let function = page_quiet_seeded_function(quiet_ms.min(page_budget), page_budget, reaction_ms);
+    let v = tokio::time::timeout(
+        Duration::from_millis(budget_ms),
+        mgr.client.send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": arm.object_id,
+                "functionDeclaration": function,
+                "returnByValue": true,
+                "awaitPromise": true,
+            })),
+            Some(&arm.session_id),
+        ),
+    )
+    .await
+    .map_err(|_| "settle wait timed out".to_string())??;
+    if v.get("exceptionDetails").is_some() {
+        return Err("settle probe threw".to_string());
+    }
+    Ok(parse_page_quiet(
+        v.pointer("/result/value").unwrap_or(&Value::Null),
+    ))
+}
+
+fn parse_page_quiet(value: &Value) -> PageQuiet {
+    let pending = value
+        .get("pending")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    let saw_change = value
+        .get("sawChange")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    PageQuiet {
+        pending,
+        saw_change,
+    }
 }
 
 /// How far back a standalone observation looks for in-flight requests.
@@ -558,5 +782,89 @@ mod tests {
         // `Promise` in the source is what makes `evaluate` await it rather than
         // returning the pending promise object.
         assert!(js.contains("Promise"), "{js}");
+    }
+
+    #[test]
+    fn seeded_wait_takes_over_from_the_arm() {
+        let js = page_quiet_seeded_function(100, 900, 500);
+        assert!(js.starts_with("function()"), "{js}");
+        assert!(js.contains("const arm = this;"), "{js}");
+        // Queued-but-undelivered records count as seen.
+        assert!(js.contains("takeRecords()"), "{js}");
+        assert!(js.contains("lastChange = arm.last"), "{js}");
+        // The unseeded form carries none of it.
+        let plain = page_quiet_script(100, 900, 500);
+        assert!(!plain.contains("arm"), "{plain}");
+    }
+
+    #[test]
+    fn the_arm_is_not_stored_on_the_page() {
+        let js = arm_script();
+        assert!(!js.contains("window."), "{js}");
+        assert!(!js.contains("globalThis"), "{js}");
+        assert!(js.contains(&ARM_LIFETIME_MS.to_string()), "{js}");
+    }
+
+    /// Run a settle script under node with a stub DOM: no mutation ever
+    /// arrives during the wait. Returns (waitedMs, sawChange).
+    fn run_wait(js_call: &str) -> Option<(f64, bool)> {
+        let node = std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        })?;
+        let prelude = "globalThis.MutationObserver = class { constructor(cb) {} \
+             observe() {} disconnect() {} takeRecords() { return []; } }; \
+             globalThis.document = { getAnimations: () => [] };";
+        let js = format!(
+            "{prelude} Promise.resolve({js_call}).then(r => \
+             console.log(JSON.stringify([r.waitedMs, r.sawChange])));"
+        );
+        let out = std::process::Command::new(node)
+            .arg("-e")
+            .arg(js)
+            .output()
+            .ok()?;
+        let v: (f64, bool) =
+            serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).ok()?;
+        Some(v)
+    }
+
+    /// The case behind the ~510ms per observed click: the action mutated the
+    /// DOM while it was dispatched, before the settle's observer existed. An
+    /// unseeded wait sees a still page and spends the reaction window; a wait
+    /// seeded by an arm that saw the mutation ends once the quiet window since
+    /// that mutation has passed, and still reports the change.
+    #[test]
+    fn an_arm_that_saw_the_dispatch_mutation_ends_the_reaction_window() {
+        let unseeded = page_quiet_script(100, 900, 500);
+        let Some((waited, saw)) = run_wait(&unseeded) else {
+            return;
+        };
+        assert!(waited >= 500.0, "unseeded waited {waited}");
+        assert!(!saw);
+
+        // The arm saw a mutation 30ms ago: 70ms more of quiet is still owed.
+        let seeded = format!(
+            "({}).call({{ saw: true, last: performance.now() - 30, \
+             obs: new MutationObserver(() => {{}}), timer: 0 }})",
+            page_quiet_seeded_function(100, 900, 500)
+        );
+        let (waited, saw) = run_wait(&seeded).expect("node ran once already");
+        assert!(saw, "the arm's mutation must be reported");
+        assert!(
+            (60.0..300.0).contains(&waited),
+            "seeded wait must still owe the quiet window, waited {waited}"
+        );
+
+        // An arm that saw nothing changes nothing: the reaction window holds.
+        let idle = format!(
+            "({}).call({{ saw: false, last: 0, \
+             obs: new MutationObserver(() => {{}}), timer: 0 }})",
+            page_quiet_seeded_function(100, 900, 500)
+        );
+        let (waited, saw) = run_wait(&idle).expect("node ran once already");
+        assert!(!saw);
+        assert!(waited >= 500.0, "idle arm waited {waited}");
     }
 }

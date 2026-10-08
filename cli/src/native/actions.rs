@@ -543,6 +543,11 @@ pub struct DaemonState {
     /// means the documented recovery has already been tried and did not work —
     /// repeating it is the loop #235 describes, so the error says so instead.
     pub last_unconfirmed_tab_switch: Option<(&'static str, String, std::time::Instant)>,
+    /// Set by the dispatcher for `click --observe`: the click leaves its
+    /// new-tab check in `deferred_click_tab_check` instead of sleeping for it,
+    /// and the observation runs the check after its settle.
+    defer_click_tab_check: bool,
+    deferred_click_tab_check: Option<DeferredClickTabCheck>,
     /// Newly created tabs whose domain initialization failed before session setup.
     pending_new_tab_setup: std::collections::HashSet<String>,
     /// Named persistent `script` JS contexts (#289). Each holds a resident boa
@@ -663,6 +668,8 @@ impl DaemonState {
             tracked_requests: Vec::new(),
             request_tracking: false,
             last_unconfirmed_tab_switch: None,
+            defer_click_tab_check: false,
+            deferred_click_tab_check: None,
             pending_new_tab_setup: std::collections::HashSet::new(),
             script_contexts: Default::default(),
             in_flight_requests: Vec::new(),
@@ -2069,7 +2076,11 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         } else {
             observe_snapshot_registering(state).await
         };
-        Some((url, snap, (req_mark, resource_mark)))
+        // Last thing before the action: watch for the mutations it makes
+        // while being dispatched, which the settle's own observer, installed
+        // afterwards, cannot see (see `settle::settle_armed`).
+        let arm = super::settle::arm(state).await;
+        Some((url, snap, (req_mark, resource_mark), arm))
     } else {
         None
     };
@@ -2095,6 +2106,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         && action != "launch"
         && state.browser.as_ref().is_some_and(|m| m.on_relay());
     let mut stale_attempts = 0u32;
+    state.defer_click_tab_check = observe && action == "click";
+    state.deferred_click_tab_check = None;
     let result = loop {
         let attempt_result = match action {
             "launch" => handle_launch(cmd, state).await,
@@ -2317,6 +2330,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // transient mid-OAuth session rotation no longer hard-fails the command.
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     };
+    state.defer_click_tab_check = false;
 
     // Action guards (#65 followup): with `--if-present`/`--optional`, an action
     // whose target element is absent becomes a no-op success ({skipped:true})
@@ -2420,18 +2434,32 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // `--observe`: after a successful mutating action, settle briefly, re-snapshot,
     // and attach ONLY the delta vs the baseline (added/removed lines, url change,
     // requests fired). Collapses act→wait→snapshot→diff into one reply.
-    if let (true, Some((url0, snap0, (req_mark, resource_mark)))) = (ok, observe_baseline) {
+    let observe_baseline = match observe_baseline {
+        Some((_, _, _, Some(arm))) if !ok => {
+            super::settle::release_arm(state, &arm).await;
+            None
+        }
+        other => other,
+    };
+    if let (true, Some((url0, snap0, (req_mark, resource_mark), arm))) = (ok, observe_baseline) {
         // Wait on signals, not on a number (#228). The 250ms this replaces was
         // wrong in both directions: too short on a slow page, where the delta
         // described a tree that no longer existed by the time the agent read
         // it, and pure overhead on a static one.
-        let settled = super::settle::settle(
+        let settled = super::settle::settle_armed(
             state,
             super::settle::max_ms_for(cmd),
             action_started_at,
             true,
+            arm.as_ref(),
         )
         .await;
+        // A click defers its new-tab check while observing, so the check's
+        // fixed wait overlaps the settle instead of adding to it.
+        if let Some(pending) = state.deferred_click_tab_check.take() {
+            let extra = finish_click_tab_check(state, pending).await;
+            merge_into_data(&mut resp, extra);
+        }
         let _ = state.drain_cdp_events();
         // Registering: the delta the caller reads names refs it will act on next.
         let snap1 = observe_snapshot_registering(state).await;
@@ -2608,6 +2636,13 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 }
             }
         }
+    }
+
+    // A deferred new-tab check the observation did not get to (it only runs
+    // on the observed success path) still runs: the click must not lose it.
+    if let Some(pending) = state.deferred_click_tab_check.take() {
+        let extra = finish_click_tab_check(state, pending).await;
+        merge_into_data(&mut resp, extra);
     }
 
     // Say that this command is answering from a NEW browser (issue #216). It
@@ -7170,21 +7205,6 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         }));
     }
 
-    // Give a just-opened tab a moment to register, then look for it.
-    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    let opened = mgr.adopt_newly_opened(&before).await;
-    // A popup the page opened is ours (adopt_newly_opened only returns tabs
-    // it can attribute to this session), but its first document loaded before
-    // we could attach. Replay the session's setup anyway so its overrides hold
-    // from here on and its next navigation carries the init scripts, headers
-    // and routes. Reported rather than failing: the click itself succeeded.
-    let opened_setup_error = match opened.as_ref() {
-        Some(page) => apply_session_setup(state, &page.session_id).await.err(),
-        None => None,
-    };
-    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-
     let mut out = json!({ "clicked": selector });
     // How the click was delivered, and a warning when it may not have acted
     // like a user's click (a DOM-dispatched fallback, an aria-disabled target):
@@ -7196,6 +7216,63 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
             out["warning"] = json!(w);
         }
     }
+    let pending = DeferredClickTabCheck {
+        before,
+        follow,
+        clicked_at: std::time::Instant::now(),
+    };
+    // Under `--observe` the check runs after the settle, which waits at least
+    // as long on any page that reacted, so its fixed wait stops adding ~150ms
+    // to every observed click.
+    if state.defer_click_tab_check {
+        state.deferred_click_tab_check = Some(pending);
+        return Ok(out);
+    }
+    let extra = finish_click_tab_check(state, pending).await;
+    merge_object(&mut out, extra);
+    Ok(out)
+}
+
+/// What a click needs to look for a tab it opened, after the fact.
+pub(crate) struct DeferredClickTabCheck {
+    /// Targets that existed before the click.
+    before: std::collections::HashSet<String>,
+    /// `--follow`: switch to the opened tab.
+    follow: bool,
+    /// When the click was delivered: the check waits until
+    /// [`CLICK_NEW_TAB_GRACE_MS`] after it, never less.
+    clicked_at: std::time::Instant,
+}
+
+/// How long after a click a tab it opened is given to register before we
+/// look for it.
+const CLICK_NEW_TAB_GRACE_MS: u64 = 150;
+
+/// The tail of a click: give a just-opened tab its grace period (only what is
+/// left of it), adopt it, and report it as `openedTab` (plus `followed`).
+async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickTabCheck) -> Value {
+    let mut out = json!({});
+    let grace = std::time::Duration::from_millis(CLICK_NEW_TAB_GRACE_MS);
+    let elapsed = pending.clicked_at.elapsed();
+    if elapsed < grace {
+        tokio::time::sleep(grace - elapsed).await;
+    }
+    let Some(mgr) = state.browser.as_mut() else {
+        return out;
+    };
+    let opened = mgr.adopt_newly_opened(&pending.before).await;
+    // A popup the page opened is ours (adopt_newly_opened only returns tabs
+    // it can attribute to this session), but its first document loaded before
+    // we could attach. Replay the session's setup anyway so its overrides hold
+    // from here on and its next navigation carries the init scripts, headers
+    // and routes. Reported rather than failing: the click itself succeeded.
+    let opened_setup_error = match opened.as_ref() {
+        Some(page) => apply_session_setup(state, &page.session_id).await.err(),
+        None => None,
+    };
+    let Some(mgr) = state.browser.as_mut() else {
+        return out;
+    };
     if let Some(page) = opened {
         let tab_id = super::browser::format_tab_id(page.tab_id);
         out["openedTab"] = json!({ "tabId": tab_id, "url": page.url, "title": page.title });
@@ -7204,7 +7281,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         }
         // `--follow`: switch the active tab to the newly-opened one (default is
         // to report it but stay put, so multi-tab flows aren't hijacked).
-        if follow {
+        if pending.follow {
             let old_target = mgr.active_target_id().ok().map(ToString::to_string);
             let new_target = mgr.target_id_for_tab(page.tab_id).map(ToString::to_string);
             let _ = mgr.tab_switch_by_id(page.tab_id).await;
@@ -7218,7 +7295,23 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
             out["followed"] = json!(true);
         }
     }
-    Ok(out)
+    out
+}
+
+/// Copy `extra`'s keys onto the object `target`.
+fn merge_object(target: &mut Value, extra: Value) {
+    if let (Some(t), Value::Object(extra)) = (target.as_object_mut(), extra) {
+        for (k, v) in extra {
+            t.insert(k, v);
+        }
+    }
+}
+
+/// Copy `extra`'s keys into a response's `data`.
+fn merge_into_data(resp: &mut Value, extra: Value) {
+    if let Some(d) = resp.get_mut("data") {
+        merge_object(d, extra);
+    }
 }
 
 async fn handle_dblclick(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -10075,7 +10168,7 @@ fn describe_expect(cmd: &Value) -> String {
 /// disturbs the session's live `@ref`s) — the baseline/after capture for
 /// Mutating actions that observe by returning the a11y delta they caused.
 pub(crate) const OBSERVABLE_ACTIONS: &[&str] = &[
-    "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "evaluate",
+    "click", "dblclick", "fill", "type", "press", "select", "pick", "check", "uncheck", "evaluate",
 ];
 
 /// Actions that replace the whole document. A cross-page diff shares no nodes

@@ -1009,7 +1009,59 @@ pub async fn fill_reporting(
         iframe_sessions,
     )
     .await?;
-    fill_object(client, &effective_session_id, &object_id, value).await
+    let first = fill_object(client, &effective_session_id, &object_id, value).await;
+    let err = match first {
+        Err(e) if is_stale_object_error(&e) => e,
+        other => return other,
+    };
+
+    // The remote object the fill was working on stopped existing part-way
+    // through (observed on the relay as "Could not find object with given id"
+    // after the trusted insert had already landed). The fill may or may not
+    // have written the value, so a blind replay could type it twice. Re-resolve
+    // the element once and READ it first: if the value is already there,
+    // report that instead of touching the field again; only a field that does
+    // not hold it gets one more fill, on the fresh handle.
+    let (fresh_id, fresh_session) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await
+    .map_err(|e2| {
+        format!("{err} (the element handle went stale mid-fill; re-resolving it failed: {e2})")
+    })?;
+    let note = "the element handle went stale mid-fill (the page's remote object was \
+                discarded); the element was re-resolved";
+    match read_value_of(client, &fresh_session, &fresh_id).await {
+        Some(current) if current == value => Ok(FillOutcome {
+            // Nothing was written on this pass; the value was read back.
+            engine: "reread".to_string(),
+            warning: Some(format!(
+                "{note} and already holds the requested value, so it was not re-typed. \
+                 Confirm any page state that depends on the input events before relying on it"
+            )),
+        }),
+        _ => {
+            let mut outcome = fill_object(client, &fresh_session, &fresh_id, value)
+                .await
+                .map_err(|e2| format!("{err} (re-resolved once and filled again: {e2})"))?;
+            outcome.warning = Some(join_warnings(
+                format!("{note}, did not hold the value, and was filled once more"),
+                outcome.warning.take(),
+            ));
+            Ok(outcome)
+        }
+    }
+}
+
+/// A CDP error meaning a remote object id we hold is no longer valid: the
+/// inspector session or execution context that minted it is gone. The element
+/// itself may well still be there under a fresh handle.
+pub fn is_stale_object_error(e: &str) -> bool {
+    e.contains("Could not find object with given id") || e.contains("Invalid remote object id")
 }
 
 /// [`fill_reporting`] for an element already resolved to a remote object on
@@ -4942,6 +4994,20 @@ mod select_all_chord_tests {
 
 #[cfg(test)]
 mod tests {
+    /// The error the comparison run hit on a batch `fill`, verbatim, must take
+    /// the re-resolve-and-verify path; ordinary failures must not.
+    #[test]
+    fn stale_object_errors_are_recognised() {
+        assert!(super::is_stale_object_error(
+            r#"CDP error (Runtime.callFunctionOn): {"code":-32000,"message":"Could not find object with given id"}"#
+        ));
+        assert!(super::is_stale_object_error("Invalid remote object id"));
+        assert!(!super::is_stale_object_error("Element not found: #x"));
+        assert!(!super::is_stale_object_error(
+            "Debugger is not attached to the tab with id: 1"
+        ));
+    }
+
     /// Focus stops at a frame boundary, so a key dispatched after focusing an
     /// `<iframe>` reaches the container and nothing inside it — a success by
     /// every check the command had, and the wrong target every time (#218).
