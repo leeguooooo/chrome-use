@@ -48,7 +48,10 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    `Loading` needs `wait --text` for its final signal.
    A click that opened a tab reports `openedTab`; add `--follow` to move to
    it (`followed: true`). In your own Chrome that needs ab-connect 0.5.30+;
-   otherwise `openedTabWarning` says why it was left alone.
+   otherwise `openedTabWarning` says why it was left alone. A plain
+   `target=_blank` link opens in a background tab so Chrome stays behind the
+   user's app; a page's `window.open` still raises Chrome, and
+   `openedTabWarning` says so.
 3. Follow the error's instructions: its last line says what to do next.
    Do not pipe output through `tail` or drop stderr.
 4. An action that changed nothing: read its `why:` note and ⚠ warnings, fix

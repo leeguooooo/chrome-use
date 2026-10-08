@@ -500,6 +500,16 @@
         it up later.
       </p>
       <p>
+        A tab a page opens itself brings Chrome to the front over whatever app you are in. So in your own Chrome, in a
+        tab the session created, chrome-use opens a plain <code>target=_blank</code> link itself (left click, no
+        modifiers, http(s) href, no <code>rel=opener</code>, <code>download</code> or <code>ping</code>): the page's
+        click handlers all run first, and if none cancelled the click the link opens in a background tab of the
+        session (<code>openedTabMode: "background"</code>). A cross-site link carries the page as referrer
+        (ab-connect 0.5.31+); a same-site one carries none, so it keeps its <code>SameSite=Strict</code> cookies.
+        <code>window.open</code>, <code>rel=opener</code>, named targets and forms still go through Chrome, and the
+        click then says in <code>openedTabWarning</code> that Chrome may have come to the front.
+      </p>
+      <p>
         <code>tab new</code>, <code>tab select</code>, and <code>tab adopt</code> stay in the background by default.
         Add <code>--activate</code> (alias <code>--front</code>) to raise the target <strong>before</strong>
         renderer initialization or the liveness probe and leave it in the foreground. This changes the visible

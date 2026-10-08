@@ -167,9 +167,23 @@ pub struct InterceptedLink {
 
 impl InterceptedLink {
     /// `Page.navigate`'s `referrer` and `referrerPolicy` for this link: what
-    /// Chrome would have sent for the click. `None` for `rel=noreferrer`.
+    /// Chrome would have sent for the click. `None` for `rel=noreferrer`, and
+    /// for a link that may be same-site with the page (see
+    /// [`maybe_same_site`]).
+    ///
+    /// The choice is about cookies. A `Page.navigate` with a referrer is
+    /// treated as a cross-site navigation (`Sec-Fetch-Site: cross-site`, no
+    /// `SameSite=Strict` cookies) whatever the referrer is, which matches
+    /// Chrome's own handling of a cross-site link but would leave a same-site
+    /// link without its Strict cookies, i.e. possibly signed out. Without a
+    /// referrer it is a browser navigation (`none`, every cookie sent), the
+    /// same as the user typing the URL. So a same-site link loses only its
+    /// `Referer` and `document.referrer`, never its session.
     pub fn referrer(&self) -> Option<(String, &'static str)> {
         if self.noreferrer || self.referrer.is_empty() {
+            return None;
+        }
+        if maybe_same_site(&self.url, &self.referrer) {
             return None;
         }
         let policy = cdp_referrer_policy(&self.policy);
@@ -219,6 +233,35 @@ impl GuardReport {
             .as_ref()
             .map(|_| "a page listener stopped the click before it reached the window".to_string())
     }
+}
+
+/// Whether `a` and `b` may be the same site. Without the public suffix list
+/// this errs towards "same": hosts that are equal, nested (`x.a.com` and
+/// `a.com`) or share their last two labels (`x.a.com`, `y.a.com`, but also
+/// `a.co.uk` and `b.co.uk`) count as the same site. Different IP addresses,
+/// or anything unparsable, count as different only when both parse.
+pub fn maybe_same_site(a: &str, b: &str) -> bool {
+    let host = |u: &str| {
+        url::Url::parse(u).ok().and_then(|u| {
+            u.host_str()
+                .map(|h| h.trim_end_matches('.').to_ascii_lowercase())
+        })
+    };
+    let (Some(a), Some(b)) = (host(a), host(b)) else {
+        return true;
+    };
+    if a == b || a.ends_with(&format!(".{b}")) || b.ends_with(&format!(".{a}")) {
+        return true;
+    }
+    let is_ip = |h: &str| h.parse::<std::net::IpAddr>().is_ok() || h.starts_with('[');
+    if is_ip(&a) || is_ip(&b) {
+        return false;
+    }
+    let tail = |h: &str| {
+        let labels: Vec<&str> = h.rsplit('.').take(2).collect();
+        (labels.len() == 2).then(|| labels)
+    };
+    matches!((tail(&a), tail(&b)), (Some(x), Some(y)) if x == y)
 }
 
 /// Map an HTML referrer policy (attribute or `<meta name=referrer>` value,
@@ -366,6 +409,31 @@ mod tests {
         link.noreferrer = false;
         link.referrer = String::new();
         assert_eq!(link.referrer(), None);
+    }
+
+    #[test]
+    fn same_site_links_go_without_referrer_so_strict_cookies_still_flow() {
+        assert!(maybe_same_site("https://a.test/x", "https://a.test/y"));
+        assert!(maybe_same_site("https://www.a.test/", "https://a.test/"));
+        assert!(maybe_same_site("https://x.a.test/", "https://y.a.test/"));
+        assert!(maybe_same_site(
+            "http://127.0.0.1:1/",
+            "http://127.0.0.1:2/"
+        ));
+        assert!(maybe_same_site("not a url", "https://a.test/"));
+        assert!(!maybe_same_site("https://b.test/", "https://a.test/"));
+        assert!(!maybe_same_site(
+            "http://localhost:1/",
+            "http://127.0.0.1:1/"
+        ));
+        assert!(!maybe_same_site("http://127.0.0.2/", "http://127.0.0.1/"));
+        let same = InterceptedLink {
+            url: "https://docs.a.test/page".into(),
+            noreferrer: false,
+            referrer: "https://www.a.test/".into(),
+            policy: "unsafe-url".into(),
+        };
+        assert_eq!(same.referrer(), None);
     }
 
     #[test]

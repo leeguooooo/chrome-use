@@ -480,6 +480,19 @@ did not answer within the check's budget, so it may be attached but is not
 tracked). The check is bounded: about 2 s to find the tab plus 3 s to attach
 it. `tab adopt <url>` picks such a tab up later.
 
+A tab a page opens itself brings Chrome to the front over whatever app the user
+is in (Chrome activates the window it opens a tab in, background tabs
+included). So in your own Chrome, in a tab the session created, chrome-use
+opens a plain `target=_blank` link itself: a left click without modifiers on an
+`<a>`/`<area>` with an http(s) href and no `rel=opener`, `download` or `ping`.
+The click is delivered as usual and the page's click handlers all run; if none
+of them cancelled it, chrome-use cancels Chrome's own navigation and opens the
+link in a background tab of the session (`openedTabMode: "background"`). A
+cross-site link carries the page as referrer (ab-connect 0.5.31+); a same-site
+one carries none, so it keeps its `SameSite=Strict` cookies. `window.open`,
+`rel=opener`, named targets and forms still go through Chrome, and the click
+then says in `openedTabWarning` that Chrome may have come to the front.
+
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization
 or the liveness probe, and leaves it in the foreground. It changes the visible

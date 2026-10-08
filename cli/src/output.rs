@@ -2557,6 +2557,14 @@ but not taken sets openedTabWarning and openedTabStatus: `unadopted` (left
 alone on purpose) or `unknown` (no answer within about 2 s to find plus 3 s to
 attach; it may be attached but is not tracked).
 
+A tab a page opens itself brings Chrome to the front over whatever app the
+user is in. So in your own Chrome, in a tab the session created, a plain left
+click on a target=_blank link (http/https, no rel=opener, download or ping) is
+taken over after the page's own click handlers ran: chrome-use opens the link
+in a background tab of the session instead (openedTabMode: `background`), with
+the page as referrer when the link is cross-site. window.open and other
+pop-ups still go through Chrome; the click then says so in openedTabWarning.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
