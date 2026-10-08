@@ -199,6 +199,8 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 语义 `find role/text/label/placeholder/alt/title/testid` 要求恰好一个可见匹配，只定位不操作时也一样。多个匹配会返回最多八个候选及可见状态、选择器和上下文提示，不派发动作，也不输出输入框的值。用 `--name`/`--exact` 消歧，或用 `--within <CSS|@ref>` 限定到唯一容器。范围必须属于当前标签页的主文档，跨 iframe 的 ref 和已选中的 iframe 上下文会被拒绝；可用 iframe 内的直接 ref 动作，或先 `frame main`。`find first/last/nth` 保留显式按序选择；普通 CSS 动作行为不变。role 和 label 名称来自 Chrome 无障碍数据，包含 `aria-labelledby`；每次语义调用重新定位。派发前目标已脱离时安全失败，结果不确定的动作不会重放。
 
+现有 `mcp --tools all` 的 `chrome_use_find` 工具接受 `within`，使用相同的唯一范围规则，工具数量不变。fill/type 的 `text` 按文字原样传入，`--name --observe` 不会被当作 CLI 参数。
+
 先从页面发现范围：`find query "Beta account"` 返回候选的选择器锚点；选出对应标题的 article/容器，再执行 `find role button click --name Save --exact --within "<返回的选择器>"`。范围有歧义时用 `snapshot -s "<选择器>"` 查看并缩小范围，不取第一个。未知语义 find 参数和重复 `--within` 会被拒绝；输入像参数的文字可写 `find label Email fill -- --name`。`--exact false` 使用子串匹配。
 
 

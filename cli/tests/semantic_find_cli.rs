@@ -91,6 +91,54 @@ mod browser {
             );
             serde_json::from_slice::<Value>(&out.stdout).unwrap()["data"].clone()
         }
+        fn mcp_find(&self, arguments: Value) -> Value {
+            use std::io::Write;
+            use std::process::Stdio;
+            let mut child = Command::new(BIN)
+                .args(["mcp", "--tools", "all"])
+                .env("HOME", self.home.path())
+                .env("USERPROFILE", self.home.path())
+                .env("AGENT_BROWSER_SOCKET_DIR", self.sock.path())
+                .env("AGENT_BROWSER_ALLOW_HEADLESS", "1")
+                .env_remove("AGENT_BROWSER_CDP")
+                .env_remove("AGENT_BROWSER_PROVIDER")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut input = child.stdin.take().unwrap();
+            for request in [
+                serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"semantic-regression","version":"1"}}}),
+                serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"chrome_use_find","arguments":arguments}}),
+            ] {
+                writeln!(input, "{request}").unwrap();
+            }
+            drop(input);
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let rows: Vec<Value> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|s| serde_json::from_str(s).unwrap())
+                .collect();
+            assert!(rows[0]["result"]["serverInfo"]["version"].is_string());
+            let tools = rows[1]["result"]["tools"].as_array().unwrap();
+            let find = tools
+                .iter()
+                .find(|t| t["name"] == "chrome_use_find")
+                .unwrap();
+            assert_eq!(
+                find["inputSchema"]["properties"]["within"]["type"],
+                "string"
+            );
+            rows[2]["result"].clone()
+        }
         fn refused(&self, args: &[&str], word: &str) {
             let out = self.run(args);
             assert!(!out.status.success(), "unexpected success");
@@ -169,6 +217,19 @@ mod browser {
         ] {
             session.ok(&["find", kind, value, "--within", &scope]);
         }
+        let mcp=session.mcp_find(serde_json::json!({"locator":"role","value":"button","action":"click","name":"Save","exact":true,"within":scope,"session":session.name}));
+        assert_eq!(mcp["isError"], false, "{mcp}");
+        assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "beta");
+        let mcp=session.mcp_find(serde_json::json!({"locator":"label","value":"Email","action":"fill","text":"--name --observe","within":scope,"session":session.name}));
+        assert_eq!(mcp["isError"], false, "{mcp}");
+        assert_eq!(
+            session.ok(&["get", "value", "#account-b input"])["value"],
+            "--name --observe"
+        );
+        assert!(
+            !mcp.to_string().contains("was ignored"),
+            "literal --observe was parsed as a flag: {mcp}"
+        );
         let mut timings = Vec::new();
         for _ in 0..5 {
             let started = Instant::now();

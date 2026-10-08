@@ -3813,6 +3813,8 @@ Ambiguity reports up to eight candidates and acts on nothing. Use --within
 <CSS|@ref> for exactly one container in the active tab main document, --name/--exact,
 or deliberately select with first/last/nth. Role and label names come from
 Chrome accessibility data; ordinary CSS actions keep their existing behavior.
+The existing MCP chrome_use_find (mcp --tools all) accepts within too;
+fill/type text is literal, including flag-looking text, and tool count is unchanged.
 Unknown semantic options and duplicate --within are refused. Use -- before
 literal fill/type text that looks like a flag. Detached targets fail safely;
 uncertain actions are never replayed.
