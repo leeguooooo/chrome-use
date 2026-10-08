@@ -732,8 +732,10 @@ impl BoundProfile {
 pub enum SessionBinding<'a> {
     /// No daemon yet: this command picks the session's profile.
     New,
-    /// Running on the relay, bound to this profile (`None`: the session's
-    /// profile is unknown — no live row and no record).
+    /// Running on the relay, bound to this profile. `None`: it is on the
+    /// relay but which profile is unknown — refused, never treated as "not
+    /// subject to rules". (Sessions off the relay never get here; see
+    /// [`decide_bound`].)
     Bound(Option<&'a BoundProfile>),
 }
 
@@ -924,10 +926,43 @@ pub fn guard_url(raw: &str) -> Option<String> {
     Some(u.to_string())
 }
 
+/// What the daemon knows about the profile its session drives.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BoundState {
+    /// The live relay row for its endpoint, or the session record.
+    Known(BoundProfile),
+    /// It drives a relay endpoint, but no row or record says which profile.
+    /// Rules still apply — and refuse, since the profile cannot be matched.
+    UnknownRelay,
+    /// Not a relay endpoint (a `--launch` or `--cdp` browser), or no browser
+    /// yet. No ChooseBrowser rule is about it.
+    NotRelay,
+}
+
+/// Pure: classify the session from its endpoint, the relay rows, its record
+/// and every endpoint the relay has published.
+pub fn bound_state(
+    rows: &[ProfileRow],
+    bound_ws: Option<&str>,
+    record: Option<&Value>,
+    relay_endpoints: &[String],
+) -> BoundState {
+    if let Some(row) = bound_ws.and_then(|ws| rows.iter().find(|r| r.ws.as_deref() == Some(ws))) {
+        return BoundState::Known(BoundProfile::from_row(row));
+    }
+    if let Some(record) = record {
+        return BoundState::Known(BoundProfile::from_record(record));
+    }
+    match bound_ws {
+        Some(ws) if relay_endpoints.iter().any(|e| e == ws) => BoundState::UnknownRelay,
+        _ => BoundState::NotRelay,
+    }
+}
+
 /// The daemon-side guard: right before a navigation is sent, whatever asked
 /// for it. `Err` refuses with the message; `Ok(Some)` is a warning to attach.
-/// `bound_ws` is the relay endpoint the session drives (`None` off the relay:
-/// a launched or `--cdp` browser is not a ChooseBrowser profile).
+/// `bound_ws` is the endpoint the session's browser is connected to (`None`
+/// before any browser).
 pub fn guard_navigation(
     url: &str,
     skip: bool,
@@ -937,15 +972,13 @@ pub fn guard_navigation(
     if skip {
         return Ok(None);
     }
-    // The live relay row for the endpoint the daemon drives, else the
-    // session's record. Neither means the session is not on a relay profile
-    // chrome-use knows (a `--launch` or `--cdp` browser), which no
-    // ChooseBrowser rule is about.
     check_bound_navigation(url, session, |rows| {
-        bound_ws
-            .and_then(|ws| rows.iter().find(|r| r.ws.as_deref() == Some(ws)))
-            .map(BoundProfile::from_row)
-            .or_else(|| session_profile(session).map(|v| BoundProfile::from_record(&v)))
+        bound_state(
+            rows,
+            bound_ws,
+            session_profile(session).as_ref(),
+            &crate::connect::relay_endpoints(),
+        )
     })
 }
 
@@ -972,15 +1005,18 @@ pub fn guard_outgoing(cmd: &Value, session: &str, skip: bool) -> Result<(), Stri
     let Some(record) = session_profile(session) else {
         return Ok(());
     };
-    check_bound_navigation(url, session, |_| Some(BoundProfile::from_record(&record))).map(|_| ())
+    check_bound_navigation(url, session, |_| {
+        BoundState::Known(BoundProfile::from_record(&record))
+    })
+    .map(|_| ())
 }
 
-/// Shared by both guards: does a running session's profile (from `bound`)
-/// match the rule covering `url`? `Err` refuses; `Ok(Some)` warns.
+/// Shared by both guards: does a running session's profile match the rule
+/// covering `url`? `Err` refuses; `Ok(Some)` warns.
 fn check_bound_navigation(
     url: &str,
     session: &str,
-    bound: impl FnOnce(&[ProfileRow]) -> Option<BoundProfile>,
+    bound: impl FnOnce(&[ProfileRow]) -> BoundState,
 ) -> Result<Option<String>, String> {
     let Some(url) = guard_url(url) else {
         return Ok(None);
@@ -997,23 +1033,34 @@ fn check_bound_navigation(
         RuleOutcome::Hit(h) => h,
     };
     let rows = load_rows();
-    // No identity at all: not a relay session (see the callers). A record
-    // that exists but cannot identify the profile still refuses, below.
-    let Some(bound) = bound(&rows) else {
-        return Ok(None);
+    match decide_bound(&rows, &hit, bound(&rows), session) {
+        RuleDecision::Refuse(msg) => Err(msg),
+        _ => Ok(None),
+    }
+}
+
+/// Pure: the decision for a running session in `state`. A relay session
+/// whose profile is unknown goes in as `Bound(None)` and is refused; only a
+/// session that is not on the relay at all is outside the rules.
+pub fn decide_bound(
+    rows: &[ProfileRow],
+    hit: &RuleHit,
+    state: BoundState,
+    session: &str,
+) -> RuleDecision {
+    let bound = match state {
+        BoundState::NotRelay => return RuleDecision::NotApplicable,
+        BoundState::UnknownRelay => None,
+        BoundState::Known(b) => Some(b),
     };
-    let bound = Some(bound);
-    match decide_rule(
-        &rows,
-        Some(&hit),
+    decide_rule(
+        rows,
+        Some(hit),
         false,
         false,
         SessionBinding::Bound(bound.as_ref()),
         session,
-    ) {
-        RuleDecision::Refuse(msg) => Err(msg),
-        _ => Ok(None),
-    }
+    )
 }
 
 // --- Per-session record ------------------------------------------------------
@@ -2330,6 +2377,45 @@ mod tests {
             rule_outcome(lookup_in(Some(stale_rules), Some(ls), url), url, Some("/root")),
             RuleOutcome::Stale(ref w) if w.contains("(gone)")
         ));
+    }
+
+    /// A known relay endpoint with no identity is not "off the relay": it is
+    /// refused. Only an endpoint the relay never published is outside rules.
+    #[test]
+    fn a_known_relay_with_unknown_identity_is_refused_not_skipped() {
+        let r = rows();
+        let relays = vec!["ws://generic".to_string()];
+        let h = hit("Profile 14", None);
+
+        let state = bound_state(&r, Some("ws://generic"), None, &relays);
+        assert_eq!(state, BoundState::UnknownRelay);
+        let msg = refusal(decide_bound(&r, &h, state, "s"));
+        assert!(msg.contains("cannot tell which profile"), "{msg}");
+        let mut amb = hit("", None);
+        amb.ambiguous = vec!["Profile 3".into(), "Profile 4".into()];
+        let msg = refusal(decide_bound(&r, &amb, BoundState::UnknownRelay, "s"));
+        assert!(msg.contains("matches 2 profiles"), "{msg}");
+
+        // Not published by the relay (a --launch / --cdp browser), or no
+        // browser yet: outside the rules.
+        assert_eq!(
+            bound_state(&r, Some("ws://launched"), None, &relays),
+            BoundState::NotRelay
+        );
+        assert_eq!(bound_state(&r, None, None, &relays), BoundState::NotRelay);
+        assert_eq!(
+            decide_bound(&r, &h, BoundState::NotRelay, "s"),
+            RuleDecision::NotApplicable
+        );
+
+        // A relay row for the endpoint identifies it; failing that, a record.
+        let live = bound_state(&r, Some("ws://b"), None, &relays);
+        assert_eq!(decide_bound(&r, &h, live, "s"), RuleDecision::AlreadyThere);
+        let rec = record(&r[at(&r, "Default")]);
+        let from_rec = bound_state(&r, Some("ws://generic"), Some(&rec), &relays);
+        assert!(
+            matches!(from_rec, BoundState::Known(ref b) if b.dir.as_deref() == Some("Default"))
+        );
     }
 
     #[test]

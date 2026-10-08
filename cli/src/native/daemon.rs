@@ -565,6 +565,12 @@ async fn handle_connection<S>(
 
                 let response = {
                     let mut s = state.lock().await;
+                    // Each top-level command states its own ChooseBrowser
+                    // choice; a command without `_cbSkip` (any non-CLI
+                    // client) is checked. Never inherit the previous
+                    // command's skip. Nested script steps inherit this value
+                    // through `execute_command`, which runs below this point.
+                    s.cb_skip = crate::native::actions::cb_skip_of(&cmd);
                     let (mut response, timing) =
                         super::timing::timed(execute_command_recovering(&cmd, &mut s)).await;
                     let ok = response.get("success").and_then(|v| v.as_bool()) == Some(true);

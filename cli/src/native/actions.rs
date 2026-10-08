@@ -1714,6 +1714,12 @@ impl Drop for DaemonState {
 /// Clear advisory streaks when an operation has no complete observation.
 /// The CLI sends launch readiness checks before ordinary commands; a successful
 /// reuse on the same connection/target/session is not a new user operation.
+/// The ChooseBrowser skip a top-level command asks for: only an explicit
+/// `_cbSkip: true` skips the rule check.
+pub fn cb_skip_of(cmd: &Value) -> bool {
+    cmd.get("_cbSkip").and_then(Value::as_bool).unwrap_or(false)
+}
+
 pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     fn context(state: &DaemonState) -> Option<(String, String, String)> {
         let manager = state.browser.as_ref()?;
@@ -1727,6 +1733,9 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     // whichever client sent it (a direct command, a batch step, an MCP tool
     // call, a script step). A top-level command carries `_cbSkip`; nested
     // steps inherit the value of the command that runs them.
+    // `state.cb_skip` is set per top-level command by the daemon's socket
+    // handler (absent field = false). A nested step that names its own value
+    // uses it; one that does not inherits its parent's.
     if let Some(skip) = cmd.get("_cbSkip").and_then(Value::as_bool) {
         state.cb_skip = skip;
     }

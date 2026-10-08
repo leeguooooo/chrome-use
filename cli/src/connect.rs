@@ -2918,6 +2918,30 @@ fn relay_ext_version_path_for(id: &str) -> PathBuf {
     relay_url_path().with_file_name(format!("relay-ext-version-{}", sanitize_profile_id(id)))
 }
 
+/// Every relay endpoint the native host has published — the generic
+/// `relay-cdp-url` and each `relay-cdp-url-<id>`, whether or not its profile
+/// sidecar is there. Lets a daemon tell "driving a relay profile whose
+/// identity is unknown" apart from "not on the relay at all".
+pub fn relay_endpoints() -> Vec<String> {
+    let Some(dir) = relay_url_path().parent().map(|p| p.to_path_buf()) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("relay-cdp-url"))
+        })
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.starts_with("ws://"))
+        .collect()
+}
+
 /// Every profile whose extension worker is currently connected: `(id, email,
 /// ws_url)`. Reads the per-profile sidecars next to `relay-cdp-url`. Powers
 /// `chrome-use browsers` and `--browser` resolution.

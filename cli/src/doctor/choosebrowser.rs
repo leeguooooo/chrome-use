@@ -34,9 +34,26 @@ fn rule_target_checks(
                 Some(r) => format!("{} ({r})", rule.pattern),
                 None => rule.pattern.clone(),
             };
-            let resolution = local_state
-                .map(|ls| choosebrowser::resolve_profile_key(ls, &rule.key))
-                .unwrap_or(choosebrowser::KeyResolution::NotFound);
+            // Without Local State nothing can be said about the profile, and
+            // the runtime lookup treats the url as having no rule. Say that,
+            // not "no such profile".
+            let Some(local_state) = local_state else {
+                return Check::new(
+                    id,
+                    RULE_CATEGORY,
+                    Status::Warn,
+                    format!(
+                        "{name} → profile key {}: unknown — Chrome's Local State could not be \
+                         read, so this rule is not applied",
+                        rule.key
+                    ),
+                )
+                .with_fix(
+                    "check that Google Chrome has run on this account \
+                     (~/Library/Application Support/Google/Chrome/Local State)",
+                );
+            };
+            let resolution = choosebrowser::resolve_profile_key(local_state, &rule.key);
             let resolved = match resolution {
                 choosebrowser::KeyResolution::Found(p) => p,
                 choosebrowser::KeyResolution::NotFound => {
@@ -393,5 +410,30 @@ mod tests {
         );
         assert_eq!(checks[2].status, Status::Warn);
         assert!(checks[2].message.contains("999"), "{}", checks[2].message);
+        assert!(
+            checks[2].message.contains("no such Chrome profile"),
+            "{}",
+            checks[2].message
+        );
+
+        // Local State unreadable: the profile is unknown, not missing, and
+        // the rule is not applied — what the runtime does.
+        let checks = rule_target_checks(&rules, None, &rows, Some("/chrome"));
+        assert_eq!(checks.len(), 3);
+        for c in &checks {
+            assert_eq!(c.status, Status::Warn);
+            assert!(c.message.contains("unknown"), "{}", c.message);
+            assert!(
+                c.message.contains("Local State could not be read"),
+                "{}",
+                c.message
+            );
+            assert!(c.message.contains("not applied"), "{}", c.message);
+            assert!(
+                !c.message.contains("no such Chrome profile"),
+                "{}",
+                c.message
+            );
+        }
     }
 }
