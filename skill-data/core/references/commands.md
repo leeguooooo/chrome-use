@@ -482,26 +482,36 @@ it. `tab adopt <url>` picks such a tab up later.
 
 A tab a page opens itself (`target=_blank`, `window.open`) brings Chrome to the
 front over whatever app the user is in: Chrome activates the window it opens a
-tab in, background tabs included. In your own Chrome the click then says so in
-`openedTabWarning` (#468).
+tab in, background tabs included (#468).
 
-`AGENT_BROWSER_BACKGROUND_LINKS=1` (opt-in, per daemon) makes chrome-use open
-plain `target=_blank` links itself, in a tab the session created: a left click
-without modifiers on an `<a>`/`<area>` with an http(s) href and no
+So in your own Chrome, in a tab the session created, chrome-use opens
+**cross-site** `target=_blank` links itself: a left click without modifiers on
+an `<a>`/`<area>` with an http(s) href to another registrable domain (eTLD+1 by
+the Public Suffix List, worked out from the clicking frame's URL) and no
 `rel=opener`, `download` or `ping`. The click is delivered as usual and the
 page's click handlers all run; if none of them cancelled it, chrome-use cancels
 Chrome's own navigation and opens the link in a background tab of the session
-(`openedTabMode: "background"`), with the page as referrer under the effective
-referrer policy (ab-connect 0.5.31+). This is not identical to Chrome's click:
-- the new tab has an extra `about:blank` history entry;
-- the request counts as cross-site, also for same-site and same-origin links,
-  so `SameSite=Strict` cookies are not sent (also after a redirect back to the
-  page's site);
-- a `Referrer-Policy` set by HTTP header is honoured only when chrome-use saw
-  that document's response; otherwise the default policy is used.
+(`openedTabMode: "background"`), with the page as referrer under its referrer
+policy (ab-connect 0.5.31+). Measured against Chrome's own click, the request
+headers, cookies and referrer are the same; the new tab has one extra
+`about:blank` history entry. A cross-site link that redirects back to the
+page's site arrives there without `SameSite=Strict` cookies.
 
-`window.open`, `rel=opener`, named targets, forms and links whose handlers stop
-the click always go through Chrome.
+Everything else goes through Chrome, which comes to the front, and the click
+says so in `openedTabWarning`: same-site links (subdomains, `http`↔`https` of
+the same site), IP addresses, pages chrome-use cannot classify or whose header
+referrer policy it did not see, `window.open`, `rel=opener`, named targets,
+forms, handlers that stop the click, and pop-ups opened later.
+
+`AGENT_BROWSER_BACKGROUND_LINKS`:
+- unset or `cross-site` (default): as above;
+- `1` / `all`: same-site links too. They then count as cross-site
+  (`Sec-Fetch-Site: cross-site`) and lose their `SameSite=Strict` cookies, which
+  can show the user as signed out;
+- `0` / `off`: never; every page-opened tab goes through Chrome.
+
+The daemon reads it when it starts, so set it before the session's first
+command, or `close` the session and start again.
 
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization
@@ -879,6 +889,9 @@ AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS="ws.example.com"  # Extra hostnames the da
 AGENT_BROWSER_CLICK_MODE="dom"               # Click strategy: "" (default: scroll-in + coordinate
                                              #   click, DOM-dispatch fallback), "coord" (strict
                                              #   coordinate only), "dom" (always element.click())
+AGENT_BROWSER_BACKGROUND_LINKS="all"         # target=_blank links opened in a background tab (#468):
+                                             #   unset/"cross-site" (default), "all"/"1" (same-site
+                                             #   too, loses Strict cookies), "off"/"0"; read at daemon start
 ```
 
 ### Click reliability

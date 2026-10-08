@@ -1,5 +1,5 @@
-//! Opt-in: open `target=_blank` links an agent clicks in a background tab,
-//! so Chrome does not come to the front (#468).
+//! Open cross-site `target=_blank` links an agent clicks in a background
+//! tab, so Chrome does not come to the front (#468).
 //!
 //! When a page opens a tab or pop-up, Chrome inserts it through
 //! `BrowserWebContentsDelegate::AddNewContents` → `chrome::AddWebContents`
@@ -21,11 +21,16 @@
 //! - a `Referrer-Policy` the page set by HTTP header is used only when the
 //!   daemon saw that document's response.
 //!
-//! So this is off by default: a click that makes the page open a tab goes
-//! through Chrome as before, and the click says Chrome may have come to the
-//! front. [`BACKGROUND_LINKS_ENV`] turns it on for the session.
+//! So by default ([`LinkMode::CrossSite`]) only links to another
+//! registrable domain (eTLD+1 by the Public Suffix List, from the clicking
+//! frame's URL) are taken over: for those the request matches Chrome's own
+//! click except for `history.length`. Same registrable domain (subdomains,
+//! another scheme), IP addresses, unclassifiable pages, and a page whose
+//! header referrer policy the daemon did not see keep Chrome's click, which
+//! raises Chrome; the click says so. [`BACKGROUND_LINKS_ENV`] `=all` also
+//! takes same-site links, `=off` none.
 //!
-//! When on, the click's default action is taken over only for a plain left
+//! The click's default action is taken over only for a plain left
 //! click on an `<a>`/`<area>` whose effective target is `_blank`, with an
 //! http(s) href, no `rel=opener` (so Chrome would open it without an opener
 //! anyway), no `download` and no `ping`, in the guard's own document. The
@@ -64,19 +69,57 @@ pub const ARM_TTL_MS: u64 = 10_000;
 /// click that silently did nothing.
 pub const MAX_DISPATCH_MS: u64 = 1_000;
 
-/// Opt-in for opening plain `target=_blank` links in a background tab.
+/// Which `target=_blank` links chrome-use opens in a background tab. Read by
+/// the daemon from its own environment, so a change takes effect for a new
+/// session (or after the daemon restarts), not for a running one.
 pub const BACKGROUND_LINKS_ENV: &str = "AGENT_BROWSER_BACKGROUND_LINKS";
 
-/// Whether [`BACKGROUND_LINKS_ENV`] is on for this daemon.
-pub fn background_links_opt_in() -> bool {
-    std::env::var(BACKGROUND_LINKS_ENV)
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
+/// The [`BACKGROUND_LINKS_ENV`] setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkMode {
+    /// `0` / `off`: every page-opened tab goes through Chrome.
+    Off,
+    /// Unset / `cross-site` (default): links to another registrable domain.
+    CrossSite,
+    /// `1` / `all`: same-site links too (they lose `SameSite=Strict` cookies).
+    All,
+}
+
+impl LinkMode {
+    /// Parse the env value; anything unrecognised is the default.
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            Some("0" | "off" | "false" | "no" | "none") => Self::Off,
+            Some("1" | "all" | "true" | "yes" | "on") => Self::All,
+            _ => Self::CrossSite,
+        }
+    }
+
+    /// The mode this daemon runs with.
+    pub fn from_env() -> Self {
+        Self::parse(std::env::var(BACKGROUND_LINKS_ENV).ok().as_deref())
+    }
+}
+
+/// The registrable domain (eTLD+1, Public Suffix List including private
+/// suffixes) of an http(s) page URL, lowercased. `None` when it cannot be
+/// told: another scheme or an opaque document, an IP address, or a host that
+/// is itself a public suffix or has no registrable domain (`localhost`).
+pub fn page_site(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    if u.scheme() != "http" && u.scheme() != "https" {
+        return None;
+    }
+    let host = match u.host()? {
+        url::Host::Domain(d) => d.trim_end_matches('.').to_ascii_lowercase(),
+        _ => return None,
+    };
+    let site = psl::domain_str(&host)?;
+    // A domain the list knows nothing about (a single label, or a TLD
+    // outside it) is left to Chrome too.
+    psl::suffix(host.as_bytes())
+        .filter(|s| s.is_known())
+        .map(|_| site.to_string())
 }
 
 /// Referrer policy tokens a document or link can carry.
@@ -123,11 +166,15 @@ pub fn document_referrer_policy(params: &Value) -> Option<(String, String)> {
 /// Installed right before the click. Returns `true` once armed.
 /// `header_policy` is the policy the guard's document got from its response
 /// header (`Some("")` for none), `None` when the daemon did not see it.
-pub fn arm_script(header_policy: Option<&str>) -> String {
+/// `page_site` is the frame's registrable domain ([`page_site`]); with
+/// [`LinkMode::CrossSite`] only links outside it are taken over.
+pub fn arm_script(header_policy: Option<&str>, mode: LinkMode, page_site: Option<&str>) -> String {
     format!(
         r#"(() => {{
   const KEY = '__chromeUsePopupGuard';
   const HEADER_POLICY = {header};
+  const ALL = {all};
+  const PAGE_SITE = {site};
   const prev = globalThis[KEY];
   if (prev && typeof prev.disarm === 'function') prev.disarm();
   const armedAt = Date.now();
@@ -177,10 +224,25 @@ pub fn arm_script(header_policy: Option<&str>) -> String {
     let url;
     try {{ url = new URL(link.href); }} catch (_) {{ return {{ skip: 'the link has no valid href' }}; }}
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return {{ skip: 'the link is ' + url.protocol }};
+    if (!ALL) {{
+      // Cross-site only: the registrable domains (eTLD+1, worked out by the
+      // daemon from this frame's URL) must differ. Same registrable domain
+      // with another scheme, subdomains, IP addresses, or a page whose site
+      // the daemon could not tell: Chrome's own click.
+      if (!PAGE_SITE) return {{ skip: "chrome-use could not tell the page's site" }};
+      const h = url.hostname.toLowerCase().replace(/\.$/, '');
+      if (!h || h.startsWith('[') || /^[0-9.]+$/.test(h)) return {{ skip: 'the link goes to an IP address' }};
+      if (h === PAGE_SITE || h.endsWith('.' + PAGE_SITE)) {{
+        return {{ skip: 'the link stays on the same site, so it keeps Chrome\'s own click and its SameSite cookies' }};
+      }}
+    }}
     let p;
     if (rel.includes('noreferrer')) p = {{ policy: 'no-referrer', source: 'rel' }};
     else if (norm(link.referrerPolicy)) p = {{ policy: norm(link.referrerPolicy), source: 'attribute' }};
     else p = documentPolicy(doc);
+    if (!ALL && p.source === 'unknown') {{
+      return {{ skip: "chrome-use did not see the page's referrer policy header" }};
+    }}
     return {{
       url: url.href,
       referrer: String(doc.URL || '').split('#')[0],
@@ -217,6 +279,8 @@ pub fn arm_script(header_policy: Option<&str>) -> String {
   return true;
 }})()"#,
         header = serde_json::to_string(&header_policy).unwrap_or_else(|_| "null".into()),
+        all = mode == LinkMode::All,
+        site = serde_json::to_string(&page_site).unwrap_or_else(|_| "null".into()),
         valid = serde_json::to_string(&POLICIES).unwrap_or_else(|_| "[]".into()),
         ttl = ARM_TTL_MS,
         max_dispatch = MAX_DISPATCH_MS,
@@ -339,21 +403,32 @@ pub async fn arm(
     session_id: &str,
     frame_id: Option<&str>,
     header_policies: &HashMap<String, String>,
+    mode: LinkMode,
 ) -> Option<ArmedGuard> {
-    let frame_id = match frame_id {
-        Some(f) => f.to_string(),
+    if mode == LinkMode::Off {
+        return None;
+    }
+    let tree = client
+        .send_command("Page.getFrameTree", None, Some(session_id))
+        .await
+        .ok()?;
+    let root = tree.get("frameTree")?;
+    let (frame_id, frame_url) = match frame_id {
+        Some(f) => (f.to_string(), frame_url(root, f)?),
         None => {
-            let tree = client
-                .send_command("Page.getFrameTree", None, Some(session_id))
-                .await
-                .ok()?;
-            tree.get("frameTree")?
-                .get("frame")?
-                .get("id")?
-                .as_str()?
-                .to_string()
+            let frame = root.get("frame")?;
+            (
+                frame.get("id")?.as_str()?.to_string(),
+                frame.get("url")?.as_str()?.to_string(),
+            )
         }
     };
+    // Cross-site mode needs the frame's site; without it the click stays
+    // Chrome's own (the guard is not armed at all).
+    let site = page_site(&frame_url);
+    if mode == LinkMode::CrossSite && site.is_none() {
+        return None;
+    }
     let ctx = client
         .send_command(
             "Page.createIsolatedWorld",
@@ -368,7 +443,11 @@ pub async fn arm(
         .send_command(
             "Runtime.evaluate",
             Some(json!({
-                "expression": arm_script(header_policies.get(&frame_id).map(String::as_str)),
+                "expression": arm_script(
+                    header_policies.get(&frame_id).map(String::as_str),
+                    mode,
+                    site.as_deref(),
+                ),
                 "contextId": ctx,
                 "returnByValue": true,
             })),
@@ -385,10 +464,22 @@ pub async fn arm(
     })
 }
 
+/// The URL of frame `id` in a `Page.getFrameTree` node.
+fn frame_url(node: &Value, id: &str) -> Option<String> {
+    let frame = node.get("frame")?;
+    if frame.get("id").and_then(Value::as_str) == Some(id) {
+        return frame.get("url").and_then(Value::as_str).map(str::to_string);
+    }
+    node.get("childFrames")?
+        .as_array()?
+        .iter()
+        .find_map(|c| frame_url(c, id))
+}
+
 /// Read (and disarm) the guard after the click. `None` when its document is
 /// gone (the click navigated the tab) or it cannot be read.
-pub async fn read(client: &CdpClient, guard: &ArmedGuard) -> Option<GuardReport> {
-    let v = client
+pub async fn read(client: &CdpClient, guard: &ArmedGuard) -> ReadOutcome {
+    let v = match client
         .send_command(
             "Runtime.evaluate",
             Some(json!({
@@ -399,32 +490,59 @@ pub async fn read(client: &CdpClient, guard: &ArmedGuard) -> Option<GuardReport>
             Some(&guard.session_id),
         )
         .await
-        .ok()?;
-    GuardReport::parse(v.pointer("/result/value")?)
+    {
+        Ok(v) => v,
+        Err(e) if document_gone(&e) => return ReadOutcome::Gone,
+        Err(_) => return ReadOutcome::Failed,
+    };
+    match v.pointer("/result/value").and_then(GuardReport::parse) {
+        Some(r) => ReadOutcome::Report(r),
+        None => ReadOutcome::Failed,
+    }
+}
+
+/// The result of reading the guard back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadOutcome {
+    Report(GuardReport),
+    /// The guard's document is gone: the click navigated the frame. A link
+    /// the guard took over cancels Chrome's navigation, so the frame did not
+    /// navigate because of it.
+    Gone,
+    /// Unknown: the guard may have taken a link over and nobody opens it.
+    Failed,
+}
+
+/// Whether a CDP error says the execution context no longer exists.
+pub fn document_gone(error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    e.contains("cannot find context") || e.contains("execution context was destroyed")
 }
 
 /// What the click says when a guard was armed but could not be read back.
-pub const UNREAD_NOTE: &str = "chrome-use could not read back its link guard after the click \
-     (the page may have navigated). If the click was on a target=_blank link, it may not have \
-     opened; the click was not repeated. Run `tab list`.";
+pub const UNREAD_NOTE: &str = "chrome-use could not read back its link guard after the click. \
+     If the click was on a target=_blank link, it may not have opened; the click was not \
+     repeated. Run `tab list`.";
 
 /// The note a click carries when the page opened a tab through Chrome.
-/// `reason` says why the guard left it to Chrome; `None` with `opted_in`
-/// false means the guard is off ([`BACKGROUND_LINKS_ENV`]).
-pub fn chrome_raised_note(reason: Option<&str>, opted_in: bool) -> String {
-    let why = match (reason, opted_in) {
+/// `reason` says why the guard left it to Chrome.
+pub fn chrome_raised_note(reason: Option<&str>, mode: LinkMode) -> String {
+    let why = match (reason, mode) {
         (Some(r), _) => format!(" ({r})"),
-        (None, true) => " (window.open, or a link chrome-use cannot open itself)".to_string(),
-        (None, false) => String::new(),
+        (None, LinkMode::Off) => String::new(),
+        (None, _) => " (window.open, or a link chrome-use cannot open itself)".to_string(),
     };
-    let hint = if opted_in {
-        String::new()
-    } else {
-        format!(
-            ". {BACKGROUND_LINKS_ENV}=1 makes chrome-use open plain target=_blank links in a \
-             background tab instead, with known differences from Chrome's own click (see \
-             `click --help`)"
-        )
+    let same_site = reason.is_some_and(|r| r.contains("same site"));
+    let hint = match mode {
+        LinkMode::Off => format!(
+            ". {BACKGROUND_LINKS_ENV} is off; unset it to have chrome-use open cross-site \
+             target=_blank links in a background tab"
+        ),
+        LinkMode::CrossSite if same_site => format!(
+            ". {BACKGROUND_LINKS_ENV}=all also opens same-site links in a background tab, but \
+             they then lose their SameSite=Strict cookies (see `click --help`)"
+        ),
+        _ => String::new(),
     };
     format!(
         "the page opened this tab itself{why}, and Chrome brings its window to the front \
@@ -550,24 +668,103 @@ mod tests {
 
     #[test]
     fn arm_script_carries_its_limits_and_the_header_policy() {
-        let s = arm_script(None);
+        let s = arm_script(None, LinkMode::CrossSite, Some("example.com"));
         assert!(s.contains(&format!("> {ARM_TTL_MS}")));
         assert!(s.contains(&format!("> {MAX_DISPATCH_MS}")));
         assert!(s.contains("'the link has rel=opener'"));
         assert!(s.contains("const HEADER_POLICY = null;"));
+        assert!(s.contains("const ALL = false;"));
+        assert!(s.contains("const PAGE_SITE = \"example.com\";"));
         assert!(s.contains("if (doc !== document) return null;"));
+        // Cross-site mode never guesses a header policy it did not see.
+        assert!(s.contains("if (!ALL && p.source === 'unknown')"));
         assert!(!s.contains("{{"));
-        assert!(arm_script(Some("no-referrer")).contains("const HEADER_POLICY = \"no-referrer\";"));
-        assert!(arm_script(Some("")).contains("const HEADER_POLICY = \"\";"));
+        let all = arm_script(Some("no-referrer"), LinkMode::All, None);
+        assert!(all.contains("const HEADER_POLICY = \"no-referrer\";"));
+        assert!(all.contains("const ALL = true;"));
+        assert!(all.contains("const PAGE_SITE = null;"));
+        assert!(arm_script(Some(""), LinkMode::CrossSite, Some("a.b"))
+            .contains("const HEADER_POLICY = \"\";"));
     }
 
     #[test]
-    fn the_note_names_the_opt_in_only_when_it_is_off() {
-        let off = chrome_raised_note(None, false);
+    fn the_switch_parses_default_all_and_off() {
+        assert_eq!(LinkMode::parse(None), LinkMode::CrossSite);
+        assert_eq!(LinkMode::parse(Some("")), LinkMode::CrossSite);
+        assert_eq!(LinkMode::parse(Some("cross-site")), LinkMode::CrossSite);
+        assert_eq!(LinkMode::parse(Some("bogus")), LinkMode::CrossSite);
+        assert_eq!(LinkMode::parse(Some("1")), LinkMode::All);
+        assert_eq!(LinkMode::parse(Some(" ALL ")), LinkMode::All);
+        assert_eq!(LinkMode::parse(Some("0")), LinkMode::Off);
+        assert_eq!(LinkMode::parse(Some("off")), LinkMode::Off);
+    }
+
+    #[test]
+    fn page_site_is_the_registrable_domain_or_nothing() {
+        assert_eq!(
+            page_site("https://a.b.example.com/x").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            page_site("http://example.com").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            page_site("https://a.cu468.co.uk/").as_deref(),
+            Some("cu468.co.uk")
+        );
+        assert_eq!(
+            page_site("https://u1.github.io/").as_deref(),
+            Some("u1.github.io")
+        );
+        assert_eq!(
+            page_site("https://WWW.Example.COM./").as_deref(),
+            Some("example.com")
+        );
+        // Unclassifiable: Chrome's own click.
+        assert_eq!(page_site("https://co.uk/"), None);
+        assert_eq!(page_site("https://github.io/"), None);
+        assert_eq!(page_site("http://localhost:3000/"), None);
+        assert_eq!(page_site("http://127.0.0.1/"), None);
+        assert_eq!(page_site("http://[::1]/"), None);
+        assert_eq!(page_site("https://a.cu468.test/"), None);
+        assert_eq!(page_site("about:blank"), None);
+        assert_eq!(page_site("data:text/html,x"), None);
+    }
+
+    #[test]
+    fn frame_url_finds_child_frames() {
+        let tree = json!({
+            "frame": { "id": "top", "url": "https://a.com/" },
+            "childFrames": [{ "frame": { "id": "c1", "url": "https://b.com/f" },
+                "childFrames": [{ "frame": { "id": "c2", "url": "about:srcdoc" } }] }]
+        });
+        assert_eq!(frame_url(&tree, "top").as_deref(), Some("https://a.com/"));
+        assert_eq!(frame_url(&tree, "c2").as_deref(), Some("about:srcdoc"));
+        assert_eq!(frame_url(&tree, "nope"), None);
+    }
+
+    #[test]
+    fn a_navigated_document_is_gone_not_unknown() {
+        assert!(document_gone("Cannot find context with specified id"));
+        assert!(document_gone("Execution context was destroyed."));
+        assert!(!document_gone("command timed out"));
+    }
+
+    #[test]
+    fn the_note_names_the_switch_where_it_helps() {
+        let off = chrome_raised_note(None, LinkMode::Off);
         assert!(off.contains("#468"));
         assert!(off.contains(BACKGROUND_LINKS_ENV));
-        let on = chrome_raised_note(Some("the link has rel=opener"), true);
-        assert!(on.contains("(the link has rel=opener)"));
-        assert!(!on.contains(BACKGROUND_LINKS_ENV));
+        let same = chrome_raised_note(
+            Some("the link stays on the same site, so it keeps Chrome's own click"),
+            LinkMode::CrossSite,
+        );
+        assert!(same.contains(&format!("{BACKGROUND_LINKS_ENV}=all")));
+        let opener = chrome_raised_note(Some("the link has rel=opener"), LinkMode::CrossSite);
+        assert!(opener.contains("(the link has rel=opener)"));
+        assert!(!opener.contains(BACKGROUND_LINKS_ENV));
+        let wopen = chrome_raised_note(None, LinkMode::All);
+        assert!(wopen.contains("window.open"));
     }
 }

@@ -48,11 +48,12 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    `Loading` needs `wait --text` for its final signal.
    A click that opened a tab reports `openedTab`; add `--follow` to move to
    it (`followed: true`). In your own Chrome that needs ab-connect 0.5.30+;
-   otherwise `openedTabWarning` says why it was left alone. A tab the page
-   opens brings Chrome to the front over the user's app; `openedTabWarning`
-   says so. `AGENT_BROWSER_BACKGROUND_LINKS=1` opens plain `target=_blank`
-   links in a background tab instead, with differences listed in
-   `click --help`.
+   otherwise `openedTabWarning` says why it was left alone. Cross-site
+   `target=_blank` links open in a background tab so Chrome stays behind the
+   user's app; anything else a page opens (same-site links, `window.open`)
+   brings Chrome to the front and `openedTabWarning` says so.
+   `AGENT_BROWSER_BACKGROUND_LINKS=all` / `off` widens or disables this; it
+   is read when the session's daemon starts (see `click --help`).
 3. Follow the error's instructions: its last line says what to do next.
    Do not pipe output through `tail` or drop stderr.
 4. An action that changed nothing: read its `why:` note and ⚠ warnings, fix

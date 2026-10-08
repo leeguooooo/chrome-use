@@ -2557,18 +2557,28 @@ but not taken sets openedTabWarning and openedTabStatus: `unadopted` (left
 alone on purpose) or `unknown` (no answer within about 2 s to find plus 3 s to
 attach; it may be attached but is not tracked).
 
-A tab a page opens itself (target=_blank, window.open) brings Chrome to the
-front over whatever app the user is in; in your own Chrome the click then says
-so in openedTabWarning (#468). With AGENT_BROWSER_BACKGROUND_LINKS=1, in a tab
-the session created, a plain left click on a target=_blank link (http/https,
-no rel=opener, download or ping) is taken over after the page's own click
-handlers ran, and chrome-use opens the link in a background tab of the session
-(openedTabMode: `background`), with the page as referrer. That differs from
-Chrome's click: the new tab has an extra about:blank history entry, the
-request counts as cross-site (no SameSite=Strict cookies, also for same-site
-links), and a header referrer policy chrome-use did not see is replaced by the
-default. window.open, rel=opener and handlers that stop the click always go
-through Chrome.
+A tab a page opens itself brings Chrome to the front over whatever app the
+user is in (#468). So in your own Chrome, in a tab the session created, a
+plain left click on a CROSS-SITE target=_blank link (another registrable
+domain by the Public Suffix List; http/https; no rel=opener, download or ping)
+is taken over after the page's own click handlers ran: chrome-use opens it in
+a background tab of the session (openedTabMode: `background`), with the page
+as referrer under its referrer policy. The request matches Chrome's own click;
+the new tab has one extra about:blank history entry. A cross-site link that
+redirects back to the page's site arrives there without SameSite=Strict
+cookies.
+
+Everything else goes through Chrome, which comes to the front, and the click
+says so in openedTabWarning: same-site links (subdomains, http<->https of the
+same site), IP addresses, pages chrome-use cannot classify or whose header
+referrer policy it did not see, window.open, rel=opener, named targets, forms,
+handlers that stop the click, and pop-ups opened later.
+
+AGENT_BROWSER_BACKGROUND_LINKS: unset or `cross-site` (default) as above;
+`1`/`all` also opens same-site links in the background (they then lose
+SameSite=Strict cookies and count as cross-site); `0`/`off` never. Read by the
+daemon when it starts: set it before the session's first command, or run
+`close` and start again.
 
 Global Options:
   --json               Output as JSON

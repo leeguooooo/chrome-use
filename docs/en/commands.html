@@ -501,16 +501,20 @@
       </p>
       <p>
         A tab a page opens itself (<code>target=_blank</code>, <code>window.open</code>) brings Chrome to the front over
-        whatever app you are in; in your own Chrome the click then says so in <code>openedTabWarning</code> (#468).
-        With <code>AGENT_BROWSER_BACKGROUND_LINKS=1</code> (opt-in), in a tab the session created, chrome-use opens a
-        plain <code>target=_blank</code> link itself (left click, no modifiers, http(s) href, no
-        <code>rel=opener</code>, <code>download</code> or <code>ping</code>): the page's click handlers all run first,
-        and if none cancelled the click the link opens in a background tab of the session
-        (<code>openedTabMode: "background"</code>), with the page as referrer (ab-connect 0.5.31+). That differs from
-        Chrome's click: an extra <code>about:blank</code> history entry, the request counts as cross-site (no
-        <code>SameSite=Strict</code> cookies, also for same-site links), and a header referrer policy chrome-use did
-        not see is replaced by the default. <code>window.open</code>, <code>rel=opener</code>, named targets, forms
-        and handlers that stop the click always go through Chrome.
+        whatever app you are in (#468). So in your own Chrome, in a tab the session created, chrome-use opens
+        <strong>cross-site</strong> <code>target=_blank</code> links itself (left click, no modifiers, http(s) href to
+        another registrable domain by the Public Suffix List, no <code>rel=opener</code>, <code>download</code> or
+        <code>ping</code>): the page's click handlers all run first, and if none cancelled the click the link opens in
+        a background tab of the session (<code>openedTabMode: "background"</code>), with the page as referrer
+        (ab-connect 0.5.31+). The request headers, cookies and referrer match Chrome's own click; the new tab has one
+        extra <code>about:blank</code> history entry, and a cross-site link that redirects back to the page's site
+        arrives without <code>SameSite=Strict</code> cookies. Everything else goes through Chrome and the click says so
+        in <code>openedTabWarning</code>: same-site links (subdomains, http↔https of the same site), IP addresses,
+        unclassifiable pages, <code>window.open</code>, <code>rel=opener</code>, named targets, forms, handlers that
+        stop the click, and pop-ups opened later. <code>AGENT_BROWSER_BACKGROUND_LINKS</code>: unset or
+        <code>cross-site</code> (default); <code>1</code>/<code>all</code> also takes same-site links, which then lose
+        their <code>SameSite=Strict</code> cookies; <code>0</code>/<code>off</code> never. The daemon reads it when it
+        starts: set it before the session's first command, or <code>close</code> and start again.
       </p>
       <p>
         <code>tab new</code>, <code>tab select</code>, and <code>tab adopt</code> stay in the background by default.
@@ -895,7 +899,8 @@ AGENT_BROWSER_HIDE_SCROLLBARS=<span class="du-str">"false"</span>        <span c
 AGENT_BROWSER_PROVIDER=<span class="du-str">"browserbase"</span>         <span class="du-cmt"># cloud browser provider</span>
 AGENT_BROWSER_STREAM_PORT=<span class="du-str">"9223"</span>             <span class="du-cmt"># override the WebSocket stream port</span>
 AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS=<span class="du-str">"ws.example.com"</span>  <span class="du-cmt"># extra hostnames the dashboard accepts (reverse proxy); loopback names only otherwise</span>
-AGENT_BROWSER_CLICK_MODE=<span class="du-str">"dom"</span>               <span class="du-cmt"># click strategy: ""(default) / "coord" / "dom"</span></code></pre>
+AGENT_BROWSER_CLICK_MODE=<span class="du-str">"dom"</span>               <span class="du-cmt"># click strategy: ""(default) / "coord" / "dom"</span>
+AGENT_BROWSER_BACKGROUND_LINKS=<span class="du-str">"all"</span>         <span class="du-cmt"># target=_blank links opened in the background: unset/"cross-site"(default) / "all"/"1" / "off"/"0"; read at daemon start</span></code></pre>
       </div>
 
       <h3>Stealth / anti-detection knobs (fork)</h3>

@@ -7319,13 +7319,17 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // Over the relay a pop-up from our tab is found in chrome.tabs, so record
     // which Chrome tabs exist before the click (#456).
     let relay_before = mgr.relay_tab_baseline().await;
-    // A tab the page opens raises Chrome over the user's app (#468). With
-    // AGENT_BROWSER_BACKGROUND_LINKS on, a plain `target=_blank` link is opened
-    // by us in a background tab instead; the guard is armed in the clicked
-    // element's frame. Off by default: that is not identical to Chrome's click.
+    // A tab the page opens raises Chrome over the user's app (#468). A plain
+    // cross-site `target=_blank` link is opened by us in a background tab
+    // instead (AGENT_BROWSER_BACKGROUND_LINKS: default cross-site, `all`,
+    // `off`); the guard is armed in the clicked element's frame.
     let may_open_links = mgr.click_may_open_links_itself();
-    let opted_in = popup_guard::background_links_opt_in();
-    let popup_guard = if opted_in && may_open_links && button == "left" && click_count == 1 {
+    let link_mode = popup_guard::LinkMode::from_env();
+    let popup_guard = if link_mode != popup_guard::LinkMode::Off
+        && may_open_links
+        && button == "left"
+        && click_count == 1
+    {
         let (guard_session, guard_frame) = popup_guard_location(
             &state.ref_map,
             selector,
@@ -7337,6 +7341,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
             &guard_session,
             guard_frame.as_deref(),
             &state.document_referrer_policies,
+            link_mode,
         )
         .await
     } else {
@@ -7385,8 +7390,12 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
             out["warning"] = json!(w);
         }
     }
-    let guard_report = match (popup_guard.as_ref(), state.browser.as_ref()) {
-        (Some(g), Some(mgr)) => popup_guard::read(&mgr.client, g).await,
+    let read = match (popup_guard.as_ref(), state.browser.as_ref()) {
+        (Some(g), Some(mgr)) => Some(popup_guard::read(&mgr.client, g).await),
+        _ => None,
+    };
+    let guard_report = match &read {
+        Some(popup_guard::ReadOutcome::Report(r)) => Some(r.clone()),
         _ => None,
     };
     if let Some(link) = guard_report.as_ref().and_then(|r| r.result.clone()) {
@@ -7394,9 +7403,10 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         merge_object(&mut out, extra);
         return Ok(out);
     }
-    // Armed but unreadable: the guard may have cancelled a link nobody will
-    // open. Say so; the click is never repeated.
-    if popup_guard.is_some() && guard_report.is_none() {
+    // Armed but unreadable for an unknown reason: the guard may have cancelled
+    // a link nobody will open. Say so; the click is never repeated. (A
+    // document that is gone navigated, so no link was cancelled.)
+    if read == Some(popup_guard::ReadOutcome::Failed) {
         out["openedTabWarning"] = json!(popup_guard::UNREAD_NOTE);
     }
     let pending = DeferredClickTabCheck {
@@ -7410,7 +7420,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                     .as_ref()
                     .and_then(|r| r.left_to_chrome())
                     .as_deref(),
-                opted_in,
+                link_mode,
             )
         }),
     };
