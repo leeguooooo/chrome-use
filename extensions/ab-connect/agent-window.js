@@ -19,6 +19,30 @@
 // never by its URL.
 
 /**
+ * Whether `tab` is still the untouched placeholder `record` describes: the
+ * recorded tab in the recorded window, still on about:blank, with no
+ * navigation pending. Once the user navigates it (or starts to), it is theirs.
+ */
+export function isUntouchedPlaceholder(tab, record) {
+  if (!tab || !record) return false
+  if (!Number.isInteger(tab.id) || tab.id !== record.tabId) return false
+  if (tab.windowId !== record.windowId) return false
+  if (tab.url !== 'about:blank') return false
+  if (tab.pendingUrl != null && tab.pendingUrl !== '' && tab.pendingUrl !== 'about:blank') return false
+  return true
+}
+
+/**
+ * What to do with the recorded placeholder once a real agent tab exists in
+ * window `windowId`: 'remove' only when it is still untouched; otherwise
+ * 'forget' (drop the record, leave the tab alone: it may be the user's now).
+ */
+export function placeholderCleanup(tab, record, windowId) {
+  if (!record || record.windowId !== windowId) return 'keep'
+  return isUntouchedPlaceholder(tab, record) ? 'remove' : 'forget'
+}
+
+/**
  * Decide whether `win` (from chrome.windows.get) may keep receiving agent tabs.
  *
  * @param win          the window, or null if it is gone
@@ -37,11 +61,7 @@ export function agentWindowStillOurs(win, tabs, isOwned, placeholder = null) {
     if (tab.windowId !== win.id) return { ours: false, reason: 'contradictory' }
     if (isOwned(tab.id)) continue
     if (tab.openerTabId != null && isOwned(tab.openerTabId)) continue
-    if (
-      placeholder != null &&
-      placeholder.windowId === win.id &&
-      placeholder.tabId === tab.id
-    )
+    if (placeholder != null && placeholder.windowId === win.id && isUntouchedPlaceholder(tab, placeholder))
       continue
     return { ours: false, reason: 'user-tab' }
   }

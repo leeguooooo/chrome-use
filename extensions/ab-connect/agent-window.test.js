@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { agentWindowStillOurs } from './agent-window.js'
+import { agentWindowStillOurs, isUntouchedPlaceholder, placeholderCleanup } from './agent-window.js'
 
 const owned = new Set([1, 2])
 const isOwned = (id) => owned.has(id)
@@ -102,4 +102,43 @@ test('a full-screen window is never the agent window', () => {
 
 test('a missing window is not ours', () => {
   assert.deepEqual(agentWindowStillOurs(null, [], isOwned), { ours: false, reason: 'gone' })
+})
+
+const record = { windowId: 9, tabId: 3 }
+
+test('a placeholder with a navigation pending is no longer exempt', () => {
+  const tab = { id: 3, windowId: 9, url: 'about:blank', pendingUrl: 'https://mail.example.com/' }
+  assert.equal(isUntouchedPlaceholder(tab, record), false)
+  assert.deepEqual(agentWindowStillOurs(win, [tab], isOwned, record), { ours: false, reason: 'user-tab' })
+  assert.equal(placeholderCleanup(tab, record, 9), 'forget')
+})
+
+test('create failed, the user navigated the placeholder, retry: their tab is never removed', () => {
+  // 1. The window was created with placeholder 3; tabs.create for the agent tab
+  //    failed, so the record stayed. 2. The user typed a URL into that tab.
+  const navigated = { id: 3, windowId: 9, url: 'https://news.example.com/' }
+  // 3. The retry's window check sees a user tab and rejects the window ...
+  assert.deepEqual(agentWindowStillOurs(win, [navigated], isOwned, record), {
+    ours: false,
+    reason: 'user-tab',
+  })
+  // ... and the cleanup only forgets the record, it never removes the tab.
+  assert.equal(placeholderCleanup(navigated, record, 9), 'forget')
+})
+
+test('a stale record after a worker restart exempts and removes nothing', () => {
+  // The recorded tab is gone; another blank tab sits in the window.
+  const other = { id: 4, windowId: 9, url: 'about:blank' }
+  assert.deepEqual(agentWindowStillOurs(win, [other], isOwned, record), { ours: false, reason: 'user-tab' })
+  assert.equal(placeholderCleanup(null, record, 9), 'forget')
+  assert.equal(placeholderCleanup(other, record, 9), 'forget')
+})
+
+test('only an untouched placeholder in its own window is removed', () => {
+  const untouched = { id: 3, windowId: 9, url: 'about:blank' }
+  assert.equal(placeholderCleanup(untouched, record, 9), 'remove')
+  assert.equal(placeholderCleanup({ ...untouched, pendingUrl: 'about:blank' }, record, 9), 'remove')
+  assert.equal(placeholderCleanup({ ...untouched, windowId: 5 }, record, 9), 'forget')
+  assert.equal(placeholderCleanup(untouched, record, 5), 'keep')
+  assert.equal(placeholderCleanup(untouched, null, 9), 'keep')
 })

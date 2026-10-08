@@ -17,7 +17,7 @@
 // native messaging.
 
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
-import { agentWindowStillOurs } from './agent-window.js';
+import { agentWindowStillOurs, isUntouchedPlaceholder, placeholderCleanup } from './agent-window.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js';
@@ -162,15 +162,15 @@ let agentWindowId = null;
 // In-flight window-creation promise: serializes first use so concurrent
 // `Target.createTarget` calls share ONE window instead of each creating their own.
 let agentWindowInit = null;
-// The placeholder tab a freshly-created window opens with; removed once the first
-// real agent tab lands in the window.
-let agentWindowPlaceholderTabId = null;
 // Why the last attempt to open the agent window failed (reported in
 // ABExt.state and in the createTarget refusal), or null.
 let agentWindowError = null;
 // { windowId, tabId } of the placeholder tab the agent window was created
-// with, persisted until that tab is removed. The only blank tab the agent
-// window check exempts: a blank tab is never assumed to be ours by its URL.
+// with. The only blank tab the agent window check exempts (a blank tab is
+// never assumed to be ours by its URL), and only while it is still untouched
+// (see isUntouchedPlaceholder). Kept in chrome.storage.local only, never in a
+// worker variable, so a service-worker restart neither trusts a stale copy nor
+// loses the record it needs to clean up.
 const AGENT_PLACEHOLDER_KEY = 'ab_agent_window_placeholder';
 // Why the last remembered agent window was rejected (ABExt.state), or null.
 let agentWindowRejected = null;
@@ -189,13 +189,16 @@ async function isUsableAgentWindow(id) {
   const win = await chrome.windows.get(id).catch(() => null);
   await loadOwnedTabs();
   const tabs = win ? await chrome.tabs.query({ windowId: id }).catch(() => null) : null;
-  const verdict = agentWindowStillOurs(
-    win,
-    tabs,
-    (tabId) => ownedTabs.has(tabId),
-    await agentPlaceholderRecord(),
-  );
+  const record = await agentPlaceholderRecord();
+  const verdict = agentWindowStillOurs(win, tabs, (tabId) => ownedTabs.has(tabId), record);
   if (!verdict.ours) agentWindowRejected = { windowId: id, reason: verdict.reason };
+  // A record for this window whose tab is gone or no longer an untouched
+  // placeholder is stale: drop it (never the tab).
+  if (record && record.windowId === id && Array.isArray(tabs)) {
+    const tab = tabs.find((t) => t && t.id === record.tabId);
+    if (!isUntouchedPlaceholder(tab, record))
+      await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
+  }
   return verdict.ours;
 }
 
@@ -247,14 +250,13 @@ async function ensureAgentWindowId() {
       }
       agentWindowError = null;
       agentWindowId = win.id;
-      agentWindowPlaceholderTabId = (win.tabs && win.tabs[0] && win.tabs[0].id) ?? null;
+      const placeholderId = win.tabs && win.tabs[0] && win.tabs[0].id;
       try {
         await chrome.storage.local.set({
           [AGENT_WINDOW_KEY]: win.id,
-          [AGENT_PLACEHOLDER_KEY]:
-            agentWindowPlaceholderTabId != null
-              ? { windowId: win.id, tabId: agentWindowPlaceholderTabId }
-              : null,
+          [AGENT_PLACEHOLDER_KEY]: Number.isInteger(placeholderId)
+            ? { windowId: win.id, tabId: placeholderId }
+            : null,
         });
       } catch {}
       return win.id;
@@ -275,6 +277,22 @@ async function ensureAgentWindowId() {
 // so a concurrent caller must never see another session's brand-new tab before
 // it is owned.
 let agentTabChain = Promise.resolve();
+
+// Once a real agent tab exists in window `winId`, close the window's initial
+// placeholder, but only if it is still untouched, re-read right before the
+// removal. If the user navigated it (say tabs.create failed earlier and the
+// window sat with just that blank tab), it is theirs: forget the record and
+// leave the tab. Runs inside the serialized chain, so no concurrent caller
+// sees the record half-updated.
+async function cleanUpPlaceholder(winId) {
+  const record = await agentPlaceholderRecord();
+  if (!record || record.windowId !== winId) return;
+  const tab = await chrome.tabs.get(record.tabId).catch(() => null);
+  if (placeholderCleanup(tab, record, winId) === 'remove') {
+    await chrome.tabs.remove(record.tabId).catch(() => {});
+  }
+  await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
+}
 function createAgentTab(url) {
   const run = agentTabChain.then(() => createAgentTabNow(url));
   agentTabChain = run.catch(() => {});
@@ -293,19 +311,7 @@ async function createAgentTabNow(url) {
     );
   const tab = await chrome.tabs.create({ url, active: false, windowId: winId });
   if (tab && tab.id != null) await markOwned(tab.id);
-  // Drop the window's initial about:blank once a real agent tab exists (only the
-  // first caller sees the id; it's cleared before the await so no double-remove).
-  // Awaited, and its record cleared only once it is gone: the next caller's
-  // agent-window check must not meet an unrecorded blank tab.
-  if (agentWindowPlaceholderTabId != null) {
-    const placeholder = agentWindowPlaceholderTabId;
-    agentWindowPlaceholderTabId = null;
-    const removed = await chrome.tabs
-      .remove(placeholder)
-      .then(() => true)
-      .catch(() => false);
-    if (removed) await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
-  }
+  await cleanUpPlaceholder(winId);
   return tab;
 }
 
@@ -316,7 +322,6 @@ if (chrome.windows && chrome.windows.onRemoved) {
     if (windowId === agentWindowId) {
       agentWindowId = null;
       agentWindowInit = null;
-      agentWindowPlaceholderTabId = null;
       chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
     }
   });
