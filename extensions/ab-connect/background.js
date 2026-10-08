@@ -458,7 +458,13 @@ async function groupTabInto(tabId, name) {
     if (found && found[0]) gid = found[0].id;
   }
   if (gid == null) {
-    gid = await chrome.tabs.group({ tabIds: tabId });
+    // createProperties.windowId is load-bearing: without it Chrome creates the
+    // group in the *current* (last focused) window and MOVES the tab there,
+    // which pulled every new agent tab out of the background agent window into
+    // the window the user was working in (observed live: tabs.onAttached into
+    // the user's window right after creation, then the emptied agent window
+    // closed).
+    gid = await chrome.tabs.group({ tabIds: tabId, createProperties: { windowId: tab.windowId } });
     await chrome.tabGroups.update(gid, { title: name, color: colorForName(name) });
   } else {
     await chrome.tabs.group({ groupId: gid, tabIds: tabId });
