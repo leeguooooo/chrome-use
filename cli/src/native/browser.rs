@@ -3666,9 +3666,23 @@ impl BrowserManager {
             .collect();
         let mut opened: Option<PageInfo> = None;
         for target in &live {
-            if before.contains(&target.target_id)
-                || self.pages.iter().any(|p| p.target_id == target.target_id)
+            if before.contains(&target.target_id) {
+                continue;
+            }
+            // Not in `before` but already tracked: the session's event drain
+            // picked up its `targetCreated` between the click and this check
+            // (an observed click settles first, and the settle drains events).
+            // It is still the tab this action opened, already attached.
+            if let Some(page) = self
+                .pages
+                .iter()
+                .find(|p| p.target_id == target.target_id)
+                .cloned()
             {
+                self.remember_created_target(&target.target_id);
+                if opened.is_none() {
+                    opened = Some(page);
+                }
                 continue;
             }
             let attach: AttachToTargetResult = match self
