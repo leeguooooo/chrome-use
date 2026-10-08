@@ -3089,6 +3089,264 @@ pub fn list_relay_profiles() -> Vec<(String, Option<String>, String)> {
     out
 }
 
+// --- Strict profile <-> endpoint resolution (issue #472) ---------------------
+//
+// A session bound to a relay profile is bound to the profile's IDENTITY. The
+// native host binds a fresh port and guid every time it starts, so the ws URL
+// is only where that profile happens to be right now. These two lookups are
+// what binding and reconnecting use, and unlike `list_relay_profiles` (which
+// is for display and quietly drops anything it can't pair) they read EVERY
+// per-profile sidecar and refuse whenever the answer isn't unique: a session
+// must never land on another profile because a sidecar was missing, corrupt or
+// duplicated. The generic `relay-cdp-url` / `relay-ext-profile` pair is not
+// consulted — different hosts write it at different moments.
+
+/// Every per-profile relay sidecar in the relay dir, unfiltered.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct RelaySidecars {
+    /// `relay-cdp-url-<suffix>` → its trimmed contents; `None` when unreadable.
+    pub endpoints: Vec<(String, Option<String>)>,
+    /// `relay-ext-profile-<suffix>` → its contents; `None` when unreadable.
+    pub profiles: Vec<(String, Option<String>)>,
+}
+
+/// Why a bound profile's current endpoint could not be resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileEndpointError {
+    /// The profile has no relay connected right now (its host is down or has
+    /// not received the extension's `hello` yet). Worth waiting for.
+    NotConnected(String),
+    /// The sidecars disagree, are unreadable or corrupt. Never retried into a
+    /// guess: the caller refuses.
+    Ambiguous(String),
+}
+
+impl std::fmt::Display for ProfileEndpointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProfileEndpointError::NotConnected(m) | ProfileEndpointError::Ambiguous(m) => {
+                f.write_str(m)
+            }
+        }
+    }
+}
+
+fn read_relay_sidecars() -> Result<RelaySidecars, String> {
+    let Some(dir) = relay_url_path().parent().map(|p| p.to_path_buf()) else {
+        return Ok(RelaySidecars::default());
+    };
+    read_relay_sidecars_in(&dir)
+}
+
+pub(crate) fn read_relay_sidecars_in(dir: &std::path::Path) -> Result<RelaySidecars, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(RelaySidecars::default()),
+        Err(e) => {
+            return Err(format!(
+                "cannot read the relay directory {}: {e}",
+                dir.display()
+            ))
+        }
+    };
+    let mut out = RelaySidecars::default();
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("cannot list the relay directory {}: {e}", dir.display()))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let read = || std::fs::read_to_string(entry.path()).ok();
+        if let Some(suffix) = name.strip_prefix("relay-cdp-url-") {
+            out.endpoints
+                .push((suffix.to_string(), read().map(|s| s.trim().to_string())));
+        } else if let Some(suffix) = name.strip_prefix("relay-ext-profile-") {
+            out.profiles.push((suffix.to_string(), read()));
+        }
+    }
+    out.endpoints.sort();
+    out.profiles.sort();
+    Ok(out)
+}
+
+fn normalize_ws(ws: &str) -> &str {
+    ws.trim().trim_end_matches('/')
+}
+
+/// The current relay endpoint of the profile `id`, from the sidecars as given.
+/// Pure. `Ok` only when exactly one consistent pair names it and no other
+/// sidecar claims the same endpoint.
+pub(crate) fn endpoint_for_profile_in(
+    sc: &RelaySidecars,
+    id: &str,
+) -> Result<String, ProfileEndpointError> {
+    use ProfileEndpointError::{Ambiguous, NotConnected};
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(Ambiguous("the bound profile id is empty".into()));
+    }
+    let own = sanitize_profile_id(id);
+    let not_connected = || {
+        NotConnected(format!(
+            "Chrome profile {id} has no extension relay connected right now"
+        ))
+    };
+    // Its own identity record must exist, parse, and name exactly this id.
+    match sc.profiles.iter().find(|(s, _)| *s == own) {
+        None => return Err(not_connected()),
+        Some((_, None)) => {
+            return Err(Ambiguous(format!(
+                "the relay profile record relay-ext-profile-{own} cannot be read"
+            )))
+        }
+        Some((_, Some(raw))) => match parse_ext_profile(raw) {
+            Some((rid, _)) if rid == id => {}
+            Some((rid, _)) => {
+                return Err(Ambiguous(format!(
+                    "the relay profile record relay-ext-profile-{own} names profile {rid}, not {id}"
+                )))
+            }
+            None => {
+                return Err(Ambiguous(format!(
+                    "the relay profile record relay-ext-profile-{own} is corrupt"
+                )))
+            }
+        },
+    }
+    // No other record may claim the same identity.
+    if let Some((other, _)) = sc.profiles.iter().find(|(s, raw)| {
+        *s != own
+            && raw
+                .as_deref()
+                .and_then(parse_ext_profile)
+                .is_some_and(|(rid, _)| rid == id)
+    }) {
+        return Err(Ambiguous(format!(
+            "two relay profile records claim profile {id} (relay-ext-profile-{own} and relay-ext-profile-{other})"
+        )));
+    }
+    let ws = match sc.endpoints.iter().find(|(s, _)| *s == own) {
+        None => return Err(not_connected()),
+        Some((_, None)) => {
+            return Err(Ambiguous(format!(
+                "the relay endpoint relay-cdp-url-{own} cannot be read"
+            )))
+        }
+        Some((_, Some(ws))) if ws.starts_with("ws://") => ws.clone(),
+        Some((_, Some(_))) => {
+            return Err(Ambiguous(format!(
+                "the relay endpoint relay-cdp-url-{own} does not hold a ws:// URL"
+            )))
+        }
+    };
+    // Every other endpoint sidecar must be readable and name a different
+    // endpoint; otherwise this one might not be ours alone.
+    for (s, other) in sc.endpoints.iter().filter(|(s, _)| *s != own) {
+        match other {
+            None => {
+                return Err(Ambiguous(format!(
+                    "the relay endpoint relay-cdp-url-{s} cannot be read, so it can't be ruled out"
+                )))
+            }
+            Some(o) if normalize_ws(o) == normalize_ws(&ws) => {
+                return Err(Ambiguous(format!(
+                "relay endpoints relay-cdp-url-{own} and relay-cdp-url-{s} name the same address"
+            )))
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(ws)
+}
+
+/// Which relay profile owns the endpoint `ws`, from the sidecars as given.
+/// Pure. `Ok(None)`: no per-profile sidecar names it (a raw CDP endpoint, or
+/// the generic relay of an extension too old to report its profile).
+/// `Err`: it is, or might be, a profile endpoint whose owner isn't unique.
+pub(crate) fn profile_for_endpoint_in(
+    sc: &RelaySidecars,
+    ws: &str,
+) -> Result<Option<String>, String> {
+    let want = normalize_ws(ws);
+    if want.is_empty() {
+        return Ok(None);
+    }
+    if let Some((s, _)) = sc.endpoints.iter().find(|(_, c)| c.is_none()) {
+        return Err(format!(
+            "the relay endpoint relay-cdp-url-{s} cannot be read, so the owner of {want} can't be determined"
+        ));
+    }
+    let matches: Vec<&String> = sc
+        .endpoints
+        .iter()
+        .filter(|(_, c)| c.as_deref().map(normalize_ws) == Some(want))
+        .map(|(s, _)| s)
+        .collect();
+    let suffix = match matches.as_slice() {
+        [] => return Ok(None),
+        [one] => *one,
+        many => {
+            return Err(format!(
+                "{} relay endpoint records name {want} ({}), so its profile can't be determined",
+                many.len(),
+                many.iter()
+                    .map(|s| format!("relay-cdp-url-{s}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        }
+    };
+    let id = match sc.profiles.iter().find(|(s, _)| s == suffix) {
+        None => {
+            return Err(format!(
+                "relay endpoint {want} has no profile record (relay-ext-profile-{suffix})"
+            ))
+        }
+        Some((_, None)) => {
+            return Err(format!(
+                "the relay profile record relay-ext-profile-{suffix} cannot be read"
+            ))
+        }
+        Some((_, Some(raw))) => match parse_ext_profile(raw) {
+            Some((id, _)) if sanitize_profile_id(&id) == *suffix => id,
+            Some((id, _)) => {
+                return Err(format!(
+                    "the relay profile record relay-ext-profile-{suffix} names profile {id}, which does not match its file"
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "the relay profile record relay-ext-profile-{suffix} is corrupt"
+                ))
+            }
+        },
+    };
+    // Round-trip: the profile must resolve back to this endpoint and nothing
+    // else may claim it (duplicate records, unreadable neighbours).
+    match endpoint_for_profile_in(sc, &id) {
+        Ok(back) if normalize_ws(&back) == want => Ok(Some(id)),
+        Ok(back) => Err(format!("profile {id} resolves to {back}, not {want}")),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The current relay endpoint of a bound profile, read from disk. See
+/// [`endpoint_for_profile_in`].
+pub fn relay_endpoint_for_profile(id: &str) -> Result<String, ProfileEndpointError> {
+    let sc = read_relay_sidecars().map_err(ProfileEndpointError::Ambiguous)?;
+    endpoint_for_profile_in(&sc, id)
+}
+
+/// The relay profile that owns `ws`, read from disk. See
+/// [`profile_for_endpoint_in`]. Anything that is not a `ws://` URL is not a
+/// relay endpoint and gives `Ok(None)` without reading the disk.
+pub fn relay_profile_for_endpoint(ws: &str) -> Result<Option<String>, String> {
+    if !ws.trim().starts_with("ws://") {
+        return Ok(None);
+    }
+    let sc = read_relay_sidecars()?;
+    profile_for_endpoint_in(&sc, ws)
+}
+
 /// Resolve a `--browser` selector to a profile's relay ws URL. Matches a
 /// profileId (exact or prefix) or an email substring (case-insensitive).
 /// Returns `Err` with the available list when nothing/ambiguous matches.
@@ -4226,5 +4484,226 @@ mod tests {
         } else {
             assert!(text.starts_with(plain), "{text}");
         }
+    }
+
+    // --- #472: a relay-bound session follows its profile, never another ---
+
+    fn sidecars(
+        endpoints: &[(&str, Option<&str>)],
+        profiles: &[(&str, Option<&str>)],
+    ) -> RelaySidecars {
+        RelaySidecars {
+            endpoints: endpoints
+                .iter()
+                .map(|(s, c)| (s.to_string(), c.map(String::from)))
+                .collect(),
+            profiles: profiles
+                .iter()
+                .map(|(s, c)| (s.to_string(), c.map(String::from)))
+                .collect(),
+        }
+    }
+
+    fn rec(id: &str) -> String {
+        format!(r#"{{"id":"{id}","email":null}}"#)
+    }
+
+    #[test]
+    fn a_bound_profile_resolves_to_its_new_endpoint_after_a_restart() {
+        let (p1, p2) = (rec("p1"), rec("p2"));
+        // Before: p1 on port 1. After the host restarted: p1 on port 3.
+        let before = sidecars(
+            &[
+                ("p1", Some("ws://127.0.0.1:1/a")),
+                ("p2", Some("ws://127.0.0.1:2/b")),
+            ],
+            &[("p1", Some(&p1)), ("p2", Some(&p2))],
+        );
+        let after = sidecars(
+            &[
+                ("p1", Some("ws://127.0.0.1:3/c")),
+                ("p2", Some("ws://127.0.0.1:2/b")),
+            ],
+            &[("p1", Some(&p1)), ("p2", Some(&p2))],
+        );
+        assert_eq!(
+            endpoint_for_profile_in(&before, "p1").unwrap(),
+            "ws://127.0.0.1:1/a"
+        );
+        assert_eq!(
+            endpoint_for_profile_in(&after, "p1").unwrap(),
+            "ws://127.0.0.1:3/c"
+        );
+        assert_eq!(
+            endpoint_for_profile_in(&after, "p2").unwrap(),
+            "ws://127.0.0.1:2/b"
+        );
+        // Both endpoints map back to their own profile.
+        assert_eq!(
+            profile_for_endpoint_in(&after, "ws://127.0.0.1:3/c").unwrap(),
+            Some("p1".to_string())
+        );
+        assert_eq!(
+            profile_for_endpoint_in(&after, "ws://127.0.0.1:2/b/").unwrap(),
+            Some("p2".to_string())
+        );
+        // The old endpoint is nobody's now; a raw CDP endpoint never was.
+        assert_eq!(
+            profile_for_endpoint_in(&after, "ws://127.0.0.1:1/a").unwrap(),
+            None
+        );
+        assert_eq!(
+            profile_for_endpoint_in(&after, "ws://127.0.0.1:9222/x").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_disconnected_profile_is_waited_for_not_replaced() {
+        let (p1, p2) = (rec("p1"), rec("p2"));
+        // p1's host is down: only p2 is left. Never answer with p2's endpoint.
+        let sc = sidecars(&[("p2", Some("ws://127.0.0.1:2/b"))], &[("p2", Some(&p2))]);
+        assert!(matches!(
+            endpoint_for_profile_in(&sc, "p1"),
+            Err(ProfileEndpointError::NotConnected(_))
+        ));
+        // Record present, endpoint not yet written: still just "not connected".
+        let sc = sidecars(
+            &[("p2", Some("ws://127.0.0.1:2/b"))],
+            &[("p1", Some(&p1)), ("p2", Some(&p2))],
+        );
+        assert!(matches!(
+            endpoint_for_profile_in(&sc, "p1"),
+            Err(ProfileEndpointError::NotConnected(_))
+        ));
+        assert!(matches!(
+            endpoint_for_profile_in(&sc, "  "),
+            Err(ProfileEndpointError::Ambiguous(_))
+        ));
+    }
+
+    #[test]
+    fn corrupt_or_unreadable_sidecars_fail_closed() {
+        let (p1, p2) = (rec("p1"), rec("p2"));
+        let ok_eps = [
+            ("p1", Some("ws://127.0.0.1:3/c")),
+            ("p2", Some("ws://127.0.0.1:2/b")),
+        ];
+        let ambiguous = |sc: &RelaySidecars| {
+            matches!(
+                endpoint_for_profile_in(sc, "p1"),
+                Err(ProfileEndpointError::Ambiguous(_))
+            )
+        };
+        // Own record: corrupt, unreadable, names someone else, blank id.
+        for bad in [
+            Some("{not json"),
+            None,
+            Some(r#"{"id":"p2"}"#),
+            Some(r#"{"id":""}"#),
+        ] {
+            let sc = sidecars(&ok_eps, &[("p1", bad), ("p2", Some(&p2))]);
+            assert!(ambiguous(&sc), "own record {bad:?}");
+            assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:3/c").is_err());
+        }
+        // Own endpoint: unreadable or not a ws URL.
+        for bad in [None, Some(""), Some("garbage")] {
+            let sc = sidecars(
+                &[("p1", bad), ("p2", Some("ws://127.0.0.1:2/b"))],
+                &[("p1", Some(&p1)), ("p2", Some(&p2))],
+            );
+            assert!(ambiguous(&sc), "own endpoint {bad:?}");
+        }
+        // Someone else's endpoint sidecar unreadable: it can't be ruled out.
+        let sc = sidecars(
+            &[("p1", Some("ws://127.0.0.1:3/c")), ("p2", None)],
+            &[("p1", Some(&p1)), ("p2", Some(&p2))],
+        );
+        assert!(ambiguous(&sc));
+        assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:3/c").is_err());
+        // An endpoint with no profile record has no owner we could name.
+        let sc = sidecars(&[("p1", Some("ws://127.0.0.1:3/c"))], &[]);
+        assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:3/c").is_err());
+    }
+
+    #[test]
+    fn duplicate_sidecars_fail_closed() {
+        let (p1, p2) = (rec("p1"), rec("p2"));
+        // Two endpoint sidecars name the same address.
+        let sc = sidecars(
+            &[
+                ("p1", Some("ws://127.0.0.1:3/c")),
+                ("p2", Some("ws://127.0.0.1:3/c/")),
+            ],
+            &[("p1", Some(&p1)), ("p2", Some(&p2))],
+        );
+        assert!(matches!(
+            endpoint_for_profile_in(&sc, "p1"),
+            Err(ProfileEndpointError::Ambiguous(_))
+        ));
+        assert!(matches!(
+            endpoint_for_profile_in(&sc, "p2"),
+            Err(ProfileEndpointError::Ambiguous(_))
+        ));
+        assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:3/c").is_err());
+        // Two profile records claim the same id, one under another file name.
+        // p1's own endpoint is unique, but its identity is not.
+        let sc = sidecars(
+            &[
+                ("p1", Some("ws://127.0.0.1:3/c")),
+                ("p9", Some("ws://127.0.0.1:9/z")),
+            ],
+            &[("p1", Some(&p1)), ("p9", Some(&p1))],
+        );
+        assert!(matches!(
+            endpoint_for_profile_in(&sc, "p1"),
+            Err(ProfileEndpointError::Ambiguous(_))
+        ));
+        assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:3/c").is_err());
+        // The impostor's record says p1 but its file name doesn't.
+        assert!(profile_for_endpoint_in(&sc, "ws://127.0.0.1:9/z").is_err());
+    }
+
+    #[test]
+    fn sidecars_are_read_unfiltered_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = |n: &str, c: &str| std::fs::write(dir.path().join(n), c).unwrap();
+        w("relay-cdp-url", "ws://127.0.0.1:5/generic");
+        w("relay-ext-profile", &rec("p2"));
+        w("relay-ext-version-p1", "0.5.30");
+        w("relay-cdp-url-p1", "ws://127.0.0.1:3/c\n");
+        w("relay-ext-profile-p1", &rec("p1"));
+        // An endpoint whose profile record is gone still counts.
+        w("relay-cdp-url-orphan", "ws://127.0.0.1:3/c");
+        let sc = read_relay_sidecars_in(dir.path()).unwrap();
+        assert_eq!(
+            sc.endpoints,
+            vec![
+                ("orphan".to_string(), Some("ws://127.0.0.1:3/c".to_string())),
+                ("p1".to_string(), Some("ws://127.0.0.1:3/c".to_string())),
+            ]
+        );
+        assert_eq!(sc.profiles.len(), 1);
+        assert!(matches!(
+            endpoint_for_profile_in(&sc, "p1"),
+            Err(ProfileEndpointError::Ambiguous(_))
+        ));
+        std::fs::remove_file(dir.path().join("relay-cdp-url-orphan")).unwrap();
+        let sc = read_relay_sidecars_in(dir.path()).unwrap();
+        assert_eq!(
+            endpoint_for_profile_in(&sc, "p1").unwrap(),
+            "ws://127.0.0.1:3/c"
+        );
+        // The generic pair is ignored either way.
+        assert_eq!(
+            profile_for_endpoint_in(&sc, "ws://127.0.0.1:5/generic").unwrap(),
+            None
+        );
+        // A missing relay dir is "nothing connected", not an error.
+        let sc = read_relay_sidecars_in(&dir.path().join("nope")).unwrap();
+        assert!(matches!(
+            endpoint_for_profile_in(&sc, "p1"),
+            Err(ProfileEndpointError::NotConnected(_))
+        ));
     }
 }

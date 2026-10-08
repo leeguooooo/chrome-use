@@ -2861,7 +2861,29 @@ fn main() {
     // can't reuse the dead binding, then wait (bounded, with progress) for the MV3
     // worker to republish the relay — the fresh daemon then connects clean. Opt
     // out with AGENT_BROWSER_NO_AUTO_RECONNECT. Skipped for --launch/--cdp.
-    let target_browser = flags.browser.as_deref().or(flags.profile.as_deref());
+    //
+    // A running session bound to a relay profile (#472) is healed toward THAT
+    // profile: the generic endpoint belongs to whichever host wrote it last,
+    // and recovering through it could hop the session to another profile.
+    let bound_relay_profile = if flags.cdp.is_none() && browser_selector.is_none() {
+        match connection::session_relay_profile(&flags.session) {
+            Ok(id) => id,
+            Err(e) => {
+                if flags.json {
+                    print_json_error(&e);
+                } else {
+                    eprintln!("{} {e}", color::error_indicator());
+                }
+                exit(1);
+            }
+        }
+    } else {
+        None
+    };
+    let target_browser = bound_relay_profile
+        .as_deref()
+        .or(flags.browser.as_deref())
+        .or(flags.profile.as_deref());
     let relay_target_up = connect::relay_url_for_selector_or_default(target_browser)
         .ok()
         .flatten()
@@ -2944,6 +2966,28 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(300));
             }
             eprintln!();
+            // The stale daemon (and its binding record) is gone. Bind the
+            // replacement to the same profile's new endpoint, or refuse.
+            if let Some(id) = bound_relay_profile.as_deref() {
+                match connect::relay_endpoint_for_profile(id) {
+                    Ok(ws) => {
+                        flags.cdp = Some(ws);
+                        flags.auto_connect = false;
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "Session '{}' is bound to Chrome profile {id}, but that profile's relay endpoint can't be determined: {e}. Not connecting to any other profile. Check `chrome-use browsers`, then retry, or start a new session with --session <name>.",
+                            flags.session
+                        );
+                        if flags.json {
+                            print_json_error(&msg);
+                        } else {
+                            eprintln!("{} {msg}", color::error_indicator());
+                        }
+                        exit(1);
+                    }
+                }
+            }
         }
     }
 

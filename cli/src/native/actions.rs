@@ -2987,6 +2987,38 @@ async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserM
     Err(last_err)
 }
 
+/// The current relay endpoint of the Chrome profile this session is bound to
+/// (issue #472). The native host binds a new port and guid each time it
+/// starts, so the endpoint the session was bound on goes dead with it; the
+/// profile is what the session is bound to. A profile that is merely not
+/// connected yet (its host is restarting) is waited for, briefly. Anything
+/// ambiguous — corrupt, unreadable or duplicated sidecars — is refused at
+/// once: reconnecting to some other profile is never the fallback.
+async fn bound_relay_endpoint(profile_id: &str) -> Result<String, String> {
+    use crate::connect::ProfileEndpointError;
+    let budget = std::time::Duration::from_secs(
+        env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(20)
+            .min(20),
+    );
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        match crate::connect::relay_endpoint_for_profile(profile_id) {
+            Ok(ws) => return Ok(ws),
+            Err(ProfileEndpointError::NotConnected(_)) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "this session is bound to Chrome profile {profile_id}, but that profile's relay endpoint can't be determined: {e}. Not connecting to any other profile. Check `chrome-use browsers`, then retry, or start a new session with --session <name>."
+                ))
+            }
+        }
+    }
+}
+
 async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     let mut options = launch_options_from_env();
 
@@ -3014,7 +3046,15 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     write_engine_file(&state.session_id, &state.engine);
     write_extensions_file(&state.session_id);
 
-    if let Ok(cdp) = env::var("AGENT_BROWSER_CDP") {
+    // A session bound to a relay profile reconnects to that profile's endpoint
+    // as it is NOW, not to the one in AGENT_BROWSER_CDP, which died with the
+    // host that served it (#472). The binding record is the session's, written
+    // by the CLI whenever it binds or rebinds; an unreadable one is refused.
+    let bound_endpoint = match crate::connection::session_relay_profile(&state.session_id)? {
+        Some(id) => Some(bound_relay_endpoint(&id).await?),
+        None => None,
+    };
+    if let Some(cdp) = bound_endpoint.or_else(|| env::var("AGENT_BROWSER_CDP").ok()) {
         let mgr = BrowserManager::connect_cdp(&cdp).await?;
         state.reset_input_state();
         state.browser = Some(mgr);
