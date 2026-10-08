@@ -867,7 +867,12 @@ pub fn conflicting_rules(hits: &[RuleHit]) -> Option<String> {
         } else {
             format!("key \"{}\"", h.key)
         };
-        let line = format!("{} → {target}", h.host);
+        let rule = h
+            .rule_id
+            .as_deref()
+            .map(|r| format!(" (rule {r})"))
+            .unwrap_or_default();
+        let line = format!("{}{rule} → {target}", h.host);
         if !seen.contains(&line) {
             seen.push(line);
         }
@@ -932,12 +937,13 @@ pub fn guard_navigation(
     if skip {
         return Ok(None);
     }
-    let Some(ws) = bound_ws else {
-        return Ok(None);
-    };
+    // The live relay row for the endpoint the daemon drives, else the
+    // session's record. Neither means the session is not on a relay profile
+    // chrome-use knows (a `--launch` or `--cdp` browser), which no
+    // ChooseBrowser rule is about.
     check_bound_navigation(url, session, |rows| {
-        rows.iter()
-            .find(|r| r.ws.as_deref() == Some(ws))
+        bound_ws
+            .and_then(|ws| rows.iter().find(|r| r.ws.as_deref() == Some(ws)))
             .map(BoundProfile::from_row)
             .or_else(|| session_profile(session).map(|v| BoundProfile::from_record(&v)))
     })
@@ -991,7 +997,12 @@ fn check_bound_navigation(
         RuleOutcome::Hit(h) => h,
     };
     let rows = load_rows();
-    let bound = bound(&rows);
+    // No identity at all: not a relay session (see the callers). A record
+    // that exists but cannot identify the profile still refuses, below.
+    let Some(bound) = bound(&rows) else {
+        return Ok(None);
+    };
+    let bound = Some(bound);
     match decide_rule(
         &rows,
         Some(&hit),
@@ -2329,8 +2340,14 @@ mod tests {
         assert_eq!(conflicting_rules(&[]), None);
         assert_eq!(conflicting_rules(&[a.clone(), a.clone()]), None);
         let msg = conflicting_rules(&[a, b]).unwrap();
-        assert!(msg.contains("claude.ai → Profile 14"), "{msg}");
-        assert!(msg.contains("github.com → Profile 13"), "{msg}");
+        assert!(
+            msg.contains("claude.ai (rule rule-7) → Profile 14"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("github.com (rule rule-7) → Profile 13"),
+            "{msg}"
+        );
         assert!(msg.contains("--session"), "{msg}");
     }
 

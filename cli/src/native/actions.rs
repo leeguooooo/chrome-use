@@ -1738,11 +1738,10 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         _ => None,
     };
     if let Some(url) = nav_url {
-        let bound_ws = state
-            .browser
-            .as_ref()
-            .filter(|m| m.on_relay())
-            .map(|m| m.ws_url().to_string());
+        // Not `on_relay()`: that only recognises the generic relay endpoint,
+        // and a session bound to one profile drives that profile's own
+        // endpoint. The guard matches the endpoint against the relay rows.
+        let bound_ws = state.browser.as_ref().map(|m| m.ws_url().to_string());
         match crate::profiles::guard_navigation(
             &url,
             state.cb_skip,
