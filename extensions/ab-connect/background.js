@@ -165,6 +165,9 @@ let agentWindowInit = null;
 // The placeholder tab a freshly-created window opens with; removed once the first
 // real agent tab lands in the window.
 let agentWindowPlaceholderTabId = null;
+// Why the last attempt to open the agent window failed (reported in
+// ABExt.state and in the createTarget refusal), or null.
+let agentWindowError = null;
 
 // Whether window `id` still exists AND is still the agent's (see
 // agent-window.js): a remembered window the user has since started working in
@@ -208,13 +211,23 @@ async function resolveAgentWindow() {
 async function ensureAgentWindowId() {
   const existing = await resolveAgentWindow();
   if (existing != null) return existing;
-  if (!(chrome.windows && chrome.windows.create)) return null;
+  if (!(chrome.windows && chrome.windows.create)) {
+    agentWindowError = 'the chrome.windows API is unavailable';
+    return null;
+  }
   if (!agentWindowInit) {
     agentWindowInit = (async () => {
       const win = await chrome.windows
         .create({ focused: false, url: 'about:blank' })
-        .catch(() => null);
-      if (!win || win.id == null) return null;
+        .catch((e) => {
+          agentWindowError = String((e && e.message) || e);
+          return null;
+        });
+      if (!win || win.id == null) {
+        agentWindowError ??= 'chrome.windows.create returned no window';
+        return null;
+      }
+      agentWindowError = null;
       agentWindowId = win.id;
       agentWindowPlaceholderTabId = (win.tabs && win.tabs[0] && win.tabs[0].id) ?? null;
       try {
@@ -250,7 +263,9 @@ async function createAgentTabNow(url) {
   // user is working in (that used to be the fallback here).
   if (winId == null)
     throw new Error(
-      'createTarget: could not open the background agent window, and agent tabs never go into the user\'s window',
+      `createTarget: could not open the background agent window (${agentWindowError || 'unknown error'}), ` +
+        "and agent tabs never go into the user's window. To use the user's window on purpose, " +
+        'run with `--window user` (AGENT_BROWSER_DEDICATED_WINDOW=user).',
     );
   const tab = await chrome.tabs.create({ url, active: false, windowId: winId });
   if (tab && tab.id != null) await markOwned(tab.id);
@@ -1164,6 +1179,7 @@ async function handleForwardCdpCommand(msg) {
       ownedTabs: [...ownedTabs],
       groups: [...groupIdByName.entries()].map(([name, id]) => ({ name, id })),
       agentWindowId,
+      agentWindowError,
       cursorEnabled,
       notifyEnabled,
       idleDetachMs,
