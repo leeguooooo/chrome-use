@@ -4082,19 +4082,12 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     apply_stealth_to_browser(state).await;
     try_restore_navigation(state).await;
 
-    // The browser's own product string (`HeadlessChrome/…` for a windowless
-    // launch). Stealth rewrites the page-visible user agent but not this, so
-    // `doctor` can verify its launch really opened no window.
-    let product = match state.browser.as_ref() {
-        Some(mgr) => mgr
-            .client
-            .send_command_no_params("Browser.getVersion", None)
-            .await
-            .ok()
-            .and_then(|v| v.get("product").and_then(Value::as_str).map(str::to_string)),
-        None => None,
-    };
-    Ok(json!({ "launched": true, "product": product }))
+    // Whether the browser really started with no window: read from the argv
+    // it was spawned with (new headless Chrome reports a plain `Chrome/…`
+    // product, so the version string cannot tell). `doctor` refuses to pass
+    // its launch test without `true` here.
+    let headless = state.browser.as_ref().and_then(|m| m.launched_headless());
+    Ok(json!({ "launched": true, "headless": headless }))
 }
 
 async fn launch_ios(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {

@@ -1123,6 +1123,15 @@ impl BrowserProcess {
         }
     }
 
+    /// Whether this browser was spawned with no window (`--headless` in its
+    /// real argv; Lightpanda never has one).
+    pub fn spawned_headless(&self) -> bool {
+        match self {
+            BrowserProcess::Chrome(p) => p.headless,
+            BrowserProcess::Lightpanda(_) => true,
+        }
+    }
+
     pub fn wait_or_kill(&mut self, timeout: std::time::Duration) {
         match self {
             BrowserProcess::Chrome(p) => p.wait_or_kill(timeout),
@@ -2185,6 +2194,14 @@ impl BrowserManager {
     /// mirror of the relay gate used internally (`agent_group().is_some()`), so the
     /// daemon dispatcher can scope relay-only recovery (the stale-session retry)
     /// without reaching into private internals.
+    /// For a browser this daemon launched: whether its real argv had
+    /// `--headless`. `None` when the browser was not launched here.
+    pub fn launched_headless(&self) -> Option<bool> {
+        self.browser_process
+            .as_ref()
+            .map(BrowserProcess::spawned_headless)
+    }
+
     pub fn on_relay(&self) -> bool {
         self.agent_group().is_some()
     }

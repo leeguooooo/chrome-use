@@ -11,6 +11,9 @@ pub struct ChromeProcess {
     child: Child,
     pub ws_url: String,
     temp_user_data_dir: Option<PathBuf>,
+    /// Whether the argv this process was spawned with carried `--headless`
+    /// (no window). Read from the real arguments, not the requested option.
+    pub headless: bool,
     /// On Unix, the process group ID used to kill the entire Chrome process tree.
     #[cfg(unix)]
     pgid: Option<i32>,
@@ -555,6 +558,7 @@ fn try_launch_chrome(chrome_path: &Path, options: &LaunchOptions) -> Result<Chro
         }
     };
 
+    let spawned_headless = args.iter().any(|a| a.starts_with("--headless"));
     let mut cmd = Command::new(chrome_path);
     cmd.args(&args)
         .stdin(Stdio::null())
@@ -640,6 +644,7 @@ fn try_launch_chrome(chrome_path: &Path, options: &LaunchOptions) -> Result<Chro
         child,
         ws_url,
         temp_user_data_dir,
+        headless: spawned_headless,
         #[cfg(unix)]
         pgid,
     })
@@ -2111,6 +2116,7 @@ mod tests {
                 child,
                 ws_url: String::new(),
                 temp_user_data_dir: Some(dir.clone()),
+                headless: false,
                 #[cfg(unix)]
                 pgid: None,
             };

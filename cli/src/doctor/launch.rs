@@ -154,14 +154,12 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         "action": "launch",
         "headless": true,
     });
-    let product = match send_command(launch_cmd, &session) {
+    let headless = match send_command(launch_cmd, &session) {
         Ok(resp) if resp.success => resp
             .data
             .as_ref()
-            .and_then(|d| d.get("product"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_default(),
+            .and_then(|d| d.get("headless"))
+            .and_then(Value::as_bool),
         Ok(resp) => {
             launch_failed(checks, resp.error.unwrap_or_else(|| "unknown error".into()));
             return;
@@ -171,23 +169,25 @@ pub(super) fn check(checks: &mut Vec<Check>) {
             return;
         }
     };
-    // Verify the effect, not the request: the browser must report itself as
-    // headless (`HeadlessChrome/...`). A visible window here is the bug this
-    // check used to be; the guard closes it on return.
-    if !product.starts_with("HeadlessChrome") {
+    // Verify the effect, not the request: the browser must have been spawned
+    // with `--headless` (its real argv, reported by the daemon). A visible
+    // window here is the bug this check used to be; the guard closes it.
+    if headless != Some(true) {
         checks.push(
             Check::new(
                 "launch.headless",
                 category,
                 Status::Fail,
-                format!(
-                    "The test browser was not headless (product: {}); it was closed at once",
-                    if product.is_empty() {
-                        "unknown"
-                    } else {
-                        &product
+                match headless {
+                    Some(false) => {
+                        "The test browser was started WITH a window (no --headless in its \
+                                    arguments); it was closed at once"
+                            .to_string()
                     }
-                ),
+                    _ => "Could not confirm the test browser was started headless; it was closed \
+                          at once"
+                        .to_string(),
+                },
             )
             .with_fix("chrome-use report --note \"doctor launch was not headless\""),
         );
