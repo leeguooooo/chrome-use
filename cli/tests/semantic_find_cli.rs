@@ -109,7 +109,7 @@ mod browser {
         let session = Session::new();
         let page = session.home.path().join("fixture.html");
         std::fs::write(&page,r##"<!doctype html><article id="account-a"><h2>Alpha account</h2><button onclick="document.querySelector('#receipt').textContent='alpha'">Save</button><h3>Email</h3><label>Email<input></label><input placeholder="Address"><input data-testid="secret" title="Private" value="fixture-secret"></article>
-<article id="account-b"><h2>Beta account</h2><button aria-labelledby="save-label" onclick="document.querySelector('#receipt').textContent='beta'"><span id="save-label">Save</span></button><label>Email<input></label><input placeholder="Address"><input data-testid="secret" title="Private" value="fixture-secret"></article>
+<section id="account-b" role="region" aria-labelledby="beta-title"><h2 id="beta-title">Beta account</h2><button aria-labelledby="save-label" onclick="document.querySelector('#receipt').textContent='beta'"><span id="save-label">Save</span></button><label>Email<input></label><input placeholder="Address"><input data-testid="secret" title="Private" value="fixture-secret"></section>
 <button style="display:none">Save</button><p id="receipt" role="status">untouched</p><iframe id="embedded" srcdoc="<p>Frame receipt</p><button onclick=&quot;parent.document.querySelector('#receipt').textContent='frame'&quot;>Frame action</button>"></iframe>"##).unwrap();
         session.ok(&["open", &format!("file://{}", page.display())]);
         for strategy in ["role", "text"] {
@@ -133,7 +133,7 @@ mod browser {
             .unwrap()
             .iter()
             .find(|c| {
-                c["tagName"] == "article"
+                c["role"] == "region"
                     && c["text"]
                         .as_str()
                         .unwrap_or("")
@@ -146,7 +146,14 @@ mod browser {
             .to_string();
         session.refused(
             &[
-                "find", "role", "button", "click", "--name", "Save", "--within", "article",
+                "find",
+                "role",
+                "button",
+                "click",
+                "--name",
+                "Save",
+                "--within",
+                "article,section",
             ],
             "exactly one container",
         );
@@ -282,14 +289,51 @@ mod browser {
             "untouched"
         );
         session.ok(&["eval", "Element.prototype.setAttribute=window.oldSet"]);
+        session.ok(&["eval", "document.querySelector('#account-b').innerHTML='<h2>Beta account</h2><button onclick=\"document.querySelector(\'#receipt\').textContent=\'nested\'\"><span>Commit</span><span>Commit</span></button><div role=\"button\" onclick=\"document.querySelector(\'#receipt\').textContent=\'custom\'\"><span id=\"inner-leaf\">Custom Save</span></div>'"]);
+        session.ok(&[
+            "find", "text", "Commit", "click", "--exact", "--within", &scope,
+        ]);
+        assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "nested");
+        session.refused(
+            &[
+                "find",
+                "text",
+                "Custom Save",
+                "click",
+                "--exact",
+                "--within",
+                "#inner-leaf",
+            ],
+            "outside the scope",
+        );
+        assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "nested");
+        session.ok(&[
+            "find",
+            "text",
+            "Custom Save",
+            "click",
+            "--exact",
+            "--within",
+            &scope,
+        ]);
+        assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "custom");
+        // Restore fixture for explicit first/nth compatibility checks.
+        session.ok(&["open", &format!("file://{}", page.display())]);
+
         // Full text's iframe receipts and explicit ordering remain available.
         assert!(session
             .ok(&["get", "text"])
             .to_string()
             .contains("Frame receipt"));
-        session.ok(&["find", "first", "article button", "click"]);
+        session.ok(&["find", "first", "article button, section button", "click"]);
         assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "alpha");
-        session.ok(&["find", "nth", "1", "article button", "click"]);
+        session.ok(&[
+            "find",
+            "nth",
+            "1",
+            "article button, section button",
+            "click",
+        ]);
         assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "beta");
     }
 }

@@ -53,8 +53,16 @@ async fn array_objects(
             )
             .await?
     };
+    objects_from_reply(client, sid, reply).await
+}
+
+async fn objects_from_reply(
+    client: &CdpClient,
+    sid: &str,
+    reply: Value,
+) -> Result<Vec<String>, String> {
     if reply.get("exceptionDetails").is_some() {
-        return Err("invalid scope or selector; nothing was dispatched".into());
+        return Err("invalid scope, selector, or clickable ancestor outside the scope; nothing was dispatched".into());
     }
     let object = reply["result"]["objectId"]
         .as_str()
@@ -279,7 +287,26 @@ async fn locate_inner(cmd: &Value, state: &DaemonState, sid: &str) -> Result<Val
                 .map(|o| (o, None)),
         );
     }
-    let inspect = r#"function(scope,label){ if(label && !(this.labels?.length || this.hasAttribute('aria-label') || this.hasAttribute('aria-labelledby'))) return null; if(!this.isConnected || !scope.isConnected || !scope.contains(this)) return null; const r=this.getBoundingClientRect(); const visible=r.width>0 && r.height>0 && (typeof this.checkVisibility!=='function' || this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})); return {tag:this.tagName.toLowerCase(), visible, role:this.getAttribute('role') || '', name:(this.getAttribute('aria-label') || this.getAttribute('title') || '').slice(0,80), selector:this.id ? '#' + CSS.escape(this.id) : this.tagName.toLowerCase(), context:(this.closest('article,section,fieldset,[role=group]')?.querySelector('h1,h2,h3,legend')?.textContent || '').trim().slice(0,80)}; }"#;
+    // Collapse text leaves to their actual clickable target before strictness.
+    // Two spans in one button identify one dispatch target, while two buttons
+    // remain ambiguous. A clickable ancestor outside --within is never used.
+    if cmd["subaction"] == "click" {
+        let arguments: Vec<Value> = candidates
+            .iter()
+            .map(|(object, _)| json!({"objectId":object}))
+            .collect();
+        let reply = client.send_command("Runtime.callFunctionOn", Some(json!({
+            "objectId": scope,
+            "functionDeclaration": "function(...elements){const targets=new Set();for(const element of elements){if(!element.isConnected || !this.contains(element))continue;const target=element.closest('a[href],button,summary,label,select,input,textarea,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]') || element;if(!this.contains(target))throw new Error('clickable ancestor outside scope');targets.add(target);}return Array.from(targets);}",
+            "arguments": arguments, "objectGroup": GROUP, "returnByValue": false,
+        })), Some(sid)).await?;
+        candidates = objects_from_reply(client, sid, reply)
+            .await?
+            .into_iter()
+            .map(|object| (object, None))
+            .collect();
+    }
+    let inspect = r#"function(scope,label){ if(label && !(this.labels?.length || this.hasAttribute('aria-label') || this.hasAttribute('aria-labelledby'))) return null; if(!this.isConnected || !scope.isConnected || !scope.contains(this)) return null; const r=this.getBoundingClientRect(); const visible=r.width>0 && r.height>0 && (typeof this.checkVisibility!=='function' || this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})); return {tag:this.tagName.toLowerCase(), visible, role:this.getAttribute('role') || '', name:(this.getAttribute('aria-label') || this.getAttribute('title') || (['INPUT','TEXTAREA','SELECT'].includes(this.tagName) ? '' : this.textContent) || '').slice(0,80), selector:this.id ? '#' + CSS.escape(this.id) : this.tagName.toLowerCase(), context:(this.closest('article,section,fieldset,[role=group]')?.querySelector('h1,h2,h3,legend')?.textContent || '').trim().slice(0,80)}; }"#;
     let mut visible = Vec::new();
     let mut matched_count = 0;
     let mut details = Vec::new();
