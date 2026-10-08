@@ -232,3 +232,19 @@ test('a replaced pop-up keeps its record under the new id, also after onRemoved'
   assert.equal(migratePopupRecord(popups, recent, 8, 9), false)
   assert.equal(popups.has(9), false)
 })
+
+test("a pop-up in a window that also holds a user tab is not verified (Chrome's opener lies)", () => {
+  const isAgent = agentTabPredicate(new Set([1]), new Set())
+  // The user's tab 7 (taken with adopt) sits in the agent window 9 and opens a
+  // child; Chrome reports the window's front tab (1, ours) as opener and puts
+  // the child in tab 1's group.
+  const child = { id: 33, windowId: 9, groupId: 60, openerTabId: 1 }
+  const all = [
+    { id: 1, windowId: 9, groupId: 60 },
+    { id: 7, windowId: 9, groupId: -1 },
+    child,
+  ]
+  assert.equal(isVerifiedAgentPopup(child, all, isAgent), false)
+  // Without the user tab in that window the same metadata is trusted.
+  assert.equal(isVerifiedAgentPopup(child, [all[0], child], isAgent), true)
+})

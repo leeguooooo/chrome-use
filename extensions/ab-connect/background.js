@@ -1921,7 +1921,9 @@ chrome.tabs.onCreated.addListener(
       // pop-up): the agent's. Opened by a merely attached tab (a user tab taken
       // with adopt/inspect): attached as before, but it keeps user identity.
       await loadAgentPopups();
-      if (ownedTabs.has(opener) || agentPopups.has(opener)) await markAgentPopup(tab.id);
+      const all = await chrome.tabs.query({}).catch(() => []);
+      if (isVerifiedAgentPopup(tab, all, agentTabPredicate(ownedTabs, agentPopups)))
+        await markAgentPopup(tab.id);
       if (tabs.has(tab.id)) return;
       // A fresh popup is often still at about:blank (no url yet) — that's fine to
       // attach; only bail on a clearly-restricted scheme. attachTab tolerates the

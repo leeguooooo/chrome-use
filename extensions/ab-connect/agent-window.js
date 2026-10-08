@@ -52,6 +52,12 @@ export function migratePopupRecord(popups, recentlyRemoved, removedTabId, addedT
  */
 export function isVerifiedAgentPopup(tab, allTabs, isAgentTab) {
   if (!tab || !Number.isInteger(tab.id)) return false
+  // Chrome names the window's FRONT tab as opener (and uses its group) when
+  // the click landed in a background tab. In a window that also holds a user
+  // tab, a pop-up the user's tab opened therefore looks like ours. Only a
+  // window holding nothing but agent tabs makes opener and group trustworthy.
+  const sameWindow = (allTabs || []).filter((t) => t && t.id !== tab.id && t.windowId === tab.windowId)
+  if (sameWindow.some((t) => !isAgentTab(t.id))) return false
   if (tab.openerTabId != null && isAgentTab(tab.openerTabId)) return true
   if (!Number.isInteger(tab.groupId) || tab.groupId === -1) return false
   return (allTabs || []).some(

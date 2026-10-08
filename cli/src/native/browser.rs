@@ -1037,6 +1037,12 @@ fn relay_chrome_tab_id(session_id: &str) -> Option<i64> {
     session_id.strip_prefix("cb-tab-")?.parse().ok()
 }
 
+/// Whether the tab a click was dispatched to is one the session created (or a
+/// pop-up adopted from one). `None` (unknown) is not.
+fn clicked_tab_is_created(active: Option<&str>, created: &HashSet<String>) -> bool {
+    active.is_some_and(|t| created.contains(t))
+}
+
 /// The Chrome tab ids of the session's pages that it genuinely created (its
 /// own tabs and the pop-ups it adopted from them, which are recorded as
 /// created). A user tab taken with `tab adopt` is a session page too, but not
@@ -3877,6 +3883,15 @@ impl BrowserManager {
         // A direct CDP connection to someone else's browser adopts nothing.
         let on_relay = self.browser_process.is_none() && self.agent_group().is_some();
         if self.browser_process.is_none() && !on_relay {
+            return NewTabCheck::default();
+        }
+        // A click in a user tab taken with `tab adopt` opens the USER's tab.
+        // Chrome's metadata cannot tell: for a click in a background tab it
+        // names the window's front tab (possibly ours) as opener and puts the
+        // pop-up in that tab's group. So on the relay only a click in a tab
+        // this session created can yield a tab the session adopts.
+        if on_relay && !clicked_tab_is_created(self.active_target_id().ok(), &self.created_targets)
+        {
             return NewTabCheck::default();
         }
         let mut check = NewTabCheck::default();
@@ -6993,6 +7008,11 @@ mod tests {
         let before: HashSet<i64> = [11, 22].into_iter().collect();
         let tabs = tabs.as_array().cloned().unwrap();
         assert!(relay_popup_candidate(&tabs, &before, &own).is_none());
+        // And a click dispatched to the adopted user tab yields no adoption at
+        // all, even when Chrome names our tab as opener and uses our group.
+        assert!(clicked_tab_is_created(Some("CREATED"), &created));
+        assert!(!clicked_tab_is_created(Some("ADOPTED"), &created));
+        assert!(!clicked_tab_is_created(None, &created));
     }
 
     fn page(target_id: &str) -> PageInfo {
