@@ -2900,6 +2900,14 @@ async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
 /// reconnect guidance. This is what lets a dropped relay self-heal invisibly
 /// instead of erroring or launching a throwaway Chrome. `connect_auto_with_fresh_tab`
 /// only opens a tab on success, so the retries cost nothing while the relay is down.
+/// The extension refused to create an agent tab because no background agent
+/// window could be opened (it never falls back to the user's window). The
+/// relay is fine, so waiting for it to "come back" only turns a clear refusal
+/// into a timeout ("session unresponsive", observed on the build box).
+fn is_agent_window_refusal(error: &str) -> bool {
+    error.contains("could not open the background agent window")
+}
+
 async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserManager, String> {
     let budget = env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
         .ok()
@@ -2974,6 +2982,7 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
         // erroring or (worse) tearing down and launching a throwaway Chrome.
         let conn = match connect_auto_with_fresh_tab().await {
             Ok(mgr) => Ok(mgr),
+            Err(e) if is_agent_window_refusal(&e) => Err(e),
             Err(e) if crate::connect::host_installed() => retry_relay_connect_after_wait(e).await,
             Err(e) => Err(e),
         };
@@ -3004,6 +3013,9 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
                 }
                 // Host installed but the relay never came back within the wait —
                 // point at the cheap reconnect, not a Chrome restart (#54).
+                if is_agent_window_refusal(&e) {
+                    return Err(e);
+                }
                 return Err(auto_connect_failure_message(&e, true));
             }
         }
@@ -3892,6 +3904,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         // host is registered, wait for the keepalive to revive it and retry once.
         let conn = match connect_auto_with_fresh_tab().await {
             Ok(mgr) => Ok(mgr),
+            Err(e) if is_agent_window_refusal(&e) => Err(e),
             Err(e) if crate::connect::host_installed() => retry_relay_connect_after_wait(e).await,
             Err(e) => Err(e),
         };
@@ -3919,6 +3932,9 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                     crate::connect::ensure_host_installed();
                     crate::connect::open_url(crate::connect::STORE_INSTALL_URL);
                     return Err(crate::connect::extension_not_installed_message());
+                }
+                if is_agent_window_refusal(&e) {
+                    return Err(e);
                 }
                 return Err(auto_connect_failure_message(&e, true));
             }
