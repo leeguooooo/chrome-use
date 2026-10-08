@@ -490,7 +490,8 @@
         <code>tab new</code>, <code>tab select</code>, and <code>tab adopt</code> stay in the background by default.
         Add <code>--activate</code> (alias <code>--front</code>) to raise the target <strong>before</strong>
         renderer initialization or the liveness probe and leave it in the foreground. This changes the visible
-        tab; activation alone does not prove that page reads work. If new-tab initialization fails, the error
+        tab and focuses its Chrome window over whatever the user is doing, so use it only when the user asks;
+        activation alone does not prove that page reads work. If new-tab initialization fails, the error
         reports the retained target ID. Use <code>tab select &lt;targetId&gt; --activate</code> with the same session
         and connection endpoint, then <code>snapshot -i</code> to verify recovery. Do not repeatedly create
         tabs or automatically replay a click whose outcome is unknown.

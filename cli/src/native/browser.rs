@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, Mutex};
 
-use super::cdp::chrome::{auto_connect_cdp, launch_chrome, ChromeProcess, LaunchOptions};
+use super::cdp::chrome::{
+    auto_connect_cdp, launch_chrome, launches_headless, ChromeProcess, LaunchOptions,
+};
 use super::cdp::client::CdpClient;
 use super::cdp::discovery::discover_cdp_url;
 use super::cdp::lightpanda::{launch_lightpanda, LightpandaLaunchOptions, LightpandaProcess};
@@ -17,6 +19,19 @@ use super::element::{resolve_element_object_id, RefMap};
 /// group that abs-created tabs land in when driving the user's real Chrome via
 /// the `ab-connect` extension, so each agent/session gets its own group.
 pub static DAEMON_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Unit tests run `execute_command` on a bare `DaemonState`, and every one
+/// that needed a browser used to launch a real Chrome on the machine running
+/// `cargo test`: seven at a time, logged as `session=default
+/// mode=launched(debug-port)` in `~/.chrome-use/connect-mode.log` (5,987 of
+/// them on one developer laptop; the build box shows the same bursts). A
+/// parallel test that sets `AGENT_BROWSER_HEADED` could make some of them
+/// headed. Only the browser-backed e2e suite may launch.
+#[cfg(all(test, not(feature = "e2e-tests")))]
+const UNIT_TEST_LAUNCH_REFUSAL: Option<&str> =
+    Some("unit tests never launch a browser (only the e2e-tests feature does)");
+#[cfg(not(all(test, not(feature = "e2e-tests"))))]
+const UNIT_TEST_LAUNCH_REFUSAL: Option<&str> = None;
 
 /// How long `close()` may spend closing the tabs this session created before it
 /// gives up and lets the process exit (issue #192).
@@ -1278,6 +1293,9 @@ pub(crate) fn foreground_conflict_warning(owner: &str, title: &str) -> String {
 
 impl BrowserManager {
     pub async fn launch(options: LaunchOptions, engine: Option<&str>) -> Result<Self, String> {
+        if let Some(refusal) = UNIT_TEST_LAUNCH_REFUSAL {
+            return Err(refusal.to_string());
+        }
         let engine = engine.unwrap_or("chrome");
 
         match engine {
@@ -1306,6 +1324,9 @@ impl BrowserManager {
         let user_agent = options.user_agent.clone();
         let color_scheme = options.color_scheme.clone();
         let download_path = options.download_path.clone();
+        // What the window will really be, not what was asked for: the
+        // `headless` option is ignored unless AGENT_BROWSER_ALLOW_HEADLESS=1.
+        let headless = engine == "lightpanda" || launches_headless(&options);
 
         let (ws_url, process) = match engine {
             "lightpanda" => {
@@ -1336,6 +1357,7 @@ impl BrowserManager {
                 .get()
                 .map(String::as_str)
                 .unwrap_or("default"),
+            Some(headless),
         );
         let manager = if engine == "lightpanda" {
             initialize_lightpanda_manager(ws_url, process).await?
@@ -1444,6 +1466,7 @@ impl BrowserManager {
                 .get()
                 .map(String::as_str)
                 .unwrap_or("default"),
+            None,
         );
         let client = Arc::new(CdpClient::connect_with_headers(&ws_url, headers).await?);
         let mut manager = Self {
@@ -3153,6 +3176,17 @@ impl BrowserManager {
         if window.get("state").and_then(Value::as_str) == Some("minimized") {
             return Err(
                 "its window is minimized, so switching tabs in it hides nothing".to_string(),
+            );
+        }
+        // Behind another tab in the window the user is working in, the flip
+        // below would put this agent tab, then a blank tab, in front of the
+        // user's own page. Normally agent tabs live in the background agent
+        // window; when one sits in the user's focused window, leave it alone.
+        if !in_front && window.get("focused").and_then(Value::as_bool) == Some(true) {
+            return Err(
+                "its tab is in the window the user is working in, and closing the menu would \
+                 switch the tab they are looking at"
+                    .to_string(),
             );
         }
         let front = self

@@ -457,8 +457,10 @@ timezone, locale, geolocation, and offline mode.
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization
 or the liveness probe, and leaves it in the foreground. It changes the visible
-tab and may help a background tab respond; activation alone is not evidence
-that page reads work. Read the page again to verify recovery.
+tab, focuses that Chrome window (bringing Chrome over the user's other apps),
+and may help a background tab respond; activation alone is not evidence that
+page reads work. Read the page again to verify recovery. Use it, and
+`bringToFront`, only when the user asked to see the tab.
 
 A background tab does not need activating to be driven: clicks and typing reach
 it, and a hidden page only runs its timers late (about once a second), so a

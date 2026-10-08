@@ -251,9 +251,11 @@ that wraps a checkbox as `[toggles=checkbox(checked=true)]`, because clicking
 it flips a setting (in LinkedIn's profile-language dialog, it deletes that
 language's profile).
 
-Tab creation, selection, and adoption stay in the background by default. Add
-`--activate` (alias `--front`) when a background tab is not responding; it
-changes the visible tab and leaves it in the foreground. If new-tab initialization
+Tab creation, selection, and adoption stay in the background by default, and
+no default command raises Chrome or changes the tab you are looking at.
+`--activate` (alias `--front`) and `bringToFront` are the explicit exceptions:
+they change the visible tab, focus that Chrome window and leave the tab in the
+foreground, so agents are told to use them only when you ask. If new-tab initialization
 fails, chrome-use retains the target and reports its ID. Use
 `chrome-use tab select <targetId> --activate`, then `chrome-use snapshot -i`
 to verify recovery, keeping the same session and connection endpoint. Do not

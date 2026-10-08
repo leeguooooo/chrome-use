@@ -158,6 +158,17 @@ fn launch_headless() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `launch_chrome(options)` will really start Chrome headless, i.e.
+/// with no window. Usually `false`: the `headless` option is ignored (see
+/// [`launch_headless`]), so a launched Chrome opens a visible window.
+pub fn launches_headless(options: &LaunchOptions) -> bool {
+    launch_headless()
+        && !options
+            .extensions
+            .as_ref()
+            .is_some_and(|exts| !exts.is_empty())
+}
+
 /// Decide the `--force-webrtc-ip-handling-policy` value, if any, for a launched
 /// Chrome. Returns `None` to leave WebRTC at Chrome's default behavior.
 fn webrtc_ip_handling_policy(has_proxy: bool) -> Option<&'static str> {

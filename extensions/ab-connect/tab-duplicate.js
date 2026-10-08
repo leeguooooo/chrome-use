@@ -87,8 +87,9 @@ async function settleOrVerify(clock, operation, verify, deadline, operationTimeo
   }
 }
 
-async function restoreForegroundBestEffort(clock, deps, tabId, windowId, deadline) {
+async function restoreForegroundBestEffort(clock, deps, tabId, windowId, wasFocused, deadline) {
   await bestEffort(clock, () => deps.activateTab(tabId), remainingTime(clock, deadline))
+  if (!wasFocused) return
   const focused = await observeWithin(
     clock,
     () => deps.getWindow(windowId).then((window) => window?.focused === true),
@@ -136,6 +137,7 @@ export async function duplicateTab(params, deps) {
     'window inspection',
   ).catch(() => null)
   const restoreWindowId = lastFocusedWindow?.id ?? sourceTab.windowId
+  const restoreWindowFocused = lastFocusedWindow?.focused === true
   const activeTabs = await completeBefore(
     clock,
     () => deps.getActiveTabs(restoreWindowId),
@@ -178,7 +180,13 @@ export async function duplicateTab(params, deps) {
     )
     const windowIsFocused = () =>
       deps.getWindow(restoreWindowId).then((window) => window?.focused === true)
-    if (!(await observeWithin(clock, windowIsFocused, remainingTime(clock, transactionDeadline)))) {
+    // Give focus back only if that window had it. When the user is in another
+    // app no Chrome window is focused, and "restoring" focus would raise Chrome
+    // over the app they are working in.
+    if (
+      restoreWindowFocused &&
+      !(await observeWithin(clock, windowIsFocused, remainingTime(clock, transactionDeadline)))
+    ) {
       await settleOrVerify(
         clock,
         () => deps.focusWindow(restoreWindowId),
@@ -234,6 +242,7 @@ export async function duplicateTab(params, deps) {
       deps,
       restoreTabId,
       restoreWindowId,
+      restoreWindowFocused,
       cleanupDeadline,
     )
     throw error

@@ -2147,8 +2147,10 @@ pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> 
             Some("Chromium") => "Chromium",
             _ => return None,
         };
+        // `-g`: start it in the background. The user quit Chrome; bringing it
+        // back is needed for the relay, raising it over their work is not.
         let ok = std::process::Command::new("open")
-            .args(["-na", app, "--args", &profile_arg])
+            .args(["-g", "-na", app, "--args", &profile_arg])
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
@@ -2713,7 +2715,13 @@ async fn probe_relay(url: &str, budget: std::time::Duration) -> bool {
 /// `launched` while the relay was up) from Chrome's own extension-debugger
 /// consent UX. Low volume (one line per connection); best-effort, never fails a
 /// connection.
-pub fn log_connect_mode(ws_url: &str, launched: bool, session: &str) {
+///
+/// Each line also carries when, which process, and who started it (`ts=`,
+/// `pid=`, `proc=`, `by=`, plus `headless=` for a launch). Without them,
+/// thousands of `session=default mode=launched` lines could not be told apart
+/// from a user's agent: they turned out to be `cargo test` runs, which are
+/// in-process and so have no daemon session name.
+pub fn log_connect_mode(ws_url: &str, launched: bool, session: &str, headless: Option<bool>) {
     let relay = relay_url();
     let relay_up = relay.is_some();
     let mode = if launched {
@@ -2728,9 +2736,17 @@ pub fn log_connect_mode(ws_url: &str, launched: bool, session: &str) {
     // A raw-port attach or a self-launch while the relay was available is the
     // exact thing that pops the consent modal — flag it loudly in the line.
     let suspect = (mode == "raw-port-attach" || launched) && relay_up;
-    let line = format!(
-        "session={session} mode={mode} relay_up={relay_up}{} ws={ws_url}\n",
-        if suspect { " CONSENT-MODAL-RISK" } else { "" }
+    let line = connect_mode_line(
+        session,
+        mode,
+        relay_up,
+        suspect,
+        ws_url,
+        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        std::process::id(),
+        &current_process_name(),
+        std::env::var("CHROME_USE_SPAWNED_BY").ok().as_deref(),
+        headless,
     );
     if let Some(home) = dirs::home_dir() {
         let path = home.join(".chrome-use").join("connect-mode.log");
@@ -2742,6 +2758,87 @@ pub fn log_connect_mode(ws_url: &str, launched: bool, session: &str) {
         {
             let _ = f.write_all(line.as_bytes());
         }
+    }
+}
+
+/// One `connect-mode.log` line. `session=` and `mode=` stay first and the
+/// added fields go at the end, so readers that match `session=<name> ` at the
+/// start or pick out `mode=` keep working on old and new lines alike.
+#[allow(clippy::too_many_arguments)]
+fn connect_mode_line(
+    session: &str,
+    mode: &str,
+    relay_up: bool,
+    suspect: bool,
+    ws_url: &str,
+    ts: &str,
+    pid: u32,
+    proc_name: &str,
+    spawned_by: Option<&str>,
+    headless: Option<bool>,
+) -> String {
+    let mut line = format!(
+        "session={session} mode={mode} relay_up={relay_up}{} ws={ws_url} ts={ts} pid={pid} proc={}",
+        if suspect { " CONSENT-MODAL-RISK" } else { "" },
+        log_token(proc_name),
+    );
+    if let Some(h) = headless {
+        line.push_str(&format!(" headless={h}"));
+    }
+    if let Some(by) = spawned_by.filter(|s| !s.is_empty()) {
+        line.push_str(&format!(" by={}", log_token(by)));
+    }
+    line.push('\n');
+    line
+}
+
+/// A value safe to put in one space-separated `key=value` field.
+fn log_token(s: &str) -> String {
+    let t: String = s
+        .chars()
+        .map(|c| {
+            if c.is_whitespace() || c == '=' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .take(80)
+        .collect();
+    if t.is_empty() {
+        "?".to_string()
+    } else {
+        t
+    }
+}
+
+fn current_process_name() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default()
+}
+
+/// `<pid>:<name>` of the process that ran this chrome-use command (its
+/// parent: an agent harness, a shell, another *-use tool), for the
+/// connect-mode log. Best effort; empty when it cannot be read.
+pub fn caller_description() -> String {
+    #[cfg(unix)]
+    {
+        // SAFETY: getppid has no preconditions and cannot fail.
+        let ppid = unsafe { libc::getppid() };
+        let name = std::process::Command::new("ps")
+            .args(["-o", "comm=", "-p", &ppid.to_string()])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let name = name.rsplit('/').next().unwrap_or("").to_string();
+        format!("{ppid}:{name}")
+    }
+    #[cfg(not(unix))]
+    {
+        String::new()
     }
 }
 
@@ -3395,6 +3492,33 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn connect_mode_line_keeps_the_old_prefix_and_names_the_caller() {
+        let line = connect_mode_line(
+            "default",
+            "launched(debug-port)",
+            true,
+            true,
+            "ws://127.0.0.1:1/devtools/browser/x",
+            "2026-10-08T03:00:00.000Z",
+            42,
+            "chrome_use-0123abcd",
+            Some("7:claude code"),
+            Some(true),
+        );
+        assert!(line.starts_with(
+            "session=default mode=launched(debug-port) relay_up=true CONSENT-MODAL-RISK ws="
+        ));
+        assert!(line.ends_with(
+            " ts=2026-10-08T03:00:00.000Z pid=42 proc=chrome_use-0123abcd headless=true by=7:claude_code\n"
+        ));
+        let relay = connect_mode_line("s", "relay", true, false, "ws://r", "t", 1, "", None, None);
+        assert_eq!(
+            relay,
+            "session=s mode=relay relay_up=true ws=ws://r ts=t pid=1 proc=?\n"
+        );
+    }
 
     #[tokio::test]
     async fn relay_probe_requires_extension_reply_not_just_an_open_socket() {

@@ -6674,9 +6674,17 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // pointing at the already-active tab) steals the foreground on each shot, so
     // concurrent sessions would fight over which tab is frontmost — the opposite
     // of the multi-tab isolation this path is meant to preserve.
+    //
+    // Never on the extension relay: there `Page.bringToFront` raises the
+    // user's own Chrome window and switches the tab they are looking at, so a
+    // `screenshot --tab` popped the browser over whatever the user was doing.
+    // Relay captures do not need it: background-tab screenshots are taken
+    // `fromSurface` and return in ~50-250ms on the relay (timing.jsonl).
     if switched_to_inactive_tab {
         if let Some(mgr) = state.browser.as_mut() {
-            let _ = mgr.bring_to_front().await;
+            if !mgr.on_relay() {
+                let _ = mgr.bring_to_front().await;
+            }
         }
     }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;

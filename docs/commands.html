@@ -474,7 +474,8 @@
       <p>
         <code>tab new</code>、<code>tab select</code> 和 <code>tab adopt</code> 默认在后台进行。
         加上 <code>--activate</code>（别名 <code>--front</code>）会在 renderer 初始化或存活探针
-        <strong>之前</strong>激活目标，并将标签保持在前台。这会切换可见标签；激活本身不代表页面已可读。
+        <strong>之前</strong>激活目标，并将标签保持在前台。这会切换可见标签，并把那个 Chrome 窗口提到用户正在用的程序之上，
+        所以只在用户要求时使用；激活本身不代表页面已可读。
         新标签初始化失败后，错误会报告保留的目标 ID。保持相同 session 和连接端点，执行
         <code>tab select &lt;targetId&gt; --activate</code>，然后用 <code>snapshot -i</code> 验证恢复。
         不要反复新建标签，也不要自动重放结果未知的点击。

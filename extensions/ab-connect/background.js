@@ -17,6 +17,7 @@
 // native messaging.
 
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
+import { agentWindowStillOurs } from './agent-window.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js';
@@ -165,31 +166,33 @@ let agentWindowInit = null;
 // real agent tab lands in the window.
 let agentWindowPlaceholderTabId = null;
 
+// Whether window `id` still exists AND is still the agent's (see
+// agent-window.js): a remembered window the user has since started working in
+// must stop receiving agent tabs, or every agent tab lands in the window the
+// user is looking at.
+async function isUsableAgentWindow(id) {
+  const win = await chrome.windows.get(id).catch(() => null);
+  if (!win) return false;
+  await loadOwnedTabs();
+  const tabs = await chrome.tabs.query({ windowId: id }).catch(() => []);
+  return agentWindowStillOurs(win, tabs, (tabId) => ownedTabs.has(tabId)).ours;
+}
+
 // Resolve the existing agent window (this SW's memory, then the persisted id),
-// validating it still exists. Returns its id, or null if there is no live agent
-// window yet.
+// validating it still exists and is still the agent's. Returns its id, or null
+// if there is no usable agent window yet.
 async function resolveAgentWindow() {
   if (agentWindowId != null) {
-    if (
-      await chrome.windows
-        .get(agentWindowId)
-        .then(() => true)
-        .catch(() => false)
-    ) {
-      return agentWindowId;
-    }
+    if (await isUsableAgentWindow(agentWindowId)) return agentWindowId;
     agentWindowId = null;
+    agentWindowInit = null;
+    await chrome.storage.local.remove(AGENT_WINDOW_KEY).catch(() => {});
   }
   try {
     const got = await chrome.storage.local.get(AGENT_WINDOW_KEY);
     const persisted = got && got[AGENT_WINDOW_KEY];
     if (persisted != null) {
-      if (
-        await chrome.windows
-          .get(persisted)
-          .then(() => true)
-          .catch(() => false)
-      ) {
+      if (await isUsableAgentWindow(persisted)) {
         agentWindowId = persisted;
         return agentWindowId;
       }
@@ -229,10 +232,23 @@ async function ensureAgentWindowId() {
 // `focused: false`, so it never steals the user's foreground). Falls back to the
 // user's active window if the windows API is unavailable, so tab creation never
 // hard-fails.
-async function createAgentTab(url) {
+//
+// Serialized, and the tab is marked owned before the next caller runs: the
+// agent-window check (isUsableAgentWindow) treats an unowned tab as the user's,
+// so a concurrent caller must never see another session's brand-new tab before
+// it is owned.
+let agentTabChain = Promise.resolve();
+function createAgentTab(url) {
+  const run = agentTabChain.then(() => createAgentTabNow(url));
+  agentTabChain = run.catch(() => {});
+  return run;
+}
+
+async function createAgentTabNow(url) {
   const winId = await ensureAgentWindowId();
   if (winId == null) return await chrome.tabs.create({ url, active: false });
   const tab = await chrome.tabs.create({ url, active: false, windowId: winId });
+  if (tab && tab.id != null) await markOwned(tab.id);
   // Drop the window's initial about:blank once a real agent tab exists (only the
   // first caller sees the id; it's cleared before the await so no double-remove).
   if (agentWindowPlaceholderTabId != null) {

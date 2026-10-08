@@ -165,7 +165,7 @@ test('native duplicate is grouped, attached, owned, and restores the foreground 
 
 test('native duplicate restores the active tab and focus from another window', async () => {
   const { calls, run } = fixture(({ calls }) => ({
-    getLastFocusedWindow: async () => ({ id: 9 }),
+    getLastFocusedWindow: async () => ({ id: 9, focused: true }),
     getActiveTabs: async (windowId) => {
       calls.push(['getActiveTabs', windowId])
       return [{ id: 70 }]
@@ -205,6 +205,7 @@ test('native duplicate does not stall when window focus completed without resolv
   const { calls, clock, run } = fixture(({ calls }) => ({
     transactionTimeoutMs: 100,
     cleanupTimeoutMs: 25,
+    getLastFocusedWindow: async () => ({ id: 3, focused: true }),
     focusWindow: (windowId) => {
       calls.push(['focusWindow', windowId])
       return never()
@@ -220,6 +221,21 @@ test('native duplicate does not stall when window focus completed without resolv
   assert.equal(result.targetId, 'duplicate-target')
   assert.ok(calls.some((call) => call[0] === 'focusWindow'))
   assert.equal(clock.now(), 25)
+})
+
+test('native duplicate never focuses Chrome when the user was in another app', async () => {
+  // No Chrome window had focus: the user is working in another app. Restoring
+  // "focus" would raise Chrome over it.
+  const { calls, run } = fixture(({ calls }) => ({
+    getLastFocusedWindow: async () => ({ id: 9, focused: false }),
+    getWindow: async (windowId) => ({ id: windowId, focused: false }),
+    focusWindow: async (windowId) => calls.push(['focusWindow', windowId]),
+  }))
+
+  await run()
+
+  assert.ok(calls.some((call) => call[0] === 'activate'))
+  assert.ok(!calls.some((call) => call[0] === 'focusWindow'))
 })
 
 test('native duplicate skips a redundant window focus request', async () => {
@@ -375,6 +391,7 @@ test('rollback continues after unmark ownership throws', async () => {
       calls.push(['unmarkOwned'])
       throw new Error('unmark failed')
     },
+    getLastFocusedWindow: async () => ({ id: 3, focused: true }),
     focusWindow: async (windowId) => calls.push(['focusWindow', windowId]),
   }))
 
@@ -392,6 +409,7 @@ test('rollback continues after tab removal rejects', async () => {
       calls.push(['remove', tabId])
       throw new Error('remove failed')
     },
+    getLastFocusedWindow: async () => ({ id: 3, focused: true }),
     focusWindow: async (windowId) => calls.push(['focusWindow', windowId]),
   }))
 
@@ -423,6 +441,7 @@ test('rollback cleanup stages share one aggregate deadline', async () => {
       return never()
     },
     getWindow: never,
+    getLastFocusedWindow: async () => ({ id: 3, focused: true }),
     focusWindow: (windowId) => {
       calls.push(['focusWindow', windowId])
       return never()
@@ -480,6 +499,7 @@ test('rollback focuses the previous window after tab activation rejects', async 
       calls.push(['activate', tabId])
       throw new Error('activate failed')
     },
+    getLastFocusedWindow: async () => ({ id: 3, focused: true }),
     focusWindow: async (windowId) => calls.push(['focusWindow', windowId]),
   }))
 

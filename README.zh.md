@@ -238,8 +238,9 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 `snapshot` 会把内嵌勾选框的按钮标成 `[toggles=checkbox(checked=true)]`，因为点它会切换设置
 （在 LinkedIn 的档案语言弹窗里，这会删除该语言的档案）。
 
-新建、选择与接管标签默认在后台进行。后台标签不响应时，可加上 `--activate`
-（别名 `--front`）；这会切换可见标签，并让目标保持在前台。新标签初始化失败后，
+新建、选择与接管标签默认在后台进行，默认命令不会把 Chrome 提到前台，也不会切换你正在看的标签。
+`--activate`（别名 `--front`）和 `bringToFront` 是显式的例外：它们会切换可见标签、
+聚焦那个 Chrome 窗口并让目标保持在前台，所以 agent 只在你要求时才用。新标签初始化失败后，
 chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接端点，执行
 `chrome-use tab select <targetId> --activate`，再用 `chrome-use snapshot -i`
 验证恢复。不要反复执行 `tab new`，也不要自动重放结果未知的动作。

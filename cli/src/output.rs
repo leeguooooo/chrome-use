@@ -4122,7 +4122,8 @@ can be selected. Adopted and foreign tabs cannot be closed by the session.
 
 Tab options:
   --activate, --front  Raise new/select/adopt targets before renderer initialization
-                       or the liveness probe. Leaves the tab in the foreground.
+                       or the liveness probe. Leaves the tab in the foreground
+                       and focuses its Chrome window: only when the user asks.
 
 Without --activate, tabs stay in the background. If new-tab initialization
 fails, the error retains the target ID: recover that same tab with
@@ -4735,7 +4736,8 @@ Usage: chrome-use doctor [options]
 
 Runs a battery of checks across environment, Chrome install, daemon state,
 config files, encryption key, providers, network reachability, and a live
-headless browser launch test.
+check: with the extension relay up it probes the relay and launches nothing;
+otherwise it runs a headless browser launch test (no window).
 
 Auto-cleans stale daemon socket/pid/version sidecar files. Destructive
 repairs (reinstalling Chrome, purging old state files, generating a missing
@@ -4743,7 +4745,7 @@ encryption key) are gated behind --fix.
 
 Options:
   --offline            Skip network probes
-  --quick              Skip the live headless launch test
+  --quick              Skip the live relay probe / headless launch test
   --fix                Also run destructive repairs
   --json               JSON output
 
@@ -5517,7 +5519,9 @@ Core Commands:
   bringToFront               Surface the active tab in the user's window. Tabs are
                              driven in the background, where document.visibilityState
                              stays 'hidden' — this is the way to make a page that
-                             gates its UI on visibility render for real
+                             gates its UI on visibility render for real. It also
+                             brings Chrome to the front over the user's work:
+                             use it only when the user asked to see the tab
   scroll <dir> [px]          Scroll (up/down/left/right)
   scroll <dir> --until <sel> Scroll step by step until <sel>/@ref/text= is in view
   scrollintoview <sel>       Scroll element into view

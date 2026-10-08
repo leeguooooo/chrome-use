@@ -1,5 +1,8 @@
 //! Live launch test: spawn a scratch daemon session, launch headless
 //! Chrome, navigate to `about:blank`, then close. Skipped under `--quick`.
+//! When the extension relay is up it probes the relay instead and launches
+//! nothing: that is the path chrome-use takes, and doctor must not start a
+//! browser the user did not ask for.
 //!
 //! A `LaunchGuard` Drop impl ensures the scratch session is closed and its
 //! sidecar files cleaned even on panic or early return.
@@ -32,6 +35,35 @@ pub(super) fn check(checks: &mut Vec<Check>) {
             Status::Info,
             "Skipped (AGENT_BROWSER_CDP is set; would attach to a real browser)",
         ));
+        return;
+    }
+
+    // With the extension relay up, chrome-use drives the user's own Chrome
+    // and never launches one, so a launch test would exercise a path the user
+    // does not take, and start a browser they never asked for (54 doctor
+    // launches with the relay up in one user's connect-mode.log). Check the
+    // path they do take instead: does the relay answer?
+    if crate::connect::relay_url().is_some() {
+        if crate::connect::relay_is_responsive() {
+            checks.push(Check::new(
+                "launch.relay",
+                category,
+                Status::Pass,
+                "Extension relay answered; chrome-use drives your own Chrome through it \
+                 (no browser launched for this check)",
+            ));
+        } else {
+            checks.push(
+                Check::new(
+                    "launch.relay",
+                    category,
+                    Status::Warn,
+                    "Extension relay is registered but did not answer within 10s \
+                     (no browser launched for this check)",
+                )
+                .with_fix("chrome-use extension connect   # or reload the ab-connect extension"),
+            );
+        }
         return;
     }
 
@@ -90,6 +122,15 @@ pub(super) fn check(checks: &mut Vec<Check>) {
         cdp: None,
         no_auto_dialog: false,
     };
+
+    // `"headless": true` below is ignored unless the daemon has
+    // AGENT_BROWSER_ALLOW_HEADLESS (launches are headed by default for
+    // stealth), so this check used to open a visible Chrome window on the
+    // user's screen. The scratch daemon inherits this process's environment;
+    // every other check has finished by now, so nothing reads it concurrently.
+    if env::var_os("AGENT_BROWSER_ALLOW_HEADLESS").is_none() {
+        env::set_var("AGENT_BROWSER_ALLOW_HEADLESS", "1");
+    }
 
     let started = Instant::now();
     if let Err(e) = ensure_daemon(&session, &opts) {

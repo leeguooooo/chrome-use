@@ -958,7 +958,13 @@ pub fn parse_flags(args: &[String]) -> Flags {
         auto_connect: !env_var_is_truthy("AGENT_BROWSER_NO_AUTO_CONNECT")
             && (env_var_is_truthy("AGENT_BROWSER_AUTO_CONNECT")
                 || config.auto_connect.unwrap_or(true)),
-        force_launch: env_var_is_truthy("AGENT_BROWSER_FORCE_LAUNCH") || env::var("CI").is_ok(),
+        // `CI` alone means "no user browser here, launch one". On a desktop
+        // whose extension relay is up it is an inherited variable (agent
+        // harnesses and tool shells set it), and honouring it silently drove a
+        // separate launched browser instead of the user's Chrome. There the
+        // relay wins; `--launch` / AGENT_BROWSER_FORCE_LAUNCH still force it.
+        force_launch: env_var_is_truthy("AGENT_BROWSER_FORCE_LAUNCH")
+            || (env::var("CI").is_ok() && crate::connect::relay_url().is_none()),
         session_name: env::var("AGENT_BROWSER_SESSION_NAME")
             .ok()
             .or(config.session_name),

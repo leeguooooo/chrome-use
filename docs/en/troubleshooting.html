@@ -229,10 +229,11 @@
         <code>verified: confirmed</code> (the probe answered from the new tab — drive it), an outright failure
         naming a stale or closed target, or <code>verified: unconfirmed</code> — the switch was
         <strong>requested</strong> but never confirmed, so the title and URL printed under it are what was asked
-        for, not a read of the live page. Do not blindly repeat an unconfirmed switch. For a background tab,
-        try <code>tab select &lt;targetId&gt; --activate</code> once; for a foreign tab use
-        <code>tab adopt &lt;targetId&gt; --activate</code>. Then run <code>snapshot -i</code> to verify recovery.
-        Activation precedes renderer initialization or the liveness probe and leaves the tab in the foreground.
+        for, not a read of the live page. Do not blindly repeat an unconfirmed switch. Re-read with
+        <code>snapshot -i</code> first; a background tab usually answers. Only when the user agrees to have their
+        browser brought forward, try <code>tab select &lt;targetId&gt; --activate</code> once (for a foreign tab,
+        <code>tab adopt &lt;targetId&gt; --activate</code>). Activation raises the user's Chrome window and changes the
+        tab in front of it. It precedes renderer initialization or the liveness probe and leaves the tab in the foreground.
         Keep the same session and connection endpoint. If new-tab initialization fails, recover the retained
         target ID from the error instead of repeatedly creating tabs. If reads still fail, preserve and inspect
         the target; do not automatically replay clicks or reload the page. A method timeout alone does not prove

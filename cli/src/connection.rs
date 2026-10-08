@@ -939,7 +939,13 @@ pub struct DaemonOptions<'a> {
 
 fn apply_daemon_env(cmd: &mut Command, session: &str, opts: &DaemonOptions) {
     cmd.env("AGENT_BROWSER_DAEMON", "1")
-        .env("AGENT_BROWSER_SESSION", session);
+        .env("AGENT_BROWSER_SESSION", session)
+        // Who started this daemon, for `~/.chrome-use/connect-mode.log`: a
+        // detached daemon's own parent is init, which names nobody.
+        .env(
+            "CHROME_USE_SPAWNED_BY",
+            crate::connect::caller_description(),
+        );
 
     if opts.headed {
         cmd.env("AGENT_BROWSER_HEADED", "1");

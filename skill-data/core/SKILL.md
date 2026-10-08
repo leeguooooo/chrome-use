@@ -100,6 +100,9 @@ sessions you did not create or adopt. `close` only your own session when done;
 `close --all` would close other agents' sessions, so it refuses; never force it.
 Your tab need not be in front: a click on a background tab still lands and its
 result arrives later, so `wait --text` for it instead of `tab select --activate`.
+The user is working in the same Chrome. Never use `--activate`, `--front` or
+`bringToFront` unless the user asked to see the tab: each one switches the tab
+in front of a window and can bring Chrome over whatever the user is doing.
 An empty tab list is not a disconnected browser: read the error before
 restarting anything, and do not escape to `open --launch`.
 
