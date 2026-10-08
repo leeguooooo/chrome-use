@@ -744,28 +744,59 @@ pub fn frame_state(reply: &Result<Value, String>, frame_id: &str) -> FrameState 
     let Some(root) = v.get("frameTree") else {
         return FrameState::Unknown;
     };
-    if root.pointer("/frame/id").and_then(Value::as_str).is_none() {
-        return FrameState::Unknown;
-    }
-    match find_frame(root, frame_id) {
-        Some(frame) => match frame.get("url").and_then(Value::as_str) {
-            Some(url) => FrameState::At(url.to_string()),
-            None => FrameState::Unknown,
-        },
-        None => FrameState::Gone,
+    match walk_frames(root, frame_id) {
+        Walk::Malformed => FrameState::Unknown,
+        Walk::Absent => FrameState::Gone,
+        Walk::Found(url) => FrameState::At(url),
     }
 }
 
-/// The `frame` object of `id` in a `Page.getFrameTree` node.
-fn find_frame<'a>(node: &'a Value, id: &str) -> Option<&'a Value> {
-    let frame = node.get("frame")?;
-    if frame.get("id").and_then(Value::as_str) == Some(id) {
-        return Some(frame);
+/// The result of walking a whole `Page.getFrameTree` node.
+#[derive(Debug, PartialEq, Eq)]
+enum Walk {
+    /// Some node is not well formed: nothing can be said about the frame.
+    Malformed,
+    /// The tree is valid everywhere and does not contain the frame.
+    Absent,
+    /// The tree is valid everywhere and the frame has this URL.
+    Found(String),
+}
+
+/// Validate the WHOLE tree while looking for `id`: every node must be an
+/// object with a `frame` object carrying a string `id` and `url`, and
+/// `childFrames`, when present, must be an array of such nodes. Any invalid
+/// node anywhere makes the answer `Malformed`, even beside a valid branch,
+/// because only a fully valid tree can prove a frame is absent.
+fn walk_frames(node: &Value, id: &str) -> Walk {
+    let Some(frame) = node.get("frame").filter(|f| f.is_object()) else {
+        return Walk::Malformed;
+    };
+    let (Some(fid), Some(url)) = (
+        frame.get("id").and_then(Value::as_str),
+        frame.get("url").and_then(Value::as_str),
+    ) else {
+        return Walk::Malformed;
+    };
+    let mut found = (fid == id).then(|| url.to_string());
+    match node.get("childFrames") {
+        None => {}
+        Some(children) => {
+            let Some(children) = children.as_array() else {
+                return Walk::Malformed;
+            };
+            for child in children {
+                match walk_frames(child, id) {
+                    Walk::Malformed => return Walk::Malformed,
+                    Walk::Found(u) if found.is_none() => found = Some(u),
+                    _ => {}
+                }
+            }
+        }
     }
-    node.get("childFrames")?
-        .as_array()?
-        .iter()
-        .find_map(|c| find_frame(c, id))
+    match found {
+        Some(u) => Walk::Found(u),
+        None => Walk::Absent,
+    }
 }
 
 /// The result of reading the guard back.
@@ -1265,6 +1296,87 @@ mod tests {
             let s = frame_state(&Ok(bad.clone()), "top");
             assert_eq!(s, FrameState::Unknown, "{bad}");
             assert!(!s.navigated_from(armed), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_frame_is_absent_only_in_a_fully_valid_tree() {
+        let armed = "https://a.com/p";
+        let top = json!({ "id": "top", "url": "https://a.com/" });
+        let state = |tree: Value| frame_state(&Ok(json!({ "frameTree": tree })), "F");
+        // A valid leaf without childFrames, and valid children: absent = gone.
+        assert_eq!(state(json!({ "frame": top })), FrameState::Gone);
+        assert_eq!(
+            state(json!({ "frame": top, "childFrames": [
+                { "frame": { "id": "c1", "url": "https://b.com/" } },
+                { "frame": { "id": "c2", "url": "https://c.com/" }, "childFrames": [] }
+            ] })),
+            FrameState::Gone
+        );
+        assert_eq!(
+            state(json!({ "frame": top, "childFrames": [
+                { "frame": { "id": "F", "url": "https://f.com/" } }
+            ] })),
+            FrameState::At("https://f.com/".into())
+        );
+        // (a) childFrames is not an array: unknown, not gone.
+        for children in [json!({}), json!("x"), json!(1), json!(null)] {
+            let s = state(json!({ "frame": top, "childFrames": children.clone() }));
+            assert_eq!(s, FrameState::Unknown, "{children}");
+            assert!(!s.navigated_from(armed));
+        }
+        // (b) a child without frame / id / url, or with non-string ones.
+        for child in [
+            json!({ "frame": { "url": "https://b.com/" } }),
+            json!({ "frame": { "id": "c1" } }),
+            json!({}),
+            json!({ "frame": "c1" }),
+            json!({ "frame": { "id": 5, "url": "https://b.com/" } }),
+            json!({ "frame": { "id": "c1", "url": null } }),
+            json!("garbage"),
+        ] {
+            let s = state(json!({ "frame": top, "childFrames": [child.clone()] }));
+            assert_eq!(s, FrameState::Unknown, "{child}");
+        }
+        // A malformed branch beside a valid one: unknown, even when F is not
+        // in the valid branch (it could be under the malformed one)...
+        let s = state(json!({ "frame": top, "childFrames": [
+            { "frame": { "id": "ok", "url": "https://b.com/" } },
+            { "frame": { "id": "bad" }, "childFrames": [] }
+        ] }));
+        assert_eq!(s, FrameState::Unknown);
+        // ...and a deeper malformed node also makes the whole tree unknown.
+        let s = state(json!({ "frame": top, "childFrames": [
+            { "frame": { "id": "ok", "url": "https://b.com/" },
+              "childFrames": [{ "frame": { "url": "https://d.com/" } }] }
+        ] }));
+        assert_eq!(s, FrameState::Unknown);
+        // Even when F itself is found, a malformed sibling makes it unknown.
+        let s = state(json!({ "frame": top, "childFrames": [
+            { "frame": { "id": "F", "url": "https://f.com/" } },
+            { "frame": { "id": "x" } }
+        ] }));
+        assert_eq!(s, FrameState::Unknown);
+        // Through read_outcome, with the guard read failing (the reviewer's
+        // counter-examples): Failed (unknown), never Gone.
+        let guard = ArmedGuard {
+            session_id: "s".into(),
+            context_id: 1,
+            frame_id: "F".into(),
+            frame_url: armed.into(),
+        };
+        let timeout: Result<Value, String> = Err("timeout".into());
+        for tree in [
+            json!({ "frameTree": { "frame": top, "childFrames": {} } }),
+            json!({ "frameTree": { "frame": top, "childFrames": [{ "frame": { "url": "https://b.com/" } }] } }),
+        ] {
+            assert!(
+                matches!(
+                    read_outcome(&timeout, &Ok(tree.clone()), &guard),
+                    ReadOutcome::Failed(_)
+                ),
+                "{tree}"
+            );
         }
     }
 
