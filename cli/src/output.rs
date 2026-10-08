@@ -4876,7 +4876,10 @@ ChooseBrowser rules are binding (macOS, when that app is installed):
   (it picks the rule's profile) or pass --no-choosebrowser to open it in the
   bound profile anyway. --browser and config routes still win over the rule.
   A rule naming a profile that no longer exists on this machine is ignored
-  with a warning line (`warning` in --json); the command still runs.
+  with a warning line (`warning` in --json); the command still runs. A rule
+  whose key fits several profiles is refused. batch steps, MCP tool calls and
+  script steps are checked the same way; a batch whose sites need different
+  profiles is refused before any step runs.
   `chrome-use doctor` lists each rule and whether its profile is connected.
 
 Examples:

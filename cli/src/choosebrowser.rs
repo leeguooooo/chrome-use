@@ -300,12 +300,22 @@ pub fn profile_rules(rules_json: &str) -> Vec<ProfileRule> {
         .collect()
 }
 
-/// The rules of the first file that exists, as [`profile_rules`] reads them.
-pub fn load_profile_rules() -> Vec<ProfileRule> {
+/// The rules file in effect: the first location that exists, in
+/// [`rules_paths`] order. The one loader both the runtime lookup and `doctor`
+/// use, so they can never disagree about which rules apply. A later file is
+/// not consulted even when the first has no rule for a url — the first file
+/// that exists is ChooseBrowser's current state, and a file behind it is a
+/// leftover (`doctor` reports it as shadowed).
+pub fn active_rules() -> Option<(PathBuf, String)> {
     rules_paths()
         .into_iter()
-        .find_map(|p| std::fs::read_to_string(p).ok())
-        .map(|body| profile_rules(&body))
+        .find_map(|p| std::fs::read_to_string(&p).ok().map(|body| (p, body)))
+}
+
+/// The rules of [`active_rules`], as [`profile_rules`] reads them.
+pub fn load_profile_rules() -> Vec<ProfileRule> {
+    active_rules()
+        .map(|(_, body)| profile_rules(&body))
         .unwrap_or_default()
 }
 
@@ -335,10 +345,47 @@ fn compare_created_at(a: &Option<serde_json::Value>, b: &Option<serde_json::Valu
 /// Compared case-insensitively against gaia id, then email, then display name,
 /// then the directory name itself — the same order the writer used when
 /// choosing what to store.
+#[cfg(test)]
 pub fn resolve_profile_directory(local_state_json: &str, key: &str) -> Option<ResolvedProfile> {
-    let state: serde_json::Value = serde_json::from_str(local_state_json).ok()?;
-    let cache = state.get("profile")?.get("info_cache")?.as_object()?;
+    match resolve_profile_key(local_state_json, key) {
+        KeyResolution::Found(p) => Some(p),
+        KeyResolution::Ambiguous(_) | KeyResolution::NotFound => None,
+    }
+}
+
+/// What a portable key names on this machine.
+#[derive(Debug, PartialEq, Clone)]
+pub enum KeyResolution {
+    Found(ResolvedProfile),
+    /// The highest-priority field that matched at all matched several
+    /// profiles (one account signed in to several, two profiles with the same
+    /// name). Picking one would be a guess about which account the user
+    /// meant, so the caller refuses. Directories, sorted.
+    Ambiguous(Vec<String>),
+    NotFound,
+}
+
+/// [`resolve_profile_directory`], keeping "several" apart from "none".
+///
+/// Fields are tried in priority order, and the first field with any match
+/// decides: one match is the answer, several is [`KeyResolution::Ambiguous`].
+/// A lower-priority field is never consulted to break the tie — that would
+/// let a display name overrule the gaia id the rule actually stored.
+pub fn resolve_profile_key(local_state_json: &str, key: &str) -> KeyResolution {
+    let Ok(state) = serde_json::from_str::<serde_json::Value>(local_state_json) else {
+        return KeyResolution::NotFound;
+    };
+    let Some(cache) = state
+        .get("profile")
+        .and_then(|p| p.get("info_cache"))
+        .and_then(|c| c.as_object())
+    else {
+        return KeyResolution::NotFound;
+    };
     let key = key.trim();
+    if key.is_empty() {
+        return KeyResolution::NotFound;
+    }
     let email_of = |info: &serde_json::Value| {
         info.get("user_name")
             .and_then(|v| v.as_str())
@@ -346,30 +393,41 @@ pub fn resolve_profile_directory(local_state_json: &str, key: &str) -> Option<Re
             .filter(|v| !v.is_empty())
             .map(str::to_string)
     };
+    let decide = |hits: Vec<(&String, &serde_json::Value)>| -> Option<KeyResolution> {
+        match hits.len() {
+            0 => None,
+            1 => Some(KeyResolution::Found(ResolvedProfile {
+                directory: hits[0].0.clone(),
+                email: email_of(hits[0].1),
+            })),
+            _ => {
+                let mut dirs: Vec<String> = hits.iter().map(|(d, _)| (*d).clone()).collect();
+                dirs.sort();
+                Some(KeyResolution::Ambiguous(dirs))
+            }
+        }
+    };
 
     for field in ["gaia_id", "user_name", "gaia_name", "name", "shortcut_name"] {
-        for (dir, info) in cache {
-            if info
-                .get(field)
-                .and_then(|v| v.as_str())
-                .is_some_and(|v| v.trim().eq_ignore_ascii_case(key))
-            {
-                return Some(ResolvedProfile {
-                    directory: dir.clone(),
-                    email: email_of(info),
-                });
-            }
+        let hits: Vec<(&String, &serde_json::Value)> = cache
+            .iter()
+            .filter(|(_, info)| {
+                info.get(field)
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| v.trim().eq_ignore_ascii_case(key))
+            })
+            .collect();
+        if let Some(r) = decide(hits) {
+            return r;
         }
     }
     // Last resort: the key may itself be a directory name, which the writer
     // falls back to when a profile has no identifying fields at all.
-    cache
+    let hits: Vec<(&String, &serde_json::Value)> = cache
         .iter()
-        .find(|(dir, _)| dir.eq_ignore_ascii_case(key))
-        .map(|(dir, info)| ResolvedProfile {
-            directory: dir.clone(),
-            email: email_of(info),
-        })
+        .filter(|(dir, _)| dir.eq_ignore_ascii_case(key))
+        .collect();
+    decide(hits).unwrap_or(KeyResolution::NotFound)
 }
 
 /// What the lookup found, step by step, for `doctor` to print.
@@ -431,15 +489,17 @@ pub fn diagnose() -> Diagnosis {
     d
 }
 
-/// What the rules say about one url, keeping apart "no rule" and "a rule
-/// whose profile is gone": the second is a stale rule the user should hear
-/// about, even though it does not block anything.
+/// What the rules say about one url, keeping apart "no rule", "a rule whose
+/// profile is gone" (a stale rule: warned about, never blocking) and "a rule
+/// whose key fits several profiles" (refused: picking one is a guess).
 #[derive(Debug, PartialEq, Clone)]
 pub enum RuleLookup {
     NoRule,
     Resolved(ResolvedProfile, ProfileChoice),
     /// A rule covers the url, but its key names no profile in `Local State`.
     Stale(ProfileChoice),
+    /// A rule covers the url, and its key names several profiles.
+    Ambiguous(ProfileChoice, Vec<String>),
 }
 
 /// Pure half of [`lookup_url`]. An unreadable `Local State` (Chrome never ran
@@ -448,13 +508,22 @@ pub fn resolve_choice(choice: Option<ProfileChoice>, local_state: Option<&str>) 
     let (Some(choice), Some(local_state)) = (choice, local_state) else {
         return RuleLookup::NoRule;
     };
-    // A key that resolves to nothing means no profile from the rule. Falling
-    // back to *some other* profile by guessing would open the link as the
-    // wrong identity.
-    match resolve_profile_directory(local_state, &choice.key) {
-        Some(profile) => RuleLookup::Resolved(profile, choice),
-        None => RuleLookup::Stale(choice),
+    // Never fall back to *some other* profile by guessing: that would open
+    // the link as the wrong identity.
+    match resolve_profile_key(local_state, &choice.key) {
+        KeyResolution::Found(profile) => RuleLookup::Resolved(profile, choice),
+        KeyResolution::Ambiguous(dirs) => RuleLookup::Ambiguous(choice, dirs),
+        KeyResolution::NotFound => RuleLookup::Stale(choice),
     }
+}
+
+/// The whole chain, pure: rules file text → matching rule → `Local State`.
+pub fn lookup_in(rules_json: Option<&str>, local_state: Option<&str>, url: &str) -> RuleLookup {
+    let choice = rules_json.and_then(|body| choose_for_url(body, url));
+    if choice.is_none() {
+        return RuleLookup::NoRule;
+    }
+    resolve_choice(choice, local_state)
 }
 
 /// The whole lookup against the real files. `NoRule` for every ordinary
@@ -465,19 +534,17 @@ pub fn resolve_choice(choice: Option<ProfileChoice>, local_state: Option<&str>) 
 /// refuses with the reason. It never substitutes another profile because the
 /// named one is not connected (see `profiles::decide_rule`). `Stale` is only a
 /// warning: a rule naming a profile that no longer exists must not block its
-/// site.
+/// site. `Ambiguous` refuses.
 pub fn lookup_url(url: &str) -> RuleLookup {
-    // First path that both exists and yields a decision. A file that parses to
-    // "no rule covers this url" is a real answer, so keep looking only while
-    // nothing has answered at all.
-    let choice = rules_paths().into_iter().find_map(|p| {
-        let body = std::fs::read_to_string(p).ok()?;
-        choose_for_url(&body, url)
-    });
-    if choice.is_none() {
+    let rules = active_rules();
+    if rules.is_none() {
         return RuleLookup::NoRule;
     }
-    resolve_choice(choice, read_local_state().as_deref())
+    lookup_in(
+        rules.as_ref().map(|(_, body)| body.as_str()),
+        read_local_state().as_deref(),
+        url,
+    )
 }
 
 /// Chrome's profile registry, as text. `None` when Chrome has never run here.

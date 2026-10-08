@@ -1573,6 +1573,22 @@ fn connect(session: &str) -> Result<Connection, String> {
     }
 }
 
+/// Whether this invocation chose its browser explicitly (`--browser`, `--cdp`,
+/// `--provider`, `--no-choosebrowser`, …). Set once by `main`, forwarded on
+/// every command as `_cbSkip` so the daemon's navigation guard
+/// (`profiles::guard_navigation`) honours the same choice for every step this
+/// invocation sends — a direct command, each `batch` step, a script.
+static CHOOSEBROWSER_SKIP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_choosebrowser_skip(skip: bool) {
+    CHOOSEBROWSER_SKIP.store(skip, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn choosebrowser_skip() -> bool {
+    CHOOSEBROWSER_SKIP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
     // Ownership guard (issue #89, ego-lite handoff model): a session handed off
     // to the user with `session handoff` is off-limits to the agent until
@@ -1583,12 +1599,27 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         crate::ownership::guard(session, crate::ownership::owner_of(session), action)?;
     }
 
+    // ChooseBrowser guard, client side: every navigation this CLI sends —
+    // a direct command, each batch step, an MCP tool call (which runs this
+    // binary) — is checked against the session's recorded profile before it
+    // leaves. The daemon repeats the check with its live endpoint, which also
+    // covers navigations it runs itself (script steps).
+    crate::profiles::guard_outgoing(
+        &cmd,
+        session,
+        CHOOSEBROWSER_SKIP.load(std::sync::atomic::Ordering::Relaxed),
+    )?;
+
     // Forward per-invocation env to the daemon. The daemon's environment is
     // frozen at spawn, so settings like AGENT_BROWSER_CLICK_MODE /
     // AGENT_BROWSER_HUMANIZE (incl. the --humanize flag, which sets the latter)
     // are otherwise silently ignored on an already-running daemon. Carry them in
     // the envelope so they apply to THIS command.
     if let Some(obj) = cmd.as_object_mut() {
+        obj.insert(
+            "_cbSkip".to_string(),
+            Value::Bool(CHOOSEBROWSER_SKIP.load(std::sync::atomic::Ordering::Relaxed)),
+        );
         if let Ok(m) = std::env::var("AGENT_BROWSER_CLICK_MODE") {
             obj.insert("_clickMode".to_string(), Value::String(m));
         }

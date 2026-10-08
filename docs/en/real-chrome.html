@@ -207,8 +207,11 @@
         so ask the user first). If the session is already bound to another profile, the command
         also fails: use a new <code>--session</code> (it picks the rule's profile), or pass
         <code>--no-choosebrowser</code> to open it in the bound profile anyway. An explicit
-        <code>--browser</code> or a config route still wins. <code>chrome-use doctor</code> lists
-        each rule and whether its profile is connected.
+        <code>--browser</code> or a config route still wins. The check covers every
+        <code>batch</code> step (a batch that needs two profiles runs no step at all), MCP tool calls
+        and script steps. A rule whose key fits several profiles is refused; a rule whose profile
+        no longer exists only warns. <code>chrome-use doctor</code> lists each rule and whether its
+        profile is connected.
       </p>
       <p>
         Rules are consulted before the "most recently focused window" guess, because a rule is

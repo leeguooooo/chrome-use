@@ -137,7 +137,13 @@ a different profile:
 
 `--browser` and config routes still win over a rule. A rule naming a profile
 that no longer exists on this machine does not block anything: the command
-runs with normal selection and prints one warning (`warning` in `--json`). `chrome-use doctor`
+runs with normal selection and prints one warning (`warning` in `--json`).
+A rule whose key fits several profiles (one account signed in to two of
+them) is refused, since picking one would be a guess.
+
+The check covers every navigation, not just direct commands: each `batch`
+step (a batch whose sites need different profiles is refused before any step
+runs), MCP tool calls, and script steps. `chrome-use doctor`
 lists each rule and whether its profile is connected.
 
 **Every profile at once (opt-in).** Chrome's `ExtensionInstallForcelist`

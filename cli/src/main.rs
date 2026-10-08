@@ -182,12 +182,6 @@ fn session_command_route(sub: Option<&str>) -> SessionCommandRoute {
 /// extension renames the group, so the daemon is asked to do that; when it
 /// cannot (no daemon yet, or an older extension), the reply says which tabs the
 /// new name applies to rather than implying it applied to all of them.
-/// The url this invocation is about to open, for the ChooseBrowser lookup.
-///
-/// Only the commands that *navigate* carry one. A `snapshot` or a `click` acts
-/// on whatever the session already has open, so consulting a routing rule there
-/// would answer a question nobody asked — and could move the session to another
-/// profile mid-task.
 /// Resolve a profile named in `~/.chrome-use/config.json` (`profiles`) to its
 /// relay endpoint, or stop with the reason — the user wrote that rule, so a
 /// silent fallback to another profile would be the wrong account (#437).
@@ -204,57 +198,60 @@ fn configured_profile_ws(selector: &str, why: &str) -> String {
     }
 }
 
-/// Add a CLI-side note to the response's `warning` without dropping one the
-/// daemon already set (same newline-joined shape the daemon uses).
-fn merge_warning(existing: Option<String>, note: &str) -> String {
-    match existing.filter(|e| !e.is_empty()) {
-        Some(e) => format!("{note}\n{e}"),
-        None => note.to_string(),
+/// Verbs whose parsed command can carry a url to navigate to. Only these are
+/// parsed early: other parsers may read stdin (`fill --stdin`, `eval
+/// --stdin`), which must happen exactly once, later.
+const NAVIGATING_VERBS: &[&str] = &["open", "goto", "navigate", "tab", "tabs", "a11y"];
+
+/// The url a parsed command navigates to — the same JSON the daemon receives,
+/// so the ChooseBrowser guard checks exactly the url that is sent.
+fn navigation_url(parsed: &serde_json::Value) -> Option<String> {
+    match parsed.get("action")?.as_str()? {
+        "navigate" | "tab_new" | "a11y" => parsed.get("url")?.as_str().map(str::to_string),
+        _ => None,
     }
 }
 
-fn target_url_for_choosebrowser(argv: &[String]) -> Option<String> {
-    const NAVIGATES: &[&str] = &["open", "goto", "navigate"];
-    let verb = argv.first()?.as_str();
-    let candidate = if NAVIGATES.contains(&verb) {
-        argv.iter()
-            .skip(1)
-            .find(|a| !a.starts_with('-') && a.contains('.'))?
-    } else if verb == "tab" || verb == "tabs" {
-        // `tab new [--label <name>] [url]`: the url is the first plain word
-        // after `new` that is not the label's value.
-        let rest = &argv[1..];
-        let new_at = rest.iter().position(|a| !a.starts_with("--"))?;
-        if rest[new_at] != "new" {
-            return None;
+/// Every url this invocation will navigate to, in order: the command's own,
+/// then each `batch` step's. Read off the formal parse (no second url
+/// heuristic) and normalised the way the daemon guard normalises it.
+///
+/// Only the commands that *navigate* carry one. A `snapshot` or a `click` acts
+/// on whatever the session already has open, so consulting a routing rule there
+/// would answer a question nobody asked.
+fn navigation_urls(
+    clean: &[String],
+    flags: &Flags,
+    batch_steps: Option<&[Vec<String>]>,
+) -> Vec<String> {
+    let navigates = |argv: &[String]| {
+        argv.first()
+            .is_some_and(|v| NAVIGATING_VERBS.contains(&v.as_str()))
+    };
+    let mut out = Vec::new();
+    if navigates(clean) {
+        if let Some(u) = commands::parse_command(clean, flags)
+            .ok()
+            .as_ref()
+            .and_then(navigation_url)
+        {
+            out.push(u);
         }
-        let mut found = None;
-        let mut i = 0;
-        while i < rest.len() {
-            let a = &rest[i];
-            if i == new_at {
-                i += 1;
-            } else if a == "--label" {
-                i += 2;
-            } else if !a.starts_with('-') && a.contains('.') {
-                found = Some(a);
-                break;
-            } else {
-                i += 1;
+    }
+    for step in batch_steps.unwrap_or(&[]) {
+        if navigates(step) {
+            if let Some(u) = commands::parse_batch_step(step, flags)
+                .ok()
+                .as_ref()
+                .and_then(navigation_url)
+            {
+                out.push(u);
             }
         }
-        found?
-    } else {
-        return None;
-    };
-    // Accept what the user typed the way `open` does, so a bare host still
-    // routes: `open github.com` is the common shape.
-    let normalized = if candidate.contains("://") {
-        candidate.clone()
-    } else {
-        format!("https://{candidate}")
-    };
-    url::Url::parse(&normalized).ok().map(|u| u.to_string())
+    }
+    out.into_iter()
+        .filter_map(|u| profiles::guard_url(&u))
+        .collect()
 }
 
 /// Turn a `--remember` invocation into the request to hand ChooseBrowser, or
@@ -274,6 +271,7 @@ fn target_url_for_choosebrowser(argv: &[String]) -> Option<String> {
 /// what it meant to exercise.
 fn remember_request(
     argv: &[String],
+    target_url: Option<&str>,
     browser_selector: Option<&str>,
     no_choosebrowser: bool,
     profile_email: Option<&str>,
@@ -302,14 +300,14 @@ fn remember_request(
         );
     };
     let verb = argv.first().map(String::as_str).unwrap_or("");
-    let Some(url) = target_url_for_choosebrowser(argv) else {
+    let Some(url) = target_url else {
         return Err(format!(
             "--remember applies to a command that opens a url — `open`, `goto`, `navigate` or `tab new <url>`. \
              `{verb}` acts on whatever the session already has open, so there is no site to \
              write a rule for."
         ));
     };
-    let host = url::Url::parse(&url)
+    let host = url::Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(str::to_string))
         .ok_or_else(|| format!("--remember: could not read a hostname out of '{url}'."))?;
@@ -2414,10 +2412,18 @@ fn main() {
     // Which relay endpoint this invocation picked for the session, and why —
     // for the one-line "profile: …" note (#437).
     let mut profile_choice: Option<(String, String)> = None;
-    // A ChooseBrowser rule covering this url whose profile no longer exists on
-    // this machine: not a refusal, but said once (stderr, or `warning` in
-    // --json) so a rule that silently does nothing is visible.
-    let mut stale_rule_warning: Option<String> = None;
+    // Did the user name the browser endpoint themselves? Captured before the
+    // profile choice below fills `flags.cdp` in on their behalf.
+    let user_chose_cdp = flags.cdp.is_some();
+    // `batch` steps navigate as much as `open` does. Their stdin is read here,
+    // once, so the rule check sees every step before anything runs.
+    let batch_steps: Option<Vec<Vec<String>>> =
+        if clean.first().map(String::as_str) == Some("batch") {
+            Some(load_batch_steps(&clean, &flags))
+        } else {
+            None
+        };
+    let nav_urls = navigation_urls(&clean, &flags, batch_steps.as_deref());
     let first_attach = !connection::daemon_ready(&flags.session);
     // `--profile` / AGENT_BROWSER_PROFILE doubles as a profile selector when it
     // names a Chrome profile (display name, directory, email, id). A path or
@@ -2436,6 +2442,41 @@ fn main() {
     } else {
         None
     };
+    // ChooseBrowser rules bind only when nothing explicit chose the browser.
+    // The daemon re-checks every navigation it is sent (batch steps, MCP
+    // calls, scripts), so it is told the same thing.
+    let rules_skipped = flags.no_choosebrowser
+        || browser_selector.is_some()
+        || user_chose_cdp
+        || flags.provider.is_some()
+        || flags.force_launch;
+    connection::set_choosebrowser_skip(rules_skipped);
+    let configured = profiles::load_profiles_config();
+    let rule_hits: Vec<profiles::RuleHit> = if rules_skipped {
+        Vec::new()
+    } else {
+        nav_urls
+            .iter()
+            // A config route for the url wins over a ChooseBrowser rule.
+            .filter(|u| {
+                configured
+                    .as_ref()
+                    .and_then(|cfg| profiles::choose_route(cfg, u))
+                    .is_none()
+            })
+            .filter_map(|u| match profiles::rule_outcome_for_url(u) {
+                profiles::RuleOutcome::Hit(h) => Some(h),
+                // Stale rules only warn; the daemon attaches that warning to
+                // the navigation it belongs to.
+                profiles::RuleOutcome::Stale(_) | profiles::RuleOutcome::None => None,
+            })
+            .collect()
+    };
+    if let Some(msg) = profiles::conflicting_rules(&rule_hits) {
+        eprintln!("{} {msg}", color::error_indicator());
+        exit(1);
+    }
+
     if let Some(sel) = browser_selector.as_ref() {
         match connect::relay_profile_for_browser(sel) {
             Ok((_, email, url)) => {
@@ -2472,8 +2513,7 @@ fn main() {
         //   3. `profiles.default` from the same config (#437),
         //   4. the profile the user is actively using (most recently focused),
         //   5. the legacy last-connected default, with a warning.
-        let target_url = target_url_for_choosebrowser(&clean);
-        let configured = profiles::load_profiles_config();
+        let target_url = nav_urls.first().cloned();
         if let Some((sel, why)) = configured
             .as_ref()
             .zip(target_url.as_deref())
@@ -2495,15 +2535,10 @@ fn main() {
         // default or the focused profile — that fall-through opened claude.ai
         // in the wrong account with no message. A config route chosen above
         // (flags.cdp set) and --no-choosebrowser still win.
-        let rule_hit = if flags.no_choosebrowser || flags.cdp.is_some() {
+        let rule_hit = if flags.cdp.is_some() {
             None
         } else {
-            let (hit, stale) = target_url
-                .as_deref()
-                .map(profiles::rule_hit_for_url)
-                .unwrap_or((None, None));
-            stale_rule_warning = stale;
-            hit
+            rule_hits.first().cloned()
         };
         if rule_hit.is_some() {
             let rows = profiles::load_rows();
@@ -2579,46 +2614,10 @@ fn main() {
         }
     }
 
-    // A session that is already running keeps its profile (it is never
-    // re-resolved mid-task). That made a ChooseBrowser rule silently not apply
-    // to it: the site opened in whatever profile the session was bound to
-    // earlier. Check the rule on every navigation of a running session and
-    // refuse a mismatch instead of switching or substituting.
-    if !first_attach
-        && browser_selector.is_none()
-        && flags.cdp.is_none()
-        && !flags.force_launch
-        && flags.provider.is_none()
-        && !flags.no_choosebrowser
-    {
-        if let Some(url) = target_url_for_choosebrowser(&clean) {
-            let routed_by_config = profiles::load_profiles_config()
-                .and_then(|cfg| profiles::choose_route(&cfg, &url))
-                .is_some();
-            let hit = if routed_by_config {
-                None
-            } else {
-                let (hit, stale) = profiles::rule_hit_for_url(&url);
-                stale_rule_warning = stale;
-                hit
-            };
-            if hit.is_some() {
-                let record = profiles::session_profile(&flags.session);
-                let rows = profiles::load_rows();
-                if let profiles::RuleDecision::Refuse(msg) = profiles::decide_rule(
-                    &rows,
-                    hit.as_ref(),
-                    flags.no_choosebrowser,
-                    routed_by_config,
-                    profiles::SessionBinding::Bound(record.as_ref()),
-                    &flags.session,
-                ) {
-                    eprintln!("{} {msg}", color::error_indicator());
-                    exit(1);
-                }
-            }
-        }
-    }
+    // A running session keeps its profile, so a rule naming another profile
+    // is enforced by the daemon right before it sends the navigation — the one
+    // point every client goes through (direct commands, batch steps, MCP tool
+    // calls, scripts). See `profiles::guard_navigation`.
 
     // #437: which profile does this session use? Said once — on the session's
     // first attach, when `--browser` re-points it, and on `open`/`goto` — not
@@ -2666,6 +2665,7 @@ fn main() {
     let remember_request = if flags.remember {
         match remember_request(
             &clean,
+            nav_urls.first().map(String::as_str),
             browser_selector.as_deref(),
             flags.no_choosebrowser,
             browser_email.as_deref(),
@@ -3009,9 +3009,6 @@ fn main() {
         if !flags.json {
             eprintln!("{}", color::dim(&profiles::profile_line(note)));
         }
-    }
-    if let (false, Some(w)) = (flags.json, &stale_rule_warning) {
-        eprintln!("{} {w}", color::warning_indicator());
     }
     if flags.force_launch && flags.cdp.is_none() && flags.provider.is_none() {
         connection::mark_session_launched(&flags.session);
@@ -3536,13 +3533,9 @@ fn main() {
     // Handle batch command: from args or stdin
     if cmd.get("action").and_then(|v| v.as_str()) == Some("batch") {
         let bail = cmd.get("bail").and_then(|v| v.as_bool()).unwrap_or(false);
-        let arg_commands = cmd.get("commands").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .map(commands::shell_words_split)
-                .collect::<Vec<Vec<String>>>()
-        });
-        run_batch(&flags, bail, arg_commands);
+        // Steps were read (args or stdin) before the profile choice, so the
+        // ChooseBrowser check saw all of them.
+        run_batch(&flags, bail, batch_steps.clone().unwrap_or_default());
         return;
     }
 
@@ -3818,9 +3811,6 @@ fn main() {
                     _ => {}
                 }
             }
-            if let (true, Some(w)) = (flags.json, &stale_rule_warning) {
-                resp.warning = Some(merge_warning(resp.warning.take(), w));
-            }
             print_response_with_opts(&resp, action, &output_opts);
             // `expect` is an assertion: map to a 3-way exit code so it composes in
             // shells/CI — 0 pass, 1 condition false, 2 un-evaluable (transport
@@ -4013,8 +4003,19 @@ fn dispatch_script(flags: &Flags, cmd: serde_json::Value) {
     }
 }
 
-fn run_batch(flags: &Flags, bail: bool, arg_commands: Option<Vec<Vec<String>>>) {
-    let commands: Vec<Vec<String>> = if let Some(cmds) = arg_commands {
+/// A `batch`'s steps: the quoted strings on the command line, or a JSON array
+/// of string arrays on stdin. Read once, before anything runs, so every step
+/// can be checked first.
+fn load_batch_steps(clean: &[String], flags: &Flags) -> Vec<Vec<String>> {
+    let arg_commands = commands::parse_command(clean, flags).ok().and_then(|cmd| {
+        cmd.get("commands").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(commands::shell_words_split)
+                .collect::<Vec<Vec<String>>>()
+        })
+    });
+    if let Some(cmds) = arg_commands {
         cmds
     } else {
         use std::io::Read as _;
@@ -4047,7 +4048,36 @@ fn run_batch(flags: &Flags, bail: bool, arg_commands: Option<Vec<Vec<String>>>) 
                 exit(1);
             }
         }
-    };
+    }
+}
+
+fn run_batch(flags: &Flags, bail: bool, commands: Vec<Vec<String>>) {
+    // Check every navigating step against the session's profile before any
+    // step runs. Refusing only the offending step would let the steps after
+    // it (a click, a fill) act on whatever page the session already had, in
+    // the account the rule said not to use.
+    for step in &commands {
+        if !step
+            .first()
+            .is_some_and(|v| NAVIGATING_VERBS.contains(&v.as_str()))
+        {
+            continue;
+        }
+        let Ok(parsed) = commands::parse_batch_step(step, flags) else {
+            continue;
+        };
+        if let Err(e) =
+            profiles::guard_outgoing(&parsed, &flags.session, connection::choosebrowser_skip())
+        {
+            let msg = format!("batch not run: {e}");
+            if flags.json {
+                print_json_error(msg);
+            } else {
+                eprintln!("{} {msg}", color::error_indicator());
+            }
+            exit(1);
+        }
+    }
 
     if commands.is_empty() {
         if flags.json {
@@ -4365,6 +4395,7 @@ mod tests {
     fn remember_produces_a_request_for_the_named_profile() {
         let (url, host) = remember_request(
             &argv(&["open", "https://github.com/leeguooooo/chrome-use"]),
+            nav(&argv(&["open", "https://github.com/leeguooooo/chrome-use"])).as_deref(),
             Some("leo@gmail.com"),
             false,
             Some("leo@gmail.com"),
@@ -4391,6 +4422,11 @@ mod tests {
                 "open",
                 "https://github.com/leeguooooo/chrome-use/issues/244",
             ]),
+            nav(&argv(&[
+                "open",
+                "https://github.com/leeguooooo/chrome-use/issues/244",
+            ]))
+            .as_deref(),
             Some("leo@gmail.com"),
             false,
             Some("leo@gmail.com"),
@@ -4407,6 +4443,7 @@ mod tests {
     fn remember_needs_an_explicit_browser() {
         let err = remember_request(
             &argv(&["open", "https://github.com/"]),
+            nav(&argv(&["open", "https://github.com/"])).as_deref(),
             None,
             false,
             Some("leo@gmail.com"),
@@ -4421,6 +4458,7 @@ mod tests {
     fn remember_rejects_a_command_that_opens_nothing() {
         let err = remember_request(
             &argv(&["snapshot"]),
+            nav(&argv(&["snapshot"])).as_deref(),
             Some("leo@gmail.com"),
             false,
             Some("leo@gmail.com"),
@@ -4435,6 +4473,7 @@ mod tests {
     fn remember_and_no_choosebrowser_cannot_both_be_meant() {
         let err = remember_request(
             &argv(&["open", "https://github.com/"]),
+            nav(&argv(&["open", "https://github.com/"])).as_deref(),
             Some("leo@gmail.com"),
             true,
             Some("leo@gmail.com"),
@@ -4452,6 +4491,7 @@ mod tests {
     fn remember_refuses_a_profile_with_no_account() {
         let err = remember_request(
             &argv(&["open", "https://github.com/"]),
+            nav(&argv(&["open", "https://github.com/"])).as_deref(),
             Some("27ade1bc"),
             false,
             None,
@@ -4463,6 +4503,7 @@ mod tests {
 
         let err = remember_request(
             &argv(&["open", "https://github.com/"]),
+            nav(&argv(&["open", "https://github.com/"])).as_deref(),
             Some("someone@else.test"),
             false,
             Some("someone@else.test"),
@@ -4478,6 +4519,7 @@ mod tests {
     fn remember_refuses_off_macos() {
         let err = remember_request(
             &argv(&["open", "https://github.com/"]),
+            nav(&argv(&["open", "https://github.com/"])).as_deref(),
             Some("leo@gmail.com"),
             false,
             Some("leo@gmail.com"),
@@ -4487,14 +4529,26 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("macOS-only"), "{err}");
     }
-    /// `--browser`'s value looks exactly like a url to the scanner that picks
-    /// the target (no leading dash, contains a dot), so the two have to be read
-    /// together: `clean_args` drops it because `--browser` takes a value, and
-    /// only then is the first dot-bearing argument really the site.
-    ///
-    /// Tested as one property rather than two, because each half is correct on
-    /// its own and the bug would live in the seam — `open --browser
-    /// leo@gmail.com https://github.com/` writing a rule for gmail.com.
+    /// The url the rule check sees for a command line, through the same parse
+    /// that builds the command sent to the daemon.
+    fn nav(raw: &[String]) -> Option<String> {
+        let flags = crate::flags::parse_flags(raw);
+        let clean = crate::flags::clean_args(raw);
+        navigation_urls(&clean, &flags, None).into_iter().next()
+    }
+
+    /// The parsed command's url, as sent on the wire.
+    fn wire(raw: &[String]) -> Option<String> {
+        let flags = crate::flags::parse_flags(raw);
+        let clean = crate::flags::clean_args(raw);
+        commands::parse_command(&clean, &flags)
+            .ok()
+            .as_ref()
+            .and_then(navigation_url)
+    }
+
+    /// `--browser`'s value looks like a url (no leading dash, contains a
+    /// dot); the formal parse never mistakes it for the site.
     #[test]
     fn a_browser_selector_is_never_mistaken_for_the_target_url() {
         let raw = argv(&[
@@ -4503,44 +4557,83 @@ mod tests {
             "leo@gmail.com",
             "https://github.com/leeguooooo",
         ]);
-        let clean = crate::flags::clean_args(&raw);
-        assert_eq!(
-            target_url_for_choosebrowser(&clean).as_deref(),
-            Some("https://github.com/leeguooooo")
-        );
+        assert_eq!(nav(&raw).as_deref(), Some("https://github.com/leeguooooo"));
     }
 
-    /// `tab new <url>` opens a site as much as `open` does, so a ChooseBrowser
-    /// rule has to see it — otherwise a bound session could open the site in
-    /// the wrong profile through the side door.
-    /// The stale-rule note joins a warning the daemon already set instead of
-    /// replacing it.
+    /// The guard checks the url that is sent, not a second guess at it: flag
+    /// values that look like hosts (`--label other.example`) are skipped by
+    /// the real parser, and hosts without a dot (localhost, IPv6) still count.
     #[test]
-    fn merge_warning_keeps_the_daemons_warning() {
-        assert_eq!(merge_warning(None, "a"), "a");
-        assert_eq!(merge_warning(Some(String::new()), "a"), "a");
-        assert_eq!(merge_warning(Some("b".into()), "a"), "a\nb");
+    fn the_guarded_url_is_the_url_sent_on_the_wire() {
+        let cases: &[(&[&str], &str)] = &[
+            (
+                &["open", "--label", "other.example", "https://rule.example/x"],
+                "https://rule.example/x",
+            ),
+            (
+                &["open", "https://rule.example/x", "--label", "other.example"],
+                "https://rule.example/x",
+            ),
+            (
+                &["goto", "localhost:8765/cb/page.html"],
+                "https://localhost:8765/cb/page.html",
+            ),
+            (
+                &["open", "http://localhost:8765/"],
+                "http://localhost:8765/",
+            ),
+            (&["navigate", "http://[::1]:8765/a"], "http://[::1]:8765/a"),
+            (&["open", "claude.ai"], "https://claude.ai/"),
+            (&["tab", "new", "claude.ai"], "https://claude.ai/"),
+            (
+                &["tab", "new", "--label", "x.y", "https://claude.ai/new"],
+                "https://claude.ai/new",
+            ),
+            (
+                &["tab", "new", "https://claude.ai/", "--label", "a"],
+                "https://claude.ai/",
+            ),
+        ];
+        for (parts, want) in cases {
+            let raw = argv(parts);
+            let sent = wire(&raw).unwrap_or_else(|| panic!("no wire url for {parts:?}"));
+            assert_eq!(
+                crate::profiles::guard_url(&sent).as_deref(),
+                Some(*want),
+                "wire url {sent:?} for {parts:?}"
+            );
+            assert_eq!(nav(&raw).as_deref(), Some(*want), "{parts:?}");
+        }
+        for parts in [
+            &["tab", "new"][..],
+            &["tab", "list"],
+            &["click", "a.b"],
+            &["snapshot"],
+            &["open", "about:blank"],
+        ] {
+            assert_eq!(nav(&argv(parts)), None, "{parts:?}");
+        }
     }
 
+    /// Every navigating step of a batch is checked, through the step parser
+    /// the batch itself uses.
     #[test]
-    fn tab_new_with_a_url_is_a_navigation_for_the_rule_lookup() {
-        let t = |a: &[&str]| target_url_for_choosebrowser(&argv(a));
+    fn batch_steps_are_navigations_for_the_rule_check() {
+        let raw = argv(&["batch"]);
+        let flags = crate::flags::parse_flags(&raw);
+        let steps = vec![
+            argv(&["open", "https://a.example/"]),
+            argv(&["snapshot"]),
+            argv(&["tab", "new", "b.example"]),
+            argv(&["click", "c.example"]),
+        ];
         assert_eq!(
-            t(&["tab", "new", "claude.ai"]).as_deref(),
-            Some("https://claude.ai/")
+            navigation_urls(&raw, &flags, Some(&steps)),
+            vec![
+                "https://a.example/".to_string(),
+                "https://b.example/".to_string()
+            ]
         );
-        assert_eq!(
-            t(&["tab", "new", "--label", "x.y", "https://claude.ai/new"]).as_deref(),
-            Some("https://claude.ai/new")
-        );
-        assert_eq!(
-            t(&["tab", "new", "https://claude.ai/", "--label", "a"]).as_deref(),
-            Some("https://claude.ai/")
-        );
-        assert_eq!(t(&["tab", "new"]), None);
-        assert_eq!(t(&["tab", "list"]), None);
-        assert_eq!(t(&["tab", "2"]), None);
-        assert_eq!(t(&["click", "a.b"]), None);
     }
 
     // --- session stop wording (#256) ------------------------------------------

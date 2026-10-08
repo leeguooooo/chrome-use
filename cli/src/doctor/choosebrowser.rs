@@ -34,26 +34,47 @@ fn rule_target_checks(
                 Some(r) => format!("{} ({r})", rule.pattern),
                 None => rule.pattern.clone(),
             };
-            let Some(resolved) =
-                local_state.and_then(|ls| choosebrowser::resolve_profile_directory(ls, &rule.key))
-            else {
-                return Check::new(
-                    id,
-                    RULE_CATEGORY,
-                    Status::Warn,
-                    format!(
-                        "{name} → profile key {}: no such Chrome profile on this machine — \
-                         the rule is ignored here",
-                        rule.key
-                    ),
-                );
+            let resolution = local_state
+                .map(|ls| choosebrowser::resolve_profile_key(ls, &rule.key))
+                .unwrap_or(choosebrowser::KeyResolution::NotFound);
+            let resolved = match resolution {
+                choosebrowser::KeyResolution::Found(p) => p,
+                choosebrowser::KeyResolution::NotFound => {
+                    return Check::new(
+                        id,
+                        RULE_CATEGORY,
+                        Status::Warn,
+                        format!(
+                            "{name} → profile key {}: no such Chrome profile on this machine — \
+                             the rule is ignored here (opening these urls warns)",
+                            rule.key
+                        ),
+                    );
+                }
+                choosebrowser::KeyResolution::Ambiguous(dirs) => {
+                    return Check::new(
+                        id,
+                        RULE_CATEGORY,
+                        Status::Warn,
+                        format!(
+                            "{name} → profile key {}: matches {} profiles ({}) — opening \
+                             these urls is refused, since which account it means is a guess",
+                            rule.key,
+                            dirs.len(),
+                            dirs.join(", ")
+                        ),
+                    )
+                    .with_fix("point the rule at one profile in ChooseBrowser");
+                }
             };
             let hit = RuleHit {
                 host: rule.pattern.clone(),
                 rule_id: rule.rule_id.clone(),
+                key: rule.key.clone(),
                 root: chrome_root.map(str::to_string),
                 dir: resolved.directory.clone(),
                 email: resolved.email.clone(),
+                ambiguous: Vec::new(),
             };
             match profiles::row_for_rule(rows, &hit) {
                 None => Check::new(

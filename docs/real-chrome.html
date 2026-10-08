@@ -199,7 +199,9 @@
         里开一个窗口，先问用户）。当前 session 已经绑定在另一个 profile 上时，命令同样失败：
         换一个新的 <code>--session</code>（它会选规则指定的 profile），或者加
         <code>--no-choosebrowser</code> 在已绑定的 profile 里打开。显式 <code>--browser</code>
-        和配置文件里的路由仍然优先。<code>chrome-use doctor</code> 会逐条列出规则，以及它指向的 profile 是否已连接。
+        和配置文件里的路由仍然优先。这条检查同样覆盖 <code>batch</code> 的每一步（一个 batch 需要两个 profile 时，任何一步都不会执行）、MCP 工具调用和 script 步骤。
+        规则的 key 同时对上几个 profile 时拒绝执行；规则指向的 profile 在本机已不存在时只给警告。
+        <code>chrome-use doctor</code> 会逐条列出规则，以及它指向的 profile 是否已连接。
       </p>
       <p>
         规则排在「猜最近聚焦的窗口」之前——规则是你写下的意图，比从你正看着哪个窗口做的推断可信。
