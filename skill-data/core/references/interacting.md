@@ -48,8 +48,10 @@ If the page discards the element handle part-way through a `fill` (CDP
 "Could not find object with given id", seen on the extension relay), `fill`
 re-resolves the element once and reads it before doing anything else: a field
 that already holds the value is reported with a ⚠ note and not typed again; a
-field that does not is filled once more and says so. Do not repeat the fill
-yourself after either note.
+field that does not is filled once more and says so. A field that cannot be
+read back at all is unknown, not different: the fill fails with "value is
+unknown" and writes nothing; check it with `get value <ref>` first. Do not
+repeat the fill yourself after any of these.
 
 ## Before you write `eval`
 

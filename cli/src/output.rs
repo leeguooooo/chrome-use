@@ -3401,8 +3401,10 @@ Options:
   [selector]           Capture just an element (CSS or @ref), e.g. `screenshot ".header" h.png`
   --selector, -s <sel> Name the element explicitly; the remaining positional is
                        the path, in any order: `screenshot h.png --selector main`.
-                       An image path given before a bare selector
-                       (`screenshot h.png main`) is also placed correctly.
+                       An image path (ending in .png/.jpg/.jpeg/.webp) given
+                       before a bare selector (`screenshot h.png main`) is also
+                       placed correctly; anything else keeps selector-then-path,
+                       so XPath works as before: `screenshot //main shot`.
                        Unknown options are refused rather than read as a
                        selector or path.
   --clip <x,y,w,h>     Capture a pixel region, e.g. `screenshot --clip 0,0,200,40 corner.png`
@@ -5112,7 +5114,10 @@ Per-step flags:
   Flags that configure the whole session (--headed, --profile, --session, ...)
   cannot change mid-batch; a step carrying one is refused. Put them before
   `batch`. A flag before `batch` (e.g. `batch --observe ...`) applies to
-  every step.
+  every step; an explicit `--observe false` or `--if-present false` in a step
+  overrides it for that step. A step's --tab replaces only the tab the batch
+  inherited, never a tab the command names itself: `tab close t1 --tab t2`
+  is refused instead of closing either.
 
 Argument Mode:
   Each quoted argument is a full command string:

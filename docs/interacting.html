@@ -157,7 +157,7 @@
         退回 <code>element.click()</code> 时报告 <code>dispatch: dom</code>。<code>keyboard type</code> 报告焦点元素和回读值，
         有焦点的字段没变化时报错。保存类按钮用 <code>click @ref --observe</code>，看点击后有没有请求发出。
         <br /><br />
-        页面在 <code>fill</code> 中途丢掉了元素句柄（CDP 报 "Could not find object with given id"，在扩展 relay 上见过）时，<code>fill</code> 会重新定位元素一次，先读值再决定：字段里已经是目标值就带 ⚠ 说明返回、不再输入；不是才再填一次并说明。看到这两种说明都不要自己重复 fill。
+        页面在 <code>fill</code> 中途丢掉了元素句柄（CDP 报 "Could not find object with given id"，在扩展 relay 上见过）时，<code>fill</code> 会重新定位元素一次，先读值再决定：字段里已经是目标值就带 ⚠ 说明返回、不再输入；不是才再填一次并说明。完全读不回来的字段视为未知而不是不同：fill 以 "value is unknown" 失败、不写入，先用 <code>get value &lt;ref&gt;</code> 确认。看到这些说明都不要自己重复 fill。
         <br /><br />
         另外：snapshot 里的 <code>button "简体中文" [toggles=checkbox(checked=true)]</code> 是开关，不是链接。
         在 LinkedIn 的「编辑档案语言」弹窗里点它会删除该语言的档案，不要拿它切换标签。

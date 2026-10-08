@@ -166,7 +166,9 @@
         If the page discards the element handle part-way through a <code>fill</code> (CDP "Could not find object with
         given id", seen on the extension relay), <code>fill</code> re-resolves the element once and reads it first: a
         field that already holds the value is reported with a ⚠ note and not typed again; one that does not is filled
-        once more and says so. Do not repeat the fill yourself after either note.
+        once more and says so. A field that cannot be read back at all is unknown, not different: the fill fails with
+        "value is unknown" and writes nothing; check it with <code>get value &lt;ref&gt;</code> first. Do not repeat the
+        fill yourself after any of these.
         <br /><br />
         Also: <code>button "简体中文" [toggles=checkbox(checked=true)]</code> in a snapshot is a switch, not a link. In
         LinkedIn's "edit profile language" dialog, clicking it deletes that language's profile. Never use it to switch
