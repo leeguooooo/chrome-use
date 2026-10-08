@@ -506,7 +506,7 @@ fn page_site_of_host(host: &str) -> Option<String> {
 pub fn host_table(
     page_site: Option<&str>,
     link_urls: &[String],
-    refuse: &dyn Fn(&str) -> Option<String>,
+    refuse: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> HashMap<String, String> {
     let mut hosts = HashMap::new();
     for url in link_urls {
@@ -555,7 +555,7 @@ pub async fn arm(
     header_policies: &HashMap<String, String>,
     mode: LinkMode,
     link_urls: &[String],
-    refuse: &dyn Fn(&str) -> Option<String>,
+    refuse: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Option<ArmedGuard> {
     if mode == LinkMode::Off {
         return None;

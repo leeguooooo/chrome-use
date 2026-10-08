@@ -7672,7 +7672,7 @@ async fn open_link_in_background(
             // navigated. Only a failure Chrome reported is "failed"; anything
             // else is "unknown", and nothing suggests opening it again.
             let landed = match state.browser.as_ref() {
-                Some(mgr) => mgr.get_url().await,
+                Some(mgr) => mgr.get_url().await.unwrap_or_default(),
                 None => String::new(),
             };
             let known = popup_guard::navigation_failure_is_known(&e);
