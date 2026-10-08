@@ -229,9 +229,9 @@ async function ensureAgentWindowId() {
 }
 
 // Create an agent tab in the shared agent window (created in the background,
-// `focused: false`, so it never steals the user's foreground). Falls back to the
-// user's active window if the windows API is unavailable, so tab creation never
-// hard-fails.
+// `focused: false`, so it never steals the user's foreground). Fails, rather
+// than falling back to the user's active window, when no agent window can be
+// opened.
 //
 // Serialized, and the tab is marked owned before the next caller runs: the
 // agent-window check (isUsableAgentWindow) treats an unowned tab as the user's,
@@ -246,7 +246,12 @@ function createAgentTab(url) {
 
 async function createAgentTabNow(url) {
   const winId = await ensureAgentWindowId();
-  if (winId == null) return await chrome.tabs.create({ url, active: false });
+  // No agent window: refuse rather than put the agent's tab in the window the
+  // user is working in (that used to be the fallback here).
+  if (winId == null)
+    throw new Error(
+      'createTarget: could not open the background agent window, and agent tabs never go into the user\'s window',
+    );
   const tab = await chrome.tabs.create({ url, active: false, windowId: winId });
   if (tab && tab.id != null) await markOwned(tab.id);
   // Drop the window's initial about:blank once a real agent tab exists (only the
@@ -387,9 +392,13 @@ async function groupTabInto(tabId, name) {
   if (!tab) throw new Error(`groupTabInto: tab ${tabId} is unavailable`);
   let gid = groupIdByName.get(name);
   if (gid != null) {
+    // Only a group in the tab's own window: `tabs.group({groupId})` MOVES the
+    // tab into the group's window, and a session's old group may sit in the
+    // user's window (from before the agent window was validated), which would
+    // drag a background agent tab into the window the user is working in.
     const ok = await chrome.tabGroups
       .get(gid)
-      .then(() => true)
+      .then((g) => g.windowId === tab.windowId)
       .catch(() => false);
     if (!ok) {
       gid = null;

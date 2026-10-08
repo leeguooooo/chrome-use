@@ -5755,6 +5755,7 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                     Some(session_name.as_str()),
                     &state.session_id,
                     mgr.visited_origins(),
+                    mgr.on_relay(),
                 )
                 .await;
             }
@@ -10588,6 +10589,7 @@ async fn handle_state_save(cmd: &Value, state: &DaemonState) -> Result<Value, St
         state.session_name.as_deref(),
         &state.session_id,
         mgr.visited_origins(),
+        mgr.on_relay(),
     )
     .await?;
 

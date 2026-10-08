@@ -113,17 +113,20 @@ async fn collect_storage_via_temp_target(
     client: &CdpClient,
     origins: &[String],
     origin_js: &str,
+    on_relay: bool,
 ) -> Result<Vec<OriginStorage>, String> {
     let create_result: CreateTargetResult = client
         .send_command_typed(
             "Target.createTarget",
             &CreateTargetParams {
                 url: "about:blank".to_string(),
-                // Transient internal target (storage collection) — never grouped,
-                // and never placed in the agent window.
+                // Transient internal target (storage collection), never grouped.
+                // On the relay it goes to the background agent window: without
+                // the hint the extension created it in the user's active window,
+                // inserting a tab there while it visited each origin.
                 agent_group: None,
                 background: None,
-                dedicated_window: None,
+                dedicated_window: on_relay.then_some(true),
             },
             None,
         )
@@ -256,6 +259,7 @@ pub async fn save_state(
     session_name: Option<&str>,
     session_id_str: &str,
     visited_origins: &HashSet<String>,
+    on_relay: bool,
 ) -> Result<String, String> {
     let cookies = cookies::get_all_cookies(client, session_id).await?;
 
@@ -303,7 +307,7 @@ pub async fn save_state(
     if !all_origins.is_empty() {
         let remaining: Vec<String> = all_origins.into_iter().collect();
         if let Ok(temp_origins) =
-            collect_storage_via_temp_target(client, &remaining, origin_js).await
+            collect_storage_via_temp_target(client, &remaining, origin_js, on_relay).await
         {
             origins.extend(temp_origins);
         }

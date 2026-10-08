@@ -630,6 +630,29 @@ pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
             && lower.contains("different extension"))
 }
 
+/// The recovery's error when the blocked tab shares a window with the user's
+/// own tabs: hiding it there means switching the user's tab, which chrome-use
+/// never does.
+const USER_WINDOW_MENU: &str = "the blocked tab is in a window with the user's own tabs, and \
+closing the menu from here would switch the tab in front of that window";
+
+/// Whether a `tabs.query` result holds a tab not in `owned` (a tab the user
+/// opened). A blank tab is not counted: the agent window's own placeholder.
+fn window_has_unowned_tab(tabs: &Value, owned: &HashSet<i64>) -> bool {
+    tabs.as_array().into_iter().flatten().any(|tab| {
+        let Some(id) = tab.get("id").and_then(Value::as_i64) else {
+            return false;
+        };
+        let url = tab
+            .get("pendingUrl")
+            .and_then(Value::as_str)
+            .filter(|u| !u.is_empty())
+            .or_else(|| tab.get("url").and_then(Value::as_str))
+            .unwrap_or("");
+        !owned.contains(&id) && !url.is_empty() && url != "about:blank"
+    })
+}
+
 /// The recovery's error when the menu was open again after the tab was shown.
 const MENU_STILL_OPEN: &str = "the menu was still open after chrome-use hid the tab for a moment";
 /// [`MENU_STILL_OPEN`] for a tab in front, which gets a second try.
@@ -3027,6 +3050,27 @@ impl BrowserManager {
 
     /// One allow-listed `chrome.*` call through the relay (`ABExt.call`),
     /// returning Chrome's result. Needs no debugger access.
+    /// Whether Chrome window `window_id` holds a tab the relay does not own
+    /// (the user's own tab). `true` when it cannot tell: guessing "agent-only"
+    /// is how a recovery ends up switching the user's tab.
+    async fn window_holds_user_tabs(&self, window_id: i64) -> bool {
+        let Ok(tabs) = self
+            .chrome_call("tabs", "query", json!([{ "windowId": window_id }]))
+            .await
+        else {
+            return true;
+        };
+        let Ok(ext_state) = self.client.send_command("ABExt.state", None, None).await else {
+            return true;
+        };
+        let owned: HashSet<i64> = ext_state
+            .get("ownedTabs")
+            .and_then(Value::as_array)
+            .map(|ids| ids.iter().filter_map(Value::as_i64).collect())
+            .unwrap_or_default();
+        window_has_unowned_tab(&tabs, &owned)
+    }
+
     async fn chrome_call(
         &self,
         namespace: &str,
@@ -3178,16 +3222,13 @@ impl BrowserManager {
                 "its window is minimized, so switching tabs in it hides nothing".to_string(),
             );
         }
-        // Behind another tab in the window the user is working in, the flip
-        // below would put this agent tab, then a blank tab, in front of the
-        // user's own page. Normally agent tabs live in the background agent
-        // window; when one sits in the user's focused window, leave it alone.
-        if !in_front && window.get("focused").and_then(Value::as_bool) == Some(true) {
-            return Err(
-                "its tab is in the window the user is working in, and closing the menu would \
-                 switch the tab they are looking at"
-                    .to_string(),
-            );
+        // The flip below inserts a blank tab next to the user's front tab and
+        // switches tabs in this window. That is only acceptable in a window that
+        // holds nothing but agent tabs (the background agent window). In a
+        // window with the user's own tabs it would grab their tab, even for
+        // 150ms, so leave it to the user.
+        if self.window_holds_user_tabs(window_id).await {
+            return Err(USER_WINDOW_MENU.to_string());
         }
         let front = self
             .chrome_call(
@@ -3223,7 +3264,9 @@ impl BrowserManager {
             .client
             .send_command(
                 "Target.createTarget",
-                Some(json!({ "url": "about:blank", "background": false })),
+                // In the agent window, never the user's active window: the
+                // extension otherwise creates it wherever the user is.
+                Some(json!({ "url": "about:blank", "background": false, "dedicatedWindow": true })),
                 None,
             )
             .await?;
@@ -6549,6 +6592,25 @@ mod tests {
         );
         assert!(!msg.contains("--adopt"), "{msg}");
         assert!(!msg.contains("adopt t1"), "{msg}");
+    }
+
+    #[test]
+    fn a_window_with_a_user_tab_is_not_the_agent_window() {
+        let owned: HashSet<i64> = [1, 2].into_iter().collect();
+        let agent_only = json!([
+            { "id": 1, "url": "https://example.com/" },
+            { "id": 2, "url": "https://example.org/" },
+            { "id": 3, "url": "about:blank" }
+        ]);
+        assert!(!window_has_unowned_tab(&agent_only, &owned));
+        let with_user_tab = json!([
+            { "id": 1, "url": "https://example.com/" },
+            { "id": 9, "url": "https://mail.example.com/" }
+        ]);
+        assert!(window_has_unowned_tab(&with_user_tab, &owned));
+        let loading = json!([{ "id": 9, "url": "", "pendingUrl": "https://x.example/" }]);
+        assert!(window_has_unowned_tab(&loading, &owned));
+        assert!(USER_WINDOW_MENU.contains("user's own tabs"));
     }
 
     #[test]
