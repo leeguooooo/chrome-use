@@ -5576,42 +5576,45 @@ mod stale_fill_tests {
                 let cmd: Value = serde_json::from_str(&text).unwrap();
                 let method = cmd["method"].as_str().unwrap_or("");
                 let p = &cmd["params"];
-                let mut s = state.lock().unwrap();
-                let reply: Result<Value, &str> = match method {
-                    "Runtime.evaluate" if p["returnByValue"] == json!(false) => {
-                        s.resolves += 1;
-                        Ok(json!({ "result": { "type": "object",
-                            "objectId": format!("obj-{}", s.resolves) } }))
-                    }
-                    "Runtime.evaluate" => {
-                        Ok(json!({ "result": { "type": "boolean", "value": true } }))
-                    }
-                    "Input.insertText" => {
-                        s.value = p["text"].as_str().unwrap_or("").to_string();
-                        s.inserts += 1;
-                        Ok(json!({}))
-                    }
-                    "Runtime.callFunctionOn" => {
-                        let stale_now = p["objectId"] == json!("obj-1")
-                            && match stale {
-                                Stale::AfterInsert => s.inserts > 0,
-                                Stale::FromTheStart => true,
-                            };
-                        let f = p["functionDeclaration"].as_str().unwrap_or("");
-                        if stale_now {
-                            Err("Could not find object with given id")
-                        } else if f.contains("monacoCandidates") {
-                            // The page-side half of fill: focused + selected.
-                            Ok(json!({ "result": { "type": "string", "value": "input-trusted" } }))
-                        } else {
-                            // Reads (and the blur tail, whose answer is ignored).
+                let reply: Result<Value, &str> = {
+                    let mut s = state.lock().unwrap();
+                    match method {
+                        "Runtime.evaluate" if p["returnByValue"] == json!(false) => {
+                            s.resolves += 1;
                             Ok(json!({ "result": { "type": "object",
-                                "value": { "ok": true, "value": s.value } } }))
+                            "objectId": format!("obj-{}", s.resolves) } }))
                         }
+                        "Runtime.evaluate" => {
+                            Ok(json!({ "result": { "type": "boolean", "value": true } }))
+                        }
+                        "Input.insertText" => {
+                            s.value = p["text"].as_str().unwrap_or("").to_string();
+                            s.inserts += 1;
+                            Ok(json!({}))
+                        }
+                        "Runtime.callFunctionOn" => {
+                            let stale_now = p["objectId"] == json!("obj-1")
+                                && match stale {
+                                    Stale::AfterInsert => s.inserts > 0,
+                                    Stale::FromTheStart => true,
+                                };
+                            let f = p["functionDeclaration"].as_str().unwrap_or("");
+                            if stale_now {
+                                Err("Could not find object with given id")
+                            } else if f.contains("monacoCandidates") {
+                                // The page-side half of fill: focused + selected.
+                                Ok(
+                                    json!({ "result": { "type": "string", "value": "input-trusted" } }),
+                                )
+                            } else {
+                                // Reads (and the blur tail, whose answer is ignored).
+                                Ok(json!({ "result": { "type": "object",
+                                "value": { "ok": true, "value": s.value } } }))
+                            }
+                        }
+                        _ => Ok(json!({})),
                     }
-                    _ => Ok(json!({})),
                 };
-                drop(s);
                 let msg = match reply {
                     Ok(result) => {
                         json!({ "id": cmd["id"], "result": result, "sessionId": cmd["sessionId"] })
