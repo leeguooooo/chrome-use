@@ -474,10 +474,13 @@
       <p>
         普通 <code>click</code> 打开的新标签（<code>target=_blank</code>、<code>window.open</code>）会以
         <code>openedTab</code> 报告，并归入当前会话：<code>tab list</code> 能列出，<code>tab close</code> 和
-        <code>close</code> 会关闭它。<code>--follow</code> 会切到它；配合 <code>--observe</code> 时，等待稳定和快照都针对新标签。
-        在你自己的 Chrome 里，只接管由本会话标签打开的标签；同一时间你或其他会话打开的标签不会被接管。
-        新标签暂时无法确认时（仍是空白页，或 URL 与别的标签重复），click 会在 <code>openedTabWarning</code> 里说明，
-        加载完成后可用 <code>tab adopt &lt;url&gt;</code> 接管。
+        <code>close</code> 会关闭它。<code>--follow</code> 会切到它；配合 <code>--observe</code> 时，等待稳定和快照都针对新标签；
+        切换失败时 <code>followed</code> 为 <code>false</code>，会话留在被点击的标签上。
+        在你自己的 Chrome 里，只接管由本会话标签打开的标签（在本会话的标签组里，或不在任何组且 opener 是本会话标签）；
+        其他组里的标签和你自己打开的标签不会被接管。接管按 Chrome 标签 id 附加，需要 ab-connect 0.5.30 或更新版本。
+        看到但没有接管时，会设置 <code>openedTabWarning</code> 和 <code>openedTabStatus</code>：<code>unadopted</code>
+        （有意不接管）或 <code>unknown</code>（Chrome 或扩展没有在预算内回应：查找约 2 秒，附加约 3 秒）。
+        之后可用 <code>tab adopt &lt;url&gt;</code> 接管。
       </p>
       <p>
         <code>tab new</code>、<code>tab select</code> 和 <code>tab adopt</code> 默认在后台进行。

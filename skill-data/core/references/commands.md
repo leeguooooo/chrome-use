@@ -457,11 +457,19 @@ timezone, locale, geolocation, and offline mode.
 A tab that a plain `click` opens (`target=_blank`, `window.open`) is reported as
 `openedTab` and becomes one of the session's tabs: listed by `tab list`, closed
 by `tab close` and by `close`. `--follow` switches to it, and with `--observe`
-the settle and snapshot then describe the new tab. In your own Chrome only a tab
-opened by one of the session's tabs is taken; a tab that you or another session
-opens meanwhile is left alone. When such a tab cannot be identified yet (still
-blank, or its URL matches another tab), the click says so in `openedTabWarning`
-instead of staying silent; `tab adopt <url>` picks it up once it has loaded.
+the settle and snapshot then describe the new tab. If the switch fails, the
+click reports `followed: false` and the session stays on the clicked tab.
+
+In your own Chrome only a tab opened by one of the session's tabs is taken: one
+in the session's tab group, or in no group with a session tab as its opener. A
+tab in another group (another session's), or one you open, is left alone. It is
+attached by its Chrome tab id, which needs ab-connect 0.5.30 or newer; an older
+extension gets the tab reported, not attached. When a tab is seen but not taken
+the click sets `openedTabWarning` and `openedTabStatus`: `unadopted` (left alone
+on purpose, e.g. still blank after 2 s) or `unknown` (Chrome or the extension
+did not answer within the check's budget, so it may be attached but is not
+tracked). The check is bounded: about 2 s to find the tab plus 3 s to attach
+it. `tab adopt <url>` picks such a tab up later.
 
 `tab new`, `tab select`, and `tab adopt` stay in the background by default.
 `--activate` (alias `--front`) raises the target **before** renderer initialization

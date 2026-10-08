@@ -490,10 +490,14 @@
         A tab that a plain <code>click</code> opens (<code>target=_blank</code>, <code>window.open</code>) is reported as
         <code>openedTab</code> and becomes one of the session's tabs: listed by <code>tab list</code>, closed by
         <code>tab close</code> and by <code>close</code>. <code>--follow</code> switches to it, and with <code>--observe</code>
-        the settle and snapshot then describe the new tab. In your own Chrome only a tab opened by one of the session's
-        tabs is taken; a tab that you or another session opens meanwhile is left alone. When such a tab cannot be
-        identified yet, the click says so in <code>openedTabWarning</code>; <code>tab adopt &lt;url&gt;</code> picks it up
-        once it has loaded.
+        the settle and snapshot then describe the new tab; if the switch fails, <code>followed</code> is
+        <code>false</code> and the session stays on the clicked tab. In your own Chrome only a tab opened by one of the
+        session's tabs is taken (in the session's tab group, or ungrouped with a session tab as opener); a tab in another
+        group, or one you open, is left alone. It is attached by Chrome tab id, which needs ab-connect 0.5.30 or newer.
+        A tab seen but not taken sets <code>openedTabWarning</code> and <code>openedTabStatus</code>:
+        <code>unadopted</code> (left alone on purpose) or <code>unknown</code> (Chrome or the extension did not answer
+        within the check's budget of about 2 s to find plus 3 s to attach). <code>tab adopt &lt;url&gt;</code> picks
+        it up later.
       </p>
       <p>
         <code>tab new</code>, <code>tab select</code>, and <code>tab adopt</code> stay in the background by default.

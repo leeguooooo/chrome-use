@@ -17,6 +17,7 @@
 // native messaging.
 
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
+import { attachTabById } from './attach-by-id.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
 import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js';
@@ -656,7 +657,15 @@ function connectHost() {
         // state read (0.5.25). The daemon feature-detects on these names, so a
         // CLI that wants them on an older extension says "update" instead of
         // sending a method Chrome answers with "wasn't found".
-        capabilities: ['nativeTabDuplicate', 'downloadsApi', `call:${POLICY_VERSION}`, 'state', 'batchCommands'],
+        // `attachTabById` (0.5.30): attach one tab by Chrome tab id (#456).
+        capabilities: [
+          'nativeTabDuplicate',
+          'downloadsApi',
+          `call:${POLICY_VERSION}`,
+          'state',
+          'batchCommands',
+          'attachTabById',
+        ],
         ...extra,
       });
     } catch {}
@@ -970,6 +979,17 @@ async function handleForwardCdpCommand(msg) {
   // (which announces it to the daemon and makes it ours). `spec` is a targetId or
   // a URL substring. On no match, return the candidate URLs so the daemon can
   // print a useful error.
+  // Attach exactly one tab by Chrome tab id (#456): a pop-up the session's own
+  // tab opened. No URL lookup, so no other tab can be attached in its place.
+  // Not persisted into ownedTabs, like the onCreated pop-up path.
+  if (method === 'ABExt.attachTabById') {
+    return await attachTabById(params, {
+      getTab: (tabId) => chrome.tabs.get(tabId),
+      eligible,
+      attachTab: (tabId) => attachTab(tabId),
+    });
+  }
+
   if (method === 'ABExt.adoptByUrl') {
     const spec = String(params?.spec || '').trim();
     const specL = spec.toLowerCase();

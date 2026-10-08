@@ -11934,6 +11934,142 @@ async fn e2e_efficiency_repeated_observations_and_script_advisories() {
     server.abort();
 }
 
+/// `click --follow` whose switch to the popup fails AFTER the pin moved
+/// (injected right after `tab_switch` re-pins, before the new tab is set up).
+/// The whole chain must stay on the clicked tab and say so: `followed:false`
+/// with a warning, the observation (target, settle, delta) is the opener's,
+/// the next snapshot and the active tab are the opener's, and the popup is
+/// still listed and selectable. Covered with and without `--observe`.
+#[tokio::test]
+#[ignore]
+async fn e2e_click_follow_failure_stays_on_the_clicked_tab() {
+    use std::sync::atomic::Ordering;
+    let popup = r##"<!doctype html><meta charset="utf-8"><title>popup</title>
+<button>Popup ready</button>"##
+        .to_string();
+    let (popup_port, popup_server) = spawn_html_server(popup).await;
+    let opener = format!(
+        r##"<!doctype html><meta charset="utf-8"><title>opener</title>
+<button id="open">Open</button>
+<script>
+document.getElementById('open').addEventListener('click', () => {{
+  window.open('http://127.0.0.1:{popup_port}/popup', '_blank');
+  const b = document.createElement('button');
+  b.textContent = 'Opened';
+  document.body.appendChild(b);
+}});
+</script>"##
+    );
+    let (port, server) = spawn_html_server(opener).await;
+    let mut state = DaemonState::new();
+    launch_headless(
+        &mut state,
+        json!({ "args": ["--no-sandbox", "--disable-dev-shm-usage"] }),
+    )
+    .await;
+
+    for (round, observe) in [(0, true), (1, false)] {
+        let id = |n: u32| format!("{round}-{n}");
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": id(1), "action": "navigate", "url": format!("http://127.0.0.1:{port}/") }),
+        )
+        .await;
+        assert_success(&resp);
+        let resp = run_cmd(&mut state, json!({ "id": id(2), "action": "tab_list" })).await;
+        let opener_target = get_data(&resp)["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["active"] == json!(true))
+            .map(|t| t["targetId"].clone())
+            .expect("an active opener tab");
+
+        crate::native::browser::FAIL_NEXT_TAB_SWITCH_AFTER_PIN.store(true, Ordering::SeqCst);
+        let mut click = json!({ "id": id(3), "action": "click", "selector": "#open",
+                                "follow": true });
+        if observe {
+            click["observe"] = json!(true);
+            click["settleMs"] = json!(2000);
+        }
+        let resp = run_cmd(&mut state, click).await;
+        assert!(
+            !crate::native::browser::FAIL_NEXT_TAB_SWITCH_AFTER_PIN.load(Ordering::SeqCst),
+            "the injected failure must have fired: {resp}"
+        );
+        assert_success(&resp);
+        let data = get_data(&resp);
+        assert!(data["openedTab"].is_object(), "popup reported: {resp}");
+        assert_eq!(data["followed"], json!(false), "{resp}");
+        let warning = data["openedTabWarning"].as_str().unwrap_or_default();
+        assert!(
+            warning.contains("still on the tab that was clicked"),
+            "{resp}"
+        );
+        if observe {
+            let observed = &data["observed"];
+            assert_eq!(observed["target"]["targetId"], opener_target, "{observed}");
+            let delta = observed["delta"].as_str().unwrap_or_default();
+            assert!(delta.contains("Opened"), "the opener's change: {observed}");
+            assert!(!delta.contains("Popup ready"), "{observed}");
+        }
+
+        // The session really is on the opener: active tab, snapshot, refs.
+        let resp = run_cmd(&mut state, json!({ "id": id(4), "action": "tab_list" })).await;
+        let tabs = get_data(&resp)["tabs"].as_array().unwrap().clone();
+        let active: Vec<_> = tabs.iter().filter(|t| t["active"] == json!(true)).collect();
+        assert_eq!(active.len(), 1, "{resp}");
+        assert_eq!(active[0]["targetId"], opener_target, "{resp}");
+        let popup_tab = tabs
+            .iter()
+            .find(|t| {
+                t["url"]
+                    .as_str()
+                    .is_some_and(|u| u.contains(&format!(":{popup_port}/popup")))
+            })
+            .unwrap_or_else(|| panic!("the popup stays listed: {resp}"))
+            .clone();
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": id(5), "action": "snapshot", "interactive": true }),
+        )
+        .await;
+        assert_success(&resp);
+        let snap = get_data(&resp)["snapshot"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(snap.contains("Opened"), "{snap}");
+        assert!(!snap.contains("Popup ready"), "{snap}");
+
+        // The popup is still reachable on purpose.
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": id(6), "action": "tab_switch", "tabId": popup_tab["tabId"] }),
+        )
+        .await;
+        assert_success(&resp);
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": id(7), "action": "snapshot", "interactive": true }),
+        )
+        .await;
+        assert!(
+            get_data(&resp)["snapshot"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Popup ready"),
+            "{resp}"
+        );
+        let resp = run_cmd(&mut state, json!({ "id": id(8), "action": "tab_close" })).await;
+        assert_success(&resp);
+    }
+
+    close_state(&mut state).await;
+    server.abort();
+    popup_server.abort();
+}
+
 /// `click --observe --follow` must settle the tab it follows to, not the one
 /// it left. The opener mutates synchronously on the click (so a watcher on the
 /// opener sees its reaction at once and goes quiet in ~100ms) while the popup

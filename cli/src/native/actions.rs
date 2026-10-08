@@ -2459,10 +2459,21 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             .is_some_and(|p| p.follow)
         {
             if let Some(pending) = state.deferred_click_tab_check.take() {
+                let target_of = |state: &DaemonState| {
+                    state
+                        .browser
+                        .as_ref()
+                        .and_then(|m| m.active_target_id().ok().map(ToString::to_string))
+                };
+                let before_check = target_of(state);
                 let extra = finish_click_tab_check(state, pending).await;
-                let followed = extra.get("followed").and_then(Value::as_bool) == Some(true);
+                // The arm watched the clicked tab. Drop it whenever the session
+                // is no longer on that tab — after a follow, and after a failed
+                // follow that could not return — so the settle never describes
+                // one tab with signals from another.
+                let moved = target_of(state) != before_check;
                 merge_into_data(&mut resp, extra);
-                if followed {
+                if moved {
                     if let Some(a) = arm.take() {
                         super::settle::release_arm(state, &a).await;
                     }
@@ -7295,6 +7306,9 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
     if let Some(w) = check.warning {
         out["openedTabWarning"] = json!(w);
     }
+    if let Some(status) = check.status {
+        out["openedTabStatus"] = json!(status);
+    }
     let opened = check.opened;
     // A popup the page opened is ours (adopt_newly_opened only returns tabs
     // it can attribute to this session), but its first document loaded before
@@ -7323,7 +7337,7 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
             // a pop-up can be gone again (or replaced) before the switch, and a
             // `followed: true` beside a settle and snapshot of the old tab is a
             // silent success.
-            match mgr.tab_switch_by_id(page.tab_id).await {
+            match mgr.follow_tab(page.tab_id).await {
                 Ok(_) => {
                     if let Some(ref new_t) = new_target {
                         state.switch_tab_context(old_target.as_deref(), new_t);
@@ -7335,11 +7349,36 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
                     out["followed"] = json!(true);
                 }
                 Err(e) => {
+                    // `follow_tab` pins the session back on failure. Say where
+                    // it actually is, read from the manager rather than assumed,
+                    // and move the ref context there if it is somewhere else.
+                    let now = mgr.active_target_id().ok().map(ToString::to_string);
+                    let now_tab = mgr
+                        .pages_list()
+                        .into_iter()
+                        .find(|p| Some(&p.target_id) == now.as_ref())
+                        .map(|p| super::browser::format_tab_id(p.tab_id));
                     out["followed"] = json!(false);
-                    out["openedTabWarning"] = json!(format!(
-                        "--follow could not switch to {tab_id} ({e}); the session stays on \
-                         the tab that was clicked. Run `tab list`."
-                    ));
+                    if now.is_some() && now == old_target {
+                        out["openedTabWarning"] = json!(format!(
+                            "--follow could not switch to {tab_id} ({e}); the session is still \
+                             on the tab that was clicked. Run `tab list`."
+                        ));
+                    } else {
+                        match now.as_deref() {
+                            Some(now_t) => state.switch_tab_context(old_target.as_deref(), now_t),
+                            None => {
+                                state.ref_map.clear();
+                                state.iframe_sessions.clear();
+                                state.active_frame_id = None;
+                            }
+                        }
+                        out["openedTabWarning"] = json!(format!(
+                            "--follow could not switch to {tab_id} ({e}), and the session could \
+                             not return to the clicked tab: it is now on {}. Run `tab list`.",
+                            now_tab.as_deref().unwrap_or("no tab")
+                        ));
+                    }
                 }
             }
         }
