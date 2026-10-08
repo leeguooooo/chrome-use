@@ -1452,8 +1452,9 @@ fn call_find(arguments: &Value) -> Result<Value, ProtocolError> {
         args.push("--name".to_string());
         args.push(name);
     }
-    if optional_bool(arguments, "exact")?.unwrap_or(false) {
+    if let Some(exact) = optional_bool(arguments, "exact")? {
         args.push("--exact".to_string());
+        args.push(exact.to_string());
     }
     if let Some(scope) = within {
         args.push("--within".to_string());

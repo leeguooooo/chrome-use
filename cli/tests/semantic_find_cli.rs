@@ -217,7 +217,7 @@ mod browser {
         ] {
             session.ok(&["find", kind, value, "--within", &scope]);
         }
-        let mcp=session.mcp_find(serde_json::json!({"locator":"role","value":"button","action":"click","name":"Save","exact":true,"within":scope,"session":session.name}));
+        let mcp=session.mcp_find(serde_json::json!({"locator":"role","value":"button","action":"click","name":"Save","exact":false,"within":scope,"session":session.name}));
         assert_eq!(mcp["isError"], false, "{mcp}");
         assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "beta");
         let mcp=session.mcp_find(serde_json::json!({"locator":"label","value":"Email","action":"fill","text":"--name --observe","within":scope,"session":session.name}));
