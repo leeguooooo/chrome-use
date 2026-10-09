@@ -20791,6 +20791,10 @@ const AUTH_BWU_CONFIRM_POLL_MS: u64 = 300;
 struct SignInObservation {
     /// `document.readyState === 'complete'`.
     ready: bool,
+    /// `document.readyState === 'interactive'`: parsed, still loading
+    /// subresources (a dashboard with a stalled third-party frame can stay
+    /// there for long).
+    parsed: bool,
     /// A visible password field, or a field this login filled, is on the page.
     form: bool,
     /// The page's visible error or alert text (only read while the form is there).
@@ -20823,7 +20827,7 @@ fn sign_in_observer(tags: &[String]) -> String {
                     if (t) {{ message = t.slice(0, 200); break; }}
                 }}
             }}
-            return JSON.stringify({{ ready: document.readyState === 'complete', form, message, url: location.href }});
+            return JSON.stringify({{ state: document.readyState, form, message, url: location.href }});
         }})()"#,
         tags = serde_json::to_string(tags).unwrap_or_default(),
     )
@@ -20832,7 +20836,8 @@ fn sign_in_observer(tags: &[String]) -> String {
 fn parse_sign_in_observation(value: Option<&Value>) -> Option<SignInObservation> {
     let v: Value = serde_json::from_str(value?.as_str()?).ok()?;
     Some(SignInObservation {
-        ready: v["ready"].as_bool().unwrap_or(false),
+        ready: v["state"].as_str() == Some("complete"),
+        parsed: v["state"].as_str() == Some("interactive"),
         form: v["form"].as_bool().unwrap_or(true),
         message: v["message"].as_str().unwrap_or("").to_string(),
         url: v["url"].as_str().unwrap_or("").to_string(),
@@ -20841,9 +20846,19 @@ fn parse_sign_in_observation(value: Option<&Value>) -> Option<SignInObservation>
 
 /// The sign-in counts as confirmed when two readings in a row (one poll
 /// apart) show a loaded page without the sign-in form. One reading is not
-/// enough: a page between two documents briefly shows neither.
-fn sign_in_confirmed(prev: Option<&SignInObservation>, now: &SignInObservation) -> bool {
-    let clear = |o: &SignInObservation| o.ready && !o.form;
+/// enough: a page between two documents briefly shows neither. A page that
+/// left the sign-in URL counts once parsed (`interactive`): a signed-in
+/// dashboard can wait on a stalled subresource well past the confirmation
+/// window. On the sign-in URL itself it must be `complete`, since a form
+/// rendered by script may not be there yet while the page is only parsed.
+fn sign_in_confirmed(
+    login_url: &str,
+    prev: Option<&SignInObservation>,
+    now: &SignInObservation,
+) -> bool {
+    let clear = |o: &SignInObservation| {
+        !o.form && (o.ready || (o.parsed && left_sign_in_page(login_url, &o.url)))
+    };
     clear(now) && prev.is_some_and(clear)
 }
 
@@ -20987,7 +21002,7 @@ async fn confirm_sign_in(
             }
         }
         if let Some(o) = &now {
-            if sign_in_confirmed(prev.as_ref(), o) {
+            if sign_in_confirmed(login_url, prev.as_ref(), o) {
                 return Ok(sign_in_evidence(login_url, o));
             }
             last = Some(o.clone());
@@ -22302,6 +22317,7 @@ mod tests {
     fn obs(ready: bool, form: bool, url: &str, message: &str) -> SignInObservation {
         SignInObservation {
             ready,
+            parsed: false,
             form,
             message: message.to_string(),
             url: url.to_string(),
@@ -22313,7 +22329,7 @@ mod tests {
     fn sign_in_is_not_confirmed_while_the_form_stays() {
         let login = "https://zentao.example.com/zentao/user-login.html";
         let form = obs(true, true, login, "");
-        assert!(!sign_in_confirmed(Some(&form), &form));
+        assert!(!sign_in_confirmed(login, Some(&form), &form));
         // Still on the form, however long: the failure names what was seen.
         let err = sign_in_not_confirmed(Some(&form), AUTH_BWU_CONFIRM_MS, Some("enter"));
         assert!(err.contains("the sign-in was not confirmed"), "{err}");
@@ -22338,17 +22354,34 @@ mod tests {
 
     #[test]
     fn sign_in_needs_two_loaded_readings_without_the_form() {
+        let login = "https://zentao.example.com/zentao/user-login.html";
         let home = "https://zentao.example.com/zentao/my.html";
         let gone = obs(true, false, home, "");
         let loading = obs(false, false, home, "");
         // One reading between two documents is not enough.
-        assert!(!sign_in_confirmed(None, &gone));
-        assert!(!sign_in_confirmed(Some(&loading), &gone));
-        assert!(!sign_in_confirmed(Some(&gone), &loading));
-        assert!(sign_in_confirmed(Some(&gone), &gone));
+        assert!(!sign_in_confirmed(login, None, &gone));
+        assert!(!sign_in_confirmed(login, Some(&loading), &gone));
+        assert!(!sign_in_confirmed(login, Some(&gone), &loading));
+        assert!(sign_in_confirmed(login, Some(&gone), &gone));
         // A form that comes back (the page reloaded the sign-in) undoes it.
         let back = obs(true, true, home, "");
-        assert!(!sign_in_confirmed(Some(&gone), &back));
+        assert!(!sign_in_confirmed(login, Some(&gone), &back));
+        // Parsed but still loading subresources: enough off the sign-in page,
+        // not on it (a script-rendered form may not be there yet).
+        let parsed_home = SignInObservation {
+            parsed: true,
+            ..obs(false, false, home, "")
+        };
+        assert!(sign_in_confirmed(login, Some(&parsed_home), &parsed_home));
+        let parsed_login = SignInObservation {
+            parsed: true,
+            ..obs(false, false, login, "")
+        };
+        assert!(!sign_in_confirmed(
+            login,
+            Some(&parsed_login),
+            &parsed_login
+        ));
     }
 
     // #482: a submit that navigated (the tab detaching under the key) is
@@ -22379,13 +22412,13 @@ mod tests {
 
     #[test]
     fn sign_in_observation_parses_the_page_reading() {
-        let v = json!(r#"{"ready":true,"form":false,"message":"","url":"https://x/home"}"#);
+        let v = json!(r#"{"state":"complete","form":false,"message":"","url":"https://x/home"}"#);
         assert_eq!(
             parse_sign_in_observation(Some(&v)),
             Some(obs(true, false, "https://x/home", ""))
         );
         // A reading without the form flag counts as the form being there.
-        let v = json!(r#"{"ready":true,"url":"https://x/home"}"#);
+        let v = json!(r#"{"state":"complete","url":"https://x/home"}"#);
         assert!(parse_sign_in_observation(Some(&v)).unwrap().form);
         assert_eq!(parse_sign_in_observation(Some(&json!(1))), None);
         assert_eq!(parse_sign_in_observation(None), None);
