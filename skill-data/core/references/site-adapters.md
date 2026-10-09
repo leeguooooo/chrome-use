@@ -98,13 +98,13 @@ if (r.status === 401) return { error: 'login_required', loginRequired: true, log
 What the caller sees: the command fails with `login wall: <host> is not
 signed in (site <name>/<cmd> …)` on stderr and `loginWall: {source: "site",
 spec, host, url, returnTo, loginUrl, evidence, rerunnable, hint}` in `--json`
-(`evidence.source` is `adapter`, `http401`, `redirect` or `page`). **Sign in
-with `chrome-use open <loginUrl>` + `chrome-use auth login --bwu`, then run the
-same command again**; ask the user only when no vault item matches, a second
-factor needs them, or the login fails. With `"auth": {"autoLogin": "bwu"}` in
-`~/.chrome-use/config.json` or `AGENT_BROWSER_AUTO_LOGIN=bwu`, chrome-use does
-that itself and runs the command once more, adding `loginWall.autoLogin` and
-`loginWall.rerun: {ok, error}`. It reruns a write only when the adapter
+(`evidence.source` is `adapter`, `http401`, `redirect` or `page`). When the
+user has not decided for that host, `loginWall.ask` holds a question to relay
+to them and one command per answer (sign in once, `auth autologin always
+<host>`, `auth autologin never <host>`): **ask the user, never choose for
+them** (`core/authentication`). With `always` stored for the host, chrome-use
+signs in by itself and runs the command once more, adding
+`loginWall.autoLogin` and `loginWall.rerun: {ok, error}`. It reruns a write only when the adapter
 reported the login itself (`rerunnable: true`): a write whose failure was
 inferred from a 401 or a redirect may have half-run, so it signs in and stops.
 

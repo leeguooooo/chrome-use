@@ -4319,9 +4319,18 @@ Bitwarden Login Options:
   A signed assertion is not proof of login; verify the authenticated destination.
   Login walls: a navigation that lands on a sign-in page, or a site adapter
   that finds the site signed out, prints `login wall: …` (JSON: loginWall).
-  Set "auth": {"autoLogin": "bwu"} in ~/.chrome-use/config.json
-  or AGENT_BROWSER_AUTO_LOGIN=bwu to run this login there automatically
-  (a signed-out site adapter is then run once more).
+  When the user has not decided for that site, it asks: a prompt in a
+  terminal, or `loginWall.ask` (a question to relay and one command per
+  answer) for an agent, which must ask the user and never choose itself.
+
+Auto-login decisions (per site, ~/.chrome-use/autologin.json):
+  auth autologin status              Show decisions and what overrides them
+  auth autologin always <host>|--all Sign in from the vault without asking
+                                     (a signed-out site adapter is run once more)
+  auth autologin never <host>        Don't sign in and don't ask
+  auth autologin off <host>|--all    Forget: ask again next time
+  AGENT_BROWSER_AUTO_LOGIN=bwu|ask|off overrides them; "auth": {"autoLogin":
+  "bwu"} in ~/.chrome-use/config.json counts as `always --all`.
 
 Login behavior:
   auth login waits for form selectors to appear before filling/clicking.
@@ -5469,9 +5478,10 @@ Signed out:
   "not_logged_in"), or fails after one of its fetch calls got HTTP 401 or was
   redirected to a sign-in page, fails with `login wall: <host> is not signed
   in …` on stderr and `loginWall` in --json. Sign in with `open <loginUrl>`
-  and `auth login --bwu`, then run it again. With "auth": {"autoLogin": "bwu"}
-  (or AGENT_BROWSER_AUTO_LOGIN=bwu) that happens by itself and the command runs
-  once more; a write is rerun only when the adapter reported the login itself.
+  and `auth login --bwu`, then run it again. When the user has not decided for
+  the site, `loginWall.ask` asks them (see `auth --help`). With `auth autologin
+  always <host>` that happens by itself and the command runs once more; a
+  write is rerun only when the adapter reported the login itself.
 
 Global Options:
   --json               Output as JSON (adapters usually return JSON already)

@@ -1,4 +1,5 @@
 mod account;
+mod autologin;
 mod bwu_login;
 mod chat;
 mod choosebrowser;
@@ -1838,6 +1839,13 @@ fn main() {
                 exit(1);
             }
         }
+    }
+
+    // `auth autologin …` (#481): the stored login-wall decisions; no daemon.
+    if clean.first().map(|s| s.as_str()) == Some("auth")
+        && clean.get(1).map(|s| s.as_str()) == Some("autologin")
+    {
+        exit(autologin::run_cli(&clean[2..], flags.json));
     }
 
     // Handle profiles command (doesn't need daemon)
@@ -3758,11 +3766,22 @@ fn main() {
                     again["id"] = json!(commands::gen_id());
                     connection::send_command(again, &session)
                 };
+                let json_mode = flags.json;
+                let ask_session = flags.session.clone();
+                let mut decide = |w: &Value| {
+                    autologin::decide(
+                        w["host"].as_str().unwrap_or(""),
+                        &ask_session,
+                        w["loginUrl"].as_str(),
+                        true,
+                        json_mode,
+                    )
+                };
                 site::apply_site_login_wall(
                     &cmd,
                     &mut resp,
                     site::SiteLoginIo {
-                        auto: bwu_login::auto_login_configured(),
+                        decide: &mut decide,
                         json: flags.json,
                         navigate: &mut navigate,
                         sign_in: &mut sign_in,
@@ -3859,31 +3878,54 @@ fn main() {
                 .filter(|w| w.get("source").and_then(|v| v.as_str()) != Some("site"))
                 .cloned();
             if let Some(wall) = wall.filter(|_| !site_wall) {
-                if let Some(h) = wall.get("hint").and_then(|v| v.as_str()) {
-                    eprintln!("{} {}", color::warning_indicator(), h);
-                }
-                if bwu_login::auto_login_configured() {
-                    let auto = bwu_login::auto_login(&flags, &wall);
-                    match auto.get("error").and_then(|v| v.as_str()) {
-                        Some(e) => eprintln!(
-                            "{} login wall: auto-login failed: {e}",
-                            color::warning_indicator()
-                        ),
-                        None => eprintln!(
-                            "login wall: signed in{}",
-                            auto.get("returnedTo")
-                                .and_then(|v| v.as_str())
-                                .map(|u| format!("; back on {u}"))
-                                .unwrap_or_default()
-                        ),
-                    }
+                let host = wall["host"].as_str().unwrap_or("").to_string();
+                // #481: sign in, skip, or ask, from the user's decision for
+                // this host. The tab is on the sign-in page already.
+                let outcome = autologin::decide(&host, &flags.session, None, false, flags.json);
+                let set = |resp: &mut connection::Response, key: &str, v: Value| {
                     if let Some(w) = resp
                         .data
                         .as_mut()
                         .and_then(|d| d.get_mut("loginWall"))
                         .and_then(|w| w.as_object_mut())
                     {
-                        w.insert("autoLogin".into(), auto);
+                        w.insert(key.into(), v);
+                    }
+                };
+                match outcome {
+                    autologin::Outcome::Ask(ask) => {
+                        eprintln!(
+                            "{} {}",
+                            color::warning_indicator(),
+                            autologin::ask_text(&host, &ask)
+                        );
+                        set(&mut resp, "ask", ask);
+                    }
+                    autologin::Outcome::Skip { source } => {
+                        if let Some(h) = wall.get("hint").and_then(|v| v.as_str()) {
+                            eprintln!("{} {}", color::warning_indicator(), h);
+                        }
+                        set(&mut resp, "autoLoginDecision", json!(source));
+                    }
+                    autologin::Outcome::SignIn { .. } => {
+                        if let Some(h) = wall.get("hint").and_then(|v| v.as_str()) {
+                            eprintln!("{} {}", color::warning_indicator(), h);
+                        }
+                        let auto = bwu_login::auto_login(&flags, &wall);
+                        match auto.get("error").and_then(|v| v.as_str()) {
+                            Some(e) => eprintln!(
+                                "{} login wall: auto-login failed: {e}",
+                                color::warning_indicator()
+                            ),
+                            None => eprintln!(
+                                "login wall: signed in{}",
+                                auto.get("returnedTo")
+                                    .and_then(|v| v.as_str())
+                                    .map(|u| format!("; back on {u}"))
+                                    .unwrap_or_default()
+                            ),
+                        }
+                        set(&mut resp, "autoLogin", auto);
                     }
                 }
             }

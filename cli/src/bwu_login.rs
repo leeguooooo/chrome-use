@@ -449,11 +449,37 @@ pub fn auto_login_enabled(env: Option<&str>, config: Option<&Value>) -> bool {
     })
 }
 
-pub fn auto_login_configured() -> bool {
-    auto_login_enabled(
-        std::env::var("AGENT_BROWSER_AUTO_LOGIN").ok().as_deref(),
-        crate::report::user_config().as_ref(),
-    )
+/// Run `auth login --bwu` under `bwu run`; the child's error when it fails.
+fn run_login_child(p: &Prepared, args: &[std::ffi::OsString]) -> Result<(), String> {
+    let output = child_command(p, args).and_then(|mut c| {
+        c.stdout(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let envelope: Option<Value> = stdout
+        .lines()
+        .rev()
+        .find_map(|l| serde_json::from_str(l.trim()).ok());
+    let ok = output.status.success()
+        && envelope
+            .as_ref()
+            .is_some_and(|e| e["success"].as_bool() == Some(true));
+    if ok {
+        return Ok(());
+    }
+    Err(envelope
+        .as_ref()
+        .and_then(|e| e["error"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("auth login --bwu exited with {}", output.status)))
+}
+
+/// Whether an `auth login --bwu` failure is a submit whose outcome is unknown
+/// (the tab detached mid-command, #482), worth one more try.
+fn retry_after_unknown_outcome(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("action_outcome_unknown") && e.contains("input.dispatchkeyevent")
 }
 
 /// Sign in to the login wall the tab is on with the only vault login for it
@@ -470,7 +496,7 @@ pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
     };
     out["item"] = json!(p.name);
     eprintln!(
-        "login wall: signing in to {} as vault item '{}' (auto-login is on)",
+        "login wall: signing in to {} as vault item '{}' (auto-login)",
         p.host, p.name
     );
     let args: Vec<std::ffi::OsString> = [
@@ -486,34 +512,37 @@ pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
     .iter()
     .map(Into::into)
     .collect();
-    let output = child_command(&p, &args).and_then(|mut c| {
-        c.stdout(std::process::Stdio::piped())
-            .output()
-            .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))
-    });
-    let output = match output {
-        Ok(o) => o,
-        Err(e) => {
-            out["error"] = json!(e);
-            return out;
+    // The sign-in page, to come back to when a submit's outcome is unknown.
+    let login_page = crate::connection::send_command(
+        json!({ "id": crate::commands::gen_id(), "action": "url" }),
+        &flags.session,
+    )
+    .ok()
+    .and_then(|r| r.data.and_then(|d| d["url"].as_str().map(str::to_string)));
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match run_login_child(&p, &args) {
+            Ok(()) => break,
+            // #482: a detach during the Enter submit leaves its outcome unknown;
+            // the site was seen still signed out afterwards. Logging in again
+            // from the sign-in page is safe: on a page that is already signed
+            // in, `auth login --bwu` reports alreadySignedIn and types nothing.
+            Err(e) if attempt == 1 && retry_after_unknown_outcome(&e) && login_page.is_some() => {
+                eprintln!(
+                    "login wall: the sign-in submit's outcome is unknown ({e}); trying once more"
+                );
+                let _ = crate::connection::send_command(
+                    json!({ "id": crate::commands::gen_id(), "action": "navigate", "url": login_page }),
+                    &flags.session,
+                );
+                out["retried"] = json!(1);
+            }
+            Err(e) => {
+                out["error"] = json!(e);
+                return out;
+            }
         }
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let envelope: Option<Value> = stdout
-        .lines()
-        .rev()
-        .find_map(|l| serde_json::from_str(l.trim()).ok());
-    let ok = output.status.success()
-        && envelope
-            .as_ref()
-            .is_some_and(|e| e["success"].as_bool() == Some(true));
-    if !ok {
-        out["error"] = json!(envelope
-            .as_ref()
-            .and_then(|e| e["error"].as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("auth login --bwu exited with {}", output.status)));
-        return out;
     }
     out["ok"] = json!(true);
     if let Some(back) = wall["returnTo"].as_str() {
@@ -558,6 +587,17 @@ mod tests {
         assert!(choose(&[], None, "github.com")
             .unwrap_err()
             .contains("no login"));
+    }
+
+    #[test]
+    fn only_an_unknown_key_outcome_is_retried() {
+        assert!(retry_after_unknown_outcome("CDP error (Input.dispatchKeyEvent): action_outcome_unknown: Input.dispatchKeyEvent was not replayed because it may already have executed. Original error: Detached while handling command."));
+        assert!(!retry_after_unknown_outcome(
+            "2 logins in your vault match x.com"
+        ));
+        assert!(!retry_after_unknown_outcome(
+            "action_outcome_unknown: Runtime.evaluate was not replayed"
+        ));
     }
 
     #[test]

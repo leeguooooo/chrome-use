@@ -285,7 +285,7 @@ chrome-use --session passkey-demo --launch snapshot -i
 ```
 
 命令落到登录页，或者 `site` 适配器发现站点没登录（返回 `loginRequired: true`，或运行失败且请求拿到过 HTTP 401）时，会输出 `login wall: …`，`--json` 里带 `loginWall`。
-在 `~/.chrome-use/config.json` 配 `"auth": {"autoLogin": "bwu"}` 或设 `AGENT_BROWSER_AUTO_LOGIN=bwu` 后，chrome-use 会自己用密码库登录，并把没登录的适配器命令重跑一次。
+某个站点第一次遇到登录墙时，chrome-use 会问要不要用密码库登录：这次登录、以后这个站点都自动登录、不登录也不再问（终端里直接提问；agent 调用时 `loginWall.ask` 里给出问题和每个选项对应的命令，由 agent 转问你）。选了「以后都自动登录」后会自己登录，并把没登录的适配器命令重跑一次。`chrome-use auth autologin status` 查看，`auth autologin off <host>` 撤销。
 
 登录后检查是否到达已认证的目标页面。passkey assertion 只说明 Chrome 签了请求，
 不能证明网站接受了它。详见[登录与凭证](https://chrome-use.leeguoo.com/login-auth.html)。

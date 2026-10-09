@@ -276,7 +276,7 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         适配器发现站点没登录时，返回 <code>{"loginRequired": true}</code>（<code>error</code> 码随意，可以再带 <code>loginUrl</code>，即站点内的登录页地址）。
         <code>error: "login_required"</code> 或 <code>"not_logged_in"</code> 也算。适配器运行失败时，如果它的某个 <code>fetch</code> 拿到 HTTP 401、被重定向到登录页，或者标签页停在了登录页，chrome-use 也按没登录处理。
         这时命令失败，stderr 输出 <code>login wall: &lt;host&gt; is not signed in …</code>，<code>--json</code> 里带 <code>loginWall</code>，提示走 <code>auth login --bwu</code>，不再用适配器自己那句「先去登录」。
-        在 <code>~/.chrome-use/config.json</code> 里配了 <code>"auth": {"autoLogin": "bwu"}</code>（或 <code>AGENT_BROWSER_AUTO_LOGIN=bwu</code>）时，会打开 <code>loginUrl</code>，用 vault 里该站点唯一的登录项登录，再把这条命令重跑一次。
+        某个站点第一次遇到时，chrome-use 会问要不要用密码库登录：这次登录、以后这个站点都自动登录、不登录也不再问。终端里直接提问；agent 调用时 <code>loginWall.ask</code> 给出问题和每个选项对应的命令，agent 要转问你，不能替你选。选了 <code>chrome-use auth autologin always &lt;host&gt;</code> 后，会打开 <code>loginUrl</code>，用 vault 里该站点的登录项登录，再把这条命令重跑一次。<code>auth autologin status</code> 查看，<code>auth autologin off &lt;host&gt;</code> 撤销。
         写操作只有在适配器自己报了没登录时才重跑；靠 401 或重定向推断出来的失败可能已经执行了一半，留给你去页面确认。
       </p>
 

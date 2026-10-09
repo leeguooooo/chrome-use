@@ -166,28 +166,55 @@ When a command leaves the tab on a site's sign-in page instead of the page
 asked for (an expired session bounced `open`, `reload`, `back` or a click to
 `/login?redirect_uri=…`), chrome-use says so once per host per session: a
 `login wall: <host> redirected to its sign-in page; …` line on stderr and
-`loginWall: {url, returnTo, host, hint}` in the JSON data. Sign in with
-`auth login --bwu` (with `--item` when several vault logins match), then open
-`returnTo` and continue. Ask the user only when no vault item matches, a
-second factor needs them, or the login fails. Detection reads the URL first
+`loginWall: {url, returnTo, host, hint}` in the JSON data. Detection reads the URL first
 (sign-in paths and hosts, a `redirect_uri` / `return_to` / `next` / `continue`
 parameter pointing back, or a bounce from another page of the same site) and
 checks the page for a visible password or username field when the URL alone
 is not conclusive, so a page that only links to a login is not flagged.
 
-To sign in automatically, set `"auth": {"autoLogin": "bwu"}` in
-`~/.chrome-use/config.json` or `AGENT_BROWSER_AUTO_LOGIN=bwu`. The first wall
-per host per session then runs the `auth login --bwu` flow with the only
-vault login for the site (several or none are reported, never guessed),
-returns to `returnTo`, and reports `loginWall.autoLogin: {ok, item, error,
-returnedTo}`. It handles a one-time code exactly as `auth login --bwu` does
-and nothing more.
+**Whether to sign in is the user's decision, per site.** When nothing is
+decided for the host yet, the wall carries a question:
+
+```
+login wall: zentao.example.com needs a sign-in. Ask the user: "zentao.example.com needs you to sign in. Should chrome-use sign in with your Bitwarden login for zentao.example.com? (1) yes, this time  (2) yes, and always … without asking  (3) no, and don't ask again …"
+  once:   chrome-use --session s open https://zentao.example.com/login && chrome-use --session s auth login --bwu  (then run the command again)
+  always: chrome-use auth autologin always zentao.example.com  (then run the command again)
+  never:  chrome-use auth autologin never zentao.example.com
+Ask the user which one; do not choose for them, and never choose "always" yourself.
+```
+
+and `loginWall.ask: {question, options: [{choice, label, command, then}],
+instruction}` in JSON. **Relay `question` to the user as is, run the command
+for their answer, and never pick an option yourself**, least of all `always`:
+it signs in to that site from their vault from now on without asking. A
+person running chrome-use in a terminal is prompted directly instead.
+
+With `always` stored for the host, the wall runs the `auth login --bwu` flow
+by itself with the vault login for the site (several are reported, never
+guessed), returns to `returnTo`, and reports `loginWall.autoLogin: {ok, item,
+error, returnedTo}`; a signed-out site adapter is then run once more. With
+`never` the wall is only reported. It handles a one-time code exactly as
+`auth login --bwu` does and nothing more.
+
+```bash
+chrome-use auth autologin status              # decisions, and anything overriding them
+chrome-use auth autologin always <host>       # sign in to <host> without asking
+chrome-use auth autologin always --all        # every site
+chrome-use auth autologin never <host>        # don't sign in, don't ask
+chrome-use auth autologin off <host>|--all    # forget: ask again next time
+```
+
+Decisions live in `~/.chrome-use/autologin.json`, per host so that agreeing
+for one site does not sign in to every site. `AGENT_BROWSER_AUTO_LOGIN`
+overrides them all (`bwu`/`always`, `ask`, or anything else for never), and
+the older `"auth": {"autoLogin": "bwu"}` in `~/.chrome-use/config.json` still
+counts as `always --all` for hosts without a decision of their own.
 
 A site adapter that finds the site signed out (`chrome-use site …`) reports
 the same kind of wall: `login wall: <host> is not signed in (site …)` and
 `loginWall` with `source: "site"` and the `loginUrl` to open before `auth
-login --bwu`. With auto-login on it opens that page, signs in and runs the
-adapter once more. See `core/site-adapters`.
+login --bwu`. With `always` for the host it opens that page, signs in and runs
+the adapter once more. See `core/site-adapters`.
 
 ### Single fields
 

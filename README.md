@@ -311,10 +311,11 @@ Chrome signed the request; it does not establish that the site accepted it.
 
 A command that lands on a sign-in page, or a `site` adapter that finds the site
 signed out (`loginRequired: true`, or a failed run after HTTP 401), prints
-`login wall: …` and returns `loginWall` in `--json`. With
-`"auth": {"autoLogin": "bwu"}` in `~/.chrome-use/config.json` or
-`AGENT_BROWSER_AUTO_LOGIN=bwu`, chrome-use signs in from the vault itself and
-runs a signed-out adapter once more.
+`login wall: …` and returns `loginWall` in `--json`. The first time for a site
+it asks whether to sign in from the vault: this time, always for that site, or
+never (a prompt in a terminal; `loginWall.ask` with one command per answer for
+an agent, which relays the question to you). `chrome-use auth autologin status`
+shows the decisions and `auth autologin off <host>` forgets one.
 See [Login & Credentials](https://chrome-use.leeguoo.com/en/login-auth.html).
 
 ## Agent loop (experimental)

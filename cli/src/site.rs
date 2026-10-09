@@ -562,9 +562,8 @@ pub fn site_login_hint(
     };
     format!(
         "login wall: {host} is not signed in (site {spec} {why}); {how} (add --item <name> if \
-         the vault has several logins for it), then run the command again. Set \"auth\": \
-         {{\"autoLogin\": \"bwu\"}} in ~/.chrome-use/config.json to do this automatically. Ask \
-         the user only if no vault item matches, 2FA needs them, or login fails"
+         the vault has several logins for it), then run the command again. Ask the user only if \
+         no vault item matches, 2FA needs them, or login fails"
     )
 }
 
@@ -2020,8 +2019,10 @@ pub fn promote_adapter_error(resp: &mut crate::connection::Response) {
 /// What [`apply_site_login_wall`] needs from the outside world, so the flow
 /// can be tested without a browser or a vault.
 pub struct SiteLoginIo<'a> {
-    /// Whether `auth.autoLogin` / `AGENT_BROWSER_AUTO_LOGIN` is `bwu`.
-    pub auto: bool,
+    /// Whether to sign in at this wall (#481): the stored decision, a
+    /// prompt at a terminal, or an `ask` object for an agent.
+    /// `crate::autologin::decide` in the CLI.
+    pub decide: &'a mut dyn FnMut(&Value) -> crate::autologin::Outcome,
     /// `--json`: stdout is the envelope, so the wall also goes to stderr.
     /// Text mode prints the error (the same line) there already.
     pub json: bool,
@@ -2085,12 +2086,28 @@ pub fn apply_site_login_wall(
     let spec = wall["spec"].as_str().unwrap_or("").to_string();
     resp.success = false;
     resp.error = Some(hint.clone());
-    if io.json || io.auto {
-        eprintln!("{} {hint}", crate::color::warning_indicator());
-    }
-    if !io.auto {
-        set_wall(resp, wall);
-        return true;
+    match (io.decide)(&wall) {
+        crate::autologin::Outcome::SignIn { .. } => {
+            eprintln!("{} {hint}", crate::color::warning_indicator());
+        }
+        crate::autologin::Outcome::Skip { source } => {
+            if io.json {
+                eprintln!("{} {hint}", crate::color::warning_indicator());
+            }
+            wall["autoLoginDecision"] = json!(source);
+            set_wall(resp, wall);
+            return true;
+        }
+        crate::autologin::Outcome::Ask(ask) => {
+            let text = crate::autologin::ask_text(&host, &ask);
+            if io.json {
+                eprintln!("{} {text}", crate::color::warning_indicator());
+            }
+            wall["ask"] = ask;
+            resp.error = Some(text);
+            set_wall(resp, wall);
+            return true;
+        }
     }
     if let Some(u) = wall["loginUrl"].as_str().map(str::to_string) {
         if let Err(e) = (io.navigate)(&u) {
@@ -2957,6 +2974,26 @@ async function(args){ return args; }"#;
         sign_in_result: Value,
         reruns: Vec<Value>,
     ) -> (crate::connection::Response, Vec<String>, usize, usize, bool) {
+        let outcome = if auto {
+            crate::autologin::Outcome::SignIn {
+                source: "test".into(),
+            }
+        } else {
+            crate::autologin::Outcome::Skip {
+                source: "test".into(),
+            }
+        };
+        run_flow_outcome(cmd, first, outcome, sign_in_result, reruns)
+    }
+
+    fn run_flow_outcome(
+        cmd: &Value,
+        first: Value,
+        outcome: crate::autologin::Outcome,
+        sign_in_result: Value,
+        reruns: Vec<Value>,
+    ) -> (crate::connection::Response, Vec<String>, usize, usize, bool) {
+        let mut decide = |_w: &Value| outcome.clone();
         let mut resp = site_resp(first);
         promote_adapter_error(&mut resp);
         let mut navs: Vec<String> = Vec::new();
@@ -2979,7 +3016,7 @@ async function(args){ return args; }"#;
             cmd,
             &mut resp,
             SiteLoginIo {
-                auto,
+                decide: &mut decide,
                 json: true,
                 navigate: &mut navigate,
                 sign_in: &mut sign_in,
@@ -2987,6 +3024,41 @@ async function(args){ return args; }"#;
             },
         );
         (resp, navs, signs, ran, walled)
+    }
+
+    #[test]
+    fn undecided_site_wall_asks_the_user_through_the_agent() {
+        let ask = crate::autologin::ask_payload(
+            "z.example.com",
+            "zt",
+            Some("https://z.example.com/zentao/user-login.html"),
+            true,
+        );
+        let (resp, navs, signs, ran, walled) = run_flow_outcome(
+            &site_cmd(true),
+            serde_json::from_str(WALLED).unwrap(),
+            crate::autologin::Outcome::Ask(ask),
+            json!({}),
+            vec![],
+        );
+        assert!(walled);
+        assert!(
+            navs.is_empty() && signs == 0 && ran == 0,
+            "nothing happens before the user answers"
+        );
+        assert!(!resp.success);
+        let err = resp.error.as_deref().unwrap();
+        assert!(
+            err.starts_with("login wall: z.example.com needs a sign-in. Ask the user"),
+            "{err}"
+        );
+        assert!(
+            err.contains("chrome-use auth autologin always z.example.com"),
+            "{err}"
+        );
+        let wall = &resp.data.as_ref().unwrap()["loginWall"];
+        assert_eq!(wall["ask"]["options"][1]["choice"], "always");
+        assert!(wall.get("autoLogin").is_none());
     }
 
     #[test]

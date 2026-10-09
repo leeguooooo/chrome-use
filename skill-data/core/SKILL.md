@@ -135,8 +135,10 @@ personal data needs the user's authorization (`core/trust-boundaries`). Never pr
 arguments, or ask for them in chat (`core/authentication`). An ordinary
 CAPTCHA in an authorized task is a step to try (`core/captcha`), not a stop.
 On a login wall (`login wall:` on stderr, `loginWall` in JSON, also from a
-`site` adapter whose site is signed out), sign in with `auth login --bwu`
-before asking the user (`core/authentication`).
+`site` adapter whose site is signed out) that carries `loginWall.ask`, relay
+its question to the user and run the command for their answer; never choose
+for them, least of all `always` (`core/authentication`). Without `ask`, sign
+in with `auth login --bwu` before asking the user.
 For a step only the human can do, `session handoff`, explain it, and wait
 for them before `session resume`.
 

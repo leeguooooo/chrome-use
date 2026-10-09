@@ -172,7 +172,7 @@
 
       <!-- ============ Bitwarden ======= -->
       <h2>用 Bitwarden 密码与 passkey 登录</h2>
-      <p>在登录页运行 <code>auth login --bwu</code>，从 <a href="https://github.com/leeguooooo/bitwarden-use">bitwarden-use</a>（0.7.0+）选择当前网站的账号。多个账号匹配、且没有一个名字正好是该站点主机名时加 <code>--item</code>。<code>site</code> 适配器发现站点没登录时也会报 <code>login wall:</code>（见<a href="site-adapters.html">站点适配器</a>）。密码、TOTP 和私钥通过 <code>bwu run</code> 传给子进程，不放进参数或输出。</p>
+      <p>在登录页运行 <code>auth login --bwu</code>，从 <a href="https://github.com/leeguooooo/bitwarden-use">bitwarden-use</a>（0.7.0+）选择当前网站的账号。多个账号匹配、且没有一个名字正好是该站点主机名时加 <code>--item</code>。<code>site</code> 适配器发现站点没登录时也会报 <code>login wall:</code>（见<a href="site-adapters.html">站点适配器</a>）。某个站点第一次遇到登录墙时会问：这次用密码库登录、以后这个站点都自动登录，还是不登录也不再问；agent 调用时问题在 <code>loginWall.ask</code> 里，agent 要转问你。<code>auth autologin status</code> 查看决定（按站点存在 <code>~/.chrome-use/autologin.json</code>），<code>auth autologin always|never|off &lt;host&gt;</code> 修改。密码、TOTP 和私钥通过 <code>bwu run</code> 传给子进程，不放进参数或输出。</p>
       <p>在 <code>--launch</code> 浏览器中加 <code>--passkey</code> 只用密码库里的 passkey 登录（需 bwu 0.9.0+），不读取密码、TOTP 或自定义字段。普通密码登录也可用 passkey 完成两步验证。凭证装进标签页上的临时 WebAuthn 验证器，由 Chrome 签名，尝试结束后移除。页面拦截会拒绝普通 passkey 注册调用，但预先保存的原始函数引用可绕过它；检测到意外注册或无法确认清理时，命令报错。仅支持签名计数器为 0 的同步型 passkey；非零计数器需要写回密码库，当前会拒绝。扩展 relay 暂不支持 passkey：passkey-only 登录立即报错，普通登录继续走密码/TOTP。环境不支持 WebAuthn 时，普通登录回退到密码流程；passkey-only 登录报错。</p>
       <div class="du-code">
         <div class="du-code-head">
