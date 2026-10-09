@@ -483,16 +483,17 @@
         之后可用 <code>tab adopt &lt;url&gt;</code> 接管。
       </p>
       <p>
-        网页自己打开的标签（<code>target=_blank</code>、<code>window.open</code>）会让 Chrome 跑到你正在用的应用前面（#468）。所以在你自己的
-        Chrome 里、本会话创建的标签上，<strong>跨站</strong>的 <code>target=_blank</code> 链接（左键、无修饰键、http(s) 地址指向另一个可注册域名
-        ——按公共后缀列表判断、没有 <code>rel=opener</code>、<code>download</code> 或 <code>ping</code>）由 chrome-use 自己打开：网页的点击处理函数照常全部执行，
+        网页自己打开的标签（<code>target=_blank</code>、<code>window.open</code>）会让 Chrome 跑到你正在用的应用前面（#468）。默认情况下
+        chrome-use 让 Chrome 自己打开，和用户点击完全一样；在你自己的 Chrome 里，click 会在 <code>openedTabWarning</code> 里说明。
+        需主动开启：<code>AGENT_BROWSER_BACKGROUND_LINKS=cross-site</code>（也可写 <code>1</code>/<code>on</code>）后，在本会话创建的标签上，
+        <strong>跨站</strong>的 <code>target=_blank</code> 链接（左键、无修饰键、http(s) 地址，页面和链接两端按公共后缀列表都属于不同的可注册域名，
+        没有 <code>rel=opener</code>、<code>download</code> 或 <code>ping</code>）由 chrome-use 自己打开：网页的点击处理函数照常全部执行，
         没有被取消时，链接在本会话的后台标签里打开（<code>openedTabMode: "background"</code>），并带上当前页作为 referrer（需要 ab-connect 0.5.31+）。
-        请求头、cookie 和 referrer 与 Chrome 自己的点击一致；新标签多一条 <code>about:blank</code> 历史记录；跨站链接重定向回当前站点时，
-        最后一跳收不到 <code>SameSite=Strict</code> cookie。其余情况仍由 Chrome 打开，Chrome 会跑到前面，click 会在 <code>openedTabWarning</code>
-        里说明：同站链接（子域名、同一站点的 http↔https）、IP 地址、<code>localhost</code> 和不在公共后缀列表里的主机（页面或链接任一端）、
-        点击过程中被处理函数改到另一个主机的链接、受 ChooseBrowser 规则约束的链接、无法判断站点的页面、<code>window.open</code>、<code>rel=opener</code>、具名窗口、
-        表单、阻止了点击传播的处理函数，以及稍后才弹出的页面。<code>AGENT_BROWSER_BACKGROUND_LINKS</code>：不设或 <code>cross-site</code>（默认）如上；
-        <code>1</code>/<code>all</code> 连同站链接也在后台打开，但它们会收不到 <code>SameSite=Strict</code> cookie；<code>0</code>/<code>off</code> 完全不接管。
+        与 Chrome 自己的点击相比的代价：新标签多一条 <code>about:blank</code> 历史记录；重定向回当前站点的链接，最后一跳<strong>收不到
+        <code>SameSite=Strict</code> cookie</strong>（用户可能显示为未登录）。<code>all</code> 连同站链接也接管，它们一律收不到这些 cookie；
+        不设、<code>0</code> 或 <code>off</code> 不接管（默认）。即使开启，以下情况仍由 Chrome 打开并在 click 结果里说明：同站链接（除非 <code>all</code>）、
+        IP 地址、<code>localhost</code> 和不在公共后缀列表里的主机、点击过程中被处理函数改到另一个主机的链接、受 ChooseBrowser 规则约束的链接、
+        无法判断站点的页面、<code>window.open</code>、<code>rel=opener</code>、具名窗口、表单、阻止了点击传播的处理函数，以及稍后才弹出的页面。
         daemon 启动时读取这个变量：请在会话的第一条命令之前设置，或先 <code>close</code> 再重新开始。
       </p>
       <p>
@@ -862,7 +863,7 @@ AGENT_BROWSER_PROVIDER=<span class="du-str">"browserbase"</span>         <span c
 AGENT_BROWSER_STREAM_PORT=<span class="du-str">"9223"</span>             <span class="du-cmt"># 覆盖 WebSocket 流端口</span>
 AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS=<span class="du-str">"ws.example.com"</span>  <span class="du-cmt"># dashboard 额外允许的主机名（反向代理用）；默认只接受本机回环地址</span>
 AGENT_BROWSER_CLICK_MODE=<span class="du-str">"dom"</span>               <span class="du-cmt"># 点击策略：""(默认) / "coord" / "dom"</span>
-AGENT_BROWSER_BACKGROUND_LINKS=<span class="du-str">"all"</span>         <span class="du-cmt"># 后台打开哪些 target=_blank 链接：不设/"cross-site"(默认) / "all"/"1" / "off"/"0"；daemon 启动时读取</span></code></pre>
+AGENT_BROWSER_BACKGROUND_LINKS=<span class="du-str">"cross-site"</span>  <span class="du-cmt"># 需主动开启（#468）：跨站 target=_blank 链接在后台标签打开。不设/"off"/"0"(默认) 不接管；"cross-site"/"1"/"on"；"all" 连同站也接管。代价：重定向回本站时收不到 SameSite=Strict cookie；daemon 启动时读取</span></code></pre>
       </div>
 
       <h3>隐身 / 反检测开关（fork）</h3>

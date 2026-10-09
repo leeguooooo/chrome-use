@@ -1,5 +1,18 @@
-//! Open cross-site `target=_blank` links an agent clicks in a background
-//! tab, so Chrome does not come to the front (#468).
+//! Opt-in: open cross-site `target=_blank` links an agent clicks in a
+//! background tab, so Chrome does not come to the front (#468). Off by
+//! default: by default every page-opened tab is Chrome's own (which raises
+//! Chrome) and the click says so.
+//!
+//! Chrome's own background-tab clicks were measured as the alternative and
+//! rejected: a Cmd/Ctrl-click or middle click dispatched with
+//! `Input.dispatchMouseEvent` opens `NEW_BACKGROUND_TAB` with requests
+//! identical to the plain click (redirect-back Strict cookies included), but
+//! still focuses the window (`windows.onFocusChanged` +31–48 ms, app
+//! activation +44 ms in the first round), and it changes what the page sees:
+//! `metaKey` on the click, or `auxclick` instead of `click`, so a handler
+//! that branches on them behaves differently, a handler's `preventDefault()`
+//! on `click` does not stop a middle click, and named targets and
+//! `rel=opener` lose their opener.
 //!
 //! When a page opens a tab or pop-up, Chrome inserts it through
 //! `BrowserWebContentsDelegate::AddNewContents` → `chrome::AddWebContents`
@@ -21,17 +34,20 @@
 //! - a `Referrer-Policy` the page set by HTTP header is used only when the
 //!   daemon saw that document's response.
 //!
-//! So by default ([`LinkMode::CrossSite`]) only links to another
+//! So when turned on ([`LinkMode::CrossSite`]) only links to another
 //! registrable domain are taken over: the daemon classifies, before the
 //! click, the clicking frame's URL and each link the click may follow, and
 //! both must have a registrable domain (eTLD+1 by the Public Suffix List)
 //! and differ. For those the request matches Chrome's own click except for
-//! `history.length`. Same registrable domain (subdomains, another scheme),
+//! `history.length`, and a link that redirects back to the page's site,
+//! which arrives there without `SameSite=Strict` cookies (the reason this is
+//! not the default). Same registrable domain (subdomains, another scheme),
 //! IP addresses, `localhost`, hosts outside the list, a link the page
 //! changes during the click to a host not classified, a link a ChooseBrowser
 //! rule applies to, and a page whose header referrer policy the daemon did
 //! not see keep Chrome's click, which raises Chrome; the click says so.
-//! [`BACKGROUND_LINKS_ENV`] `=all` also takes same-site links, `=off` none.
+//! [`BACKGROUND_LINKS_ENV`]: unset/`off`/`0` none (default),
+//! `cross-site`/`1`/`on` as above, `all` same-site links too.
 //!
 //! The click's default action is taken over only for a plain left
 //! click on an `<a>`/`<area>` whose effective target is `_blank`, with an
@@ -80,21 +96,27 @@ pub const BACKGROUND_LINKS_ENV: &str = "AGENT_BROWSER_BACKGROUND_LINKS";
 /// The [`BACKGROUND_LINKS_ENV`] setting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkMode {
-    /// `0` / `off`: every page-opened tab goes through Chrome.
+    /// Unset / `0` / `off` (default): every page-opened tab goes through
+    /// Chrome, which raises its window (#468 is not resolved by default).
     Off,
-    /// Unset / `cross-site` (default): links to another registrable domain.
+    /// `cross-site` / `1` / `on`: links to another registrable domain. Cost:
+    /// one extra history entry, and a cross-site link that redirects back to
+    /// the page's site arrives there without `SameSite=Strict` cookies.
     CrossSite,
-    /// `1` / `all`: same-site links too (they lose `SameSite=Strict` cookies).
+    /// `all`: same-site links too (they lose `SameSite=Strict` cookies).
     All,
 }
 
 impl LinkMode {
-    /// Parse the env value; anything unrecognised is the default.
+    /// Parse the env value. Off unless explicitly turned on: Chrome's own
+    /// background-tab clicks (Cmd/Ctrl or middle click) keep the request
+    /// identical but still activate the window, and opening the link
+    /// ourselves is not identical, so neither can be the default.
     pub fn parse(value: Option<&str>) -> Self {
         match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-            Some("0" | "off" | "false" | "no" | "none") => Self::Off,
-            Some("1" | "all" | "true" | "yes" | "on") => Self::All,
-            _ => Self::CrossSite,
+            Some("cross-site" | "1" | "on" | "true" | "yes") => Self::CrossSite,
+            Some("all") => Self::All,
+            _ => Self::Off,
         }
     }
 
@@ -866,8 +888,10 @@ pub fn chrome_raised_note(reason: Option<&str>, mode: LinkMode) -> String {
     let same_site = reason.is_some_and(|r| r.contains("same site"));
     let hint = match mode {
         LinkMode::Off => format!(
-            ". {BACKGROUND_LINKS_ENV} is off; unset it to have chrome-use open cross-site \
-             target=_blank links in a background tab"
+            ". {BACKGROUND_LINKS_ENV}=cross-site (opt-in, read when the session starts) makes \
+             chrome-use open cross-site target=_blank links in a background tab instead, at a \
+             cost: a link that redirects back to this site arrives without its SameSite=Strict \
+             cookies (see `click --help`)"
         ),
         LinkMode::CrossSite if same_site => format!(
             ". {BACKGROUND_LINKS_ENV}=all also opens same-site links in a background tab, but \
@@ -1096,14 +1120,16 @@ mod tests {
 
     #[test]
     fn the_switch_parses_default_all_and_off() {
-        assert_eq!(LinkMode::parse(None), LinkMode::CrossSite);
-        assert_eq!(LinkMode::parse(Some("")), LinkMode::CrossSite);
-        assert_eq!(LinkMode::parse(Some("cross-site")), LinkMode::CrossSite);
-        assert_eq!(LinkMode::parse(Some("bogus")), LinkMode::CrossSite);
-        assert_eq!(LinkMode::parse(Some("1")), LinkMode::All);
-        assert_eq!(LinkMode::parse(Some(" ALL ")), LinkMode::All);
+        // Off by default (#468 not resolved by default; see LinkMode).
+        assert_eq!(LinkMode::parse(None), LinkMode::Off);
+        assert_eq!(LinkMode::parse(Some("")), LinkMode::Off);
+        assert_eq!(LinkMode::parse(Some("bogus")), LinkMode::Off);
         assert_eq!(LinkMode::parse(Some("0")), LinkMode::Off);
         assert_eq!(LinkMode::parse(Some("off")), LinkMode::Off);
+        assert_eq!(LinkMode::parse(Some("cross-site")), LinkMode::CrossSite);
+        assert_eq!(LinkMode::parse(Some("1")), LinkMode::CrossSite);
+        assert_eq!(LinkMode::parse(Some(" ON ")), LinkMode::CrossSite);
+        assert_eq!(LinkMode::parse(Some(" ALL ")), LinkMode::All);
     }
 
     #[test]
@@ -1384,7 +1410,8 @@ mod tests {
     fn the_note_names_the_switch_where_it_helps() {
         let off = chrome_raised_note(None, LinkMode::Off);
         assert!(off.contains("#468"));
-        assert!(off.contains(BACKGROUND_LINKS_ENV));
+        assert!(off.contains(&format!("{BACKGROUND_LINKS_ENV}=cross-site")));
+        assert!(off.contains("SameSite=Strict"));
         let same = chrome_raised_note(
             Some("the link stays on the same site, so it keeps Chrome's own click"),
             LinkMode::CrossSite,

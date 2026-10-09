@@ -7342,10 +7342,10 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // Over the relay a pop-up from our tab is found in chrome.tabs, so record
     // which Chrome tabs exist before the click (#456).
     let relay_before = mgr.relay_tab_baseline().await;
-    // A tab the page opens raises Chrome over the user's app (#468). A plain
+    // A tab the page opens raises Chrome over the user's app (#468). Opt-in
+    // (AGENT_BROWSER_BACKGROUND_LINKS=cross-site/all; off by default): a plain
     // cross-site `target=_blank` link is opened by us in a background tab
-    // instead (AGENT_BROWSER_BACKGROUND_LINKS: default cross-site, `all`,
-    // `off`); the guard is armed in the clicked element's frame.
+    // instead; the guard is armed in the clicked element's frame.
     let may_open_links = mgr.click_may_open_links_itself();
     let link_mode = popup_guard::LinkMode::from_env();
     let popup_guard = if link_mode != popup_guard::LinkMode::Off

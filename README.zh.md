@@ -230,7 +230,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use solve-slider 1` · `skills get core/captcha` | 尝试易盾拼图（未通过时非零退出）；加载点选与结果核验流程 |
 | `chrome-use find "edit web service settings button"` | 按自然语言描述返回排序后的候选，不自动执行 |
 | `chrome-use actions @e15` · `do @e15 expand` | 这个元素此刻支持什么，并只做其中之一 |
-| `chrome-use click @e2 --follow` | 点击打开的新标签（`target=_blank`、`window.open`）以 `openedTab` 报告并归入会话；`--follow` 切过去。在你自己的 Chrome 里只接管由本会话标签打开的标签，并按标签 id 附加（需要 ab-connect 0.5.30+）；否则由 `openedTabWarning` / `openedTabStatus`（`unadopted`、`unknown`）说明原因。跨站的 `target=_blank` 链接在后台标签打开（`openedTabMode: background`），Chrome 不会跑到你的应用前面；网页打开的其他标签仍会让 Chrome 跑到前面，`openedTabWarning` 会说明。`AGENT_BROWSER_BACKGROUND_LINKS=all` / `off`（会话的 daemon 启动时读取）可扩大或关闭这一行为 |
+| `chrome-use click @e2 --follow` | 点击打开的新标签（`target=_blank`、`window.open`）以 `openedTab` 报告并归入会话；`--follow` 切过去。在你自己的 Chrome 里只接管由本会话标签打开的标签，并按标签 id 附加（需要 ab-connect 0.5.30+）；否则由 `openedTabWarning` / `openedTabStatus`（`unadopted`、`unknown`）说明原因。网页打开的标签会让 Chrome 跑到你的应用前面，`openedTabWarning` 会说明。需主动开启的 `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`（会话的 daemon 启动时读取）会把跨站的 `target=_blank` 链接改在后台标签打开（`openedTabMode: background`）；代价：重定向回当前站点的链接收不到 `SameSite=Strict` cookie |
 | `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | 列出标签；选择已创建或已接管的标签；通过扩展或直接 CDP 连接，不导航地接管已打开的标签 |
 | `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | 在初始化或存活探针之前激活目标；`--front` 是别名 |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | 处理点击触发的原生 `confirm()` / `prompt()` |

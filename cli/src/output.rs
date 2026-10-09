@@ -2557,31 +2557,29 @@ but not taken sets openedTabWarning and openedTabStatus: `unadopted` (left
 alone on purpose) or `unknown` (no answer within about 2 s to find plus 3 s to
 attach; it may be attached but is not tracked).
 
-A tab a page opens itself brings Chrome to the front over whatever app the
-user is in (#468). So in your own Chrome, in a tab the session created, a
-plain left click on a CROSS-SITE target=_blank link (another registrable
-domain by the Public Suffix List; http/https; no rel=opener, download or ping)
-is taken over after the page's own click handlers ran: chrome-use opens it in
-a background tab of the session (openedTabMode: `background`), with the page
-as referrer under its referrer policy. The request matches Chrome's own click;
-the new tab has one extra about:blank history entry. A cross-site link that
-redirects back to the page's site arrives there without SameSite=Strict
-cookies.
+A tab a page opens itself (target=_blank, window.open) brings Chrome to the
+front over whatever app the user is in (#468). By default chrome-use leaves
+it to Chrome, exactly as a user's click; in your own Chrome the click then
+says so in openedTabWarning.
 
-Everything else goes through Chrome, which comes to the front, and the click
-says so in openedTabWarning: same-site links (subdomains, http<->https of the
-same site), IP addresses, localhost and hosts outside the Public Suffix List
-(on either end), links a page handler changes to another host during the
-click, links a ChooseBrowser rule applies to, pages whose header referrer
-policy chrome-use did not see, window.open, rel=opener, named targets, forms,
-handlers that stop the click, and pop-ups opened later. The decision is made
-after every page listener ran, with the link as the page left it.
-
-AGENT_BROWSER_BACKGROUND_LINKS: unset or `cross-site` (default) as above;
-`1`/`all` also opens same-site links in the background (they then lose
-SameSite=Strict cookies and count as cross-site); `0`/`off` never. Read by the
-daemon when it starts: set it before the session's first command, or run
-`close` and start again.
+AGENT_BROWSER_BACKGROUND_LINKS=cross-site (opt-in; also `1`/`on`): in a tab
+the session created, a plain left click on a CROSS-SITE target=_blank link
+(another registrable domain by the Public Suffix List on both ends; http/https;
+no rel=opener, download or ping) is taken over after the page's own click
+handlers ran, and chrome-use opens it in a background tab of the session
+(openedTabMode: `background`), with the page as referrer under its referrer
+policy. Cost compared with Chrome's click: the new tab has one extra
+about:blank history entry, and a link that redirects back to the page's own
+site arrives there WITHOUT its SameSite=Strict cookies (the user can appear
+signed out). `all` also takes same-site links, which then always lose their
+SameSite=Strict cookies. Unset, `0` or `off`: never (the default).
+Everything else always goes through Chrome: same-site links (unless `all`),
+IP addresses, localhost and hosts outside the Public Suffix List, links a
+handler changes to another host during the click, links a ChooseBrowser rule
+applies to, pages whose header referrer policy chrome-use did not see,
+window.open, rel=opener, named targets, forms, handlers that stop the click,
+and pop-ups opened later. The daemon reads the variable when it starts: set
+it before the session's first command, or `close` and start again.
 
 Global Options:
   --json               Output as JSON
