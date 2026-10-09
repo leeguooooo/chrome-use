@@ -205,16 +205,11 @@ pub fn document_referrer_policy(params: &Value) -> Option<(String, String)> {
 /// no page listener cancelled the click, cancels Chrome's own action.
 /// A listener that stops propagation means the last one never runs: the
 /// click stays Chrome's.
-pub fn arm_script(
-    header_policy: Option<&str>,
-    mode: LinkMode,
-    hosts: &HashMap<String, String>,
-) -> String {
+pub fn arm_script(header_policy: Option<&str>, hosts: &HashMap<String, String>) -> String {
     format!(
         r#"(() => {{
   const KEY = '__chromeUsePopupGuard';
   const HEADER_POLICY = {header};
-  const ALL = {all};
   const HOSTS = {hosts};
   const prev = globalThis[KEY];
   if (prev && typeof prev.disarm === 'function') prev.disarm();
@@ -273,18 +268,18 @@ pub fn arm_script(
     let url;
     try {{ url = new URL(link.href); }} catch (_) {{ return {{ skip: 'the link has no valid href' }}; }}
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return {{ skip: 'the link is ' + url.protocol }};
-    if (!ALL) {{
-      const h = url.hostname.toLowerCase().replace(/\.$/, '');
-      const cls = Object.prototype.hasOwnProperty.call(HOSTS, h) ? HOSTS[h] : null;
-      if (cls !== 'cross') {{
-        return {{ skip: cls || "the page changed the link during the click, so chrome-use could not classify its site" }};
-      }}
+    // Every mode: only a host the daemon classified before the click as one
+    // that may be taken over ('cross'; same-site too with `all`).
+    const h = url.hostname.toLowerCase().replace(/\.$/, '');
+    const cls = Object.prototype.hasOwnProperty.call(HOSTS, h) ? HOSTS[h] : null;
+    if (cls !== 'cross') {{
+      return {{ skip: cls || "the page changed the link during the click, so chrome-use could not classify its site" }};
     }}
     let p;
     if (rel.includes('noreferrer')) p = {{ policy: 'no-referrer', source: 'rel' }};
     else if (norm(link.referrerPolicy)) p = {{ policy: norm(link.referrerPolicy), source: 'attribute' }};
     else p = documentPolicy(doc);
-    if (!ALL && p.source === 'unknown') {{
+    if (p.source === 'unknown') {{
       return {{ skip: "chrome-use did not see the page's referrer policy header" }};
     }}
     return {{
@@ -348,7 +343,6 @@ pub fn arm_script(
   return true;
 }})()"#,
         header = serde_json::to_string(&header_policy).unwrap_or_else(|_| "null".into()),
-        all = mode == LinkMode::All,
         hosts = serde_json::to_string(hosts).unwrap_or_else(|_| "{}".into()),
         valid = serde_json::to_string(&POLICIES).unwrap_or_else(|_| "[]".into()),
         ttl = ARM_TTL_MS,
@@ -509,15 +503,14 @@ pub fn classify_link(
         )));
     };
     if link == page {
-        return Some(Err((
-            host,
-            "the link stays on the same site, so it keeps Chrome's own click and its SameSite \
-             cookies"
-                .to_string(),
-        )));
+        return Some(Err((host, SAME_SITE_REASON.to_string())));
     }
     Some(Ok(host))
 }
+
+/// Why a same-site link keeps Chrome's click (unless the mode is `all`).
+pub const SAME_SITE_REASON: &str =
+    "the link stays on the same site, so it keeps Chrome's own click and its SameSite cookies";
 
 /// [`page_site`] for a bare host.
 fn page_site_of_host(host: &str) -> Option<String> {
@@ -527,15 +520,23 @@ fn page_site_of_host(host: &str) -> Option<String> {
 /// The guard's host table: each candidate link URL's host mapped to `"cross"`
 /// (may be taken over) or the reason it keeps Chrome's click. `refuse` is
 /// the ChooseBrowser check for a URL (`Some(reason)` when a rule would send
-/// it elsewhere); such a link keeps Chrome's click too.
+/// it elsewhere); such a link keeps Chrome's click too. `same_site_too`
+/// ([`LinkMode::All`]) widens it to same-site links and nothing else: a link
+/// that cannot be classified, or that a ChooseBrowser rule applies to, keeps
+/// Chrome's click in every mode.
 pub fn host_table(
     page_site: Option<&str>,
     link_urls: &[String],
     refuse: &(dyn Fn(&str) -> Option<String> + Sync),
+    same_site_too: bool,
 ) -> HashMap<String, String> {
     let mut hosts = HashMap::new();
     for url in link_urls {
-        match classify_link(page_site, url) {
+        let class = match classify_link(page_site, url) {
+            Some(Err((host, why))) if same_site_too && why == SAME_SITE_REASON => Some(Ok(host)),
+            other => other,
+        };
+        match class {
             Some(Ok(host)) => {
                 let verdict = match refuse(url) {
                     // Pre-excluded: the link keeps Chrome's own click (it is
@@ -605,7 +606,12 @@ pub async fn arm(
             )
         }
     };
-    let hosts = host_table(page_site(&frame_url).as_deref(), link_urls, refuse);
+    let hosts = host_table(
+        page_site(&frame_url).as_deref(),
+        link_urls,
+        refuse,
+        mode == LinkMode::All,
+    );
     let ctx = client
         .send_command(
             "Page.createIsolatedWorld",
@@ -622,7 +628,6 @@ pub async fn arm(
             Some(json!({
                 "expression": arm_script(
                     header_policies.get(&frame_id).map(String::as_str),
-                    mode,
                     &hosts,
                 ),
                 "contextId": ctx,
@@ -1031,26 +1036,26 @@ mod tests {
     fn arm_script_carries_its_limits_and_the_header_policy() {
         let mut hosts = HashMap::new();
         hosts.insert("b.example.org".to_string(), "cross".to_string());
-        let s = arm_script(None, LinkMode::CrossSite, &hosts);
+        let s = arm_script(None, &hosts);
         assert!(s.contains(&format!("> {ARM_TTL_MS}")));
         assert!(s.contains(&format!("> {MAX_DISPATCH_MS}")));
         assert!(s.contains("'the link has rel=opener'"));
         assert!(s.contains("const HEADER_POLICY = null;"));
-        assert!(s.contains("const ALL = false;"));
         assert!(s.contains("const HOSTS = {\"b.example.org\":\"cross\"};"));
         assert!(s.contains("if (doc !== document) return null;"));
-        // Cross-site mode never guesses a header policy it did not see.
-        assert!(s.contains("if (!ALL && p.source === 'unknown')"));
+        // No mode in the page script: the host table and the policy check
+        // apply in every mode (`all` only widens the table to same-site).
+        assert!(!s.contains("ALL"));
+        assert!(s.contains("if (cls !== 'cross')"));
+        assert!(s.contains("if (p.source === 'unknown')"));
         // The decision is made by the last stage, from the link as it is then.
         assert!(s.contains("if (k === stages.length - 1) { decide(); st.disarm(); return; }"));
         assert!(s.contains("const c = candidate(e);"));
         assert!(!s.contains("{{"));
-        let all = arm_script(Some("no-referrer"), LinkMode::All, &HashMap::new());
-        assert!(all.contains("const HEADER_POLICY = \"no-referrer\";"));
-        assert!(all.contains("const ALL = true;"));
-        assert!(all.contains("const HOSTS = {};"));
-        assert!(arm_script(Some(""), LinkMode::CrossSite, &HashMap::new())
-            .contains("const HEADER_POLICY = \"\";"));
+        let other = arm_script(Some("no-referrer"), &HashMap::new());
+        assert!(other.contains("const HEADER_POLICY = \"no-referrer\";"));
+        assert!(other.contains("const HOSTS = {};"));
+        assert!(arm_script(Some(""), &HashMap::new()).contains("const HEADER_POLICY = \"\";"));
         assert!(DISARM_SCRIPT.contains("st.disarm()"));
     }
 
@@ -1108,7 +1113,7 @@ mod tests {
             "https://b.example.com/".to_string(),
         ];
         let refuse = |url: &str| url.contains("ruled").then(|| "profile Work".to_string());
-        let t = host_table(Some("example.com"), &links, &refuse);
+        let t = host_table(Some("example.com"), &links, &refuse, false);
         assert_eq!(t["x.other.org"], "cross");
         assert!(t["ruled.example.net"].contains("ChooseBrowser"));
         // Pre-excluded links keep Chrome's own click; the wording must not
@@ -1116,6 +1121,51 @@ mod tests {
         assert!(t["ruled.example.net"].contains("Chrome's own click"));
         assert!(!t["ruled.example.net"].contains("nothing was opened"));
         assert!(t["b.example.com"].contains("same site"));
+    }
+
+    #[test]
+    fn all_only_adds_same_site_links_and_keeps_every_other_fallback() {
+        let links: Vec<String> = [
+            "https://x.other.org/a",          // cross-site
+            "https://b.example.com/",         // same site
+            "http://example.com/",            // same site, other scheme
+            "http://127.0.0.1:8080/",         // IP
+            "http://[::1]/",                  // IPv6
+            "http://localhost:3000/",         // localhost
+            "https://x.cu468.test/",          // TLD unknown to the PSL
+            "https://co.uk/",                 // bare public suffix
+            "https://ruled.example.net/",     // ChooseBrowser rule
+            "https://ruled.example.com/same", // same site but ruled
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let refuse = |url: &str| url.contains("ruled").then(|| "profile Work".to_string());
+        let cross = host_table(Some("example.com"), &links, &refuse, false);
+        let all = host_table(Some("example.com"), &links, &refuse, true);
+        // `all` widens to same-site links...
+        assert_eq!(cross["b.example.com"], SAME_SITE_REASON);
+        assert_eq!(all["b.example.com"], "cross");
+        assert_eq!(all["example.com"], "cross");
+        assert_eq!(all["x.other.org"], "cross");
+        // ...and nothing else: every other fallback stays Chrome's click.
+        for host in ["127.0.0.1", "[::1]", "localhost", "x.cu468.test", "co.uk"] {
+            assert!(all[host].contains("could not classify the link"), "{host}");
+            assert_eq!(all[host], cross[host], "{host}");
+        }
+        assert!(all["ruled.example.net"].contains("ChooseBrowser"));
+        assert!(all["ruled.example.com"].contains("ChooseBrowser"));
+        // A page whose site cannot be told: nothing is taken over, even `all`.
+        let none = host_table(None, &links, &refuse, true);
+        assert!(none.values().all(|v| v != "cross"), "{none:?}");
+        // A host the page switches to during the click is not in the table
+        // at all, and the guard script leaves an unknown host to Chrome; the
+        // unknown header policy is checked in every mode too.
+        assert!(!all.contains_key("y.elsewhere.org"));
+        let s = arm_script(None, &all);
+        assert!(s.contains("the page changed the link during the click"));
+        assert!(s.contains("if (p.source === 'unknown')"));
+        assert!(s.contains("did not see the page's referrer policy header"));
     }
 
     #[test]
