@@ -549,24 +549,27 @@ where
     if !keepalive {
         return Some(state.lock().await);
     }
+    // An idle session answers without any extra bytes.
+    if let Ok(guard) = state.try_lock() {
+        return Some(guard);
+    }
     let lock = state.lock();
     tokio::pin!(lock);
     let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut waited = false;
     let guard = loop {
         tokio::select! {
             guard = &mut lock => break guard,
             _ = ticks.tick() => {
-                waited = true;
                 if writer.write_all(b"\n").await.is_err() {
                     return None;
                 }
             }
         }
     };
-    // The lock can free up between two ticks: confirm the client is still there.
-    if waited && writer.write_all(b"\n").await.is_err() {
+    // After any wait, confirm the client is still there: it may have left
+    // before the first keepalive or between two of them.
+    if writer.write_all(b"\n").await.is_err() {
         return None;
     }
     Some(guard)
@@ -998,6 +1001,42 @@ mod tests {
         .await;
         assert!(guard.is_none());
         release.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn queued_command_is_dropped_when_its_client_left_before_the_first_keepalive() {
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(0u32));
+        let held = state.clone().lock_owned().await;
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            drop(held);
+        });
+        let (mut writer, reader) = tokio::io::duplex(128);
+        drop(reader);
+        let guard = lock_for_client(
+            &state,
+            &mut writer,
+            true,
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        assert!(guard.is_none());
+        release.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_idle_session_answers_without_extra_bytes() {
+        let state = tokio::sync::Mutex::new(0u32);
+        let mut output = Vec::new();
+        assert!(lock_for_client(
+            &state,
+            &mut output,
+            true,
+            std::time::Duration::from_millis(10)
+        )
+        .await
+        .is_some());
+        assert!(output.is_empty());
     }
 
     #[tokio::test]
