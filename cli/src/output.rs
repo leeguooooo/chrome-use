@@ -4146,6 +4146,12 @@ referring to the same tab across commands. Optional user-assigned labels
 (e.g. `docs`, `app`) are interchangeable with ids everywhere a tab ref is
 accepted.
 
+After the browser reconnects (a relay restart, for example) each id and label
+stays bound to the same Chrome tab. An id or label whose tab is gone is
+refused, and the label is not given to another tab. If the tab you were
+driving is the one that is gone, commands on the current tab are refused
+until you pick one with `tab select <ref>`, `tab new` or `--tab <ref>`.
+
 Operations:
   list                       List tabs with ids and labels (external: ownership too)
   new [url] [--activate]     Open a new tab, optionally in the foreground

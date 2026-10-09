@@ -419,7 +419,8 @@ Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused
 within a session, so the same id keeps referring to the same tab across
 commands. That holds across a reconnect (a relay restart, for example): ids are
 re-bound by Chrome tab, not by list order, and an id whose tab cannot be found
-again is refused with an error rather than given to another tab. If the tab you
+again is refused with an error rather than given to another tab, and its label
+stays reserved for that tab. If the tab you
 were driving is the one that is gone, commands that act on "the current tab" are
 refused until you pick one (`tab <id>`, `tab new <url>` or `--tab <id>`). Positional integers are **not** accepted — `tab 2` errors with a
 teaching message; use `t2`.

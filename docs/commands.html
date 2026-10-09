@@ -426,7 +426,7 @@
       <h2>标签页与窗口</h2>
       <p>
         标签 id 是形如 <code>t1</code>、<code>t2</code> 的稳定字符串，会话内不重用。
-        重新连接后（例如 relay 重启）每个 id 仍绑定到同一个 Chrome 标签页；找不到原标签页的 id 会被拒绝，不会转给其他标签页。如果正在操作的标签页不见了，作用于当前标签页的命令会被拒绝，直到用 <code>tab &lt;id&gt;</code>、<code>tab new &lt;url&gt;</code> 或 <code>--tab &lt;id&gt;</code> 选定一个标签页。
+        重新连接后（例如 relay 重启）每个 id 仍绑定到同一个 Chrome 标签页；找不到原标签页的 id 会被拒绝，不会转给其他标签页，它的标签名也继续保留给那个标签页。如果正在操作的标签页不见了，作用于当前标签页的命令会被拒绝，直到用 <code>tab &lt;id&gt;</code>、<code>tab new &lt;url&gt;</code> 或 <code>--tab &lt;id&gt;</code> 选定一个标签页。
         位置整数<strong>不</strong>被接受 —— <code>tab 2</code> 会报错，请用 <code>t2</code>。
         你也可以给标签起可读的 label（<code>docs</code>、<code>app</code>），与 id 通用。
       </p>

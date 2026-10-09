@@ -1179,7 +1179,7 @@ pub fn format_tab_id(tab_id: u32) -> String {
 /// One tab ref held by a session, carried across a reconnect of its browser
 /// connection (#473). The Chrome target id is the identity; `tab_id` and
 /// `label` are what the agent typed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CarriedTabRef {
     pub tab_id: u32,
     pub label: Option<String>,
@@ -1191,7 +1191,7 @@ pub struct CarriedTabRef {
 }
 
 /// The session's tab refs just before its browser connection was replaced.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TabRefSnapshot {
     pub tabs: Vec<CarriedTabRef>,
     pub next_tab_id: u32,
@@ -1279,11 +1279,53 @@ fn lost_tab_ref_message(lost: &CarriedTabRef) -> String {
         None => format_tab_id(lost.tab_id),
     };
     format!(
-        "Tab {name} could not be re-identified after this session's browser connection was \
-         re-established: its Chrome tab (target {}) is not among the session's tabs any more. \
+        "Tab {name} could not be re-identified when this session's browser reconnected: its \
+         Chrome tab (target {}) is not among the session's tabs any more. \
          Refusing to act on it rather than guess; run `chrome-use tab` to list the current tab ids",
         lost.target_id
     )
+}
+
+/// The refusal for a label a tab already carries, or that a ref lost on a
+/// reconnect still holds (#473). A lost ref keeps its label: giving it to a
+/// new tab would make `docs` name a different tab than the agent meant, and
+/// two tabs would carry it if the old one came back.
+fn label_in_use(
+    pages: &[PageInfo],
+    lost_tab_refs: &[CarriedTabRef],
+    label: &str,
+) -> Option<String> {
+    if pages.iter().any(|p| p.label.as_deref() == Some(label)) {
+        return Some(format!(
+            "Label `{}` is already used by another tab; labels must be unique within a session",
+            label
+        ));
+    }
+    lost_tab_refs
+        .iter()
+        .find(|t| t.label.as_deref() == Some(label))
+        .map(|lost| {
+            format!(
+                "Label `{}` still belongs to {}, whose tab could not be re-identified when this \
+                 session's browser reconnected; it is kept for that tab \
+                 rather than reused. Pick another label",
+                label,
+                format_tab_id(lost.tab_id)
+            )
+        })
+}
+
+/// A page joining the session whose Chrome tab is a ref lost on a reconnect
+/// takes that ref's id and label back, and the ref stops being refused.
+fn reclaim_lost_ref_in(lost_tab_refs: &mut Vec<CarriedTabRef>, page: &mut PageInfo) {
+    if let Some(index) = lost_tab_refs
+        .iter()
+        .position(|t| t.target_id == page.target_id)
+    {
+        let lost = lost_tab_refs.remove(index);
+        page.tab_id = lost.tab_id;
+        page.label = lost.label;
+    }
 }
 
 /// Resolve a `TabRef` against the session's tabs. A ref whose tab could not be
@@ -2014,7 +2056,7 @@ impl BrowserManager {
             return Ok(());
         }
         let tab_id = self.assign_tab_id();
-        self.pages.push(PageInfo {
+        let mut page = PageInfo {
             tab_id,
             label: None,
             target_id: target.target_id.clone(),
@@ -2022,7 +2064,9 @@ impl BrowserManager {
             url: target.url.clone(),
             title: sanitize_title(&target.title),
             target_type: target.target_type.clone(),
-        });
+        };
+        self.reclaim_lost_ref(&mut page);
+        self.pages.push(page);
         // Mark as owned-for-resolution so the pinned tab resolves in
         // strict_session_index — but via adopted_targets (NOT created_targets),
         // so close() never auto-closes the user's tab.
@@ -4585,9 +4629,17 @@ impl BrowserManager {
         resolve_tab_ref_in(&self.pages, &self.lost_tab_refs, tab_ref)
     }
 
-    /// Returns true iff a tab already carries the given label.
+    /// Returns true iff a tab already carries the given label, or a tab ref
+    /// lost on a reconnect still holds it (#473).
     pub fn has_label(&self, label: &str) -> bool {
-        self.pages.iter().any(|p| p.label.as_deref() == Some(label))
+        label_in_use(&self.pages, &self.lost_tab_refs, label).is_some()
+    }
+
+    /// Give a page joining the session the id and label of a ref lost on a
+    /// reconnect when it is that ref's Chrome tab coming back (#473), so the
+    /// agent's `t2` / `docs` name it again instead of a new id.
+    fn reclaim_lost_ref(&mut self, page: &mut PageInfo) {
+        reclaim_lost_ref_in(&mut self.lost_tab_refs, page);
     }
 
     /// Chrome tab-group name for tabs this manager creates, or `None` when not
@@ -4756,12 +4808,8 @@ impl BrowserManager {
                     label
                 ));
             }
-            if self.has_label(label) {
-                return Err(format!(
-                    "Label `{}` is already used by another tab; labels must be unique within a \
-                     session",
-                    label
-                ));
+            if let Some(err) = label_in_use(&self.pages, &self.lost_tab_refs, label) {
+                return Err(err);
             }
         }
 
@@ -4946,12 +4994,8 @@ impl BrowserManager {
                     label
                 ));
             }
-            if self.has_label(label) {
-                return Err(format!(
-                    "Label `{}` is already used by another tab; labels must be unique within a \
-                     session",
-                    label
-                ));
+            if let Some(err) = label_in_use(&self.pages, &self.lost_tab_refs, label) {
+                return Err(err);
             }
         }
 
@@ -6243,7 +6287,8 @@ impl BrowserManager {
         id
     }
 
-    pub fn add_page(&mut self, page: PageInfo) {
+    pub fn add_page(&mut self, mut page: PageInfo) {
+        self.reclaim_lost_ref(&mut page);
         let index = self.pages.len();
         self.pages.push(page);
         self.active_page_index = index;
@@ -6258,10 +6303,11 @@ impl BrowserManager {
     /// to a foreign tab, so the session's own `eval`/`get title`/`screenshot`
     /// landed on the wrong page. Passively-tracked pages must not steal focus —
     /// only explicit opens (`tab new`, switch) set the active tab.
-    pub fn add_background_page(&mut self, page: PageInfo) {
+    pub fn add_background_page(&mut self, mut page: PageInfo) {
         if self.pages.iter().any(|p| p.target_id == page.target_id) {
             return;
         }
+        self.reclaim_lost_ref(&mut page);
         self.pages.push(page);
     }
 
@@ -7472,6 +7518,38 @@ mod tests {
             pages.iter().find(|p| p.tab_id == 2).unwrap().target_id,
             "T-B"
         );
+    }
+
+    /// A lost ref keeps its label: no new tab can take it, and the old tab
+    /// coming back gets id and label back, so the label is never on two tabs.
+    #[test]
+    fn a_lost_refs_label_stays_reserved_until_its_tab_returns() {
+        let mut pages = vec![page("T-C"), page("T-A")];
+        let (_, rebind) = rebind_tab_refs(&mut pages, &snapshot_ab());
+        let mut lost = rebind.lost.clone();
+        let err = label_in_use(&pages, &lost, "docs").expect("docs is reserved");
+        assert!(err.contains("still belongs to t2"), "{err}");
+        assert!(label_in_use(&pages, &lost, "other").is_none());
+
+        let mut back = page("T-B");
+        back.tab_id = 7;
+        reclaim_lost_ref_in(&mut lost, &mut back);
+        assert_eq!(back.tab_id, 2);
+        assert_eq!(back.label.as_deref(), Some("docs"));
+        assert!(lost.is_empty());
+        pages.push(back);
+        assert_eq!(
+            pages
+                .iter()
+                .filter(|p| p.label.as_deref() == Some("docs"))
+                .count(),
+            1
+        );
+        // A tab that was never lost is left alone.
+        let mut other = page("T-D");
+        other.tab_id = 8;
+        reclaim_lost_ref_in(&mut lost, &mut other);
+        assert_eq!((other.tab_id, other.label), (8, None));
     }
 
     // --- issue #21: --reuse-tab URL matching ignores query/fragment ---

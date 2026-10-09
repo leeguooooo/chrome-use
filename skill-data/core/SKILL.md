@@ -116,6 +116,10 @@ Never `tab adopt` a tab the user opened unless they asked you to work in it;
 your own tabs live in a background agent window and that is where you work.
 An empty tab list is not a disconnected browser: read the error before
 restarting anything, and do not escape to `open --launch`.
+After a reconnect your tab ids and labels still name the same tabs. If the
+reply says the tab you were driving is gone and commands are refused, run
+`tab list`, pick the tab you mean with `tab select <ref>` (or `tab new`), then
+`snapshot -i` again; do not reuse the old refs or the lost tab's id.
 
 When chrome-use got in your way (a failure you worked around, a misleading
 error, a missing feature), offer the user `chrome-use report --note "<goal>"`

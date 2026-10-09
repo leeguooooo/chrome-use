@@ -254,6 +254,11 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 `chrome-use tab select <targetId> --activate`，再用 `chrome-use snapshot -i`
 验证恢复。不要反复执行 `tab new`，也不要自动重放结果未知的动作。
 
+标签 id 和标签名在重新连接后（例如 relay 重启）仍绑定到同一个 Chrome 标签页；
+原标签页已不在的 id 或标签名会被拒绝，不会转给其他标签页。如果 agent 正在操作的标签页不见了，
+作用于当前标签页的命令会被拒绝，直到它用 `tab select <ref>`、`tab new` 或 `--tab <ref>`
+选定一个标签页，因此不会在它没选过的标签页里执行任何操作。
+
 ### 用 Bitwarden 登录
 
 打开网站登录页后运行 `chrome-use auth login --bwu`。多个账号匹配时，用

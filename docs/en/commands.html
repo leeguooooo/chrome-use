@@ -439,7 +439,7 @@
       <h2>Tabs &amp; windows</h2>
       <p>
         Tab ids are stable strings like <code>t1</code>, <code>t2</code> and are not reused within a session.
-        After a reconnect (a relay restart, for example) each id stays bound to the same Chrome tab; an id whose tab cannot be found again is refused rather than given to another tab. If the tab you were driving is gone, commands on the current tab are refused until you pick one with <code>tab &lt;id&gt;</code>, <code>tab new &lt;url&gt;</code> or <code>--tab &lt;id&gt;</code>.
+        After a reconnect (a relay restart, for example) each id stays bound to the same Chrome tab; an id whose tab cannot be found again is refused rather than given to another tab, and its label stays reserved for that tab. If the tab you were driving is gone, commands on the current tab are refused until you pick one with <code>tab &lt;id&gt;</code>, <code>tab new &lt;url&gt;</code> or <code>--tab &lt;id&gt;</code>.
         Positional integers are <strong>not</strong> accepted — <code>tab 2</code> errors; use <code>t2</code>.
         You can also give a tab a readable label (<code>docs</code>, <code>app</code>), interchangeable with the id.
       </p>

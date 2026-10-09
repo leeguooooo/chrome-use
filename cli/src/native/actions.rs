@@ -612,6 +612,12 @@ pub struct DaemonState {
     /// connection made active; picking a tab (`tab <id>`, `tab new`, `--tab`)
     /// clears it.
     lost_driving_tab: Option<String>,
+    /// The tab refs of a browser connection that died, with why, until a new
+    /// connection has been bound to them (#473). Survives a failed reconnect.
+    carried_tabs: Option<(String, super::browser::TabRefSnapshot)>,
+    /// Whether a carried snapshot left on disk by a daemon that died during a
+    /// reconnect has been looked for yet.
+    carried_tabs_read: bool,
     /// When true, automatically dismiss `beforeunload` dialogs and accept `alert`
     /// dialogs so they never block the agent.  Enabled by default.
     pub auto_dialog: bool,
@@ -705,6 +711,8 @@ impl DaemonState {
             pending_dialog: None,
             replaced_browser_pending: None,
             lost_driving_tab: None,
+            carried_tabs: None,
+            carried_tabs_read: false,
             auto_dialog: !matches!(
                 env::var("AGENT_BROWSER_NO_AUTO_DIALOG").as_deref(),
                 Ok("1" | "true" | "yes")
@@ -1986,7 +1994,6 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         };
 
         if needs_launch {
-            let mut carried_tabs: Option<super::browser::TabRefSnapshot> = None;
             // A replacement browser is not the browser the caller was using.
             // Whatever was open in the old one — a half-filled form a human was
             // about to finish by hand — is gone, and saying nothing about that
@@ -2006,8 +2013,22 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     .unwrap_or("its browser was gone");
                 replaced_browser = Some(why.to_string());
                 // The tab refs the agent holds (`t1`, `t2`, labels), so the new
-                // connection can bind them to the same Chrome tabs (#473).
-                carried_tabs = state.browser.as_ref().map(|mgr| mgr.tab_ref_snapshot());
+                // connection can bind them to the same Chrome tabs (#473). Kept
+                // in the daemon state, not here: if this reconnect fails, the
+                // next command's must still bind them. An older snapshot that
+                // was never restored is the one the agent's refs came from.
+                if state.carried_tabs.is_none() {
+                    state.carried_tabs = state
+                        .browser
+                        .as_ref()
+                        .map(|mgr| (why.to_string(), mgr.tab_ref_snapshot()));
+                    // On disk too: a reconnect can wait long enough for the
+                    // client to stop this daemon, and the next one must bind
+                    // the same refs rather than number the tabs afresh.
+                    if let Some(carried) = &state.carried_tabs {
+                        write_carried_tabs(&state.session_id, carried);
+                    }
+                }
                 if let Some(ref mut mgr) = state.browser {
                     let _ = mgr.close().await;
                 }
@@ -2028,63 +2049,19 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             if let Err(e) = auto_launch(state).await {
                 return error_response(&id, &format!("Auto-launch failed: {}", e));
             }
-            if let (Some(snapshot), Some(mgr)) = (carried_tabs.as_ref(), state.browser.as_mut()) {
-                let rebind = mgr.restore_tab_refs(snapshot);
-                let on_relay = mgr.on_relay();
-                let landed = mgr
-                    .active_tab_brief()
-                    .filter(|(tab_id, _)| rebind.fresh.contains(tab_id));
-                let driving = mgr.active_tab_id();
-                let now_target = mgr.active_target_id().ok().map(str::to_string);
-                let navigated_targets: Vec<String> = rebind
-                    .navigated
-                    .iter()
-                    .filter_map(|(tab_id, _)| mgr.target_id_for_tab(*tab_id).map(str::to_string))
-                    .collect();
-                let was_driving = snapshot.active_tab_id();
-                let why = replaced_browser.take().unwrap_or_default();
-                let driving_lost = driving_tab_lost(&rebind, was_driving, landed.as_ref());
-                reconnect_note = Some(reconnected_browser_note(
-                    &why,
-                    on_relay,
-                    &rebind,
-                    landed.as_ref().map(|(tab_id, url)| (*tab_id, url.as_str())),
-                    was_driving,
-                    driving,
-                    driving_lost,
-                ));
-                // The element refs in hand belong to the tab the session was
-                // driving, as it was. They must not be re-anchored by role and
-                // name on another tab, or on a document the tab navigated to
-                // while the connection was down (#473).
-                for lost in &rebind.lost {
-                    state.tab_states.remove(&lost.target_id);
-                }
-                for target in &navigated_targets {
-                    state.tab_states.remove(target);
-                }
-                let was_target = snapshot.active_target_id.as_deref();
-                let switched = match now_target.as_deref() {
-                    Some(now)
-                        if was_target != Some(now)
-                            || navigated_targets.iter().any(|t| t == now) =>
-                    {
-                        state.switch_tab_context(None, now);
-                        true
-                    }
-                    _ => false,
-                };
-                if switched && !state.ref_map.has_snapshot() {
-                    state.ref_map.set_restart_note(
-                        "this session's browser connection was re-established and the refs \
-                         taken before it belong to a tab or document that is not the current \
-                         one. Run `snapshot -i` and use its refs."
-                            .to_string(),
-                    );
-                }
-                if driving_lost {
-                    state.lost_driving_tab = was_driving.map(super::browser::format_tab_id);
-                }
+        }
+
+        // Bind the tab refs carried from a replaced connection to this one,
+        // whichever command (or an earlier failed attempt) got it connected.
+        if state.browser.is_some() {
+            if state.carried_tabs.is_none() && !state.carried_tabs_read {
+                state.carried_tabs = read_carried_tabs(&state.session_id);
+            }
+            state.carried_tabs_read = true;
+            if let Some((why, snapshot)) = state.carried_tabs.take() {
+                let why = replaced_browser.take().unwrap_or(why);
+                reconnect_note = Some(restore_carried_tabs(state, &why, &snapshot));
+                remove_carried_tabs(&state.session_id);
             }
         }
 
@@ -2097,15 +2074,19 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // The tab this session was driving was not found after a reconnect:
         // whatever tab is active now is not one the agent chose (#473).
         if let Some(lost) = state.lost_driving_tab.clone() {
-            if !command_picks_its_tab(action, cmd) {
+            if let Err(detail) = lost_tab_gate(action, cmd, state.browser.as_ref()) {
                 let mut resp = error_response(
                     &id,
                     &format!(
+                        "{}{}",
+                        detail.map(|d| format!("{d}. ")).unwrap_or_default(),
+                        format_args!(
                         "Refusing to run `{action}`: the tab this session was driving ({lost}) \
-                         was not found after its browser connection was re-established, and \
+                         was not found when this session's browser reconnected, and \
                          the tab active now is not one you chose. Run `chrome-use tab` to list \
                          the tabs, then `chrome-use tab <id>` to pick one (or pass `--tab <id>`), \
                          or `chrome-use tab new <url>`."
+                        )
                     ),
                 );
                 if let Some(note) = reconnect_note.take() {
@@ -2205,6 +2186,13 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     state.iframe_sessions.clear();
                     state.active_frame_id = None;
                 }
+            }
+            // The named tab resolved and is the active one now: the agent
+            // chose it, which ends a lost-driving-tab refusal (#473). This is
+            // where the choice happens, so a `script --tab` or `batch --tab`
+            // runs its steps in the tab it picked.
+            if state.browser.is_some() {
+                state.lost_driving_tab = None;
             }
         }
     }
@@ -2368,10 +2356,10 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "recording_restart" => handle_recording_restart(cmd, state).await,
             "pdf" => handle_pdf(cmd, state).await,
             "tab_list" => handle_tab_list(cmd, state).await,
-            "tab_new" => handle_tab_new(cmd, state).await,
+            "tab_new" => end_lost_tab_refusal_on_ok(handle_tab_new(cmd, state).await, state),
             "tab_duplicate" => handle_tab_duplicate(cmd, state).await,
-            "tab_switch" => handle_tab_switch(cmd, state).await,
-            "tab_adopt" => handle_tab_adopt(cmd, state).await,
+            "tab_switch" => end_lost_tab_refusal_on_ok(handle_tab_switch(cmd, state).await, state),
+            "tab_adopt" => end_lost_tab_refusal_on_ok(handle_tab_adopt(cmd, state).await, state),
             "tab_inspect" => handle_tab_inspect(cmd, state).await,
             "tab_close" => handle_tab_close(cmd, state).await,
             "viewport" => handle_viewport(cmd, state).await,
@@ -2887,12 +2875,6 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     });
     if let Some(note) = replaced_note {
         prepend_warning(&mut resp, &note);
-    }
-    if state.lost_driving_tab.is_some()
-        && resp.get("success").and_then(|v| v.as_bool()) == Some(true)
-        && command_chose_a_tab(action, cmd)
-    {
-        state.lost_driving_tab = None;
     }
 
     // `--observe` is a global flag, so it reaches commands that cannot observe.
@@ -6083,6 +6065,8 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     state.ref_map.clear();
     state.tab_states.clear();
     state.lost_driving_tab = None;
+    state.carried_tabs = None;
+    remove_carried_tabs(&state.session_id);
     Ok(json!({ "closed": true }))
 }
 
@@ -13551,8 +13535,14 @@ fn reconnected_browser_note(
     driving_lost: bool,
 ) -> String {
     use super::browser::format_tab_id;
-    let list =
-        |ids: &mut dyn Iterator<Item = u32>| ids.map(format_tab_id).collect::<Vec<_>>().join(", ");
+    let list = |ids: &mut dyn Iterator<Item = u32>| {
+        let mut ids: Vec<u32> = ids.collect();
+        ids.sort_unstable();
+        ids.into_iter()
+            .map(format_tab_id)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     if rebind.kept.is_empty() && driving_lost {
         let mut note = format!(
             "This session's previous tabs are gone ({why}): none of {} was found again.",
@@ -13635,6 +13625,104 @@ fn reconnected_browser_note(
     note
 }
 
+fn carried_tabs_path(session: &str) -> std::path::PathBuf {
+    crate::connection::get_socket_dir().join(format!("{session}.carried-tabs.json"))
+}
+
+/// Record the tab refs of a connection that died, for the daemon that binds
+/// them if this one is stopped first (#473). Best-effort.
+fn write_carried_tabs(session: &str, carried: &(String, super::browser::TabRefSnapshot)) {
+    let body = json!({"why": carried.0, "snapshot": carried.1});
+    if let Err(e) = fs::write(carried_tabs_path(session), body.to_string()) {
+        eprintln!("[daemon] failed to record the carried tab refs: {e}");
+    }
+}
+
+fn read_carried_tabs(session: &str) -> Option<(String, super::browser::TabRefSnapshot)> {
+    let body = fs::read_to_string(carried_tabs_path(session)).ok()?;
+    let value: Value = serde_json::from_str(&body).ok()?;
+    let why = value.get("why")?.as_str()?.to_string();
+    let snapshot = serde_json::from_value(value.get("snapshot")?.clone()).ok()?;
+    Some((why, snapshot))
+}
+
+fn remove_carried_tabs(session: &str) {
+    let _ = fs::remove_file(carried_tabs_path(session));
+}
+
+/// Bind a freshly connected browser's tabs to the refs carried from the
+/// connection that died, and set the boundaries that keep old refs off the
+/// wrong tab or document (#473). Returns the note for the reply.
+fn restore_carried_tabs(
+    state: &mut DaemonState,
+    why: &str,
+    snapshot: &super::browser::TabRefSnapshot,
+) -> String {
+    let Some(mgr) = state.browser.as_mut() else {
+        return String::new();
+    };
+    let rebind = mgr.restore_tab_refs(snapshot);
+    let on_relay = mgr.on_relay();
+    let landed = mgr
+        .active_tab_brief()
+        .filter(|(tab_id, _)| rebind.fresh.contains(tab_id));
+    let driving = mgr.active_tab_id();
+    let now_target = mgr.active_target_id().ok().map(str::to_string);
+    let navigated_targets: Vec<String> = rebind
+        .navigated
+        .iter()
+        .filter_map(|(tab_id, _)| mgr.target_id_for_tab(*tab_id).map(str::to_string))
+        .collect();
+    let was_driving = snapshot.active_tab_id();
+    let driving_lost = driving_tab_lost(&rebind, was_driving, landed.as_ref());
+    let note = reconnected_browser_note(
+        why,
+        on_relay,
+        &rebind,
+        landed.as_ref().map(|(tab_id, url)| (*tab_id, url.as_str())),
+        was_driving,
+        driving,
+        driving_lost,
+    );
+    // The element refs in hand belong to the tab the session was driving, as
+    // it was. They must not be re-anchored by role and name on another tab,
+    // or on a document the tab navigated to while the connection was down.
+    for lost in &rebind.lost {
+        state.tab_states.remove(&lost.target_id);
+    }
+    for target in &navigated_targets {
+        state.tab_states.remove(target);
+    }
+    let was_target = snapshot.active_target_id.as_deref();
+    let keeps_refs = match now_target.as_deref() {
+        Some(now) => was_target == Some(now) && !navigated_targets.iter().any(|t| t == now),
+        None => false,
+    };
+    if !keeps_refs {
+        match now_target.as_deref() {
+            Some(now) => state.switch_tab_context(None, now),
+            None => {
+                state.ref_map.clear();
+                state.last_snapshot = None;
+                state.iframe_sessions.clear();
+                state.active_frame_id = None;
+            }
+        }
+        if !state.ref_map.has_snapshot() {
+            state.ref_map.set_restart_note(
+                "this session's browser reconnected, and the refs taken before that \
+                 belong to a tab or document that is not the current one. Run \
+                 `snapshot -i` and use its refs."
+                    .to_string(),
+            );
+        }
+    }
+    if driving_lost {
+        state.lost_driving_tab = was_driving.map(super::browser::format_tab_id);
+    }
+    note
+}
+
 /// Whether a reconnect lost the tab this session was driving while the tab
 /// that is active now has a page in it (#473). Running "the current tab"
 /// commands there would act on a tab the agent never chose, with element refs
@@ -13655,27 +13743,68 @@ fn driving_tab_lost(
     !matches!(landed, Some((_, url)) if url.is_empty() || url == "about:blank")
 }
 
-/// Whether a command names the tab it acts on, or only lists / opens tabs, so
-/// it may run while [`DaemonState::lost_driving_tab`] is set.
-fn command_picks_its_tab(action: &str, cmd: &Value) -> bool {
-    let names_tab = ["tabId", "tab"]
-        .iter()
-        .any(|k| cmd.get(*k).is_some_and(|v| !v.is_null()));
-    names_tab || matches!(action, "tab_list" | "tab_new" | "tab_inspect" | "tab_adopt")
+/// Actions the `--tab` routing in `execute_command_inner` leaves alone: they
+/// read `tabId` as their own argument, or do not act on a tab at all.
+const TAB_ROUTING_SKIPS: &[&str] = &[
+    "tab_switch",
+    "tab_close",
+    "tab_new",
+    "tab_duplicate",
+    "tab_list",
+    "tab_adopt",
+    "tab_inspect",
+    "navigate",
+    "launch",
+];
+
+/// Whether a command may run while [`DaemonState::lost_driving_tab`] is set
+/// (#473). It must list or open tabs, or name a tab that exists, read exactly
+/// the way the command's own routing reads it: a string id or label that
+/// resolves to one of the session's tabs. A number, `true`, an object, an
+/// empty string or a ref that does not resolve selects nothing, so it does
+/// not get through.
+///
+/// `Err` carries why the named tab did not resolve, when one was named.
+fn lost_tab_gate(
+    action: &str,
+    cmd: &Value,
+    mgr: Option<&super::browser::BrowserManager>,
+) -> Result<(), Option<String>> {
+    match action {
+        "tab_list" | "tab_new" | "tab_adopt" => return Ok(()),
+        // `navigate` ignores `--tab` and acts on the active tab.
+        "navigate" | "launch" => return Err(None),
+        _ => {}
+    }
+    let named = if TAB_ROUTING_SKIPS.contains(&action) {
+        cmd.get("tabId").and_then(|v| v.as_str())
+    } else {
+        cmd.get("tab")
+            .or_else(|| cmd.get("tabId"))
+            .and_then(|v| v.as_str())
+    };
+    let (Some(tab_ref), Some(mgr)) = (named.filter(|r| !r.is_empty()), mgr) else {
+        return Err(None);
+    };
+    if mgr.tab_id_for_target(tab_ref).is_some() {
+        return Ok(());
+    }
+    super::browser::TabRef::parse(tab_ref)
+        .and_then(|parsed| mgr.resolve_tab_ref(&parsed))
+        .map(|_| ())
+        .map_err(Some)
 }
 
-/// Whether a successful command chose the session's current tab, which ends
-/// the refusal set by a lost driving tab.
-fn command_chose_a_tab(action: &str, cmd: &Value) -> bool {
-    match action {
-        "tab_new" | "tab_switch" => true,
-        "navigate" => false,
-        a if a.starts_with("tab_") => false,
-        _ => cmd
-            .get("tabId")
-            .or_else(|| cmd.get("tab"))
-            .is_some_and(|v| !v.is_null()),
+/// A tab command that succeeded selected the session's current tab, which
+/// ends a lost-driving-tab refusal. A failed one leaves it as it was.
+fn end_lost_tab_refusal_on_ok(
+    result: Result<Value, String>,
+    state: &mut DaemonState,
+) -> Result<Value, String> {
+    if result.is_ok() {
+        state.lost_driving_tab = None;
     }
+    result
 }
 
 /// Put `note` in front of a reply's warning.
@@ -21709,29 +21838,6 @@ mod tests {
         assert!(!other.contains("ran in"), "{other}");
         assert!(other.contains("t3 (https://example.com/)"), "{other}");
         assert!(other.contains("refused until you pick a tab"), "{other}");
-    }
-
-    /// While the driven tab is lost, only commands that name their tab or
-    /// manage tabs run; picking a tab ends the refusal, closing one does not.
-    #[test]
-    fn a_lost_driving_tab_lets_only_tab_choices_through() {
-        assert!(!command_picks_its_tab("click", &json!({"selector": "@e3"})));
-        assert!(!command_picks_its_tab(
-            "navigate",
-            &json!({"url": "https://x/"})
-        ));
-        assert!(!command_picks_its_tab("tab_close", &json!({})));
-        assert!(command_picks_its_tab("click", &json!({"tabId": "t1"})));
-        assert!(command_picks_its_tab("tab_close", &json!({"tabId": "t1"})));
-        assert!(command_picks_its_tab("tab_list", &json!({})));
-        assert!(command_picks_its_tab("tab_new", &json!({})));
-
-        assert!(command_chose_a_tab("tab_switch", &json!({"tabId": "t1"})));
-        assert!(command_chose_a_tab("tab_new", &json!({})));
-        assert!(command_chose_a_tab("snapshot", &json!({"tabId": "t1"})));
-        assert!(!command_chose_a_tab("tab_close", &json!({"tabId": "t1"})));
-        assert!(!command_chose_a_tab("tab_list", &json!({})));
-        assert!(!command_chose_a_tab("navigate", &json!({"tabId": "t1"})));
     }
 
     /// An empty tree has two very different causes, and the output cannot tell

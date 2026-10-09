@@ -270,6 +270,12 @@ fails, chrome-use retains the target and reports its ID. Use
 to verify recovery, keeping the same session and connection endpoint. Do not
 repeat `tab new` or automatically replay an action whose outcome is unknown.
 
+Tab ids and labels survive a reconnect (a relay restart, for example): each
+stays bound to the same Chrome tab, and one whose tab is gone is refused rather
+than given to another tab. If the tab the agent was driving is gone, commands
+on the current tab are refused until it picks one with `tab select <ref>`,
+`tab new` or `--tab <ref>`, so nothing runs in a tab it never chose.
+
 ### Bitwarden login
 
 Open the site's login page, then run `chrome-use auth login --bwu`. When several
