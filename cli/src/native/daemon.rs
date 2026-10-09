@@ -355,7 +355,15 @@ async fn run_socket_server(
                 }
             }
             _ = drain_interval.tick() => {
-                let mut s = state.lock().await;
+                // Never wait for the session lock here: this loop also accepts
+                // connections, and a command can hold the lock for a minute.
+                // Waiting parked accept(), so a second client for a busy
+                // session was not even read until the command ended, got no
+                // keepalives and stopped the daemon at its 45s stall budget.
+                // The drain could not run during the command anyway.
+                let Ok(mut s) = state.try_lock() else {
+                    continue;
+                };
                 if let Some(ref mut mgr) = s.browser {
                     if mgr.has_process_exited() {
                         let _ = mgr.close().await;
