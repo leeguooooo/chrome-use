@@ -63,7 +63,9 @@ export function createAgentTabQueue(deps) {
         if (!verdict.ours) deps.rejectWindow({ windowId: id, reason: verdict.reason })
         if (rec?.windowId === id && Array.isArray(tabs) &&
             !isUntouchedPlaceholder(tabs.find(t => t?.id === rec.tabId), rec)) {
-          await writeWindow({ [windowKey]: deps.getWindowId(), [placeholderKey]: null })
+          // Keep the window being validated: after a worker restart the
+          // in-memory id is still null while the persisted window is checked.
+          await writeWindow({ [windowKey]: id, [placeholderKey]: null })
         }
         return verdict.ours
       }

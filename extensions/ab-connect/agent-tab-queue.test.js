@@ -147,3 +147,23 @@ test('late storage window write is reconciled to current transaction', async () 
   assert.equal(records.window, f.windowId)
   assert.equal(records.placeholder, null)
 })
+
+test('a stale placeholder record does not erase the persisted agent window after a worker restart', async () => {
+  const f = fixture()
+  // Persisted window 1 holds only an agent tab; its recorded placeholder is gone.
+  f.chrome.storage.local.set({ window: 1, placeholder: { windowId: 1, tabId: 10 } })
+  const agentTab = await f.chrome.tabs.create({ url: 'https://agent.test', windowId: 1 })
+  f.ownedTabs.add(agentTab.id)
+  let windowsCreated = 0
+  const normal = f.chrome.windows.create
+  f.chrome.windows.create = (options) => { windowsCreated++; return normal(options) }
+  const records = await f.chrome.storage.local.get()
+  assert.equal(records.window, 1)
+  const create = createAgentTabQueue(f.deps)
+  const tab = await create('https://next.test')
+  assert.equal(tab.windowId, 1)
+  assert.equal(windowsCreated, 0)
+  const after = await f.chrome.storage.local.get()
+  assert.equal(after.window, 1)
+  assert.equal(after.placeholder, null)
+})
