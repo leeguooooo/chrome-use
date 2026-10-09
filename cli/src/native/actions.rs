@@ -6160,10 +6160,10 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
 /// over the bound relay profile's endpoint as it is now (#472), or, for a
 /// session not bound to one, the endpoint the dead connection was on. An
 /// endpoint that refuses connections (a killed relay host's record that still
-/// names its old port, or a browser not back yet) is waited out: up to 35 s,
-/// since the extension respawns a killed host on its keepalive (19-24 s on the
-/// build host), and under the client's 45 s read budget. No other endpoint is
-/// tried.
+/// names its old port, or a browser not back yet) is waited out: up to 40 s,
+/// since the extension respawns a killed host from its keepalive alarm (19-36 s
+/// on the build host), and under the client's 45 s read budget. No other
+/// endpoint is tried.
 async fn close_tabs_after_lost_connection(
     session: &str,
     dead: &str,
@@ -6175,8 +6175,8 @@ async fn close_tabs_after_lost_connection(
         env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(35)
-            .min(35),
+            .unwrap_or(40)
+            .min(40),
     );
     let deadline = std::time::Instant::now() + budget;
     let same = |a: &str, b: &str| a.trim_end_matches('/') == b.trim_end_matches('/');
