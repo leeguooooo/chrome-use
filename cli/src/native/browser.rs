@@ -1184,6 +1184,10 @@ pub struct CarriedTabRef {
     pub tab_id: u32,
     pub label: Option<String>,
     pub target_id: String,
+    /// The url the session last knew the tab at. A kept tab whose url differs
+    /// on the new connection navigated while the connection was down, so the
+    /// element refs taken on it describe a document that is gone.
+    pub url: String,
 }
 
 /// The session's tab refs just before its browser connection was replaced.
@@ -1215,6 +1219,10 @@ pub struct TabRebind {
     /// Tabs the new connection has that the snapshot did not; they get ids
     /// above every id the session has handed out, so no old ref names them.
     pub fresh: Vec<u32>,
+    /// Kept tabs whose url is not the one the session last knew: they
+    /// navigated while the connection was down. Same tab, different document.
+    /// Each with the url it is at now.
+    pub navigated: Vec<(u32, String)>,
 }
 
 /// Re-bind tab refs after a reconnect by Chrome target id, never by the order
@@ -1240,6 +1248,9 @@ pub fn rebind_tab_refs(pages: &mut [PageInfo], snapshot: &TabRefSnapshot) -> (u3
                 page.tab_id = old.tab_id;
                 page.label = old.label.clone();
                 rebind.kept.push(old.tab_id);
+                if old.url != page.url {
+                    rebind.navigated.push((old.tab_id, page.url.clone()));
+                }
             }
             None => {
                 page.tab_id = next;
@@ -6168,6 +6179,7 @@ impl BrowserManager {
                 tab_id: p.tab_id,
                 label: p.label.clone(),
                 target_id: p.target_id.clone(),
+                url: p.url.clone(),
             })
             .collect();
         for lost in &self.lost_tab_refs {
@@ -7345,6 +7357,7 @@ mod tests {
             tab_id,
             label: label.map(str::to_string),
             target_id: target_id.to_string(),
+            url: String::new(),
         }
     }
 
@@ -7432,6 +7445,33 @@ mod tests {
         let mut kept = rebind.kept.clone();
         kept.sort_unstable();
         assert_eq!(kept, vec![1, 2]);
+    }
+
+    /// A tab that navigated while the connection was down keeps its id (it is
+    /// the same Chrome tab) and is reported as navigated, so the refs taken on
+    /// the old document can be dropped instead of re-anchored on the new one.
+    #[test]
+    fn a_tab_that_navigated_during_the_reconnect_is_reported() {
+        let mut snapshot = snapshot_ab();
+        snapshot.tabs[0].url = "http://x/a1.html".to_string();
+        snapshot.tabs[1].url = "http://x/a2.html".to_string();
+        let mut a = page("T-A");
+        a.url = "http://x/a1.html".to_string();
+        let mut b = page("T-B");
+        b.url = "http://x/elsewhere.html".to_string();
+        let mut pages = vec![b, a];
+        let (_, rebind) = rebind_tab_refs(&mut pages, &snapshot);
+        let mut kept = rebind.kept.clone();
+        kept.sort_unstable();
+        assert_eq!(kept, vec![1, 2]);
+        assert_eq!(
+            rebind.navigated,
+            vec![(2, "http://x/elsewhere.html".to_string())]
+        );
+        assert_eq!(
+            pages.iter().find(|p| p.tab_id == 2).unwrap().target_id,
+            "T-B"
+        );
     }
 
     // --- issue #21: --reuse-tab URL matching ignores query/fragment ---
