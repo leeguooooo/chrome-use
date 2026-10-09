@@ -110,10 +110,12 @@ chrome-use auth login --bwu --passkey       # sign in with the vault passkey
 ```
 
 - **Picking the account.** It asks `bwu login --domain <page> --list`, which
-  sees masked entries only. One match is used. Several are listed most recently
-  used first, each with an `--item` to pass back. Use the first unless the user
-  asked for a particular account, and ask when that is unclear. It never picks
-  one by itself.
+  sees masked entries only. One match is used. bwu matches by registrable
+  domain, so `app.example.com` also lists every other `*.example.com` login;
+  when exactly one of them is named exactly the page's host, that one is used.
+  Otherwise several are listed most recently used first, each with an
+  `--item` to pass back. Use the first unless the user asked for a particular
+  account, and ask when that is unclear. It never picks one by itself.
 - **Values never pass through you.** chrome-use runs itself again under
   `bwu run`, which logs the read and hands the values to that child process
   only. By default it asks the user once with Touch ID (not for items in a
@@ -180,6 +182,12 @@ vault login for the site (several or none are reported, never guessed),
 returns to `returnTo`, and reports `loginWall.autoLogin: {ok, item, error,
 returnedTo}`. It handles a one-time code exactly as `auth login --bwu` does
 and nothing more.
+
+A site adapter that finds the site signed out (`chrome-use site …`) reports
+the same kind of wall: `login wall: <host> is not signed in (site …)` and
+`loginWall` with `source: "site"` and the `loginUrl` to open before `auth
+login --bwu`. With auto-login on it opens that page, signs in and runs the
+adapter once more. See `core/site-adapters`.
 
 ### Single fields
 

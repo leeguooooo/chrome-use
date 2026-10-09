@@ -72,6 +72,42 @@ one without a yes. If they agree:
 
 `AGENT_BROWSER_SITES_NO_SUGGEST=1` turns the suggestion off.
 
+## When the site is not signed in
+
+An adapter that finds the site signed out (its API says 401, the page has no
+user) returns `loginRequired: true`, so chrome-use treats it as a login wall
+and not as an ordinary failure:
+
+```js
+const r = await fetch('/api/me', { credentials: 'include' });
+if (r.status === 401) return { error: 'login_required', loginRequired: true, loginUrl: '/login' };
+```
+
+- `loginUrl` is optional: the site's sign-in page, absolute or relative to the
+  page. `auth login --bwu` fills the page it is on, so give it when the site
+  does not redirect there by itself.
+- `error: "login_required"` or `"not_logged_in"` (or `"Not logged in"`) alone
+  means the same, for adapters written before this.
+- Without either, a run that **failed** still counts as signed out when one of
+  the adapter's `fetch` calls got HTTP 401 or was redirected to a sign-in URL,
+  or the tab ended on a sign-in page. A successful result is never changed.
+  (`window.fetch` and XHR are not watched; call plain `fetch`.)
+- A write adapter must check the login before it writes, and say so; do not
+  report "not saved" for a request the site refused for want of a login.
+
+What the caller sees: the command fails with `login wall: <host> is not
+signed in (site <name>/<cmd> …)` on stderr and `loginWall: {source: "site",
+spec, host, url, returnTo, loginUrl, evidence, rerunnable, hint}` in `--json`
+(`evidence.source` is `adapter`, `http401`, `redirect` or `page`). **Sign in
+with `chrome-use open <loginUrl>` + `chrome-use auth login --bwu`, then run the
+same command again**; ask the user only when no vault item matches, a second
+factor needs them, or the login fails. With `"auth": {"autoLogin": "bwu"}` in
+`~/.chrome-use/config.json` or `AGENT_BROWSER_AUTO_LOGIN=bwu`, chrome-use does
+that itself and runs the command once more, adding `loginWall.autoLogin` and
+`loginWall.rerun: {ok, error}`. It reruns a write only when the adapter
+reported the login itself (`rerunnable: true`): a write whose failure was
+inferred from a 401 or a redirect may have half-run, so it signs in and stops.
+
 ## Long text, local files, long runs
 
 Write adapters (publish an article, upload a video) take one command each:

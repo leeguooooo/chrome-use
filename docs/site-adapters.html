@@ -271,6 +271,15 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         同名时用我们自己的；我们的只读命令运行失败而 OpenCLI 有同名的只读命令时，会自动改用它（写操作不会重试）。<code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> 关闭。
       </p>
 
+      <h3>站点没登录时</h3>
+      <p>
+        适配器发现站点没登录时，返回 <code>{"loginRequired": true}</code>（<code>error</code> 码随意，可以再带 <code>loginUrl</code>，即站点内的登录页地址）。
+        <code>error: "login_required"</code> 或 <code>"not_logged_in"</code> 也算。适配器运行失败时，如果它的某个 <code>fetch</code> 拿到 HTTP 401、被重定向到登录页，或者标签页停在了登录页，chrome-use 也按没登录处理。
+        这时命令失败，stderr 输出 <code>login wall: &lt;host&gt; is not signed in …</code>，<code>--json</code> 里带 <code>loginWall</code>，提示走 <code>auth login --bwu</code>，不再用适配器自己那句「先去登录」。
+        在 <code>~/.chrome-use/config.json</code> 里配了 <code>"auth": {"autoLogin": "bwu"}</code>（或 <code>AGENT_BROWSER_AUTO_LOGIN=bwu</code>）时，会打开 <code>loginUrl</code>，用 vault 里该站点唯一的登录项登录，再把这条命令重跑一次。
+        写操作只有在适配器自己报了没登录时才重跑；靠 401 或重定向推断出来的失败可能已经执行了一半，留给你去页面确认。
+      </p>
+
       <h3>自己写适配器：analyze 和 verify</h3>
       <p>
         先在页面上把加载数据的操作做一遍（搜索、滚动、打开列表），再跑 <code>chrome-use site analyze</code>：它列出页面发过的接口请求、页面里嵌着的初始数据（<code>__NEXT_DATA__</code>、<code>__INITIAL_STATE__</code> 等）和检测到的反爬厂商，并推荐取数方式。

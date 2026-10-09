@@ -256,7 +256,7 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 
 ### 用 Bitwarden 登录
 
-打开网站登录页后运行 `chrome-use auth login --bwu`。多个账号匹配时，用
+打开网站登录页后运行 `chrome-use auth login --bwu`。多个账号匹配、且没有一个名字正好是该站点主机名时，用
 `--item <id|name>` 选一个。在 `--launch` 浏览器中加 `--passkey` 只用 passkey
 登录（需 bitwarden-use 0.9.0+），不读取密码、TOTP 或自定义字段。扩展 relay
 暂不支持 passkey：passkey-only 登录立即报错，普通登录继续走密码/TOTP。仅支持签名计数器为 0 的同步型 passkey；非零计数器需要写回密码库，当前会拒绝。
@@ -278,6 +278,9 @@ chrome-use --session passkey-demo --launch open https://github.com/login
 chrome-use --session passkey-demo --launch auth login --bwu --item github.com --passkey
 chrome-use --session passkey-demo --launch snapshot -i
 ```
+
+命令落到登录页，或者 `site` 适配器发现站点没登录（返回 `loginRequired: true`，或运行失败且请求拿到过 HTTP 401）时，会输出 `login wall: …`，`--json` 里带 `loginWall`。
+在 `~/.chrome-use/config.json` 配 `"auth": {"autoLogin": "bwu"}` 或设 `AGENT_BROWSER_AUTO_LOGIN=bwu` 后，chrome-use 会自己用密码库登录，并把没登录的适配器命令重跑一次。
 
 登录后检查是否到达已认证的目标页面。passkey assertion 只说明 Chrome 签了请求，
 不能证明网站接受了它。详见[登录与凭证](https://chrome-use.leeguoo.com/login-auth.html)。

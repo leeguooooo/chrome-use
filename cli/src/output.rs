@@ -4302,6 +4302,8 @@ Login Options:
 Bitwarden Login Options:
   --bwu                    Use bitwarden-use (0.7.0+); reuse the current login page
   --item <id|name>          Choose an account when the site has several
+                           (without it, the one item named exactly the
+                           site's host is used, else the matches are listed)
   --passkey                Sign in with a vault passkey in --launch mode (bwu 0.9.0+)
   --no-submit              Fill only; skip TOTP and passkey authenticators
                            Cannot be combined with --passkey
@@ -4309,9 +4311,11 @@ Bitwarden Login Options:
   In --launch mode, password login can also answer a passkey second factor.
   Unexpected registration or unconfirmed authenticator cleanup aborts the command.
   A signed assertion is not proof of login; verify the authenticated destination.
-  Login walls: a navigation that lands on a sign-in page prints `login wall: …`
-  (JSON: loginWall). Set "auth": {"autoLogin": "bwu"} in ~/.chrome-use/config.json
-  or AGENT_BROWSER_AUTO_LOGIN=bwu to run this login there automatically.
+  Login walls: a navigation that lands on a sign-in page, or a site adapter
+  that finds the site signed out, prints `login wall: …` (JSON: loginWall).
+  Set "auth": {"autoLogin": "bwu"} in ~/.chrome-use/config.json
+  or AGENT_BROWSER_AUTO_LOGIN=bwu to run this login there automatically
+  (a signed-out site adapter is then run once more).
 
 Login behavior:
   auth login waits for form selectors to appear before filling/clicking.
@@ -5453,6 +5457,15 @@ Long runs:
 An adapter runs in the background of the page and is polled, so it is not
 bound by the ~8s budget of a single relay command. Progress it reports with
 args.progress(...) is printed to stderr (and returned as `progress` in --json).
+
+Signed out:
+  An adapter that returns `loginRequired: true` (or error "login_required" /
+  "not_logged_in"), or fails after one of its fetch calls got HTTP 401 or was
+  redirected to a sign-in page, fails with `login wall: <host> is not signed
+  in …` on stderr and `loginWall` in --json. Sign in with `open <loginUrl>`
+  and `auth login --bwu`, then run it again. With "auth": {"autoLogin": "bwu"}
+  (or AGENT_BROWSER_AUTO_LOGIN=bwu) that happens by itself and the command runs
+  once more; a write is rerun only when the adapter reported the login itself.
 
 Global Options:
   --json               Output as JSON (adapters usually return JSON already)

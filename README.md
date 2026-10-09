@@ -273,7 +273,7 @@ repeat `tab new` or automatically replay an action whose outcome is unknown.
 ### Bitwarden login
 
 Open the site's login page, then run `chrome-use auth login --bwu`. When several
-accounts match, select one with `--item <id|name>`. Add `--passkey` to use only a
+accounts match and none is named exactly the site's host, select one with `--item <id|name>`. Add `--passkey` to use only a
 vault passkey in a `--launch` browser (bitwarden-use 0.9.0+); passwords, TOTP
 and custom fields are not read in that mode. On the extension relay, passkeys
 are unsupported: passkey-only login fails immediately, while ordinary login
@@ -302,6 +302,13 @@ chrome-use --session passkey-demo --launch snapshot -i
 
 Check the authenticated destination after login. A passkey assertion means
 Chrome signed the request; it does not establish that the site accepted it.
+
+A command that lands on a sign-in page, or a `site` adapter that finds the site
+signed out (`loginRequired: true`, or a failed run after HTTP 401), prints
+`login wall: …` and returns `loginWall` in `--json`. With
+`"auth": {"autoLogin": "bwu"}` in `~/.chrome-use/config.json` or
+`AGENT_BROWSER_AUTO_LOGIN=bwu`, chrome-use signs in from the vault itself and
+runs a signed-out adapter once more.
 See [Login & Credentials](https://chrome-use.leeguoo.com/en/login-auth.html).
 
 ## Agent loop (experimental)

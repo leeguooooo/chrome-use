@@ -279,6 +279,15 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         On a shared name ours win; if ours fails and OpenCLI has a read command of the same name, that runs instead (writes never retry). <code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> turns them off.
       </p>
 
+      <h3>When the site is not signed in</h3>
+      <p>
+        An adapter that finds the site signed out returns <code>{"loginRequired": true}</code> (with any <code>error</code> code, plus an optional <code>loginUrl</code>, the sign-in page relative to the site).
+        <code>error: "login_required"</code> or <code>"not_logged_in"</code> means the same. chrome-use also counts a failed run as signed out when one of the adapter's <code>fetch</code> calls got HTTP 401 or was redirected to a sign-in page, or the tab ended on one.
+        Then the command fails with a <code>login wall: &lt;host&gt; is not signed in …</code> line on stderr and <code>loginWall</code> in <code>--json</code>, pointing at <code>auth login --bwu</code> instead of the adapter's own message.
+        With <code>"auth": {"autoLogin": "bwu"}</code> in <code>~/.chrome-use/config.json</code> (or <code>AGENT_BROWSER_AUTO_LOGIN=bwu</code>) it opens <code>loginUrl</code>, signs in with the only vault login for the site and runs the command once more.
+        A write adapter is rerun only when it reported the login itself; one whose failure was inferred from a 401 or redirect may have half-run, so it is left for you to check.
+      </p>
+
       <h3>Writing your own: analyze and verify</h3>
       <p>
         Do the action that loads the data on the page first (search, scroll, open the list), then run <code>chrome-use site analyze</code>. It lists the API calls the page made, the state it embeds (<code>__NEXT_DATA__</code>, <code>__INITIAL_STATE__</code>, …) and any anti-bot vendor, and recommends a data source.

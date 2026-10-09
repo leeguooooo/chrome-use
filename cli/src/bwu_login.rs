@@ -204,9 +204,13 @@ fn bwu_json(bwu: &std::path::Path, args: &[&str]) -> Result<Value, String> {
     })
 }
 
-/// Choose the vault item: `--item` (id or exact name), else the only match.
-/// Several matches are listed for the caller to pick from, most recently used
-/// first; picking one silently could log in as the wrong account.
+/// Choose the vault item: `--item` (id or exact name), else the only match,
+/// else the only one *named* exactly the page's host (#479: bwu matches by
+/// registrable domain, so `zentao.example.com` also lists every other
+/// `*.example.com` login; an item named `zentao.example.com` is the one meant
+/// for it). Otherwise several matches are listed for the caller to pick from,
+/// most recently used first; picking one silently could log in as the wrong
+/// account.
 fn choose(candidates: &[Value], item: Option<&str>, host: &str) -> Result<Value, String> {
     let line = |c: &Value| {
         format!(
@@ -229,7 +233,22 @@ fn choose(candidates: &[Value], item: Option<&str>, host: &str) -> Result<Value,
             .iter()
             .filter(|c| c["id"] == want || c["name"] == want)
             .collect(),
-        None => candidates.iter().collect(),
+        None => {
+            let named: Vec<&Value> = candidates
+                .iter()
+                .filter(|c| {
+                    !host.is_empty()
+                        && c["name"]
+                            .as_str()
+                            .is_some_and(|n| n.trim().eq_ignore_ascii_case(host))
+                })
+                .collect();
+            if candidates.len() > 1 && named.len() == 1 {
+                named
+            } else {
+                candidates.iter().collect()
+            }
+        }
     };
     match picked.as_slice() {
         [one] => Ok((*one).clone()),
@@ -539,6 +558,33 @@ mod tests {
         assert!(choose(&[], None, "github.com")
             .unwrap_err()
             .contains("no login"));
+    }
+
+    #[test]
+    fn choose_prefers_the_one_item_named_for_the_host() {
+        // bwu lists every login of the registrable domain.
+        let many = [
+            c("1", "dev-web.example.com"),
+            c("2", "zentao.example.com"),
+            c("3", "example.com"),
+        ];
+        assert_eq!(
+            choose(&many, None, "zentao.example.com").unwrap()["id"],
+            "2"
+        );
+        assert_eq!(
+            choose(&many, None, "ZENTAO.example.com").unwrap()["id"],
+            "2"
+        );
+        // No item named for the host, or two of them: still ask.
+        assert!(choose(&many, None, "jira.example.com").is_err());
+        let twins = [c("1", "zentao.example.com"), c("2", "zentao.example.com")];
+        assert!(choose(&twins, None, "zentao.example.com").is_err());
+        // --item still wins.
+        assert_eq!(
+            choose(&many, Some("1"), "zentao.example.com").unwrap()["id"],
+            "1"
+        );
     }
 
     #[test]

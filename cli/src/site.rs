@@ -353,6 +353,7 @@ fn build_runner_fn(adapter: &Adapter, args: &Value, helper_src: Option<&str>) ->
         .collect();
     let infer_json = serde_json::to_string(&infer).unwrap_or_else(|_| "[]".to_string());
     let hint_json = serde_json::to_string(&missing_arg_hint(adapter)).unwrap_or_default();
+    let login_js = login_signal_js();
     format!(
         "(async (__args) => {{\n\
          for (const t of {infer_json}) {{\n\
@@ -362,11 +363,208 @@ fn build_runner_fn(adapter: &Adapter, args: &Value, helper_src: Option<&str>) ->
          const m = location.pathname.match(new RegExp(t.re));\n\
          if (m) {{ try {{ __args[t.arg] = decodeURIComponent(m[1]); }} catch (_) {{ __args[t.arg] = m[1]; }} }}\n\
          }}\n\
-         const __r = await {invoke};\n\
+         {login_js}\n\
+         let __r;\n\
+         try {{ __r = await {invoke}; }} catch (e) {{\n\
+         const ev = __cuAuthEvidence();\n\
+         if (!ev) throw e;\n\
+         return {{ error: 'login_required', loginRequired: true, loginEvidence: ev, \
+         adapterError: String((e && e.message) || e) }};\n\
+         }}\n\
          if (__r && typeof __r === 'object' && typeof __r.error === 'string' \
          && /^missing arg/i.test(__r.error) && !__r.hint) __r.hint = {hint_json};\n\
-         return __r;\n\
+         return __cuLoginNormalize(__r);\n\
          }})"
+    )
+}
+
+/// Error codes an adapter may return to say "the site says you are not signed
+/// in" (#479), matched case-insensitively at the start of `error`. The
+/// documented spelling is `loginRequired: true`; these cover adapters written
+/// before that existed (`not_logged_in`, `Not logged in`).
+pub const LOGIN_ERROR_RE: &str = r"^\s*(login[ _-]?required|not[ _-]?logged[ _-]?in)\b";
+
+/// The page-side half of the adapter login signal (#479), spliced into the
+/// runner ahead of the adapter call:
+///
+/// - `fetch` is shadowed in the adapter's scope so the runtime sees, without
+///   the adapter's help, a response with HTTP 401 or one that was redirected
+///   to a sign-in URL (same rules as the daemon's login-wall check).
+/// - `__cuLoginNormalize(result)` marks a result `loginRequired: true` when the
+///   adapter said so (`loginRequired: true`, or an error code matching
+///   [`LOGIN_ERROR_RE`]), or when the adapter failed and one of those
+///   responses was seen. Evidence goes in `loginEvidence`: `{source:
+///   "adapter"}`, `{source: "http401", url}` or `{source: "redirect", url}`.
+///   A successful result is never touched.
+fn login_signal_js() -> String {
+    let segs = serde_json::to_string(crate::native::login_wall::LOGIN_SEGMENTS).unwrap_or_default();
+    let hosts =
+        serde_json::to_string(crate::native::login_wall::LOGIN_HOST_LABELS).unwrap_or_default();
+    let re = serde_json::to_string(LOGIN_ERROR_RE).unwrap_or_default();
+    format!(
+        "const __cuAuth = {{ s401: '', login: '' }};\n\
+         const __cuLoginish = (u) => {{ try {{\n\
+         const x = new URL(u, location.href); const host = x.hostname.toLowerCase();\n\
+         if (host.includes('.') && {hosts}.includes(host.split('.')[0])) return true;\n\
+         return x.pathname.split('/').some((s) => {{ const t = s.toLowerCase().split('.')[0];\n\
+         return {segs}.includes(t) || ['login', 'signin', 'logon'].some((w) => t.length > w.length + 3 && t.endsWith(w)); }});\n\
+         }} catch (_) {{ return false; }} }};\n\
+         const __cuFetch = (typeof window !== 'undefined' && window.fetch) ? window.fetch.bind(window) : undefined;\n\
+         const fetch = async (...a) => {{\n\
+         const res = await __cuFetch(...a);\n\
+         try {{\n\
+         const u = res.url || String((a[0] && a[0].url) || a[0]);\n\
+         if (res.status === 401 && !__cuAuth.s401) __cuAuth.s401 = u;\n\
+         else if (res.redirected && !__cuAuth.login && __cuLoginish(res.url)) __cuAuth.login = res.url;\n\
+         }} catch (_) {{}}\n\
+         return res;\n\
+         }};\n\
+         const __cuAuthEvidence = () => __cuAuth.login ? {{ source: 'redirect', url: __cuAuth.login }}\n\
+         : __cuAuth.s401 ? {{ source: 'http401', url: __cuAuth.s401 }} : null;\n\
+         const __cuLoginNormalize = (r) => {{\n\
+         if (!r || typeof r !== 'object' || Array.isArray(r)) return r;\n\
+         const err = typeof r.error === 'string' ? r.error : '';\n\
+         if (r.loginRequired === true || (err && new RegExp({re}, 'i').test(err))) {{\n\
+         r.loginRequired = true; if (!err) r.error = 'login_required';\n\
+         if (!r.loginEvidence) r.loginEvidence = {{ source: 'adapter' }};\n\
+         return r;\n\
+         }}\n\
+         const ev = (err || r.success === false) ? __cuAuthEvidence() : null;\n\
+         if (ev) {{ r.loginRequired = true; r.loginEvidence = ev; }}\n\
+         return r;\n\
+         }};"
+    )
+}
+
+/// How a site adapter run ended up behind a login (#479), from its result
+/// and, when the daemon also saw the tab land on a sign-in page, that wall.
+/// `None` when nothing says the run failed for want of a login.
+///
+/// The returned `loginWall` object carries the generic wall's fields (`url`,
+/// `returnTo`, `host`, `hint`) plus `source: "site"`, `spec`, `loginUrl`,
+/// `evidence` and `rerunnable` (whether the command may be run again by itself
+/// after signing in: a read, or an adapter that said explicitly it was not
+/// signed in, which means it wrote nothing).
+pub fn site_login_wall(
+    result: &Value,
+    page_wall: Option<&Value>,
+    origin: &str,
+    domain: &str,
+    spec: &str,
+    read_only: bool,
+) -> Option<Value> {
+    let obj = result.as_object()?;
+    let err = obj.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    let failed = !err.is_empty() || obj.get("success").and_then(|v| v.as_bool()) == Some(false);
+    let said = obj.get("loginRequired").and_then(|v| v.as_bool()) == Some(true)
+        || regex_lite::Regex::new(&format!("(?i){LOGIN_ERROR_RE}"))
+            .map(|re| re.is_match(err))
+            .unwrap_or(false);
+    let page_url = page_wall
+        .and_then(|w| w.get("url"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let evidence = if said {
+        obj.get("loginEvidence")
+            .filter(|v| v.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({ "source": "adapter" }))
+    } else if failed && page_url.is_some() {
+        json!({ "source": "page", "url": page_url })
+    } else {
+        return None;
+    };
+    let base = url::Url::parse(origin)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https"))
+        .or_else(|| url::Url::parse(&format!("https://{domain}/")).ok());
+    let absolute = |s: &str| -> Option<String> {
+        let s = s.trim();
+        if s.is_empty() {
+            return None;
+        }
+        match &base {
+            Some(b) => b.join(s).ok().map(|u| u.to_string()),
+            None => url::Url::parse(s).ok().map(|u| u.to_string()),
+        }
+    };
+    let source = evidence
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("adapter");
+    let login_url = obj
+        .get("loginUrl")
+        .and_then(|v| v.as_str())
+        .and_then(absolute)
+        .or_else(|| {
+            (source == "redirect" || source == "page")
+                .then(|| evidence.get("url").and_then(|v| v.as_str()))
+                .flatten()
+                .and_then(absolute)
+        })
+        .or_else(|| page_url.clone());
+    let host = base
+        .as_ref()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| domain.to_string());
+    // Back to the page the adapter ran on, unless that is the sign-in page,
+    // or a sign-out page that would end the new session at once.
+    let return_to = base
+        .as_ref()
+        .filter(|u| !crate::native::login_wall::login_ish(u) && !logout_ish(u))
+        .map(|u| u.to_string());
+    let rerun = read_only || source == "adapter";
+    let hint = site_login_hint(&host, spec, login_url.as_deref(), err, source);
+    Some(json!({
+        "source": "site",
+        "spec": spec,
+        "url": origin,
+        "returnTo": return_to,
+        "host": host,
+        "loginUrl": login_url,
+        "evidence": evidence,
+        "rerunnable": rerun,
+        "hint": hint,
+    }))
+}
+
+/// Whether a URL looks like a sign-out page (`/logout`, `/user-logout.html`,
+/// `/auth/sign_out`): never a page to go back to after signing in.
+fn logout_ish(u: &url::Url) -> bool {
+    u.path_segments().into_iter().flatten().any(|seg| {
+        let stem = seg.split('.').next().unwrap_or("").to_ascii_lowercase();
+        let squashed: String = stem.chars().filter(|c| !matches!(c, '-' | '_')).collect();
+        ["logout", "signout", "logoff"]
+            .iter()
+            .any(|w| squashed == *w || squashed.ends_with(w))
+    })
+}
+
+/// The stderr line and error message for a site adapter's login wall.
+pub fn site_login_hint(
+    host: &str,
+    spec: &str,
+    login_url: Option<&str>,
+    adapter_error: &str,
+    source: &str,
+) -> String {
+    let why = match source {
+        "http401" => "got HTTP 401".to_string(),
+        "redirect" => "was redirected to a sign-in page".to_string(),
+        "page" => "left the tab on a sign-in page".to_string(),
+        _ if !adapter_error.is_empty() => format!("reported {adapter_error}"),
+        _ => "reported that it is not signed in".to_string(),
+    };
+    let how = match login_url {
+        Some(u) => format!("sign in with `chrome-use open {u}` and `chrome-use auth login --bwu`"),
+        None => "open its sign-in page and sign in with `chrome-use auth login --bwu`".to_string(),
+    };
+    format!(
+        "login wall: {host} is not signed in (site {spec} {why}); {how} (add --item <name> if \
+         the vault has several logins for it), then run the command again. Set \"auth\": \
+         {{\"autoLogin\": \"bwu\"}} in ~/.chrome-use/config.json to do this automatically. Ask \
+         the user only if no vault item matches, 2FA needs them, or login fails"
     )
 }
 
@@ -1784,6 +1982,183 @@ pub fn verify_result(spec: &str, result: &Value, write_fixture: bool) -> (bool, 
 /// positionally, or after the `--` end-of-options marker
 /// (`site <name>/<cmd> -- --state closed`), which forwards everything verbatim.
 /// The CLI warns when it detects this collision.
+/// #122: a `site` adapter can return an application-level error (e.g.
+/// `{error:"HTTP 429", hint:...}`) while the *eval* itself succeeds, so the
+/// transport envelope stays `success:true` / exit 0 and automation can't tell
+/// a rate-limited/failed call from a real empty result. Promote such an
+/// adapter error into the top-level envelope so both `--json`
+/// (`success:false`, `error`) and the exit code (1) reflect it.
+pub fn promote_adapter_error(resp: &mut crate::connection::Response) {
+    let Some(result) = resp.data.as_ref().and_then(|d| d.get("result")) else {
+        return;
+    };
+    let adapter_err = result
+        .get("error")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let explicit_fail = result.get("success").and_then(|v| v.as_bool()) == Some(false);
+    if adapter_err.is_none() && !explicit_fail {
+        return;
+    }
+    resp.success = false;
+    if resp.error.is_none() {
+        let err = adapter_err.unwrap_or_else(|| "site adapter reported failure".to_string());
+        // Carry the adapter's `hint` (#359: how to pass a missing arg) into
+        // the message the caller reads.
+        let hint = result
+            .get("hint")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        resp.error = Some(match hint {
+            Some(h) => format!("{err} — {h}"),
+            None => err,
+        });
+    }
+}
+
+/// What [`apply_site_login_wall`] needs from the outside world, so the flow
+/// can be tested without a browser or a vault.
+pub struct SiteLoginIo<'a> {
+    /// Whether `auth.autoLogin` / `AGENT_BROWSER_AUTO_LOGIN` is `bwu`.
+    pub auto: bool,
+    /// `--json`: stdout is the envelope, so the wall also goes to stderr.
+    /// Text mode prints the error (the same line) there already.
+    pub json: bool,
+    /// Open the site's sign-in page in this session.
+    pub navigate: &'a mut dyn FnMut(&str) -> Result<(), String>,
+    /// `bwu_login::auto_login`: sign in on the current page, return to
+    /// `returnTo`; `{ok, item, error, returnedTo}`.
+    pub sign_in: &'a mut dyn FnMut(&Value) -> Value,
+    /// Send the same `site` command again.
+    pub rerun: &'a mut dyn FnMut() -> Result<crate::connection::Response, String>,
+}
+
+fn data_wall(resp: &crate::connection::Response) -> Option<&Value> {
+    resp.data.as_ref().and_then(|d| d.get("loginWall"))
+}
+
+fn wall_for(cmd: &Value, resp: &crate::connection::Response) -> Option<Value> {
+    let data = resp.data.as_ref()?;
+    let result = data.get("result")?;
+    // The daemon's own check (#434) flags a tab that landed on a sign-in
+    // page; that is evidence for the adapter's failure too.
+    let page_wall =
+        data_wall(resp).filter(|w| w.get("source").and_then(|v| v.as_str()) != Some("site"));
+    site_login_wall(
+        result,
+        page_wall,
+        data.get("origin").and_then(|v| v.as_str()).unwrap_or(""),
+        data.get("domain")
+            .and_then(|v| v.as_str())
+            .or_else(|| cmd.get("domain").and_then(|v| v.as_str()))
+            .unwrap_or(""),
+        cmd.get("spec").and_then(|v| v.as_str()).unwrap_or(""),
+        cmd.get("readOnly").and_then(|v| v.as_bool()) == Some(true),
+    )
+}
+
+fn set_wall(resp: &mut crate::connection::Response, wall: Value) {
+    let data = resp.data.get_or_insert_with(|| json!({}));
+    if let Some(d) = data.as_object_mut() {
+        d.insert("loginWall".into(), wall);
+    }
+}
+
+/// A `site` adapter run that failed because the site is not signed in
+/// (#479) is a login wall like a redirect to a sign-in page (#434): replace
+/// the adapter's error with the wall's hint (which points at `auth login
+/// --bwu`, not at the user), put `loginWall` in the data, and with auto-login
+/// on, open the sign-in page, sign in from the vault and run the command once
+/// more. A write whose failure was only inferred (HTTP 401, a redirect) is
+/// not rerun: it may have half-run. Returns whether there was a wall.
+pub fn apply_site_login_wall(
+    cmd: &Value,
+    resp: &mut crate::connection::Response,
+    io: SiteLoginIo<'_>,
+) -> bool {
+    let Some(mut wall) = wall_for(cmd, resp) else {
+        return false;
+    };
+    let hint = wall["hint"].as_str().unwrap_or("").to_string();
+    let host = wall["host"].as_str().unwrap_or("").to_string();
+    let spec = wall["spec"].as_str().unwrap_or("").to_string();
+    resp.success = false;
+    resp.error = Some(hint.clone());
+    if io.json || io.auto {
+        eprintln!("{} {hint}", crate::color::warning_indicator());
+    }
+    if !io.auto {
+        set_wall(resp, wall);
+        return true;
+    }
+    if let Some(u) = wall["loginUrl"].as_str().map(str::to_string) {
+        if let Err(e) = (io.navigate)(&u) {
+            wall["autoLogin"] =
+                json!({ "ok": false, "item": null, "error": format!("couldn't open {u}: {e}") });
+            resp.error = Some(format!(
+                "login wall: auto-login failed: couldn't open {u}: {e} — {hint}"
+            ));
+            set_wall(resp, wall);
+            return true;
+        }
+    }
+    let auto = (io.sign_in)(&wall);
+    wall["autoLogin"] = auto.clone();
+    if let Some(e) = auto.get("error").and_then(|v| v.as_str()) {
+        eprintln!(
+            "{} login wall: auto-login failed: {e}",
+            crate::color::warning_indicator()
+        );
+        resp.error = Some(format!("login wall: auto-login failed: {e} — {hint}"));
+        set_wall(resp, wall);
+        return true;
+    }
+    if wall["rerunnable"].as_bool() != Some(true) {
+        let source = wall["evidence"]["source"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        eprintln!("login wall: signed in to {host}");
+        resp.error = Some(format!(
+            "login wall: signed in to {host}, but site {spec} writes and its failure was inferred \
+             ({source}), not reported by the adapter, so it was not run again: check the page, \
+             then run the command again"
+        ));
+        set_wall(resp, wall);
+        return true;
+    }
+    eprintln!("login wall: signed in to {host}; running site {spec} again");
+    match (io.rerun)() {
+        Ok(mut again) => {
+            promote_adapter_error(&mut again);
+            if let Some(still) = wall_for(cmd, &again) {
+                // Signed in, and the adapter still says it is not: report
+                // that, and do not loop.
+                let h = still["hint"].as_str().unwrap_or("").to_string();
+                wall["rerun"] = json!({ "ok": false, "error": h });
+                again.success = false;
+                again.error = Some(format!(
+                    "login wall: signed in to {host}, but site {spec} still reports it is not \
+                     signed in — {h}"
+                ));
+            } else {
+                wall["rerun"] = json!({ "ok": again.success, "error": again.error });
+            }
+            set_wall(&mut again, wall);
+            *resp = again;
+        }
+        Err(e) => {
+            wall["rerun"] = json!({ "ok": false, "error": e });
+            resp.error = Some(format!(
+                "login wall: signed in to {host}; running site {spec} again failed: {e}"
+            ));
+            set_wall(resp, wall);
+        }
+    }
+    true
+}
+
 pub fn map_args(adapter: &Adapter, positional: &[String], named: &[(String, String)]) -> Value {
     let mut obj = serde_json::Map::new();
     // Positional args fill the adapter's declared args in DECLARATION order
@@ -2318,5 +2693,419 @@ async function(args){ return args; }"#;
         // A normal adapter that merely contains "test" in its name still lists.
         assert!(is_runnable_adapter_stem("latest"));
         assert!(is_runnable_adapter_stem("testimonials"));
+    }
+
+    // #479: the adapter login signal, page side. Runs the real runner under
+    // node with a stub `window.fetch`.
+    fn run_login_case(func: &str, fetch_stub: &str) -> Option<Value> {
+        let node = std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        })?;
+        let raw = format!(
+            "/* @meta\n{{\"name\": \"demo/login\", \"domain\": \"example.com\", \"args\": {{}}}}\n*/\n{func}"
+        );
+        let a = parse_adapter(&raw, "demo/login").unwrap();
+        let start = build_start(&a, &json!({}), None, "__cu_site_l", &json!({}))
+            .replace(BUDGET_PLACEHOLDER, "1000");
+        let poll = poll_script("__cu_site_l");
+        let driver = format!(
+            "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/app/');\n\
+             window.fetch = {fetch_stub};\n\
+             (async () => {{ {start}; for (let i = 0; i < 50; i++) {{ await new Promise(r => setTimeout(r, 5));\n\
+             const p = {poll}; if (p.state === 'done') {{ console.log(JSON.stringify(p)); return; }} }} }})();"
+        );
+        let out = std::process::Command::new(node)
+            .arg("-e")
+            .arg(driver)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Some(serde_json::from_slice(&out.stdout).unwrap())
+    }
+
+    const OK_FETCH: &str = "async (u) => ({ status: 200, ok: true, redirected: false, url: new URL(u, location.href).href, json: async () => ({}) })";
+    const FETCH_401: &str = "async (u) => ({ status: 401, ok: false, redirected: false, url: new URL(u, location.href).href, json: async () => ({ error: 'Unauthorized' }) })";
+    const FETCH_REDIRECT: &str = "async (u) => ({ status: 200, ok: true, redirected: true, url: 'https://example.com/zentao/user-login.html?referer=x', json: async () => { throw new Error('Unexpected token <'); } })";
+
+    #[test]
+    fn runner_marks_adapter_reported_login() {
+        let Some(p) = run_login_case(
+            "async function(args) { return { error: 'not_logged_in', hint: 'log in first' }; }",
+            OK_FETCH,
+        ) else {
+            return;
+        };
+        assert_eq!(p["result"]["loginRequired"], true);
+        assert_eq!(p["result"]["error"], "not_logged_in");
+        assert_eq!(p["result"]["loginEvidence"]["source"], "adapter");
+        // The documented spelling, with no error code of its own.
+        let p = run_login_case(
+            "async function(args) { return { loginRequired: true, loginUrl: '/login' }; }",
+            OK_FETCH,
+        )
+        .unwrap();
+        assert_eq!(p["result"]["error"], "login_required");
+        assert_eq!(p["result"]["loginUrl"], "/login");
+    }
+
+    #[test]
+    fn runner_infers_login_from_401_redirect_and_throw() {
+        // An old adapter that misreads a 401 as a write failure.
+        let Some(p) = run_login_case(
+            "async function(args) { await (await fetch('/api/bugs/1')).json(); return { error: 'not_recorded' }; }",
+            FETCH_401,
+        ) else {
+            return;
+        };
+        assert_eq!(p["result"]["loginRequired"], true);
+        assert_eq!(p["result"]["error"], "not_recorded");
+        assert_eq!(p["result"]["loginEvidence"]["source"], "http401");
+        assert_eq!(
+            p["result"]["loginEvidence"]["url"],
+            "https://example.com/api/bugs/1"
+        );
+        // Redirected to a sign-in page, and the adapter threw parsing it.
+        let p = run_login_case(
+            "async function(args) { return (await fetch('/api/bugs/1')).json(); }",
+            FETCH_REDIRECT,
+        )
+        .unwrap();
+        assert!(p["error"].is_null(), "{p}");
+        assert_eq!(p["result"]["error"], "login_required");
+        assert_eq!(p["result"]["loginEvidence"]["source"], "redirect");
+        assert!(p["result"]["adapterError"]
+            .as_str()
+            .unwrap()
+            .contains("Unexpected token"));
+        // A throw with no login evidence stays a throw.
+        let p = run_login_case(
+            "async function(args) { throw new Error('boom'); }",
+            OK_FETCH,
+        )
+        .unwrap();
+        assert!(p["error"].as_str().unwrap().contains("boom"));
+    }
+
+    #[test]
+    fn runner_leaves_successful_and_unrelated_results_alone() {
+        // A 401 the adapter handled itself (an optional call) and succeeded.
+        let Some(p) = run_login_case(
+            "async function(args) { await fetch('/api/optional'); return { items: [1] }; }",
+            FETCH_401,
+        ) else {
+            return;
+        };
+        assert!(p["result"].get("loginRequired").is_none(), "{p}");
+        assert_eq!(p["result"]["items"][0], 1);
+        // An error with no login evidence is just an error.
+        let p = run_login_case(
+            "async function(args) { await fetch('/api/x'); return { error: 'HTTP 429' }; }",
+            OK_FETCH,
+        )
+        .unwrap();
+        assert!(p["result"].get("loginRequired").is_none(), "{p}");
+        // Arrays and scalars pass through.
+        let p = run_login_case("async function(args) { return [1, 2]; }", OK_FETCH).unwrap();
+        assert_eq!(p["result"], json!([1, 2]));
+    }
+
+    #[test]
+    fn site_login_wall_from_results() {
+        let origin = "https://zentao.example.com/zentao/my.html";
+        let r = json!({ "error": "not_logged_in", "loginRequired": true,
+            "loginEvidence": { "source": "adapter" }, "loginUrl": "/zentao/user-login.html",
+            "hint": "先在 Chrome 打开站点登录" });
+        let w =
+            site_login_wall(&r, None, origin, "zentao.example.com", "zentao/bug", true).unwrap();
+        assert_eq!(w["source"], "site");
+        assert_eq!(w["host"], "zentao.example.com");
+        assert_eq!(
+            w["loginUrl"],
+            "https://zentao.example.com/zentao/user-login.html"
+        );
+        assert_eq!(w["returnTo"], origin);
+        assert_eq!(w["rerunnable"], true);
+        let hint = w["hint"].as_str().unwrap();
+        assert!(
+            hint.starts_with("login wall: zentao.example.com is not signed in"),
+            "{hint}"
+        );
+        assert!(hint.contains("auth login --bwu"), "{hint}");
+        assert!(
+            hint.contains("`chrome-use open https://zentao.example.com/zentao/user-login.html` and `chrome-use auth login --bwu`"),
+            "{hint}"
+        );
+        assert!(!hint.contains("先在 Chrome"), "{hint}");
+        // Older adapters: the error code alone, no runner normalization.
+        let w = site_login_wall(
+            &json!({ "error": "Not logged in" }),
+            None,
+            origin,
+            "",
+            "x/y",
+            false,
+        )
+        .unwrap();
+        assert_eq!(w["evidence"]["source"], "adapter");
+        assert_eq!(w["rerunnable"], true);
+        assert!(w["loginUrl"].is_null());
+        // Inferred on a write: signed in, never rerun by itself.
+        let r = json!({ "error": "not_recorded", "loginRequired": true,
+            "loginEvidence": { "source": "http401", "url": "https://zentao.example.com/api" } });
+        let w = site_login_wall(&r, None, origin, "", "zentao/bug-comment", false).unwrap();
+        assert_eq!(w["rerunnable"], false);
+        assert!(w["hint"].as_str().unwrap().contains("got HTTP 401"));
+        // Redirect evidence names the sign-in page.
+        let r = json!({ "error": "login_required", "loginRequired": true,
+            "loginEvidence": { "source": "redirect", "url": "https://zentao.example.com/zentao/user-login-x.html" } });
+        let w = site_login_wall(&r, None, origin, "", "zentao/bug", true).unwrap();
+        assert_eq!(
+            w["loginUrl"],
+            "https://zentao.example.com/zentao/user-login-x.html"
+        );
+        // The daemon saw the tab on a sign-in page and the adapter failed.
+        let page =
+            json!({ "url": "https://app.example.com/login?next=%2F", "host": "app.example.com" });
+        let w = site_login_wall(
+            &json!({ "error": "HTTP 500" }),
+            Some(&page),
+            "https://app.example.com/login?next=%2F",
+            "",
+            "a/b",
+            true,
+        )
+        .unwrap();
+        assert_eq!(w["evidence"]["source"], "page");
+        assert_eq!(w["loginUrl"], "https://app.example.com/login?next=%2F");
+        // ...back to the sign-in page itself is not a destination.
+        assert!(w["returnTo"].is_null());
+        // Never back to a sign-out page: it would end the new session.
+        let w = site_login_wall(
+            &json!({ "error": "login_required" }),
+            None,
+            "https://zentao.example.com/zentao/user-logout.html",
+            "",
+            "zentao/bug",
+            true,
+        )
+        .unwrap();
+        assert!(w["returnTo"].is_null(), "{w}");
+        for u in [
+            "https://a.example.com/logout",
+            "https://a.example.com/auth/sign_out",
+            "https://a.example.com/Log-Off.aspx",
+        ] {
+            assert!(logout_ish(&url::Url::parse(u).unwrap()), "{u}");
+        }
+        assert!(!logout_ish(
+            &url::Url::parse("https://a.example.com/blog/layout").unwrap()
+        ));
+        // Not walls: a success, a plain failure, a success on a sign-in page.
+        assert!(site_login_wall(&json!({ "items": [] }), None, origin, "", "a/b", true).is_none());
+        assert!(site_login_wall(
+            &json!({ "error": "HTTP 429" }),
+            None,
+            origin,
+            "",
+            "a/b",
+            true
+        )
+        .is_none());
+        assert!(
+            site_login_wall(&json!({ "ok": 1 }), Some(&page), origin, "", "a/b", true).is_none()
+        );
+        assert!(site_login_wall(&json!([1]), None, origin, "", "a/b", true).is_none());
+        // `not_recorded` alone is not a login signal.
+        assert!(site_login_wall(
+            &json!({ "error": "not_recorded" }),
+            None,
+            origin,
+            "",
+            "a/b",
+            false
+        )
+        .is_none());
+    }
+
+    fn site_resp(result: Value) -> crate::connection::Response {
+        crate::connection::Response {
+            success: true,
+            data: Some(
+                json!({ "result": result, "origin": "https://z.example.com/zentao/", "domain": "z.example.com" }),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn site_cmd(read_only: bool) -> Value {
+        json!({ "action": "site", "spec": "zentao/bug", "domain": "z.example.com", "readOnly": read_only })
+    }
+
+    const WALLED: &str = r#"{"error":"not_logged_in","loginRequired":true,"loginEvidence":{"source":"adapter"},"loginUrl":"/zentao/user-login.html"}"#;
+
+    /// Runs the flow with recording fakes; returns (resp, navigations, sign-ins, reruns).
+    fn run_flow(
+        cmd: &Value,
+        first: Value,
+        auto: bool,
+        sign_in_result: Value,
+        reruns: Vec<Value>,
+    ) -> (crate::connection::Response, Vec<String>, usize, usize, bool) {
+        let mut resp = site_resp(first);
+        promote_adapter_error(&mut resp);
+        let mut navs: Vec<String> = Vec::new();
+        let mut signs = 0usize;
+        let mut ran = 0usize;
+        let mut queue = reruns.into_iter();
+        let mut navigate = |u: &str| {
+            navs.push(u.to_string());
+            Ok(())
+        };
+        let mut sign_in = |_w: &Value| {
+            signs += 1;
+            sign_in_result.clone()
+        };
+        let mut rerun = || {
+            ran += 1;
+            Ok(site_resp(queue.next().expect("unexpected rerun")))
+        };
+        let walled = apply_site_login_wall(
+            cmd,
+            &mut resp,
+            SiteLoginIo {
+                auto,
+                json: true,
+                navigate: &mut navigate,
+                sign_in: &mut sign_in,
+                rerun: &mut rerun,
+            },
+        );
+        (resp, navs, signs, ran, walled)
+    }
+
+    #[test]
+    fn site_wall_without_auto_login_points_at_bwu() {
+        let (resp, navs, signs, ran, walled) = run_flow(
+            &site_cmd(true),
+            serde_json::from_str(WALLED).unwrap(),
+            false,
+            json!({}),
+            vec![],
+        );
+        assert!(walled);
+        assert!(!resp.success);
+        let err = resp.error.as_deref().unwrap();
+        assert!(
+            err.starts_with("login wall: z.example.com is not signed in"),
+            "{err}"
+        );
+        assert!(err.contains("auth login --bwu"), "{err}");
+        let wall = &resp.data.as_ref().unwrap()["loginWall"];
+        assert_eq!(wall["source"], "site");
+        assert!(wall.get("autoLogin").is_none());
+        assert!(navs.is_empty() && signs == 0 && ran == 0);
+    }
+
+    #[test]
+    fn site_wall_with_auto_login_signs_in_and_reruns_once() {
+        let (resp, navs, signs, ran, walled) = run_flow(
+            &site_cmd(true),
+            serde_json::from_str(WALLED).unwrap(),
+            true,
+            json!({ "ok": true, "item": "zentao", "error": null, "returnedTo": "https://z.example.com/zentao/" }),
+            vec![json!({ "id": 8876, "title": "t" })],
+        );
+        assert!(walled);
+        assert_eq!(navs, vec!["https://z.example.com/zentao/user-login.html"]);
+        assert_eq!((signs, ran), (1, 1));
+        assert!(resp.success, "{:?}", resp.error);
+        assert!(resp.error.is_none());
+        let data = resp.data.as_ref().unwrap();
+        assert_eq!(data["result"]["id"], 8876);
+        assert_eq!(data["loginWall"]["autoLogin"]["ok"], true);
+        assert_eq!(data["loginWall"]["rerun"]["ok"], true);
+
+        // Still walled after signing in: reported, not looped.
+        let (resp, _, signs, ran, _) = run_flow(
+            &site_cmd(true),
+            serde_json::from_str(WALLED).unwrap(),
+            true,
+            json!({ "ok": true, "item": "zentao", "error": null }),
+            vec![serde_json::from_str(WALLED).unwrap()],
+        );
+        assert_eq!((signs, ran), (1, 1));
+        assert!(!resp.success);
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("still reports it is not signed in"));
+
+        // Sign-in failed: no rerun, the error names both.
+        let (resp, _, _, ran, _) = run_flow(
+            &site_cmd(true),
+            serde_json::from_str(WALLED).unwrap(),
+            true,
+            json!({ "ok": false, "item": null, "error": "the vault has 2 logins for z.example.com" }),
+            vec![],
+        );
+        assert_eq!(ran, 0);
+        let err = resp.error.unwrap();
+        assert!(
+            err.starts_with("login wall: auto-login failed: the vault has 2"),
+            "{err}"
+        );
+        assert!(err.contains("auth login --bwu"), "{err}");
+    }
+
+    #[test]
+    fn inferred_wall_on_a_write_signs_in_but_does_not_rerun() {
+        let first = json!({ "error": "not_recorded", "loginRequired": true,
+            "loginEvidence": { "source": "http401", "url": "https://z.example.com/api" } });
+        let (resp, _, signs, ran, walled) = run_flow(
+            &site_cmd(false),
+            first,
+            true,
+            json!({ "ok": true, "item": "zentao", "error": null }),
+            vec![],
+        );
+        assert!(walled);
+        assert_eq!((signs, ran), (1, 0));
+        assert!(!resp.success);
+        assert!(resp.error.unwrap().contains("was not run again"));
+        // An adapter that says so itself wrote nothing: a write is rerun.
+        let (resp, _, _, ran, _) = run_flow(
+            &site_cmd(false),
+            serde_json::from_str(WALLED).unwrap(),
+            true,
+            json!({ "ok": true, "item": "zentao", "error": null }),
+            vec![json!({ "commented": true })],
+        );
+        assert_eq!(ran, 1);
+        assert!(resp.success);
+    }
+
+    #[test]
+    fn signed_in_results_are_untouched() {
+        for first in [
+            json!({ "id": 1, "title": "ok" }),
+            json!({ "error": "HTTP 429", "hint": "slow down" }),
+        ] {
+            let (resp, navs, signs, ran, walled) =
+                run_flow(&site_cmd(true), first.clone(), true, json!({}), vec![]);
+            assert!(!walled);
+            assert!(navs.is_empty() && signs == 0 && ran == 0);
+            assert!(resp.data.as_ref().unwrap().get("loginWall").is_none());
+            if first.get("error").is_some() {
+                assert_eq!(resp.error.as_deref(), Some("HTTP 429 — slow down"));
+            } else {
+                assert!(resp.success && resp.error.is_none());
+            }
+        }
     }
 }

@@ -2378,6 +2378,10 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 // same-named command with the same arguments.
                 "spec": spec,
                 "siteArgs": inv.args.clone(),
+                // For main.rs (#479): after an automatic sign-in, a read is
+                // rerun; a write only when the adapter itself said it was not
+                // signed in (so it wrote nothing).
+                "readOnly": adapter.meta.get("readOnly").and_then(|v| v.as_bool()) == Some(true),
             }))
         }
 

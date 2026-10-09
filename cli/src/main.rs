@@ -3700,47 +3700,55 @@ fn main() {
 
     match send_command(cmd.clone(), &flags.session) {
         Ok(mut resp) => {
-            // #122: a `site` adapter can return an application-level error (e.g.
-            // `{error:"HTTP 429", hint:...}`) while the *eval* itself succeeds, so
-            // the transport envelope stays `success:true` / exit 0 and automation
-            // can't tell a rate-limited/failed call from a real empty result.
-            // Promote such an adapter error into the top-level envelope so both
-            // `--json` (`success:false`, `error`) and the exit code (1) reflect it.
+            // #122: promote an adapter's application-level error into the
+            // envelope (see `site::promote_adapter_error`).
             let raw_eval = cmd.get("rawEval").and_then(|v| v.as_bool()) == Some(true);
-            if cmd.get("action").and_then(|v| v.as_str()) == Some("site") && !raw_eval {
-                if let Some(result) = resp.data.as_ref().and_then(|d| d.get("result")) {
-                    let adapter_err = result
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string());
-                    let explicit_fail =
-                        result.get("success").and_then(|v| v.as_bool()) == Some(false);
-                    if adapter_err.is_some() || explicit_fail {
-                        resp.success = false;
-                        if resp.error.is_none() {
-                            let err = adapter_err
-                                .unwrap_or_else(|| "site adapter reported failure".to_string());
-                            // Carry the adapter's `hint` (#359: how to pass a
-                            // missing arg) into the message the caller reads.
-                            let hint = result
-                                .get("hint")
-                                .and_then(|v| v.as_str())
-                                .filter(|s| !s.is_empty());
-                            resp.error = Some(match hint {
-                                Some(h) => format!("{err} — {h}"),
-                                None => err,
-                            });
-                        }
-                    }
-                }
+            let is_site = cmd.get("action").and_then(|v| v.as_str()) == Some("site") && !raw_eval;
+            if is_site {
+                site::promote_adapter_error(&mut resp);
             }
+            // #479: an adapter that failed because the site is not signed in
+            // is a login wall: say so, and with auto-login on, sign in and
+            // run it again once.
+            let site_wall = is_site && {
+                let session = flags.session.clone();
+                let mut navigate = |u: &str| -> Result<(), String> {
+                    let r = connection::send_command(
+                        json!({ "id": commands::gen_id(), "action": "navigate", "url": u }),
+                        &session,
+                    )?;
+                    if r.success {
+                        Ok(())
+                    } else {
+                        Err(r.error.unwrap_or_else(|| "navigation failed".into()))
+                    }
+                };
+                let mut sign_in = |w: &Value| bwu_login::auto_login(&flags, w);
+                let mut rerun = || {
+                    let mut again = cmd.clone();
+                    again["id"] = json!(commands::gen_id());
+                    connection::send_command(again, &session)
+                };
+                site::apply_site_login_wall(
+                    &cmd,
+                    &mut resp,
+                    site::SiteLoginIo {
+                        auto: bwu_login::auto_login_configured(),
+                        json: flags.json,
+                        navigate: &mut navigate,
+                        sign_in: &mut sign_in,
+                        rerun: &mut rerun,
+                    },
+                )
+            };
             // A failed adapter whose name OpenCLI also has, as a read: run that
             // instead of failing. Precedence picks ours first, which must not
             // hide a working command behind a broken one (e.g. a page CSP that
             // blocks the adapter's API). Writes never retry — they may have
             // half-run.
-            if cmd.get("action").and_then(|v| v.as_str()) == Some("site") && !resp.success {
+            // Not behind a login wall: OpenCLI would run as the same signed-out
+            // user.
+            if is_site && !site_wall && !resp.success {
                 let spec = cmd.get("spec").and_then(|v| v.as_str()).unwrap_or("");
                 let entry = opencli::lookup(spec)
                     .filter(|e| e.get("access").and_then(|v| v.as_str()) == Some("read"));
@@ -3815,8 +3823,13 @@ fn main() {
             // #434: the tab landed on a sign-in page. Say so on stderr (once
             // per host per session; the daemon decides), and with auto-login
             // on, sign in from the vault and go back.
-            let wall = resp.data.as_ref().and_then(|d| d.get("loginWall")).cloned();
-            if let Some(wall) = wall {
+            let wall = resp
+                .data
+                .as_ref()
+                .and_then(|d| d.get("loginWall"))
+                .filter(|w| w.get("source").and_then(|v| v.as_str()) != Some("site"))
+                .cloned();
+            if let Some(wall) = wall.filter(|_| !site_wall) {
                 if let Some(h) = wall.get("hint").and_then(|v| v.as_str()) {
                     eprintln!("{} {}", color::warning_indicator(), h);
                 }

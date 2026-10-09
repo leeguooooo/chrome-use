@@ -8,7 +8,7 @@
 use serde_json::{json, Value};
 
 /// Path segments (lowercased, extension dropped) that name a sign-in page.
-const LOGIN_SEGMENTS: &[&str] = &[
+pub const LOGIN_SEGMENTS: &[&str] = &[
     "login",
     "log-in",
     "log_in",
@@ -23,7 +23,7 @@ const LOGIN_SEGMENTS: &[&str] = &[
 
 /// First host labels of a dedicated sign-in host (accounts.google.com,
 /// login.microsoftonline.com, sso.company.com).
-const LOGIN_HOST_LABELS: &[&str] = &["accounts", "login", "signin", "auth", "sso", "idp"];
+pub const LOGIN_HOST_LABELS: &[&str] = &["accounts", "login", "signin", "auth", "sso", "idp"];
 
 /// Query parameters (lowercased) that carry where to go after signing in.
 const RETURN_PARAMS: &[&str] = &[
