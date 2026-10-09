@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.179
+## 1.5.180
 
 <!-- release:start -->
+### Improvements
+
+- **A login wall asks whether to sign in, instead of needing a config switch.** The first wall on a site (a redirect to its sign-in page, or a `site` adapter that finds it signed out) asks: sign in from the vault this time, always for that site without asking, or never. A person at a terminal gets a prompt. An agent gets `loginWall.ask` and the same text on stderr: a question to relay to the user as is and one command per answer (`auth login --bwu` on the sign-in page, `auth autologin always <host>`, `auth autologin never <host>`); the core skill tells it to ask and never to choose `always` itself. Decisions are stored per site in `~/.chrome-use/autologin.json`; `auth autologin status` shows them and `auth autologin off <host>` (or `--all`) forgets one. `"auth": {"autoLogin": "bwu"}` and `AGENT_BROWSER_AUTO_LOGIN=bwu` keep working as "always"; `AGENT_BROWSER_AUTO_LOGIN=ask` / `off` force asking or never. (#483, fixes #481)
+
+### Bug Fixes
+
+- **Auto-login tries once more when the outcome of the login submit is unknown.** A tab that detached during the Enter that submits the login (`action_outcome_unknown … Detached while handling command`) left the site signed out; auto-login now goes back to the sign-in page and runs `auth login --bwu` once more, which types nothing on a page that is already signed in. The cause of the detach is still open. (#483, refs #482)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.179
+
 Requires extension ab-connect 0.5.31 (published on the Chrome Web Store; Chrome updates it automatically). Only the opt-in background links below depend on it.
 
 ### Bug Fixes
@@ -17,7 +32,6 @@ Requires extension ab-connect 0.5.31 (published on the Chrome Web Store; Chrome 
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.178
 
