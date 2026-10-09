@@ -618,6 +618,12 @@ pub struct DaemonState {
     /// Whether a carried snapshot left on disk by a daemon that died during a
     /// reconnect has been looked for yet.
     carried_tabs_read: bool,
+    /// The carried tab refs record exists but cannot be read (#473): which tab
+    /// an id names is unknown, so commands are held. Ends only with `close`.
+    carried_tabs_unknown: Option<String>,
+    /// The record was consumed but could not be removed: a later daemon would
+    /// bring its ids back, so commands are held until removal succeeds.
+    carried_tabs_cleanup: Option<String>,
     /// When true, automatically dismiss `beforeunload` dialogs and accept `alert`
     /// dialogs so they never block the agent.  Enabled by default.
     pub auto_dialog: bool,
@@ -713,6 +719,8 @@ impl DaemonState {
             lost_driving_tab: None,
             carried_tabs: None,
             carried_tabs_read: false,
+            carried_tabs_unknown: None,
+            carried_tabs_cleanup: None,
             auto_dialog: !matches!(
                 env::var("AGENT_BROWSER_NO_AUTO_DIALOG").as_deref(),
                 Ok("1" | "true" | "yes")
@@ -2018,15 +2026,27 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 // next command's must still bind them. An older snapshot that
                 // was never restored is the one the agent's refs came from.
                 if state.carried_tabs.is_none() {
-                    state.carried_tabs = state
+                    let carried = state
                         .browser
                         .as_ref()
                         .map(|mgr| (why.to_string(), mgr.tab_ref_snapshot()));
                     // On disk too: a reconnect can wait long enough for the
                     // client to stop this daemon, and the next one must bind
-                    // the same refs rather than number the tabs afresh.
-                    if let Some(carried) = &state.carried_tabs {
-                        write_carried_tabs(&state.session_id, carried);
+                    // the same refs rather than number the tabs afresh. The
+                    // old state is torn down only once that record is safe.
+                    if let Some(carried) = carried {
+                        if let Err(e) = write_carried_tabs(&state.session_id, &carried) {
+                            return error_response(
+                                &id,
+                                &format!(
+                                    "This session's browser is gone ({why}) and the tab ids it \
+                                     holds could not be recorded before reconnecting: {e}. \
+                                     Nothing was changed; the command can run once that file \
+                                     can be written."
+                                ),
+                            );
+                        }
+                        state.carried_tabs = Some(carried);
                     }
                 }
                 if let Some(ref mut mgr) = state.browser {
@@ -2055,13 +2075,38 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // whichever command (or an earlier failed attempt) got it connected.
         if state.browser.is_some() {
             if state.carried_tabs.is_none() && !state.carried_tabs_read {
-                state.carried_tabs = read_carried_tabs(&state.session_id);
+                match read_carried_tabs(&state.session_id) {
+                    CarriedRecord::Missing => {}
+                    CarriedRecord::Found(carried) => state.carried_tabs = Some(carried),
+                    CarriedRecord::Unreadable(e) => state.carried_tabs_unknown = Some(e),
+                }
             }
             state.carried_tabs_read = true;
             if let Some((why, snapshot)) = state.carried_tabs.take() {
                 let why = replaced_browser.take().unwrap_or(why);
                 reconnect_note = Some(restore_carried_tabs(state, &why, &snapshot));
-                remove_carried_tabs(&state.session_id);
+                state.carried_tabs_cleanup =
+                    crate::connection::remove_carried_tabs(&state.session_id).err();
+            } else if state.carried_tabs_cleanup.is_some() {
+                state.carried_tabs_cleanup =
+                    crate::connection::remove_carried_tabs(&state.session_id).err();
+            }
+        }
+
+        // Which tab an id names is not known for sure: hold everything but
+        // `tab list` rather than act on a tab the agent may not mean (#473).
+        if let Some(hold) = carried_tabs_hold(state, action) {
+            if action == "tab_list" {
+                reconnect_note = Some(match reconnect_note.take() {
+                    Some(note) => format!("{note}\n{hold}"),
+                    None => hold,
+                });
+            } else {
+                let mut resp = error_response(&id, &hold);
+                if let Some(note) = reconnect_note.take() {
+                    prepend_warning(&mut resp, &note);
+                }
+                return resp;
             }
         }
 
@@ -6066,7 +6111,13 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     state.tab_states.clear();
     state.lost_driving_tab = None;
     state.carried_tabs = None;
-    remove_carried_tabs(&state.session_id);
+    // The session ends here, so its carried tab ids must not come back. If
+    // their record cannot be removed, say so rather than report a clean close.
+    crate::connection::remove_carried_tabs(&state.session_id).map_err(|e| {
+        format!("The browser session was closed, but {e}; a later command would bring those tab ids back")
+    })?;
+    state.carried_tabs_unknown = None;
+    state.carried_tabs_cleanup = None;
     Ok(json!({ "closed": true }))
 }
 
@@ -13634,29 +13685,86 @@ fn reconnected_browser_note(
     note
 }
 
-fn carried_tabs_path(session: &str) -> std::path::PathBuf {
-    crate::connection::get_socket_dir().join(format!("{session}.carried-tabs.json"))
+/// What a daemon finds when it looks for a carried tab refs record.
+enum CarriedRecord {
+    Missing,
+    Found((String, super::browser::TabRefSnapshot)),
+    /// It exists but cannot be read or is not a valid record: why.
+    Unreadable(String),
 }
 
 /// Record the tab refs of a connection that died, for the daemon that binds
-/// them if this one is stopped first (#473). Best-effort.
-fn write_carried_tabs(session: &str, carried: &(String, super::browser::TabRefSnapshot)) {
-    let body = json!({"why": carried.0, "snapshot": carried.1});
-    if let Err(e) = fs::write(carried_tabs_path(session), body.to_string()) {
-        eprintln!("[daemon] failed to record the carried tab refs: {e}");
+/// them if this one is stopped first (#473). Atomic: a temp file is written
+/// and synced, then renamed over the record, so a reader never sees half of
+/// one. Any failure is returned.
+fn write_carried_tabs(
+    session: &str,
+    carried: &(String, super::browser::TabRefSnapshot),
+) -> Result<(), String> {
+    use std::io::Write as _;
+    let path = crate::connection::carried_tabs_path(session);
+    let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let body = json!({"why": carried.0, "snapshot": carried.1}).to_string();
+    let written = (|| -> std::io::Result<()> {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(body.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&tmp, &path)?;
+        if let Some(dir) = path.parent() {
+            fs::File::open(dir)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    written.map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("{}: {e}", path.display())
+    })
+}
+
+fn read_carried_tabs(session: &str) -> CarriedRecord {
+    let path = crate::connection::carried_tabs_path(session);
+    let body = match fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CarriedRecord::Missing,
+        Err(e) => return CarriedRecord::Unreadable(format!("{}: {e}", path.display())),
+    };
+    let parsed = serde_json::from_str::<Value>(&body)
+        .map_err(|e| e.to_string())
+        .and_then(|value| {
+            let why = value
+                .get("why")
+                .and_then(|v| v.as_str())
+                .ok_or("no `why`")?
+                .to_string();
+            let snapshot =
+                serde_json::from_value(value.get("snapshot").cloned().ok_or("no `snapshot`")?)
+                    .map_err(|e| e.to_string())?;
+            Ok((why, snapshot))
+        });
+    match parsed {
+        Ok(carried) => CarriedRecord::Found(carried),
+        Err(e) => CarriedRecord::Unreadable(format!("{}: not a valid record: {e}", path.display())),
     }
 }
 
-fn read_carried_tabs(session: &str) -> Option<(String, super::browser::TabRefSnapshot)> {
-    let body = fs::read_to_string(carried_tabs_path(session)).ok()?;
-    let value: Value = serde_json::from_str(&body).ok()?;
-    let why = value.get("why")?.as_str()?.to_string();
-    let snapshot = serde_json::from_value(value.get("snapshot")?.clone()).ok()?;
-    Some((why, snapshot))
-}
-
-fn remove_carried_tabs(session: &str) {
-    let _ = fs::remove_file(carried_tabs_path(session));
+/// Why commands are held because of the carried tab refs record, if they are.
+fn carried_tabs_hold(state: &DaemonState, action: &str) -> Option<String> {
+    if let Some(e) = &state.carried_tabs_unknown {
+        return Some(format!(
+            "Refusing to run `{action}`: this session's tab ids from before its daemon was \
+             replaced could not be read back ({e}). A tab id, label or the current tab may now \
+             name a different tab than you mean, so nothing that acts on a tab runs. \
+             `chrome-use tab list` shows the tabs as they are now; `chrome-use close` ends this \
+             session (closing the tabs it opened) and the next command starts fresh."
+        ));
+    }
+    state.carried_tabs_cleanup.as_ref().map(|e| {
+        format!(
+            "Refusing to run `{action}`: this session's tab ids were bound again, but {e}. A \
+             later daemon would read that record and bring back tab ids that no longer hold, so \
+             commands are held until it can be removed; `chrome-use close` ends the session."
+        )
+    })
 }
 
 /// Bind a freshly connected browser's tabs to the refs carried from the

@@ -26,6 +26,9 @@ struct Browser {
     /// Bumped to drop every open connection.
     generation: u64,
     created: u32,
+    /// Every page-level `Runtime.evaluate` expression, with the session it
+    /// was sent to.
+    evaluated: Vec<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -100,10 +103,28 @@ impl Fake {
             .push((target.to_string(), url.to_string()));
     }
 
+    /// Sessions that evaluated `location.href` since the last call.
+    fn take_url_reads(&self) -> Vec<String> {
+        let mut b = self.0.lock().unwrap();
+        let reads = b
+            .evaluated
+            .iter()
+            .filter(|(_, e)| e.contains("location.href"))
+            .map(|(s, _)| s.clone())
+            .collect();
+        b.evaluated.clear();
+        reads
+    }
+
     fn reply(&self, req: &Value) -> Value {
         let mut b = self.0.lock().unwrap();
         let method = req["method"].as_str().unwrap_or("");
         let params = &req["params"];
+        if method == "Runtime.evaluate" {
+            let session = req["sessionId"].as_str().unwrap_or("").to_string();
+            let expression = params["expression"].as_str().unwrap_or("").to_string();
+            b.evaluated.push((session, expression));
+        }
         match method {
             "Target.getTargets" => {
                 let mut list: Vec<Value> = b
@@ -512,16 +533,29 @@ fn batch_and_script_with_tab_run_their_steps_in_that_tab() {
     fake.go_down();
     fake.remove("T2");
     fake.come_back(true);
+    // Reconnect first, so the reads counted below are the steps' own.
+    let r = d.send(json!({"id": "r", "action": "tab_list"}));
+    assert_eq!(r["success"], true, "{r}");
+    fake.take_url_reads();
     let out = d.cli(&["batch", "get url"]);
     assert!(text(&out).contains("Refusing to run"), "{}", text(&out));
+    assert!(
+        fake.take_url_reads().is_empty(),
+        "a refused step reached a tab"
+    );
     let out = d.cli(&["batch", "--tab", "t1", "get url", "get url"]);
     assert!(out.status.success(), "{}", text(&out));
     assert!(!text(&out).contains("Refusing"), "{}", text(&out));
+    // Both steps read the url of T1, the tab t1 names, and of no other tab.
+    assert_only_session(&fake, "S-T1");
 
     // Lose the driven t1 now.
     fake.go_down();
     fake.remove("T1");
     fake.come_back(false);
+    let r = d.send(json!({"id": "r2", "action": "tab_list"}));
+    assert_eq!(r["success"], true, "{r}");
+    fake.take_url_reads();
     let program = d.home.path().join("p.json");
     std::fs::write(&program, r#"[{"do": "url"}, {"do": "url"}]"#).unwrap();
     let program = program.to_str().unwrap();
@@ -532,9 +566,14 @@ fn batch_and_script_with_tab_run_their_steps_in_that_tab() {
         out.status,
         text(&out)
     );
+    assert!(
+        fake.take_url_reads().is_empty(),
+        "a refused script reached a tab"
+    );
     let out = d.cli_plain(&["script", "--tab", "t3", program]);
     assert!(out.status.success(), "{}", text(&out));
     assert!(!text(&out).contains("Refusing"), "{}", text(&out));
+    assert_only_session(&fake, "S-T3");
 }
 
 /// The daemon is stopped while its reconnect is failing (a client gives up on
@@ -569,5 +608,193 @@ fn refs_survive_the_daemon_being_replaced_mid_reconnect() {
             .unwrap_or("")
             .contains("still belongs to t2"),
         "{r}"
+    );
+}
+
+fn record_path(d: &Daemon) -> PathBuf {
+    d.sock
+        .path()
+        .join(format!("{}.carried-tabs.json", d.session))
+}
+
+fn held(r: &Value, needle: &str) -> bool {
+    r["success"] == false
+        && r["error"]
+            .as_str()
+            .is_some_and(|e| e.starts_with("Refusing to run") && e.contains(needle))
+}
+
+/// A record the next daemon cannot read, whether half-written or unreadable,
+/// is not "no record": commands are held, nothing claims the tabs were bound
+/// again, and only `close` ends the hold.
+#[test]
+fn an_unreadable_record_holds_instead_of_numbering_afresh() {
+    use std::os::unix::fs::PermissionsExt;
+    for (name, damage) in [("half", 0u8), ("locked", 1u8)] {
+        let (fake, cdp) = Fake::start();
+        let mut d = Daemon::start(&format!("rc-{name}"), &cdp);
+        three_tabs(&d);
+        fake.go_down();
+        let r = d.send(json!({"id": "x", "action": "tab_list"}));
+        assert_eq!(r["success"], false, "{r}");
+        let path = record_path(&d);
+        let full = std::fs::read_to_string(&path).expect("record written");
+        if damage == 0 {
+            std::fs::write(&path, &full[..full.len() / 2]).unwrap();
+        } else {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        d.replace();
+        fake.come_back(true);
+
+        let r = d.send(json!({"id": "l", "action": "tab_list"}));
+        assert_eq!(r["success"], true, "{name}: {r}");
+        let warning = r["warning"].as_str().unwrap_or("");
+        assert!(warning.contains("could not be read back"), "{name}: {r}");
+        assert!(!warning.contains("re-established"), "{name}: {r}");
+        fake.take_url_reads();
+        for cmd in [
+            json!({"id": "a", "action": "url"}),
+            json!({"id": "b", "action": "click", "selector": "#submit", "tabId": "t1"}),
+            json!({"id": "c", "action": "tab_switch", "tabId": "t1"}),
+            json!({"id": "d", "action": "tab_new"}),
+        ] {
+            let r = d.send(cmd.clone());
+            assert!(held(&r, "could not be read back"), "{name} {cmd}: {r}");
+        }
+        assert!(
+            fake.take_url_reads().is_empty(),
+            "{name}: a held command reached a tab"
+        );
+        if damage == 1 {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let r = d.send(json!({"id": "z", "action": "close"}));
+        assert_eq!(r["success"], true, "{name}: {r}");
+        assert!(!path.exists(), "{name}: close left the record");
+        let r = d.send(json!({"id": "y", "action": "url"}));
+        assert!(!held(&r, ""), "{name}: still held after close: {r}");
+    }
+}
+
+/// A record that cannot be written stops the reconnect before the old state
+/// is torn down: the next attempt still binds the same ids.
+#[test]
+fn a_record_that_cannot_be_written_changes_nothing() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-nowrite", &cdp);
+    three_tabs(&d);
+    let path = record_path(&d);
+    std::fs::create_dir(&path).unwrap();
+    fake.go_down();
+    let r = d.send(json!({"id": "x1", "action": "tab_list"}));
+    assert_eq!(r["success"], false, "{r}");
+    assert!(
+        r["error"]
+            .as_str()
+            .unwrap()
+            .contains("could not be recorded"),
+        "{r}"
+    );
+    std::fs::remove_dir(&path).unwrap();
+    let leftovers: Vec<_> = std::fs::read_dir(d.sock.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains("carried-tabs"))
+        .collect();
+    assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+
+    fake.remove("T2");
+    fake.come_back(true);
+    let r = d.send(json!({"id": "x2", "action": "tab_list"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert!(
+        r["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Tabs t2 could not be found"),
+        "{r}"
+    );
+    let tabs = d.tabs();
+    assert_eq!(tab_of(&tabs, "T1").as_deref(), Some("t1"), "{tabs:?}");
+    assert_eq!(tab_of(&tabs, "T3").as_deref(), Some("t3"), "{tabs:?}");
+    assert!(!path.exists());
+}
+
+/// The record was consumed but cannot be removed: commands are held, the
+/// reply says so, and the hold ends only once the removal succeeds.
+#[test]
+fn a_record_that_cannot_be_removed_holds_commands() {
+    use std::os::unix::fs::PermissionsExt;
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-norm", &cdp);
+    three_tabs(&d);
+    fake.go_down();
+    let r = d.send(json!({"id": "x1", "action": "tab_list"}));
+    assert_eq!(r["success"], false, "{r}");
+    let path = record_path(&d);
+    assert!(path.exists());
+    fake.come_back(true);
+    let dir = d.sock.path();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let r = d.send(json!({"id": "x2", "action": "tab_list"}));
+    fake.take_url_reads();
+    let r2 = d.send(json!({"id": "x3", "action": "url"}));
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(r["success"], true, "{r}");
+    let warning = r["warning"].as_str().unwrap_or("");
+    assert!(warning.contains("re-established"), "{r}");
+    assert!(warning.contains("could not remove"), "{r}");
+    assert!(held(&r2, "could not remove"), "{r2}");
+    assert!(path.exists(), "the record is still there");
+    assert!(
+        fake.take_url_reads().is_empty(),
+        "a held command reached a tab"
+    );
+
+    let r = d.send(json!({"id": "x4", "action": "url"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert!(!path.exists(), "removal was not retried");
+    assert_only_session(&fake, "S-T2");
+}
+
+/// `session stop` ends the session: its carried tab ids do not come back on
+/// the next daemon.
+#[test]
+fn a_stopped_sessions_record_does_not_come_back() {
+    let (fake, cdp) = Fake::start();
+    let mut d = Daemon::start("rc-stop", &cdp);
+    three_tabs(&d);
+    fake.go_down();
+    let r = d.send(json!({"id": "x1", "action": "tab_list"}));
+    assert_eq!(r["success"], false, "{r}");
+    let path = record_path(&d);
+    assert!(path.exists());
+    let session = d.session.clone();
+    let out = d.cli(&["session", "stop", &session, "--force"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!path.exists(), "stop left the record: {}", text(&out));
+
+    fake.remove("T2");
+    fake.come_back(true);
+    d.replace();
+    let r = d.send(json!({"id": "x2", "action": "tab_list"}));
+    assert_eq!(r["success"], true, "{r}");
+    let warning = r["warning"].as_str().unwrap_or("");
+    assert!(!warning.contains("re-established"), "{r}");
+    assert!(!warning.contains("could not be found"), "{r}");
+    let r = d.send(json!({"id": "x3", "action": "url"}));
+    assert!(!refused_for_lost_tab(&r), "{r}");
+}
+
+/// The page reads since the last check all went to `session`, and there was
+/// at least one: a wrong tab that happens to answer cannot pass.
+fn assert_only_session(fake: &Fake, session: &str) {
+    let reads = fake.take_url_reads();
+    assert!(!reads.is_empty(), "no page read reached any tab");
+    assert!(
+        reads.iter().all(|s| s == session),
+        "reads went to {reads:?}, expected only {session}"
     );
 }

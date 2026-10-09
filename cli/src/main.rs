@@ -961,6 +961,11 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
                         );
                         exit(1);
                     }
+                    // A stopped session's carried tab ids must not come back.
+                    if let Err(e) = connection::remove_carried_tabs(target) {
+                        eprintln!("{} session stopped, but {e}", color::error_indicator());
+                        exit(1);
+                    }
                     let note = session_stop_forced_note(target, tabs);
                     if json_mode {
                         print_json_value(
@@ -972,6 +977,17 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
                     return;
                 }
                 let message = session_stop_incomplete_message(target, &error, tabs);
+                if json_mode {
+                    print_json_error(&message);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), message);
+                }
+                exit(1);
+            }
+            // The session ended: its carried tab ids (#473) must not come back
+            // on the next daemon. Not removable means not cleanly stopped.
+            if let Err(e) = connection::remove_carried_tabs(target) {
+                let message = format!("session stopped, but {e}");
                 if json_mode {
                     print_json_error(&message);
                 } else {
@@ -1005,6 +1021,19 @@ fn run_session_lifecycle(args: &[String], session: &str, json_mode: bool) {
                     native::daemon::mark_session_closed(s, &reason);
                 }
                 connection::kill_stale_daemon(s);
+            }
+            let unremoved: Vec<String> = sessions
+                .iter()
+                .filter_map(|s| connection::remove_carried_tabs(s).err())
+                .collect();
+            if !unremoved.is_empty() {
+                let message = format!("sessions pruned, but {}", unremoved.join("; "));
+                if json_mode {
+                    print_json_error(&message);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), message);
+                }
+                exit(1);
             }
             if json_mode {
                 print_json_value(json!({ "success": true, "data": { "pruned": sessions } }));

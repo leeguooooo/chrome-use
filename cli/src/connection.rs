@@ -643,6 +643,27 @@ pub fn created_target_count(session: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// Where a daemon records the tab refs of a browser connection that died,
+/// until a new connection has been bound to them (#473).
+pub fn carried_tabs_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{}.carried-tabs.json", session))
+}
+
+/// Remove the carried tab refs record. Missing is fine; any other failure is
+/// returned, because a record left behind brings old tab ids back on the
+/// next daemon.
+pub fn remove_carried_tabs(session: &str) -> Result<(), String> {
+    let path = carried_tabs_path(session);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!(
+            "could not remove the record of this session's tab ids at {}: {e}",
+            path.display()
+        )),
+    }
+}
+
 /// Drop the saved ownership record without closing anything. The tabs stay
 /// open; only the session's claim on them is forgotten.
 pub fn forget_created_targets(session: &str) -> Result<(), String> {
