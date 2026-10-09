@@ -305,7 +305,8 @@ impl Daemon {
     }
 
     fn send(&self, cmd: Value) -> Value {
-        let mut s = UnixStream::connect(self.sock_path()).unwrap();
+        let mut s = UnixStream::connect(self.sock_path())
+            .unwrap_or_else(|e| panic!("{}: no daemon for {cmd}: {e}", self.session));
         s.set_read_timeout(Some(Duration::from_secs(90))).unwrap();
         writeln!(s, "{cmd}").unwrap();
         let mut line = String::new();
@@ -672,6 +673,8 @@ fn an_unreadable_record_holds_instead_of_numbering_afresh() {
         let r = d.send(json!({"id": "z", "action": "close"}));
         assert_eq!(r["success"], true, "{name}: {r}");
         assert!(!path.exists(), "{name}: close left the record");
+        // `close` may end the daemon; the next one must not hold either.
+        d.replace();
         let r = d.send(json!({"id": "y", "action": "url"}));
         assert!(!held(&r, ""), "{name}: still held after close: {r}");
     }
