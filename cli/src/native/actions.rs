@@ -6054,6 +6054,29 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     if let Some(reason) = closed_by_other_session_reason(cmd, &state.session_id) {
         super::daemon::mark_session_closed(&state.session_id, &reason);
     }
+    // The connection died while the session was idle (the relay host
+    // restarted): closing over it reaches no tab, and its closes fail without a
+    // word. Close the session's tabs over a new connection first, the way any
+    // other command reconnects, and never report closed for tabs that were not
+    // (#485). On failure the session is left as it was, so `close` can be
+    // retried.
+    if let Some(mgr) = state.browser.as_mut() {
+        if mgr.is_cdp_connection() && !mgr.is_connection_alive().await {
+            let dead = mgr.ws_url().to_string();
+            let held = mgr.created_target_ids();
+            close_tabs_after_lost_connection(&state.session_id, &dead, &held)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "close incomplete: this session's browser connection was dead, and \
+                         closing its tabs over a new one failed: {error}. Nothing was reported \
+                         closed; retry `close` once the browser is reachable."
+                    )
+                })?;
+            // Its tabs are closed; there is nothing left to do over it.
+            state.browser = None;
+        }
+    }
     // A fresh daemon after idle has no manager, but still owns the external tabs
     // recorded by its predecessor. Explicit close must not silently ignore them.
     if state.browser.is_none() {
@@ -6131,6 +6154,75 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     state.carried_tabs_unknown = None;
     state.carried_tabs_cleanup = None;
     Ok(json!({ "closed": true }))
+}
+
+/// Close the session's tabs after the connection that held them died (#485):
+/// over the bound relay profile's endpoint as it is now (#472), or, for a
+/// session not bound to one, the endpoint the dead connection was on. An
+/// endpoint that refuses connections (a killed relay host's record that still
+/// names its old port, or a browser not back yet) is waited out within the
+/// same budget as a reconnect. No other endpoint is tried.
+async fn close_tabs_after_lost_connection(
+    session: &str,
+    dead: &str,
+    held: &HashSet<String>,
+) -> Result<(), String> {
+    use crate::connect::ProfileEndpointError;
+    let pin = crate::connection::session_relay_profile(session)?;
+    let budget = Duration::from_secs(
+        env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(20)
+            .min(20),
+    );
+    let deadline = std::time::Instant::now() + budget;
+    let same = |a: &str, b: &str| a.trim_end_matches('/') == b.trim_end_matches('/');
+    // The endpoint that refused the last attempt, and why.
+    let mut refused: Option<(String, String)> = None;
+    loop {
+        let endpoint = match pin.as_deref() {
+            Some(id) => match crate::connect::relay_endpoint_for_profile(id) {
+                Ok(ws) => ws,
+                Err(ProfileEndpointError::NotConnected(_))
+                    if std::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "this session is bound to Chrome profile {id}, but that profile's relay \
+                         endpoint can't be determined: {e}"
+                    ))
+                }
+            },
+            None => dead.to_string(),
+        };
+        // A bound profile's record can still name the dead host's port: wait
+        // for it to name another. (The dead connection's own endpoint is
+        // simply tried again until the budget runs out.)
+        if pin.is_some() {
+            if let Some((r, e)) = refused.as_ref().filter(|(r, _)| same(r, &endpoint)) {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!("{r} is not accepting connections: {e}"));
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+        }
+        match super::browser::close_owned_tabs_at(session, &endpoint, dead, held).await {
+            Ok(_) => return Ok(()),
+            Err(e)
+                if e.starts_with("CDP WebSocket connect failed")
+                    && std::time::Instant::now() < deadline =>
+            {
+                refused = Some((endpoint, e));
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

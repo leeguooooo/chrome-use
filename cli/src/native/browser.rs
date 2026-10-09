@@ -72,6 +72,56 @@ pub async fn close_persisted_session_tabs(session: &str) -> Result<(), String> {
     close_persisted_session_tabs_at(session, &endpoint).await
 }
 
+/// Close the tabs this session created, over a new connection to `endpoint`,
+/// after the connection that held them died (#485). The tabs are the ones the
+/// session's record grants on `endpoint` (the same ownership rules as a fresh
+/// daemon's close), plus those the dead manager `held` that the record lacks,
+/// but only when `endpoint` is the browser they were opened in: it is the dead
+/// connection's own endpoint, or the record re-associated to it. Anything that
+/// cannot be confirmed closes nothing. Returns how many were closed; `Err` when
+/// any of them was not, with their ownership kept.
+pub async fn close_owned_tabs_at(
+    session: &str,
+    endpoint: &str,
+    dead_endpoint: &str,
+    held: &HashSet<String>,
+) -> Result<usize, String> {
+    let mut targets = crate::connection::read_created_targets(session, endpoint);
+    if targets.is_empty() && crate::connection::has_created_targets(session) {
+        return Err(format!(
+            "the session's saved tab ownership does not match the browser at {endpoint}"
+        ));
+    }
+    let same_browser = !targets.is_empty()
+        || endpoint.trim_end_matches('/') == dead_endpoint.trim_end_matches('/');
+    let unrecorded: Vec<String> = held.difference(&targets).cloned().collect();
+    if !unrecorded.is_empty() {
+        if !same_browser {
+            return Err(format!(
+                "{} tab(s) this session opened are not in its saved record, and the browser at \
+                 {endpoint} cannot be confirmed to be the one they were opened in",
+                unrecorded.len()
+            ));
+        }
+        targets.extend(unrecorded);
+    }
+    if targets.is_empty() {
+        return Ok(0);
+    }
+    let client = Arc::new(CdpClient::connect(endpoint).await?);
+    let total = targets.len();
+    close_created_targets(&client, &mut targets).await;
+    crate::connection::write_created_targets(session, endpoint, &targets)?;
+    if !targets.is_empty() {
+        return Err(format!(
+            "{} of the {total} tab(s) this session opened could not be closed; their ownership \
+             was kept",
+            targets.len()
+        ));
+    }
+    Ok(total)
+}
+
 async fn close_created_targets(client: &Arc<CdpClient>, targets: &mut HashSet<String>) {
     // Each future owns its id while completed closes mutate the same set.
     #[allow(clippy::redundant_iter_cloned)]
@@ -3349,6 +3399,11 @@ impl BrowserManager {
     }
 
     /// Returns true if this manager was connected via CDP (as opposed to local launch).
+    /// The tabs this session created through this manager (deletion rights).
+    pub fn created_target_ids(&self) -> HashSet<String> {
+        self.created_targets.clone()
+    }
+
     pub fn is_cdp_connection(&self) -> bool {
         self.browser_process.is_none()
     }

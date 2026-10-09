@@ -278,6 +278,7 @@ impl Daemon {
             .env("CHROME_USE_RELAY_DIR", relay.path())
             .env("AGENT_BROWSER_CDP", cdp)
             .env("AGENT_BROWSER_NO_AUTO_RECONNECT", "1")
+            .env("AGENT_BROWSER_RELAY_REVIVE_SECS", "3")
             .env_remove("AGENT_BROWSER_AUTO_CONNECT")
             .env_remove("AGENT_BROWSER_PROVIDER")
             .env("NO_COLOR", "1")
@@ -856,4 +857,122 @@ fn a_held_session_never_overwrites_the_unreadable_record() {
         "a held command reached a tab"
     );
     assert_eq!(std::fs::read(&path).unwrap(), corrupt, "record changed");
+}
+
+/// The targets the browser still has.
+fn open_targets(fake: &Fake) -> Vec<String> {
+    fake.0
+        .lock()
+        .unwrap()
+        .targets
+        .iter()
+        .map(|(t, _)| t.clone())
+        .collect()
+}
+
+/// The target ids `tab list` marks as created by this session.
+fn created_by_session(d: &Daemon) -> Vec<String> {
+    let r = d.send(json!({"id": "o", "action": "tab_list"}));
+    assert_eq!(r["success"], true, "{r}");
+    let created: Vec<String> = r["data"]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["ownership"] == "created")
+        .map(|t| t["targetId"].as_str().unwrap().to_string())
+        .collect();
+    assert!(created.len() >= 2, "{r}");
+    created
+}
+
+fn created_record(d: &Daemon) -> PathBuf {
+    d.sock
+        .path()
+        .join(format!("{}.created-targets.json", d.session))
+}
+
+/// Bind the session to relay profile P1 served at the fake's address.
+fn bind_to_profile(d: &Daemon, cdp: &str) {
+    std::fs::write(
+        d.relay.path().join("relay-ext-profile-P1"),
+        r#"{"id": "P1", "email": "p1@example.test"}"#,
+    )
+    .unwrap();
+    std::fs::write(d.relay.path().join("relay-cdp-url-P1"), cdp).unwrap();
+    std::fs::write(
+        d.sock.path().join(format!("{}.relay-profile", d.session)),
+        "P1",
+    )
+    .unwrap();
+}
+
+/// #485: the connection dies while the session is idle and the next command
+/// is `close`. It must close the session's tabs over a new connection, not
+/// report `closed` after sending its closes into the dead one. Both for a
+/// session bound to a relay profile and for one on a plain endpoint.
+#[test]
+fn close_after_an_idle_restart_closes_the_tabs() {
+    for bound in [false, true] {
+        let (fake, cdp) = Fake::start();
+        let d = Daemon::start(&format!("rc-close-{bound}"), &cdp);
+        if bound {
+            bind_to_profile(&d, &cdp);
+        }
+        three_tabs(&d);
+        let created = created_by_session(&d);
+
+        fake.go_down();
+        fake.come_back(true);
+        let r = d.send(json!({"id": "z", "action": "close"}));
+        assert_eq!(r["success"], true, "bound={bound}: {r}");
+        assert_eq!(r["data"]["closed"], true, "bound={bound}: {r}");
+        let open = open_targets(&fake);
+        for t in &created {
+            assert!(
+                !open.contains(t),
+                "bound={bound}: {t} left open after close: {open:?}"
+            );
+        }
+        assert!(
+            !created_record(&d).exists(),
+            "bound={bound}: close left the ownership record"
+        );
+    }
+}
+
+/// The browser is still unreachable when `close` runs: it says the close is
+/// incomplete, closes nothing, keeps the ownership record, and a `close` once
+/// the browser is back closes the tabs.
+#[test]
+fn close_while_the_browser_is_unreachable_never_reports_closed() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-close-down", &cdp);
+    three_tabs(&d);
+    let created = created_by_session(&d);
+
+    fake.go_down();
+    let r = d.send(json!({"id": "z1", "action": "close"}));
+    assert_eq!(r["success"], false, "{r}");
+    assert!(
+        r["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("close incomplete"),
+        "{r}"
+    );
+    assert!(r["data"]["closed"] != true, "{r}");
+    let open = open_targets(&fake);
+    for t in &created {
+        assert!(open.contains(t), "{t} gone while the browser was down");
+    }
+    assert!(created_record(&d).exists(), "ownership record dropped");
+
+    fake.come_back(false);
+    let r = d.send(json!({"id": "z2", "action": "close"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(r["data"]["closed"], true, "{r}");
+    let open = open_targets(&fake);
+    for t in &created {
+        assert!(!open.contains(t), "{t} left open: {open:?}");
+    }
 }
