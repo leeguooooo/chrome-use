@@ -6275,10 +6275,21 @@ impl BrowserManager {
     }
 
     /// The active tab's id and url.
+    /// `None` when the pin names a tab that is gone: the stale index would
+    /// name a tab the session does not drive.
     pub fn active_tab_brief(&self) -> Option<(u32, String)> {
+        if self.dangling_active_pin().is_some() {
+            return None;
+        }
         self.pages
-            .get(self.active_page_index)
+            .get(self.resolved_active_index())
             .map(|p| (p.tab_id, p.url.clone()))
+    }
+
+    /// The pinned active target, when no session tab carries it any more.
+    pub fn dangling_active_pin(&self) -> Option<&str> {
+        let pin = self.active_target_id.as_deref()?;
+        (!self.pages.iter().any(|p| p.target_id == pin)).then_some(pin)
     }
 
     pub fn assign_tab_id(&mut self) -> u32 {

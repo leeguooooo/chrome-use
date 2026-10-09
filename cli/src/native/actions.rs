@@ -13522,7 +13522,9 @@ fn replaced_browser_note(why: &str, on_relay: bool, ran_in: Option<&str>) -> Str
 /// when they are not sends the agent to redo work that is still on screen, so
 /// the "gone" wording is kept for the case where none of them was found.
 /// `landed` is the tab the command ran in when it is not one the session had;
-/// `was_driving` and `now_driving` are the active tab before and after.
+/// `was_driving` and `now_driving` are the active tab before and after;
+/// `now_driving` is `Err(name)` when the session's pin names a tab that is
+/// not there any more, so no other tab is named as the one it drives.
 /// `driving_lost` is [`driving_tab_lost`]: the command is refused rather than
 /// run in another tab, and the note must not say it ran.
 fn reconnected_browser_note(
@@ -13531,7 +13533,7 @@ fn reconnected_browser_note(
     rebind: &super::browser::TabRebind,
     landed: Option<(u32, &str)>,
     was_driving: Option<u32>,
-    now_driving: Option<u32>,
+    now_driving: Result<Option<u32>, String>,
     driving_lost: bool,
 ) -> String {
     use super::browser::format_tab_id;
@@ -13604,7 +13606,14 @@ fn reconnected_browser_note(
             format_tab_id(*tab_id)
         ));
     }
-    if let (Some(was), Some(now)) = (was_driving, now_driving) {
+    if let Err(pin) = &now_driving {
+        note.push_str(&format!(
+            " The tab this session's commands are pinned to ({pin}) is gone, so commands that \
+             act on the current tab are refused: pick a tab with `chrome-use tab <id>` or open \
+             one with `chrome-use tab new <url>`."
+        ));
+    }
+    if let (Some(was), Ok(Some(now))) = (was_driving, now_driving) {
         if was != now && driving_lost {
             note.push_str(&format!(
                 " The tab this session was driving ({}) is not among them, so commands that act \
@@ -13666,7 +13675,17 @@ fn restore_carried_tabs(
     let landed = mgr
         .active_tab_brief()
         .filter(|(tab_id, _)| rebind.fresh.contains(tab_id));
-    let driving = mgr.active_tab_id();
+    // A pin to a tab that is gone is named as such, never as whichever page
+    // the stale index points at.
+    let driving = match mgr.dangling_active_pin() {
+        Some(pin) => Err(rebind
+            .lost
+            .iter()
+            .find(|t| t.target_id == pin)
+            .map(|t| super::browser::format_tab_id(t.tab_id))
+            .unwrap_or_else(|| format!("target {pin}"))),
+        None => Ok(mgr.active_tab_brief().map(|(tab_id, _)| tab_id)),
+    };
     let now_target = mgr.active_target_id().ok().map(str::to_string);
     let navigated_targets: Vec<String> = rebind
         .navigated
@@ -21733,7 +21752,7 @@ mod tests {
             &rebind,
             None,
             Some(2),
-            Some(2),
+            Ok(Some(2)),
             false,
         );
         assert!(!note.contains("gone"), "{note}");
@@ -21756,7 +21775,7 @@ mod tests {
             &rebind,
             None,
             Some(2),
-            Some(2),
+            Ok(Some(2)),
             false,
         );
         assert!(
@@ -21781,7 +21800,7 @@ mod tests {
             &rebind,
             None,
             Some(2),
-            Some(1),
+            Ok(Some(1)),
             true,
         );
         assert!(!note.contains("previous tabs are gone"), "{note}");
@@ -21790,6 +21809,26 @@ mod tests {
         assert!(!note.contains("ran in t1"), "{note}");
         assert!(note.contains("Its tabs t1 were"), "{note}");
         assert!(note.contains("Tabs t2 could not be found"), "{note}");
+    }
+
+    /// The pin names a tab that is gone: the warning names that lost pin and
+    /// never another tab as the one the command ran in.
+    #[test]
+    fn a_reconnect_with_a_dangling_pin_names_the_lost_pin() {
+        let rebind = rebind(vec![1], vec![carried(2, "T-B")], vec![]);
+        let note = reconnected_browser_note(
+            "its browser connection was dead",
+            true,
+            &rebind,
+            None,
+            Some(2),
+            Err("t2".to_string()),
+            true,
+        );
+        assert!(note.contains("pinned to (t2) is gone"), "{note}");
+        assert!(note.contains("refused"), "{note}");
+        assert!(!note.contains("ran in"), "{note}");
+        assert!(!note.contains("run in t1"), "{note}");
     }
 
     /// Losing a tab the session was not driving changes nothing about where
@@ -21815,7 +21854,7 @@ mod tests {
             &rebind,
             Some((3, "about:blank")),
             Some(1),
-            Some(3),
+            Ok(Some(3)),
             false,
         );
         assert!(blank.contains("previous tabs are gone"), "{blank}");
@@ -21830,7 +21869,7 @@ mod tests {
             &rebind,
             Some((3, "https://example.com/")),
             Some(1),
-            Some(3),
+            Ok(Some(3)),
             true,
         );
         assert!(other.contains("previous tabs are gone"), "{other}");
