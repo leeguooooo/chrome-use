@@ -6156,14 +6156,21 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     Ok(json!({ "closed": true }))
 }
 
-/// Close the session's tabs after the connection that held them died (#485):
-/// over the bound relay profile's endpoint as it is now (#472), or, for a
-/// session not bound to one, the endpoint the dead connection was on. An
-/// endpoint that refuses connections (a killed relay host's record that still
-/// names its old port, or a browser not back yet) is waited out: up to 40 s,
-/// since the extension respawns a killed host from its keepalive alarm (19-36 s
-/// on the build host), and under the client's 45 s read budget. No other
-/// endpoint is tried.
+/// Close the session's tabs after the connection that held them died (#485).
+///
+/// Where: the relay profile the session is bound to (#472), or else the one
+/// the relay records still name as the owner of the dead endpoint, at that
+/// profile's endpoint as it is now. A session that was never pinned (one
+/// auto-connected to the only connected profile) is on a relay profile all the
+/// same, and its host comes back on a new port. With no profile known, the
+/// dead endpoint itself, and then a connected profile's endpoint that the
+/// session's ownership record matches (#461: by profile identity, so another
+/// profile's endpoint grants nothing and is never connected to).
+///
+/// An endpoint that refuses connections (a killed relay host's record that
+/// still names its old port, or a browser not back yet) is waited out: up to
+/// 40 s, since the extension respawns a killed host from its keepalive alarm
+/// (19-24 s on the build host), and under the client's 45 s read budget.
 async fn close_tabs_after_lost_connection(
     session: &str,
     dead: &str,
@@ -6171,6 +6178,7 @@ async fn close_tabs_after_lost_connection(
 ) -> Result<(), String> {
     use crate::connect::ProfileEndpointError;
     let pin = crate::connection::session_relay_profile(session)?;
+    let profile = pin.or_else(|| crate::connect::relay_profile_id_for_endpoint(dead));
     let budget = Duration::from_secs(
         env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
             .ok()
@@ -6183,7 +6191,7 @@ async fn close_tabs_after_lost_connection(
     // The endpoint that refused the last attempt, and why.
     let mut refused: Option<(String, String)> = None;
     loop {
-        let endpoint = match pin.as_deref() {
+        let endpoint = match profile.as_deref() {
             Some(id) => match crate::connect::relay_endpoint_for_profile(id) {
                 Ok(ws) => ws,
                 Err(ProfileEndpointError::NotConnected(_))
@@ -6194,17 +6202,20 @@ async fn close_tabs_after_lost_connection(
                 }
                 Err(e) => {
                     return Err(format!(
-                        "this session is bound to Chrome profile {id}, but that profile's relay \
+                        "this session's tabs are in Chrome profile {id}, but that profile's relay \
                          endpoint can't be determined: {e}"
                     ))
                 }
             },
+            None if refused.is_some() => {
+                endpoint_matching_created_record(session, dead).unwrap_or_else(|| dead.to_string())
+            }
             None => dead.to_string(),
         };
-        // A bound profile's record can still name the dead host's port: wait
-        // for it to name another. (The dead connection's own endpoint is
-        // simply tried again until the budget runs out.)
-        if pin.is_some() {
+        // A profile's record can still name the dead host's port: wait for it
+        // to name another. (With no profile, the dead connection's own
+        // endpoint is simply tried again until the budget runs out.)
+        if profile.is_some() {
             if let Some((r, e)) = refused.as_ref().filter(|(r, _)| same(r, &endpoint)) {
                 if std::time::Instant::now() >= deadline {
                     return Err(format!("{r} is not accepting connections: {e}"));
@@ -6225,6 +6236,18 @@ async fn close_tabs_after_lost_connection(
             Err(e) => return Err(e),
         }
     }
+}
+
+/// A connected relay profile's endpoint, other than `dead`, on which the
+/// session's ownership record grants tabs: the profile it was recorded under
+/// (#461). Reading the record is the ownership check, so no endpoint of
+/// another profile is ever returned or connected to.
+fn endpoint_matching_created_record(session: &str, dead: &str) -> Option<String> {
+    crate::connect::list_relay_profiles()
+        .into_iter()
+        .map(|(_, _, ws)| ws)
+        .filter(|ws| ws.trim_end_matches('/') != dead.trim_end_matches('/'))
+        .find(|ws| !crate::connection::read_created_targets(session, ws).is_empty())
 }
 
 // ---------------------------------------------------------------------------

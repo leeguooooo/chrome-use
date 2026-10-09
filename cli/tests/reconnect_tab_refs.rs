@@ -29,6 +29,8 @@ struct Browser {
     /// Every page-level `Runtime.evaluate` expression, with the session it
     /// was sent to.
     evaluated: Vec<(String, String)>,
+    /// The listener serving now; an older one stops and its port refuses.
+    listener: u64,
 }
 
 #[derive(Clone)]
@@ -40,7 +42,14 @@ impl Fake {
             up: true,
             ..Default::default()
         })));
-        let shared = fake.clone();
+        let url = fake.listen();
+        (fake, url)
+    }
+
+    /// Serve on a new port until another listener replaces this one.
+    fn listen(&self) -> String {
+        let shared = self.clone();
+        let mine = shared.0.lock().unwrap().listener;
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -53,8 +62,10 @@ impl Fake {
                 let port = listener.local_addr().unwrap().port();
                 tx.send(format!("ws://127.0.0.1:{port}/devtools/browser/fake"))
                     .unwrap();
-                loop {
-                    let Ok((stream, _)) = listener.accept().await else {
+                while shared.0.lock().unwrap().listener == mine {
+                    let accepted =
+                        tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+                    let Ok(Ok((stream, _))) = accepted else {
                         continue;
                     };
                     let shared = shared.clone();
@@ -68,10 +79,23 @@ impl Fake {
                     };
                     tokio::spawn(async move { serve(shared, stream, generation).await });
                 }
+                // Dropping the listener closes the port: it refuses from now on.
             });
         });
-        let url = rx.recv().unwrap();
-        (fake, url)
+        rx.recv().unwrap()
+    }
+
+    /// The relay host restarts: every connection drops, the old port refuses,
+    /// and the same browser is served on a new port.
+    fn restart_on_new_port(&self) -> String {
+        {
+            let mut b = self.0.lock().unwrap();
+            b.listener += 1;
+            b.generation += 1;
+            b.up = true;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        self.listen()
     }
 
     /// The connection dies and new ones are refused.
@@ -975,4 +999,93 @@ fn close_while_the_browser_is_unreachable_never_reports_closed() {
     for t in &created {
         assert!(!open.contains(t), "{t} left open: {open:?}");
     }
+}
+
+/// Relay profile P1's records name `ws` (what its native host writes).
+fn publish_profile_endpoint(d: &Daemon, ws: &str) {
+    std::fs::write(
+        d.relay.path().join("relay-ext-profile-P1"),
+        r#"{"id": "P1", "email": "p1@example.test"}"#,
+    )
+    .unwrap();
+    std::fs::write(d.relay.path().join("relay-cdp-url-P1"), ws).unwrap();
+}
+
+/// #485 as found: a session on a relay profile it was never pinned to (it
+/// auto-connected to the only connected profile), the relay host restarts
+/// onto a new port, and `close` comes next. Its tabs are closed through the
+/// profile's new endpoint: while the killed host's record still names the old
+/// port (the new one is written a moment later), and when the new record is
+/// already there.
+#[test]
+fn close_after_a_relay_restart_closes_the_tabs_on_the_new_port() {
+    for record_late in [true, false] {
+        let (fake, cdp) = Fake::start();
+        let d = Daemon::start(&format!("rc-close-port-{record_late}"), &cdp);
+        publish_profile_endpoint(&d, &cdp);
+        three_tabs(&d);
+        let created = created_by_session(&d);
+
+        let new_ws = fake.restart_on_new_port();
+        if record_late {
+            let relay = d.relay.path().to_path_buf();
+            let ws = new_ws.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1500));
+                std::fs::write(relay.join("relay-cdp-url-P1"), ws).unwrap();
+            });
+        } else {
+            publish_profile_endpoint(&d, &new_ws);
+        }
+        let r = d.send(json!({"id": "z", "action": "close"}));
+        assert_eq!(r["success"], true, "late={record_late}: {r}");
+        assert_eq!(r["data"]["closed"], true, "late={record_late}: {r}");
+        let open = open_targets(&fake);
+        for t in &created {
+            assert!(
+                !open.contains(t),
+                "late={record_late}: {t} left open after close: {open:?}"
+            );
+        }
+        assert!(
+            !created_record(&d).exists(),
+            "late={record_late}: close left the ownership record"
+        );
+    }
+}
+
+/// Another profile's relay is the only one live while this session's profile
+/// stays down: `close` must not touch it, and reports the close incomplete.
+#[test]
+fn close_never_closes_through_another_profile() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-close-other", &cdp);
+    publish_profile_endpoint(&d, &cdp);
+    three_tabs(&d);
+    let created = created_by_session(&d);
+
+    // The same browser comes back, but published as profile P2's relay.
+    let new_ws = fake.restart_on_new_port();
+    std::fs::remove_file(d.relay.path().join("relay-cdp-url-P1")).unwrap();
+    std::fs::remove_file(d.relay.path().join("relay-ext-profile-P1")).unwrap();
+    std::fs::write(
+        d.relay.path().join("relay-ext-profile-P2"),
+        r#"{"id": "P2", "email": "p2@example.test"}"#,
+    )
+    .unwrap();
+    std::fs::write(d.relay.path().join("relay-cdp-url-P2"), &new_ws).unwrap();
+    let r = d.send(json!({"id": "z", "action": "close"}));
+    assert_eq!(r["success"], false, "{r}");
+    assert!(
+        r["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("close incomplete"),
+        "{r}"
+    );
+    let open = open_targets(&fake);
+    for t in &created {
+        assert!(open.contains(t), "{t} closed through another profile");
+    }
+    assert!(created_record(&d).exists(), "ownership record dropped");
 }
