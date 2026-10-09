@@ -3149,12 +3149,25 @@ async fn bound_relay_endpoint(profile_id: &str) -> Result<String, String> {
 
 /// How long a bound profile's relay is waited for while its host restarts.
 fn bound_relay_budget() -> Duration {
+    relay_wait_budget(20)
+}
+
+/// How long a reconnect waits for a restarted relay host to publish its new
+/// endpoint (#484). The extension respawns a killed host on its keepalive, which
+/// took 19-24 s on the build host, so the profile-lookup budget above is too
+/// short. Kept under the client's 45 s read budget for one command.
+fn relay_restart_budget() -> Duration {
+    relay_wait_budget(35)
+}
+
+/// `AGENT_BROWSER_RELAY_REVIVE_SECS`, capped at (and defaulting to) `max`.
+fn relay_wait_budget(max: u64) -> Duration {
     Duration::from_secs(
         env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(20)
-            .min(20),
+            .unwrap_or(max)
+            .min(max),
     )
 }
 
@@ -3187,11 +3200,12 @@ async fn bound_relay_endpoint_by(
 /// after a restart the profile's record can still name the dead host's
 /// address until the new host writes its own. A connect that address refuses
 /// is not the answer: the record is read again until it names a different
-/// address, within the same budget a profile that is not connected yet gets.
+/// address, for as long as a restarted host takes to come back
+/// ([`relay_restart_budget`]).
 /// Only the bound profile's own endpoint is ever tried, and anything
 /// ambiguous is refused as in [`bound_relay_endpoint`].
 async fn connect_bound_relay(profile_id: &str) -> Result<BrowserManager, String> {
-    let deadline = std::time::Instant::now() + bound_relay_budget();
+    let deadline = std::time::Instant::now() + relay_restart_budget();
     // The address that refused the last connect, and why.
     let mut refused: Option<(String, String)> = None;
     loop {
