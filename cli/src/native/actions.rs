@@ -4113,10 +4113,12 @@ async fn reconnect_bound_profile(
     state.start_fetch_handler();
     state.start_dialog_handler();
     state.update_stream_client().await;
+    // The connection is installed, so its setup is applied before anything
+    // that can fail (as in `auto_launch`).
+    apply_launch_init_scripts(state, SessionSetup::default()).await;
     // No rollback on failure: rolling back closes the browser's created tabs,
     // and these are the session's own tabs, not a fresh launch's.
     load_storage_state(state, storage_state).await?;
-    apply_launch_init_scripts(state, SessionSetup::default()).await;
     Ok(json!({ "launched": true, "reconnected": true }))
 }
 
