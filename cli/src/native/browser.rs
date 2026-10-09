@@ -3497,6 +3497,28 @@ impl BrowserManager {
 
     /// Whether Chrome refuses debugger commands on the pinned tab right now
     /// (#373). One no-op evaluate; `false` when it cannot tell.
+    /// The pinned tab's URL as Chrome's tab record has it (`ABExt.inspectTab`,
+    /// a browser-level call), for when the page itself cannot be read: a
+    /// password manager's frame refuses every page command while it is open.
+    /// `None` off the relay or when the extension cannot say.
+    pub async fn pinned_tab_url_from_browser(&self) -> Option<String> {
+        if !self.on_relay() {
+            return None;
+        }
+        let pinned = self.active_target_id.clone()?;
+        let page = self.pages.iter().find(|p| p.target_id == pinned)?;
+        let live: Value = self
+            .client
+            .send_command_typed(
+                "ABExt.inspectTab",
+                &json!({ "sessionId": page.session_id, "targetId": page.target_id }),
+                None,
+            )
+            .await
+            .ok()?;
+        live.get("url").and_then(Value::as_str).map(str::to_string)
+    }
+
     pub async fn pinned_tab_blocked(&self) -> bool {
         let Ok(session_id) = self.active_session_id().map(str::to_string) else {
             return false;

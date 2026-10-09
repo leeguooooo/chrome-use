@@ -18885,7 +18885,44 @@ async fn auth_frame_world(
 /// `Runtime.evaluate` in the scope's document. A child frame that loaded its
 /// next page (a separate password page) gets a new world once; the scripts
 /// themselves check the origin, so that never reaches another site.
+/// How often an auth read is tried again after the tab detached under it.
+const AUTH_DETACHED_READ_RETRIES: u32 = 2;
+
+/// `scope_eval_once`, tried again when the tab detached under the command
+/// (`Detached while handling command`, which the relay reports as
+/// `action_outcome_unknown` because it cannot know what an evaluate did).
+/// Every expression the login sends through here is a read, or a mark/focus
+/// that is the same when done twice, so repeating it is safe; the one that is
+/// not (submitting a form) uses `scope_eval_once`. Observed on ZenTao over
+/// the relay (#482): the check just before Enter failed this way, and the
+/// tab answered normally a moment later.
 async fn scope_eval(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    expression: &str,
+    by_value: bool,
+) -> Result<super::cdp::types::EvaluateResult, String> {
+    let mut tries = 0;
+    loop {
+        match scope_eval_once(client, scope, expression, by_value).await {
+            Err(e) if tries < AUTH_DETACHED_READ_RETRIES && tab_detached_under_command(&e) => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// The relay lost the tab's debugger while a command ran: the page is still
+/// there (unlike `page_went_away`), the command's effect is unknown.
+fn tab_detached_under_command(e: &str) -> bool {
+    let lower = e.to_ascii_lowercase();
+    lower.contains("detached while handling command")
+        || (lower.contains("action_outcome_unknown") && !page_went_away(e))
+}
+
+async fn scope_eval_once(
     client: &super::cdp::client::CdpClient,
     scope: &AuthScope,
     expression: &str,
@@ -19175,11 +19212,25 @@ fn auth_submit_finder(field_tag: Option<&str>, submit_tag: &str) -> String {
 /// takes focus out of it). A key is pressed once and never repeated: a failed
 /// key-up after the key-down is not an error (#449).
 ///
+/// The Enter is checked, not assumed (#482): a capture listener on the page
+/// records whether the key arrived. Over the extension relay, on a background
+/// tab after the fields were filled, `Input.dispatchKeyEvent` returned success
+/// while no listener on the page saw any key at all (ZenTao, Bitwarden
+/// installed; reproduced repeatedly), and the login used to report
+/// `submitted: true` for a form nobody had submitted. A key that did not
+/// arrive is safe to replace, so the form's sign-in button gets a click
+/// instead (the click reached the page in the same state). A key whose
+/// command failed because the tab detached under it is judged the same way,
+/// by what the page shows afterwards, not reported as an unknown outcome.
+///
 /// `marked`: the caller already marked the control (`data-cu-auth="submit-<marker>"`,
 /// a submit selector the user named).
+#[allow(clippy::too_many_arguments)]
 async fn auth_submit(
     client: &super::cdp::client::CdpClient,
     scope: &AuthScope,
+    ref_map: &RefMap,
+    iframe_sessions: &HashMap<String, String>,
     field_tag: Option<&str>,
     marker: &str,
     marked: bool,
@@ -19271,21 +19322,244 @@ async fn auth_submit(
             });
         }
     }
-    if let Some(tag) = field_tag {
-        let tag_json = serde_json::to_string(tag).unwrap_or_default();
-        scope_eval(
+    let receipt = format!("cu-enter-{marker}");
+    scope_eval(client, scope, &arm_enter_receipt(&receipt, field_tag), true).await?;
+    let pressed = interaction::press_key_once(client, &scope.page_session, "Enter").await;
+    if let Err(e) = &pressed {
+        // Refused before it ran (a password manager's frame): the caller
+        // closes the menu and submits again. Anything but a detach is an error.
+        if !submit_outcome_unknown(e) {
+            return Err(e.clone());
+        }
+    }
+    match enter_receipt(client, scope, &receipt).await {
+        // The key reached the page, or the page went on to another document
+        // (the submit navigated): the sign-in check after this judges it.
+        KeyReceipt::Got | KeyReceipt::Moved => Ok("enter"),
+        // Nothing to read: say so; the sign-in check reports what it finds.
+        KeyReceipt::Unknown => Ok("enter (unconfirmed: the page could not be read after the key)"),
+        KeyReceipt::Lost => {
+            auth_submit_after_lost_enter(client, scope, ref_map, iframe_sessions, field_tag, marker)
+                .await
+        }
+    }
+}
+
+/// What the page saw of the Enter `auth_submit` pressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyReceipt {
+    /// A keydown for Enter reached the page.
+    Got,
+    /// The document that was armed is gone (the page navigated).
+    Moved,
+    /// The armed document is still there and saw no Enter.
+    Lost,
+    /// The page could not be read.
+    Unknown,
+}
+
+/// Arm the page to record an Enter keydown (window capture phase, so the
+/// page's own handlers cannot hide it from us unless they stop it at the
+/// window first), then focus the field the key is for.
+fn arm_enter_receipt(receipt: &str, field_tag: Option<&str>) -> String {
+    format!(
+        r#"(() => {{
+            const k = Symbol.for({r});
+            const l = Symbol.for({r} + '-listener');
+            window[k] = 'armed';
+            if (!window[l]) {{
+                window[l] = true;
+                window.addEventListener('keydown', (e) => {{ if (e.key === 'Enter') window[k] = 'got'; }}, true);
+            }}
+            const tag = {field};
+            const el = tag === null ? null : document.querySelector('[data-cu-auth=' + JSON.stringify(tag) + ']');
+            if (el && document.activeElement !== el) el.focus();
+        }})()"#,
+        r = serde_json::to_string(receipt).unwrap_or_default(),
+        field = serde_json::to_string(&field_tag).unwrap_or_default(),
+    )
+}
+
+/// Read what `arm_enter_receipt` recorded: `'got'`, `'armed'` (nothing yet),
+/// or `undefined` once the armed document is gone.
+fn read_enter_receipt(receipt: &str) -> String {
+    format!(
+        "(() => {{ const v = window[Symbol.for({r})]; return v === undefined ? 'moved' : v; }})()",
+        r = serde_json::to_string(receipt).unwrap_or_default(),
+    )
+}
+
+fn parse_key_receipt(value: Option<&str>) -> Option<KeyReceipt> {
+    match value {
+        Some("got") => Some(KeyReceipt::Got),
+        Some("moved") => Some(KeyReceipt::Moved),
+        Some("armed") => Some(KeyReceipt::Lost),
+        _ => None,
+    }
+}
+
+/// How long `auth_submit` watches for its Enter to reach the page. A
+/// delivered key is recorded before the CDP command returns; the wait is for
+/// a tab that detached under the key and is coming back.
+const AUTH_ENTER_RECEIPT_MS: u64 = 2_000;
+
+async fn enter_receipt(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    receipt: &str,
+) -> KeyReceipt {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(AUTH_ENTER_RECEIPT_MS);
+    let read = read_enter_receipt(receipt);
+    let mut last = KeyReceipt::Unknown;
+    loop {
+        match scope_eval(client, scope, &read, true).await {
+            Ok(r) => match parse_key_receipt(r.result.value.as_ref().and_then(Value::as_str)) {
+                Some(KeyReceipt::Lost) => last = KeyReceipt::Lost,
+                Some(seen) => return seen,
+                None => {}
+            },
+            // The context the key was armed in is gone: the page moved on.
+            Err(e) if page_went_away(&e) => return KeyReceipt::Moved,
+            // A password manager's frame, or the tab coming back: read again.
+            Err(_) => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return last;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+/// Whether a submit key's error means the tab or page went away under the
+/// command (#482: `Detached while handling command`, which the relay reports
+/// as `action_outcome_unknown` for an input command), so the page has to be
+/// read to know whether the key took effect.
+fn submit_outcome_unknown(e: &str) -> bool {
+    let lower = e.to_ascii_lowercase();
+    lower.contains("action_outcome_unknown")
+        || lower.contains("detached while handling command")
+        || page_went_away(e)
+}
+
+/// The Enter never reached the page (checked, see `auth_submit`): nothing was
+/// submitted, so submit once by other means. The form's sign-in button gets
+/// a trusted click (focus is taken out of the field first, so a password
+/// manager's menu does not open over it); a click the page did not see becomes
+/// a DOM click; a form without a button is submitted with `requestSubmit()`.
+async fn auth_submit_after_lost_enter(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    ref_map: &RefMap,
+    iframe_sessions: &HashMap<String, String>,
+    field_tag: Option<&str>,
+    marker: &str,
+) -> Result<&'static str, String> {
+    let submit_tag = format!("submit-{marker}");
+    let tag_json = serde_json::to_string(&submit_tag).unwrap_or_default();
+    let found = scope_eval(
+        client,
+        scope,
+        &auth_submit_finder(field_tag, &submit_tag),
+        true,
+    )
+    .await?
+    .result
+    .value
+        == Some(Value::Bool(true));
+    if !found {
+        let field = serde_json::to_string(&field_tag).unwrap_or_default();
+        let submitted = scope_eval_once(
             client,
             scope,
             &format!(
-                "(() => {{ const el = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
-                 if (el && document.activeElement !== el) el.focus(); }})()"
+                "(() => {{ const tag = {field}; \
+                 const el = tag === null ? null : document.querySelector('[data-cu-auth=' + JSON.stringify(tag) + ']'); \
+                 const f = el && el.form; if (!f) return false; \
+                 if (typeof f.requestSubmit === 'function') f.requestSubmit(); else f.submit(); return true; }})()"
             ),
             true,
         )
-        .await?;
+        .await;
+        return match submitted {
+            Ok(r) if r.result.value == Some(Value::Bool(true)) => {
+                Ok("form.requestSubmit() (the Enter key did not reach the page)")
+            }
+            Err(e) if page_went_away(&e) => Ok("form.requestSubmit() (the Enter key did not reach the page)"),
+            Err(e) => Err(e),
+            Ok(_) => Err(
+                "auth login --bwu: the Enter key never reached the page (chrome-use watched for it), \
+                 and the form has no sign-in button or form to submit instead. Nothing was submitted."
+                    .to_string(),
+            ),
+        };
     }
-    interaction::press_key_once(client, &scope.page_session, "Enter").await?;
-    Ok("enter")
+    scope_eval(
+        client,
+        scope,
+        &format!(
+            "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+             if (!b) return false; const k = Symbol.for('cu-clicked'); b[k] = ''; \
+             b.addEventListener('click', (e) => {{ b[k] = e.isTrusted ? 'trusted' : 'synthetic'; }}, {{ once: true, capture: true }}); \
+             const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur(); return true; }})()"
+        ),
+        true,
+    )
+    .await?;
+    let selector = format!("[data-cu-auth=\"{submit_tag}\"]");
+    match interaction::click(
+        client,
+        &scope.session_id,
+        ref_map,
+        &selector,
+        "left",
+        1,
+        iframe_sessions,
+    )
+    .await
+    {
+        Ok(()) => {}
+        // Refused before it ran: the caller closes the menu and submits again
+        // (the Enter it presses then is checked the same way).
+        Err(e) if super::browser::is_debugger_access_denied(&e) => return Err(e),
+        // The tab detached under the click: whether it landed is read below.
+        Err(e) if submit_outcome_unknown(&e) => {}
+        Err(e) => return Err(e),
+    }
+    let seen = format!(
+        "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+         return !b ? 'gone' : (b[Symbol.for('cu-clicked')] || ''); }})()"
+    );
+    for _ in 0..10 {
+        match scope_eval(client, scope, &seen, true).await {
+            Ok(r) => match r.result.value.as_ref().and_then(Value::as_str) {
+                Some("") => {}
+                _ => return Ok("button (the Enter key did not reach the page)"),
+            },
+            Err(e) if page_went_away(&e) => {
+                return Ok("button (the Enter key did not reach the page)")
+            }
+            Err(_) => {}
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    let clicked = scope_eval(
+        client,
+        scope,
+        &format!(
+            "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+             if (!b) return 'gone'; if (b[Symbol.for('cu-clicked')]) return 'seen'; b.click(); return 'dom'; }})()"
+        ),
+        true,
+    )
+    .await;
+    match clicked {
+        Ok(r) if r.result.value.as_ref().and_then(Value::as_str) == Some("dom") => {
+            Ok("button (DOM click; the Enter key and the click did not reach the page)")
+        }
+        Ok(_) => Ok("button (the Enter key did not reach the page)"),
+        Err(e) if page_went_away(&e) => Ok("button (the Enter key did not reach the page)"),
+        Err(e) => Err(e),
+    }
 }
 
 /// How many times one login closes a password manager's inline menu before
@@ -19672,7 +19946,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 if let Some(o) = pin {
                     unblocked!(verify_auth_fields(&mgr.client, &scope, o, &[(user_tag.clone(), 0)]).await)?;
                 }
-                submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, Some(&user_tag), &marker, false).await)?);
+                submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, Some(&user_tag), &marker, false).await)?);
                 unblocked!(
                     mark_usable_auth_element(&mgr.client, &scope, &[&pass_wanted], &pass_tag, auth_timeout_ms, true, pin).await
                 )
@@ -19764,7 +20038,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
 
         if scope.in_frame() {
             submit_via = Some(
-                unblocked!(auth_submit(&mgr.client, &scope, Some(&pass_tag), &marker, sub_sel.is_some()).await)?,
+                unblocked!(auth_submit(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, Some(&pass_tag), &marker, sub_sel.is_some()).await)?,
             );
         } else if let Some(sub_sel) = sub_sel {
             // A click is never sent twice: a menu that opened on the password
@@ -20077,6 +20351,11 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     let mut needs: Option<&'static str> = None;
     // Nothing to sign in to: not a sign-in URL and no login field anywhere.
     let mut already_signed_in = false;
+    // Every field this login filled (its `data-cu-auth` tag): the sign-in is
+    // confirmed only once none of them is on the page any more.
+    let mut filled_tags: Vec<String> = Vec::new();
+    // What showed the login went through (#482), set only by `confirm_sign_in`.
+    let mut evidence: Option<String> = None;
 
     let outcome: Result<(), String> = async {
         // A step refused because a password manager's inline menu is open
@@ -20145,10 +20424,15 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             // itself had failed (#449 follow-up, App Store Connect).
             if auto && !auth_url_is_sign_in(&current) {
                 let quick = timeout_ms.min(AUTH_BWU_SIGNED_IN_PROBE_MS);
-                if unblocked!(
+                // Only a clean "no field within the look" on a page that has
+                // finished loading and shows no password field counts: any
+                // other failure to read the page is not evidence of a sign-in
+                // (#482: a login must never be reported without one).
+                let probed = unblocked!(
                     wait_for_auth_scope(&mgr.client, &session_id, &state.iframe_sessions, &current, pin, &any, &probe, quick, true).await
-                )
-                .is_err()
+                );
+                if matches!(&probed, Err(e) if e.starts_with("Wait timed out"))
+                    && page_shows_no_sign_in_form(&mgr.client, &session_id).await
                 {
                     already_signed_in = true;
                     return Ok(());
@@ -20200,7 +20484,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     }
                     unblocked!(verify_auth_fields(&mgr.client, &scope, here, &pending).await)?;
                     let last = pending.last().map(|(t, _)| t.clone());
-                    submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, last.as_deref(), &marker, false).await)?);
+                    submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, last.as_deref(), &marker, false).await)?);
                     pending.clear();
                     submitted = true;
                     if std::mem::take(&mut code_pending) {
@@ -20256,7 +20540,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                         }
                         unblocked!(verify_auth_fields(&mgr.client, &scope, here, &pending).await)?;
                         let last = pending.last().map(|(t, _)| t.clone());
-                        submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, last.as_deref(), &marker, false).await)?);
+                        submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, last.as_deref(), &marker, false).await)?);
                         pending.clear();
                         Some(
                             unblocked!(mark_usable_auth_element(&mgr.client, &scope, &selectors, &tag, timeout_ms, strict, pin).await)
@@ -20309,6 +20593,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             } else {
                 value.encode_utf16().count()
             };
+            filled_tags.push(tag.clone());
             pending.push((tag, len));
             filled.push(step.clone());
         }
@@ -20371,7 +20656,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     } else if !no_submit {
                         let fields = [(tag.clone(), code.encode_utf16().count())];
                         unblocked!(verify_auth_fields(&mgr.client, &scope, here, &fields).await)?;
-                        submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, Some(&tag), &marker, false).await)?);
+                        submit_via = Some(unblocked!(auth_submit(&mgr.client, &scope, &state.ref_map, &state.iframe_sessions, Some(&tag), &marker, false).await)?);
                         submitted = true;
                     }
                     if submitted {
@@ -20395,6 +20680,14 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             if found.is_ok() {
                 needs = Some("a verification code");
             }
+        }
+        // Submitted and nothing more to type: the login is reported only with
+        // evidence that the site took it (#482), never because a key was sent.
+        if submitted && !no_submit && needs.is_none() {
+            evidence = Some(
+                confirm_sign_in(&mut *mgr, &scope, &session_id, &current, &filled_tags, &mut menu_closed, submit_via)
+                    .await?,
+            );
         }
         Ok(())
     }
@@ -20453,12 +20746,13 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     if filled.is_empty() && passkey_state != "used" {
         return Err("auth login --bwu: found no login field on this page to fill".to_string());
     }
-    if submitted && needs.is_none() {
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-    }
-    let url = mgr.get_url().await.unwrap_or_default();
-    // Leaving the login page is the best sign the login went through; the
-    // caller still checks with `snapshot`.
+    let url = mgr
+        .get_url()
+        .await
+        .ok()
+        .filter(|u| !u.is_empty())
+        .or(mgr.pinned_tab_url_from_browser().await)
+        .unwrap_or_default();
     let mut out = json!({
         "item": item,
         "filled": filled,
@@ -20473,6 +20767,10 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     if let Some(via) = submit_via {
         out["submittedWith"] = json!(via);
     }
+    if let Some(why) = evidence {
+        out["signedIn"] = json!(true);
+        out["evidence"] = json!(why);
+    }
     if let Some(what) = needs {
         out["needs"] = json!(what);
         out["next"] = json!(auth_needs_code_hint(scope.frame_origin.as_deref()));
@@ -20481,6 +20779,250 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         out["warning"] = json!(w);
     }
     Ok(out)
+}
+
+/// How long a submitted login is watched for evidence that the site took it.
+const AUTH_BWU_CONFIRM_MS: u64 = 12_000;
+/// How often the page is read while watching.
+const AUTH_BWU_CONFIRM_POLL_MS: u64 = 300;
+
+/// One reading of the page after a login was submitted.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct SignInObservation {
+    /// `document.readyState === 'complete'`.
+    ready: bool,
+    /// A visible password field, or a field this login filled, is on the page.
+    form: bool,
+    /// The page's visible error or alert text (only read while the form is there).
+    message: String,
+    url: String,
+}
+
+/// Read the page (and the sign-in frame, when the login is in one).
+/// `None` when the top document cannot be read; an error only for a password
+/// manager's frame blocking the tab, which the caller can close.
+fn sign_in_observer(tags: &[String]) -> String {
+    format!(
+        r#"(() => {{
+            const vis = (el) => {{
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+            }};
+            let form = [...document.querySelectorAll('input[type=password]')].some(vis);
+            for (const t of {tags}) {{
+                const el = document.querySelector('[data-cu-auth=' + JSON.stringify(t) + ']');
+                if (el && el.isConnected && vis(el)) form = true;
+            }}
+            let message = '';
+            if (form) {{
+                const sel = '[role=alert], [role=alertdialog], dialog[open], .modal, .alert, .error, .errors, .error-message, .invalid-feedback, .flash-error, [aria-live=assertive]';
+                for (const el of document.querySelectorAll(sel)) {{
+                    if (!vis(el)) continue;
+                    const t = (el.innerText || '').trim().replace(/\s+/g, ' ');
+                    if (t) {{ message = t.slice(0, 200); break; }}
+                }}
+            }}
+            return JSON.stringify({{ ready: document.readyState === 'complete', form, message, url: location.href }});
+        }})()"#,
+        tags = serde_json::to_string(tags).unwrap_or_default(),
+    )
+}
+
+fn parse_sign_in_observation(value: Option<&Value>) -> Option<SignInObservation> {
+    let v: Value = serde_json::from_str(value?.as_str()?).ok()?;
+    Some(SignInObservation {
+        ready: v["ready"].as_bool().unwrap_or(false),
+        form: v["form"].as_bool().unwrap_or(true),
+        message: v["message"].as_str().unwrap_or("").to_string(),
+        url: v["url"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+/// The sign-in counts as confirmed when two readings in a row (one poll
+/// apart) show a loaded page without the sign-in form. One reading is not
+/// enough: a page between two documents briefly shows neither.
+fn sign_in_confirmed(prev: Option<&SignInObservation>, now: &SignInObservation) -> bool {
+    let clear = |o: &SignInObservation| o.ready && !o.form;
+    clear(now) && prev.is_some_and(clear)
+}
+
+/// Whether `url` is a different page than the sign-in page `login_url`, and
+/// not itself a sign-in URL.
+fn left_sign_in_page(login_url: &str, url: &str) -> bool {
+    let (Ok(a), Ok(b)) = (url::Url::parse(login_url), url::Url::parse(url)) else {
+        return false;
+    };
+    let moved = a.origin() != b.origin()
+        || a.path().trim_end_matches('/') != b.path().trim_end_matches('/');
+    moved && !super::login_wall::login_ish(&b)
+}
+
+fn sign_in_evidence(login_url: &str, now: &SignInObservation) -> String {
+    if left_sign_in_page(login_url, &now.url) {
+        format!(
+            "the sign-in form is gone and the tab left the sign-in page for {}",
+            now.url
+        )
+    } else {
+        format!("the sign-in form is gone from {}", now.url)
+    }
+}
+
+/// The failure for a login whose effect was not seen. Says what was seen
+/// instead, and how the form was submitted when it was not a plain Enter.
+fn sign_in_not_confirmed(
+    last: Option<&SignInObservation>,
+    waited_ms: u64,
+    via: Option<&str>,
+) -> String {
+    let secs = waited_ms / 1000;
+    let what = match last {
+        Some(o) if o.form => {
+            let said = if o.message.is_empty() {
+                String::new()
+            } else {
+                format!(" The page says: \"{}\".", o.message)
+            };
+            format!(
+                "the sign-in form is still on the page ({}) {secs}s after it was submitted, so the \
+                 site did not sign in.{said}",
+                o.url
+            )
+        }
+        Some(o) => format!(
+            "the page ({}) was still loading {secs}s after the submit",
+            o.url
+        ),
+        None => format!("the page could not be read for {secs}s after the submit"),
+    };
+    let how = match via {
+        Some(v) if v != "enter" => format!(" Submitted with: {v}."),
+        _ => String::new(),
+    };
+    format!(
+        "auth login --bwu: the sign-in was not confirmed: {what}{how} Nothing is reported as signed \
+         in without seeing it. Read the page (`snapshot -i`) before running auth login again."
+    )
+}
+
+/// The failure for a login whose page a password manager's frame keeps
+/// blocking after the submit. Chrome's tab record still says where the tab
+/// is, but a URL alone is not evidence of a sign-in: it is reported, never
+/// turned into one.
+fn sign_in_blocked(login_url: &str, url: &str) -> String {
+    let place = if left_sign_in_page(login_url, url) {
+        format!(
+            "the tab is now on {url}, which is not the sign-in page, so it may have gone \
+             through, but that was not seen on the page"
+        )
+    } else {
+        format!("the tab is still on {url}")
+    };
+    format!(
+        "auth login --bwu: the sign-in was not confirmed: a password manager's frame blocks the \
+         page after the submit and could not be closed, so the page could not be read; {place}. \
+         Read the page (`snapshot -i`) once the frame is closed.{}",
+        no_recovery_note("the password manager's frame stayed open")
+    )
+}
+
+/// After a submit: wait until the page shows the login went through (the
+/// sign-in form gone from a loaded page, read twice in a row), and return
+/// what showed it. Fails, saying what the page shows instead, when that is
+/// not seen within `AUTH_BWU_CONFIRM_MS` (#482: a key that never reached the
+/// page used to be reported as a finished login). A password manager's frame
+/// blocking the tab is closed as during the login; when it cannot be, the
+/// only evidence left is Chrome's own record of the tab having left the
+/// sign-in page, and the result says the page itself was not read.
+async fn confirm_sign_in(
+    mgr: &mut BrowserManager,
+    scope: &AuthScope,
+    session_id: &str,
+    login_url: &str,
+    tags: &[String],
+    menu_closed: &mut u32,
+    via: Option<&str>,
+) -> Result<String, String> {
+    let observer = sign_in_observer(tags);
+    let started = tokio::time::Instant::now();
+    let deadline = started + Duration::from_millis(AUTH_BWU_CONFIRM_MS);
+    let mut prev: Option<SignInObservation> = None;
+    let mut last: Option<SignInObservation> = None;
+    loop {
+        let top = mgr
+            .client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({ "expression": observer, "returnByValue": true })),
+                Some(session_id),
+            )
+            .await;
+        let mut now = match &top {
+            Ok(v) => parse_sign_in_observation(v.get("result").and_then(|r| r.get("value"))),
+            Err(e) if super::browser::is_debugger_access_denied(e) => {
+                if auth_close_menu(&mut *mgr, menu_closed, "").await.is_err() {
+                    // Chrome's tab record still says where the tab is, but a
+                    // URL alone is not evidence of a sign-in: report it, as a
+                    // failure the caller can check, not as a login.
+                    let url = mgr.pinned_tab_url_from_browser().await.unwrap_or_default();
+                    return Err(sign_in_blocked(login_url, &url));
+                }
+                None
+            }
+            Err(_) => None,
+        };
+        // The fields of a sign-in frame count too; a frame that went away
+        // took its form with it.
+        if scope.in_frame() {
+            if let Some(o) = now.as_mut() {
+                if let Ok(r) = scope_eval(&mgr.client, scope, &observer, true).await {
+                    if let Some(f) = parse_sign_in_observation(r.result.value.as_ref()) {
+                        o.form |= f.form;
+                        if o.message.is_empty() {
+                            o.message = f.message;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(o) = &now {
+            if sign_in_confirmed(prev.as_ref(), o) {
+                return Ok(sign_in_evidence(login_url, o));
+            }
+            last = Some(o.clone());
+        }
+        prev = now;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(sign_in_not_confirmed(
+                last.as_ref(),
+                AUTH_BWU_CONFIRM_MS,
+                via,
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(AUTH_BWU_CONFIRM_POLL_MS)).await;
+    }
+}
+
+/// For the already-signed-in probe: the page has finished loading and shows
+/// no password field. Anything unreadable is `false`.
+async fn page_shows_no_sign_in_form(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+) -> bool {
+    let observer = sign_in_observer(&[]);
+    match client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": observer, "returnByValue": true })),
+            Some(session_id),
+        )
+        .await
+    {
+        Ok(v) => parse_sign_in_observation(v.get("result").and_then(|r| r.get("value")))
+            .is_some_and(|o| o.ready && !o.form),
+        Err(_) => false,
+    }
 }
 
 /// What to do when the page asks for a code after the login (#449): the vault
@@ -21757,6 +22299,153 @@ mod tests {
 
     /// #373: a blocked command that could not be recovered must not steer the
     /// agent to destructive workarounds; agents closed every tab or relaunched.
+    fn obs(ready: bool, form: bool, url: &str, message: &str) -> SignInObservation {
+        SignInObservation {
+            ready,
+            form,
+            message: message.to_string(),
+            url: url.to_string(),
+        }
+    }
+
+    // #482: a submit after which the form is still there is never a login.
+    #[test]
+    fn sign_in_is_not_confirmed_while_the_form_stays() {
+        let login = "https://zentao.example.com/zentao/user-login.html";
+        let form = obs(true, true, login, "");
+        assert!(!sign_in_confirmed(Some(&form), &form));
+        // Still on the form, however long: the failure names what was seen.
+        let err = sign_in_not_confirmed(Some(&form), AUTH_BWU_CONFIRM_MS, Some("enter"));
+        assert!(err.contains("the sign-in was not confirmed"), "{err}");
+        assert!(err.contains("still on the page"), "{err}");
+        assert!(err.contains(login), "{err}");
+        // The site's own message is passed on, and a refusal it explained is
+        // not retried by the login wall.
+        let said = obs(true, true, login, "Wrong password");
+        let err = sign_in_not_confirmed(Some(&said), AUTH_BWU_CONFIRM_MS, None);
+        assert!(err.contains("The page says: \"Wrong password\""), "{err}");
+        // How the form went in is said when it was not a plain Enter.
+        let err = sign_in_not_confirmed(
+            Some(&form),
+            AUTH_BWU_CONFIRM_MS,
+            Some("button (the Enter key did not reach the page)"),
+        );
+        assert!(err.contains("Submitted with: button"), "{err}");
+        // Nothing readable is a failure too, never a success.
+        let err = sign_in_not_confirmed(None, AUTH_BWU_CONFIRM_MS, None);
+        assert!(err.contains("could not be read"), "{err}");
+    }
+
+    #[test]
+    fn sign_in_needs_two_loaded_readings_without_the_form() {
+        let home = "https://zentao.example.com/zentao/my.html";
+        let gone = obs(true, false, home, "");
+        let loading = obs(false, false, home, "");
+        // One reading between two documents is not enough.
+        assert!(!sign_in_confirmed(None, &gone));
+        assert!(!sign_in_confirmed(Some(&loading), &gone));
+        assert!(!sign_in_confirmed(Some(&gone), &loading));
+        assert!(sign_in_confirmed(Some(&gone), &gone));
+        // A form that comes back (the page reloaded the sign-in) undoes it.
+        let back = obs(true, true, home, "");
+        assert!(!sign_in_confirmed(Some(&gone), &back));
+    }
+
+    // #482: a submit that navigated (the tab detaching under the key) is
+    // judged by where the page ends up.
+    #[test]
+    fn sign_in_evidence_says_where_the_page_went() {
+        let login = "https://zentao.example.com/zentao/user-login.html";
+        let home = obs(true, false, "https://zentao.example.com/zentao/my.html", "");
+        let e = sign_in_evidence(login, &home);
+        assert!(
+            e.contains("left the sign-in page") && e.contains("my.html"),
+            "{e}"
+        );
+        // Same page, form gone (a single-page app): said as such.
+        let spa = obs(true, false, login, "");
+        let e = sign_in_evidence(login, &spa);
+        assert!(e.contains("form is gone") && !e.contains("left"), "{e}");
+        assert!(!left_sign_in_page(login, login));
+        assert!(!left_sign_in_page(
+            login,
+            "https://zentao.example.com/login"
+        ));
+        assert!(left_sign_in_page(
+            login,
+            "https://zentao.example.com/zentao/my.html"
+        ));
+    }
+
+    #[test]
+    fn sign_in_observation_parses_the_page_reading() {
+        let v = json!(r#"{"ready":true,"form":false,"message":"","url":"https://x/home"}"#);
+        assert_eq!(
+            parse_sign_in_observation(Some(&v)),
+            Some(obs(true, false, "https://x/home", ""))
+        );
+        // A reading without the form flag counts as the form being there.
+        let v = json!(r#"{"ready":true,"url":"https://x/home"}"#);
+        assert!(parse_sign_in_observation(Some(&v)).unwrap().form);
+        assert_eq!(parse_sign_in_observation(Some(&json!(1))), None);
+        assert_eq!(parse_sign_in_observation(None), None);
+    }
+
+    // #482: a password manager's inline menu that keeps blocking the page
+    // after the submit is a failure, even when the tab's URL moved on.
+    #[test]
+    fn a_blocked_page_after_the_submit_is_not_a_login() {
+        let login = "https://zentao.example.com/zentao/user-login.html";
+        let moved = sign_in_blocked(login, "https://zentao.example.com/zentao/my.html");
+        assert!(moved.contains("the sign-in was not confirmed"), "{moved}");
+        assert!(moved.contains("may have gone through"), "{moved}");
+        let stayed = sign_in_blocked(login, login);
+        assert!(stayed.contains("still on"), "{stayed}");
+        assert!(stayed.contains("do not close tabs"), "{stayed}");
+        // The login wall tries such a login once more from the sign-in page.
+        assert!(!stayed.contains("The page says"));
+    }
+
+    // #482: what the page saw of the Enter decides what happens next.
+    #[test]
+    fn enter_receipt_maps_the_page_state() {
+        assert_eq!(parse_key_receipt(Some("got")), Some(KeyReceipt::Got));
+        assert_eq!(parse_key_receipt(Some("moved")), Some(KeyReceipt::Moved));
+        // Armed and still waiting: the key did not arrive, so it is replaced.
+        assert_eq!(parse_key_receipt(Some("armed")), Some(KeyReceipt::Lost));
+        assert_eq!(parse_key_receipt(None), None);
+        let read = read_enter_receipt("cu-enter-x");
+        assert!(read.contains("'moved'"), "{read}");
+        let arm = arm_enter_receipt("cu-enter-x", Some("bwu1-x"));
+        assert!(
+            arm.contains("addEventListener('keydown'") && arm.contains("true)"),
+            "{arm}"
+        );
+        assert!(arm.contains("bwu1-x"), "{arm}");
+    }
+
+    // #482: a detach under the key (the relay's action_outcome_unknown) is
+    // read from the page, not reported as an unknown outcome; a password
+    // manager's frame refusing the key is not a detach (the caller closes the
+    // menu and submits again).
+    #[test]
+    fn a_detached_submit_is_judged_from_the_page() {
+        let detached = "CDP error (Input.dispatchKeyEvent): action_outcome_unknown: Input.dispatchKeyEvent was not replayed because it may already have executed. Read the current page before deciding whether to repeat the action. Original error: Detached while handling command.";
+        assert!(submit_outcome_unknown(detached));
+        assert!(submit_outcome_unknown("Execution context was destroyed."));
+        assert!(!submit_outcome_unknown(
+            "debugger_access_denied: Cannot access a chrome-extension:// URL of different extension"
+        ));
+        // The reads around the key are repeated after a detach; a page that
+        // navigated is not (that is an answer, not a transport failure).
+        let read = "CDP error (Runtime.evaluate): action_outcome_unknown: Runtime.evaluate was not replayed because it may already have executed. Original error: Detached while handling command.";
+        assert!(tab_detached_under_command(read));
+        assert!(!tab_detached_under_command(
+            "Execution context was destroyed."
+        ));
+        assert!(!tab_detached_under_command("Wait timed out after 3000ms"));
+    }
+
     #[test]
     fn no_recovery_note_gives_a_safe_next_step() {
         let note = no_recovery_note("the menu was still open");

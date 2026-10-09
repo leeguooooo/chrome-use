@@ -475,11 +475,16 @@ fn run_login_child(p: &Prepared, args: &[std::ffi::OsString]) -> Result<(), Stri
         .unwrap_or_else(|| format!("auth login --bwu exited with {}", output.status)))
 }
 
-/// Whether an `auth login --bwu` failure is a submit whose outcome is unknown
-/// (the tab detached mid-command, #482), worth one more try.
+/// Whether an `auth login --bwu` failure is worth one more try from the
+/// sign-in page (#482): a step the tab detached under (its outcome unknown),
+/// or a submit the site was not seen to take while the page showed no message
+/// of its own. A page that says why it refused (a wrong password) is not
+/// retried: the same login would be refused again and count as another failed
+/// attempt.
 fn retry_after_unknown_outcome(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
-    e.contains("action_outcome_unknown") && e.contains("input.dispatchkeyevent")
+    e.contains("action_outcome_unknown")
+        || (e.contains("the sign-in was not confirmed") && !e.contains("the page says"))
 }
 
 /// Sign in to the login wall the tab is on with the only vault login for it
@@ -524,10 +529,11 @@ pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
         attempt += 1;
         match run_login_child(&p, &args) {
             Ok(()) => break,
-            // #482: a detach during the Enter submit leaves its outcome unknown;
-            // the site was seen still signed out afterwards. Logging in again
-            // from the sign-in page is safe: on a page that is already signed
-            // in, `auth login --bwu` reports alreadySignedIn and types nothing.
+            // #482: a step the tab detached under, or a submit the site was
+            // not seen to take. Logging in again from the sign-in page is
+            // safe: on a page that is already signed in, `auth login --bwu`
+            // reports alreadySignedIn (a loaded page with no sign-in form) and
+            // types nothing.
             Err(e) if attempt == 1 && retry_after_unknown_outcome(&e) && login_page.is_some() => {
                 eprintln!(
                     "login wall: the sign-in submit's outcome is unknown ({e}); trying once more"
@@ -590,13 +596,19 @@ mod tests {
     }
 
     #[test]
-    fn only_an_unknown_key_outcome_is_retried() {
+    fn retries_unknown_outcomes_and_unconfirmed_sign_ins_only() {
         assert!(retry_after_unknown_outcome("CDP error (Input.dispatchKeyEvent): action_outcome_unknown: Input.dispatchKeyEvent was not replayed because it may already have executed. Original error: Detached while handling command."));
         assert!(!retry_after_unknown_outcome(
             "2 logins in your vault match x.com"
         ));
-        assert!(!retry_after_unknown_outcome(
+        assert!(retry_after_unknown_outcome(
             "action_outcome_unknown: Runtime.evaluate was not replayed"
+        ));
+        assert!(retry_after_unknown_outcome(
+            "auth login --bwu: the sign-in was not confirmed: the sign-in form is still on the page (https://x/login) 12s after it was submitted, so the site did not sign in."
+        ));
+        assert!(!retry_after_unknown_outcome(
+            "auth login --bwu: the sign-in was not confirmed: the sign-in form is still on the page (https://x/login) 12s after it was submitted, so the site did not sign in. The page says: \"wrong password\"."
         ));
     }
 

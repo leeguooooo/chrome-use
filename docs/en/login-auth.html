@@ -195,6 +195,7 @@
 <span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> passkey-demo <span class="du-flag">--launch</span> snapshot <span class="du-flag">-i</span></code></pre>
       </div>
       <p><code>--no-submit</code> fills only, skips TOTP and installs no passkey authenticator; it cannot be combined with <code>--passkey</code>. A signed assertion does not prove site acceptance: check the authenticated destination with <code>snapshot</code> or the site's authenticated state.</p>
+      <p>A password login is reported only when the site took it: after submitting, it waits until the sign-in form is gone from a loaded page (read twice in a row) and returns <code>signedIn: true</code> with the <code>evidence</code>; when the form is still there after about 12 s it fails with <code>the sign-in was not confirmed</code>, quoting the page's own message. The Enter is checked too: on a background tab of your own Chrome a key can be accepted by Chrome and never reach the page, so nothing was submitted, and the form's sign-in button is clicked instead (<code>submittedWith</code> says so).</p>
 
       <hr class="du-divider" />
 

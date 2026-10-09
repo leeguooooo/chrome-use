@@ -4317,6 +4317,10 @@ Bitwarden Login Options:
   In --launch mode, password login can also answer a passkey second factor.
   Unexpected registration or unconfirmed authenticator cleanup aborts the command.
   A signed assertion is not proof of login; verify the authenticated destination.
+  A password login succeeds only once the sign-in form is gone from the page
+  (signedIn + evidence); a form still there ~12s after the submit fails with
+  "the sign-in was not confirmed". An Enter that never reached the page is
+  replaced by a click on the form's sign-in button (submittedWith says so).
   Login walls: a navigation that lands on a sign-in page, or a site adapter
   that finds the site signed out, prints `login wall: …` (JSON: loginWall).
   When the user has not decided for that site, it asks: a prompt in a

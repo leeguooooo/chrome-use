@@ -187,6 +187,7 @@
 <span class="du-prompt">$</span> chrome-use <span class="du-flag">--session</span> passkey-demo <span class="du-flag">--launch</span> snapshot <span class="du-flag">-i</span></code></pre>
       </div>
       <p><code>--no-submit</code> 只填不提交，不读取 TOTP，也不安装 passkey 验证器；不能与 <code>--passkey</code> 同用。签名成功不代表网站接受了登录，需用 <code>snapshot</code> 或网站的已认证状态确认目标页面。</p>
+      <p>密码登录只有看到网站接受了才报成功：提交后等登录表单从页面上消失（页面加载完、连续两次读到），返回 <code>signedIn: true</code> 和 <code>evidence</code>；约 12 秒后表单还在就报 <code>the sign-in was not confirmed</code>，带上页面自己的提示。回车键是否到了页面也会检查：在你自己 Chrome 的后台标签页上，回车可能被 Chrome 接收却没到页面，这时什么都没提交，改点表单的登录按钮（<code>submittedWith</code> 会写明）。</p>
 
       <hr class="du-divider" />
 

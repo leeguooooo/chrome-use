@@ -6411,6 +6411,183 @@ async fn start_delayed_login_server(
     (base_url, handle)
 }
 
+/// Sign-in pages for `auth login --bwu`'s confirmation (#482), by path:
+/// `/stays` takes the submit and keeps showing the form with an error,
+/// `/swallow` eats every Enter at the window before anything else sees it and
+/// signs in only from its button, `/nav` goes to `/home` on submit.
+async fn start_bwu_confirm_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base_url = format!("http://127.0.0.1:{}", port);
+    let handle = tokio::spawn(async move {
+        for _ in 0..200 {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 8192];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .to_string();
+                let form = r#"<form id="f"><input type="text" name="user" autocomplete="username" />
+<input type="password" name="pass" /><button type="submit" id="go">Sign in</button></form>
+<div id="err" role="alert"></div>"#;
+                let body = match path.as_str() {
+                    "/stays" => format!(
+                        r#"<!doctype html><html><body>{form}<script>
+document.getElementById('f').addEventListener('submit', (e) => {{
+  e.preventDefault();
+  document.getElementById('err').textContent = 'Wrong username or password';
+}});
+</script></body></html>"#
+                    ),
+                    "/swallow" => format!(
+                        r#"<!doctype html><html><body>{form}<script>
+window.addEventListener('keydown', (e) => {{ if (e.key === 'Enter') {{ e.preventDefault(); e.stopImmediatePropagation(); }} }}, true);
+document.getElementById('f').addEventListener('submit', (e) => {{
+  e.preventDefault();
+  document.getElementById('f').remove();
+  document.body.insertAdjacentHTML('beforeend', '<h1 id="welcome">Welcome</h1>');
+}});
+</script></body></html>"#
+                    ),
+                    "/nav" => format!(
+                        r#"<!doctype html><html><body>{form}<script>
+document.getElementById('f').addEventListener('submit', (e) => {{
+  e.preventDefault();
+  setTimeout(() => {{ location.href = '/home'; }}, 300);
+}});
+</script></body></html>"#
+                    ),
+                    _ => "<!doctype html><html><body><h1>Home</h1></body></html>".to_string(),
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
+            });
+        }
+    });
+    (base_url, handle)
+}
+
+async fn bwu_login_on(state: &mut DaemonState, base_url: &str, path: &str) -> Value {
+    let nav = execute_command(
+        &json!({ "id": "n", "action": "navigate", "url": format!("{base_url}{path}") }),
+        state,
+    )
+    .await;
+    assert_success(&nav);
+    Box::pin(execute_command(
+        &json!({
+            "id": "l",
+            "action": "auth_login_bwu",
+            "origin": base_url,
+            "item": "e2e",
+            "username": "user@example.com",
+            "password": "super-secret",
+        }),
+        state,
+    ))
+    .await
+}
+
+/// #482: a submit the site did not take is a failure that says what the page
+/// shows, never `submitted: true` on its own.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_fails_when_the_form_stays() {
+    let (base_url, _server) = start_bwu_confirm_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let login = bwu_login_on(&mut state, &base_url, "/stays").await;
+    assert_eq!(login["success"], false, "{login}");
+    let err = login["error"].as_str().unwrap_or_default();
+    assert!(err.contains("the sign-in was not confirmed"), "{err}");
+    assert!(err.contains("still on the page"), "{err}");
+    assert!(err.contains("Wrong username or password"), "{err}");
+    assert!(!err.contains("super-secret"), "{err}");
+}
+
+/// #482: an Enter the page never saw is replaced by the sign-in button, and
+/// the login is reported with the evidence that it went through.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_presses_the_button_when_enter_is_lost() {
+    let (base_url, _server) = start_bwu_confirm_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let login = bwu_login_on(&mut state, &base_url, "/swallow").await;
+    assert_success(&login);
+    let data = get_data(&login);
+    assert_eq!(data["signedIn"], true, "{data}");
+    assert!(
+        data["submittedWith"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("did not reach the page"),
+        "{data}"
+    );
+    assert!(
+        data["evidence"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("form is gone"),
+        "{data}"
+    );
+}
+
+/// #482: a submit that navigates is judged by where the page ends up.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_confirms_a_submit_that_navigates() {
+    let (base_url, _server) = start_bwu_confirm_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let login = bwu_login_on(&mut state, &base_url, "/nav").await;
+    assert_success(&login);
+    let data = get_data(&login);
+    assert_eq!(data["signedIn"], true, "{data}");
+    assert_eq!(data["submittedWith"], "enter", "{data}");
+    assert!(
+        data["evidence"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("left the sign-in page"),
+        "{data}"
+    );
+    assert!(
+        data["url"].as_str().unwrap_or_default().ends_with("/home"),
+        "{data}"
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn e2e_auth_login_waits_for_delayed_spa_form_render() {

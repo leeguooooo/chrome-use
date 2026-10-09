@@ -291,6 +291,12 @@ registration calls; retained native references can bypass it. Unexpected
 credential creation or unconfirmed cleanup aborts the command. If WebAuthn
 is unavailable, ordinary login keeps the password flow; passkey-only login fails.
 
+A login is reported only when the site took it: after submitting, `auth login
+--bwu` waits until the sign-in form is gone from the page and returns
+`signedIn: true` with the `evidence`, or fails with `the sign-in was not
+confirmed: …` and what the page shows instead. It checks that its Enter reached
+the page; one that did not is replaced by a click on the form's sign-in button.
+
 | Login option | Effect |
 |---|---|
 | `--bwu` | Use the vault account for the current page (bwu 0.7.0+) |

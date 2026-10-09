@@ -157,8 +157,21 @@ chrome-use auth login --bwu --passkey       # sign in with the vault passkey
   that refuses the passkey is reported with its message.
 - `--no-submit` fills only: no passkey and no one-time code (sites submit a
   code on its last digit).
-- Result: `{"item", "filled": [...], "submitted", "otp": "filled" | "not asked" | "none", "passkey": "used" | "not asked" | "unsupported" | "unavailable" | "none", "url"}`.
-  Run `snapshot` afterwards to see whether the site accepted the login.
+- Result: `{"item", "filled": [...], "submitted", "submittedWith", "signedIn", "evidence", "otp": "filled" | "not asked" | "none", "passkey": "used" | "not asked" | "unsupported" | "unavailable" | "none", "url"}`.
+- **Success means the site took it.** After submitting, it watches the page
+  until the sign-in form is gone from a loaded page (read twice in a row) and
+  reports `signedIn: true` with that `evidence` (e.g. "the sign-in form is gone
+  and the tab left the sign-in page for …/my.html"). When the form is still
+  there after about 12 s it fails with `the sign-in was not confirmed: …`,
+  quoting the page's own message when it shows one; a page it cannot read is
+  a failure too. Pressing a key is never reported as a login.
+- **The Enter is checked.** The page records whether the Enter arrived. On a
+  background tab of your own Chrome (extension relay) the key can be accepted
+  by Chrome and never reach the page; then nothing was submitted, and the
+  form's sign-in button is clicked instead
+  (`submittedWith: "button (the Enter key did not reach the page)"`). A tab
+  that detached under the key (`Detached while handling command`) is judged
+  by what the page shows afterwards, not reported as an unknown outcome.
 
 ### Login walls
 
