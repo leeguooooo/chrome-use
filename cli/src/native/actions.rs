@@ -3153,11 +3153,13 @@ fn bound_relay_budget() -> Duration {
 }
 
 /// How long a reconnect waits for a restarted relay host to publish its new
-/// endpoint (#484). The extension respawns a killed host on its keepalive, which
-/// took 19-24 s on the build host, so the profile-lookup budget above is too
-/// short. Kept under the client's 45 s read budget for one command.
-fn relay_restart_budget() -> Duration {
-    relay_wait_budget(35)
+/// endpoint (#484). The extension respawns a killed host from its keepalive
+/// alarm, which took 19-36 s on the build host, so the profile-lookup budget
+/// above is too short. Both stay under the client's 45 s read budget for one
+/// command: a `launch` does nothing after connecting, so it may wait 40 s; a
+/// command that reconnects first still has to run, so it waits 35 s.
+fn relay_restart_budget(launch: bool) -> Duration {
+    relay_wait_budget(if launch { 40 } else { 35 })
 }
 
 /// `AGENT_BROWSER_RELAY_REVIVE_SECS`, capped at (and defaulting to) `max`.
@@ -3204,8 +3206,8 @@ async fn bound_relay_endpoint_by(
 /// ([`relay_restart_budget`]).
 /// Only the bound profile's own endpoint is ever tried, and anything
 /// ambiguous is refused as in [`bound_relay_endpoint`].
-async fn connect_bound_relay(profile_id: &str) -> Result<BrowserManager, String> {
-    let deadline = std::time::Instant::now() + relay_restart_budget();
+async fn connect_bound_relay(profile_id: &str, launch: bool) -> Result<BrowserManager, String> {
+    let deadline = std::time::Instant::now() + relay_restart_budget(launch);
     // The address that refused the last connect, and why.
     let mut refused: Option<(String, String)> = None;
     loop {
@@ -3277,7 +3279,7 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     // A refused connect to an address the profile's record still names is
     // waited out until the new host has written its own (#484).
     let bound = match crate::connection::session_relay_profile(&state.session_id)? {
-        Some(id) => Some(connect_bound_relay(&id).await?),
+        Some(id) => Some(connect_bound_relay(&id, false).await?),
         None => None,
     };
     let connected = match bound {
@@ -4086,7 +4088,7 @@ async fn reconnect_bound_profile(
     } else {
         "its browser connection was dead"
     };
-    let mgr = connect_bound_relay(profile).await.map_err(|e| {
+    let mgr = connect_bound_relay(profile, true).await.map_err(|e| {
         let kept = if alive {
             "This session still holds its current tabs and refs; nothing was closed."
         } else {
@@ -4330,7 +4332,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
             (Some(mgr), _) => mgr,
             // A fresh daemon of a bound session: the profile's endpoint as it
             // is now, waiting out one its restarted host has not replaced yet.
-            (None, Some(profile)) => connect_bound_relay(profile).await?,
+            (None, Some(profile)) => connect_bound_relay(profile, true).await?,
             (None, None) => BrowserManager::connect_cdp(url).await?,
         });
         state.subscribe_to_browser_events();
