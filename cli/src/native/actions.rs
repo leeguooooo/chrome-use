@@ -3154,10 +3154,11 @@ fn bound_relay_budget() -> Duration {
 
 /// How long a reconnect waits for a restarted relay host to publish its new
 /// endpoint (#484). The extension respawns a killed host from its keepalive
-/// alarm, which took 19-36 s on the build host, so the profile-lookup budget
-/// above is too short. Both stay under the client's 45 s read budget for one
-/// command: a `launch` does nothing after connecting, so it may wait 40 s; a
-/// command that reconnects first still has to run, so it waits 35 s.
+/// alarm (clamped to about 30 s; 19-24 s on the build host), so the
+/// profile-lookup budget above is too short. Both stay under the client's 45 s
+/// read budget for one command: a `launch` does nothing after connecting, so
+/// it may wait 40 s; a command that reconnects first still has to run, so it
+/// waits 35 s.
 fn relay_restart_budget(launch: bool) -> Duration {
     relay_wait_budget(if launch { 40 } else { 35 })
 }
