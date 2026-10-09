@@ -1,8 +1,19 @@
 # Changelog
 
-## 1.5.180
+## 1.5.181
 
 <!-- release:start -->
+### Bug Fixes
+
+- **`auth login --bwu` no longer reports a login the site never got.** On your own Chrome (extension relay), on a background tab, the Enter that submits the form could be accepted by Chrome and never reach the page: nothing was submitted, yet the command said `submitted: true` and auto-login said `ok: true` while the site stayed signed out. The Enter is now checked; one that did not arrive is replaced by a click on the form's sign-in button. And a login is reported only once the sign-in form is gone from the page (`signedIn: true` with the `evidence`); a form still there after about 12 s, or a page that cannot be read, fails with `the sign-in was not confirmed: …` and what the page shows. A tab that detaches under the Enter is judged by the page afterwards instead of failing with `action_outcome_unknown`, and `alreadySignedIn` needs a loaded page without a sign-in form. The login wall tries once more when the outcome is unknown or the page gave no reason. (#487, fixes #482)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.180
+
 ### Improvements
 
 - **A login wall asks whether to sign in, instead of needing a config switch.** The first wall on a site (a redirect to its sign-in page, or a `site` adapter that finds it signed out) asks: sign in from the vault this time, always for that site without asking, or never. A person at a terminal gets a prompt. An agent gets `loginWall.ask` and the same text on stderr: a question to relay to the user as is and one command per answer (`auth login --bwu` on the sign-in page, `auth autologin always <host>`, `auth autologin never <host>`); the core skill tells it to ask and never to choose `always` itself. Decisions are stored per site in `~/.chrome-use/autologin.json`; `auth autologin status` shows them and `auth autologin off <host>` (or `--all`) forgets one. `"auth": {"autoLogin": "bwu"}` and `AGENT_BROWSER_AUTO_LOGIN=bwu` keep working as "always"; `AGENT_BROWSER_AUTO_LOGIN=ask` / `off` force asking or never. (#483, fixes #481)
@@ -14,7 +25,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.179
 
