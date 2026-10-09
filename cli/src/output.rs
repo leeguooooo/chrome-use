@@ -5904,6 +5904,10 @@ Sessions:
   daemon restart             Kill all session daemons; keeps the extension relay
                              up. Clears stale/cross-leaked state after an upgrade.
 
+  Busy commands send keepalives every 10s. The total wait is at least 180s
+  (longer for larger command budgets). On "daemon still busy", wait before
+  checking again; the command keeps running. Do not replay side effects.
+
   Lifecycle: each --session <name> spawns a background daemon that drives that
   session's tabs. A daemon auto-shuts-down after 10 min idle (no commands) —
   AGENT_BROWSER_IDLE_TIMEOUT_MS overrides, 0 disables — and on shutdown closes

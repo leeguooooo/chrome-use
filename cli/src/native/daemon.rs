@@ -522,6 +522,42 @@ async fn run_socket_server(
     Ok(())
 }
 
+// A command can succeed at 51s yet lose its client at 45s while making
+// sequential CDP calls. Only clients that opt in can consume blank keepalives.
+async fn with_keepalive<W, F>(
+    writer: &mut W,
+    enabled: bool,
+    period: std::time::Duration,
+    command: F,
+) -> F::Output
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    F: std::future::Future,
+{
+    if !enabled {
+        return command.await;
+    }
+    let heartbeats = async {
+        let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticks.tick().await;
+            if writer.write_all(b"\n").await.is_err() {
+                break;
+            }
+        }
+    };
+    tokio::pin!(command);
+    tokio::select! {
+        result = &mut command => result,
+        _ = heartbeats => {
+            // Losing the client must not cancel a command halfway through its
+            // side effects. A blocked heartbeat write must not hold it up either.
+            command.await
+        }
+    }
+}
+
 async fn handle_connection<S>(
     stream: S,
     state: std::sync::Arc<tokio::sync::Mutex<DaemonState>>,
@@ -577,8 +613,13 @@ async fn handle_connection<S>(
                     // command's skip. Nested script steps inherit this value
                     // through `execute_command`, which runs below this point.
                     s.cb_skip = crate::native::actions::cb_skip_of(&cmd);
-                    let (mut response, timing) =
-                        super::timing::timed(execute_command_recovering(&cmd, &mut s)).await;
+                    let (mut response, timing) = with_keepalive(
+                        &mut writer,
+                        cmd.get("_keepalive").and_then(Value::as_bool) == Some(true),
+                        std::time::Duration::from_secs(10),
+                        super::timing::timed(execute_command_recovering(&cmd, &mut s)),
+                    )
+                    .await;
                     let ok = response.get("success").and_then(|v| v.as_bool()) == Some(true);
                     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
                     super::timing::log_command(&s.session_id, action, ok, &timing);
@@ -781,6 +822,92 @@ mod idle_tests {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    async fn slow_reply_output(enabled: bool) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+        let (mut writer, mut reader) = tokio::io::duplex(128);
+        let reply = with_keepalive(
+            &mut writer,
+            enabled,
+            std::time::Duration::from_millis(10),
+            async {
+                tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+                b"{\"success\":true}\n"
+            },
+        )
+        .await;
+        writer.write_all(reply).await.unwrap();
+        drop(writer);
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await.unwrap();
+        output
+    }
+
+    #[tokio::test]
+    async fn opted_in_slow_command_sends_keepalives_before_reply() {
+        let output = slow_reply_output(true).await;
+        assert_eq!(output[0], b'\n');
+        assert_eq!(
+            String::from_utf8(output).unwrap().trim_start_matches('\n'),
+            "{\"success\":true}\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn command_without_keepalive_writes_only_the_reply() {
+        assert_eq!(slow_reply_output(false).await, b"{\"success\":true}\n");
+    }
+
+    #[tokio::test]
+    async fn failed_keepalive_write_does_not_cancel_command() {
+        let (mut writer, reader) = tokio::io::duplex(1);
+        drop(reader);
+        let mut completed = 0;
+        with_keepalive(
+            &mut writer,
+            true,
+            std::time::Duration::from_millis(10),
+            async {
+                tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+                completed += 1;
+            },
+        )
+        .await;
+        assert_eq!(completed, 1);
+    }
+
+    #[tokio::test]
+    async fn blocked_keepalive_write_does_not_block_command() {
+        let (mut writer, _reader) = tokio::io::duplex(1);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            with_keepalive(
+                &mut writer,
+                true,
+                std::time::Duration::from_millis(10),
+                async {
+                    tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+                    42
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, 42);
+    }
+
+    #[tokio::test]
+    async fn keepalive_first_tick_is_delayed() {
+        let mut output = Vec::new();
+        with_keepalive(
+            &mut output,
+            true,
+            std::time::Duration::from_millis(100),
+            async { tokio::time::sleep(std::time::Duration::from_millis(20)).await },
+        )
+        .await;
+        assert!(output.is_empty());
+    }
 
     /// #472: a daemon deregistered by a relay recovery must not delete the
     /// session's binding records when it finally exits.

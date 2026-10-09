@@ -29,6 +29,10 @@ response carries `siteAdapterSuggestion`, ask the user before saving the steps
 you keep repeating on that site as an adapter (`core/site-adapters`). Adapters
 run as the logged-in user; call only operations within the task.
 
+If a command reports "daemon still busy", wait before checking the session again.
+Do not replay a side-effecting command; it is still running. See
+[behaviour](references/behaviour.md) for keepalive and waiting limits.
+
 ## The loop
 
 ```bash
