@@ -801,3 +801,59 @@ fn assert_only_session(fake: &Fake, session: &str) {
         "reads went to {reads:?}, expected only {session}"
     );
 }
+
+/// A record that cannot be read is evidence: a connection opened while the
+/// session is held numbers its tabs only provisionally, so when it dies its
+/// tabs must not be written over that record. After the daemon is replaced
+/// the session is still held, the record is byte for byte the same, and no
+/// tab action reaches the browser.
+#[test]
+fn a_held_session_never_overwrites_the_unreadable_record() {
+    let (fake, cdp) = Fake::start();
+    let mut d = Daemon::start("rc-evidence", &cdp);
+    let path = record_path(&d);
+    let corrupt = br#"{"why": "its browser connection was dead", "snaps"#;
+    std::fs::write(&path, corrupt).unwrap();
+
+    let r = d.send(json!({"id": "l1", "action": "tab_list"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert!(
+        r["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("could not be read back"),
+        "{r}"
+    );
+
+    fake.go_down();
+    let r = d.send(json!({"id": "u1", "action": "url"}));
+    assert_eq!(r["success"], false, "{r}");
+    assert_eq!(std::fs::read(&path).unwrap(), corrupt, "record overwritten");
+
+    d.replace();
+    fake.come_back(true);
+    let r = d.send(json!({"id": "l2", "action": "tab_list"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert!(
+        r["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("could not be read back"),
+        "{r}"
+    );
+    fake.take_url_reads();
+    for cmd in [
+        json!({"id": "a", "action": "url"}),
+        json!({"id": "b", "action": "click", "selector": "#submit", "tabId": "t2"}),
+        json!({"id": "c", "action": "tab_switch", "tabId": "t1"}),
+        json!({"id": "d", "action": "tab_close", "tabId": "t1"}),
+    ] {
+        let r = d.send(cmd.clone());
+        assert!(held(&r, "could not be read back"), "{cmd}: {r}");
+    }
+    assert!(
+        fake.take_url_reads().is_empty(),
+        "a held command reached a tab"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), corrupt, "record changed");
+}

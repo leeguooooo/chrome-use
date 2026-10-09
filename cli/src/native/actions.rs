@@ -2025,7 +2025,19 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 // in the daemon state, not here: if this reconnect fails, the
                 // next command's must still bind them. An older snapshot that
                 // was never restored is the one the agent's refs came from.
-                if state.carried_tabs.is_none() {
+                if state.carried_tabs_unknown.is_some() {
+                    // Which tab an id names is unknown, so this manager's
+                    // numbering is not the agent's: it must never overwrite
+                    // or replace the record that says so. Only an explicit
+                    // end of the session releases it.
+                } else if let Some(e) = state.carried_tabs_cleanup.take() {
+                    // The consumed record is still on disk. Carrying this
+                    // manager forward would need a new record over it, so
+                    // hold instead, as for a record that cannot be read.
+                    state.carried_tabs_unknown = Some(format!(
+                        "{e}, and the browser was lost again before it was removed"
+                    ));
+                } else if state.carried_tabs.is_none() {
                     let carried = state
                         .browser
                         .as_ref()
