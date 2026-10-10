@@ -947,9 +947,8 @@ fn pending_adopt_directive() -> Option<String> {
 }
 
 /// Set when `chrome-use adopt <spec>` found no tab (#507): the spec that
-/// failed. While set the session has NO current tab. Connecting then attaches
-/// what the relay scopes to the session's group without choosing, probing or
-/// evaluating in any of it, opens no first tab, and the daemon refuses every
+/// failed. While set the session has NO current tab. Connecting then
+/// attaches, chooses, probes and opens nothing, and the daemon refuses every
 /// command that acts on "the current tab" until one is opened (`tab new`) or
 /// named (`adopt`, `tab <id>`, `--tab <handle> --force`). It is kept in a
 /// per-session file too, so a daemon that restarts in between still refuses.
